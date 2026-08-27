@@ -1,0 +1,29 @@
+# Sextant workspaces — analysis output, regenerable, never committed.
+# Unanchored: module workspaces live at module roots, including nested ones.
+.sextant/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+*.egg-info/
+
+# ---- JVM: the extractor build, and fixture-repo builds in CI ----
+build/
+target/
+.gradle/
+.kotlin/
+*.class
+
+# ---- OS / editor (courtesy for collaborators without a global ignore) ----
+.DS_Store
+.idea/
+.vscode/
+*.iml
