@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sextant"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "duckdb>=1.1",
+  "click>=8.1",
+  "rich>=13.7",
+  "pydantic>=2.7",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10", "import-linter>=2.0"]
+
+[project.scripts]
+sextant = "sextant.cli.app:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sextant"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.importlinter]
+root_package = "sextant"
+
+[[tool.importlinter.contracts]]
+name = "Layering: cli -> outer groups -> application -> domain"
+type = "layers"
+layers = ["sextant.cli", "sextant.ingress | sextant.storage | sextant.egress", "sextant.application", "sextant.domain"]
+
+[[tool.importlinter.contracts]]
+name = "Outer groups never import one another"
+type = "independence"
+modules = ["sextant.ingress", "sextant.storage", "sextant.egress"]
+
+[[tool.importlinter.contracts]]
+name = "Ingress is write-only: it never depends on the Workspace port"
+type = "forbidden"
+source_modules = ["sextant.ingress"]
+forbidden_modules = ["sextant.application.ports.workspace"]
