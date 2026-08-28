@@ -2,9 +2,12 @@
 anything reads code. Implementations are keyed by build system, never by
 language — a module records the languages present."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
+
+from sextant.application.ports.selection import NoAdapterError
 
 
 @dataclass(frozen=True)
@@ -30,3 +33,16 @@ class Detector(Protocol):
 
     def accepts(self, path: Path) -> bool: ...
     def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel: ...
+
+
+def select_detector(detectors: Sequence[Detector], path: Path) -> Detector:
+    """The first detector that recognises this repository.
+
+    First rather than best: detectors are keyed by build system, and where a
+    repository carries two build files the registry's order is the deliberate
+    statement of which one is authoritative. There is no rank to appeal to.
+    """
+    for detector in detectors:
+        if detector.accepts(path):
+            return detector
+    raise NoAdapterError(f"no detector recognises {path} as a repository it can read")

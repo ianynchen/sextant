@@ -17,6 +17,8 @@ from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
+# The registries the composition root builds (ARCHITECTURE §6). Order is the
+# statement of precedence where two adapters could both accept.
 _REPO = Path(__file__).parents[3]
 _JAR = _REPO / "extractor-jvm" / "build" / "libs" / "sextant-extractor.jar"
 _CATALOGS = _REPO / "catalogs"
@@ -57,8 +59,8 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
         result = analyze(
             path=path,
             workspace=workspace,
-            detector=MavenDetector(),
-            scanner=AsmScanner(_JAR),
+            detectors=[MavenDetector()],
+            scanners=[AsmScanner(_JAR)],
             catalogs=YamlCatalogSource(_CATALOGS),
             fact_root=workspace_dir / "facts",
             progress=progress,

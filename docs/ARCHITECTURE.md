@@ -232,6 +232,13 @@ Spring and Micronaut. Scanners are selected per language, artifact readers per f
 catalogs as the active set, overlays by rank. Nothing in the pipeline branches on a
 language name.
 
+**The composition root builds the registries; selection happens where the information
+exists.** A detector is chosen from a path, which `cli` has. A scanner is chosen from a
+module's languages, which nothing knows until detection has run — so the registry is handed
+to the stage and the choice is made there. The *rule* for choosing sits beside the port that
+declares `accepts` and `rank`, so a second composition root cannot combine them differently
+and make the port mean two things.
+
 ---
 
 ## 7. Extension points

@@ -80,8 +80,8 @@ def test_render_names_the_catalog_and_capability_analyze_skipped(tmp_path: Path)
         result = analyze(
             path=FIXTURE,
             workspace=workspace,
-            detector=MavenDetector(),
-            scanner=_NoCapabilitiesScanner(AsmScanner(_JAR)),
+            detectors=[MavenDetector()],
+            scanners=[_NoCapabilitiesScanner(AsmScanner(_JAR))],
             catalogs=YamlCatalogSource(_CATALOGS),
             fact_root=tmp_path / "facts",
             progress=NullProgress(),
