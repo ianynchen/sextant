@@ -26,3 +26,21 @@ def test_scan_writes_one_fact_file_per_source_file_when_run_on_the_fixture(tmp_p
         "OrderResult.jsonl", "OrderService.jsonl",
     ]
     assert report.documents == 4
+
+
+def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
+    tmp_path: Path,
+):
+    """A path is not a file extension. Swapping `.java` for `.jsonl` with a
+    global substring replace rewrites every occurrence, so a workspace whose
+    own directory happens to hold `.java` had its output paths corrupted
+    mid-string — facts written somewhere nobody would look for them."""
+    out = tmp_path / "work.java" / "facts"
+    AsmScanner(JAR).scan(ScanRequest(
+        module_id="com.acme:orders", coordinates="com.acme/orders", version="1.0.0",
+        classes_dir=CLASSES, out_dir=out,
+    ))
+    assert sorted(p.name for p in out.rglob("*.jsonl")) == [
+        "OrderCommand.jsonl", "OrderController.jsonl",
+        "OrderResult.jsonl", "OrderService.jsonl",
+    ]

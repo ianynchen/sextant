@@ -28,12 +28,12 @@ public final class Main {
                     .toList();
                 for (Path classFile : classFiles) {
                     byte[] bytes = Files.readAllBytes(classFile);
-                    String relative = classes.relativize(classFile).toString()
-                        .replace(".class", ".java");
+                    String relative =
+                        replaceSuffix(posix(classes.relativize(classFile)), ".class", ".java");
                     String documentId = sha256(relative);
                     List<String> lines = scanner.scan(bytes, documentId);
-                    writeFactFile(out.resolve(relative), relative, documentId,
-                                  options, sha256Bytes(bytes), lines);
+                    writeFactFile(out.resolve(replaceSuffix(relative, ".java", ".jsonl")),
+                                  relative, documentId, options, sha256Bytes(bytes), lines);
                     documents++;
                     facts += lines.size();
                 }
@@ -48,8 +48,7 @@ public final class Main {
     private static void writeFactFile(Path target, String relative, String documentId,
                                       Map<String, String> options, String contentHash,
                                       List<String> factLines) throws IOException {
-        Path path = Path.of(target.toString().replace(".java", ".jsonl"));
-        Files.createDirectories(path.getParent());
+        Files.createDirectories(target.getParent());
         TreeMap<String, String> document = new TreeMap<>();
         document.put("kind", JsonOut.string("document"));
         document.put("document_id", JsonOut.string(documentId));
@@ -70,7 +69,29 @@ public final class Main {
         List<String> all = new ArrayList<>();
         all.add(JsonOut.object(document));
         all.addAll(factLines);
-        Files.write(path, String.join("\n", all).concat("\n").getBytes("UTF-8"));
+        Files.write(target, String.join("\n", all).concat("\n").getBytes("UTF-8"));
+    }
+
+    /** Forward slashes whatever the platform. `relative_path` is hashed into
+     *  the document id and reappears in artifact names, so a backslash here
+     *  would make one module produce different documents on Windows. */
+    private static String posix(Path relative) {
+        StringBuilder joined = new StringBuilder();
+        for (Path part : relative) {
+            if (joined.length() > 0) joined.append('/');
+            joined.append(part);
+        }
+        return joined.toString();
+    }
+
+    /** Suffix-aware, because `String.replace` is a *global* substring replace:
+     *  it rewrites every occurrence, so a workspace path holding ".java"
+     *  anywhere would be corrupted mid-string rather than re-extensioned. */
+    private static String replaceSuffix(String value, String from, String to) {
+        if (!value.endsWith(from)) {
+            throw new IllegalArgumentException("expected " + value + " to end with " + from);
+        }
+        return value.substring(0, value.length() - from.length()) + to;
     }
 
     private static String report(int documents, int facts) {
