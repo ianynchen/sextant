@@ -20,6 +20,21 @@ _GAPS = [
         "so any POM that depends on a parent, an active profile, or a property "
         "placeholder will be misread — which is most real-world POMs."
     ),
+    (
+        "Catalogs are not matched to modules: every catalog's `detect.coordinates` "
+        "is declared and read by nobody, so every catalog runs against every "
+        "module whether or not the module depends on that framework."
+    ),
+    (
+        "Nested and anonymous classes are not read: they are named below as "
+        "uncovered, but their endpoints and annotations are absent from "
+        "everything above. A non-empty uncovered list does not yet stop the run."
+    ),
+    (
+        "Module classification reads only a container file and a declared main "
+        "class: a module showing neither is reported `undetermined` rather than "
+        "weighed against the rest of the evidence."
+    ),
 ]
 
 

@@ -18,6 +18,9 @@ PHASE_1_GAPS = [
     "outbound_endpoints_not_implemented",
     "call_graph_not_implemented",
     "maven_parent_and_profile_resolution_not_implemented",
+    "catalog_module_matching_not_implemented",
+    "nested_and_anonymous_classes_not_read",
+    "module_classification_evidence_incomplete",
 ]
 
 

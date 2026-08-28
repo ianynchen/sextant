@@ -29,7 +29,7 @@ Status values: `planned` · `in-progress` · `delivered` · `deferred` · `cance
 | Technology choices in [ARCHITECTURE.md](ARCHITECTURE.md) §9, §9a | **approved 2026-08-27** | Core stack wholesale; audit-round tools decided individually |
 | Control-flow scope for version 1 | **approved 2026-08-27** | Loops, optionality, grouped alternatives; unnamed branches recorded as a known gap |
 | Rapid type analysis in version 1 | **approved 2026-08-27** | On top of hierarchy analysis, from the start |
-| Repository initialisation under version control | planned | `GUIDELINES.md` §11 — the one remaining blocker before commits can exist |
+| Repository initialisation under version control | delivered | `GUIDELINES.md` §11 — done; the branch `feat/phase-1-vertical-slice` carries the Phase 1 history |
 
 ## Data definitions
 

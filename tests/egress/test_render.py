@@ -3,8 +3,8 @@ from pathlib import Path
 
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.pipeline import ResolveReport
-from sextant.egress.render.document import render_module_document
-from sextant.egress.render.metadata import write_metadata
+from sextant.egress.render.document import _GAPS, render_module_document
+from sextant.egress.render.metadata import PHASE_1_GAPS, write_metadata
 
 MODULE = ModuleModel(
     module_id="com.acme:orders-service",
@@ -51,3 +51,11 @@ def test_document_is_identical_when_rendered_twice_from_the_same_report():
     assert render_module_document(MODULE, REPORT, "a3f91c") == render_module_document(
         MODULE, REPORT, "a3f91c"
     )
+
+
+def test_every_machine_readable_gap_has_a_sentence_a_person_can_read():
+    """`metadata.json` lists gap keys and the document lists gap sentences, and
+    the two are kept in correspondence by a comment alone. A key with no
+    sentence is a gap the machine reports and the reader never sees — which is
+    a document that reads as complete when it is not (M07)."""
+    assert len(PHASE_1_GAPS) == len(_GAPS)
