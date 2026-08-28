@@ -353,6 +353,11 @@ on the wire than its schema states**. Structural comparison (DR-5) that reads th
 and compares it to a JSON contract will report a total mismatch unless the mapping is applied
 first. This is a concrete correctness bug waiting in the matching rule.
 
+**But the descriptor answers it for us.** Reading a generated message through protobuf's own
+reflection exposes each field's `JSONName()` — verified against protobuf-go — so the mapping
+is **data we read, not an algorithm we implement**, and any `json_name` override comes with
+it. That turns a subtle rule we could get wrong into a field lookup.
+
 **Comparison is only valid within a format, or across a known mapping.** DR-5's directional
 structural compatibility assumes both sides describe the same wire. A Protobuf request
 contract and a JSON response contract are not comparable until one is projected into the

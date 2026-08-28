@@ -205,6 +205,30 @@ knowledge, so unwrapping is catalog data ([D02](D02-catalog-schema.md)) applied 
 deliberately small role set — `read`, `write`, `import`, `generated`, `type_use` — for
 body-level uses only; signature-level type uses come from the structured signatures.
 
+**A type reference carries nullability, and it is three-valued.** `nullable`, `not_null`,
+`unknown` — never a boolean. An unannotated Java field is **`unknown`**, not optional, and
+collapsing the two would let an absent annotation masquerade as a positive statement that a
+field may be omitted. This is the same rule as [D02](D02-catalog-schema.md) §2c's on formats:
+an assumption must not wear an observation's clothes.
+
+It sits on the **type reference** rather than the field, because the two differ:
+`@Nullable List<String>` is not `List<@Nullable String>`, and only a per-reference value can
+tell them apart.
+
+**Which annotation means nullable is framework knowledge, so it is catalog data**
+([D02](D02-catalog-schema.md) §2e), never a list in the scanner. The same concept is spelled
+`org.jspecify.annotations.Nullable`, `org.springframework.lang.Nullable`,
+`javax.annotation.Nullable`, `jakarta.annotation.Nullable`,
+`org.jetbrains.annotations.Nullable` and `androidx.annotation.Nullable`, and a codebase
+compiled over a decade may carry several at once. A scanner that hard-coded one would report
+`unknown` for the rest.
+
+**Kotlin's nullability is in its type system, not an annotation**, so it arrives through
+`ext.kotlin.nullable` (§6) — but the adapter **projects it into the shared three-valued field**
+rather than leaving it in the extension. Nullability crosses languages: it decides `required`
+on a shape field, which is what DR-5 compares. Anything the comparison needs cannot live
+behind an extension read boundary.
+
 **Literal values have a typed model**: string, number, boolean, enum reference, **class
 reference — captured as a symbol reference, not a string** — and arrays of these. This is
 what lets a catalog's `response_arg: 2` on `postForObject(url, req, OrderResponse.class)`
@@ -221,6 +245,15 @@ declared shapes arrive in it already, because it is what schema formats natively
 Java `long` and an OpenAPI `integer/int64` meet in the middle as `integer/int64`. This
 vocabulary is a closed set, and it is the comparison level of DR-5's structural matching
 and FR-11's drift report — never Java types against spec types directly.
+
+**A code shape's `required` is derived, and records how.** `declared_shape` fields carry
+`required` because schema formats state it outright; a shape rooted from code has to work it
+out, from a nullability annotation (§5a), from a Kotlin type, from a `wrapper` declared
+`optional` such as `java.util.Optional`, or from a framework's own attribute — Jakarta REST's
+`@DefaultValue`, a Pydantic default, `serde`'s `skip_serializing_if`. Where nothing states it,
+`required` is `unknown` and the endpoint says so. **DR-5 must not read `unknown` as
+`optional`**: a request contract missing a field the callee requires is a real defect, and a
+contract that never said either way is not evidence that it is safe.
 
 ### Why `module` is a fact and not a passing argument
 

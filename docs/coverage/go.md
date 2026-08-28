@@ -66,11 +66,30 @@ All of these except pre-1.22 `net/http` are the same underlying job: **a method 
 | SQS | `aws-sdk-go-v2` | `client.SendMessage(ctx, &sqs.SendMessageInput{QueueUrl: …})` | `registration_call` — struct literal again |
 | Pub/Sub | `cloud.google.com/go/pubsub` | `client.Topic("name").Publish(ctx, msg)`; `client.Subscription("s").Receive(ctx, fn)` | `fluent_chain`, two links |
 | gRPC | `google.golang.org/grpc` | server `pb.RegisterFooServer(s, impl)`; client `pb.NewFooClient(conn)` | `registration_call` — **the generated registration function names the service explicitly.** Cleaner than the JVM's `extends FooImplBase`. |
-| Protobuf | `google.golang.org/protobuf` | generated `.pb.go` embeds the serialized `FileDescriptorProto` as a raw byte slice ⚠️ | `generated_descriptor` |
+| Protobuf | `google.golang.org/protobuf` | generated `.pb.go` embeds the serialized `FileDescriptorProto` as `file_<path>_proto_rawDesc` — **a `[]byte` up to protobuf-go 1.31 and a `const string` by 1.36**, so a reader must handle both | `generated_descriptor` |
 | AMQP | `rabbitmq/amqp091-go` (was `streadway/amqp`) | `ch.QueueDeclare(name, …)`, `ch.Publish(exchange, key, …)` | `registration_call` |
 | NATS | `nats.go` | `nc.Subscribe("subject", cb)`, `nc.Publish("subject", data)` | `registration_call` |
 
 ---
+
+## Protobuf descriptors — verified locally
+
+Tested against protobuf-go v1.31.0 and v1.36.12 rather than taken from documentation, because
+the representation changed between them:
+
+```
+v1.31.0   var  file_google_protobuf_timestamp_proto_rawDesc = []byte{ … }
+v1.36.12  const file_google_protobuf_timestamp_proto_rawDesc = "" + …
+```
+
+Loading the package and reading `ProtoReflect().Descriptor()` recovers the full schema — file
+path, syntax, package, message full name, and per field the number, kind, JSON name and
+whether the `optional` keyword was present. **The whole `.proto` is there.**
+
+One consequence reaches beyond Go. The descriptor carries each field's `JSONName()`, so
+proto3's lowerCamelCase JSON mapping ([COVERAGE](../COVERAGE.md) §4.3) is **data we read, not
+an algorithm we implement** — `total_amount` versus `totalAmount` comes from the descriptor
+itself, including any `json_name` override.
 
 ## Payloads — the strongest story of any language here
 

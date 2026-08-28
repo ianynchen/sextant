@@ -302,6 +302,46 @@ a partially-configured module look like a module with fewer boundaries.
 
 ---
 
+## 2e. Nullability declarations
+
+Which annotation means "may be absent" is framework knowledge, so catalogs declare it and
+[D00](D00-fact-schema.md) §5a's three-valued nullability is populated from it:
+
+```yaml
+nullability:
+  nullable:
+    - org.jspecify.annotations.Nullable
+    - org.springframework.lang.Nullable      # deprecated in Spring 7, still in compiled code
+    - javax.annotation.Nullable
+    - jakarta.annotation.Nullable
+    - org.jetbrains.annotations.Nullable
+    - androidx.annotation.Nullable
+  not_null:
+    - org.jspecify.annotations.NonNull
+    - org.springframework.lang.NonNull
+    - org.jetbrains.annotations.NotNull
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+```
+
+**Several of these coexist in one codebase.** A module compiled over a decade may carry the
+JetBrains annotations in old code, Spring's in middle-aged code, and JSpecify in new code, all
+reaching the same shape. A catalog listing one of them reports `unknown` for the others, which
+DR-5 must not read as `optional`.
+
+**`NullMarked` is a scope, not a field marker.** JSpecify's default-non-null applies to a
+package or class, so a field with *no* annotation inside a `@NullMarked` scope is `not_null` —
+the absence carries meaning, and only a declared scope rule recovers it.
+
+**Two facts about reading these that [M03](M03-scanner.md) has to face.** JSpecify is
+`TYPE_USE` with `RUNTIME` retention, so it lands in `RuntimeVisibleTypeAnnotations` — the
+scanner does not override `visitTypeAnnotation` at all today, and M03 names only the
+*Invisible* attribute, so **both** must be read. And the older annotations are mostly
+`CLASS`-retention, landing in the *Invisible* attribute instead, so neither table can be
+skipped.
+
+---
+
 ## 3. Ordering
 
 Engines run in a fixed order because later passes depend on earlier ones: inbound first,
@@ -358,5 +398,6 @@ were skipped, and why.
 | How a catalog expresses a topic name assembled from a constant and a literal | Kafka catalogs |
 | The closed set for `format`, and whether a schema-registry subject is part of it | §2c, and Avro or Protobuf on Kafka |
 | Whether `resolves` needs config-sourced conditions, for a Kafka `value.serializer` in properties | §2c format resolution for Kafka |
+| Whether a scope rule (`@NullMarked`) may be declared on a package as well as a class, and how it interacts with `@NullUnmarked` | §2e |
 | Whether the manifest reader pins framework versions, given the files are undocumented internals that may shift | §2's `filesystem` style |
 | **How much expressiveness `address_from_config` needs before it stops being data.** Spring Cloud Stream's binding suffix depends on the functional interface, gains an index for multiple inputs, and can be overridden wholesale by `spring.cloud.function.definition` | §2d, and the Spring Cloud Stream catalog |

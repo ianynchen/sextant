@@ -25,6 +25,36 @@ Rust has excellent *compilers* and poor *compiler APIs*. There is no stable, sup
 
 **Provisional recommendation:** for a first pass, `syn` at the syntax level, accepting `resolution: partial` on everything that needs a type. That yields the annotation-shaped frameworks and nothing else. A typed Rust pass should wait for a stable rustdoc JSON format or a decision to pin a toolchain version.
 
+### ⛔ What is blocked, and what is not
+
+This is the only ⛔ in the coverage set. **Blocked** means no amount of effort on our side
+produces the thing, because it does not exist to be used — verified August 2026, when rustdoc
+JSON remained nightly-only with a `FORMAT_VERSION` that breaks between releases.
+
+**Blocked: anything needing a resolved type.** Dispatch through traits, call edges through
+generics, `axum`'s and `warp`'s routes built as values, and any shape that must follow a type
+across a crate boundary.
+
+**Not blocked, and worth having on its own:** `actix-web` and Rocket's `#[get("/path")]`
+attributes, `prost`'s `#[prost(string, tag = "1")]` field numbers, and every `serde` payload
+shape — wire name, optionality and type. All of that is in the token stream and `syn` reads it
+without resolving a single type. The blocked half is real but it is not the whole language.
+
+**Alternatives, best first.**
+
+1. **Drive `rust-analyzer` over LSP.** It has no stable library API, but LSP is a protocol and
+   is stable enough to depend on. **Python needs exactly this trick for `pyright`**, whose
+   maintainers give the same answer — so one LSP-backed fact source serves both languages, and
+   two separate blockers collapse into one component. The strongest option, and the reason is
+   that it is not Rust-specific.
+2. **Ship syntax-only via `syn`**, with `resolution: partial` on everything needing a type.
+   Available now, and covers the "not blocked" list above.
+3. **Pin a nightly toolchain** and read rustdoc JSON behind a `FORMAT_VERSION` matrix — what
+   `cargo-public-api` and docs.rs already do. Real maintenance, known shape.
+4. **A rustc driver reading MIR.** Most powerful, pins an exact nightly, most brittle.
+
+Do 2 now and 1 when types are needed, precisely because 1 is shared with Python.
+
 ---
 
 ## Inbound HTTP
