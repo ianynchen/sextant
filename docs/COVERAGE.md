@@ -146,9 +146,10 @@ that language exists. It is not a cost you can pay today. Only ✅ and ◐ mean 
 | **Rust** | A | A | — † | B | ⚠️ | B |
 | **Swift** | A | — | — | — | — | B |
 
-Payload formats are a **separate axis** — see §4. They are orthogonal to both tables
-(Avro-over-Kafka, Protobuf-over-gRPC, Protobuf-over-Kafka, JSON-over-REST are all real) and
-almost entirely language-independent.
+**Wire format is not in these tables at all** — see §4. Format is a property of a channel to
+be *inferred*, not a protocol to be supported: Avro-over-Kafka, Protobuf-over-gRPC,
+Protobuf-over-REST and JSON-over-anything are all real, and the detection job is nearly
+identical in every language.
 
 ### Reading the matrices
 
@@ -216,28 +217,99 @@ Per-language essays — toolchain detail, payload handling, structural oddities:
 
 ---
 
-## 4. Payload formats — the orthogonal axis
+## 4. Wire format — a separate concern from protocol
 
-Avro and Protobuf are **not protocols**; they are serialization formats that ride on the
-protocols in §2. Treating them as columns would create meaningless cells ("Avro in Go" — over
-what transport?) and hide the ones that matter ("Avro-over-Kafka subject naming").
+Format is not a protocol and not a coverage cell. It is a **property of a channel that has to
+be inferred**, and it decomposes into two questions asked in order:
 
-They are also **almost entirely language-independent**, which is a genuine simplification:
-generated code carries the schema in every language, always as `generated_descriptor`.
+1. **What is on the wire?** Does this Kafka topic carry Avro, Protobuf, JSON or opaque bytes?
+   Does this REST endpoint serve JSON or `application/x-protobuf`?
+2. **Where is the spec for it, and how does it bind?** Which `.proto` message, which `.avsc`
+   record, which XSD element describes what question 1 found?
 
-| Format | Where the schema lives | Shape | Tier | Note |
-|---|---|---|---|---|
-| **Protobuf** | Generated code embeds the serialized `FileDescriptorProto` — JVM `getDescriptor()`, Go `.pb.go` raw descriptor ⚠️, Python `_pb2.py` `DESCRIPTOR`, Rust `prost` field attributes, Swift generated structs | `generated_descriptor` | **B** | **The whole `.proto` is recoverable from compiled output.** Field numbers are the strongest join key of any protocol — both sides derive from one schema, so numbers must agree (DR-5). |
-| **Avro** | Generated JVM classes extend `org.apache.avro.specific.SpecificRecordBase` with `public static final Schema SCHEMA$` | `generated_descriptor` | **B** | Same trick as protobuf. Confluent subject naming: `<topic>-key` / `<topic>-value` under the default `TopicNameStrategy`. |
-| **JSON** | Jackson/`serde`/Pydantic/`Codable`/struct tags — the type declaration *is* the schema | `annotation` / type read | ◐ | Shipped as type references, not expanded fields. Optionality is what needs nullability annotations (§7). |
-| **JSON Schema** | Fastify route options, `zod`, OpenAPI components | literal / `fluent_chain` | B | Already in the shape we want |
-| **XML / XSD** | WSDL and XSD documents | artifact | C | Deferred with SOAP |
+In that framing Protobuf and Avro are **no different from JSON or XML**. The only reason they
+felt different is that we have been silently assuming JSON for REST — which is not
+necessarily true, and worse, is not currently recorded as an assumption.
 
-**Two version traps.** JVM protobuf generated classes extend `GeneratedMessageV3`
-(protobuf-java 3.x) **or `GeneratedMessage`** (4.26+, with `V3` deprecated and slated for
-removal in 5.x). Both must be matched. And Confluent's serializer FQNs ⚠️ are unconfirmed.
+### 4.1 Detecting the format
 
----
+Evidence quality varies enormously by protocol. Three regimes:
+
+| Protocol | How the format is declared | Evidence | If nothing is declared |
+|---|---|---|---|
+| **gRPC** | **Fixed by the protocol** | `compiler` | Protobuf, always. The only certain cell in this table. |
+| SOAP | Fixed | `compiler` | XML |
+| GraphQL | Fixed | `compiler` | JSON |
+| **REST in** | `produces` / `consumes`, JAX-RS `@Produces` / `@Consumes`, or a return type that is itself a generated message | `declared` | **Assumed** from the framework's default converter (Jackson → JSON) |
+| **REST out** | `Content-Type` / `Accept` set somewhere in the client chain | `syntax` | **Assumed** JSON |
+| **Kafka** | **Serializer configuration** — `key.serializer` / `value.serializer`, or the generic parameters of `KafkaTemplate<K,V>` and the `@KafkaListener` payload type | `config_join` | Unknown. Kafka carries anything. |
+| SSE | `text/event-stream` framing; the payload inside each event is separate | `declared` | Assumed JSON per event |
+| WebSocket | A negotiated subprotocol, or nothing — usually only the parse call | `syntax` | Unknown |
+| **Pub/Sub** | Nothing. The message is `bytes`. Only the **parse call** reveals it — `Order.parseFrom(data)` versus `objectMapper.readValue(data, Order.class)` | `syntax` | Unknown |
+| **SQS** | Nothing. The body is a string; same as Pub/Sub | `syntax` | Unknown |
+| JMS | `TextMessage` / `BytesMessage` / `ObjectMessage`, then the parse call | `syntax` | Unknown |
+
+Kafka is the interesting one, because the answer sits in configuration rather than code —
+`config_join` again (§7), the same shape as Spring Cloud Stream destinations:
+
+| Serializer | Format | Schema registry |
+|---|---|---|
+| `org.apache.kafka.common.serialization.StringSerializer` | string | no |
+| `…serialization.ByteArraySerializer` | opaque bytes | no |
+| `io.confluent.kafka.serializers.KafkaAvroSerializer` | Avro | **yes** — subject `<topic>-value` |
+| `io.confluent.kafka.serializers.protobuf.KafkaProtobufSerializer` ⚠️ | Protobuf | yes |
+| `io.confluent.kafka.serializers.json.KafkaJsonSchemaSerializer` ⚠️ | JSON Schema | yes |
+| `org.springframework.kafka.support.serializer.JsonSerializer` | JSON | no |
+
+### 4.2 Binding the spec
+
+| Format | Spec artifact | Where it lives | Binds by |
+|---|---|---|---|
+| **Protobuf** | `.proto`, or the `FileDescriptorProto` embedded in generated code | repository **and** compiled output | message type name |
+| **Avro** | `.avsc`, or `SCHEMA$` on a `SpecificRecordBase` subclass | repository **and** compiled output | record full name; on Kafka, the **subject** `<topic>-value` |
+| **JSON** | Usually none — **the DTO type declaration is the spec** | code | type reference |
+| JSON Schema | Fastify route options, OpenAPI `components`, `zod` | code or artifact | `$ref` / type reference |
+| XML | XSD, WSDL | repository | namespace + element name |
+
+Protobuf and Avro share a property nothing else here has: **the schema survives into the
+compiled artifact**, so it is recoverable from a jar with no source present. That is the same
+mechanism in every language — `generated_descriptor` — which is why it needs saying once
+rather than seven times.
+
+### 4.3 What this changes in the model
+
+**An assumed format must not look like an observed one.** If a REST endpoint declares no
+`produces` and we record JSON because Jackson is the default, that is an *inference from
+framework configuration*, not an observation. It belongs at `evidence: declared` with
+`resolution: narrowed` at best — never at the same trust level as a `produces` attribute or a
+Kafka serializer setting. Today we would record nothing at all, which is arguably more honest
+and definitely less useful.
+
+**Protobuf-over-REST silently renames every field.** The proto3 JSON mapping converts field
+names to lowerCamelCase by default, so a proto field `total_amount` appears on a JSON wire as
+`totalAmount` unless `json_name` overrides it. Any service defined by a `.proto` but exposed
+over REST — gRPC transcoding, gRPC-Gateway, Connect — therefore has **different field names
+on the wire than its schema states**. Structural comparison (DR-5) that reads the `.proto`
+and compares it to a JSON contract will report a total mismatch unless the mapping is applied
+first. This is a concrete correctness bug waiting in the matching rule.
+
+**Comparison is only valid within a format, or across a known mapping.** DR-5's directional
+structural compatibility assumes both sides describe the same wire. A Protobuf request
+contract and a JSON response contract are not comparable until one is projected into the
+other.
+
+**Avro already solved our matching problem, and we should borrow its vocabulary.** Schema
+registries enforce `BACKWARD` (a new reader can read old data), `FORWARD` (an old reader can
+read new data) and `FULL` compatibility. That is exactly DR-5's directional rule — request a
+superset of required fields, response a subset — expressed in terms the industry already
+uses. Aligning our vocabulary with it costs nothing and buys credibility over inventing our
+own.
+
+**The registry is a runtime service, not a repository artifact.** For Kafka with Confluent
+serializers the authoritative schema lives in a schema registry we cannot read at scan time.
+What we *can* derive statically is the **subject name** from the topic and the naming
+strategy — which is enough to state what would have to be fetched, and is a natural place for
+a `sync` command to fill in later.
 
 ## 5. The checklist, by protocol
 
@@ -619,12 +691,15 @@ Recommend **per-language baseline** (§1). Measured against the JVM, every non-J
 and the column carries no information. Measured against each language's baseline, `gin` is A
 and Go's Pub/Sub is B — which is the distinction we actually want when planning work.
 
-**Q2 — Do Avro and Protobuf belong on the protocol axis? needs a decision.**
-Recommend **no** — a separate format axis (§4). They ride *on* the protocols, so cells like
-"Avro in Go" have no meaning without naming a transport, while the fact that matters —
-Avro-over-Kafka subject naming — has nowhere to live. They are also nearly
-language-independent, which is a simplification worth capturing rather than spreading across
-seven rows.
+**Q2 — Do Avro and Protobuf belong on the protocol axis? resolved — separated entirely.**
+No, and not as a parallel coverage axis either. Format is a **property of a channel that has
+to be inferred**, in two steps: detect what is on the wire, then bind the spec that describes
+it (§4). In that framing Protobuf and Avro are no different from JSON or XML — the only
+reason they seemed different is that we were **silently assuming JSON for REST**, which is
+not necessarily true and was not recorded as an assumption. §4 now covers detection evidence
+per protocol, spec binding per format, and the consequences: assumed formats must not carry
+observed-format trust, and proto3's lowerCamelCase JSON mapping renames every field on a
+transcoded wire.
 
 **Q3 — HTTP versus REST as separate columns? resolved.**
 Neither. **HTTP is a transport; the axis is the application protocol running on it** — REST,
