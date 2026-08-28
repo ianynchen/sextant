@@ -48,7 +48,7 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     )
     assert result.exit_code == 0, result.output
     metadata = json.loads((tmp_path / "metadata.json").read_text())
-    assert metadata["endpoints"]["inbound"]["http"] == 6
+    assert metadata["endpoints"]["inbound"]["http"] == 17
 
 
 def test_render_writes_the_document_after_analyze(tmp_path: Path):

@@ -11,13 +11,20 @@ requires: [annotation_args]
 
 matches:
   type_annotation: org/springframework/web/bind/annotation/RestController#
-  path_prefix_from:
-    annotation: org/springframework/web/bind/annotation/RequestMapping#
-    arg: value
   request_body_annotation: org/springframework/web/bind/annotation/RequestBody#
-  method_annotations:
-    - { fqn: org/springframework/web/bind/annotation/GetMapping#,    http_method: GET,    path_arg: value }
-    - { fqn: org/springframework/web/bind/annotation/PostMapping#,   http_method: POST,   path_arg: value }
-    - { fqn: org/springframework/web/bind/annotation/PutMapping#,    http_method: PUT,    path_arg: value }
-    - { fqn: org/springframework/web/bind/annotation/DeleteMapping#, http_method: DELETE, path_arg: value }
-    - { fqn: org/springframework/web/bind/annotation/PatchMapping#,  http_method: PATCH,  path_arg: value }
+  mapping:
+    # `value` and `path` are @AliasFor each other, so only the one the author
+    # typed reaches the bytecode. First present wins, in this order.
+    path_from: [value, path]
+    method_from: method
+    all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
+    prefix_annotation: org/springframework/web/bind/annotation/RequestMapping#
+    annotations:
+      # @RequestMapping carries no pre-set method: it takes one from its own
+      # `method` attribute, and means every method when that is absent.
+      - { fqn: org/springframework/web/bind/annotation/RequestMapping# }
+      - { fqn: org/springframework/web/bind/annotation/GetMapping#,    method: [GET] }
+      - { fqn: org/springframework/web/bind/annotation/PostMapping#,   method: [POST] }
+      - { fqn: org/springframework/web/bind/annotation/PutMapping#,    method: [PUT] }
+      - { fqn: org/springframework/web/bind/annotation/DeleteMapping#, method: [DELETE] }
+      - { fqn: org/springframework/web/bind/annotation/PatchMapping#,  method: [PATCH] }

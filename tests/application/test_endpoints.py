@@ -26,17 +26,15 @@ _INVENTED_LISTENER = Catalog(
     requires=("annotation_args",),
     matches={
         "type_annotation": "com/acme/messaging/annotation/Listener#",
-        "path_prefix_from": {
-            "annotation": "com/acme/messaging/annotation/Topic#",
-            "arg": "value",
+        "mapping": {
+            "path_from": ["value"],
+            "method_from": "method",
+            "all_methods": ["PUBLISH"],
+            "prefix_annotation": "com/acme/messaging/annotation/Topic#",
+            "annotations": [
+                {"fqn": "com/acme/messaging/annotation/OnMessage#", "method": ["PUBLISH"]},
+            ],
         },
-        "method_annotations": [
-            {
-                "fqn": "com/acme/messaging/annotation/OnMessage#",
-                "http_method": "PUBLISH",
-                "path_arg": "value",
-            },
-        ],
     },
 )
 
@@ -52,8 +50,23 @@ def test_catalog_declares_its_style_and_required_capabilities_when_loaded():
 
 def test_catalog_maps_post_mapping_to_the_post_method():
     spring = next(c for c in load_catalogs(CATALOGS) if c.id == "spring-web")
-    methods = {m["fqn"]: m["http_method"] for m in spring.matches["method_annotations"]}
-    assert methods["org/springframework/web/bind/annotation/PostMapping#"] == "POST"
+    annotations = spring.matches["mapping"]["annotations"]
+    methods = {m["fqn"]: m.get("method") for m in annotations}
+    assert methods["org/springframework/web/bind/annotation/PostMapping#"] == ["POST"]
+
+
+def test_catalog_leaves_request_mapping_without_a_preset_method():
+    """`@RequestMapping` takes its method from its own argument, and means every
+    method when it has none — so it must declare no default here, or the
+    fallback that produces one endpoint per method can never be reached."""
+    spring = next(c for c in load_catalogs(CATALOGS) if c.id == "spring-web")
+    annotations = spring.matches["mapping"]["annotations"]
+    request_mapping = next(
+        m
+        for m in annotations
+        if m["fqn"] == "org/springframework/web/bind/annotation/RequestMapping#"
+    )
+    assert "method" not in request_mapping
 
 
 def _controller_facts(root: Path) -> None:
@@ -397,10 +410,15 @@ _SCALAR_PATH_CATALOG = Catalog(
     requires=("annotation_args",),
     matches={
         "type_annotation": "com/acme/rest/Resource#",
-        "path_prefix_from": {"annotation": "com/acme/rest/Path#", "arg": "value"},
-        "method_annotations": [
-            {"fqn": "com/acme/rest/Get#", "http_method": "GET", "path_arg": "value"},
-        ],
+        "mapping": {
+            "path_from": ["value"],
+            "method_from": "method",
+            "all_methods": ["GET"],
+            # Not a mapping annotation: this catalog is the JAX-RS shape, where
+            # the type carries the path and the method carries the verb.
+            "prefix_annotation": "com/acme/rest/Path#",
+            "annotations": [{"fqn": "com/acme/rest/Get#", "method": ["GET"]}],
+        },
     },
 )
 

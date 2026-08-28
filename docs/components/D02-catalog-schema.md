@@ -61,13 +61,48 @@ The declaration is an annotation and its arguments.
 ```yaml
 style: annotation_driven
 matches:
-  type_annotation:   org.springframework.web.bind.annotation.RestController
-  method_annotations:
-    - { fqn: "…annotation.GetMapping",  http_method: GET,  path_arg: value }
-    - { fqn: "…annotation.PostMapping", http_method: POST, path_arg: value }
-  path_prefix_from: { annotation: "…annotation.RequestMapping", arg: value }
+  type_annotation: org.springframework.web.bind.annotation.RestController
   request_body_annotation: "…annotation.RequestBody"
+  mapping:
+    path_from: [value, path]
+    method_from: method
+    all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
+    prefix_annotation: "…annotation.RequestMapping"
+    annotations:
+      - { fqn: "…annotation.RequestMapping" }
+      - { fqn: "…annotation.GetMapping",    method: [GET] }
+      - { fqn: "…annotation.PostMapping",   method: [POST] }
 ```
+
+**One shape, and each annotation carries only what differs about it.** This mirrors the
+framework rather than working around it: `@GetMapping` *is* `@RequestMapping` with the method
+pre-set, and its own class file says so — it is meta-annotated
+`@RequestMapping(method = [GET])` and declares no `method` attribute of its own.
+
+Four rules follow, and none of them names a framework:
+
+- **`prefix_annotation` names the type-level annotation carrying the path prefix**, and it
+  reads `path_from` like everything else. It stays a separate field rather than being inferred
+  from position: Spring puts the prefix and the method on one annotation, but JAX-RS does not —
+  `@Path` on the type is the prefix and `@GET` on the method is the verb. An engine that
+  inferred the role from position alone would serve Spring and no one else.
+- **`path_from` lists attributes that alias one another**, first present wins, in the order
+  written. Spring's `value` and `path` are `@AliasFor` each other, so only one of them is in
+  the bytecode: whichever the author typed. Reading one name and defaulting to empty would
+  emit an endpoint with **no path** — wrong output rather than a missing one.
+- **The method comes from the attribute if present, else the annotation's declared default,
+  else every method in `all_methods`.**
+- **An annotation naming no method produces one endpoint per method**, not one endpoint with
+  an unresolved method. It is not that the analysis failed; the handler genuinely accepts them
+  all. Endpoint identity is minted from the wire contract including the method
+  ([D01](D01-graph-schema.md)), so a caller sending `POST` must match an inbound endpoint that
+  accepts `POST`. One endpoint with an unresolved method would match every caller and blunt
+  the comparison the tool exists to make.
+
+**This table hand-copies what the bytecode already states**, and that is a deliberate,
+temporary duplication. A `meta_annotations` capability would derive it instead, by reading the
+annotation's own class file and following the composition — which would also cover a project's
+own composed annotations, such as an `@ApiGet` built from `@GetMapping`. Recorded in §7.
 
 Covers Spring Web, JAX-RS, Spring Kafka, JMS listeners, and JAX-WS.
 
@@ -406,6 +441,7 @@ were skipped, and why.
 | How a catalog expresses a topic name assembled from a constant and a literal | Kafka catalogs |
 | The closed set for `format`, and whether a schema-registry subject is part of it | §2c, and Avro or Protobuf on Kafka |
 | Whether `resolves` needs config-sourced conditions, for a Kafka `value.serializer` in properties | §2c format resolution for Kafka |
+| A `meta_annotations` capability: follow an annotation's own meta-annotations so composed annotations resolve, instead of listing each one | §2 `annotation_driven`, and every custom composed mapping annotation |
 | Whether a scope rule (`@NullMarked`) may be declared on a package as well as a class, and how it interacts with `@NullUnmarked` | §2e |
 | Whether the manifest reader pins framework versions, given the files are undocumented internals that may shift | §2's `filesystem` style |
 | **How much expressiveness `address_from_config` needs before it stops being data.** Spring Cloud Stream's binding suffix depends on the functional interface, gains an index for multiple inputs, and can be overridden wholesale by `spring.cloud.function.definition` | §2d, and the Spring Cloud Stream catalog |

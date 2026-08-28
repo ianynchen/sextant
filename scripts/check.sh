@@ -24,6 +24,8 @@ if [ "${1:-}" = "--lint" ]; then
     exit 0
 fi
 
-step "pytest"; "${BIN}pytest" -q
+# Before pytest, not after: the end-to-end tests load the shaded jar, so a
+# stale one makes them pass or fail on the previous build's extractor.
 step "extractor build and tests"; (cd extractor-jvm && ./gradlew --quiet build)
+step "pytest"; "${BIN}pytest" -q
 printf '\n\033[32mall gates passed\033[0m\n'

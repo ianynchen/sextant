@@ -113,20 +113,23 @@ def derive_endpoints(
 
 
 def _run_annotation_driven(workspace: Workspace, catalog: Catalog) -> None:
-    """Passes the catalog's own protocol, direction, annotation identifiers,
-    and HTTP-method mapping through to the derivation as bound parameters.
-    The engine here is generic: it never names a framework or a protocol,
-    only forwards what the catalog declares."""
-    prefix_from = catalog.matches["path_prefix_from"]
+    """Passes the catalog's own protocol, direction, annotation identifiers and
+    mapping declaration through to the derivation as bound parameters. The
+    engine here is generic: it never names a framework or a protocol, only
+    forwards what the catalog declares."""
+    mapping = catalog.matches["mapping"]
     workspace.derive(
         "endpoints",
         protocol=catalog.protocol,
         direction=catalog.direction,
         type_annotation=catalog.matches["type_annotation"],
-        prefix_annotation=prefix_from["annotation"],
-        prefix_arg=prefix_from["arg"],
-        method_annotations=[
-            {"fqn": m["fqn"], "http_method": m["http_method"], "path_arg": m["path_arg"]}
-            for m in catalog.matches["method_annotations"]
+        prefix_annotation=mapping["prefix_annotation"],
+        # `method` is absent for an annotation that pre-sets none, and the
+        # derivation reads that absence as "every method in all_methods".
+        mapping_annotations=[
+            {"fqn": m["fqn"], "methods": m.get("method")} for m in mapping["annotations"]
         ],
+        path_from=list(mapping["path_from"]),
+        method_from=mapping["method_from"],
+        all_methods=list(mapping["all_methods"]),
     )
