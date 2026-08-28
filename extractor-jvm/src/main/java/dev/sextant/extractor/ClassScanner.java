@@ -53,7 +53,58 @@ public final class ClassScanner {
             String methodSymbol = symbolOf(owner + name + "().");
             emit(methodSymbol, "<init>".equals(name) ? "constructor" : "method",
                  typeSymbol, signatureJson(descriptor, sig), access);
-            return null;
+            return new MethodVisitor(Opcodes.ASM9) {
+                @Override
+                public org.objectweb.asm.AnnotationVisitor visitAnnotation(String d, boolean visible) {
+                    return annotationVisitor(methodSymbol, d, visible);
+                }
+            };
+        }
+
+        @Override
+        public org.objectweb.asm.AnnotationVisitor visitAnnotation(String descriptor, boolean visible) {
+            return annotationVisitor(typeSymbol, descriptor, visible);
+        }
+
+        private org.objectweb.asm.AnnotationVisitor annotationVisitor(
+                String target, String descriptor, boolean visible) {
+            String annotation = Type.getType(descriptor).getInternalName() + "#";
+            TreeMap<String, String> args = new TreeMap<>();
+            return new org.objectweb.asm.AnnotationVisitor(Opcodes.ASM9) {
+                @Override public void visit(String name, Object value) {
+                    args.put(name == null ? "value" : name, literal(value));
+                }
+                @Override public org.objectweb.asm.AnnotationVisitor visitArray(String name) {
+                    List<String> items = new ArrayList<>();
+                    return new org.objectweb.asm.AnnotationVisitor(Opcodes.ASM9) {
+                        @Override public void visit(String ignored, Object value) {
+                            items.add(literal(value));
+                        }
+                        @Override public void visitEnd() {
+                            args.put(name == null ? "value" : name, JsonOut.array(items));
+                        }
+                    };
+                }
+                @Override public void visitEnd() {
+                    TreeMap<String, String> use = new TreeMap<>();
+                    use.put("annotation", JsonOut.string(annotation));
+                    use.put("args", JsonOut.object(args));
+                    TreeMap<String, String> fact = new TreeMap<>();
+                    fact.put("kind", JsonOut.string("annotation"));
+                    fact.put("document_id", JsonOut.string(documentId));
+                    fact.put("target", JsonOut.string(target));
+                    fact.put("use", JsonOut.object(use));
+                    fact.put("retention", JsonOut.string(visible ? "runtime" : "class"));
+                    lines.add(JsonOut.object(fact));
+                }
+            };
+        }
+
+        private String literal(Object value) {
+            if (value instanceof String text) return JsonOut.string(text);
+            if (value instanceof Boolean || value instanceof Number) return String.valueOf(value);
+            if (value instanceof Type type) return JsonOut.string(type.getInternalName() + "#");
+            return JsonOut.string(String.valueOf(value));
         }
 
         private String signatureJson(String descriptor, String genericSignature) {
