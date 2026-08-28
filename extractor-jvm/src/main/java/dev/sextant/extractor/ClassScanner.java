@@ -253,7 +253,7 @@ public final class ClassScanner {
          *  reference" (D00 §5a), not beside it. */
         private String fieldTypeRef(Type type) {
             TreeMap<String, String> ref = new TreeMap<>();
-            ref.put("symbol", JsonOut.string(referenceSymbol(type)));
+            ref.put("symbol", JsonOut.string(TypeRefs.descriptorName(type)));
             ref.put("arguments", JsonOut.array(List.of()));
             ref.put("wire_type", JsonOut.string(WireTypes.of(type)));
             ref.put("wire_format", JsonOut.string(WireTypes.format(type)));
@@ -265,18 +265,6 @@ public final class ClassScanner {
             ref.put("nullable", String.valueOf(nullable));
             ref.put("nullable_resolution", JsonOut.string(nullable ? "partial" : "resolved"));
             return JsonOut.object(ref);
-        }
-
-        // Mirrors TypeRefs.descriptorName's symbol grammar. Kept local rather
-        // than exposed from TypeRefs: this task's scope is visitField, and
-        // fields need no generic-argument recursion beyond what method
-        // parameters already settle for without it.
-        private String referenceSymbol(Type type) {
-            return switch (type.getSort()) {
-                case Type.ARRAY -> referenceSymbol(type.getElementType()) + "[]";
-                case Type.OBJECT -> type.getInternalName() + "#";
-                default -> type.getClassName() + "#";
-            };
         }
 
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access) {

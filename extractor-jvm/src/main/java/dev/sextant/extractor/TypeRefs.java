@@ -16,7 +16,9 @@ public final class TypeRefs {
         return ref(descriptorName(type), List.of());
     }
 
-    private static String descriptorName(Type type) {
+    // Package-private: ClassScanner's field type references share this exact
+    // symbol grammar rather than keeping their own copy of it.
+    static String descriptorName(Type type) {
         return switch (type.getSort()) {
             case Type.OBJECT -> type.getInternalName() + "#";
             case Type.ARRAY -> descriptorName(type.getElementType()) + "[]";
