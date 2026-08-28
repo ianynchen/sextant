@@ -10,8 +10,11 @@ class Workspace(Protocol):
     def load_facts(self, fact_root: Path) -> int:
         """Bulk-ingest every fact file under fact_root. Returns rows loaded."""
 
-    def derive(self, name: str) -> None:
-        """Run one named derivation, rebuilding its tables whole."""
+    def derive(self, name: str, **params: object) -> None:
+        """Run one named derivation, rebuilding its tables whole. `params`
+        are bound into the derivation's SQL by name — this is how a generic
+        engine (D02) passes catalog data in without the SQL ever containing
+        the catalog's literals."""
 
     def query(self, name: str, **params: object) -> list[dict[str, object]]:
         """Run one named query. Unknown names raise KeyError."""

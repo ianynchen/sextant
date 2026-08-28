@@ -43,9 +43,9 @@ class DuckDbWorkspace:
         assert row is not None
         return int(row[0])
 
-    def derive(self, name: str) -> None:
+    def derive(self, name: str, **params: object) -> None:
         sql = (_SQL_DIR / _NAMED_DERIVATIONS[name]).read_text(encoding="utf-8")
-        self._connection.execute(sql)
+        self._connection.execute(sql, params or None)
 
     def query(self, name: str, **params: object) -> list[dict[str, object]]:
         sql = _NAMED_QUERIES[name]

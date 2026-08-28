@@ -31,6 +31,10 @@ src = ["src", "tests"]
 strict = true
 files = ["src"]
 
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
