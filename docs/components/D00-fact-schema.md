@@ -174,7 +174,7 @@ Thirteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `symbol` | Identifier, construct kind, enclosing symbol, **typed signature** (§5a), visibility, range | Symbol graph, shapes, endpoints, class diagrams |
 | `relationship` | Subject, object, relationship kind | Hierarchy, dispatch, class diagrams |
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
-| `annotation` | Target symbol, annotation symbol, **argument values**, retention | Every endpoint engine |
+| `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
 | `call_site` | Caller, target owner, name, descriptor, invoke kind, **control-flow position**, literal arguments | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
 | `constant` | Symbol, value | Topic and URL resolution |
@@ -195,6 +195,17 @@ of the parameter annotated `@RequestBody`" becomes a field read rather than a po
 join, and where a parameter's annotations attach without the parameter needing a symbol of
 its own. (The SCIP parameter descriptor exists for the rare case of naming one from
 outside — a curation, say — and is deferred until something needs it.)
+
+**A type-use annotation attaches to the type reference it annotates, not to a flat fact.**
+A method has more than one type reference — the return type, and each parameter — so the
+annotation alone does not say which one it belongs to the way a field's single reference
+does; only the position it was read from does. A parameter's entry therefore carries a
+`type_annotations` list alongside its declaration-level `annotations`, and the signature
+carries a `return_type_annotations` list alongside `returns`, each entry holding the
+annotation `use`, `retention`, and `type_path` — the same three things a flat `annotation`
+fact carries for a type-use annotation on a field, minus the target it would otherwise need
+to name. Collapsing "the return type is nullable" and "the parameter is nullable" into one
+undifferentiated fact is the ambiguity this placement exists to remove.
 
 **A type reference is a symbol reference plus optional type arguments, recursively.**
 `List<OrderLine>` keeps `OrderLine`; `Mono<ResponseEntity<OrderResult>>` keeps the whole

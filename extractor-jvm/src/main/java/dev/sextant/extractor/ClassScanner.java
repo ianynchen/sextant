@@ -85,7 +85,12 @@ public final class ClassScanner {
             int parameterCount = Type.getArgumentTypes(descriptor).length;
             String[] parameterNames = new String[parameterCount];
             List<List<String>> parameterAnnotations = new ArrayList<>();
-            for (int i = 0; i < parameterCount; i++) parameterAnnotations.add(new ArrayList<>());
+            List<List<String>> parameterTypeAnnotations = new ArrayList<>();
+            for (int i = 0; i < parameterCount; i++) {
+                parameterAnnotations.add(new ArrayList<>());
+                parameterTypeAnnotations.add(new ArrayList<>());
+            }
+            List<String> returnTypeAnnotations = new ArrayList<>();
 
             // Parameter names (visitParameter) and parameter annotations
             // (visitParameterAnnotation) arrive as callbacks during the visit, so the
@@ -115,13 +120,36 @@ public final class ClassScanner {
                 @Override
                 public org.objectweb.asm.AnnotationVisitor visitTypeAnnotation(
                         int typeRef, org.objectweb.asm.TypePath typePath, String d, boolean visible) {
-                    return typeAnnotationVisitor(methodSymbol, typePath, d, visible);
+                    // A method has more than one type reference — the return type,
+                    // and each parameter — so unlike a field's single reference,
+                    // the annotation itself does not say which one it belongs to.
+                    // TypeReference's sort does: attach to the matching slot in the
+                    // signature (D00 §5a) rather than a flat fact a consumer would
+                    // have to match back to "which parameter, or the return type".
+                    org.objectweb.asm.TypeReference reference = new org.objectweb.asm.TypeReference(typeRef);
+                    return switch (reference.getSort()) {
+                        case org.objectweb.asm.TypeReference.METHOD_RETURN ->
+                            typeAnnotationEntryVisitor(typePath, d, visible, returnTypeAnnotations);
+                        case org.objectweb.asm.TypeReference.METHOD_FORMAL_PARAMETER -> {
+                            int index = reference.getFormalParameterIndex();
+                            yield (index >= 0 && index < parameterTypeAnnotations.size())
+                                ? typeAnnotationEntryVisitor(
+                                    typePath, d, visible, parameterTypeAnnotations.get(index))
+                                : null;
+                        }
+                        // Type-parameter bounds, the receiver type, and throws
+                        // clauses have no slot in today's signature (D00 §5a covers
+                        // parameters and the return type only) — out of scope here,
+                        // not silently misattributed to one of those two.
+                        default -> null;
+                    };
                 }
 
                 @Override
                 public void visitEnd() {
                     emit(methodSymbol, constructKind, typeSymbol,
-                         signatureJson(descriptor, sig, parameterNames, parameterAnnotations), access);
+                         signatureJson(descriptor, sig, parameterNames, parameterAnnotations,
+                                       parameterTypeAnnotations, returnTypeAnnotations), access);
                 }
             };
         }
@@ -209,6 +237,24 @@ public final class ClassScanner {
             return useCollectingVisitor(descriptor, sink::add);
         }
 
+        /** A method's type-use annotation attaches the same way — inline on the
+         *  return type or the matching parameter's entry, never a flat fact —
+         *  but unlike a declaration-level parameter annotation it also carries
+         *  `retention` and `type_path`: D00 §5a's per-reference value is what
+         *  tells `@Nullable List<String>` apart from `List<@Nullable String>`,
+         *  and both retention tables land here (see {@link #typeAnnotationVisitor}). */
+        private org.objectweb.asm.AnnotationVisitor typeAnnotationEntryVisitor(
+                org.objectweb.asm.TypePath typePath, String descriptor, boolean visible, List<String> sink) {
+            String typePathString = typePath == null ? "" : String.valueOf(typePath);
+            return useCollectingVisitor(descriptor, use -> {
+                TreeMap<String, String> entry = new TreeMap<>();
+                entry.put("use", use);
+                entry.put("retention", JsonOut.string(visible ? "runtime" : "class"));
+                entry.put("type_path", JsonOut.string(typePathString));
+                sink.add(JsonOut.object(entry));
+            });
+        }
+
         /** Collects one annotation's argument values and hands the finished
          *  {@code {"annotation":...,"args":{...}}} JSON to {@code onUse}. */
         private org.objectweb.asm.AnnotationVisitor useCollectingVisitor(
@@ -265,7 +311,9 @@ public final class ClassScanner {
         }
 
         private String signatureJson(String descriptor, String genericSignature,
-                                      String[] parameterNames, List<List<String>> parameterAnnotations) {
+                                      String[] parameterNames, List<List<String>> parameterAnnotations,
+                                      List<List<String>> parameterTypeAnnotations,
+                                      List<String> returnTypeAnnotations) {
             Type[] argumentTypes = Type.getArgumentTypes(descriptor);
             List<String> parameters = new ArrayList<>();
             for (int i = 0; i < argumentTypes.length; i++) {
@@ -273,6 +321,9 @@ public final class ClassScanner {
                 parameter.put("annotations", JsonOut.array(parameterAnnotations.get(i)));
                 parameter.put("name", parameterNames[i] == null ? "null" : JsonOut.string(parameterNames[i]));
                 parameter.put("type", TypeRefs.fromType(argumentTypes[i]));
+                // Type-use annotations on this parameter's type — distinct from
+                // "annotations" above, which are declaration-level (D00 §5a).
+                parameter.put("type_annotations", JsonOut.array(parameterTypeAnnotations.get(i)));
                 parameters.add(JsonOut.object(parameter));
             }
             String generic = TypeRefs.returnFromSignature(genericSignature);
@@ -280,6 +331,7 @@ public final class ClassScanner {
             TreeMap<String, String> signature = new TreeMap<>();
             signature.put("parameters", JsonOut.array(parameters));
             signature.put("returns", returns);
+            signature.put("return_type_annotations", JsonOut.array(returnTypeAnnotations));
             return JsonOut.object(signature);
         }
 

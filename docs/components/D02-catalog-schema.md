@@ -377,11 +377,9 @@ package or class, so a field with *no* annotation inside a `@NullMarked` scope i
 the absence carries meaning, and only a declared scope rule recovers it.
 
 **Two facts about reading these that [M03](M03-scanner.md) has to face.** JSpecify is
-`TYPE_USE` with `RUNTIME` retention, so it lands in `RuntimeVisibleTypeAnnotations` — the
-scanner does not override `visitTypeAnnotation` at all today, and M03 names only the
-*Invisible* attribute, so **both** must be read. And the older annotations are mostly
-`CLASS`-retention, landing in the *Invisible* attribute instead, so neither table can be
-skipped.
+`TYPE_USE` with `RUNTIME` retention, so it lands in `RuntimeVisibleTypeAnnotations`. And the
+older annotations are mostly `CLASS`-retention, landing in the *Invisible* attribute
+instead. Neither table can be skipped — the scanner reads both.
 
 ---
 

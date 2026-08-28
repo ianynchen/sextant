@@ -20,4 +20,15 @@ public class FieldSample {
     // the outer type is nullable here, the element type below.
     public @org.jspecify.annotations.Nullable List<String> maybeList;
     public List<@org.jspecify.annotations.Nullable String> listOfMaybe;
+    // CLASS retention: the invisible-type-annotation table, unlike everything
+    // else in this file which is JSpecify's RUNTIME.
+    public @ClassRetainedNullable String classRetained;
+
+    // Both the return type and the parameter type are annotated, so a scanner
+    // that discarded which type reference an annotation belongs to (as opposed
+    // to whether it belongs to one at all) would attach both to the same place.
+    public @org.jspecify.annotations.Nullable String getName(
+            @org.jspecify.annotations.Nullable String input) {
+        return input;
+    }
 }
