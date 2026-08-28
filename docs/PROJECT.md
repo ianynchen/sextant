@@ -21,6 +21,7 @@ Status values: `planned` · `in-progress` · `delivered` · `deferred` · `cance
 | Schema closure audit — four gaps found and resolved | delivered | NFR-6 |
 | Tool capability audit — matrix in ARCHITECTURE §9a, four decisions | delivered | `GUIDELINES.md` §7 |
 | [COVERAGE.md](COVERAGE.md) — framework and protocol reach, gaps tiered A/B/C | delivered | [FR-3](REQUIREMENTS.md#fr-3--endpoint-catalog), NFR-9 |
+| [coverage/](COVERAGE.md#9-beyond-the-jvm) — Go, Rust, Python, TypeScript, Android, iOS | delivered | REQUIREMENTS § Scope |
 | Phase 1 vertical slice — fixture repo to endpoint catalog, byte-identical | delivered | [FR-1](REQUIREMENTS.md#fr-1--module-discovery), [FR-2](REQUIREMENTS.md#fr-2--fact-extraction), [FR-3](REQUIREMENTS.md#fr-3--endpoint-catalog), [FR-17](REQUIREMENTS.md#fr-17--coverage-reporting), [FR-20](REQUIREMENTS.md#fr-20--command-surface), NFR-1, NFR-5, NFR-10, NFR-11 |
 
 ## Approvals

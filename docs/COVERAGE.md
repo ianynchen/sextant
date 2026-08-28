@@ -1,40 +1,69 @@
 # COVERAGE
 
-What Sextant detects today, and what it does not. Delivery status is in
-[PROJECT.md](PROJECT.md); this document is about *reach* — which real-world ways of
-declaring a boundary we can actually see.
+What Sextant can detect, and what it cannot. Delivery status is in [PROJECT.md](PROJECT.md);
+this document is about *reach* — which real-world ways of declaring a boundary we can
+actually see. It is the completeness checklist for future implementation.
 
 Written after running Phase 1 against a real project ([spring-petclinic](https://github.com/spring-projects/spring-petclinic)),
 which found **zero endpoints on the first attempt** because the catalog matched
-`@RestController` and petclinic uses `@Controller`. That failure is the reason this
-document exists: coverage gaps are invisible until something real is pointed at the tool.
+`@RestController` and petclinic uses `@Controller`. That failure is why this document
+exists: coverage gaps are invisible until something real is pointed at the tool.
+
+| | |
+|---|---|
+| §1–§8 | The JVM — the MVP languages, in detail |
+| §9 | [Go](coverage/go.md) · [Rust](coverage/rust.md) · [Python](coverage/python.md) · [TypeScript and JavaScript](coverage/typescript.md) · [Android and iOS](coverage/mobile.md) |
+| §10 | Why Python and JavaScript are the hard cases, and what to do about it |
+| §11–§12 | What all of it implies |
 
 ---
 
-## How to read this
+## 1. How to read this
 
-Every gap is one of three kinds, and the distinction is the whole point — they cost
-wildly different amounts to close.
+### Detection shapes
+
+Every boundary in every language and framework surveyed here falls into one of eight
+shapes. **The shape predicts the cost far better than the language or the protocol does**,
+so this is the vocabulary the rest of the document uses. Ordered cheapest first.
+
+| Shape | The facts live in | Example |
+|---|---|---|
+| `annotation` | A declaration | `@GetMapping("/x")`, NestJS `@Get()`, Retrofit `@GET`, FastAPI `@app.get` |
+| `registration_call` | One call's literal arguments | `app.get("/x", h)`, `mux.HandleFunc("GET /x", h)`, `pb.RegisterFooServer(s, impl)` |
+| `generated_descriptor` | Schema embedded in generated code | protobuf descriptors, Avro `SCHEMA$` |
+| `interface_implementation` | A type's supertype | gRPC `FooImplBase`, `MessageReceiver` |
+| `fluent_chain` | Spread across a builder chain | `WebClient`, `RestClient`, AWS SDK, Vert.x |
+| `filesystem` | The file's path on disk | Next.js `app/api/users/[id]/route.ts` |
+| `config_join` | Code names a key; the value is in configuration | Spring Cloud Stream, SmallRye, MicroProfile REST Client |
+| `runtime_dynamic` | Constructed at runtime; **no static form exists** | `boto3` clients, DRF routers, `@grpc/proto-loader` |
+
+`runtime_dynamic` is the only one where the honest answer is that we cannot see it. The
+other seven are engineering.
+
+### Tiers
+
+Within the JVM, where a scanner already exists, gaps are tiered by cost:
 
 | Tier | Means | Cost |
 |---|---|---|
 | **A** | A catalog entry away. Fits an engine that already exists. | One YAML file and a fixture. **No code.** |
 | **B** | Needs a scanner capability we have not built. | Real work in the extractor, then a catalog. |
-| **C** | The boundary does not exist in the code at all. | New modelling — a rule that infers a boundary from something other than an annotation. |
+| **C** | The boundary is not in the code at all. | New modelling. |
 
-Tier A is large and cheap. Tier B is gated almost entirely on one capability. Tier C is
-where the interesting design problems are.
+Tier A is large and cheap. Tier B is gated almost entirely on one capability
+(`fluent_chain` reconstruction). Tier C is where the interesting design problems are.
 
-**Verification.** Facts below were researched against primary sources in August 2026.
-Anything marked ⚠️ was not confirmed from a primary source and **must be verified before
-being written into a catalog** — a wrong annotation name produces silently wrong output,
-which is the failure mode this project cares most about.
+### Verification
+
+Facts were researched against primary sources in August 2026. Anything marked ⚠️ was not
+confirmed and **must be verified before being written into a catalog** — a wrong
+annotation name does not fail loudly, it silently matches nothing.
 
 ---
 
-## 1. Supported today
+## 2. Supported today
 
-Java and Kotlin, from compiled bytecode, via ASM. Two catalogs, both `annotation_driven`,
+Java and Kotlin, from compiled bytecode, via ASM. Two catalogs, both `annotation`-shaped,
 both inbound HTTP only.
 
 | Catalog | Type annotation | Method annotations | Path prefix |
@@ -42,158 +71,212 @@ both inbound HTTP only.
 | `spring-web` | `@RestController` | `@GetMapping`, `@PostMapping`, `@PutMapping`, `@DeleteMapping`, `@PatchMapping` | class-level `@RequestMapping`, `value` only |
 | `spring-mvc` | `@Controller` | same | same |
 
-Paths are read from the `value` attribute, first array element, with a scalar fallback.
+Paths come from the `value` attribute, first array element, with a scalar fallback.
 Endpoints carry request and response **type references**, not expanded field lists.
 
 **Two scanner capabilities are implemented** of eight designed: `annotation_args` and
-`typed_signatures`. Everything below that needs one of the other six is Tier B by
-definition.
+`typed_signatures`. Anything needing one of the other six is Tier B by definition.
 
 **Nothing outbound exists.** No call sites are recorded at all, so the system tier has
 nothing to match on.
 
 ---
 
-## 2. Gaps inside Spring MVC — the framework we claim to support
+## 3. Gaps inside Spring MVC — the framework we claim to support
 
-These are the highest-value gaps in the project, because they affect codebases we would
-otherwise report on confidently.
+The highest-value gaps in the project, because they affect codebases we would otherwise
+report on confidently.
 
 | Gap | Tier | Note |
 |---|---|---|
-| **`@RequestMapping(method = RequestMethod.GET)`** | **A** | The original Spring form, ubiquitous in code written before 4.3. We treat `@RequestMapping` **only** as a prefix, so such a controller yields **zero endpoints** — the petclinic failure again, in a different disguise. **The single biggest gap.** |
+| **`@RequestMapping(method = RequestMethod.GET)`** | **A** | The original Spring form, ubiquitous in code written before 4.3. We treat `@RequestMapping` **only** as a prefix, so such a controller yields **zero endpoints** — the petclinic failure in a different disguise. **The single biggest gap.** |
 | `@RequestMapping` with no `method` | A | Matches every verb. Invisible today. |
 | `path =` as an alias for `value =` | A | Spring treats them identically. We read `value` only, so `@GetMapping(path="/x")` produces an **empty path** — wrong output, not missing output. |
 | `produces` / `consumes` | A | Part of the wire contract; ignored entirely. |
-| `@RequestMapping` on an **interface or superclass** | B | Spring inherits mappings. We read only a class's own annotations. Common with `interface FooApi` + `class FooController implements FooApi`. |
-| **Meta-annotations** — custom `@ApiGet` composed from `@GetMapping` | B | Spring resolves these transitively. We match FQNs exactly, so a composed annotation is invisible. Needs scanning annotation *classes* for their own annotations. |
+| `@RequestMapping` on an interface or superclass | B | Spring inherits mappings; we read only a class's own annotations. Common with `interface FooApi` + `class FooController implements FooApi`. |
+| **Meta-annotations** — custom `@ApiGet` composed from `@GetMapping` | B | Spring resolves these transitively; we match FQNs exactly. |
 | `@ControllerAdvice` + `@ExceptionHandler` | C | Not endpoints, but they define the error contract of *every* endpoint. |
-| **Spring Data REST** (`@RepositoryRestResource`) | **C** | A repository *interface* silently becomes a full CRUD HTTP API. No controller, no mapping annotation, nothing to match. |
-| Actuator — `@Endpoint`/`@ReadOperation`, plus built-ins | A / C | The annotations are Tier A; the built-in endpoints exist from a dependency and a property, with no code at all. |
-| Servlets, filters, interceptors | C | `@WebServlet`, `FilterRegistrationBean`, `HandlerInterceptor`, `WebFilter`. |
-| `@ConditionalOnProperty` / `@Profile` controllers | C | An endpoint that exists in one environment and not another — interacts with the environment model we designed but have not exercised. |
-| WebFlux **functional routing** — `RouterFunctions.route().GET(…)`, Kotlin `coRouter { }` | **B** | No annotations exist. Needs chain reconstruction and the `fluent` engine style, neither implemented. |
-| WebFlux annotated controllers returning `Mono`/`Flux` | B | The **endpoint is found**; the response type is the wrapper, because wrapper unwrapping ([D02](components/D02-catalog-schema.md) §2a) is designed and not implemented. |
-| Nested and inner classes | B | Currently skipped and *reported* as uncovered — honest, but a nested `@Controller` is a real missed endpoint. |
+| **Spring Data REST** (`@RepositoryRestResource`) | **C** | A repository *interface* silently becomes a full CRUD HTTP API. No controller, no mapping annotation. |
+| Actuator — `@Endpoint`/`@ReadOperation`, plus built-ins | A / C | The annotations are Tier A; the built-ins exist from a dependency and a property, with no code at all. |
+| Servlets, filters, interceptors | C | `@WebServlet`, `FilterRegistrationBean`, `HandlerInterceptor`, `WebFilter` |
+| `@ConditionalOnProperty` / `@Profile` controllers | C | An endpoint that exists in one environment and not another |
+| WebFlux **functional routing** — `RouterFunctions.route().GET(…)`, Kotlin `coRouter { }` | **B** | `fluent_chain` / `combinator` — no annotations exist |
+| WebFlux annotated controllers returning `Mono`/`Flux` | B | The **endpoint is found**; the response type is the wrapper, because unwrapping ([D02](components/D02-catalog-schema.md) §2a) is designed and not implemented |
+| Nested and inner classes | B | Skipped and *reported* — honest, but a nested `@Controller` is a real missed endpoint |
 
 ---
 
-## 3. Spring Framework 7 / Spring Boot 4
-
-Researched specifically because the version is current and our catalogs were written
-against Boot 3 idioms.
+## 4. Spring Framework 7 / Spring Boot 4
 
 | Feature | Exact form | Tier | Verified |
 |---|---|---|---|
-| **API versioning** | `version` attribute on `@RequestMapping` and its composed annotations: `@GetMapping(path="/x", version="1.1")`. Values fixed (`"1.2"`) or baseline (`"1.2+"`). | **A** | ✅ javadoc + release notes |
-| **HTTP service client registration** | `org.springframework.web.service.registry.ImportHttpServices` on a `@Configuration` class, registering `@HttpExchange` interfaces as proxies without manual `HttpServiceProxyFactory` wiring | A (once outbound exists) | ✅ javadoc |
+| **API versioning** | `version` attribute on `@RequestMapping` and composed annotations: `@GetMapping(path="/x", version="1.1")`. Fixed (`"1.2"`) or baseline (`"1.2+"`). | **A** | ✅ javadoc + release notes |
+| **HTTP service client registration** | `org.springframework.web.service.registry.ImportHttpServices` on a `@Configuration` class | A (once outbound exists) | ✅ javadoc |
 | **JSpecify null-safety** | `org.jspecify.annotations.{Nullable,NonNull,NullMarked,NullUnmarked}`, `TYPE_USE` + `RUNTIME` | **B** | ✅ javadoc |
-| `org.springframework.lang.Nullable` deprecated | Replaced by JSpecify; **both FQNs must be matched**, since code compiled against ≤6 still carries the old one | B | ✅ reference docs |
-| `RestTemplate` deprecation | Intent announced in 7.0; formal `@Deprecated` reportedly 7.1 | — | ⚠️ secondary source only |
-| Version-aware functional route predicates | A predicate for matching by API version in `RouterFunctions` | B | ⚠️ method name unconfirmed |
+| `org.springframework.lang.Nullable` deprecated | Replaced by JSpecify; **both FQNs must be matched** | B | ✅ reference docs |
+| `RestTemplate` deprecation | Intent announced in 7.0; formal `@Deprecated` reportedly 7.1 | — | ⚠️ secondary source |
+| Version-aware functional route predicates | A `RouterFunctions` predicate matching by API version | B | ⚠️ name unconfirmed |
 
-**Consequence for us that is easy to miss.** JSpecify is `TYPE_USE` with `RUNTIME`
-retention, so it lands in `RuntimeVisibleTypeAnnotations`. [M03](components/M03-scanner.md)
-names the **Invisible** attribute. When type annotations are implemented, **both** must be
-read — and today the scanner overrides `visitTypeAnnotation` at all, so neither is.
-Nullability is what sets `required` on a contract field, so this gates honest shape
-comparison.
+**Easy to miss:** JSpecify is `TYPE_USE` with `RUNTIME` retention, so it lands in
+`RuntimeVisibleTypeAnnotations`. [M03](components/M03-scanner.md) names the **Invisible**
+attribute, and the scanner does not override `visitTypeAnnotation` at all today, so neither
+is read. Nullability is what sets `required` on a contract field, so this gates honest
+shape comparison.
 
 ---
 
-## 4. Other JVM frameworks
+## 5. Other JVM frameworks
 
 The headline finding: **in both Micronaut and Quarkus the original annotations survive
 compilation with `RUNTIME` retention.** Neither framework's build-time processor strips
-them — both emit *additional* generated classes alongside. So Sextant's bytecode approach
-works for them unchanged, and the annotation-driven parts are Tier A.
+them — both emit *additional* generated classes alongside. Our bytecode approach works on
+them unchanged, and the annotation-driven parts are Tier A.
 
 ### Micronaut
 
 | Concern | Exact form | Tier |
 |---|---|---|
-| Inbound | `io.micronaut.http.annotation.Controller` (class, `value` is a **String**, not an array) + `Get`/`Post`/`Put`/`Delete`/`Patch`/`Head`/`Options`/`Trace`, each with `value`/`uri` as String **and** `uris` as String[] | **A** |
-| Declarative client | `io.micronaut.http.client.annotation.Client` — target is a URL, a service id, or a `${property}` placeholder | A |
-| Programmatic client | `HttpRequest.GET(uri)` static factory + `client.retrieve(…)`/`exchange(…)` — **not** a fluent builder over a live request | A-ish |
-| Kafka | `@KafkaListener` (class) + `@Topic` (method); `@KafkaClient` + `@Topic` for producers | A |
-| JMS | `@JMSListener` (class) + `@Queue`/`@Topic` (method) | A |
-| SQS | **No first-party annotations** — raw AWS SDK v2, or `micronaut-jms-sqs` bridging the JMS annotations | B |
-| Pub/Sub | `@PubSubClient` (interface) and `@PubSubListener` (class) + `@Subscription` — **Micronaut is the only framework surveyed with a first-party Pub/Sub annotation** | A |
-| gRPC | Bean extending the generated `XxxGrpc.XxxImplBase`; client stubs built manually from a `@GrpcChannel`-qualified channel | B |
+| Inbound | `io.micronaut.http.annotation.Controller` (class, `value` is a **String**) + `Get`/`Post`/`Put`/`Delete`/`Patch`/`Head`/`Options`/`Trace`, each with `value`/`uri` as String **and** `uris` as String[] | **A** |
+| Declarative client | `io.micronaut.http.client.annotation.Client` — URL, service id, or `${property}` | A |
+| Programmatic client | `HttpRequest.GET(uri)` static factory + `client.retrieve`/`exchange` | `registration_call` |
+| Kafka | `@KafkaListener` + `@Topic`; `@KafkaClient` + `@Topic` | A |
+| JMS | `@JMSListener` + `@Queue`/`@Topic` | A |
+| SQS | **No first-party annotations** — raw AWS SDK, or `micronaut-jms-sqs` | B |
+| Pub/Sub | `@PubSubClient`, `@PubSubListener` + `@Subscription` — **the only first-party Pub/Sub annotation surveyed** | A |
+| gRPC | `@Singleton` extending the generated `ImplBase`; `@GrpcChannel` factory | B |
 
-⚠️ The Kafka annotations are documented under `io.micronaut.configuration.kafka.annotation`; Micronaut has relocated `configuration.*` packages before, so verify per version.
+⚠️ Kafka annotations documented under `io.micronaut.configuration.kafka.annotation`;
+Micronaut has relocated `configuration.*` packages before — verify per version.
 
 ### Quarkus
 
 | Concern | Exact form | Tier |
 |---|---|---|
-| Inbound | **`jakarta.ws.rs`** (Jakarta REST): `@Path` (class, `value` is a String) + `@GET`/`@POST`/`@PUT`/`@DELETE`/`@PATCH`/`@HEAD`/`@OPTIONS` | **A** |
-| Custom verbs | `jakarta.ws.rs.HttpMethod` as a meta-annotation | B (meta-annotations) |
-| Reactive Routes | `io.quarkus.vertx.web.Route` on bean methods — a genuinely distinct second style | A |
-| Declarative client | `org.eclipse.microprofile.rest.client.inject.RegisterRestClient`; URL via `baseUri` **or** a `<fqcn>/mp-rest/url` property | A + config join |
-| Programmatic client | Vert.x `WebClient` (Mutiny flavour) — genuinely fluent: `webClient.get(path).send()` | B |
-| Messaging (all brokers) | SmallRye: `org.eclipse.microprofile.reactive.messaging.{Incoming,Outgoing}` naming a **channel**, with the actual topic bound in `application.properties` | **C** — see §7 |
-| gRPC | `io.quarkus.grpc.GrpcService` on a CDI bean; `io.quarkus.grpc.GrpcClient("name")` injection | A |
-
-Note that Jakarta REST's `@Path` `value` is a **scalar String**, not an array — precisely
-the case our scalar fallback was added for.
+| Inbound | **`jakarta.ws.rs`**: `@Path` (a scalar String) + `@GET`/`@POST`/`@PUT`/`@DELETE`/`@PATCH`/`@HEAD`/`@OPTIONS` | **A** |
+| Custom verbs | `jakarta.ws.rs.HttpMethod` as a meta-annotation | B |
+| Reactive Routes | `io.quarkus.vertx.web.Route` on bean methods | A |
+| Declarative client | `org.eclipse.microprofile.rest.client.inject.RegisterRestClient`; URL via `baseUri` **or** a `<fqcn>/mp-rest/url` property | A + `config_join` |
+| Programmatic client | Vert.x Mutiny `WebClient` | `fluent_chain` |
+| Messaging (all brokers) | SmallRye `@Incoming`/`@Outgoing` naming a **channel**, topic bound in `application.properties` | **`config_join`** — see §11 |
+| gRPC | `io.quarkus.grpc.GrpcService`, `io.quarkus.grpc.GrpcClient("name")` | A |
 
 ---
 
-## 5. Outbound HTTP
+## 6. JVM libraries and integration frameworks
 
-**Nothing here is supported.** Phase 1 records no call sites at all. Listed by what it
-would take once outbound exists.
+### Protocol Buffers on the JVM
+
+Generated classes extend `com.google.protobuf.GeneratedMessageV3` (protobuf-java 3.x) or
+**`GeneratedMessage`** (4.26+ — `GeneratedMessageV3` is deprecated and slated for removal
+in 5.x ✅ verified). **Both must be matched.** Each message exposes a static
+`getDescriptor()`, and the generated outer file class embeds the serialized
+`FileDescriptorProto`.
+
+**This means the entire `.proto` is recoverable from a compiled jar** — the same trick as
+Avro's `SCHEMA$`. Tier B, high value: field numbers are the strongest join key of any
+protocol, because both sides derive from the same schema.
+
+### Akka and Apache Pekko
+
+✅ Verified, and easy to get wrong. Lightbend moved Akka to the Business Source License
+from 2.7; **Apache Pekko** is the Apache-2.0 fork of Akka 2.6.x. Packages were renamed
+`akka.*` → `org.apache.pekko.*`, and `alpakka` → `connectors` (so
+`akka.stream.alpakka.jms` became `org.apache.pekko.stream.connectors.jms`).
+
+**Every Akka matcher needs a Pekko twin.** A catalog written against one silently matches
+nothing in a codebase using the other, and the split runs right through the middle of the
+Scala/JVM ecosystem.
+
+| Concern | Shape | Tier |
+|---|---|---|
+| Akka HTTP routing DSL — `path("users" / IntNumber) { get { complete(…) } }` | `combinator` | **C-ish.** Nested closures where the route is a *value*, frequently composed across methods. **The hardest inbound form surveyed**, harder than WebFlux functional routing or Rust's `warp`. |
+| Akka HTTP client — `Http().singleRequest(HttpRequest(uri = …))` | `fluent_chain` | B |
+| Alpakka / Pekko Connectors Kafka — `Consumer.plainSource(settings, Subscriptions.topics("t"))` | `registration_call` | B |
+| Akka gRPC | generated services | B |
+| **Actor messaging** — `ref ! msg`, `ref.tell(msg)` | — | **C, and possibly permanent** |
+
+**Actor messaging deserves a plain statement.** `ref ! msg` is a real call edge — control
+and data cross it — but the receiving actor is determined by an `ActorRef` created
+somewhere else entirely, often from configuration or a router. Class hierarchy analysis
+cannot see through it, and neither can RTA or VTA. **In a heavily actor-based system, most
+of the call graph is invisible to any static tool**, ours included. If we support Akka, we
+must say so in the coverage report rather than presenting a confident but hollow graph.
+
+### Vert.x
+
+`io.vertx.ext.web.Router` ✅ — `router.get("/api/whiskies").handler(this::getAll)`, also
+`router.route(HttpMethod.GET, path)` and `router.post(…)`.
+
+This is a `fluent_chain`, but a **short and regular one**: receiver type identifies the
+framework, method name gives the verb, first argument gives the path, and `.handler(ref)`
+gives the target. It is one of the easier Tier B wins and a good first exercise for chain
+reconstruction.
+
+| Concern | Shape | Note |
+|---|---|---|
+| `Router` verb methods | `fluent_chain` | As above |
+| **Event bus** — `vertx.eventBus().send("address", msg)` / `.consumer("address", h)` | `registration_call` | An in-process pub/sub with **string addresses** — matchable exactly like topics, and a genuine boundary between modules |
+| `RouterBuilder.create(vertx, "openapi.yml")` + `.operation("opId").handler(…)` | artifact + `fluent_chain` | **Routes come from the OpenAPI document**, bound by `operationId`. Joins directly to our OpenAPI reader. |
+| Service proxies (`@ProxyGen`) | `annotation` | Generates event-bus clients |
+
+### Others worth a catalog
+
+| Framework | Shape | Note |
+|---|---|---|
+| **Apache Camel** — `from("kafka:orders?brokers=…").to("http://svc/api")` | `fluent_chain` over **URI strings** | Exceptionally information-dense: protocol, direction, destination and options all in one literal. If we read Camel routes we get inbound *and* outbound *and* the protocol in one pass. High value. |
+| **Ktor** (server) — `routing { get("/path") { … } }` | `combinator` | Kotlin DSL; relevant to Android teams running Kotlin on both sides |
+| Javalin — `app.get("/path", ctx -> …)` | `registration_call` | Easy |
+| Dropwizard, RESTEasy, Jersey, Helidon MP | `annotation` (JAX-RS) | Covered by the same `jakarta.ws.rs` catalog as Quarkus |
+| Spring GraphQL — `@QueryMapping`, `@MutationMapping`, `@SchemaMapping` | `annotation` | Tier A |
+| WebSocket / STOMP — `@MessageMapping`, `@ServerEndpoint` | `annotation` | Tier A |
+| RabbitMQ — `@RabbitListener` | `annotation` | Tier A |
+| Apache Pulsar — `@PulsarListener` | `annotation` | Tier A |
+| Scheduling — `@Scheduled`, Quartz | `annotation` | Not a protocol, but a real entry point |
+| Spring Integration | `@ServiceActivator`, `@InboundChannelAdapter` | `config_join` — channels, not destinations |
+| Temporal / Cadence | `@WorkflowInterface`, `@ActivityInterface` | `annotation` — a durable async boundary |
+
+---
+
+## 7. Outbound HTTP on the JVM
+
+**Nothing here is supported.** Phase 1 records no call sites at all.
 
 | Client | Shape | Tier |
 |---|---|---|
-| `RestTemplate` | Single call, URL as an argument | **A** |
-| Feign `@FeignClient` | Annotation on an interface | **A** |
-| Retrofit `@GET` | Annotation on an interface | **A** |
-| Spring `@HttpExchange`/`@GetExchange` | Annotation on an interface | **A** |
-| Micronaut `@Client`, MicroProfile `@RegisterRestClient` | Annotation on an interface | **A** |
-| `RestClient` (Spring 6.1+) | `restClient.get().uri(…).retrieve().body(…)` | **B** — chain reconstruction |
-| `WebClient` | `webClient.get().uri(…).retrieve().bodyToMono(…)` | **B** |
-| OkHttp | `new Request.Builder().url(…).get().build()` then `client.newCall(req).execute()` | **B** |
-| JDK `java.net.http.HttpClient` | `HttpRequest.newBuilder().uri(…).GET().build()` | **B** |
-| Apache HttpClient | `new HttpGet(url)` + `client.execute(…)` | B |
-| Legacy `URL.openConnection()` | — | B |
+| `RestTemplate` | `registration_call` | **A** |
+| Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange`, Micronaut `@Client`, MicroProfile `@RegisterRestClient` | `annotation` | **A** |
+| `RestClient` (Spring 6.1+), `WebClient`, OkHttp, JDK `HttpClient`, Apache HttpClient | `fluent_chain` | **B** |
+| Legacy `URL.openConnection()` | `fluent_chain` | B |
 
 **Chain reconstruction is not one feature among many — it is the gate on modern HTTP
 clients generally.** Every client written in the last five years is a builder chain.
 
-**One schema problem worth flagging now:** `@HttpExchange` is used for declarative
-*clients*, and Spring 6.1+ also supports implementing such an interface *server-side*. The
-same annotation means inbound or outbound depending on context, which our catalog format —
-where `direction` is a property of the catalog, not of the match — cannot express.
+**A schema problem worth flagging now:** `@HttpExchange` is used for declarative *clients*,
+and Spring 6.1+ also supports implementing such an interface *server-side*. The same
+annotation means inbound or outbound depending on context, which our catalog format — where
+`direction` is a property of the catalog, not of the match — cannot express.
 
 ---
 
-## 6. By protocol
-
-Against the protocol list this project set out to support.
-
-### REST / HTTP
-Partially covered inbound (§1–4), nothing outbound (§5).
+## 8. By protocol (JVM)
 
 ### Kafka
 | Form | Exact | Tier |
 |---|---|---|
 | Spring `@KafkaListener` | `org.springframework.kafka.annotation.KafkaListener` — `topics`, `topicPattern`, `topicPartitions`, `groupId` | **A** |
-| Spring `KafkaTemplate` | `send(topic, …)` overloads; also `send(ProducerRecord)` and `send(Message)` with the topic in a header | A / B |
+| Spring `KafkaTemplate` | `send(topic, …)`; also `send(ProducerRecord)` and `send(Message)` with the topic in a header | A / B |
 | Plain client — consume | `KafkaConsumer.subscribe(Collection<String>)` or `subscribe(Pattern)` | A |
-| Plain client — produce | `KafkaProducer.send(ProducerRecord)` — **the topic is a constructor argument of `ProducerRecord`**, not an argument of `send` | **B** — needs value tracking across statements |
-| Spring Cloud Stream functional beans | `Consumer<T>`/`Supplier<T>` beans; topic in `spring.cloud.stream.bindings.<name>.destination` | **C** — see §7 |
+| Plain client — produce | `KafkaProducer.send(ProducerRecord)` — **the topic is a constructor argument of `ProducerRecord`** | **B** |
+| Spring Cloud Stream functional beans | `Consumer<T>`/`Supplier<T>`; topic in `spring.cloud.stream.bindings.<name>.destination` | **`config_join`** |
 
-⚠️ `KafkaTemplate.send` returns `ListenableFuture` in older Spring Kafka and
-`CompletableFuture` in current — version-dependent.
+⚠️ `KafkaTemplate.send` returns `ListenableFuture` in older Spring Kafka, `CompletableFuture` in current.
 
 ### AWS SQS
 | Form | Exact | Tier |
 |---|---|---|
 | Spring Cloud AWS 3.x | `io.awspring.cloud.sqs.annotation.SqsListener`; `io.awspring.cloud.sqs.SqsTemplate` | **A** |
-| Spring Cloud AWS 2.x | `io.awspring.cloud.messaging.listener.annotation.SqsListener` — different package ⚠️ | A |
-| AWS SDK v2 | `SqsClient.sendMessage(SendMessageRequest)`, `receiveMessage(…)`; queue URL via `…builder().queueUrl(…)` | **B** — builder chain |
+| Spring Cloud AWS 2.x | `io.awspring.cloud.messaging.listener.annotation.SqsListener` ⚠️ different package | A |
+| AWS SDK v2 | `SqsClient.sendMessage(SendMessageRequest)`, queue URL via `…builder().queueUrl(…)` | **B** |
 
 ### Google Cloud Pub/Sub
 **The hardest of the six.** No first-party Spring annotation exists.
@@ -201,12 +284,11 @@ Partially covered inbound (§1–4), nothing outbound (§5).
 | Form | Exact | Tier |
 |---|---|---|
 | Micronaut | `@PubSubListener` + `@Subscription`, `@PubSubClient` | **A** |
-| Client library — publish | `Publisher.newBuilder(TopicName.of(project, topic)).build()`, `.publish(PubsubMessage)` | **B** |
-| Client library — subscribe | `Subscriber` + a `MessageReceiver` implementation, `.startAsync()` | **B/C** |
-| Spring Cloud GCP | `PubSubTemplate.subscribe(…)`, or a Spring Integration `PubSubInboundChannelAdapter` + `@ServiceActivator` | **C** |
+| Client library — publish | `Publisher.newBuilder(TopicName.of(project, topic)).build()`, `.publish(…)` | **B** |
+| Client library — subscribe | `Subscriber` + `MessageReceiver`, `.startAsync()` | **B/C** |
+| Spring Cloud GCP | `PubSubTemplate.subscribe(…)`, or `PubSubInboundChannelAdapter` + `@ServiceActivator` | **C** |
 
-⚠️ Spring Cloud GCP packages moved from `org.springframework.cloud.gcp.*` to
-`com.google.cloud.spring.*`; the version of that rename was not confirmed.
+⚠️ Spring Cloud GCP packages moved from `org.springframework.cloud.gcp.*` to `com.google.cloud.spring.*`; version of the rename unconfirmed.
 
 ### JMS
 | Form | Exact | Tier |
@@ -214,93 +296,212 @@ Partially covered inbound (§1–4), nothing outbound (§5).
 | Spring | `org.springframework.jms.annotation.JmsListener` (`destination`, `selector`, `subscription`); `JmsTemplate.send`/`convertAndSend` | **A** |
 | Direct API | `jakarta.jms.{ConnectionFactory,Session,MessageProducer,MessageConsumer}` | B |
 
-**Package change:** `javax.jms` (Spring ≤5 / Boot ≤2) → `jakarta.jms` (Spring 6 / Boot 3+).
-Both must be matched.
+**Package change:** `javax.jms` (Spring ≤5 / Boot ≤2) → `jakarta.jms` (Spring 6 / Boot 3+). Both must be matched.
 
 ### gRPC
 | Form | Exact | Tier |
 |---|---|---|
-| Generated server base | `FooGrpc.FooImplBase` implementing `io.grpc.BindableService` | **B** — `interface_implementation` style, designed but not implemented |
-| Generated client stubs | `FooGrpc.FooStub`/`FooBlockingStub`/`FooFutureStub`, extending `io.grpc.stub.Abstract{Async,Blocking,Future}Stub` | B |
+| Generated server base | `FooGrpc.FooImplBase` implementing `io.grpc.BindableService` | **B** — `interface_implementation`, designed but not implemented |
+| Generated client stubs | `FooStub`/`FooBlockingStub`/`FooFutureStub` extending `io.grpc.stub.Abstract{Async,Blocking,Future}Stub` | B |
 | `net.devh` starter | `net.devh.boot.grpc.server.service.GrpcService`, `net.devh.boot.grpc.client.inject.GrpcClient` | A |
 | Quarkus | `io.quarkus.grpc.GrpcService`, `io.quarkus.grpc.GrpcClient` | A |
-| Official `org.springframework.grpc` starter | Annotation names ⚠️ unconfirmed | A |
-
-**Good news for matching:** both sides derive from the same `.proto`, so field numbers must
-agree — the strongest join key of any protocol, per [ARCHITECTURE](ARCHITECTURE.md) DR-5.
+| Official `org.springframework.grpc` starter | ⚠️ names unconfirmed | A |
 
 ### SOAP
-Deferred by decision. `@WebService`/`@WebMethod` would be Tier A for the endpoints; WSDL
-reading is a separate tier-2 artifact, and without it SOAP link matching falls back to
-structural comparison.
+Deferred by decision. `@WebService`/`@WebMethod` would be Tier A; WSDL reading is a separate tier-2 artifact, and without it SOAP link matching falls back to structural comparison.
 
 ### Avro
 | Form | Exact | Tier |
 |---|---|---|
 | Generated classes | Extend `org.apache.avro.specific.SpecificRecordBase`, carry a **`public static final Schema SCHEMA$`** | **B** |
 | Confluent serializers | `io.confluent.kafka.serializers.KafkaAvroSerializer`/`Deserializer` ⚠️ | B |
-| Subject naming | Default `TopicNameStrategy`: subject = `<topic>-key` / `<topic>-value` | B |
-
-**`SCHEMA$` is the important find.** The schema is retrievable from the compiled class,
-exactly as protobuf's descriptor is — so the "read the schema out of generated code"
-approach behind [ARCHITECTURE](ARCHITECTURE.md) DR-4 generalises to a second format.
+| Subject naming | Default `TopicNameStrategy`: `<topic>-key` / `<topic>-value` | B |
 
 ---
 
-## 7. The strategic risk: boundaries are leaving the code
+## 9. Beyond the JVM
+
+**The fact-source question decides everything, and it ranks the languages very differently
+from how difficulty is usually assumed.** Before asking which frameworks a language has,
+ask what its toolchain will tell us.
+
+| Language | Compiler-grade fact source | Types | Build needed | Call graph available | Rank |
+|---|---|---|---|---|---|
+| **Java / Kotlin** | JVM bytecode via **ASM** | Full | Yes | We write it | 1 |
+| **Go** | **`go/packages`** + `go/ssa` | Full | No (deps only) | ✅ **`callgraph/{cha,rta,vta}` ships with the toolchain** | 2 |
+| **TypeScript** | **`ts.TypeChecker`** compiler API | Full where annotated | No | `Jelly` ✅ | 3 |
+| **Swift** | **IndexStoreDB** (index-while-building) ✅ | Full | Yes (macOS) | Index has call relations | 4 |
+| **Rust** | None stable — `syn` has no types; rustdoc JSON is unstable ⚠️ | Syntax only | — | None | 6 |
+| **Python** | None — pyright has **no programmatic API**, only LSP ⚠️ | Sparse (§10) | No | `PyCG` | 7 |
+| **JavaScript** (no TS) | None | None | No | `Jelly`, degraded | 8 |
+
+Three findings from this table are worth stating outright.
+
+**Go ships the analysis we deferred.** `golang.org/x/tools/go/callgraph` provides `static`,
+`cha`, `rta` and `vta` as maintained library code ✅, and `cha` is documented as sound on
+partial programs — libraries with no `main`, which is our situation exactly. For the JVM we
+planned to write class hierarchy analysis and defer variable type analysis to a later
+version. For Go, all of it exists. **Go's dispatch resolution starts ahead of the JVM's.**
+
+**Swift is not the hard case people assume.** `swiftc` emits index data as a side effect of
+compilation, and `IndexStoreDB` reads it into a queryable store of symbols, occurrences and
+relations ✅ — the same data `sourcekit-lsp` uses for call hierarchy. It needs a build,
+which fits DR-4 precisely. Periphery already works this way.
+
+**For TypeScript the JVM rule inverts.** We scan what is compiled on the JVM because
+bytecode is richer than source. In TypeScript compiled output is *strictly poorer* — types
+erased, decorators lowered to `__decorate` calls, bundlers renaming and inlining. **We must
+scan TypeScript source**, with `tsconfig.json` as the build input carrying authority under
+DR-4.
+
+Per-language detail: [Go](coverage/go.md) · [Rust](coverage/rust.md) ·
+[Python](coverage/python.md) · [TypeScript and JavaScript](coverage/typescript.md) ·
+[Android and iOS](coverage/mobile.md).
+
+---
+
+## 10. The typing problem in Python and JavaScript
+
+The concern is real, but it is narrower and more tractable than "these languages have no
+types". Three findings change the shape of the problem.
+
+### The types exist exactly where the framework needed them
+
+The frameworks hardest to type-erase are the ones that **cannot function without
+declarations**. FastAPI builds validation and its OpenAPI document from parameter
+annotations. NestJS DTOs carry `class-validator` decorators. tRPC procedures are defined by
+a `zod` schema. Fastify routes take a JSON Schema in the options object.
+
+So payload coverage correlates with **framework modernity, not with language**:
+
+| Typed and recoverable | Untyped, needs inference |
+|---|---|
+| FastAPI + Pydantic, Litestar | Flask `request.json["x"]` |
+| NestJS + `class-validator`, tRPC + `zod`, Fastify + JSON Schema | Express `req.body.x` |
+| Go struct tags, Rust `serde`, Swift `Codable` | Plain JavaScript with no `tsconfig.json` |
+
+The right response is not one verdict per language but **`resolution` per endpoint** —
+machinery [D00](components/D00-fact-schema.md) already has.
+
+### "Python is typed now" is false at the granularity we need
+
+⚠️ From a 2026 study of Python libraries and frameworks: **91% contain at least one type
+hint, but half cover only 13.6% of their members.** Among libraries that use hints
+systematically, median coverage is 45.8% of parameters and 35.9% of returns.
+
+So a repository-level check for "does this project use type hints" tells us almost nothing.
+The question has to be asked per function, and the answer will usually be no.
+
+### Benchmark evidence says to use an LLM for shapes and never for edges
+
+⚠️ From an empirical study of 24 LLMs on Python and JavaScript static analysis (arXiv
+2410.00603, Venkatesh and Bodden), evaluated against TypeEvalPy and the SWARM-CG/SWARM-JS
+benchmarks:
+
+- **Call graphs: traditional static analysis wins, consistently.** `PyCG` for Python and
+  `Jelly` for JavaScript outperformed every model tested. Even the strongest models
+  "struggle with completeness and soundness."
+- **Type inference for Python: LLMs win clearly**, surpassing `HeaderGen` and the hybrid
+  `HiTyper`.
+
+That is a precise split, and it maps directly onto machinery we already have:
+
+| Task | Method | `evidence` | `precedence` |
+|---|---|---|---|
+| Call edges, dispatch, reachability | Static analysis (`PyCG`, `Jelly`, `go/callgraph`) | `syntax` / `compiler` | 50 |
+| Payload field names, types, optionality | LLM, where declarations are absent | `llm` | 10 |
+
+**The operating rule: an LLM may propose a shape; it may never propose an edge.** An
+invented field is a visible, checkable error that a human overlay can correct at precedence
+90. An invented call edge silently corrupts blast-radius answers — the thing the tool exists
+to compute — and nothing downstream would catch it.
+
+`PyCG`, `Jelly`, `TypeEvalPy` and `SWARM-CG` also give us something rarer than a technique:
+**published benchmarks to measure our own output against**, rather than asserting quality.
+
+### The residual honest gap
+
+Where a Flask handler reads `request.json["customer"]["id"]`, the wire shape exists only as
+a set of subscript expressions scattered through the function body. Recovering it means
+collecting field accesses along a path — cheap and reliable for *names*, unreliable for
+*types* and worse for *optionality*. `boto3` is the extreme case: its clients are
+synthesised at runtime from JSON service models, so `client.send_message` is defined in no
+Python file at all and no analysis will resolve it. Detection there is a `name_match` on the
+service string `boto3.client("sqs")`, and `resolution: narrowed` is the honest ceiling.
+
+---
+
+## 11. The strategic risk: boundaries are leaving the code
 
 The clearest pattern across all this research, and the thing most likely to limit Sextant's
 value over time.
 
-**Modern frameworks are moving topic and destination names out of annotations and into
-configuration**, leaving only an opaque channel name in the code:
+**Modern frameworks move destinations out of annotations and into configuration**, leaving
+only an opaque channel name in the code:
 
 | Framework | In the code | Where the destination actually lives |
 |---|---|---|
 | Spring Cloud Stream | a `Consumer<T>` bean named `handleOrder` | `spring.cloud.stream.bindings.handleOrder-in-0.destination` |
 | Quarkus / SmallRye | `@Incoming("orders")` | `mp.messaging.incoming.orders.topic` |
 | MicroProfile REST Client | `@RegisterRestClient(configKey="orders")` | `orders/mp-rest/url` |
+| Django | a view function | `urls.py`, in a different module |
 
-An annotation-only reader sees `handleOrder-in-0` and learns nothing. **The join between
-code and configuration is not an optimisation for these frameworks — it is the only path
-to the answer.**
+An annotation-only reader sees `handleOrder-in-0` and learns nothing. **For these
+frameworks the code-to-configuration join is not an optimisation — it is the only path to
+the answer.**
 
 Sextant is better placed for this than most tools, because configuration resolution is
-already a first-class pass and endpoints already carry *expressions* rather than values.
-But no catalog style expresses "the destination is a property key derived from this bean's
-name", and that is a genuine gap in [D02](components/D02-catalog-schema.md), not a missing
-catalog file.
+already a first-class pass and endpoints already carry *expressions* rather than values. But
+no catalog style expresses "the destination is a property key derived from this bean's
+name", and that is a gap in [D02](components/D02-catalog-schema.md), not a missing catalog
+file.
 
-The same drift shows in HTTP: WebFlux functional routing and every modern client are
-builder chains rather than annotations. **The annotation-driven engine covers the past
-well and the future progressively less well.**
+The same drift shows in HTTP: WebFlux functional routing, Akka HTTP's DSL, Rust's `warp`,
+and every modern client are chains or combinators rather than annotations — and Next.js and
+SvelteKit have moved the path out of the code entirely, into the filename. **The
+annotation-driven engine covers the past well and the future progressively less well.**
 
 ---
 
-## 8. What this implies
+## 12. What this implies
 
-Three conclusions, in the order they matter.
+**Tier A is large, cheap, and immediately valuable.** `@RequestMapping(method=…)`, `path`
+as an alias, Micronaut, Quarkus/JAX-RS, `@KafkaListener`, `@JmsListener`, `@SqsListener`,
+Retrofit, GraphQL, RabbitMQ — YAML files against an engine that exists and is proven.
 
-**Tier A is large, cheap, and immediately valuable.** `@RequestMapping` with a `method`
-attribute, `path` as an alias, Micronaut, Quarkus/JAX-RS, `@KafkaListener`, `@JmsListener`,
-`@SqsListener` — all of these are YAML files against an engine that exists and is proven.
-That is a great deal of real-world reach for no new machinery.
+**`fluent_chain` reconstruction is the single highest-leverage capability.** It gates every
+modern HTTP client, WebFlux functional routing, Vert.x, the AWS SDK, the Pub/Sub client
+library, plain Kafka producers, and Apache Camel. Almost every Tier B entry traces to it.
+Vert.x's `Router` is the cleanest first exercise; Camel offers the largest single payoff.
 
-**Chain reconstruction is the single highest-leverage capability.** It gates: all modern
-HTTP clients, WebFlux functional routing, the AWS SDK, the Pub/Sub client library, and
-plain Kafka producers. Almost every Tier B entry above traces back to it.
+**Implementation order across languages should follow the fact sources, not the popularity
+of the language:** Go, then TypeScript, then Swift, then Python, then Rust. Go because the
+toolchain hands us more than the JVM does; Rust last because no stable compiler API exists,
+not because the ecosystem is unmatchable.
 
-**Two schema questions should be settled before more catalogs are written**, because both
-are shapes the format cannot currently express: a match whose direction depends on context
-rather than on the catalog (`@HttpExchange`), and a destination that lives in configuration
-under a key derived from code (§7).
+**Three engines do not exist yet and each unlocks a whole ecosystem:** `filesystem` routing
+(Next.js, SvelteKit, Remix, Nuxt), `config_join` destinations (§11), and `combinator` DSL
+routing (Akka HTTP, Ktor, `warp`, WebFlux functional).
+
+**Four things should be settled in the schema before more catalogs are written**, because
+none is expressible today: a match whose direction depends on context (`@HttpExchange`); a
+destination derived from a configuration key (§11); a path derived from a file's location;
+and per-endpoint `resolution` driven by whether the framework forced a declaration (§10).
+
+**Two limits should be stated in the product, not discovered by users.** Actor messaging is
+largely invisible to static analysis, so an Akka-heavy system will produce a confident but
+hollow graph unless we report it. And `runtime_dynamic` boundaries — `boto3`, DRF routers,
+`@grpc/proto-loader` — are not gaps we will close later; they are boundaries that do not
+exist statically, and the coverage report has to say so.
 
 ---
 
 ## Verification status
 
 Researched August 2026 against primary sources — Spring, Micronaut, Quarkus, Apache Kafka,
-AWS, Google Cloud, gRPC and Avro documentation. Items marked ⚠️ rest on secondary sources
-or could not be confirmed, and **must be checked against the library's own javadoc or
-source before entering a catalog**. A wrong annotation name does not fail loudly; it
-silently matches nothing, which is exactly how petclinic returned zero endpoints.
+AWS, Google Cloud, gRPC, Avro, Protocol Buffers, Apache Pekko, Vert.x, the Go and Swift
+toolchains, and the academic literature on LLM-assisted static analysis. Items marked ⚠️
+rest on secondary sources or could not be confirmed, and **must be checked against the
+library's own documentation or source before entering a catalog**. A wrong annotation name
+does not fail loudly; it silently matches nothing, which is exactly how petclinic returned
+zero endpoints.
