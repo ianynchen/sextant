@@ -10,6 +10,9 @@ dependencies {
     implementation("org.ow2.asm:asm-tree:9.7")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    // Test scope only: the committed fixture needs an annotation to compile
+    // against, and this dependency must stay out of the shaded jar.
+    testImplementation("org.jspecify:jspecify:1.0.0")
 }
 
 tasks.withType<JavaCompile> {

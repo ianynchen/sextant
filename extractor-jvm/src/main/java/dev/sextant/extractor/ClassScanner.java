@@ -113,6 +113,12 @@ public final class ClassScanner {
                 }
 
                 @Override
+                public org.objectweb.asm.AnnotationVisitor visitTypeAnnotation(
+                        int typeRef, org.objectweb.asm.TypePath typePath, String d, boolean visible) {
+                    return typeAnnotationVisitor(methodSymbol, typePath, d, visible);
+                }
+
+                @Override
                 public void visitEnd() {
                     emit(methodSymbol, constructKind, typeSymbol,
                          signatureJson(descriptor, sig, parameterNames, parameterAnnotations), access);
@@ -130,6 +136,12 @@ public final class ClassScanner {
                 @Override
                 public org.objectweb.asm.AnnotationVisitor visitAnnotation(String d, boolean visible) {
                     return annotationVisitor(fieldSymbol, d, visible);
+                }
+
+                @Override
+                public org.objectweb.asm.AnnotationVisitor visitTypeAnnotation(
+                        int typeRef, org.objectweb.asm.TypePath typePath, String d, boolean visible) {
+                    return typeAnnotationVisitor(fieldSymbol, typePath, d, visible);
                 }
 
                 @Override
@@ -154,6 +166,37 @@ public final class ClassScanner {
                 fact.put("target", JsonOut.string(target));
                 fact.put("use", use);
                 fact.put("retention", JsonOut.string(visible ? "runtime" : "class"));
+                lines.add(JsonOut.object(fact));
+            });
+        }
+
+        /** A type-use annotation (JSR 308) is the same `annotation` fact as
+         *  {@link #annotationVisitor}, plus the `type_path` ASM hands back through
+         *  {@code TypePath}. That path is the only thing that tells
+         *  {@code @Nullable List<String>} apart from {@code List<@Nullable String>}
+         *  (D00 §5a) — dropping it collapses both to "a Nullable sits somewhere on
+         *  this field", which a later task cannot attach to the right reference.
+         *
+         *  <p>Read from **both** retention tables: the caller passes {@code visible}
+         *  from whichever of {@code RuntimeVisibleTypeAnnotations} or
+         *  {@code RuntimeInvisibleTypeAnnotations} ASM is currently walking.
+         *  JSpecify's annotations are {@code RUNTIME}; {@code javax.annotation.Nullable}
+         *  and the JetBrains spellings are mostly {@code CLASS} — a module compiled
+         *  over a decade carries several spellings at different retentions, and
+         *  reading only one table silently misses the others. */
+        private org.objectweb.asm.AnnotationVisitor typeAnnotationVisitor(
+                String target, org.objectweb.asm.TypePath typePath, String descriptor, boolean visible) {
+            // null renders as "the outer type" per the TypePath contract, not as
+            // the four-character string "null".
+            String typePathString = typePath == null ? "" : String.valueOf(typePath);
+            return useCollectingVisitor(descriptor, use -> {
+                TreeMap<String, String> fact = new TreeMap<>();
+                fact.put("kind", JsonOut.string("annotation"));
+                fact.put("document_id", JsonOut.string(documentId));
+                fact.put("target", JsonOut.string(target));
+                fact.put("use", use);
+                fact.put("retention", JsonOut.string(visible ? "runtime" : "class"));
+                fact.put("type_path", JsonOut.string(typePathString));
                 lines.add(JsonOut.object(fact));
             });
         }

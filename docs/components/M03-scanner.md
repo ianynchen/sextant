@@ -127,8 +127,12 @@ Throw sites: an `ATHROW` instruction is recorded as a call-site-shaped fact with
 kind `throw` and the thrown type as target — it is what gives traces their `throws`
 terminal, and it costs one case in the instruction visitor.
 
-Annotation values including nested annotations, arrays and enums. Type annotations from the
-invisible-type-annotation attribute — measured elsewhere as the one real case where a source
+Annotation values including nested annotations, arrays and enums. Type annotations from
+**both** the visible and invisible type-annotation attributes — a codebase compiled over a
+decade carries several nullability spellings at different retentions: JSpecify's is
+`RUNTIME` and lands in the visible table, while `javax.annotation.Nullable` and the
+JetBrains spellings are mostly `CLASS` and land in the invisible one, so reading only one
+table silently misses the other. Measured elsewhere as the one real case where a source
 tier saw something the bytecode already held. The constant-value attribute. Source file and
 line numbers. Kotlin metadata for nullability.
 
