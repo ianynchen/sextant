@@ -833,14 +833,14 @@ rather than at an observed level.
 
 ### Still-open design questions
 
-Three shapes the schema cannot express. All surfaced from the research; none is an
-organisational problem, and each blocks a whole family of frameworks rather than one library.
+Shapes the schema cannot express. All surfaced from the research; none is an organisational
+problem, and each blocks a whole family of frameworks rather than one library.
 
-1. **The boundary is the route, but it should be the operation.** GraphQL, SOAP and WebSocket
-   put one HTTP path in front of many logical operations — a schema with 200 fields is one
-   route. Modelled as routes, a GraphQL service reports a single endpoint and the system tier
-   has nothing to match. This is a [D01](components/D01-graph-schema.md) change and is the
-   most consequential item on this list.
+1. ~~The unit of a boundary where one address carries many operations~~ — **resolved**:
+   the operation is the endpoint, the address stays on it as `path`,
+   [D01](components/D01-graph-schema.md). Aggregation is possible and disaggregation is not,
+   so recording operations still allows one arrow per service; recording only the address
+   could never answer *who calls `getOrder`*. The cost lands on rendering, not the schema.
 2. **Config-derived destinations.** No catalog style says "the destination is a property key
    derived from this bean's name" — the shape Spring Cloud Stream, SmallRye, MicroProfile
    REST Client and Django all use (§7). For these frameworks the code-to-configuration join

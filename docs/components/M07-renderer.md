@@ -152,4 +152,5 @@ exist.
 | Whether `metadata.json` lists endpoints in full below some count, or always as counts | [D05](D05-manifest-and-state.md) |
 | Whether a `view` overlay may apply to a class diagram as well as a trace | [D03](D03-overlay-schema.md) |
 | Whether the document is Markdown, HTML, or both | — |
-| How deep a system chain renders before it becomes unreadable, and what says so | System scope |
+| How deep a system chain renders before it becomes unreadable, and what says so |
+| The exact grouping rule for many operations on one address — [D01](D01-graph-schema.md) requires grouping by `path` by default; the shape of the opt-out is undecided | System scope |

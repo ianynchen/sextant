@@ -116,13 +116,31 @@ measured as a mistake.
 
 **Endpoint identity is minted from the wire contract**:
 `hash(module id, protocol, direction, wire identity template)` — the path template with
-placeholders normalised, the topic expression, or the fully-qualified remote method. Never
+placeholders normalised, the topic expression, the fully-qualified remote method, or **the
+operation name where one address carries many operations**. Never
 from the handler symbol: a refactor that moves the handler must not orphan the curations,
 proposals and links that reference the endpoint, because the wire contract they were about
 did not change. Editing the path *is* a new endpoint, correctly. Two handlers declaring
 the same wire contract collide into one identity — and that collision is a routing-ambiguity
 finding, which per-handler identity would have hidden. Environment expressions hash as
 expressions: `${orders.topic}` is the same endpoint in every environment.
+
+**Where one address carries many operations, the operation is the endpoint.** GraphQL puts
+every operation behind a single `POST /graphql`; SOAP puts them behind one path with the name
+in the envelope; WebSocket puts them behind one connection with the name in each frame. gRPC
+already works this way and set the precedent — its wire identity is `package.Service/Method`,
+not the HTTP/2 path.
+
+The address is **not** discarded: it stays on the endpoint as `path`, which for REST coincides
+with the wire identity and for these protocols does not. So `/graphql` is where the operation
+is reachable, and `Query.getOrder` is what it is.
+
+The reason is that aggregation is possible and disaggregation is not. Recording operations
+still allows one arrow per service by grouping on `path`; recording only the address can never
+answer *who calls `getOrder`* without a second matching mechanism built alongside the first.
+The cost is real and lands on rendering rather than on the schema — a service with two hundred
+GraphQL fields has two hundred endpoints, and [M07](M07-renderer.md) must group them by `path`
+unless asked otherwise, or every diagram of such a service is unreadable.
 
 ### Traces — a named query, not a table
 
