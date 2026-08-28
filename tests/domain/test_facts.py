@@ -32,7 +32,7 @@ def test_round_trip_preserves_every_fact_when_written_and_read_back(tmp_path: Pa
     symbol = SymbolFact(
         document_id="doc_1",
         symbol="sextant-jvm maven com.acme/orders 1.0 com/acme/OrderController#create().",
-        construct=ConstructKind.METHOD,
+        construct_kind=ConstructKind.METHOD,
         enclosing="sextant-jvm maven com.acme/orders 1.0 com/acme/OrderController#",
         signature=Signature(
             parameters=[Parameter(name="cmd", type=TypeRef(symbol="com/acme/OrderCommand#"))],

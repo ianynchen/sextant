@@ -84,11 +84,7 @@ class SymbolFact(BaseModel):
     kind: Literal["symbol"] = "symbol"
     document_id: str
     symbol: str
-    # Shadows BaseModel.construct(), a deprecated v1-compat classmethod; the
-    # field name itself is the D00 §5 vocabulary ("construct kind") and is
-    # not ours to rename. pydantic only warns; mypy sees the classmethod's
-    # signature as incompatible with the field, which is a false positive.
-    construct: ConstructKind  # type: ignore[assignment]
+    construct_kind: ConstructKind
     enclosing: str | None = None
     signature: Signature | None = None
     visibility: str = "public"
