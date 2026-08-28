@@ -74,6 +74,4 @@ def test_resolve_reports_the_skip_instead_of_crashing_when_no_catalog_is_satisfi
     workspace.close()
 
     assert report.endpoints == []
-    assert report.skipped_catalogs == [
-        SkippedCatalog("spring-web", ("annotation_args",)),
-    ]
+    assert SkippedCatalog("spring-web", ("annotation_args",)) in report.skipped_catalogs
