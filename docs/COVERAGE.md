@@ -41,7 +41,7 @@ baseline is `annotation`, which is why `WebClient` is B there. Go's baseline is
 | **A** / **B** / **C** | **Not built.** Tier is the *marginal* cost of the mainstream library, measured against that language's baseline — not against what ships today |
 | — | Not applicable — the protocol does not exist in that ecosystem |
 | ⛔ | Blocked by the language toolchain, not by our effort |
-| † | The cell hides a significantly worse case; see §5 |
+| · | **Not yet enumerated** — §5 has no rows for this cell, so we do not know. Distinct from `—`, which means we looked and it does not exist |
 
 `—` and `⛔` are deliberately distinct from a gap. JMS in Go is not missing work.
 
@@ -124,64 +124,72 @@ that language exists. It is not a cost you can pay today. Only ✅ and ◐ mean 
 
 ### 2a. Application protocols over HTTP
 
-| Language | Scanner | REST in | REST out | SOAP | GraphQL | WebSocket | SSE |
+| Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ † | A † | A | A | A † | **B** |
-| **Go** | none | A | A | — | A | B | **C** |
-| **TypeScript** | none | A † | A | — | A | A | B |
-| **JavaScript** | none | A † | A | — | A | A | B |
-| **Python** | none | A † | A | B | A | A | B |
-| **Rust** | none | A † | B | — | A | A | B |
-| **Swift** | none | — † | A † | — | A † | B | — |
+| **Java / Kotlin** | ✅ ASM | ◐ 8A 8B 5C | 3A 2B | 2A | 4A | 2A 1B | 1A 2B |
+| **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
+| **TypeScript** | none | 3A 1B 1C | 1A | — | 2A | 2A 1B | 1B 1C |
+| **JavaScript** | none | 3A 1B 1C | 1A | — | 2A | 2A 1B | 1B 1C |
+| **Python** | none | 4A 1B 1C | 1A | 1B | 2A | 2A 1B | 2B |
+| **Rust** | none | 1A 2B 1C | 1B | — | 1A | 1A 1B | 1B |
+| **Swift** | none | 1A | 1A 1B | — | 1A | 1B | — |
 
 ### 2b. Messaging and RPC
 
 SNS and Redis are **out of scope by decision**, not oversight — each would be a new column.
 
-| Language | gRPC | Kafka | JMS / AMQP | SQS | Pub/Sub | Async |
+| Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | B | A † | A | A | B | A |
-| **Go** | A | A | — † | A | B | A |
-| **TypeScript** | B † | A | — | A | B | A |
-| **JavaScript** | B † | A | — | A | B | A |
-| **Python** | A | A | — † | **C** † | B | A |
-| **Rust** | A | A | — † | B | ⚠️ | B |
-| **Swift** | A | — | — | — | — | B |
+| **Java / Kotlin** | 3A 1B | 4A 3B 2C | 4A 1B | 2A 2B | 1A 2B 1C | 2A 1B 2C |
+| **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
+| **TypeScript** | 1A 1B | 1A | 1A | 1A | 1B | 1A |
+| **JavaScript** | 1A 1B | 1A | 1A | 1A | 1B | 1A |
+| **Python** | 1A | 2A | 1A | 1C | 1B | 2A |
+| **Rust** | 1A | 1A | 1A | 1B | ⚠️ | 1A 1B |
+| **Swift** | 1A | — | — | 1B | — | 1B |
 
 **Wire format is not in these tables at all** — see §4. Format is a property of a channel to
 be *inferred*, not a protocol to be supported: Avro-over-Kafka, Protobuf-over-gRPC,
 Protobuf-over-REST and JSON-over-anything are all real, and the detection job is nearly
 identical in every language.
-
 ### Reading the matrices
 
-**SSE is the worst column in either table, and it is the only one that is worse in every
-language than the protocol it rides on.** Nothing declares it. It is detected from a return
-type (`SseEmitter`, `Flux<ServerSentEvent>`, axum `Sse<S>`, `EventSourceResponse`) or, in Go
-and Express, from a bare `Content-Type: text/event-stream` header string. There is no
-annotation anywhere.
+**Every cell is generated from §5** by `scripts/coverage_matrix.py`, so the summary cannot
+drift from the checklist it summarises. A cell counts libraries at each tier — `4A 3B 2C`
+means four need only a catalog, three need a scanner capability, and two are not in the code
+at all. **The spread is the point**: a single headline tier hides the gap, which is the thing
+worth seeing.
 
-**GraphQL is far better than expected — A almost everywhere.** Every ecosystem either
-declares operations with annotations (Spring `@QueryMapping`, NestJS `@Query`, Strawberry
-`@strawberry.field`, async-graphql `#[Object]`) or ships an SDL schema file that *is* the
-contract. Both are readable. GraphQL is the cheapest new protocol on this page.
+**Java + Kafka shows why, at `4A 3B 2C`.** Four ways of using Kafka from Java cost a YAML file
+each. Three need real work, including `KafkaProducer.send(new ProducerRecord("t", …))`, where
+the topic is a constructor argument of a *different object*. Two are not in the code at all —
+Spring Cloud Stream and SmallRye put the topic in a properties file under a key derived from
+a bean name. A cell reading "A" would have been true and useless.
 
-**The JVM is the outlier on gRPC.** Everywhere else the generated code *names the service in
-a call* — Go's `pb.RegisterFooServer(s, impl)`, Python's `add_FooServicer_to_server`, Rust's
-`FooServer::new`. Only the JVM uses inheritance (`extends FooGrpc.FooImplBase`). That is why
-gRPC is B for us and A for everyone else.
+**Java REST inbound is the largest cell in the document at `8A 8B 5C`** — twenty-one distinct
+ways of declaring an HTTP endpoint in one language, of which we currently read two. That
+number, more than anything here, is the argument for catalogs being data.
+
+**SSE is the worst column in either matrix**, and the only one worse in every language than
+the protocol it rides on. Nothing declares it: it is inferred from a return type
+(`SseEmitter`, `Flux<ServerSentEvent>`, axum `Sse<S>`, `EventSourceResponse`) or, in Go and
+Express, from a bare `Content-Type: text/event-stream` string in the handler body.
+
+**GraphQL is the cheapest new protocol on the page — tier A everywhere it exists.** Every
+ecosystem either annotates its operations or ships an SDL file that *is* the contract.
+
+**The JVM is the outlier on gRPC.** Everywhere else the generated code names the service in a
+call — Go's `pb.RegisterFooServer(s, impl)`, Python's `add_FooServicer_to_server`, Rust's
+`FooServer::new`. Only the JVM uses inheritance, which is why gRPC carries a B for us and A
+for everyone else.
 
 **`registration_call` is to the non-JVM languages what `fluent_chain` is to the JVM** — one
-capability that unlocks most cells at once. It is the baseline for four of the seven rows.
+capability unlocking most cells at once. It is the baseline for four of the seven rows.
 
 **Pub/Sub is B in every language.** Only Micronaut ships a first-party annotation; everywhere
 else it is a builder chain over a client library.
 
-**The `†` clusters worth knowing before reading §5.** Java REST-in hides
-`@RequestMapping(method=…)`, which yields zero endpoints today. TypeScript REST-in hides
-Next.js filesystem routing, which no engine we have designed can express. Python SQS is C
-because `boto3` has no static form at all. Java WebSocket is A for `@ServerEndpoint` and
-`@MessageMapping` but B for programmatic `addHandler` registration.
+---
 
 ## 3. Language readiness — the gate on every row
 
@@ -395,6 +403,10 @@ Deferred by decision — *"can defer, not really that widely used"*. Listed for 
 | Java | JAX-WS `@WebService`, `@WebMethod`, `@WebParam` | — | `annotation` | A |
 | Java | Spring-WS `@Endpoint` + `@PayloadRoot(namespace, localPart)` | — | `annotation` | A |
 | Python | `zeep`, `spyne` | client built from a WSDL URL at runtime | `runtime_dynamic` | B |
+| Go | — | **no meaningful SOAP ecosystem** — hand-rolled XML if at all | — | — |
+| TS | — | **no meaningful SOAP ecosystem** | — | — |
+| Rust | — | **no meaningful SOAP ecosystem** | — | — |
+| Swift | — | **no meaningful SOAP ecosystem** | — | — |
 | — | WSDL / XSD documents | the actual contract | artifact | C (tier-2 artifact) |
 
 Without WSDL reading, SOAP link matching falls back to structural comparison.
@@ -504,6 +516,7 @@ complete answer.
 | Python | `confluent-kafka`, `kafka-python` `KafkaConsumer("topic", …)` | **topic is a constructor argument** | `registration_call` | A |
 | Python | `faust-streaming` `app.topic("orders")` + `@app.agent(topic)` | — | `annotation` + `registration_call` | A |
 | Rust | `rdkafka` `consumer.subscribe(&["topic"])`, `FutureRecord::to("topic")` | — | `registration_call` | A |
+| Swift | — | **no mature Swift Kafka client**; server-side Swift reaches it through C interop ⚠️ | — | — |
 
 ⚠️ `KafkaTemplate.send` returns `ListenableFuture` in older Spring Kafka, `CompletableFuture` in current.
 
@@ -520,7 +533,9 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 | Java | Direct `jakarta.jms.{Session, MessageProducer, MessageConsumer}` | — | `fluent_chain` | B |
 | Java | `@RabbitListener`, `@PulsarListener` | — | `annotation` | A |
 | Go | `rabbitmq/amqp091-go` ⚠️ (was `streadway/amqp`) `ch.Publish(exchange, key, …)` | — | `registration_call` | A |
+| TS | `amqplib` `ch.publish(exchange, key, …)`, `ch.consume(queue, cb)` | — | `registration_call` | A |
 | Python | `pika`, `kombu` `channel.basic_publish(exchange, routing_key, …)` | — | `registration_call` | A |
+| Swift | — | **no JMS or AMQP client in common iOS use** | — | — |
 | Rust | `lapin` `channel.basic_publish(…)` | — | `registration_call` | A |
 
 **Package change:** `javax.jms` (Spring ≤5 / Boot ≤2) → `jakarta.jms` (Spring 6 / Boot 3+).
@@ -537,6 +552,7 @@ Both must be matched.
 | TS | `@aws-sdk/client-sqs` v3 `client.send(new SendMessageCommand({QueueUrl}))` | **command classes are real, statically visible types** | `registration_call` | A |
 | **Python** | **`boto3`** `boto3.client("sqs").send_message(QueueUrl=…)` | **clients synthesised at runtime from JSON service models — `send_message` is defined in no Python file** | `runtime_dynamic` | **C — ceiling is a `name_match` on the service string; `resolution: narrowed` at best** |
 | Rust | `aws-sdk-rust` `client.send_message().queue_url(u).send()` | — | `fluent_chain` | B |
+| Swift | `Soto`, the community AWS SDK for Swift ⚠️ | `sqs.sendMessage(.init(queueUrl: …))` | `registration_call` | B |
 | Java | Micronaut | **no first-party annotations** — raw SDK or `micronaut-jms-sqs` | — | B |
 
 ### 5.11 Google Cloud Pub/Sub
@@ -554,6 +570,7 @@ first-party annotation.
 | TS | `pubsub.topic("n").publishMessage(…)`, `subscription.on("message", cb)` | — | `fluent_chain` | B |
 | Python | `publisher.publish(topic_path, data)`, path built by `publisher.topic_path(proj, t)` | topic assembled from a helper call | `fluent_chain` | B |
 | Rust | `google-cloud-rust` ⚠️ | maturity unconfirmed | — | ⚠️ |
+| Swift | — | **no first-party or mature community Swift client** | — | — |
 
 ⚠️ Spring Cloud GCP packages moved `org.springframework.cloud.gcp.*` → `com.google.cloud.spring.*`; version of the rename unconfirmed.
 
@@ -570,6 +587,12 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 | Java | **Akka / Pekko actor messaging** `ref ! msg`, `ref.tell(msg)` | receiver comes from an `ActorRef` created elsewhere | — | **C, possibly permanent — see §7** |
 | Python | **Celery** `@app.task`, `task.delay(…)`, `.apply_async(queue=…)` | a real async boundary, easy to miss | `annotation` | A |
 | TS | `bullmq` `new Queue("n")`, `new Worker("n", fn)` | string names, matchable like topics | `registration_call` | A |
+| Go | `robfig/cron` `c.AddFunc("@hourly", fn)`; Temporal Go SDK `w.RegisterWorkflow(fn)` | `registration_call` | A |
+| Go | `asynq`, `machinery` task queues — `mux.HandleFunc("task:name", h)` | `registration_call` | A |
+| Rust | `tokio-cron-scheduler` `Job::new("0 * * * * *", fn)` | `registration_call` | A |
+| Rust | Temporal / `apalis` job queues ⚠️ | `registration_call` | B |
+| Python | APScheduler `@scheduler.scheduled_job("cron", …)` | `annotation` | A |
+| Swift | `BGTaskScheduler.register(forTaskWithIdentifier:)` — identifiers also declared in `Info.plist` (§6) | `registration_call` | B |
 | Any | Database access — Room `@Query`, JPA repositories, ORM models | a data boundary, not a protocol | `annotation` | B |
 
 ---
@@ -722,10 +745,16 @@ cheap, outbound is `fluent_chain`-shaped and mostly not, so it earns two columns
 JMS, SQS and Pub/Sub, producer and consumer sit in the same library at the same tier, so
 direction belongs in the library row.
 
-**Q6 — What does a cell mean when it holds several libraries at different tiers?**
-The cell shows the tier of the **mainstream** library and carries `†` when it hides a
-significantly worse case. §5 is the real checklist; §2 is navigation. Collapsing Kafka-in-Java
-to a single tier would hide that Spring Cloud Stream is C.
+**Q6 — What does a cell mean when it holds several libraries at different tiers? resolved — carry all of them.**
+A cell shows the **count at each tier** (`4A 3B 2C`), not a headline. A single tier hides
+exactly what the checklist exists to reveal: Java + Kafka is genuinely cheap for
+`@KafkaListener` and genuinely impossible for Spring Cloud Stream, and both facts matter when
+planning. Each column header links to the §5 subsection holding the named libraries, where
+rows are grouped by language — §2 answers "how much work, and is something hiding here", §5
+answers "what exactly do I build". The matrices are **generated from §5** by
+`scripts/coverage_matrix.py`, so the two cannot disagree, and `--check` fails if they drift.
+A `·` marks a cell §5 has no rows for — *not yet enumerated*, distinct from `—`, which means
+we looked and it does not exist.
 
 **Q7 — How do we stop this document drifting from reality? my strongest suggestion.**
 Catalogs are already YAML, and the design already has capability gating — scanners declare
