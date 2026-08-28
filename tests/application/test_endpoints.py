@@ -1,7 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from sextant.application.resolve.endpoints import (
     Catalog,
+    CatalogError,
     SkippedCatalog,
     derive_endpoints,
     load_catalogs,
@@ -345,3 +348,63 @@ def test_derive_endpoints_reads_a_scalar_annotation_argument_when_it_is_not_an_a
     workspace.close()
 
     assert [(r["method"], r["path"]) for r in rows] == [("GET", "/rest/orders/{id}")]
+
+
+_VALID_CATALOG = """id: invented
+style: annotation_driven
+protocol: http
+direction: inbound
+matches: {}
+"""
+
+
+def _catalog_dir(root: Path, text: str) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "invented.yml").write_text(text, encoding="utf-8")
+    return root
+
+
+def test_load_catalogs_names_the_file_and_the_value_when_a_protocol_is_not_a_closed_set_member(
+    tmp_path: Path,
+):
+    """`protocol` and `direction` are closed sets in D00: a value outside one
+    is a typo, not a new kind of endpoint. Unchecked, it does not stay in the
+    file — it is bound into the derivation and published in metadata.json,
+    where it is indistinguishable from something observed. The message names
+    the file and the value, because that is what a reader needs (GUIDELINES
+    §9)."""
+    directory = _catalog_dir(tmp_path, _VALID_CATALOG.replace("http", "htpp"))
+
+    with pytest.raises(CatalogError) as failure:
+        load_catalogs(directory)
+
+    assert "htpp" in str(failure.value)
+    assert "invented.yml" in str(failure.value)
+    assert "http" in str(failure.value)
+
+
+def test_load_catalogs_rejects_a_direction_outside_the_closed_set(tmp_path: Path):
+    directory = _catalog_dir(tmp_path, _VALID_CATALOG.replace("inbound", "incoming"))
+
+    with pytest.raises(CatalogError) as failure:
+        load_catalogs(directory)
+
+    assert "incoming" in str(failure.value)
+    assert "invented.yml" in str(failure.value)
+
+
+def test_load_catalogs_names_the_missing_field_when_a_catalog_omits_one(tmp_path: Path):
+    directory = _catalog_dir(tmp_path, _VALID_CATALOG.replace("style: annotation_driven\n", ""))
+
+    with pytest.raises(CatalogError) as failure:
+        load_catalogs(directory)
+
+    assert "style" in str(failure.value)
+    assert "invented.yml" in str(failure.value)
+
+
+def test_load_catalogs_accepts_a_catalog_whose_values_are_all_in_the_closed_sets(
+    tmp_path: Path,
+):
+    catalog = load_catalogs(_catalog_dir(tmp_path, _VALID_CATALOG))[0]
+    assert (catalog.protocol, catalog.direction) == ("http", "inbound")
