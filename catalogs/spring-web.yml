@@ -20,3 +20,4 @@ matches:
     - { fqn: org/springframework/web/bind/annotation/PostMapping#,   http_method: POST,   path_arg: value }
     - { fqn: org/springframework/web/bind/annotation/PutMapping#,    http_method: PUT,    path_arg: value }
     - { fqn: org/springframework/web/bind/annotation/DeleteMapping#, http_method: DELETE, path_arg: value }
+    - { fqn: org/springframework/web/bind/annotation/PatchMapping#,  http_method: PATCH,  path_arg: value }
