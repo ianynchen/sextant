@@ -7,6 +7,7 @@ from sextant.application.resolve.pipeline import resolve
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import Document
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -29,7 +30,12 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
         )
     )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
-    report = resolve(workspace, facts, REPO / "catalogs", {"annotation_args", "typed_signatures"})
+    report = resolve(
+        workspace,
+        facts,
+        YamlCatalogSource(REPO / "catalogs"),
+        {"annotation_args", "typed_signatures"},
+    )
     workspace.close()
 
     routes = {(e["method"], e["path"]) for e in report.endpoints}
@@ -87,7 +93,7 @@ def test_resolve_reports_the_skip_instead_of_crashing_when_no_catalog_is_satisfi
     )
     write_fact_file(facts / "OrderController.jsonl", document, [])
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
-    report = resolve(workspace, facts, CATALOGS, {"typed_signatures"})
+    report = resolve(workspace, facts, YamlCatalogSource(CATALOGS), {"typed_signatures"})
     workspace.close()
 
     assert report.endpoints == []

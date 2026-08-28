@@ -9,6 +9,7 @@ from sextant.application.ports.scanner import ScanReport, ScanRequest
 from sextant.application.stages.analyze import analyze
 from sextant.cli.app import cli
 from sextant.egress.render.metadata import write_metadata
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -81,7 +82,7 @@ def test_render_names_the_catalog_and_capability_analyze_skipped(tmp_path: Path)
             workspace=workspace,
             detector=MavenDetector(),
             scanner=_NoCapabilitiesScanner(AsmScanner(_JAR)),
-            catalogs_dir=_CATALOGS,
+            catalogs=YamlCatalogSource(_CATALOGS),
             fact_root=tmp_path / "facts",
             progress=NullProgress(),
         )

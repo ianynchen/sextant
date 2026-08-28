@@ -1,12 +1,9 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sextant.application.ports.catalogs import CatalogSource
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.endpoints import (
-    SkippedCatalog,
-    derive_endpoints,
-    load_catalogs,
-)
+from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 
 
 @dataclass(frozen=True)
@@ -18,13 +15,15 @@ class ResolveReport:
 
 
 def resolve(
-    workspace: Workspace, fact_root: Path, catalogs_dir: Path, capabilities: set[str]
+    workspace: Workspace,
+    fact_root: Path,
+    catalogs: CatalogSource,
+    capabilities: set[str],
 ) -> ResolveReport:
     """Facts in, graph out. Language-blind: it branches on capabilities, never
     on names (M04)."""
     loaded = workspace.load_facts(fact_root)
-    catalogs = load_catalogs(catalogs_dir)
-    skipped = derive_endpoints(workspace, catalogs, capabilities)
+    skipped = derive_endpoints(workspace, catalogs.load(), capabilities)
     return ResolveReport(
         facts_loaded=loaded,
         endpoints=workspace.query("endpoints"),

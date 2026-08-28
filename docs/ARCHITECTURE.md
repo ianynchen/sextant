@@ -198,6 +198,7 @@ ingress/
   detect/          build-tool adapters                                       M02
   extract/jvm/     ASM subprocess wrapper and fact mapping                   M03
   read/            config, kubernetes, helm, openapi, protobuf               M03
+  catalogs/        Sextant's own framework catalogs                          D02
   overlay-files/   overlay file reading                                      D03
 storage/
   duckdb/          the Workspace implementation, and the SQL bodies of
@@ -209,6 +210,11 @@ catalogs/          framework YAML and conformance fixtures                   D02
 cli/               composition root: builds registries, wires selections     M00
 extractor-jvm/     the Java source of the ASM extractor                      M03
 ```
+
+**`ingress` is everything read from disk that is not the workspace** — not only the analysed
+module's artifacts. `read/` holds the module's own files and `catalogs/` holds Sextant's, and
+the distinction matters: the module's configuration becomes facts, while a catalog is
+framework knowledge that produces none.
 
 **Dependencies flow inward.** `domain` imports nothing from the project. `application`
 imports `domain` only. `ingress`, `storage` and `egress` import `domain` and
@@ -238,6 +244,7 @@ and one registry line, and changes no existing test.
 | `Workspace` | Load facts in bulk, run the named derivations, answer the named queries of [D01](components/D01-graph-schema.md) — nothing else, so it cannot decay into a SQL pass-through. | [D01](components/D01-graph-schema.md) |
 | `Detector` | Given a path, report what the repository contains. Keyed by build system. | [M02](components/M02-detector.md) |
 | `Scanner` | Given a module, emit facts. Declares `accepts`, `capabilities`, `rank`. | [M03](components/M03-scanner.md) |
+| `CatalogSource` | Yield every catalog it holds. A port rather than a directory because §6 of [D02](components/D02-catalog-schema.md) loads the built-in set and a repository's own together and privileges neither — so the layer that interprets catalogs never learns where they came from. | [D02](components/D02-catalog-schema.md) |
 | `ArtifactReader` | Given files of one kind, emit facts, marking whether the build consumes them. | [M03](components/M03-scanner.md) |
 | `Engine` | Given catalogs and facts, materialise endpoints. Declares required capabilities. | [D02](components/D02-catalog-schema.md), [M04](components/M04-resolver.md) |
 | `Overlay` | Given files and a lookup, emit validated claims with a rank. | [M01](components/M01-overlay.md) |

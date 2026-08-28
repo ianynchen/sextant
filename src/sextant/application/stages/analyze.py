@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from sextant.application.ports.catalogs import CatalogSource
 from sextant.application.ports.detector import Detector, ModuleModel
 from sextant.application.ports.progress import Progress
 from sextant.application.ports.scanner import Scanner, ScanRequest
@@ -25,7 +26,7 @@ def analyze(
     workspace: Workspace,
     detector: Detector,
     scanner: Scanner,
-    catalogs_dir: Path,
+    catalogs: CatalogSource,
     fact_root: Path,
     progress: Progress,
 ) -> AnalyzeResult:
@@ -51,7 +52,7 @@ def analyze(
     progress.finish("scan", f"{scan_report.facts} facts")
 
     progress.start("resolve")
-    report = resolve(workspace, fact_root, catalogs_dir, scanner.capabilities())
+    report = resolve(workspace, fact_root, catalogs, scanner.capabilities())
     progress.finish("resolve", f"{len(report.endpoints)} endpoints")
 
     return AnalyzeResult(

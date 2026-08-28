@@ -12,6 +12,7 @@ from sextant.application.stages.analyze import analyze
 from sextant.cli.progress import RichProgress
 from sextant.egress.render.document import render_module_document
 from sextant.egress.render.metadata import write_metadata
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -58,7 +59,7 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
             workspace=workspace,
             detector=MavenDetector(),
             scanner=AsmScanner(_JAR),
-            catalogs_dir=_CATALOGS,
+            catalogs=YamlCatalogSource(_CATALOGS),
             fact_root=workspace_dir / "facts",
             progress=progress,
         )

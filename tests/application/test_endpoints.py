@@ -2,16 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from sextant.application.resolve.endpoints import (
-    Catalog,
-    CatalogError,
-    SkippedCatalog,
-    derive_endpoints,
-    load_catalogs,
-)
+from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CATALOGS = Path(__file__).parents[2] / "catalogs"
@@ -24,6 +20,7 @@ _INVENTED_LISTENER = Catalog(
     protocol="message",
     direction="outbound",
     requires=("annotation_args",),
+    source=Path("tests/invented.yml"),
     matches={
         "type_annotation": "com/acme/messaging/annotation/Listener#",
         "mapping": {
@@ -40,7 +37,7 @@ _INVENTED_LISTENER = Catalog(
 
 
 def test_catalog_declares_its_style_and_required_capabilities_when_loaded():
-    catalogs = load_catalogs(CATALOGS)
+    catalogs = YamlCatalogSource(CATALOGS).load()
     spring = next(c for c in catalogs if c.id == "spring-web")
     assert spring.style == "annotation_driven"
     assert spring.protocol == "http"
@@ -49,7 +46,7 @@ def test_catalog_declares_its_style_and_required_capabilities_when_loaded():
 
 
 def test_catalog_maps_post_mapping_to_the_post_method():
-    spring = next(c for c in load_catalogs(CATALOGS) if c.id == "spring-web")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
     annotations = spring.matches["mapping"]["annotations"]
     methods = {m["fqn"]: m.get("method") for m in annotations}
     assert methods["org/springframework/web/bind/annotation/PostMapping#"] == ["POST"]
@@ -59,7 +56,7 @@ def test_catalog_leaves_request_mapping_without_a_preset_method():
     """`@RequestMapping` takes its method from its own argument, and means every
     method when it has none — so it must declare no default here, or the
     fallback that produces one endpoint per method can never be reached."""
-    spring = next(c for c in load_catalogs(CATALOGS) if c.id == "spring-web")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
     annotations = spring.matches["mapping"]["annotations"]
     request_mapping = next(
         m
@@ -170,7 +167,7 @@ def test_derive_endpoints_finds_the_three_annotated_routes_when_the_catalog_is_a
     _controller_facts(tmp_path / "facts")
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
-    spring = next(c for c in load_catalogs(CATALOGS) if c.id == "spring-web")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
 
     skipped = derive_endpoints(workspace, [spring], capabilities={"annotation_args"})
     routes = {(e["method"], e["path"]) for e in workspace.query("endpoints")}
@@ -274,7 +271,7 @@ def test_derive_endpoints_keeps_both_catalogs_results_when_two_catalogs_match(
     _invented_listener_facts(tmp_path / "facts")
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
-    spring = next(c for c in load_catalogs(CATALOGS) if c.id == "spring-web")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
 
     skipped = derive_endpoints(
         workspace, [spring, _INVENTED_LISTENER], capabilities={"annotation_args"}
@@ -301,7 +298,7 @@ def test_derive_endpoints_merges_on_wire_identity_when_two_catalogs_match_the_sa
     _controller_facts(tmp_path / "facts")
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
-    spring = next(c for c in load_catalogs(CATALOGS) if c.id == "spring-web")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
     twin = Catalog(**{**vars(spring), "id": "spring-web-twin"})
 
     derive_endpoints(workspace, [spring, twin], capabilities={"annotation_args"})
@@ -322,6 +319,7 @@ def test_derive_endpoints_skips_and_reports_when_a_required_capability_is_missin
         direction="inbound",
         requires=("annotation_args",),
         matches={},
+        source=Path("tests/needs-a-capability.yml"),
     )
 
     skipped = derive_endpoints(workspace, [catalog], capabilities=set())
@@ -408,6 +406,7 @@ _SCALAR_PATH_CATALOG = Catalog(
     protocol="http",
     direction="inbound",
     requires=("annotation_args",),
+    source=Path("tests/invented.yml"),
     matches={
         "type_annotation": "com/acme/rest/Resource#",
         "mapping": {
@@ -475,7 +474,7 @@ def test_load_catalogs_names_the_file_and_the_value_when_a_protocol_is_not_a_clo
     directory = _catalog_dir(tmp_path, _VALID_CATALOG.replace("http", "htpp"))
 
     with pytest.raises(CatalogError) as failure:
-        load_catalogs(directory)
+        YamlCatalogSource(directory).load()
 
     assert "htpp" in str(failure.value)
     assert "invented.yml" in str(failure.value)
@@ -486,7 +485,7 @@ def test_load_catalogs_rejects_a_direction_outside_the_closed_set(tmp_path: Path
     directory = _catalog_dir(tmp_path, _VALID_CATALOG.replace("inbound", "incoming"))
 
     with pytest.raises(CatalogError) as failure:
-        load_catalogs(directory)
+        YamlCatalogSource(directory).load()
 
     assert "incoming" in str(failure.value)
     assert "invented.yml" in str(failure.value)
@@ -496,7 +495,7 @@ def test_load_catalogs_names_the_missing_field_when_a_catalog_omits_one(tmp_path
     directory = _catalog_dir(tmp_path, _VALID_CATALOG.replace("style: annotation_driven\n", ""))
 
     with pytest.raises(CatalogError) as failure:
-        load_catalogs(directory)
+        YamlCatalogSource(directory).load()
 
     assert "style" in str(failure.value)
     assert "invented.yml" in str(failure.value)
@@ -505,19 +504,40 @@ def test_load_catalogs_names_the_missing_field_when_a_catalog_omits_one(tmp_path
 def test_load_catalogs_accepts_a_catalog_whose_values_are_all_in_the_closed_sets(
     tmp_path: Path,
 ):
-    catalog = load_catalogs(_catalog_dir(tmp_path, _VALID_CATALOG))[0]
+    catalog = YamlCatalogSource(_catalog_dir(tmp_path, _VALID_CATALOG)).load()[0]
     assert (catalog.protocol, catalog.direction) == ("http", "inbound")
 
 
-def test_catalog_naming_a_style_with_no_engine_is_refused_at_load(tmp_path: Path):
+def test_catalog_naming_a_style_with_no_engine_is_refused_by_file(tmp_path: Path):
     """A style with no engine matches nothing, so it would yield no endpoints
     and no skip — indistinguishable from a framework that exposes none. D02 §2
-    declares six styles and this codebase implements one, so the gap is real
-    and has to fail where a bad `protocol` already fails: at load, by file."""
-    directory = _catalog_dir(tmp_path, _UNKNOWN_STYLE_CATALOG)
+    declares six styles and this codebase implements one, so the gap is real.
+
+    The reader cannot check it: which engines exist is knowledge of
+    `application/resolve`, which `ingress` must not import. So the catalog
+    loads and the engine layer refuses it, naming the file — which is what
+    `Catalog.source` is carried for."""
+    catalogs = YamlCatalogSource(_catalog_dir(tmp_path, _UNKNOWN_STYLE_CATALOG)).load()
 
     with pytest.raises(CatalogError) as raised:
-        load_catalogs(directory)
+        derive_endpoints(_UnusedWorkspace(), catalogs, capabilities=set())
 
     assert "fluent" in str(raised.value)
     assert "annotation_driven" in str(raised.value)
+    assert "invented.yml" in str(raised.value)
+
+
+class _UnusedWorkspace:
+    """Refusal comes before any derivation, so a workspace that fails on
+    contact proves the catalog was rejected rather than partly run."""
+
+    def load_facts(self, fact_root: Path) -> int:
+        raise AssertionError("no fact load for a refused catalog")
+
+    def derive(self, name: str, **params: object) -> None:
+        raise AssertionError(f"no derivation for a refused catalog: {name}")
+
+    def query(self, name: str, **params: object) -> list[dict[str, object]]:
+        raise AssertionError(f"no query for a refused catalog: {name}")
+
+    def close(self) -> None: ...
