@@ -5,6 +5,8 @@
 -- framework is a new YAML file with no change here.
 --
 -- Parameters:
+--   $protocol            -- the catalog's declared protocol (D00's closed set)
+--   $direction           -- the catalog's declared direction (D00's closed set)
 --   $type_annotation     -- fqn of the type-level annotation that marks a controller
 --   $prefix_annotation   -- fqn of the type-level annotation carrying the path prefix
 --   $prefix_arg          -- name of the prefix annotation's path argument
@@ -42,8 +44,8 @@ mappings AS (
     JOIN method_catalog mc ON mc.fqn = a.annotation
 )
 SELECT
-    'http'      AS protocol,
-    'inbound'   AS direction,
+    $protocol   AS protocol,
+    $direction  AS direction,
     m.http_method AS method,
     coalesce(p.prefix, '') || m.path_suffix AS path,
     s.symbol    AS handler,

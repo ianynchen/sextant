@@ -117,6 +117,84 @@ def test_derive_endpoints_finds_the_three_annotated_routes_when_the_catalog_is_a
     }
 
 
+def _invented_listener_facts(root: Path) -> None:
+    """A second, invented annotation_driven shape — deliberately not Spring —
+    used only to prove that `protocol` and `direction` on the derived rows
+    come from the catalog's own declared fields rather than from a literal
+    baked into the SQL. D02 groups Spring Kafka and JMS listeners under this
+    same style with `protocol: message`; a catalog like this one is exactly
+    what would have silently come out labelled http/inbound before this fix."""
+    document = Document(
+        document_id="doc_1", relative_path="com/acme/notify/OrderListener.java",
+        module_id="com.acme:orders-service", language="java", sextant_version="0.1.0",
+        fact_schema_version="1.0.0", scanner_id="asm", scanner_version="9.7",
+        content_hash="sha256:a", origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT, redaction_set_hash="sha256:b",
+    )
+    listener = "com/acme/notify/OrderListener#"
+    handle = "com/acme/notify/OrderListener#onOrderCreated()."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=listener, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1", symbol=handle, construct_kind=ConstructKind.METHOD,
+            enclosing=listener,
+        ),
+        AnnotationFact(
+            document_id="doc_1", target=listener, retention="runtime",
+            use=AnnotationUse(annotation="com/acme/messaging/annotation/Listener#", args={}),
+        ),
+        AnnotationFact(
+            document_id="doc_1", target=listener, retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/messaging/annotation/Topic#", args={"value": ["orders."]},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1", target=handle, retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/messaging/annotation/OnMessage#",
+                args={"value": ["created"]},
+            ),
+        ),
+    ]
+    write_fact_file(root / "OrderListener.jsonl", document, facts)
+
+
+def test_derive_endpoints_carries_the_catalogs_own_protocol_and_direction_when_non_http(
+    tmp_path: Path,
+):
+    _invented_listener_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalog = Catalog(
+        id="invented-listener", style="annotation_driven", protocol="message",
+        direction="outbound", requires=("annotation_args",),
+        matches={
+            "type_annotation": "com/acme/messaging/annotation/Listener#",
+            "path_prefix_from": {
+                "annotation": "com/acme/messaging/annotation/Topic#", "arg": "value",
+            },
+            "method_annotations": [
+                {
+                    "fqn": "com/acme/messaging/annotation/OnMessage#",
+                    "http_method": "PUBLISH", "path_arg": "value",
+                },
+            ],
+        },
+    )
+
+    skipped = derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert skipped == []
+    assert len(rows) == 1
+    assert rows[0]["protocol"] == "message"
+    assert rows[0]["direction"] == "outbound"
+    assert rows[0]["protocol"] != "http"
+    assert rows[0]["direction"] != "inbound"
+
+
 def test_derive_endpoints_skips_and_reports_when_a_required_capability_is_missing(
     tmp_path: Path,
 ):

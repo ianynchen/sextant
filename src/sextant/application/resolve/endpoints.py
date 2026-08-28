@@ -59,13 +59,15 @@ def derive_endpoints(
 
 
 def _run_annotation_driven(workspace: Workspace, catalog: Catalog) -> None:
-    """Passes the catalog's own annotation identifiers and HTTP-method
-    mapping through to the derivation as bound parameters. The engine here
-    is generic: it never names a framework, only forwards what `matches`
-    declares."""
+    """Passes the catalog's own protocol, direction, annotation identifiers,
+    and HTTP-method mapping through to the derivation as bound parameters.
+    The engine here is generic: it never names a framework or a protocol,
+    only forwards what the catalog declares."""
     prefix_from = catalog.matches["path_prefix_from"]
     workspace.derive(
         "endpoints",
+        protocol=catalog.protocol,
+        direction=catalog.direction,
         type_annotation=catalog.matches["type_annotation"],
         prefix_annotation=prefix_from["annotation"],
         prefix_arg=prefix_from["arg"],
