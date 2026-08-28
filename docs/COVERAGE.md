@@ -831,25 +831,37 @@ problem and Kafka serializers, had nowhere to live. It is now a catalog default 
 resolution, and a default that survives unchallenged is recorded at `evidence: declared`
 rather than at an observed level.
 
-### Still-open design questions, unchanged by this reorganisation
+### Still-open design questions
 
-Four shapes the schema cannot express today. All four surfaced from the research, none is an
-organisational problem:
+Three shapes the schema cannot express. All surfaced from the research; none is an
+organisational problem, and each blocks a whole family of frameworks rather than one library.
 
-1. ~~Context-dependent `direction` and `protocol`~~ — **resolved**, [D02](components/D02-catalog-schema.md) §2c.
-2. **Config-derived destinations** (§7) — no catalog style says "the destination is a
-   property key derived from this bean's name".
-3. **Filesystem-derived paths** — Next.js, SvelteKit, Remix and Nuxt put the route in the
+1. **The boundary is the route, but it should be the operation.** GraphQL, SOAP and WebSocket
+   put one HTTP path in front of many logical operations — a schema with 200 fields is one
+   route. Modelled as routes, a GraphQL service reports a single endpoint and the system tier
+   has nothing to match. This is a [D01](components/D01-graph-schema.md) change and is the
+   most consequential item on this list.
+2. **Config-derived destinations.** No catalog style says "the destination is a property key
+   derived from this bean's name" — the shape Spring Cloud Stream, SmallRye, MicroProfile
+   REST Client and Django all use (§7). For these frameworks the code-to-configuration join
+   is not an optimisation, it is the only path to an answer.
+3. **Filesystem-derived paths.** Next.js, SvelteKit, Remix and Nuxt put the route in the
    file's location and the verb in an export name. No engine we have designed reads a
-   directory walk as a fact source.
-5. **One route, many operations** — GraphQL, SOAP, WebSocket and SSE need the *operation* to
-   be the boundary, not the HTTP route ([D01](components/D01-graph-schema.md)).
-4. **Per-endpoint `resolution` driven by framework typing** (§7) rather than by language.
+   directory walk as a fact source, and this is the most common way to declare an HTTP
+   endpoint in the modern JavaScript ecosystem.
 
-Two limits should be stated **in the product**, not discovered by users: actor messaging is
-largely invisible to static analysis, and `runtime_dynamic` boundaries — `boto3`, DRF
-routers, `@grpc/proto-loader` — are not gaps we will close later. They are boundaries that do
-not exist statically, and the coverage report has to say so.
+**Resolved by this round:** context-dependent `direction`, `protocol` and `format` —
+[D02](components/D02-catalog-schema.md) §2c.
+
+**Answered elsewhere by §4:** [M06](components/M06-stitcher.md) asks how shapes are compared
+when the two sides use different serialisation formats. §4.3 answers it — comparison is valid
+only within a format or across a known projection, and proto3's lowerCamelCase JSON mapping is
+the concrete case that makes the projection non-identity.
+
+**Two limits belong in the product, not in a discovery by users.** Actor messaging is largely
+invisible to static analysis, and `runtime_dynamic` boundaries — `boto3`, DRF routers,
+`@grpc/proto-loader` — are not gaps we will close later. They are boundaries that do not exist
+statically, and the coverage report has to say so.
 
 ---
 
