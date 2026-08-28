@@ -89,3 +89,7 @@ def test_scan_names_the_class_files_it_skipped_when_the_fixture_has_a_nested_cla
         )
     )
     assert report.uncovered == ("com/acme/orders/OrderResult$Detail.class",)
+
+
+def test_scanner_declares_the_capabilities_phase_2a_implements():
+    assert {"type_annotations", "kotlin_metadata"} <= AsmScanner(JAR).capabilities()
