@@ -4,6 +4,22 @@ CREATE TABLE IF NOT EXISTS raw_facts (
     payload     JSON
 );
 
+-- Pre-declared so the "endpoints" query always succeeds, even when every
+-- catalog is skipped by capability gating and derive_endpoints.sql never
+-- runs (D02 §2, M04): a weaker scanner must degrade visibly via
+-- skipped_catalogs, not crash. derive_endpoints.sql still replaces this
+-- table whole via CREATE OR REPLACE TABLE whenever at least one catalog runs.
+CREATE TABLE IF NOT EXISTS endpoints (
+    protocol          TEXT,
+    direction         TEXT,
+    method            TEXT,
+    path              TEXT,
+    handler           TEXT,
+    handler_signature JSON,
+    resolution        TEXT,
+    evidence          TEXT
+);
+
 CREATE OR REPLACE VIEW documents AS
 SELECT document_id,
        payload ->> 'relative_path'   AS relative_path,
