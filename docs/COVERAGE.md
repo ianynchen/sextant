@@ -126,7 +126,7 @@ that language exists. It is not a cost you can pay today. Only ✅ and ◐ mean 
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ 8A 8B 5C | 3A 2B | 2A | 4A | 2A 1B | 1A 2B |
+| **Java / Kotlin** | ✅ ASM | ◐ 8A 8B 5C | 2A 3B | 2A | 4A | 2A 1B | 1A 2B |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 1B 1C | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 1B 1C | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -140,10 +140,10 @@ SNS and Redis are **out of scope by decision**, not oversight — each would be 
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | 3A 1B | 4A 3B 2C | 4A 1B | 2A 2B | 1A 2B 1C | 2A 1B 2C |
+| **Java / Kotlin** | 3A 1B | 2A 5B 2C | 3A 2B | 2A 2B | 1A 2B 1C | 2A 1B 2C |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
-| **TypeScript** | 1A 1B | 1A | 1A | 1A | 1B | 1A |
-| **JavaScript** | 1A 1B | 1A | 1A | 1A | 1B | 1A |
+| **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
+| **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **Python** | 1A | 2A | 1A | 1C | 1B | 2A |
 | **Rust** | 1A | 1A | 1A | 1B | ⚠️ | 1A 1B |
 | **Swift** | 1A | — | — | 1B | — | 1B |
@@ -188,6 +188,42 @@ capability unlocking most cells at once. It is the baseline for four of the seve
 
 **Pub/Sub is B in every language.** Only Micronaut ships a first-party annotation; everywhere
 else it is a builder chain over a client library.
+
+
+### Why the tiers are consistent
+
+Tiers here are not assigned row by row. A tier is derived from the row's **detection shape**
+against the capabilities that language's scanner has:
+
+```
+shape ∈ that language's baseline                       → A
+shape ∈ {config_join, runtime_dynamic, filesystem,
+         combinator}                                   → C   (not in the code)
+otherwise (fluent_chain, generated_descriptor,
+           interface_implementation)                   → B
+```
+
+Checked against all 183 rows, this reproduces the hand-assigned tier **86%** of the time, and
+every disagreement was worth having. The largest cluster was **our own inconsistency**: in
+Java, `RestTemplate`, `KafkaTemplate.send`, `KafkaConsumer.subscribe` and `JmsTemplate.send`
+are all `registration_call` and had been marked A, while Javalin, Alpakka and the Vert.x event
+bus — *the same shape* — were marked B. The first four were wrong: Phase 1 records no call
+sites at all, so none of them is a catalog away. They now read B, and become A the day
+call-site extraction ships. That is the burndown property working.
+
+Three residual cases need more than a shape, and are recorded rather than smoothed over:
+
+- **`combinator` spans B to C** by nesting depth. Ktor and WebFlux functional routing are
+  tractable; Akka HTTP's `path(…) { get { … } }` composes routes as values across methods and
+  is not.
+- **`runtime_dynamic` is B, not C, when a readable artifact escapes it.** `@grpc/proto-loader`
+  and `zeep` build clients at runtime, but from a `.proto` or WSDL path that is a **literal in
+  the source** — so read the artifact instead. `boto3` has no such escape, which is why it
+  stays C.
+- **`artifact` depends on whether that reader exists.** GraphQL SDL is A because reading it is
+  planned; WSDL is C because SOAP is deferred.
+
+Run `python scripts/coverage_matrix.py --check` to confirm §2 still matches §5.
 
 ---
 
@@ -383,7 +419,7 @@ has nothing to match on.
 |---|---|---|---|
 | Java | Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange`, Micronaut `@Client`, MicroProfile `@RegisterRestClient` | `annotation` | A |
 | Java | Spring 7 `ImportHttpServices` registration | `annotation` | A |
-| Java | `RestTemplate` | `registration_call` | A |
+| Java | `RestTemplate` | `registration_call` | B |
 | Java | `RestClient`, `WebClient`, OkHttp, JDK `HttpClient`, Apache HttpClient, `URL.openConnection()` | `fluent_chain` | **B — gates every client written in the last five years** |
 | Java | **Apache Camel** `from("kafka:orders").to("http://svc/api")` | `fluent_chain` over **URI strings** | **B — largest single payoff: protocol, direction and destination in one literal** |
 | Go | `http.Get(url)`, `http.NewRequest(m, url, b)` + `client.Do` | `registration_call` / `fluent_chain` | A |
@@ -494,7 +530,7 @@ complete answer.
 | Python | `_pb2_grpc.py`: `FooServicer`, `add_FooServicer_to_server`, `FooStub(channel)` | — | `registration_call` | A |
 | Rust | `tonic` `FooServer::new(impl)`, `FooClient::connect(url)` | — | `registration_call` | A |
 | TS | `@grpc/grpc-js` + `@grpc/proto-loader` `loadSync("foo.proto")` | **service built at runtime from a `.proto` path** | `runtime_dynamic` | **B — the path is a literal, so read the `.proto` as an artifact** |
-| TS | `ts-proto`, `protobufjs` static mode | generated typed services | `generated_descriptor` | A |
+| TS | `ts-proto`, `protobufjs` static mode | generated typed services | `generated_descriptor` | B |
 | Swift | gRPC-Swift generated clients and providers; Connect-Swift | — | `registration_call` | A |
 
 ### 5.8 Kafka
@@ -503,8 +539,8 @@ complete answer.
 |---|---|---|---|---|
 | Java | Spring `@KafkaListener` (`topics`, `topicPattern`, `topicPartitions`, `groupId`) | — | `annotation` | A |
 | Java | Micronaut `@KafkaListener`/`@KafkaClient` + `@Topic` | — | `annotation` | A |
-| Java | `KafkaTemplate.send(topic, …)` | — | `registration_call` | A |
-| Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)` | — | `registration_call` | A |
+| Java | `KafkaTemplate.send(topic, …)` | — | `registration_call` | B |
+| Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)` | — | `registration_call` | B |
 | Java | **`KafkaProducer.send(ProducerRecord)`** | **topic is a constructor argument of `ProducerRecord`**, not of `send` | `fluent_chain` | B |
 | Java | `KafkaTemplate.send(Message)` with topic in a header | — | `fluent_chain` | B |
 | Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination` | `config_join` | **C — see §7** |
@@ -529,7 +565,7 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 |---|---|---|---|---|
 | Java | Spring `@JmsListener` (`destination`, `selector`, `subscription`, `concurrency`) | — | `annotation` | A |
 | Java | Micronaut `@JMSListener` + `@Queue`/`@Topic` | — | `annotation` | A |
-| Java | `JmsTemplate.send` / `convertAndSend` | — | `registration_call` | A |
+| Java | `JmsTemplate.send` / `convertAndSend` | — | `registration_call` | B |
 | Java | Direct `jakarta.jms.{Session, MessageProducer, MessageConsumer}` | — | `fluent_chain` | B |
 | Java | `@RabbitListener`, `@PulsarListener` | — | `annotation` | A |
 | Go | `rabbitmq/amqp091-go` ⚠️ (was `streadway/amqp`) `ch.Publish(exchange, key, …)` | — | `registration_call` | A |
@@ -756,15 +792,22 @@ answers "what exactly do I build". The matrices are **generated from §5** by
 A `·` marks a cell §5 has no rows for — *not yet enumerated*, distinct from `—`, which means
 we looked and it does not exist.
 
-**Q7 — How do we stop this document drifting from reality? my strongest suggestion.**
-Catalogs are already YAML, and the design already has capability gating — scanners declare
-capabilities, catalogs declare requirements, unmet requirements are skipped *and reported*.
-So the matrix could be **generated**: add a small registry of `(language, protocol, library,
-shape, status)` records, derive the tier mechanically from `shape` against the capabilities a
-scanner declares, and have `sextant` render §2 and §5. Coverage then cannot drift, "what
-needs adding" becomes a query rather than a document, and it follows the project's own rule
-that frameworks are data. Recommend doing this once a second language exists — before that
-the registry costs more than it saves.
+**Q7 — How do we stop this document drifting from reality? partly resolved; the rest needs a decision.**
+Done for §2, which is now **generated from §5** by `scripts/coverage_matrix.py`; `--check`
+fails if they have drifted. The open part is whether to go further and derive the *tiers*
+too. Evidence says yes: the rule in §2's "Why the tiers are consistent" reproduces the
+hand-assigned tier for 86% of 183 rows, and the disagreements were mostly **our own
+inconsistency** rather than rule failure — four Java `registration_call` rows had been marked
+A while three identical-shaped rows were marked B. Deriving tiers found them; hand-reading
+would not have.
+
+The remaining choice is where the source data lives. §5's markdown tables already parse
+cleanly, so the incremental value of moving to YAML is narrow: a tier that recomputes when a
+capability ships, and queryability from the CLI. Against it, the *notes* carry much of this
+document's value ("the topic is a constructor argument of a different object") and they read
+badly in YAML. **Recommend keeping §5 as markdown and adding shape→tier derivation as a
+`--check` rule**, so an inconsistent tier fails the check the way a stale matrix does. Revisit
+a YAML registry only if a second language's checklist makes the tables unwieldy.
 
 **Q8 — Do the per-language files now duplicate §5?**
 Partly, and deliberately: §5 owns the **judgment** (tier, status) and the language files own
