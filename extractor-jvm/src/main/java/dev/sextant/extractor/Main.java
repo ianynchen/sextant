@@ -100,6 +100,6 @@ public final class Main {
         for (byte b : MessageDigest.getInstance("SHA-256").digest(value)) {
             hex.append(String.format("%02x", b));
         }
-        return hex.substring(0, 32);
+        return hex.toString();
     }
 }
