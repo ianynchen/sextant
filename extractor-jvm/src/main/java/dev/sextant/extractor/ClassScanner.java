@@ -1,7 +1,11 @@
 package dev.sextant.extractor;
 
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.TreeMap;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
@@ -21,8 +25,40 @@ public final class ClassScanner {
 
     public List<String> scan(byte[] classBytes, String documentId) {
         List<String> lines = new ArrayList<>();
-        new ClassReader(classBytes).accept(new Visitor(lines, documentId), ClassReader.SKIP_FRAMES);
+        ClassReader reader = new ClassReader(classBytes);
+        reader.accept(new Visitor(lines, documentId, methodNameCounts(reader)), ClassReader.SKIP_FRAMES);
         return lines;
+    }
+
+    /** How many methods share each name. D00 §1 spends the disambiguator only
+     *  on "one overload among several", so a name cannot be built until the
+     *  whole class has been seen — hence one cheap extra pass over the same
+     *  already-parsed bytes rather than deferring every emission. */
+    private static Map<String, Integer> methodNameCounts(ClassReader reader) {
+        Map<String, Integer> counts = new HashMap<>();
+        reader.accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public MethodVisitor visitMethod(int a, String name, String d, String s, String[] e) {
+                counts.merge(name, 1, Integer::sum);
+                return null;
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return counts;
+    }
+
+    /** D00 §1: overloads are disambiguated by **descriptor hash**, never by an
+     *  ordinal — an ordinal changes the moment a sibling is added, and a symbol
+     *  that moves is a symbol nothing downstream can join on. Prefixed rather
+     *  than bare hexadecimal, for the reason the same section gives. */
+    static String disambiguatorOf(String descriptor) {
+        try {
+            StringBuilder hex = new StringBuilder();
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(descriptor.getBytes("UTF-8"));
+            for (int i = 0; i < 4; i++) hex.append(String.format("%02x", digest[i]));
+            return "sig_" + hex;
+        } catch (NoSuchAlgorithmException | java.io.UnsupportedEncodingException impossible) {
+            throw new IllegalStateException("SHA-256 or UTF-8 missing from this JVM", impossible);
+        }
     }
 
     String symbolOf(String descriptorPath) {
@@ -32,12 +68,14 @@ public final class ClassScanner {
     private final class Visitor extends ClassVisitor {
         private final List<String> lines;
         private final String documentId;
+        private final Map<String, Integer> methodNameCounts;
         private String typeSymbol;
 
-        Visitor(List<String> lines, String documentId) {
+        Visitor(List<String> lines, String documentId, Map<String, Integer> methodNameCounts) {
             super(Opcodes.ASM9);
             this.lines = lines;
             this.documentId = documentId;
+            this.methodNameCounts = methodNameCounts;
         }
 
         @Override
@@ -50,7 +88,9 @@ public final class ClassScanner {
         @Override
         public MethodVisitor visitMethod(int access, String name, String descriptor, String sig, String[] ex) {
             String owner = typeSymbol.substring(typeSymbol.lastIndexOf(' ') + 1);
-            String methodSymbol = symbolOf(owner + name + "().");
+            boolean overloaded = methodNameCounts.getOrDefault(name, 1) > 1;
+            String methodSymbol = symbolOf(
+                owner + name + (overloaded ? "(" + disambiguatorOf(descriptor) + ")." : "()."));
             String constructKind = "<init>".equals(name) ? "constructor" : "method";
             int parameterCount = Type.getArgumentTypes(descriptor).length;
             String[] parameterNames = new String[parameterCount];

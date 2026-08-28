@@ -24,6 +24,14 @@ public class OrderController {
         return service.find(id);
     }
 
+    // A genuine overload: two methods named `get`, both mapped. Their symbols
+    // must differ (D00 §1), or the resolver's join on method_symbol multiplies
+    // and two routes are reported as four.
+    @GetMapping("/{id}/{view}")
+    public OrderResult get(@PathVariable long id, @PathVariable String view) {
+        return service.find(id);
+    }
+
     @GetMapping
     public List<OrderResult> list() {
         return service.list();

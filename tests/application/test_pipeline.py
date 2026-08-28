@@ -16,7 +16,7 @@ FIXTURE = REPO / "fixtures" / "orders-service"
 CATALOGS = REPO / "catalogs"
 
 
-def test_resolve_finds_the_three_fixture_endpoints_when_run_end_to_end(tmp_path: Path):
+def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(tmp_path: Path):
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     facts = tmp_path / "facts"
     AsmScanner(JAR).scan(ScanRequest(
@@ -31,8 +31,13 @@ def test_resolve_finds_the_three_fixture_endpoints_when_run_end_to_end(tmp_path:
     assert routes == {
         ("POST", "/v1/orders"),
         ("GET", "/v1/orders/{id}"),
+        ("GET", "/v1/orders/{id}/{view}"),
         ("GET", "/v1/orders"),
     }
+    # One row per mapped method, not one per (method, same-named sibling) pair:
+    # the fixture's two `get` overloads share a name, and a symbol that does not
+    # disambiguate them (D00 §1) makes this join multiply instead of match.
+    assert len(report.endpoints) == 4
     assert report.skipped_catalogs == []
 
 
