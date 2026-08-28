@@ -49,7 +49,7 @@ endpoints is the failure this prevents.
 
 ---
 
-## 2. The five styles
+## 2. The six styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
 genuinely new shape needs a new engine.
@@ -111,6 +111,51 @@ outbound so that a path a module both exposes and calls merges into one endpoint
 direction `both`. A later pass that changed direction would arrive after that merge has
 already happened, silently corrupting it. Direction is therefore resolved **at match
 time** — §2c — never afterwards.
+
+### `filesystem`
+
+The declaration is the file's own location. Next.js, SvelteKit, Remix and Nuxt derive the
+path from the directory structure and the HTTP verb from an exported symbol's name —
+`app/api/users/[id]/route.ts` exporting `GET` is `GET /api/users/:id`. No annotation, no
+call, and no string anywhere in the source contains the path.
+
+**Two sources, in order of authority.**
+
+*The build's own manifest, where it exists.* Next.js writes out the resolved route table;
+SvelteKit's equivalent varies by adapter. **This is the same category as bytecode** — not an
+artifact the build consumes (§DR-4's case) but one it produces, which is the build's own
+answer to the question. Every convention is handled for free and stays correct when the
+framework adds more, and the framework's conventions are a moving target maintained by
+someone else.
+
+*A directory walk, as fallback.* Reading the manifest requires a successful build, which
+requires an install and can fail, so a bare checkout must still yield something. A walk
+handles the common patterns — nested folders, `[id]` parameters — and records anything it does
+not recognise as `partial` rather than guessing. Route groups in parentheses contribute
+nothing to the URL; parallel and intercepting routes are rare for API routes specifically.
+
+```yaml
+style: filesystem
+matches:
+  manifest: [".next/routes-manifest.json", ".next/app-paths-manifest.json"]   # ⚠️ internal, unversioned
+  walk:
+    root: "app"
+    endpoint_file: "route.{ts,js}"
+    verb_from: exported_symbol_name
+    segment:
+      - { pattern: "[{name}]",    then: parameter }
+      - { pattern: "[[...{name}]]", then: optional_catch_all }
+      - { pattern: "[...{name}]", then: catch_all }
+      - { pattern: "({name})",    then: omitted_from_path }
+```
+
+**A manifest gives paths and nothing else** — not the handler symbol, not the request or
+response types. The source still has to be read to connect a path to its code, so the
+fallback shares most of its machinery with the primary path rather than duplicating it.
+
+An LLM may verify a walked path against the manifest or the source; a human curation settles
+what neither can. As in §2d, an LLM is never the sole source of an address that creates a
+link.
 
 ## 2a. Wrapper declarations
 
@@ -313,4 +358,5 @@ were skipped, and why.
 | How a catalog expresses a topic name assembled from a constant and a literal | Kafka catalogs |
 | The closed set for `format`, and whether a schema-registry subject is part of it | §2c, and Avro or Protobuf on Kafka |
 | Whether `resolves` needs config-sourced conditions, for a Kafka `value.serializer` in properties | §2c format resolution for Kafka |
+| Whether the manifest reader pins framework versions, given the files are undocumented internals that may shift | §2's `filesystem` style |
 | **How much expressiveness `address_from_config` needs before it stops being data.** Spring Cloud Stream's binding suffix depends on the functional interface, gains an index for multiple inputs, and can be overridden wholesale by `spring.cloud.function.definition` | §2d, and the Spring Cloud Stream catalog |

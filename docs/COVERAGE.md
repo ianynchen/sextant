@@ -844,10 +844,10 @@ problem and Kafka serializers, had nowhere to live. It is now a catalog default 
 resolution, and a default that survives unchallenged is recorded at `evidence: declared`
 rather than at an observed level.
 
-### Still-open design questions
+### Design questions raised by this research
 
-Shapes the schema cannot express. All surfaced from the research; none is an organisational
-problem, and each blocks a whole family of frameworks rather than one library.
+Each of these blocked a whole family of frameworks rather than one library, and all three are
+now settled. Recorded here because the reasoning matters more than the outcome.
 
 1. ~~The unit of a boundary where one address carries many operations~~ — **resolved**:
    the operation is the endpoint, the address stays on it as `path`,
@@ -862,13 +862,18 @@ problem, and each blocks a whole family of frameworks rather than one library.
    binding name depends on the functional interface and can be overridden wholesale, and a
    catalog format that needs conditionals to express that has stopped being data. Logged in
    D02 §7.
-3. **Filesystem-derived paths.** Next.js, SvelteKit, Remix and Nuxt put the route in the
-   file's location and the verb in an export name. No engine we have designed reads a
-   directory walk as a fact source, and this is the most common way to declare an HTTP
-   endpoint in the modern JavaScript ecosystem.
+3. ~~Filesystem-derived paths~~ — **resolved**: read the build's own route manifest where
+   it exists, fall back to a directory walk recorded as `partial`, with LLM verification and
+   human curation on top ([D02](components/D02-catalog-schema.md) §2, `filesystem` style).
+   A manifest is not an artifact the build *consumes* — it is one the build *produces*, which
+   puts it in the same category as bytecode, so this is an instance of our approach rather
+   than an exception to it. The fallback is cheaper than it looks: a manifest yields paths
+   only, so the source must be read for handlers and types either way.
 
-**Resolved by this round:** context-dependent `direction`, `protocol` and `format` —
-[D02](components/D02-catalog-schema.md) §2c.
+**All three are now resolved**, along with context-dependent `direction`, `protocol` and
+`format` ([D02](components/D02-catalog-schema.md) §2c). What remains open is not a shape the
+schema cannot express but a question of how much expressiveness the catalog format can absorb
+before it stops being data — logged in D02 §7.
 
 **Answered elsewhere by §4:** [M06](components/M06-stitcher.md) asks how shapes are compared
 when the two sides use different serialisation formats. §4.3 answers it — comparison is valid
