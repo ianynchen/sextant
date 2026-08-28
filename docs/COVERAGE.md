@@ -92,10 +92,10 @@ would report "1 endpoint" for both and the system tier would have nothing to mat
 **The protocol is not always determined by the annotation.** A Spring `@GetMapping` returning
 `List<Order>` is REST; the same annotation returning `SseEmitter` or
 `Flux<ServerSentEvent<T>>` is SSE. `@ServerEndpoint` is WebSocket. The declaration is
-identical and the **return type** decides. This generalises a gap already recorded for
-`@HttpExchange`, where the *direction* depends on use rather than on the catalog: **both
-`protocol` and `direction` are currently properties of the catalog, and both need to be
-derivable per match.** See §8.
+identical and the **return type** decides. This generalises a gap recorded for
+`@HttpExchange`, where the *direction* depends on use rather than on the catalog. Both are
+now resolved per match against a catalog-level default, along with `format` —
+[D02](components/D02-catalog-schema.md) §2c.
 
 ### Verification
 
@@ -723,11 +723,24 @@ onto machinery we already have:
 |---|---|---|---|
 | Call edges, dispatch, reachability | Static analysis | `syntax` / `compiler` | 50 |
 | Payload fields, types, optionality | LLM, where declarations are absent | `llm` | 10 |
+| A destination behind a configuration key | Catalog rule, **verified** by an LLM, corrected by a human | `declared` / `llm` / `human` | 50 / 10 / 90 |
 
-**The operating rule: an LLM may propose a shape; it may never propose an edge.** An
-invented field is a visible, checkable error a human overlay corrects at precedence 90. An
-invented call edge silently corrupts blast radius — the thing the tool exists to compute —
-and nothing downstream would catch it.
+**The operating rule: an LLM may propose a shape, and may verify a derivation; it may never
+be the sole source of anything that creates a link.** An invented field is a visible,
+checkable error a human overlay corrects at precedence 90. An invented call edge silently
+corrupts blast radius — the thing the tool exists to compute — and nothing downstream would
+catch it.
+
+**The third row needs its boundary drawn carefully**, because it is the case where the rule
+above is easiest to violate by accident. The benchmark finding concerns *call graph
+construction inside a program*, where `PyCG` and `Jelly` are demonstrably better than a model.
+Joining a bean name to a configuration key is not that: there is no static competitor beyond
+reading the configuration, which we already do. So an LLM there is filling a gap rather than
+losing to a better method — but a destination is part of a wire identity, so a wrong one does
+not produce an odd-looking field. It produces **a confident link between two services that do
+not talk to each other.** Hence verification rather than derivation
+([D02](components/D02-catalog-schema.md) §2d): where an LLM is nonetheless the only source,
+the endpoint carries `evidence: llm` and every link built on it inherits that precedence.
 
 `PyCG`, `Jelly`, `TypeEvalPy` and `SWARM-CG` also give us **published benchmarks to measure
 our own output against**, rather than asserting quality.
@@ -841,10 +854,14 @@ problem, and each blocks a whole family of frameworks rather than one library.
    [D01](components/D01-graph-schema.md). Aggregation is possible and disaggregation is not,
    so recording operations still allows one arrow per service; recording only the address
    could never answer *who calls `getOrder`*. The cost lands on rendering, not the schema.
-2. **Config-derived destinations.** No catalog style says "the destination is a property key
-   derived from this bean's name" — the shape Spring Cloud Stream, SmallRye, MicroProfile
-   REST Client and Django all use (§7). For these frameworks the code-to-configuration join
-   is not an optimisation, it is the only path to an answer.
+2. ~~Config-derived destinations~~ — **resolved**: catalog vocabulary is primary
+   ([D02](components/D02-catalog-schema.md) §2d), an LLM verifies the join, a human curation
+   settles what neither can. Framework knowledge belongs in data — five rules written once
+   beat every user writing them per project — and pushing it onto users is what the
+   architecture says it will not do. The open risk is expressiveness: Spring Cloud Stream's
+   binding name depends on the functional interface and can be overridden wholesale, and a
+   catalog format that needs conditionals to express that has stopped being data. Logged in
+   D02 §7.
 3. **Filesystem-derived paths.** Next.js, SvelteKit, Remix and Nuxt put the route in the
    file's location and the verb in an export name. No engine we have designed reads a
    directory walk as a fact source, and this is the most common way to declare an HTTP

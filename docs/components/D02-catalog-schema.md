@@ -216,6 +216,47 @@ exposed over REST therefore carries different field names than its own schema st
 
 ---
 
+## 2d. Addresses that live in configuration
+
+Some frameworks put no destination in the code at all. A Spring Cloud Stream `Consumer<Order>`
+bean named `handleOrder` reads a Kafka topic named nowhere in the source; the topic is under
+`spring.cloud.stream.bindings.handleOrder-in-0.destination`. SmallRye's `@Incoming("orders")`
+names a channel, not a topic — that is `mp.messaging.incoming.orders.topic`. MicroProfile's
+`@RegisterRestClient(configKey="orders")` finds its URL under `orders/mp-rest/url`.
+
+The pattern is constant: **the code carries a name, and configuration says what the name
+means.** Configuration resolution is already a first-class pass, so what is missing is only
+the vocabulary for the derivation. A catalog declares it:
+
+```yaml
+address_from_config:
+  key: "spring.cloud.stream.bindings.{binding}.destination"
+  binding:
+    from: bean_name
+    suffix:
+      - { when: { implements: java.util.function.Consumer }, then: "-in-0" }
+      - { when: { implements: java.util.function.Supplier }, then: "-out-0" }
+```
+
+**Three layers, in order of authority.** The catalog rule is primary, because this is
+framework knowledge and framework knowledge belongs in data — five rules written once beat
+every user writing them per project. Where a rule exists but the resolved value is doubtful,
+an LLM **verifies** the join and flags disagreement. Where no rule exists or the verification
+disputes it, a human curation settles it at precedence 90.
+
+**An LLM may verify this join; it must not be the sole source of it.** A destination is part
+of a wire identity, so a wrong one does not produce a visibly odd field — it produces a
+*confident link between two services that do not talk to each other*. Where an LLM is
+nonetheless the only source, the endpoint carries `evidence: llm` and every link built on it
+inherits that precedence and renders as unconfirmed.
+
+**An unresolved address is not an absent endpoint.** If the key is missing from every
+configuration source, the endpoint is still recorded with its address as the unresolved
+expression, and the coverage report names the key that was not found. Dropping it would make
+a partially-configured module look like a module with fewer boundaries.
+
+---
+
 ## 3. Ordering
 
 Engines run in a fixed order because later passes depend on earlier ones: inbound first,
@@ -272,3 +313,4 @@ were skipped, and why.
 | How a catalog expresses a topic name assembled from a constant and a literal | Kafka catalogs |
 | The closed set for `format`, and whether a schema-registry subject is part of it | §2c, and Avro or Protobuf on Kafka |
 | Whether `resolves` needs config-sourced conditions, for a Kafka `value.serializer` in properties | §2c format resolution for Kafka |
+| **How much expressiveness `address_from_config` needs before it stops being data.** Spring Cloud Stream's binding suffix depends on the functional interface, gains an index for multiple inputs, and can be overridden wholesale by `spring.cloud.function.definition` | §2d, and the Spring Cloud Stream catalog |
