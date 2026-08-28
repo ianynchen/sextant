@@ -8,6 +8,11 @@ _MAIN_CLASS = f"{{{_POM_NS['m']}}}mainClass"
 
 # Files that declare how the module is packaged to run. Names, not contents:
 # M02 forbids the detector from reading code, and these are build files.
+# Maven's own non-code build directories. Named here because they are build
+# layout, not languages: everything else under src/main is a source root, and
+# the name of that directory is what the build says is compiled there.
+_NON_SOURCE_DIRECTORIES = frozenset({"resources", "webapp", "filters"})
+
 _CONTAINER_FILES = (
     "Dockerfile", "Containerfile",
     "compose.yaml", "compose.yml",
@@ -34,17 +39,50 @@ class MavenDetector:
         group = self._text(pom, "groupId")
         artifact = self._text(pom, "artifactId")
         version = self._text(pom, "version")
+        source_roots = self._source_roots(path, pom)
         module = ModuleModel(
             module_id=f"{group}:{artifact}",
             coordinates=f"{group}/{artifact}",
             version=version,
             root=path,
             kind=self._classify(path, pom),
-            languages=frozenset({"java"}),
-            source_roots=(path / "src" / "main" / "java",),
+            # Observed, never asserted: a module records the languages
+            # present (M02), and this detector is keyed by build system, so
+            # it has no business naming one.
+            languages=frozenset(root.name for root in source_roots),
+            source_roots=source_roots,
             output_dirs=(path / "target" / "classes",),
         )
         return RepositoryModel(root=path, modules=(module,))
+
+    @staticmethod
+    def _source_roots(path: Path, pom: ElementTree.Element) -> tuple[Path, ...]:
+        """The directories this build compiles from, as they actually exist.
+
+        A declared `<sourceDirectory>` wins, because it is the build saying
+        so. Otherwise every directory under `src/main` that is not one of
+        Maven's own non-code directories is a source root, and each one's
+        name is the language compiled there — which is how a module holding
+        a second JVM language is reported as holding it, without any language
+        name appearing in this file to say so.
+
+        Returns an empty tuple where the module has no source directory at
+        all. A root that does not exist is never returned: a path nothing
+        can read is worse than an absence, because everything downstream
+        treats it as a place it already looked.
+        """
+        declared = pom.find("m:build/m:sourceDirectory", _POM_NS)
+        if declared is not None and declared.text:
+            root = path / declared.text.strip()
+            return (root,) if root.is_dir() else ()
+        main = path / "src" / "main"
+        if not main.is_dir():
+            return ()
+        return tuple(sorted(
+            (child for child in main.iterdir()
+             if child.is_dir() and child.name not in _NON_SOURCE_DIRECTORIES),
+            key=lambda child: child.name,
+        ))
 
     @staticmethod
     def _classify(path: Path, pom: ElementTree.Element) -> str:

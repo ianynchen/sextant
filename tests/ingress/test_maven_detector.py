@@ -21,6 +21,7 @@ def test_detect_reports_module_coordinates_and_output_dir_when_run_on_the_fixtur
     assert module.version == "1.0.0"
     assert module.output_dirs == (FIXTURE / "target" / "classes",)
     assert module.languages == {"java"}
+    assert module.source_roots == (FIXTURE / "src" / "main" / "java",)
 
 
 _BARE_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
@@ -59,3 +60,46 @@ def test_kind_is_service_when_a_container_file_sits_beside_the_pom(tmp_path: Pat
     _module(tmp_path)
     (tmp_path / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
     assert MavenDetector().detect(tmp_path).modules[0].kind == "service"
+
+
+def test_languages_and_source_roots_follow_the_source_tree_when_the_module_is_not_java(
+    tmp_path: Path,
+):
+    """The detector is keyed by build system, not language (M02), and only
+    `ingress/extract/jvm` may name a language (ARCHITECTURE §10). A hardcoded
+    `java` is both: it makes a Kotlin module report a language it does not
+    hold and a source root that does not exist — a path everything downstream
+    treats as somewhere it already looked."""
+    _module(tmp_path)
+    kotlin = tmp_path / "src" / "main" / "kotlin"
+    kotlin.mkdir(parents=True)
+    (kotlin / "Order.kt").write_text("class Order\n", encoding="utf-8")
+    (tmp_path / "src" / "main" / "resources").mkdir()
+
+    module = MavenDetector().detect(tmp_path).modules[0]
+
+    assert module.languages == {"kotlin"}
+    assert module.source_roots == (kotlin,)
+    assert all(root.is_dir() for root in module.source_roots)
+
+
+def test_source_roots_are_empty_when_the_module_has_no_source_directory(tmp_path: Path):
+    module = MavenDetector().detect(_module(tmp_path)).modules[0]
+    assert module.source_roots == ()
+    assert module.languages == frozenset()
+
+
+def test_a_declared_source_directory_wins_over_the_conventional_layout(tmp_path: Path):
+    """M02: the detector reads the build, never a convention."""
+    pom = _BARE_POM.replace(
+        "</project>",
+        "  <build><sourceDirectory>sources/scala</sourceDirectory></build>\n</project>",
+    )
+    _module(tmp_path, pom)
+    (tmp_path / "sources" / "scala").mkdir(parents=True)
+    (tmp_path / "src" / "main" / "java").mkdir(parents=True)
+
+    module = MavenDetector().detect(tmp_path).modules[0]
+
+    assert module.source_roots == (tmp_path / "sources" / "scala",)
+    assert module.languages == {"scala"}
