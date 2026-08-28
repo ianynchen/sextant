@@ -15,11 +15,11 @@ Rust has excellent *compilers* and poor *compiler APIs*. There is no stable, sup
 | Route | What it gives | Problem |
 |---|---|---|
 | `syn` / `proc-macro2` | Full syntax tree | **No types at all.** Cannot resolve a method call to its impl, cannot follow a trait. |
-| `rustdoc` JSON output | Item signatures, trait impls, generics | Format is explicitly unstable and versioned by `FORMAT_VERSION`; historically nightly-only ⚠️. Documents the *public API*, so private internals and call sites are absent. |
+| `rustdoc` JSON output | Item signatures, trait impls, generics | ⛔ Still **nightly-only** as of August 2026 — `cargo +nightly rustdoc -- --output-format json -Z unstable-options` — and `FORMAT_VERSION` is a breaking change between releases. Documents the *public API*, so private internals and call sites are absent. |
 | `rust-analyzer` | Everything, genuinely | No stable library API; it is an LSP server, and its internals change freely. |
 | MIR | The real thing | Only via unstable `-Z` flags or a rustc driver plugin, which pins us to an exact nightly. |
 
-**There is no Rust equivalent of ASM, of `go/packages`, or of the Swift index store.** Every route is either type-free or unstable.
+**There is no Rust equivalent of ASM, of `go/packages`, or of the Swift index store.** Every route is either type-free or unstable — and this is the one ⛔ in the whole document: no amount of effort on our side produces a stable compiler API that does not exist.
 
 **The macro problem compounds it.** `#[get("/users/{id}")]` in actix-web and Rocket is a procedural macro. The attribute itself is readable with `syn` — the path string is right there in the token stream, which is the good case. But anything that *generates* routes inside a macro body is invisible without expansion, and expansion means running the compiler.
 
@@ -60,7 +60,7 @@ Rust has excellent *compilers* and poor *compiler APIs*. There is no stable, sup
 | Protobuf | `prost` | `#[derive(prost::Message)]` with `#[prost(string, tag = "1")]` per field | `annotation` — **field numbers are in the attributes**, readable by `syn` with no types needed |
 | SQS | `aws-sdk-rust` | `client.send_message().queue_url(u).send()` | `fluent_chain` |
 | AMQP | `lapin` | `channel.basic_publish(exchange, key, …)` | `registration_call` |
-| Pub/Sub | `google-cloud-rust` ⚠️ | maturity unconfirmed | — |
+| Pub/Sub | `google-cloud-pubsub` (official `googleapis/google-cloud-rust`) | **publish only — receiving is not implemented**, and the crate is pre-GA. Rust Pub/Sub has no inbound side to detect | `fluent_chain` |
 
 ---
 

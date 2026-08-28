@@ -32,7 +32,7 @@ Everything we would want to read is destroyed by the build:
 
 So the JVM rule — *scan what is compiled* — **must be inverted for TypeScript: scan the source, and require `tsconfig.json` as the build input** that establishes authority under DR-4. `tsconfig.json` plays the role `pom.xml` plays for Maven: it names the sources, the module resolution, and the compiler settings.
 
-**Plain JavaScript with no TypeScript and no JSDoc is the floor case for the whole project** — no types, no build manifest describing types, and dynamic dispatch everywhere.
+**Plain JavaScript is the floor case, but it is not blocked.** `allowJs` + `checkJs` in a `jsconfig.json` makes the same TypeScript checker infer types in `.js` files, and JSDoc annotations supply what inference cannot. Quality degrades; the toolchain does not disappear. Four other routes survive too — `zod` and JSON Schema validators are runtime *values* and exist in JavaScript unchanged, field accesses give names without types, and an LLM may propose the shape at precedence 10.
 
 ---
 

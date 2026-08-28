@@ -40,11 +40,12 @@ baseline is `annotation`, which is why `WebClient` is B there. Go's baseline is
 | ◐ | **Partly shipped** — working, with known gaps in the same cell |
 | **A** / **B** / **C** | **Not built.** Tier is the *marginal* cost of the mainstream library, measured against that language's baseline — not against what ships today |
 | — | Not applicable — the protocol does not exist in that ecosystem |
-| ⛔ | Blocked by the language toolchain, not by our effort |
+| ⛔ | **Blocked by the language toolchain**, not by our effort. Used once, on Rust: no stable compiler API exists to ask, at any price |
 | · | **Not yet enumerated** — §5 has no rows for this cell, so we do not know. Distinct from `—`, which means we looked and it does not exist |
 | ⚠️ | **Not confirmed against a primary source.** Attached to a claim, that claim needs checking before it enters a catalog. As a whole cell, no tier could be assigned because the underlying fact is unverified |
 
-`—` and `⛔` are deliberately distinct from a gap. JMS in Go is not missing work.
+`—` and `⛔` are deliberately distinct from a gap. JMS in Go is not missing work, and Rust's
+missing compiler API is not something more effort would fix.
 
 `⚠️` is the one marker that is about **us**, not about the ecosystem: it records where this
 document's own research stopped short.
@@ -134,8 +135,8 @@ that language exists. It is not a cost you can pay today. Only ✅ and ◐ mean 
 |---|---|---|---|---|---|---|---|
 | **Java / Kotlin** | ✅ ASM | ◐ 8A 8B 5C | 2A 3B | 2A | 4A | 2A 1B | 1A 2B |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
-| **TypeScript** | none | 3A 1B 1C | 1A | — | 2A | 2A 1B | 1B 1C |
-| **JavaScript** | none | 3A 1B 1C | 1A | — | 2A | 2A 1B | 1B 1C |
+| **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
+| **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **Python** | none | 4A 1B 1C | 1A | 1B | 2A | 2A 1B | 2B |
 | **Rust** | none | 1A 2B 1C | 1B | — | 1A | 1A 1B | 1B |
 | **Swift** | none | 1A | 1A 1B | — | 1A | 1B | — |
@@ -146,7 +147,7 @@ SNS and Redis are **out of scope by decision**, not oversight — each would be 
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | 3A 1B | 2A 5B 2C | 3A 2B | 3A 2B | 1A 2B 1C | 2A 1B 2C |
+| **Java / Kotlin** | 3A 1B | 2A 7B | 3A 2B | 3A 2B | 1A 3B | 2A 2B 1C |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -166,11 +167,11 @@ means four need only a catalog, three need a scanner capability, and two are not
 at all. **The spread is the point**: a single headline tier hides the gap, which is the thing
 worth seeing.
 
-**Java + Kafka shows why, at `4A 3B 2C`.** Four ways of using Kafka from Java cost a YAML file
-each. Three need real work, including `KafkaProducer.send(new ProducerRecord("t", …))`, where
-the topic is a constructor argument of a *different object*. Two are not in the code at all —
-Spring Cloud Stream and SmallRye put the topic in a properties file under a key derived from
-a bean name. A cell reading "A" would have been true and useless.
+**Java + Kafka shows why.** Several ways of using Kafka from Java cost a YAML file each;
+several more need real work, including `KafkaProducer.send(new ProducerRecord("t", …))`, where
+the topic is a constructor argument of a *different object*; and Spring Cloud Stream and
+SmallRye put the topic in a properties file under a key derived from a bean name. A cell
+reading "A" would have been true and useless.
 
 **Java REST inbound is the largest cell in the document at `8A 8B 5C`** — twenty-one distinct
 ways of declaring an HTTP endpoint in one language, of which we currently read two. That
@@ -203,11 +204,17 @@ against the capabilities that language's scanner has:
 
 ```
 shape ∈ that language's baseline                       → A
-shape ∈ {config_join, runtime_dynamic, filesystem,
-         combinator}                                   → C   (not in the code)
+shape ∈ {runtime_dynamic, combinator}                  → C   (not in the code)
 otherwise (fluent_chain, generated_descriptor,
-           interface_implementation)                   → B
+           interface_implementation, config_join,
+           filesystem)                                  → B
 ```
+
+**`config_join` and `filesystem` were C until the design questions in §8 were settled.** They
+are B now because a mechanism exists on paper — [D02](components/D02-catalog-schema.md) §2d
+and the `filesystem` style. Nothing about the frameworks changed; what changed is that we know
+how to read them. That is the burndown property working, and it is the reason a tier is
+derived rather than asserted.
 
 Checked against all 183 rows, this reproduces the hand-assigned tier **86%** of the time, and
 every disagreement was worth having. The largest cluster was **our own inconsistency**: in
@@ -242,8 +249,8 @@ Run `python scripts/coverage_matrix.py --check` to confirm §2 still matches §5
 | **TypeScript** | **`ts.TypeChecker`** compiler API | Full where annotated | No | `Jelly` | `registration_call` + `annotation` + `filesystem` |
 | **Swift** | **IndexStoreDB** (index-while-building) | Full | Yes (macOS) | Index carries call relations | `registration_call` |
 | **Python** | None — pyright has **no programmatic API**, only LSP | Sparse (§7) | No | `PyCG` | `annotation` + `registration_call` |
-| **Rust** | None stable — `syn` has no types; rustdoc JSON unstable | Syntax only | — | None | `annotation` (syntax-only) |
-| **JavaScript** | None | None | No | `Jelly`, degraded | as TypeScript, payloads ⛔ |
+| **Rust** | ⛔ **None stable.** `syn` has no types; rustdoc JSON needs `cargo +nightly … -Z unstable-options` and its `FORMAT_VERSION` breaks between releases | Syntax only | — | None | `annotation` (syntax-only) |
+| **JavaScript** | `ts.TypeChecker` via `allowJs` + `checkJs` | Inferred, plus JSDoc | No | `Jelly` | as TypeScript |
 
 **Three findings worth stating outright.**
 
@@ -402,7 +409,7 @@ is, what it costs.
 | TS | **NestJS** `@Controller("users")` + `@Get(":id")` + `@Body() dto` | **structurally identical to Spring MVC** | `annotation` | **A — highest-value non-JVM target** |
 | TS | Express, Koa, Hapi, Hono | `app.get("/p", h)`, mounted via `app.use("/api", r)` | `registration_call` | A |
 | TS | Fastify `fastify.get(p, { schema }, h)` | **options object carries a JSON Schema** | `registration_call` | A |
-| TS | **Next.js / SvelteKit / Remix / Nuxt** | **path is the file path, verb is the exported symbol name** | `filesystem` | **C — no engine we have designed can express this** |
+| TS | **Next.js / SvelteKit / Remix / Nuxt** | **path is the file path, verb is the exported symbol name** | `filesystem` | **B** — read the build's route manifest, walk as fallback ([D02](components/D02-catalog-schema.md) `filesystem` style) |
 | TS | tRPC `publicProcedure.input(z.object(…)).query(fn)` | contract is a `zod` schema | `fluent_chain` | B |
 | Python | **FastAPI** `@app.get("/items/{id}")`, `response_model=` | **types mandatory — the framework cannot run without them** | `annotation` | A |
 | Python | Litestar `@get("/items/{id:int}")` | same | `annotation` | A |
@@ -550,8 +557,8 @@ complete answer.
 | Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)` | — | `registration_call` | B |
 | Java | **`KafkaProducer.send(ProducerRecord)`** | **topic is a constructor argument of `ProducerRecord`**, not of `send` | `fluent_chain` | B |
 | Java | `KafkaTemplate.send(Message)` with topic in a header | — | `fluent_chain` | B |
-| Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination` | `config_join` | **C — see §7** |
-| Java | **SmallRye** `@Incoming("orders")` / `@Outgoing` | channel in code, topic in `application.properties` | `config_join` | **C** |
+| Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination` | `config_join` | **B** — [D02](components/D02-catalog-schema.md) §2d |
+| Java | **SmallRye** `@Incoming("orders")` / `@Outgoing` | channel in code, topic in `application.properties` | `config_join` | **B** — [D02](components/D02-catalog-schema.md) §2d |
 | Java | Alpakka / Pekko Connectors `Consumer.plainSource(s, Subscriptions.topics("t"))` | — | `registration_call` | B |
 | Go | `segmentio/kafka-go` `kafka.NewReader(kafka.ReaderConfig{Topic: "t"})` | **topic is a struct-literal field** — easier than positional | `registration_call` | A |
 | Go | `IBM/sarama` (was `Shopify/sarama`), `confluent-kafka-go` | **both import paths are live in the wild** — the module declared the Shopify path for a period after the move, so neither can be dropped | `registration_call` | A |
@@ -609,7 +616,7 @@ first-party annotation.
 | Java | **Micronaut `@PubSubClient` / `@PubSubListener` + `@Subscription`** | the only first-party annotation surveyed | `annotation` | A |
 | Java | `Publisher.newBuilder(TopicName.of(p, t)).build()`, `.publish(…)` | — | `fluent_chain` | B |
 | Java | `Subscriber` + `MessageReceiver`, `.startAsync()` | — | `interface_implementation` | B |
-| Java | Spring Cloud GCP `PubSubTemplate.subscribe(…)`, or `PubSubInboundChannelAdapter` + `@ServiceActivator` | channel indirection | `config_join` | C |
+| Java | Spring Cloud GCP `PubSubTemplate.subscribe(…)`, or `PubSubInboundChannelAdapter` + `@ServiceActivator` | channel indirection | `config_join` | B — [D02](components/D02-catalog-schema.md) §2d |
 | Go | `client.Topic("n").Publish(ctx, m)`, `client.Subscription("s").Receive(ctx, fn)` | — | `fluent_chain` | B |
 | TS | `pubsub.topic("n").publishMessage(…)`, `subscription.on("message", cb)` | — | `fluent_chain` | B |
 | Python | `publisher.publish(topic_path, data)`, path built by `publisher.topic_path(proj, t)` | topic assembled from a helper call | `fluent_chain` | B |
@@ -627,7 +634,7 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 | Java | `@Scheduled`, Quartz | `annotation` | A |
 | Java | Temporal / Cadence `@WorkflowInterface`, `@ActivityInterface` | `annotation` | A |
 | Java | **Vert.x event bus** `vertx.eventBus().send("addr", m)` / `.consumer("addr", h)` | in-process pub/sub with **string addresses**, matchable like topics | `registration_call` | B |
-| Java | Spring Integration `@ServiceActivator`, `@InboundChannelAdapter` | channels, not destinations | `config_join` | C |
+| Java | Spring Integration `@ServiceActivator`, `@InboundChannelAdapter` | channels, not destinations | `config_join` | B — [D02](components/D02-catalog-schema.md) §2d |
 | Java | **Akka / Pekko actor messaging** `ref ! msg`, `ref.tell(msg)` | receiver comes from an `ActorRef` created elsewhere | — | **C, possibly permanent — see §7** |
 | Python | **Celery** `@app.task`, `task.delay(…)`, `.apply_async(queue=…)` | a real async boundary, easy to miss | `annotation` | A |
 | TS | `bullmq` `new Queue("n")`, `new Worker("n", fn)` | string names, matchable like topics | `registration_call` | A |
@@ -807,7 +814,7 @@ direction belongs in the library row.
 **Q6 — What does a cell mean when it holds several libraries at different tiers? resolved — carry all of them.**
 A cell shows the **count at each tier** (`4A 3B 2C`), not a headline. A single tier hides
 exactly what the checklist exists to reveal: Java + Kafka is genuinely cheap for
-`@KafkaListener` and genuinely impossible for Spring Cloud Stream, and both facts matter when
+`@KafkaListener` and much harder for Spring Cloud Stream, and both facts matter when
 planning. Each column header links to the §5 subsection holding the named libraries, where
 rows are grouped by language — §2 answers "how much work, and is something hiding here", §5
 answers "what exactly do I build". The matrices are **generated from §5** by

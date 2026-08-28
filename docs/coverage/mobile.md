@@ -93,7 +93,7 @@ The obvious cost is that the build is Xcode-shaped and generally macOS-only.
 |---|---|---|
 | Custom URL schemes | `Info.plist` → `CFBundleURLTypes` | artifact |
 | Universal Links | `apple-app-site-association` (a JSON file on the server) + entitlements | artifact — **and it lives outside the app repository**, which is a cross-repository join |
-| App Intents / Siri | `@AssistantIntent`, `AppIntent` conformances ⚠️ | `annotation` / `interface_implementation` |
+| App Intents / Siri (iOS 16+) | structs conforming to `AppIntent` with a `perform()` method; they live in the **main binary**, not an extension, and since iOS 17 may sit in Swift packages | `interface_implementation` |
 | Push notifications | `UNUserNotificationCenterDelegate` methods | `interface_implementation` |
 | Share / action extensions | separate targets with `NSExtension` keys in `Info.plist` | artifact |
 | Background tasks | `BGTaskScheduler` identifiers, registered as strings and declared in `Info.plist` | `registration_call` + artifact |

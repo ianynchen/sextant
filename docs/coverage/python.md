@@ -18,7 +18,7 @@ this file is the library inventory.
 |---|---|---|
 | `ast` (stdlib) | Syntax, decorators, literals | **No types, no resolution.** Cannot tell which `Client` a `client.send()` is. |
 | `mypy` | Declared and some inferred types | Its API is explicitly internal and unstable; defaults to `Any` in unannotated functions, so it *hides* the gap rather than reporting it |
-| **`pyright`** | Best inference available; infers unannotated symbols rather than giving up | **No programmatic API.** The maintainers' answer is to run it as an LSP server and issue hover/type requests per position ⚠️ — a real integration cost and slow at repository scale |
+| **`pyright`** | Best inference available; infers unannotated symbols rather than giving up | **No programmatic API** — the maintainers' answer is to run it as an LSP server and issue hover/type requests per position: a real integration cost and slow at repository scale |
 | `PyCG` | Call graph | Named in the literature as the reference Python call-graph tool (see §10) |
 | `jedi` / `griffe` | Symbol and API extraction | Signature-level, not call-level |
 

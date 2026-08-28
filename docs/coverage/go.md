@@ -61,13 +61,13 @@ All of these except pre-1.22 `net/http` are the same underlying job: **a method 
 | Protocol | Library | Shape | Detection |
 |---|---|---|---|
 | Kafka | `segmentio/kafka-go` | `kafka.NewReader(kafka.ReaderConfig{Topic: "t", GroupID: …})` | `registration_call` — **topic is a struct-literal field**, which is easier than a positional argument, not harder |
-| Kafka | `IBM/sarama` ⚠️ (was `Shopify/sarama`) | `consumer.ConsumePartition(topic, …)`, `producer.Input() <- &sarama.ProducerMessage{Topic: t}` | `registration_call` / channel send |
+| Kafka | `IBM/sarama` (was `Shopify/sarama`; **both import paths are live** — the module declared the Shopify path for a period after the move) | `consumer.ConsumePartition(topic, …)`, `producer.Input() <- &sarama.ProducerMessage{Topic: t}` | `registration_call` / channel send |
 | Kafka | `confluent-kafka-go` | `c.SubscribeTopics([]string{"t"}, nil)` | `registration_call` |
 | SQS | `aws-sdk-go-v2` | `client.SendMessage(ctx, &sqs.SendMessageInput{QueueUrl: …})` | `registration_call` — struct literal again |
 | Pub/Sub | `cloud.google.com/go/pubsub` | `client.Topic("name").Publish(ctx, msg)`; `client.Subscription("s").Receive(ctx, fn)` | `fluent_chain`, two links |
 | gRPC | `google.golang.org/grpc` | server `pb.RegisterFooServer(s, impl)`; client `pb.NewFooClient(conn)` | `registration_call` — **the generated registration function names the service explicitly.** Cleaner than the JVM's `extends FooImplBase`. |
 | Protobuf | `google.golang.org/protobuf` | generated `.pb.go` embeds the serialized `FileDescriptorProto` as a raw byte slice ⚠️ | `generated_descriptor` |
-| AMQP | `rabbitmq/amqp091-go` ⚠️ (was `streadway/amqp`) | `ch.QueueDeclare(name, …)`, `ch.Publish(exchange, key, …)` | `registration_call` |
+| AMQP | `rabbitmq/amqp091-go` (was `streadway/amqp`) | `ch.QueueDeclare(name, …)`, `ch.Publish(exchange, key, …)` | `registration_call` |
 | NATS | `nats.go` | `nc.Subscribe("subject", cb)`, `nc.Publish("subject", data)` | `registration_call` |
 
 ---
