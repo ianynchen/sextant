@@ -45,7 +45,12 @@ root_package = "sextant"
 [[tool.importlinter.contracts]]
 name = "Layering: cli -> outer groups -> application -> domain"
 type = "layers"
-layers = ["sextant.cli", "sextant.ingress | sextant.storage | sextant.egress", "sextant.application", "sextant.domain"]
+containers = ["sextant"]
+layers = ["cli", "ingress | storage | egress", "application", "domain"]
+# Exhaustive so a new top-level package cannot land outside every contract:
+# an unlisted package is unlayered, and an unlayered package is unchecked.
+# The container form is what makes this option available.
+exhaustive = true
 
 [[tool.importlinter.contracts]]
 name = "Outer groups never import one another"
@@ -57,3 +62,15 @@ name = "Ingress is write-only: it never depends on the Workspace port"
 type = "forbidden"
 source_modules = ["sextant.ingress"]
 forbidden_modules = ["sextant.application.ports.workspace"]
+
+[[tool.importlinter.contracts]]
+name = "Egress is read-only: it never depends on the Workspace port"
+type = "forbidden"
+source_modules = ["sextant.egress"]
+forbidden_modules = ["sextant.application.ports.workspace"]
+# Direct imports only. A renderer is handed a ResolveReport, and the module
+# that defines that report also imports the port, so the indirect chain is
+# unavoidable without moving the report out of the pipeline module. What this
+# contract forbids is what the rule is actually about: a renderer reaching for
+# the workspace itself, which is derivation hiding in presentation.
+allow_indirect_imports = true
