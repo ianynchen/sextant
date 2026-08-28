@@ -6,6 +6,7 @@ from typing import cast
 import click
 
 from sextant.application.ports.detector import ModuleModel
+from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.application.stages.analyze import analyze
 from sextant.cli.progress import RichProgress
@@ -28,6 +29,10 @@ def _commit_of(path: Path) -> str:
     return result.stdout.strip() or "unknown"
 
 
+def _workspace_dir_of(path: Path, workspace_dir: Path | None) -> Path:
+    return workspace_dir or (path / ".sextant")
+
+
 @click.group()
 def cli() -> None:
     """Sextant — architecture from compiled code."""
@@ -42,7 +47,7 @@ def module() -> None:
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("--workspace", "workspace_dir", type=click.Path(path_type=Path), default=None)
 def module_analyze(path: Path, workspace_dir: Path | None) -> None:
-    workspace_dir = workspace_dir or (path / ".sextant")
+    workspace_dir = _workspace_dir_of(path, workspace_dir)
     progress = RichProgress()
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
@@ -68,7 +73,7 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
     """Reads the workspace `analyze` left behind — it never re-detects,
     re-scans, or re-resolves (M00 "no analysis"; the workspace persists
     precisely so render is a cheap read)."""
-    workspace_dir = workspace_dir or (path / ".sextant")
+    workspace_dir = _workspace_dir_of(path, workspace_dir)
     metadata_path = workspace_dir / "metadata.json"
     db_path = workspace_dir / "workspace.duckdb"
     if not metadata_path.is_file() or not db_path.is_file():
@@ -83,6 +88,12 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
         root=path, kind=module_info["kind"], languages=frozenset(module_info["languages"]),
         source_roots=(), output_dirs=(),
     )
+    # Read back what `analyze` already established, rather than re-deriving
+    # it — a skipped catalog must stay visible on `render` too (M04, FR-17).
+    skipped_catalogs = [
+        SkippedCatalog(skipped["catalog_id"], tuple(skipped["missing_capabilities"]))
+        for skipped in metadata.get("skipped_catalogs", [])
+    ]
 
     workspace = DuckDbWorkspace(db_path)
     try:
@@ -90,6 +101,7 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             facts_loaded=cast(int, workspace.query("facts")[0]["facts"]),
             endpoints=workspace.query("endpoints"),
             coverage=workspace.query("coverage")[0],
+            skipped_catalogs=skipped_catalogs,
         )
         text = render_module_document(reconstructed, report, _commit_of(path))
         target = workspace_dir / "render" / "architecture.md"

@@ -52,6 +52,11 @@ def write_metadata(
         "coverage": report.coverage,
         "gaps": PHASE_1_GAPS,
         "endpoints": {"inbound": inbound, "outbound": {}},
+        "skipped_catalogs": [
+            {"catalog_id": skipped.catalog_id,
+             "missing_capabilities": list(skipped.missing_capabilities)}
+            for skipped in report.skipped_catalogs
+        ],
         "query": ["sextant module render"],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
