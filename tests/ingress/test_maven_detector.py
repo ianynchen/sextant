@@ -20,8 +20,11 @@ def test_detect_reports_module_coordinates_and_output_dir_when_run_on_the_fixtur
     assert module.coordinates == "com.acme/orders-service"
     assert module.version == "1.0.0"
     assert module.output_dirs == (FIXTURE / "target" / "classes",)
-    assert module.languages == {"java"}
-    assert module.source_roots == (FIXTURE / "src" / "main" / "java",)
+    assert module.languages == {"java", "kotlin"}
+    assert module.source_roots == (
+        FIXTURE / "src" / "main" / "java",
+        FIXTURE / "src" / "main" / "kotlin",
+    )
 
 
 _BARE_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">

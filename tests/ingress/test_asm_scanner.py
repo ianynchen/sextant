@@ -29,6 +29,7 @@ def test_scan_writes_one_fact_file_per_source_file_when_run_on_the_fixture(tmp_p
     written = sorted(p.name for p in tmp_path.rglob("*.jsonl"))
     assert written == [
         "CustomerRef.jsonl",
+        "KotlinOrder.jsonl",
         "LegacyOrderController.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
@@ -38,7 +39,7 @@ def test_scan_writes_one_fact_file_per_source_file_when_run_on_the_fixture(tmp_p
         "OrderService.jsonl",
         "OrderView.jsonl",
     ]
-    assert report.documents == 9
+    assert report.documents == 10
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -60,6 +61,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
     )
     assert sorted(p.name for p in out.rglob("*.jsonl")) == [
         "CustomerRef.jsonl",
+        "KotlinOrder.jsonl",
         "LegacyOrderController.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",

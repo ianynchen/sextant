@@ -63,6 +63,10 @@ public final class ClassScanner {
         private final List<String> lines;
         private final String documentId;
         private String typeSymbol;
+        // Populated from @Metadata before any field is visited (ASM visits class-level
+        // annotations before fields — see visitAnnotation below); empty for every
+        // non-Kotlin class, which leaves Java's rule as the only source.
+        private java.util.Map<String, Boolean> kotlinNullability = KotlinNullability.NONE;
 
         Visitor(List<String> lines, String documentId) {
             super(Opcodes.ASM9);
@@ -159,6 +163,9 @@ public final class ClassScanner {
             String owner = typeSymbol.substring(typeSymbol.lastIndexOf(' ') + 1);
             String fieldSymbol = symbolOf(owner + name + ".");
             Type type = Type.getType(descriptor);
+            // null when this field is not a Kotlin property (every Java field, and any
+            // Kotlin field @Metadata did not name) — Java's rule still applies to those.
+            Boolean kotlinNullable = kotlinNullability.get(name);
 
             return new FieldVisitor(Opcodes.ASM9) {
                 @Override
@@ -174,13 +181,20 @@ public final class ClassScanner {
 
                 @Override
                 public void visitEnd() {
-                    emit(fieldSymbol, "field", typeSymbol, fieldSignatureJson(type), access);
+                    emit(fieldSymbol, "field", typeSymbol, fieldSignatureJson(type, kotlinNullable), access,
+                         kotlinNullable == null ? null : kotlinExt(kotlinNullable));
                 }
             };
         }
 
         @Override
         public org.objectweb.asm.AnnotationVisitor visitAnnotation(String descriptor, boolean visible) {
+            // The compiler's own bookkeeping, not a fact of its own (D00 §5a is about
+            // annotations someone wrote) — decode it into the property lookup instead
+            // of letting its protobuf blob out through the normal annotation stream.
+            if (KotlinNullability.DESCRIPTOR.equals(descriptor)) {
+                return KotlinNullability.collector(decoded -> kotlinNullability = decoded);
+            }
             return annotationVisitor(typeSymbol, descriptor, visible);
         }
 
@@ -337,32 +351,58 @@ public final class ClassScanner {
 
         /** A field has no parameter list, only the type reference D00 §5a says it
          *  carries "the same way" a return type does. */
-        private String fieldSignatureJson(Type type) {
+        private String fieldSignatureJson(Type type, Boolean kotlinNullable) {
             TreeMap<String, String> signature = new TreeMap<>();
-            signature.put("returns", fieldTypeRef(type));
+            signature.put("returns", fieldTypeRef(type, kotlinNullable));
             return JsonOut.object(signature);
         }
 
         /** D1 and D3 both land on the type reference, alongside the symbol
          *  TypeRefs.ref already carries — nullability "sits on the type
          *  reference" (D00 §5a), not beside it. */
-        private String fieldTypeRef(Type type) {
+        private String fieldTypeRef(Type type, Boolean kotlinNullable) {
             TreeMap<String, String> ref = new TreeMap<>();
             ref.put("symbol", JsonOut.string(TypeRefs.descriptorName(type)));
             ref.put("arguments", JsonOut.array(List.of()));
             ref.put("wire_type", JsonOut.string(WireTypes.of(type)));
             ref.put("wire_format", JsonOut.string(WireTypes.format(type)));
-            // The language's own answer, not an annotation's. A primitive cannot
-            // hold null and the type system settles it; a reference may, but
-            // nothing declared that it should — so the claim is weaker and says
-            // so, rather than a third enum value existing (D00 §5a).
-            boolean nullable = type.getSort() == Type.OBJECT || type.getSort() == Type.ARRAY;
-            ref.put("nullable", String.valueOf(nullable));
-            ref.put("nullable_resolution", JsonOut.string(nullable ? "partial" : "resolved"));
+            if (kotlinNullable != null) {
+                // Kotlin's `String` vs `String?` is a declaration, not a default the
+                // language falls back to absent other evidence — unlike Java's "no
+                // annotation found" guess, this is `resolved` (D00 §5a). A Kotlin
+                // field landing here as `partial` instead would mean the @Metadata
+                // read silently did nothing.
+                ref.put("nullable", String.valueOf(kotlinNullable));
+                ref.put("nullable_resolution", JsonOut.string("resolved"));
+            } else {
+                // The language's own answer, not an annotation's. A primitive cannot
+                // hold null and the type system settles it; a reference may, but
+                // nothing declared that it should — so the claim is weaker and says
+                // so, rather than a third enum value existing (D00 §5a).
+                boolean nullable = type.getSort() == Type.OBJECT || type.getSort() == Type.ARRAY;
+                ref.put("nullable", String.valueOf(nullable));
+                ref.put("nullable_resolution", JsonOut.string(nullable ? "partial" : "resolved"));
+            }
             return JsonOut.object(ref);
         }
 
+        /** D00 §6: the raw @Metadata read stays recoverable behind the extension
+         *  namespace even once it has been projected onto the shared field above —
+         *  the projection must not be the only place the answer survives. */
+        private String kotlinExt(boolean nullable) {
+            TreeMap<String, String> kotlin = new TreeMap<>();
+            kotlin.put("nullable", String.valueOf(nullable));
+            TreeMap<String, String> ext = new TreeMap<>();
+            ext.put("kotlin", JsonOut.object(kotlin));
+            return JsonOut.object(ext);
+        }
+
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access) {
+            emit(symbol, constructKind, enclosing, signature, access, null);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -373,6 +413,7 @@ public final class ClassScanner {
             fact.put("visibility", JsonOut.string((access & Opcodes.ACC_PUBLIC) != 0 ? "public" : "other"));
             fact.put("line_start", "0");
             fact.put("line_end", "0");
+            if (ext != null) fact.put("ext", ext);
             lines.add(JsonOut.object(fact));
         }
     }
