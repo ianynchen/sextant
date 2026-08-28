@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.TreeMap;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.FieldVisitor;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
@@ -120,6 +121,25 @@ public final class ClassScanner {
         }
 
         @Override
+        public FieldVisitor visitField(int access, String name, String descriptor, String sig, Object value) {
+            String owner = typeSymbol.substring(typeSymbol.lastIndexOf(' ') + 1);
+            String fieldSymbol = symbolOf(owner + name + ".");
+            Type type = Type.getType(descriptor);
+
+            return new FieldVisitor(Opcodes.ASM9) {
+                @Override
+                public org.objectweb.asm.AnnotationVisitor visitAnnotation(String d, boolean visible) {
+                    return annotationVisitor(fieldSymbol, d, visible);
+                }
+
+                @Override
+                public void visitEnd() {
+                    emit(fieldSymbol, "field", typeSymbol, fieldSignatureJson(type), access);
+                }
+            };
+        }
+
+        @Override
         public org.objectweb.asm.AnnotationVisitor visitAnnotation(String descriptor, boolean visible) {
             return annotationVisitor(typeSymbol, descriptor, visible);
         }
@@ -218,6 +238,45 @@ public final class ClassScanner {
             signature.put("parameters", JsonOut.array(parameters));
             signature.put("returns", returns);
             return JsonOut.object(signature);
+        }
+
+        /** A field has no parameter list, only the type reference D00 §5a says it
+         *  carries "the same way" a return type does. */
+        private String fieldSignatureJson(Type type) {
+            TreeMap<String, String> signature = new TreeMap<>();
+            signature.put("returns", fieldTypeRef(type));
+            return JsonOut.object(signature);
+        }
+
+        /** D1 and D3 both land on the type reference, alongside the symbol
+         *  TypeRefs.ref already carries — nullability "sits on the type
+         *  reference" (D00 §5a), not beside it. */
+        private String fieldTypeRef(Type type) {
+            TreeMap<String, String> ref = new TreeMap<>();
+            ref.put("symbol", JsonOut.string(referenceSymbol(type)));
+            ref.put("arguments", JsonOut.array(List.of()));
+            ref.put("wire_type", JsonOut.string(WireTypes.of(type)));
+            ref.put("wire_format", JsonOut.string(WireTypes.format(type)));
+            // The language's own answer, not an annotation's. A primitive cannot
+            // hold null and the type system settles it; a reference may, but
+            // nothing declared that it should — so the claim is weaker and says
+            // so, rather than a third enum value existing (D00 §5a).
+            boolean nullable = type.getSort() == Type.OBJECT || type.getSort() == Type.ARRAY;
+            ref.put("nullable", String.valueOf(nullable));
+            ref.put("nullable_resolution", JsonOut.string(nullable ? "partial" : "resolved"));
+            return JsonOut.object(ref);
+        }
+
+        // Mirrors TypeRefs.descriptorName's symbol grammar. Kept local rather
+        // than exposed from TypeRefs: this task's scope is visitField, and
+        // fields need no generic-argument recursion beyond what method
+        // parameters already settle for without it.
+        private String referenceSymbol(Type type) {
+            return switch (type.getSort()) {
+                case Type.ARRAY -> referenceSymbol(type.getElementType()) + "[]";
+                case Type.OBJECT -> type.getInternalName() + "#";
+                default -> type.getClassName() + "#";
+            };
         }
 
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access) {
