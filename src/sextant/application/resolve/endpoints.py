@@ -5,6 +5,7 @@ maps to which HTTP method, where the path argument lives — is data, read
 from `matches` and carried, unmodified, through to the derivation as bound
 parameters. No framework name appears in this module."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -54,7 +55,7 @@ def load_catalogs(directory: Path) -> list[Catalog]:
         catalogs.append(
             Catalog(
                 id=_required(raw, "id", path),
-                style=_required(raw, "style", path),
+                style=_style(raw, path),
                 protocol=_closed(raw, "protocol", Protocol, path),
                 direction=_closed(raw, "direction", Direction, path),
                 requires=tuple(raw.get("requires", [])),
@@ -70,6 +71,24 @@ def _required(raw: dict[str, Any], key: str, path: Path) -> Any:
             f"loading catalog {path}: no `{key}` — every catalog declares one (D02 §1)"
         )
     return raw[key]
+
+
+def _style(raw: dict[str, Any], path: Path) -> str:
+    """Checks the declared style against the engines that exist.
+
+    A style with no engine is a broken catalog, not a degraded run. Capability
+    gating reports what it skips; an unmatched style would produce no endpoints
+    and no skip, which reads as "this framework exposes nothing" — the failure
+    the reporting exists to prevent. So it is refused where every other bad
+    catalog value is refused: at load, naming the file.
+    """
+    value = _required(raw, "style", path)
+    if value not in _ENGINES:
+        raise CatalogError(
+            f"loading catalog {path}: `style: {value}` has no engine — one of "
+            f"{', '.join(sorted(_ENGINES))} (D02 §2)"
+        )
+    return str(value)
 
 
 def _closed(raw: dict[str, Any], key: str, values: type[StrEnum], path: Path) -> str:
@@ -107,8 +126,7 @@ def derive_endpoints(
         if missing:
             skipped.append(SkippedCatalog(catalog.id, missing))
             continue
-        if catalog.style == "annotation_driven":
-            _run_annotation_driven(workspace, catalog)
+        _ENGINES[catalog.style](workspace, catalog)
     return skipped
 
 
@@ -133,3 +151,11 @@ def _run_annotation_driven(workspace: Workspace, catalog: Catalog) -> None:
         method_from=mapping["method_from"],
         all_methods=list(mapping["all_methods"]),
     )
+
+
+# One entry per engine style D02 §2 declares and this codebase implements.
+# Adding a style is a function above and a line here, and `_style` refuses any
+# catalog naming a style that is not in it.
+_ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
+    "annotation_driven": _run_annotation_driven,
+}

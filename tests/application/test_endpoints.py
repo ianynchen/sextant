@@ -442,6 +442,13 @@ def test_derive_endpoints_reads_a_scalar_annotation_argument_when_it_is_not_an_a
     assert [(r["method"], r["path"]) for r in rows] == [("GET", "/rest/orders/{id}")]
 
 
+_UNKNOWN_STYLE_CATALOG = """id: invented
+style: fluent
+protocol: http
+direction: inbound
+matches: {}
+"""
+
 _VALID_CATALOG = """id: invented
 style: annotation_driven
 protocol: http
@@ -500,3 +507,17 @@ def test_load_catalogs_accepts_a_catalog_whose_values_are_all_in_the_closed_sets
 ):
     catalog = load_catalogs(_catalog_dir(tmp_path, _VALID_CATALOG))[0]
     assert (catalog.protocol, catalog.direction) == ("http", "inbound")
+
+
+def test_catalog_naming_a_style_with_no_engine_is_refused_at_load(tmp_path: Path):
+    """A style with no engine matches nothing, so it would yield no endpoints
+    and no skip — indistinguishable from a framework that exposes none. D02 §2
+    declares six styles and this codebase implements one, so the gap is real
+    and has to fail where a bad `protocol` already fails: at load, by file."""
+    directory = _catalog_dir(tmp_path, _UNKNOWN_STYLE_CATALOG)
+
+    with pytest.raises(CatalogError) as raised:
+        load_catalogs(directory)
+
+    assert "fluent" in str(raised.value)
+    assert "annotation_driven" in str(raised.value)
