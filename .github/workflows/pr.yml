@@ -31,6 +31,7 @@ jobs:
         with:
           java-version: "21"
           distribution: temurin
+          cache: maven
       - uses: gradle/actions/setup-gradle@v4
 
       - uses: actions/setup-python@v5
@@ -40,6 +41,14 @@ jobs:
 
       - name: Install
         run: pip install -e ".[dev]"
+
+      - name: Prime the fixture's dependencies
+        # The suite compiles fixtures with `mvn -o`. Offline is deliberate —
+        # ARCHITECTURE §9a makes it policy, so no test reaches the network and
+        # a broken build cannot look like a slow one. A fresh runner has an
+        # empty ~/.m2, so this is the one step allowed to fetch.
+        working-directory: fixtures/orders-service
+        run: mvn -q -B compile
 
       - name: Gates
         # ruff, mypy, the import contracts, the extractor build and both test
