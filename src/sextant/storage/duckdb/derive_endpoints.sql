@@ -91,7 +91,7 @@ mappings AS (
     -- A mapping annotation naming no method means every method, and each is a
     -- distinct wire contract, so each is its own endpoint (D02 §2).
     SELECT d.target AS method_symbol,
-           UNNEST(d.methods) AS http_method,
+           UNNEST(d.methods) AS wire_method,
            d.path AS path_suffix
     FROM declared d
     WHERE d.is_mapping
@@ -100,7 +100,7 @@ derived AS (
     SELECT
         $protocol   AS protocol,
         $direction  AS direction,
-        m.http_method AS method,
+        m.wire_method AS method,
         coalesce(p.prefix, '') || m.path_suffix AS path,
         s.symbol    AS handler,
         s.signature AS handler_signature,

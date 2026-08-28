@@ -355,7 +355,7 @@ written.
 | Integration harness | Fixture repositories, built in CI | |
 | Formatter and linter | ruff | One tool, both jobs |
 | Types | mypy, strict | |
-| Architecture tests | **import-linter** | Contracts in CI, per `GUIDELINES.md` §5.2 |
+| Architecture tests | **import-linter**, and source rules in `tests/architecture/` | Import contracts in CI per `GUIDELINES.md` §5.2. Import contracts cannot see what a file *says*, so §10's content rules — no framework in code, storage ignorance, language confinement — parse the source instead. No extra dependency: `pytest-archon` does import rules, which import-linter already does better. |
 | JVM tests | JUnit 5 | |
 | CLI framework | click | Noun→verb groups are its native shape; `CliRunner` tests commands in-process |
 | Console status | rich | Live in-place task display on **stderr**; auto plain-line fallback when not a terminal |
@@ -398,21 +398,36 @@ name reads as a specification per `GUIDELINES.md` §10 — for example
 
 ## 10. Architecture rules
 
-Encoded as import-linter contracts and run with the unit suite. An untested rule is
-already being violated.
+Run with the unit suite. An untested rule is already being violated — so each row below
+names the mechanism that tests it, and a rule with no mechanism is not a rule.
 
-| Rule | Contract |
-|---|---|
-| Layering | `cli` → `{ingress, storage, egress}` → `application` → `domain`, one direction only |
-| Application purity | `application` imports no outer group |
-| Adapter independence | `ingress`, `storage` and `egress` never import one another — everyone depends on the ports |
-| **Ingress is write-only** | Nothing in `ingress/` depends on `Workspace` at all: readers emit facts and can never read the graph back |
-| **Egress is read-only** | Nothing in `egress/` writes facts or derived tables: a renderer that writes is derivation hiding in presentation |
-| Storage ignorance | `storage/` knows SQL and D01; it never references a framework, a language, or a protocol name |
-| Language confinement | Only `ingress/extract/jvm` may reference JVM-specific names |
-| Extension namespace | Only a language's own adapter may read its `ext.<lang>` namespace |
+Two mechanisms, because they answer different questions. **import-linter** reasons about what
+a file *imports*; it cannot see what a file *says*, and a protocol name in a query is a
+perfectly legal import. **Source rules** (`tests/architecture/`) parse the source and read
+identifiers and string literals, ignoring comments and docstrings — explaining why a rule
+exists usually means naming the thing it forbids.
 
----
+| Rule | Contract | Tested by |
+|---|---|---|
+| Layering | `cli` → `{ingress, storage, egress}` → `application` → `domain`, one direction only | import-linter |
+| Application purity | `application` imports no outer group | import-linter |
+| Adapter independence | `ingress`, `storage` and `egress` never import one another — everyone depends on the ports | import-linter |
+| **Ingress is write-only** | Nothing in `ingress/` depends on `Workspace` at all: readers emit facts and can never read the graph back | import-linter |
+| **Egress is read-only** | Nothing in `egress/` writes facts or derived tables: a renderer that writes is derivation hiding in presentation | import-linter |
+| Storage ignorance | `storage/` knows SQL and D01; it never names a framework, a language, or a protocol | source rule |
+| Language confinement | Only `ingress/extract/jvm` names JVM languages or bytecode. The composition root is excepted: naming concrete adapters is what it is for | source rule |
+| Extension namespace | Only a language's own adapter reads its `ext.<lang>` namespace | source rule |
+| **No framework in code** | No framework is named anywhere outside the catalogs — the claim the whole design rests on | source rule |
+| **Ports hold only contracts** | Protocols, frozen dataclasses, errors, and do-nothing implementations. A port that grows behaviour stops being a seam | source rule |
+| **Closed sets defined once** | Only `domain/closed_sets.py` defines one; a second definition is NFR-5 widened by accident | source rule |
+| **Application reads no files** | Every I/O concern reaches `application` through a port | source rule |
+
+**Exceptions are written down, never absorbed.** A rule quietly loosened until it passes still
+reads as enforcement. One is currently recorded in the suite: `domain/facts.py` names a field
+`classpath`, which is a JVM name for a language-neutral idea — the ordered set of places
+symbols were read from, each with a tier. Renaming it is a [D00](components/D00-fact-schema.md)
+schema change, so the rule asserts the leak exists rather than ignoring it, and fails if a
+second one appears.
 
 ## 11. Decision records
 
