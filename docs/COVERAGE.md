@@ -42,8 +42,12 @@ baseline is `annotation`, which is why `WebClient` is B there. Go's baseline is
 | — | Not applicable — the protocol does not exist in that ecosystem |
 | ⛔ | Blocked by the language toolchain, not by our effort |
 | · | **Not yet enumerated** — §5 has no rows for this cell, so we do not know. Distinct from `—`, which means we looked and it does not exist |
+| ⚠️ | **Not confirmed against a primary source.** Attached to a claim, that claim needs checking before it enters a catalog. As a whole cell, no tier could be assigned because the underlying fact is unverified |
 
 `—` and `⛔` are deliberately distinct from a gap. JMS in Go is not missing work.
+
+`⚠️` is the one marker that is about **us**, not about the ecosystem: it records where this
+document's own research stopped short.
 
 ### Detection shapes
 
