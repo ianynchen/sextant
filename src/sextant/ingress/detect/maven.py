@@ -4,6 +4,15 @@ from xml.etree import ElementTree
 from sextant.application.ports.detector import ModuleModel, RepositoryModel
 
 _POM_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
+_MAIN_CLASS = f"{{{_POM_NS['m']}}}mainClass"
+
+# Files that declare how the module is packaged to run. Names, not contents:
+# M02 forbids the detector from reading code, and these are build files.
+_CONTAINER_FILES = (
+    "Dockerfile", "Containerfile",
+    "compose.yaml", "compose.yml",
+    "docker-compose.yaml", "docker-compose.yml",
+)
 
 
 class MavenDetector:
@@ -30,7 +39,7 @@ class MavenDetector:
             coordinates=f"{group}/{artifact}",
             version=version,
             root=path,
-            kind=self._classify(),
+            kind=self._classify(path, pom),
             languages=frozenset({"java"}),
             source_roots=(path / "src" / "main" / "java",),
             output_dirs=(path / "target" / "classes",),
@@ -38,15 +47,29 @@ class MavenDetector:
         return RepositoryModel(root=path, modules=(module,))
 
     @staticmethod
-    def _classify() -> str:
+    def _classify(path: Path, pom: ElementTree.Element) -> str:
         """Service, library, or undetermined, from evidence (M02): a boot
         plugin applied, a declared main class, a container file, or inbound
         endpoints make it a service; publishing an artifact with none of
         those makes it a library; absent evidence, `undetermined` — never a
-        guess. Phase 1's only fixture is a service and none of that evidence
-        is read yet, so this seam returns the fixed answer until a later
-        phase supplies the evidence."""
-        return "service"
+        guess.
+
+        Two of those are cheap and framework-neutral, and are read here: a
+        container file beside the POM, and a `<mainClass>` anywhere in the
+        build. The rest are not. A boot plugin is a framework name, which
+        belongs in a catalog and not in this module; inbound endpoints are
+        not known until after M04, which M02 records as an open decision.
+
+        `library` is never returned. It requires knowing that the module
+        publishes an artifact, and every POM declares coordinates whether
+        anything is published or not — reading that as evidence would be the
+        guess this method exists to refuse.
+        """
+        if any((path / name).is_file() for name in _CONTAINER_FILES):
+            return "service"
+        if any(node.tag == _MAIN_CLASS for node in pom.iter()):
+            return "service"
+        return "undetermined"
 
     @staticmethod
     def _text(pom: ElementTree.Element, tag: str) -> str:
