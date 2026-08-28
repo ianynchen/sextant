@@ -25,30 +25,72 @@
 
 ---
 
-## Decisions required before implementation
+## Decisions taken
 
-These are not pre-decided by the spec. **Get sign-off before the task that needs each**; do not pick silently (`GUIDELINES.md` §1.1).
+Approved before implementation. Recorded with their reasoning, because each places knowledge
+in a particular layer — and a later change that ignores the reasoning would undo it silently.
 
-**D1 — Where the wire type is computed. Needed by Task 3.**
-D00 §5b says code shapes "project into" the wire vocabulary but not where. It cannot be the
-derivation: mapping `java/lang/Long#` to `integer/int64` is language knowledge, and
-`application/` is language-blind with an architecture rule enforcing it. **Proposal:** the
-extractor emits the projected wire type alongside each type reference. The derivation then
-compares wire types it never had to understand.
+**D1 — The extractor projects wire types, into D00 §5b's vocabulary.**
+Mapping `java/lang/Long#` to `integer/int64` is language knowledge, and `application/` is
+language-blind with an architecture rule enforcing it. Each language adapter converts its own
+types; the derivation then compares values it never had to understand.
 
-**D2 — How far shape expansion follows a type. Needed by Task 10.**
-Open in [M04](../../components/M04-resolver.md): *"Whether shape extraction follows types into
-third-party signatures without limit."* **Proposal:** follow first-party and module-output
-types to any depth, stop at third-party, and record the stop — the shape is marked open with
-the unexpanded type reference kept. A cycle terminates by reference, as D00 §5b's `object`
-type is a reference to another shape rather than an inlining.
+The target is D00 §5b rather than OpenAPI's set directly. §5b **is** OpenAPI's types plus three
+distinctions OpenAPI encodes as modifiers — `map` (object with `additionalProperties`), `enum`
+(a type plus a constraint) and `bytes`. Projecting §5b down to OpenAPI is lossless; collapsing
+at extraction time is not, and two of the three change matching answers. A `Map<String, X>`
+and a DTO are both `object` to OpenAPI, so flattening makes a map look type-compatible with a
+record. An enum flattened to `string` makes a consumer accepting any string look compatible
+with a producer emitting two values — true in one direction, false in the other, which is
+exactly what DR-5 compares.
 
-**D3 — What an unannotated Java reference field means. Needed by Task 11.**
-Java's language rule is that every reference may be null, so the truthful value is
-`nullable: true`. **Proposal:** record exactly that at `resolution: partial`, since nothing
-declared it — a weaker claim than an annotated field, distinguished by the trust fields rather
-than by a third enum value. Under a JSpecify `@NullMarked` scope the default inverts to
-`not_null` at `resolution: resolved`, because the scope is a declaration.
+**D2 — Expand our own code to any depth, map known types, stop at unknown third-party.**
+Three cases, not two:
+
+| Origin | Example | Treatment |
+|---|---|---|
+| Module output or first-party | `com.acme.orders.CustomerRef` | Expand structurally, any depth |
+| **Known type with a defined wire form** | `Instant`, `UUID`, `google.protobuf.Timestamp` | **Map to that form; never expand** |
+| Unknown third-party | `com.othervendor.Thing` | Stop, keep the reference, mark the shape open, **report it** |
+
+Expanding a known type is not merely wasteful, it is wrong: open `BigDecimal` and you get
+`intVal`, `scale`, `intCompact`, `precision` — internal machinery, none of which reaches the
+wire, producing a shape no real payload could match.
+
+**A type's wire form is serialiser knowledge, so it is catalog data** (§2g). `Instant` is an
+ISO string under Jackson's `JavaTimeModule`, epoch millis without it, and anything at all under
+a custom serialiser. That draws the line against D1 cleanly: **the extractor projects what the
+language leaves no choice about** — primitives, boxes, `String`, arrays, collections — **and
+the catalog declares what the serialiser decides.**
+
+Unknown types are not followed on a structural test. "Simple" has no honest definition, and
+`BigDecimal` is the trap: few fields, all internal. Instead the coverage report **names every
+type expansion stopped at**, so the catalog grows from evidence rather than guesswork — the
+same bargain as capability gating.
+
+**D3 — The extractor emits `nullable` and its `resolution`, from its own language's rule.**
+The default is a fact about a type system, not about annotations, so it belongs where the
+language is understood — the same principle as D1.
+
+| Language | Unannotated default | `resolution` |
+|---|---|---|
+| **Java** | reference → nullable, primitive → not-null | reference is **`partial`**: the language permits null, but nothing declared intent |
+| **Kotlin** | `String` → not-null, `String?` → nullable | `resolved` |
+| Go | pointer, slice, map, interface → nullable; value type → not-null | `resolved` |
+| Rust | `Option<T>` → nullable, else not-null | `resolved` |
+| Swift | `T?` → nullable, else not-null | `resolved` |
+| Python | only from an annotation | `unresolved` without one |
+
+**Java is the outlier**, and that reframes the feature: nullability is not a best-effort signal
+that happens to suit Kotlin. It is reliable in every language surveyed **except unannotated
+legacy Java**, which is the one case needing annotations to recover it.
+
+The catalog still matters, because the extractor does not know that
+`org.jspecify.annotations.Nullable` means nullable — that is one of six spellings and is
+framework knowledge (§2e). So: **the extractor states the language's answer, the catalog names
+the annotations, and the derivation combines them** — a catalog-declared annotation overrides
+the language default and raises `resolution` to `resolved`. The derivation stays language-blind
+throughout.
 
 ---
 
@@ -56,7 +98,7 @@ than by a third enum value. Under a JSpecify `@NullMarked` scope the default inv
 
 | File | Responsibility |
 |---|---|
-| `docs/components/D02-catalog-schema.md` | **Amend**: §2f serialisation naming — which annotation supplies a wire name, and the default naming strategy |
+| `docs/components/D02-catalog-schema.md` | **Amend**: §2f serialisation naming, and §2g types with a known wire form |
 | `extractor-jvm/.../ClassScanner.java` | **Modify**: `visitField`, `visitTypeAnnotation` on both tables, wire-type projection |
 | `extractor-jvm/.../WireTypes.java` | **Create**: JVM descriptor → D00 §5b wire type and format |
 | `extractor-jvm/.../KotlinNullability.java` | **Create**: `@Metadata` → per-property nullability |
@@ -68,12 +110,12 @@ than by a third enum value. Under a JSpecify `@NullMarked` scope the default inv
 | `src/sextant/storage/duckdb/schema.sql` | **Modify**: `shapes`, `shape_fields`, `fields` view, endpoint shape columns |
 | `src/sextant/storage/duckdb/derive_shapes.sql` | **Create**: root, expand, project |
 | `src/sextant/application/resolve/shapes.py` | **Create**: wrapper unwrapping and the shape pass |
-| `src/sextant/catalogs/spring-web.yml`, `spring-mvc.yml` | **Modify**: `wrappers`, `nullability`, `serialization` |
+| `src/sextant/catalogs/spring-web.yml`, `spring-mvc.yml` | **Modify**: `wrappers`, `nullability`, `serialization`, `known_types` |
 | `src/sextant/egress/render/metadata.py` | **Modify**: report shapes; drop `shape_expansion_not_implemented` |
 
 ---
 
-## Task 1: Amend D02 with serialisation naming
+## Task 1: Amend D02 with serialisation naming and known wire forms
 
 [D01](../../components/D01-graph-schema.md) §5 says **`shape_fields.wire_name` is the identity,
 never the source field name** — *"after a naming strategy or an explicit serialisation
@@ -117,17 +159,52 @@ wire, and a shape carrying it would fail DR-5's directional comparison against a
 correctly omits it.
 ````
 
-- [ ] **Step 2: Add the open decision to §7**
+- [ ] **Step 2: Add §2g, known types**
+
+````markdown
+## 2g. Types with a known wire form
+
+Some types are objects in code and something else entirely on the wire. `java.time.Instant`
+is an ISO-8601 string; `java.math.BigDecimal` is a number; `google.protobuf.Timestamp` has
+`seconds` and `nanos` fields and serialises to an RFC-3339 string. **Expanding them
+structurally produces a shape no payload can match** — `BigDecimal` would contribute
+`intVal`, `scale`, `intCompact` and `precision`, none of which exists on the wire.
+
+Which types these are is **serialiser knowledge, not language knowledge**: `Instant` is an ISO
+string under Jackson's `JavaTimeModule`, epoch millis without it, and whatever a custom
+serialiser says. So a catalog declares them:
+
+```yaml
+known_types:
+  - { type: java.time.Instant,           wire: string, format: date-time }
+  - { type: java.time.LocalDate,         wire: string, format: date }
+  - { type: java.math.BigDecimal,        wire: number }
+  - { type: java.util.UUID,              wire: string, format: uuid }
+  - { type: google.protobuf.Timestamp,   wire: string, format: date-time }
+  - { type: google.protobuf.StringValue, wire: string, nullable: true }
+```
+
+This is the boundary against the extractor's own projection (§D1 of the Phase 2A plan): the
+extractor converts what the **language** leaves no choice about — primitives, their boxes,
+`String`, arrays, collections. A catalog converts what the **serialiser** decides.
+
+**A third-party type with no entry here is not guessed at.** Expansion stops, the shape is
+marked open, the type reference is kept, and [M04](M04-resolver.md) reports the type that
+stopped it — so the catalog grows from observation rather than from a structural guess about
+what looks "simple".
+````
+
+- [ ] **Step 3: Add the open decision to §7**
 
 ```markdown
 | Whether a globally configured naming strategy is read from configuration, or only declared per catalog | §2f, and any module that sets one in `application.yml` |
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add docs/components/D02-catalog-schema.md
-git commit -m "design: serialisation naming is catalog data (D02 2f)"
+git commit -m "design: serialisation naming and known wire forms are catalog data (D02 2f, 2g)"
 ```
 
 ---
@@ -211,11 +288,13 @@ git commit -m "test: fixture payloads covering every nullability and naming case
 
 ---
 
-## Task 3: Field symbols, with the wire type projected
+## Task 3: Field symbols, with the wire type and the language's nullability
 
-**Requires decision D1.** The extractor never overrides `visitField`, so there are no field
-symbols and a shape has nothing to expand. Language knowledge stays here: the wire type is
-computed where the descriptor is understood, not in the language-blind derivation.
+**Implements D1 and the Java half of D3.** The extractor never overrides `visitField`, so
+there are no field symbols and a shape has nothing to expand. Two pieces of language knowledge
+stay here rather than leaking into the language-blind derivation: the **wire type**, and the
+**language's own nullability rule** — in Java, every reference may hold null and no primitive
+can.
 
 **Files:**
 - Create: `extractor-jvm/src/main/java/dev/sextant/extractor/WireTypes.java`
@@ -224,8 +303,8 @@ computed where the descriptor is understood, not in the language-blind derivatio
 
 **Interfaces:**
 - Produces: a `symbol` fact with `construct_kind: "field"`, an `enclosing` naming the owning
-  type, a `signature.returns` type reference, and `wire_type` / `wire_format` on that
-  reference. Consumed by Tasks 7 and 10.
+  type, a `signature.returns` type reference carrying `wire_type`, `wire_format`, `nullable`
+  and `nullable_resolution`. Consumed by Tasks 7, 10 and 11.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -278,16 +357,40 @@ final class WireTypes {
 The field symbol ends in `.` like any member, carries its declaring type as `enclosing`, and
 collects its annotations through the visitor `visitMethod` already uses.
 
-- [ ] **Step 5: Run the test and the whole extractor suite**
+- [ ] **Step 5: Emit Java's nullability rule on the type reference**
+
+```java
+// The language's own answer, not an annotation's. A primitive cannot hold null
+// and the type system settles it; a reference may, but nothing declared that it
+// should — so the claim is weaker and says so, rather than a third enum value
+// existing (D00 §5a).
+boolean nullable = type.getSort() == Type.OBJECT || type.getSort() == Type.ARRAY;
+String resolution = nullable ? "partial" : "resolved";
+```
+
+- [ ] **Step 6: Write the failing test for it, run, implement, run again**
+
+```java
+@Test
+void states_javas_own_nullability_rule_without_reading_any_annotation() throws Exception {
+    List<String> lines = scan("OrderRequest");
+    assertTrue(lines.stream().anyMatch(l -> l.contains("OrderRequest#reference.")
+        && l.contains("\"nullable\":true") && l.contains("\"nullable_resolution\":\"partial\"")));
+    assertTrue(lines.stream().anyMatch(l -> l.contains("OrderRequest#total.")
+        && l.contains("\"nullable\":false") && l.contains("\"nullable_resolution\":\"resolved\"")));
+}
+```
+
+- [ ] **Step 7: Run the whole extractor suite**
 
 Run: `cd extractor-jvm && ./gradlew test`
 Expected: PASS, and every existing test still green.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add extractor-jvm
-git commit -m "feat: emit field symbols with their projected wire type"
+git commit -m "feat: emit field symbols with wire type and Java's nullability rule"
 ```
 
 ---
@@ -345,8 +448,9 @@ git commit -m "feat: read type annotations from both retention tables"
 
 ## Task 5: Kotlin nullability from `@Metadata`
 
-Kotlin's nullability is in its type system, not an annotation, so no amount of annotation
-reading finds it. [D00](../../components/D00-fact-schema.md) §5a requires the adapter to
+**Implements the Kotlin half of D3.** Same rule as Task 3, different language: Kotlin's
+nullability is in its type system, so it is `resolved` rather than `partial` — the type
+declared it. No amount of annotation reading finds it. [D00](../../components/D00-fact-schema.md) §5a requires the adapter to
 **project it into the shared field** rather than leave it in `ext.kotlin`, because anything
 DR-5 compares cannot sit behind an extension read boundary.
 
@@ -356,8 +460,9 @@ DR-5 compares cannot sit behind an extension read boundary.
 - Test: `extractor-jvm/src/test/java/dev/sextant/extractor/KotlinMetadataTest.java`
 
 **Interfaces:**
-- Produces: `nullable` on the type reference of a Kotlin property, and `ext.kotlin.nullable`
-  alongside it, so the shared field is populated and the raw fact is still recoverable.
+- Produces: `nullable` and `nullable_resolution: "resolved"` on the type reference of a Kotlin
+  property, and `ext.kotlin.nullable` alongside it, so the shared field is populated and the
+  raw fact is still recoverable.
 
 - [ ] **Step 1: Add `kotlinx-metadata-jvm` to the extractor, shaded**
 
@@ -449,7 +554,7 @@ git commit -m "feat: shapes and shape_fields tables, and endpoint shape columns"
 
 ---
 
-## Task 8: Declare wrappers, nullability and serialisation in the Spring catalogs
+## Task 8: Declare wrappers, nullability, serialisation and known types in the Spring catalogs
 
 [D02](../../components/D02-catalog-schema.md) §2a's `wrappers` block exists in the spec and in
 **neither catalog**; §2e's `nullability` and §2f's `serialization` are new.
@@ -478,6 +583,12 @@ serialization:
     - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
   ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
   default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.time.LocalDate,  wire: string, format: date }
+  - { type: java.math.BigDecimal, wire: number }
+  - { type: java.util.UUID,       wire: string, format: uuid }
 ```
 
 - [ ] **Step 2: Test that the catalog loads and declares all five wrappers**
@@ -521,7 +632,10 @@ def test_stops_at_an_unfamiliar_wrapper_and_says_so():
 
 ## Task 10: Expand a rooted type into fields
 
-**Requires decision D2.**
+**Implements D2.** Expand module-output and first-party types to any depth. A type with a
+`known_types` entry is mapped to its wire form and never expanded. An unknown third-party type
+stops expansion: the reference is kept, the shape is marked open, and the type is reported so
+the catalog can grow from evidence.
 
 **Files:** Create `src/sextant/storage/duckdb/derive_shapes.sql`; Modify `shapes.py`; Test `tests/application/test_shapes.py`.
 
@@ -538,58 +652,121 @@ def test_expands_a_rooted_type_into_its_wire_fields():
 ```
 
 - [ ] **Step 2: Run, watch it fail, write the derivation, run again**
-- [ ] **Step 3: Add the depth test D2 decides**
+- [ ] **Step 3: Add the three boundary tests**
 
 ```python
-def test_marks_a_shape_open_where_expansion_stopped_at_a_third_party_type():
+def test_a_known_type_is_mapped_to_its_wire_form_and_never_expanded():
+    """Expanding BigDecimal yields intVal, scale, intCompact and precision —
+    internal machinery, none of it on the wire, producing a shape no real
+    payload could match."""
+    field = field_of("OrderRequest", "total_amount")
+    assert field["wire_type"] == "number"
+    assert shape_fields_of(field["type_ref"]) == []
+
+
+def test_expansion_stops_at_an_unknown_third_party_type_and_marks_the_shape_open():
     shape = shape_of("com/acme/orders/contracts/OrderView#")
     assert shape["open"] is True
+
+
+def test_the_report_names_the_type_that_stopped_expansion():
+    """The catalog grows from observation. A gap nobody can see is a gap
+    nobody closes."""
+    assert "com/othervendor/Thing#" in unexpanded_types_reported()
 ```
 
 - [ ] **Step 4: Commit**
 
 ---
 
-## Task 11: Populate `required` and `nullable`
+## Task 11: Apply the catalog's nullability and presence rules
 
-**Requires decision D3.** Two independent two-valued flags (D00 §5a), from three sources: a
-nullability annotation, the Kotlin type system, and presence machinery such as an `optional`
-wrapper or a Jackson `required` attribute.
+**Implements the derivation half of D3.** Tasks 3 and 5 already emitted each language's own
+answer. This task stays **language-blind**: it applies catalog-declared annotations on top of
+whatever the extractor said, and never contains a rule about Java or Kotlin.
+
+Two independent two-valued flags (D00 §5a). `nullable` comes from the language, overridden by
+a declared annotation. `required` comes from **presence machinery only** — an `optional`
+wrapper, a Jackson `required` attribute, a default argument — and never from a nullability
+annotation, because they answer different questions.
 
 **Files:** Modify `derive_shapes.sql`, `shapes.py`; Test `tests/application/test_shapes.py`.
 
-- [ ] **Step 1: Write the failing tests, one per source and one per default**
+**Interfaces:**
+- Consumes: `nullable` / `nullable_resolution` on type references (Tasks 3, 5); the
+  `nullability` block (Task 8).
+- Produces: `shape_fields.nullable`, `.required`, `.resolution`, `.evidence`.
+
+- [ ] **Step 1: Write the failing tests — the language answer, the override, and the scope**
 
 ```python
-def test_an_annotated_field_is_nullable_and_resolved():
-    assert field_of("OrderRequest", "note") == {"nullable": True, "resolution": "resolved"}
-
-
-def test_an_unannotated_java_reference_is_nullable_but_only_partially_resolved():
-    """Java's rule is that every reference may be null, so `nullable` is the
-    truthful value — but nothing declared it, and the trust fields say so
-    rather than a third enum value existing."""
+def test_the_language_answer_survives_when_no_catalog_annotation_applies():
+    """The extractor already decided. The derivation must not re-derive it, or
+    the same rule ends up in two places and they will diverge."""
     assert field_of("OrderRequest", "reference") == {"nullable": True, "resolution": "partial"}
 
 
-def test_a_primitive_is_not_null_without_any_annotation():
-    assert field_of("OrderRequest", "total")["nullable"] is False
+def test_a_declared_annotation_overrides_the_language_default_and_resolves_it():
+    assert field_of("OrderRequest", "note") == {"nullable": True, "resolution": "resolved"}
 
 
-def test_kotlin_nullability_reaches_the_shared_field():
-    assert field_of("KotlinOrder", "note")["nullable"] is True
-    assert field_of("KotlinOrder", "id")["nullable"] is False
+def test_a_not_null_annotation_overrides_javas_permissive_default():
+    assert field_of("OrderRequest", "customerId") == {"nullable": False, "resolution": "resolved"}
 
 
-def test_presence_is_not_read_from_a_nullability_annotation():
-    """`required` and `nullable` answer different questions (D00 §5a). A field
-    that may be null must still be present unless a presence rule says
-    otherwise."""
+def test_kotlin_arrives_already_resolved_and_is_not_downgraded():
+    assert field_of("KotlinOrder", "note") == {"nullable": True, "resolution": "resolved"}
+    assert field_of("KotlinOrder", "id") == {"nullable": False, "resolution": "resolved"}
+
+
+def test_a_null_marked_scope_inverts_the_default_for_everything_inside_it():
+    """The scope is itself a declaration, so absence carries meaning and the
+    result is resolved rather than partial."""
+    assert field_of("ScopedRequest", "code") == {"nullable": False, "resolution": "resolved"}
+
+
+def test_presence_is_never_read_from_a_nullability_annotation():
+    """`required` and `nullable` answer different questions (D00 §5a). Bean
+    Validation's @NotNull is the trap: it constrains a value at validation time
+    and says nothing about whether the field may be omitted."""
     assert field_of("OrderRequest", "note")["required"] is True
+
+
+def test_an_optional_wrapper_makes_a_field_not_required():
+    assert field_of("OrderRequest", "note2")["required"] is False
+
+
+def test_the_derivation_names_no_language():
+    """Language-blind by test, not by intention. The per-language rules live in
+    the extractors; this file must contain none of them."""
+    source = (SQL_DIR / "derive_shapes.sql").read_text().lower()
+    assert not {"java", "kotlin", "jvm"} & set(re.findall(r"[a-z]+", source))
 ```
 
-- [ ] **Step 2: Run, watch them fail, implement, run again**
-- [ ] **Step 3: Commit**
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `pytest tests/application/test_shapes.py -v`
+Expected: FAIL — `shape_fields` carries no nullability yet.
+
+- [ ] **Step 3: Add a `ScopedRequest` to the fixture under `@NullMarked`**
+
+```java
+@org.jspecify.annotations.NullMarked
+package com.acme.orders.scoped;
+```
+
+- [ ] **Step 4: Implement the override, then run again**
+
+The order is: the extractor's answer, then a scope rule if one encloses the field, then an
+explicit annotation. Last wins, and any catalog-declared source raises `resolution` to
+`resolved`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/sextant tests/application/test_shapes.py fixtures/orders-service
+git commit -m "feat: apply catalog nullability over the language's own answer"
+```
 
 ---
 
@@ -637,7 +814,7 @@ git commit -m "feat: endpoints carry their request and response contracts"
 **Coverage.** D00 §5a typed signatures → Tasks 3–5. D00 §5b wire vocabulary → Task 3 (D1).
 D00 §5a presence and nullability → Task 11. D01 §5 shapes tables and `wire_name` identity →
 Tasks 7, 10. D02 §2a wrappers → Tasks 8, 9. D02 §2e nullability → Tasks 8, 11. D02 §2f
-serialisation → Tasks 1, 8, 10. M03 capabilities → Tasks 3–6. FR-17 reporting → Task 12.
+serialisation → Tasks 1, 8, 10. D02 §2g known types → Tasks 1, 8, 10. M03 capabilities → Tasks 3–6. FR-17 reporting → Task 12.
 
 **Not covered, deliberately.** `constant_propagation`, `chain_reconstruction`, `control_flow`
 and `invokedynamic` belong to 2D and 2E. Declared shapes loaded from `declared_shape` facts
