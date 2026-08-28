@@ -4,13 +4,14 @@ import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
+from sextant.cli.resources import catalogs_dir
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
-CATALOGS = Path(__file__).parents[2] / "catalogs"
+CATALOGS = catalogs_dir()
 
 # A second, invented annotation_driven shape — deliberately not Spring — so a
 # test can hand `derive_endpoints` two catalogs that are genuinely different.

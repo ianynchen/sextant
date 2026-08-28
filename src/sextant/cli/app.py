@@ -10,6 +10,7 @@ from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.application.stages.analyze import analyze
 from sextant.cli.progress import RichProgress
+from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.egress.render.document import render_module_document
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
@@ -19,9 +20,6 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 # The registries the composition root builds (ARCHITECTURE §6). Order is the
 # statement of precedence where two adapters could both accept.
-_REPO = Path(__file__).parents[3]
-_JAR = _REPO / "extractor-jvm" / "build" / "libs" / "sextant-extractor.jar"
-_CATALOGS = _REPO / "catalogs"
 
 
 def _commit_of(path: Path) -> str:
@@ -60,8 +58,8 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
             path=path,
             workspace=workspace,
             detectors=[MavenDetector()],
-            scanners=[AsmScanner(_JAR)],
-            catalogs=YamlCatalogSource(_CATALOGS),
+            scanners=[AsmScanner(extractor_jar())],
+            catalogs=YamlCatalogSource(catalogs_dir()),
             fact_root=workspace_dir / "facts",
             progress=progress,
         )

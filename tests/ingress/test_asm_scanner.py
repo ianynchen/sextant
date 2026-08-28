@@ -1,10 +1,11 @@
 from pathlib import Path
 
 from sextant.application.ports.scanner import ScanRequest
+from sextant.cli.resources import extractor_jar
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 
 REPO = Path(__file__).parents[2]
-JAR = REPO / "extractor-jvm" / "build" / "libs" / "sextant-extractor.jar"
+JAR = extractor_jar()
 CLASSES = REPO / "fixtures" / "orders-service" / "target" / "classes"
 
 

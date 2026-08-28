@@ -346,9 +346,9 @@ written.
 | Language | Python 3.12+ | Best iteration loop for the bulk of the work, which is catalog and query development. Every heavy operation is a subprocess or a database query. |
 | Storage and query | DuckDB | Columnar, embedded, reads JSONL directly, recursive queries for reachability. Keeps graph work out of Python loops. |
 | Bytecode reading | ASM | See [DR-1](#dr-1--asm-over-class-files-rather-than-a-source-indexer). |
-| Extractor packaging | Shipped inside the Python distribution | Version drift between extractor and loader is a silent correctness fault. |
+| Extractor packaging | Shipped inside the Python distribution, as `sextant/extractor-jvm/` | Version drift between extractor and loader is a silent correctness fault. **Build order matters**: the jar is built rather than committed, so `./gradlew build` must run before the wheel or the wheel ships without it. Not enforced by the build — a hook invoking Gradle would put a JDK in the `pip install` path — so it is a documented constraint, and a missing jar fails by name at startup rather than silently. |
 | JVM extractor build | Gradle, shaded jar | |
-| Python packaging | `pyproject.toml`, hatchling backend | Named by `GUIDELINES.md` §11 |
+| Python packaging | `pyproject.toml`, hatchling backend | Named by `GUIDELINES.md` §11. Catalogs live at `src/sextant/catalogs/` so they travel with the code that interprets them, and are resolved through the installed package rather than from a file's position on disk. |
 | Test framework | pytest | |
 | Assertions | Plain `assert`, pytest introspection | No assertion library. |
 | Test doubles | Fakes by default; `unittest.mock` only at boundaries we do not own | `GUIDELINES.md` §10 |

@@ -4,6 +4,7 @@ from pathlib import Path
 from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import resolve
+from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import Document
@@ -12,9 +13,9 @@ from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
-JAR = REPO / "extractor-jvm" / "build" / "libs" / "sextant-extractor.jar"
+JAR = extractor_jar()
 FIXTURE = REPO / "fixtures" / "orders-service"
-CATALOGS = REPO / "catalogs"
+CATALOGS = catalogs_dir()
 
 
 def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(tmp_path: Path):
@@ -33,7 +34,7 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
     report = resolve(
         workspace,
         facts,
-        YamlCatalogSource(REPO / "catalogs"),
+        YamlCatalogSource(catalogs_dir()),
         {"annotation_args", "typed_signatures"},
     )
     workspace.close()

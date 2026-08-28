@@ -8,6 +8,7 @@ from sextant.application.ports.progress import NullProgress
 from sextant.application.ports.scanner import ScanReport, ScanRequest
 from sextant.application.stages.analyze import analyze
 from sextant.cli.app import cli
+from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
@@ -16,8 +17,8 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
-_JAR = REPO / "extractor-jvm" / "build" / "libs" / "sextant-extractor.jar"
-_CATALOGS = REPO / "catalogs"
+_JAR = extractor_jar()
+_CATALOGS = catalogs_dir()
 
 
 class _NoCapabilitiesScanner:

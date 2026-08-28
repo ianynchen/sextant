@@ -23,6 +23,14 @@ sextant = "sextant.cli.app:cli"
 [tool.hatch.build.targets.wheel]
 packages = ["src/sextant"]
 
+# The extractor travels inside the distribution (ARCHITECTURE §9): version
+# drift between extractor and loader is a silent correctness fault. It is built
+# rather than committed, so **build the jar before the wheel** — `cd
+# extractor-jvm && ./gradlew build` — or the wheel ships without it and
+# `sextant module analyze` fails naming the missing file.
+[tool.hatch.build.targets.wheel.force-include]
+"extractor-jvm/build/libs/sextant-extractor.jar" = "sextant/extractor-jvm/sextant-extractor.jar"
+
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
