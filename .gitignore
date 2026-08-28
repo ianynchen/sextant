@@ -15,6 +15,9 @@ htmlcov/
 dist/
 *.egg-info/
 
+# The shaded extractor, built by Gradle into the Python package it ships in.
+src/sextant/extractor-jvm/
+
 # ---- JVM: the extractor build, and fixture-repo builds in CI ----
 build/
 target/

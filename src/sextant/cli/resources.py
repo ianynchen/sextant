@@ -33,25 +33,20 @@ def extractor_jar() -> Path:
     because version drift between extractor and loader is a silent correctness
     fault — the two must travel as one artifact.
 
-    Two locations, unlike the catalogs, because the jar is built rather than
-    committed: inside the package once a wheel is built, and in Gradle's output
-    when running from a checkout.
+    One location, like the catalogs: Gradle builds the jar straight into the
+    package. It is git-ignored rather than committed, so a fresh clone has none
+    until the extractor is built — which is why this reports the remedy instead
+    of failing at install time. Making the wheel force-include it did exactly
+    that, breaking `pip install -e .` on any clone.
     """
-    packaged = _package_root() / "extractor-jvm" / "sextant-extractor.jar"
-    if packaged.is_file():
-        return packaged
-    built = _repo_root() / "extractor-jvm" / "build" / "libs" / "sextant-extractor.jar"
-    if built.is_file():
-        return built
-    raise MissingResourceError(
-        f"the JVM extractor is at neither {packaged} nor {built} — build it with "
-        "`cd extractor-jvm && ./gradlew build`, and build it before the wheel"
-    )
+    jar = _package_root() / "extractor-jvm" / "sextant-extractor.jar"
+    if not jar.is_file():
+        raise MissingResourceError(
+            f"the JVM extractor is not at {jar} — build it with "
+            "`cd extractor-jvm && ./gradlew build`"
+        )
+    return jar
 
 
 def _package_root() -> Path:
     return Path(str(resources.files("sextant")))
-
-
-def _repo_root() -> Path:
-    return Path(__file__).parents[3]

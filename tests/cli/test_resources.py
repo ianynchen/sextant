@@ -27,10 +27,9 @@ def test_extractor_jar_is_found_where_the_build_puts_it():
 
 def test_a_missing_extractor_says_how_to_build_it(monkeypatch: pytest.MonkeyPatch):
     """Silence is the defect being fixed here: the old code resolved to a path
-    that was simply not there, and the run continued. Both locations are made
-    to miss, so the error has to carry the remedy rather than a bare path."""
+    that was simply not there, and the run continued. A clone that has not built
+    the extractor is an ordinary state, so the error carries the remedy."""
     monkeypatch.setattr(resources, "_package_root", lambda: Path("/nonexistent/package"))
-    monkeypatch.setattr(resources, "_repo_root", lambda: Path("/nonexistent/repo"))
 
     with pytest.raises(MissingResourceError) as raised:
         resources.extractor_jar()
