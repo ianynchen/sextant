@@ -4,6 +4,10 @@ Not in the MVP. This is the checklist for when it is.
 
 Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1.
 
+> **Scope.** [COVERAGE.md](../COVERAGE.md) §5 is canonical for tier and status,
+> organised by protocol. This file holds what does not fit a protocol row: the
+> toolchain verdict, the payload story, and the structural oddities of the language.
+
 ---
 
 ## Toolchain — the best of any language we surveyed except the JVM

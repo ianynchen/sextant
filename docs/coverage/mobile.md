@@ -8,6 +8,10 @@ a small number of inbound boundaries that are not HTTP at all — a deep link, a
 notification, a share intent. The endpoint model still fits, but the protocol values and
 the address shapes are new.
 
+> **Scope.** [COVERAGE.md](../COVERAGE.md) §5 is canonical for tier and status,
+> organised by protocol. This file holds what does not fit a protocol row: the
+> toolchain verdict, the payload story, and the structural oddities of the language.
+
 ---
 
 ## Android

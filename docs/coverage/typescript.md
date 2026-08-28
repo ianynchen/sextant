@@ -3,6 +3,10 @@
 Not in the MVP. Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1.
 The typing analysis is in [COVERAGE.md](../COVERAGE.md) §10.
 
+> **Scope.** [COVERAGE.md](../COVERAGE.md) §5 is canonical for tier and status,
+> organised by protocol. This file holds what does not fit a protocol row: the
+> toolchain verdict, the payload story, and the structural oddities of the language.
+
 ---
 
 ## Toolchain — much better than Python, on one condition
