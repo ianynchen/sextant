@@ -1,6 +1,13 @@
 """The Workspace port (ARCHITECTURE §7). Its surface is deliberately narrow —
 bulk load, the named derivations, the named queries of D01 — so that it cannot
-decay into a SQL pass-through."""
+decay into a SQL pass-through.
+
+**The names stay strings.** D01 declares these sets, so an enum in `domain`
+would put them under the same discipline as every other closed set and let
+mypy reject a typo. Considered and declined: six values across eleven call
+sites, and the failure it prevents — a mistyped name — raises immediately and
+is caught by any test that exercises the path. The reading cost at every call
+site outweighs it. Revisit if the sets grow or a second Workspace appears."""
 
 from pathlib import Path
 from typing import Protocol

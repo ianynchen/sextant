@@ -198,6 +198,7 @@ ingress/
   detect/          build-tool adapters                                       M02
   extract/jvm/     ASM subprocess wrapper and fact mapping                   M03
   read/            config, kubernetes, helm, openapi, protobuf               M03
+  catalogs/        Sextant's own framework catalogs                          D02
   overlay-files/   overlay file reading                                      D03
 storage/
   duckdb/          the Workspace implementation, and the SQL bodies of
@@ -209,6 +210,11 @@ catalogs/          framework YAML and conformance fixtures                   D02
 cli/               composition root: builds registries, wires selections     M00
 extractor-jvm/     the Java source of the ASM extractor                      M03
 ```
+
+**`ingress` is everything read from disk that is not the workspace** — not only the analysed
+module's artifacts. `read/` holds the module's own files and `catalogs/` holds Sextant's, and
+the distinction matters: the module's configuration becomes facts, while a catalog is
+framework knowledge that produces none.
 
 **Dependencies flow inward.** `domain` imports nothing from the project. `application`
 imports `domain` only. `ingress`, `storage` and `egress` import `domain` and
@@ -226,6 +232,13 @@ Spring and Micronaut. Scanners are selected per language, artifact readers per f
 catalogs as the active set, overlays by rank. Nothing in the pipeline branches on a
 language name.
 
+**The composition root builds the registries; selection happens where the information
+exists.** A detector is chosen from a path, which `cli` has. A scanner is chosen from a
+module's languages, which nothing knows until detection has run — so the registry is handed
+to the stage and the choice is made there. The *rule* for choosing sits beside the port that
+declares `accepts` and `rank`, so a second composition root cannot combine them differently
+and make the port mean two things.
+
 ---
 
 ## 7. Extension points
@@ -238,6 +251,7 @@ and one registry line, and changes no existing test.
 | `Workspace` | Load facts in bulk, run the named derivations, answer the named queries of [D01](components/D01-graph-schema.md) — nothing else, so it cannot decay into a SQL pass-through. | [D01](components/D01-graph-schema.md) |
 | `Detector` | Given a path, report what the repository contains. Keyed by build system. | [M02](components/M02-detector.md) |
 | `Scanner` | Given a module, emit facts. Declares `accepts`, `capabilities`, `rank`. | [M03](components/M03-scanner.md) |
+| `CatalogSource` | Yield every catalog it holds. A port rather than a directory because §6 of [D02](components/D02-catalog-schema.md) loads the built-in set and a repository's own together and privileges neither — so the layer that interprets catalogs never learns where they came from. | [D02](components/D02-catalog-schema.md) |
 | `ArtifactReader` | Given files of one kind, emit facts, marking whether the build consumes them. | [M03](components/M03-scanner.md) |
 | `Engine` | Given catalogs and facts, materialise endpoints. Declares required capabilities. | [D02](components/D02-catalog-schema.md), [M04](components/M04-resolver.md) |
 | `Overlay` | Given files and a lookup, emit validated claims with a rank. | [M01](components/M01-overlay.md) |
@@ -332,16 +346,16 @@ written.
 | Language | Python 3.12+ | Best iteration loop for the bulk of the work, which is catalog and query development. Every heavy operation is a subprocess or a database query. |
 | Storage and query | DuckDB | Columnar, embedded, reads JSONL directly, recursive queries for reachability. Keeps graph work out of Python loops. |
 | Bytecode reading | ASM | See [DR-1](#dr-1--asm-over-class-files-rather-than-a-source-indexer). |
-| Extractor packaging | Shipped inside the Python distribution | Version drift between extractor and loader is a silent correctness fault. |
+| Extractor packaging | Shipped inside the Python distribution. Gradle builds the shaded jar straight into `src/sextant/extractor-jvm/`, git-ignored, and hatchling's `artifacts` carries it into the wheel | Version drift between extractor and loader is a silent correctness fault, so the two travel as one artifact. One location, checkout and wheel alike. It is a build output, not a committed file, so a fresh clone has none until `./gradlew build` runs — reported by name where it is needed rather than at install time. `force-include` was tried and is mandatory in hatchling: a missing jar became a `pip install` failure, which is an install-time hard error for a file only `module analyze` needs. |
 | JVM extractor build | Gradle, shaded jar | |
-| Python packaging | `pyproject.toml`, hatchling backend | Named by `GUIDELINES.md` §11 |
+| Python packaging | `pyproject.toml`, hatchling backend | Named by `GUIDELINES.md` §11. Catalogs live at `src/sextant/catalogs/` so they travel with the code that interprets them, and are resolved through the installed package rather than from a file's position on disk. |
 | Test framework | pytest | |
 | Assertions | Plain `assert`, pytest introspection | No assertion library. |
 | Test doubles | Fakes by default; `unittest.mock` only at boundaries we do not own | `GUIDELINES.md` §10 |
 | Integration harness | Fixture repositories, built in CI | |
 | Formatter and linter | ruff | One tool, both jobs |
 | Types | mypy, strict | |
-| Architecture tests | **import-linter** | Contracts in CI, per `GUIDELINES.md` §5.2 |
+| Architecture tests | **import-linter**, and source rules in `tests/architecture/` | Import contracts in CI per `GUIDELINES.md` §5.2. Import contracts cannot see what a file *says*, so §10's content rules — no framework in code, storage ignorance, language confinement — parse the source instead. No extra dependency: `pytest-archon` does import rules, which import-linter already does better. |
 | JVM tests | JUnit 5 | |
 | CLI framework | click | Noun→verb groups are its native shape; `CliRunner` tests commands in-process |
 | Console status | rich | Live in-place task display on **stderr**; auto plain-line fallback when not a terminal |
@@ -384,21 +398,36 @@ name reads as a specification per `GUIDELINES.md` §10 — for example
 
 ## 10. Architecture rules
 
-Encoded as import-linter contracts and run with the unit suite. An untested rule is
-already being violated.
+Run with the unit suite. An untested rule is already being violated — so each row below
+names the mechanism that tests it, and a rule with no mechanism is not a rule.
 
-| Rule | Contract |
-|---|---|
-| Layering | `cli` → `{ingress, storage, egress}` → `application` → `domain`, one direction only |
-| Application purity | `application` imports no outer group |
-| Adapter independence | `ingress`, `storage` and `egress` never import one another — everyone depends on the ports |
-| **Ingress is write-only** | Nothing in `ingress/` depends on `Workspace` at all: readers emit facts and can never read the graph back |
-| **Egress is read-only** | Nothing in `egress/` writes facts or derived tables: a renderer that writes is derivation hiding in presentation |
-| Storage ignorance | `storage/` knows SQL and D01; it never references a framework, a language, or a protocol name |
-| Language confinement | Only `ingress/extract/jvm` may reference JVM-specific names |
-| Extension namespace | Only a language's own adapter may read its `ext.<lang>` namespace |
+Two mechanisms, because they answer different questions. **import-linter** reasons about what
+a file *imports*; it cannot see what a file *says*, and a protocol name in a query is a
+perfectly legal import. **Source rules** (`tests/architecture/`) parse the source and read
+identifiers and string literals, ignoring comments and docstrings — explaining why a rule
+exists usually means naming the thing it forbids.
 
----
+| Rule | Contract | Tested by |
+|---|---|---|
+| Layering | `cli` → `{ingress, storage, egress}` → `application` → `domain`, one direction only | import-linter |
+| Application purity | `application` imports no outer group | import-linter |
+| Adapter independence | `ingress`, `storage` and `egress` never import one another — everyone depends on the ports | import-linter |
+| **Ingress is write-only** | Nothing in `ingress/` depends on `Workspace` at all: readers emit facts and can never read the graph back | import-linter |
+| **Egress is read-only** | Nothing in `egress/` writes facts or derived tables: a renderer that writes is derivation hiding in presentation | import-linter |
+| Storage ignorance | `storage/` knows SQL and D01; it never names a framework, a language, or a protocol | source rule |
+| Language confinement | Only `ingress/extract/jvm` names JVM languages or bytecode. The composition root is excepted: naming concrete adapters is what it is for | source rule |
+| Extension namespace | Only a language's own adapter reads its `ext.<lang>` namespace | source rule |
+| **No framework in code** | No framework is named anywhere outside the catalogs — the claim the whole design rests on | source rule |
+| **Ports hold only contracts** | Protocols, frozen dataclasses, errors, and do-nothing implementations. A port that grows behaviour stops being a seam | source rule |
+| **Closed sets defined once** | Only `domain/closed_sets.py` defines one; a second definition is NFR-5 widened by accident | source rule |
+| **Application reads no files** | Every I/O concern reaches `application` through a port | source rule |
+
+**Exceptions are written down, never absorbed.** A rule quietly loosened until it passes still
+reads as enforcement. One is currently recorded in the suite: `domain/facts.py` names a field
+`classpath`, which is a JVM name for a language-neutral idea — the ordered set of places
+symbols were read from, each with a tier. Renaming it is a [D00](components/D00-fact-schema.md)
+schema change, so the rule asserts the leak exists rather than ignoring it, and fails if a
+second one appears.
 
 ## 11. Decision records
 

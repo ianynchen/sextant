@@ -1,9 +1,11 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from sextant.application.ports.detector import Detector, ModuleModel
+from sextant.application.ports.catalogs import CatalogSource
+from sextant.application.ports.detector import Detector, ModuleModel, select_detector
 from sextant.application.ports.progress import Progress
-from sextant.application.ports.scanner import Scanner, ScanRequest
+from sextant.application.ports.scanner import Scanner, ScanRequest, select_scanner
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.pipeline import ResolveReport, resolve
 
@@ -23,9 +25,9 @@ class AnalyzeResult:
 def analyze(
     path: Path,
     workspace: Workspace,
-    detector: Detector,
-    scanner: Scanner,
-    catalogs_dir: Path,
+    detectors: Sequence[Detector],
+    scanners: Sequence[Scanner],
+    catalogs: CatalogSource,
     fact_root: Path,
     progress: Progress,
 ) -> AnalyzeResult:
@@ -34,10 +36,14 @@ def analyze(
     progress.define("resolve", "resolve")
 
     progress.start("detect")
-    model = detector.detect(path)
+    model = select_detector(detectors, path).detect(path)
     module = model.modules[0]
     progress.finish("detect", f"modules: {len(model.modules)}")
 
+    # Selected here, not by the caller: a scanner is chosen per language
+    # (ARCHITECTURE §7) and the languages are not known until detection has
+    # run. The registry is the composition root's; the moment is the pipeline's.
+    scanner = select_scanner(scanners, module.languages)
     progress.start("scan")
     scan_report = scanner.scan(
         ScanRequest(
@@ -51,7 +57,7 @@ def analyze(
     progress.finish("scan", f"{scan_report.facts} facts")
 
     progress.start("resolve")
-    report = resolve(workspace, fact_root, catalogs_dir, scanner.capabilities())
+    report = resolve(workspace, fact_root, catalogs, scanner.capabilities())
     progress.finish("resolve", f"{len(report.endpoints)} endpoints")
 
     return AnalyzeResult(

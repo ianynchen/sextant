@@ -156,11 +156,18 @@ public final class ClassScanner {
                 @Override public void visit(String name, Object value) {
                     args.put(name == null ? "value" : name, literal(value));
                 }
+                @Override public void visitEnum(String name, String descriptor, String constant) {
+                    args.put(name == null ? "value" : name, enumReference(descriptor, constant));
+                }
                 @Override public org.objectweb.asm.AnnotationVisitor visitArray(String name) {
                     List<String> items = new ArrayList<>();
                     return new org.objectweb.asm.AnnotationVisitor(Opcodes.ASM9) {
                         @Override public void visit(String ignored, Object value) {
                             items.add(literal(value));
+                        }
+                        @Override public void visitEnum(
+                                String ignored, String descriptor, String constant) {
+                            items.add(enumReference(descriptor, constant));
                         }
                         @Override public void visitEnd() {
                             args.put(name == null ? "value" : name, JsonOut.array(items));
@@ -174,6 +181,17 @@ public final class ClassScanner {
                     onUse.accept(JsonOut.object(use));
                 }
             };
+        }
+
+        /** ASM reports an enum-valued argument through {@code visitEnum}, never
+         *  {@code visit}, so it needs its own override at both levels: a scalar
+         *  argument and an element inside an array. D00 §5a's literal model calls
+         *  for an enum reference, so it carries its owning type rather than the
+         *  bare constant name. Dropping it would make {@code @RequestMapping} with
+         *  no method indistinguishable from one that names every method. */
+        private String enumReference(String descriptor, String constant) {
+            return JsonOut.string(
+                Type.getType(descriptor).getInternalName() + "#" + constant + ".");
         }
 
         private String literal(Object value) {

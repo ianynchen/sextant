@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Lint gates only — fast enough to run on every commit. The test suites run in
+# CI, which is what actually blocks a merge.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+# Skip deliberately:      git commit --no-verify
+set -euo pipefail
+exec "$(git rev-parse --show-toplevel)/scripts/check.sh" --lint

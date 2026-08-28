@@ -133,7 +133,7 @@ that language exists. It is not a cost you can pay today. Only ✅ and ◐ mean 
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ 8A 8B 5C | 2A 3B | 2A | 4A | 2A 1B | 1A 2B |
+| **Java / Kotlin** | ✅ ASM | ◐ 6A 8B 5C | 2A 3B | 2A | 4A | 2A 1B | 1A 2B |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -386,8 +386,9 @@ is, what it costs.
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
 | Java | Spring `@RestController` / `@Controller` + `@GetMapping` etc. | annotation on class + method | `annotation` | ✅ shipped |
-| Java | **`@RequestMapping(method = RequestMethod.GET)`** | the pre-4.3 form | `annotation` | **A — biggest single gap; yields zero endpoints today** |
-| Java | `path =` alias for `value =` | — | `annotation` | **A — currently produces an *empty path*, wrong output not missing output** |
+| Java | **`@RequestMapping(method = RequestMethod.GET)`** | the pre-4.3 form | `annotation` | ✅ shipped |
+| Java | `@RequestMapping` naming no method | Spring accepts every method, so it is one endpoint per method, not one with an unresolved method | `annotation` | ✅ shipped |
+| Java | `path =` alias for `value =` | `@AliasFor`, so only the one typed reaches the bytecode | `annotation` | ✅ shipped |
 | Java | `produces` / `consumes` | — | `annotation` | A |
 | Java | Spring 7 `version = "1.1"` / `"1.2+"` on `@RequestMapping` | API versioning | `annotation` | A |
 | Java | Micronaut `@Controller` + `@Get`/`@Post`… (`value`/`uri` String, **`uris` String[]**) | — | `annotation` | A |

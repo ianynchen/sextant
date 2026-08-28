@@ -1,0 +1,57 @@
+name: PR gates
+
+# Blocks a merge on compilation and unit tests. Runs on pull requests and on
+# pushes to main, so a merge that breaks the branch is visible immediately
+# rather than at the next pull request.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push supersedes the run in flight for the same ref.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    # One job, running the same script a developer runs. Two jobs looked
+    # tidier and were a lie: the Python end-to-end tests load the shaded jar,
+    # so a Python job without a JVM either fails or skips the tests that matter
+    # most — and a green run that skipped them is worse than a red one.
+    name: All gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          java-version: "21"
+          distribution: temurin
+          cache: maven
+      - uses: gradle/actions/setup-gradle@v6
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"   # the floor in pyproject; a newer local version must not hide a break
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Prime the fixture's dependencies
+        # The suite compiles fixtures with `mvn -o`. Offline is deliberate —
+        # ARCHITECTURE §9a makes it policy, so no test reaches the network and
+        # a broken build cannot look like a slow one. A fresh runner has an
+        # empty ~/.m2, so this is the one step allowed to fetch.
+        working-directory: fixtures/orders-service
+        run: mvn -q -B compile
+
+      - name: Gates
+        # ruff, mypy, the import contracts, the extractor build and both test
+        # suites — in that order, cheapest first, and the extractor before the
+        # tests that load it.
+        run: scripts/check.sh

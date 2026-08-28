@@ -8,15 +8,17 @@ from sextant.application.ports.progress import NullProgress
 from sextant.application.ports.scanner import ScanReport, ScanRequest
 from sextant.application.stages.analyze import analyze
 from sextant.cli.app import cli
+from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.egress.render.metadata import write_metadata
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
-_JAR = REPO / "extractor-jvm" / "build" / "libs" / "sextant-extractor.jar"
-_CATALOGS = REPO / "catalogs"
+_JAR = extractor_jar()
+_CATALOGS = catalogs_dir()
 
 
 class _NoCapabilitiesScanner:
@@ -48,7 +50,7 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     )
     assert result.exit_code == 0, result.output
     metadata = json.loads((tmp_path / "metadata.json").read_text())
-    assert metadata["endpoints"]["inbound"]["http"] == 6
+    assert metadata["endpoints"]["inbound"]["http"] == 17
 
 
 def test_render_writes_the_document_after_analyze(tmp_path: Path):
@@ -79,9 +81,9 @@ def test_render_names_the_catalog_and_capability_analyze_skipped(tmp_path: Path)
         result = analyze(
             path=FIXTURE,
             workspace=workspace,
-            detector=MavenDetector(),
-            scanner=_NoCapabilitiesScanner(AsmScanner(_JAR)),
-            catalogs_dir=_CATALOGS,
+            detectors=[MavenDetector()],
+            scanners=[_NoCapabilitiesScanner(AsmScanner(_JAR))],
+            catalogs=YamlCatalogSource(_CATALOGS),
             fact_root=tmp_path / "facts",
             progress=NullProgress(),
         )

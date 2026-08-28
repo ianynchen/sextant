@@ -22,6 +22,19 @@ sextant = "sextant.cli.app:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sextant"]
+# The extractor ships inside the distribution (ARCHITECTURE §9): version drift
+# between extractor and loader is a silent correctness fault. Gradle builds it
+# into the package, so it is git-ignored — `artifacts` is what carries an
+# ignored build output into the wheel. Not `force-include`, which is mandatory
+# and made `pip install -e .` fail on any clone where the jar did not exist.
+artifacts = ["src/sextant/extractor-jvm/*.jar"]
+
+# The extractor is not force-included. Gradle builds it straight into
+# src/sextant/extractor-jvm/, so it is ordinary package data — present in the
+# wheel when it has been built, and simply absent when it has not. A
+# force-include is mandatory in hatchling, which made `pip install -e .` fail
+# on any clone where the jar did not exist yet: an install-time hard error for
+# a file only `module analyze` needs.
 
 [tool.ruff]
 line-length = 100
