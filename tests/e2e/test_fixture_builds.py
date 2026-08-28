@@ -8,3 +8,7 @@ def test_fixture_produces_class_files_when_built():
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     classes = FIXTURE / "target" / "classes" / "com" / "acme" / "orders"
     assert (classes / "OrderController.class").exists()
+    contracts = classes / "contracts"
+    assert (contracts / "OrderRequest.class").exists()
+    assert (contracts / "OrderView.class").exists()
+    assert (contracts / "CustomerRef.class").exists()
