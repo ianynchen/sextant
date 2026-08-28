@@ -3,7 +3,7 @@
 The completeness checklist: what Sextant can detect, what it cannot, and what each gap
 costs. Delivery status is in [PROJECT.md](PROJECT.md); this is about *reach*.
 
-Organised on two axes — **language × protocol**. §2 is the index, §5 is the work list.
+Organised on two axes — **language × application protocol**. §2 is the index, §5 is the work list.
 
 Written after running Phase 1 against [spring-petclinic](https://github.com/spring-projects/spring-petclinic),
 which found **zero endpoints on the first attempt** because the catalog matched
@@ -65,6 +65,38 @@ the shape once and the tier follows from which capabilities exist.
 `runtime_dynamic` is the only shape where the honest answer is that we cannot see it. The
 other seven are engineering.
 
+
+### Transport versus application protocol
+
+HTTP is a **transport**. What we care about is the application protocol running on top of
+it, because that is what determines the *address shape* of a boundary — and therefore what
+can be matched against what.
+
+| Application protocol | Transport | Address shape | Consequence |
+|---|---|---|---|
+| **REST** | HTTP/1.1, HTTP/2 | verb + path template | One route, one operation |
+| **SOAP** | HTTP POST | namespace + localPart | **One HTTP path, N operations** |
+| **GraphQL** | HTTP POST, usually one path | operation type + field name | **One HTTP path, N operations** |
+| **WebSocket** | HTTP upgrade, then frames | connection path + **event name** | **One HTTP path, N events** |
+| **SSE** | HTTP GET, streaming response | path + event name | One route, a stream |
+| **gRPC** | HTTP/2 | `package.Service/Method` | Invisible to any HTTP-level matcher |
+| Webhook | HTTP — an inbound REST endpoint | verb + path | Detection-identical to REST; a semantic property, not a protocol |
+
+**Two consequences that change the model.**
+
+**Four of these put one HTTP path in front of many logical operations.** A service exposing
+200 GraphQL fields has exactly one HTTP route, and a SOAP service exposing 40 operations has
+one. **The unit of a boundary has to be the operation, not the HTTP route** — otherwise we
+would report "1 endpoint" for both and the system tier would have nothing to match.
+
+**The protocol is not always determined by the annotation.** A Spring `@GetMapping` returning
+`List<Order>` is REST; the same annotation returning `SseEmitter` or
+`Flux<ServerSentEvent<T>>` is SSE. `@ServerEndpoint` is WebSocket. The declaration is
+identical and the **return type** decides. This generalises a gap already recorded for
+`@HttpExchange`, where the *direction* depends on use rather than on the catalog: **both
+`protocol` and `direction` are currently properties of the catalog, and both need to be
+derivable per match.** See §8.
+
 ### Verification
 
 Researched against primary sources, August 2026. Anything marked ⚠️ was **not** confirmed
@@ -72,37 +104,69 @@ and must be checked before entering a catalog — a wrong annotation name does n
 loudly, it silently matches nothing.
 
 ---
+## 2. The matrices
 
-## 2. The matrix
+Rows are languages. **Scanner** is the prerequisite: without it, nothing else in the row is
+reachable regardless of tier. Split in two because the address shapes differ (§1) and one
+eleven-column table is unreadable.
 
-Rows are languages, columns are protocols. **Scanner** is the prerequisite: without it,
-nothing else in the row is reachable regardless of tier.
+### 2a. Application protocols over HTTP
 
-| Language | Scanner | HTTP in | HTTP out | SOAP | gRPC | Kafka | JMS/AMQP | SQS | Pub/Sub | Async |
-|---|---|---|---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ | ◐ † | A † | A | B | A † | A | A | B | A |
-| **Go** | — | A | A | — | A | A | — † | A | B | A |
-| **TypeScript** | — | A † | A | — | B † | A | — | A | B | A |
-| **JavaScript** | — | A † | A | — | B † | A | — | A | B | A |
-| **Python** | — | A † | A | B | A | A | — † | C † | B | A |
-| **Rust** | — | A † | B | — | A | A | — † | B | ⚠️ | B |
-| **Swift** | — | — † | A † | — | A | — | — | — | — | B |
+| Language | Scanner | REST in | REST out | SOAP | GraphQL | WebSocket | SSE |
+|---|---|---|---|---|---|---|---|
+| **Java / Kotlin** | ✅ | ◐ † | A † | A | A | A † | **B** |
+| **Go** | — | A | A | — | A | B | **C** |
+| **TypeScript** | — | A † | A | — | A | A | B |
+| **JavaScript** | — | A † | A | — | A | A | B |
+| **Python** | — | A † | A | B | A | A | B |
+| **Rust** | — | A † | B | — | A | A | B |
+| **Swift** | — | — † | A † | — | A † | B | — |
 
-Payload formats are a **separate axis** — see §4. They are orthogonal to this table
+### 2b. Messaging and RPC
+
+| Language | gRPC | Kafka | JMS / AMQP | SQS | Pub/Sub | Async |
+|---|---|---|---|---|---|---|
+| **Java / Kotlin** | B | A † | A | A | B | A |
+| **Go** | A | A | — † | A | B | A |
+| **TypeScript** | B † | A | — | A | B | A |
+| **JavaScript** | B † | A | — | A | B | A |
+| **Python** | A | A | — † | **C** † | B | A |
+| **Rust** | A | A | — † | B | ⚠️ | B |
+| **Swift** | A | — | — | — | — | B |
+
+Payload formats are a **separate axis** — see §4. They are orthogonal to both tables
 (Avro-over-Kafka, Protobuf-over-gRPC, Protobuf-over-Kafka, JSON-over-REST are all real) and
 almost entirely language-independent.
 
-### Reading the matrix
+### Reading the matrices
 
-**The JVM row is the only one with a scanner, and it is the only row with an `interface_implementation` gap (gRPC).** Everywhere else gRPC is `registration_call` — Go's `pb.RegisterFooServer(s, impl)`, Python's `add_FooServicer_to_server`, Rust's `FooServer::new` all *name the service in a call*. The JVM's `class FooImpl extends FooGrpc.FooImplBase` is the outlier, and it is the reason gRPC is B for us and A for everyone else.
+**SSE is the worst column in either table, and it is the only one that is worse in every
+language than the protocol it rides on.** Nothing declares it. It is detected from a return
+type (`SseEmitter`, `Flux<ServerSentEvent>`, axum `Sse<S>`, `EventSourceResponse`) or, in Go
+and Express, from a bare `Content-Type: text/event-stream` header string. There is no
+annotation anywhere.
 
-**`registration_call` is to the non-JVM languages what `fluent_chain` is to the JVM** — one capability that unlocks most cells at once. It is the baseline for four of the seven rows.
+**GraphQL is far better than expected — A almost everywhere.** Every ecosystem either
+declares operations with annotations (Spring `@QueryMapping`, NestJS `@Query`, Strawberry
+`@strawberry.field`, async-graphql `#[Object]`) or ships an SDL schema file that *is* the
+contract. Both are readable. GraphQL is the cheapest new protocol on this page.
 
-**Pub/Sub is B in every language.** No ecosystem except Micronaut ships a first-party annotation; everywhere else it is a builder chain over a client library.
+**The JVM is the outlier on gRPC.** Everywhere else the generated code *names the service in
+a call* — Go's `pb.RegisterFooServer(s, impl)`, Python's `add_FooServicer_to_server`, Rust's
+`FooServer::new`. Only the JVM uses inheritance (`extends FooGrpc.FooImplBase`). That is why
+gRPC is B for us and A for everyone else.
 
-**The three `†` clusters worth knowing before reading §5:** Java HTTP-in hides `@RequestMapping(method=…)`, which yields zero endpoints today. TypeScript HTTP-in hides Next.js filesystem routing, which no engine we have designed can express. Python SQS is C because `boto3` has no static form at all.
+**`registration_call` is to the non-JVM languages what `fluent_chain` is to the JVM** — one
+capability that unlocks most cells at once. It is the baseline for four of the seven rows.
 
----
+**Pub/Sub is B in every language.** Only Micronaut ships a first-party annotation; everywhere
+else it is a builder chain over a client library.
+
+**The `†` clusters worth knowing before reading §5.** Java REST-in hides
+`@RequestMapping(method=…)`, which yields zero endpoints today. TypeScript REST-in hides
+Next.js filesystem routing, which no engine we have designed can express. Python SQS is C
+because `boto3` has no static form at all. Java WebSocket is A for `@ServerEndpoint` and
+`@MessageMapping` but B for programmatic `addHandler` registration.
 
 ## 3. Language readiness — the gate on every row
 
@@ -168,7 +232,7 @@ removal in 5.x ✅). Both must be matched. And Confluent's serializer FQNs ⚠�
 The work list. Each row is one library in one language: what it looks like, what shape it
 is, what it costs.
 
-### 5.1 HTTP inbound
+### 5.1 REST inbound
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
@@ -180,7 +244,7 @@ is, what it costs.
 | Java | Micronaut `@Controller` + `@Get`/`@Post`… (`value`/`uri` String, **`uris` String[]**) | — | `annotation` | A |
 | Java | Quarkus / JAX-RS **`jakarta.ws.rs`** `@Path` + `@GET`… | `@Path` value is a scalar String | `annotation` | A |
 | Java | Quarkus `io.quarkus.vertx.web.Route` | second Quarkus style | `annotation` | A |
-| Java | Spring GraphQL `@QueryMapping`, WebSocket `@MessageMapping`, Actuator `@Endpoint` | — | `annotation` | A |
+| Java | Actuator `@Endpoint` / `@ReadOperation` | — | `annotation` | A |
 | Java | `@RequestMapping` on an **interface or superclass** | Spring inherits mappings | `annotation` + hierarchy | B |
 | Java | **Meta-annotations** — custom `@ApiGet` composed from `@GetMapping` | Spring resolves transitively | `annotation` (recursive) | B |
 | Java | Nested / inner classes | currently skipped **and reported** | — | B |
@@ -216,7 +280,7 @@ is, what it costs.
 | Swift | Vapor `app.get("users", ":id") { … }` | **path segments are variadic args** | `registration_call` | A |
 | Swift | iOS apps | apps are not servers | — | — |
 
-### 5.2 HTTP outbound
+### 5.2 REST outbound
 
 **Nothing is supported anywhere.** Phase 1 records no call sites at all, so the system tier
 has nothing to match on.
@@ -236,7 +300,91 @@ has nothing to match on.
 | Swift | `URLSession` + `URLRequest.httpMethod = "POST"` | **verb is a property assignment** — a shape seen nowhere else | `fluent_chain` | B |
 | Any | Generated clients — `oapi-codegen`, `openapi-typescript`, `swift-openapi-generator` | read the OpenAPI document instead | artifact | A |
 
-### 5.3 gRPC
+### 5.3 SOAP
+
+Deferred by decision — *"can defer, not really that widely used"*. Listed for completeness.
+
+| Language | Library | Form | Shape | Tier |
+|---|---|---|---|---|
+| Java | JAX-WS `@WebService`, `@WebMethod`, `@WebParam` | — | `annotation` | A |
+| Java | Spring-WS `@Endpoint` + `@PayloadRoot(namespace, localPart)` | — | `annotation` | A |
+| Python | `zeep`, `spyne` | client built from a WSDL URL at runtime | `runtime_dynamic` | B |
+| — | WSDL / XSD documents | the actual contract | artifact | C (tier-2 artifact) |
+
+Without WSDL reading, SOAP link matching falls back to structural comparison.
+
+### 5.4 GraphQL
+
+Better than expected: **A in almost every language.** Every ecosystem either declares
+operations with annotations or ships an SDL file that *is* the contract. Remember that the
+endpoint is the **field**, not `/graphql` — a schema with 200 fields is 200 boundaries behind
+one HTTP route.
+
+| Language | Library | Form | Shape | Tier |
+|---|---|---|---|---|
+| Java | Spring GraphQL `@QueryMapping`, `@MutationMapping`, `@SubscriptionMapping`, `@SchemaMapping`, `@BatchMapping` | code-first | `annotation` | A |
+| Java | Netflix DGS `@DgsComponent` + `@DgsQuery` / `@DgsData` ⚠️ | code-first | `annotation` | A |
+| Java | MicroProfile GraphQL `org.eclipse.microprofile.graphql.{GraphQLApi, Query, Mutation}` (Quarkus) | code-first | `annotation` | A |
+| Java | `graphql-java` schema-first — `.graphqls` + `RuntimeWiring` | **the SDL file is the contract** | artifact + `registration_call` | A |
+| Go | `gqlgen` — schema-first, resolvers generated from `.graphql` | SDL is authoritative | artifact | A |
+| TS | NestJS `@Resolver()` + `@Query()` / `@Mutation()` | code-first | `annotation` | A |
+| TS | Apollo Server `typeDefs` (SDL) + a `resolvers` object; TypeGraphQL, Pothos | schema- or code-first | artifact / `annotation` | A |
+| Python | Strawberry `@strawberry.type`, `@strawberry.field` | **code-first and fully typed** | `annotation` | A |
+| Python | Graphene, Ariadne | class- or SDL-based | `annotation` / artifact | A |
+| Rust | `async-graphql` `#[Object]`, `#[graphql(...)]` | code-first macros, readable by `syn` | `annotation` | A |
+| Swift | Apollo iOS — client operations generated from `.graphql` documents | **outbound only** | artifact | A |
+
+**The SDL file is the single best artifact in this document.** Where a project is
+schema-first, the entire contract — every operation, every field, every type, nullability
+included — sits in one readable file that is a build input. Prefer it over code inspection.
+
+### 5.5 WebSocket
+
+The boundary is the **event name**, not the connection path. `socket.on("orderCreated")` is
+matchable exactly like a Kafka topic; `/ws` on its own tells us nothing.
+
+| Language | Library | Form | Shape | Tier |
+|---|---|---|---|---|
+| Java | JSR-356 `jakarta.websocket.server.ServerEndpoint("/ws")` ⚠️ | annotation on the class | `annotation` | A |
+| Java | Spring STOMP `@MessageMapping("/topic/x")`, `@SubscribeMapping` | annotation | `annotation` | A |
+| Java | Spring `registerWebSocketHandlers(registry).addHandler(h, "/ws")` | programmatic | `fluent_chain` | B |
+| Go | `gorilla/websocket` `upgrader.Upgrade(w, r, nil)` | **the protocol is decided by a call *inside* the HTTP handler**, not by the route registration | `registration_call` in a body | B |
+| TS | NestJS `@WebSocketGateway()` + `@SubscribeMessage("event")` | annotation | `annotation` | A |
+| TS | `socket.io` `io.on("connection", s => s.on("event", cb))`, `socket.emit("event", d)` | string event names | `registration_call` | A |
+| TS | `ws` `wss.on("connection", …)` | no event names — raw frames | `registration_call` | B |
+| Python | FastAPI `@app.websocket("/ws")` | annotation | `annotation` | A |
+| Python | Flask-SocketIO `@socketio.on("event")` | **event name in the annotation** | `annotation` | A |
+| Python | Django Channels — `ws_urlpatterns`, `AsyncWebsocketConsumer` | routing module + class | `registration_call` + `interface_implementation` | B |
+| Rust | `axum` — a `WebSocketUpgrade` extractor in the handler signature | **type name visible in the syntax** | `annotation`-like | A |
+| Rust | `tokio-tungstenite` | manual | `registration_call` | B |
+| Swift | `URLSessionWebSocketTask` | client only | `fluent_chain` | B |
+
+### 5.6 Server-Sent Events
+
+**The worst column in either matrix.** Nothing declares SSE. It is inferred from a return
+type or from a media-type string, so the *same* route declaration is REST or SSE depending on
+what the handler returns. This is the clearest case for making `protocol` a per-match
+property — see §8.
+
+| Language | Library | How it is actually detected | Shape | Tier |
+|---|---|---|---|---|
+| Java | Spring MVC — returns `org.springframework.web.servlet.mvc.method.annotation.SseEmitter` ⚠️ | **return type** | return-type read | B |
+| Java | WebFlux — returns `Flux<ServerSentEvent<T>>`, or `produces = MediaType.TEXT_EVENT_STREAM_VALUE` | return type **or** a `produces` string | return-type read | B |
+| Java | JAX-RS — `@Produces(MediaType.SERVER_SENT_EVENTS)` + `SseEventSink` | **an annotation argument** — the one good case | `annotation` | A |
+| Go | manual — `w.Header().Set("Content-Type", "text/event-stream")` then flush in a loop | **a bare string in the handler body.** No library, pure convention | `runtime_dynamic`-adjacent | **C** |
+| TS | Express — `res.setHeader("Content-Type", "text/event-stream")` | string in the body | — | C |
+| TS | Next.js / Hono streaming responses, `ReadableStream` | return type | — | B |
+| Python | `sse-starlette` — returns `EventSourceResponse` | **return type** | return-type read | B |
+| Python | FastAPI — `StreamingResponse(media_type="text/event-stream")` | constructor argument | `registration_call` | B |
+| Rust | `axum` — returns `Sse<S>` | **return type**, visible in the syntax | return-type read | B |
+| Swift | rare | — | — | — |
+
+**The one cheap win:** `produces = "text/event-stream"` and `@Produces(SERVER_SENT_EVENTS)`
+are annotation arguments we can already read. That catches a real share of JVM SSE endpoints
+for the cost of a catalog entry, and is worth doing even though the return-type route is the
+complete answer.
+
+### 5.7 gRPC
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
@@ -251,7 +399,7 @@ has nothing to match on.
 | TS | `ts-proto`, `protobufjs` static mode | generated typed services | `generated_descriptor` | A |
 | Swift | gRPC-Swift generated clients and providers; Connect-Swift | — | `registration_call` | A |
 
-### 5.4 Kafka
+### 5.8 Kafka
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
@@ -273,7 +421,7 @@ has nothing to match on.
 
 ⚠️ `KafkaTemplate.send` returns `ListenableFuture` in older Spring Kafka, `CompletableFuture` in current.
 
-### 5.5 JMS and AMQP
+### 5.9 JMS and AMQP
 
 JMS is a **Java specification**. The other languages have no equivalent — the `—` in §2 is
 structural, not a gap. AMQP is the cross-language analogue and is listed here.
@@ -292,7 +440,7 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 **Package change:** `javax.jms` (Spring ≤5 / Boot ≤2) → `jakarta.jms` (Spring 6 / Boot 3+).
 Both must be matched.
 
-### 5.6 AWS SQS
+### 5.10 AWS SQS
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
@@ -305,7 +453,7 @@ Both must be matched.
 | Rust | `aws-sdk-rust` `client.send_message().queue_url(u).send()` | — | `fluent_chain` | B |
 | Java | Micronaut | **no first-party annotations** — raw SDK or `micronaut-jms-sqs` | — | B |
 
-### 5.7 Google Cloud Pub/Sub
+### 5.11 Google Cloud Pub/Sub
 
 The hardest protocol in the table: **B in every language**, because only Micronaut ships a
 first-party annotation.
@@ -323,20 +471,7 @@ first-party annotation.
 
 ⚠️ Spring Cloud GCP packages moved `org.springframework.cloud.gcp.*` → `com.google.cloud.spring.*`; version of the rename unconfirmed.
 
-### 5.8 SOAP
-
-Deferred by decision — *"can defer, not really that widely used"*. Listed for completeness.
-
-| Language | Library | Form | Shape | Tier |
-|---|---|---|---|---|
-| Java | JAX-WS `@WebService`, `@WebMethod`, `@WebParam` | — | `annotation` | A |
-| Java | Spring-WS `@Endpoint` + `@PayloadRoot(namespace, localPart)` | — | `annotation` | A |
-| Python | `zeep`, `spyne` | client built from a WSDL URL at runtime | `runtime_dynamic` | B |
-| — | WSDL / XSD documents | the actual contract | artifact | C (tier-2 artifact) |
-
-Without WSDL reading, SOAP link matching falls back to structural comparison.
-
-### 5.9 Async and internal boundaries
+### 5.12 Async and internal boundaries
 
 Not protocols, but genuine entry points that would otherwise fall out of the checklist.
 
@@ -348,7 +483,7 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 | Java | Spring Integration `@ServiceActivator`, `@InboundChannelAdapter` | channels, not destinations | `config_join` | C |
 | Java | **Akka / Pekko actor messaging** `ref ! msg`, `ref.tell(msg)` | receiver comes from an `ActorRef` created elsewhere | — | **C, possibly permanent — see §7** |
 | Python | **Celery** `@app.task`, `task.delay(…)`, `.apply_async(queue=…)` | a real async boundary, easy to miss | `annotation` | A |
-| TS | `bullmq` `new Queue("n")`, `new Worker("n", fn)`; `socket.io` `s.on("event", cb)` | string names, matchable like topics | `registration_call` | A |
+| TS | `bullmq` `new Queue("n")`, `new Worker("n", fn)` | string names, matchable like topics | `registration_call` | A |
 | Any | Database access — Room `@Query`, JPA repositories, ORM models | a data boundary, not a protocol | `annotation` | B |
 
 ---
@@ -479,11 +614,13 @@ Avro-over-Kafka subject naming — has nowhere to live. They are also nearly
 language-independent, which is a simplification worth capturing rather than spreading across
 seven rows.
 
-**Q3 — HTTP versus REST as separate columns?**
-Recommend **collapse them**. REST is a style over HTTP, and nothing in our extraction differs
-between them. The split that *does* matter is **direction** — inbound is `annotation`-shaped
-and largely cheap, outbound is `fluent_chain`-shaped and largely not — so §2 has HTTP in and
-HTTP out as separate columns.
+**Q3 — HTTP versus REST as separate columns? resolved.**
+Neither. **HTTP is a transport; the axis is the application protocol running on it** — REST,
+SOAP, GraphQL, WebSocket, SSE, gRPC (§1). That distinction is load-bearing rather than
+cosmetic: four of those protocols put **one HTTP path in front of many logical operations**,
+so a model that stopped at the HTTP route would report "1 endpoint" for a service exposing
+200 GraphQL fields. Direction still earns two columns for REST, where the tiers genuinely
+diverge.
 
 **Q4 — Does "pubsub" mean the GCP product or the publish-subscribe pattern?**
 Read as **the GCP product**, since Kafka and JMS already have columns. Publish-subscribe as a
@@ -516,18 +653,30 @@ the **essay** (toolchain verdict, payload handling, structural oddities such as 
 `urls.py`, Next.js filesystem routing, `boto3`). No fact carries a tier in two places. If Q7
 lands, §5 becomes generated and the essays stay hand-written.
 
+**Q9 — Can `protocol` stay a property of the catalog? needs a decision. New — surfaced by adding SSE.**
+**No.** A Spring `@GetMapping` returning `List<Order>` is REST; the identical annotation
+returning `SseEmitter` or `Flux<ServerSentEvent<T>>` is SSE. The declaration does not
+distinguish them — the **return type** does. This is the same shape as the `@HttpExchange`
+problem, where *direction* depends on use rather than on the catalog. Recommend treating both
+`protocol` and `direction` as **per-match, with a catalog-level default**: a catalog declares
+what it usually produces, and a rule may override it from the match. That is a smaller change
+than it sounds and it closes two gaps at once.
+
 ### Still-open design questions, unchanged by this reorganisation
 
 Four shapes the schema cannot express today. All four surfaced from the research, none is an
 organisational problem:
 
-1. **Context-dependent direction.** `@HttpExchange` means inbound or outbound depending on
-   use, but `direction` is a property of the catalog, not of the match.
+1. **Context-dependent `direction` and `protocol`.** `@HttpExchange` is inbound or outbound
+   depending on use; `@GetMapping` is REST or SSE depending on its return type. Both are
+   catalog properties today and both need to be per-match (Q9).
 2. **Config-derived destinations** (§7) — no catalog style says "the destination is a
    property key derived from this bean's name".
 3. **Filesystem-derived paths** — Next.js, SvelteKit, Remix and Nuxt put the route in the
    file's location and the verb in an export name. No engine we have designed reads a
    directory walk as a fact source.
+5. **One route, many operations** — GraphQL, SOAP, WebSocket and SSE need the *operation* to
+   be the boundary, not the HTTP route ([D01](components/D01-graph-schema.md)).
 4. **Per-endpoint `resolution` driven by framework typing** (§7) rather than by language.
 
 Two limits should be stated **in the product**, not discovered by users: actor messaging is
