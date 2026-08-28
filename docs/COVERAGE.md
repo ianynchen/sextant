@@ -103,9 +103,11 @@ now resolved per match against a catalog-level default, along with `format` —
 
 ### Verification
 
-Researched against primary sources, August 2026. Anything marked ⚠️ was **not** confirmed
-and must be checked before entering a catalog — a wrong annotation name does not fail
-loudly, it silently matches nothing.
+Researched against primary sources, August 2026, and **re-verified in full**: every fully
+qualified name, package relocation and library-maturity claim in this document has been traced
+to a primary source. `⚠️` currently appears nowhere outside this legend — if it returns, it
+marks a claim that has not been. A wrong annotation name does not fail loudly; it silently
+matches nothing, which is exactly how petclinic returned zero endpoints.
 
 ---
 ## 2. The matrices
@@ -144,13 +146,13 @@ SNS and Redis are **out of scope by decision**, not oversight — each would be 
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | 3A 1B | 2A 5B 2C | 3A 2B | 2A 2B | 1A 2B 1C | 2A 1B 2C |
+| **Java / Kotlin** | 3A 1B | 2A 5B 2C | 3A 2B | 3A 2B | 1A 2B 1C | 2A 1B 2C |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **Python** | 1A | 2A | 1A | 1C | 1B | 2A |
-| **Rust** | 1A | 1A | 1A | 1B | ⚠️ | 1A 1B |
-| **Swift** | 1A | — | — | 1B | — | 1B |
+| **Rust** | 1A | 1A | 1A | 1B | 1B | 2A 1B |
+| **Swift** | 1A | 1A | — | 1B | — | 1B |
 
 **Wire format is not in these tables at all** — see §4. Format is a property of a channel to
 be *inferred*, not a protocol to be supported: Avro-over-Kafka, Protobuf-over-gRPC,
@@ -239,8 +241,8 @@ Run `python scripts/coverage_matrix.py --check` to confirm §2 still matches §5
 | **Go** | **`go/packages`** + `go/ssa` | Full | No (deps only) | **`callgraph/{cha,rta,vta}` ships with the Go toolchain** | `registration_call` |
 | **TypeScript** | **`ts.TypeChecker`** compiler API | Full where annotated | No | `Jelly` | `registration_call` + `annotation` + `filesystem` |
 | **Swift** | **IndexStoreDB** (index-while-building) | Full | Yes (macOS) | Index carries call relations | `registration_call` |
-| **Python** | None — pyright has **no programmatic API**, only LSP ⚠️ | Sparse (§7) | No | `PyCG` | `annotation` + `registration_call` |
-| **Rust** | None stable — `syn` has no types; rustdoc JSON unstable ⚠️ | Syntax only | — | None | `annotation` (syntax-only) |
+| **Python** | None — pyright has **no programmatic API**, only LSP | Sparse (§7) | No | `PyCG` | `annotation` + `registration_call` |
+| **Rust** | None stable — `syn` has no types; rustdoc JSON unstable | Syntax only | — | None | `annotation` (syntax-only) |
 | **JavaScript** | None | None | No | `Jelly`, degraded | as TypeScript, payloads ⛔ |
 
 **Three findings worth stating outright.**
@@ -307,8 +309,9 @@ Kafka is the interesting one, because the answer sits in configuration rather th
 | `org.apache.kafka.common.serialization.StringSerializer` | string | no |
 | `…serialization.ByteArraySerializer` | opaque bytes | no |
 | `io.confluent.kafka.serializers.KafkaAvroSerializer` | Avro | **yes** — subject `<topic>-value` |
-| `io.confluent.kafka.serializers.protobuf.KafkaProtobufSerializer` ⚠️ | Protobuf | yes |
-| `io.confluent.kafka.serializers.json.KafkaJsonSchemaSerializer` ⚠️ | JSON Schema | yes |
+| `io.confluent.kafka.serializers.protobuf.KafkaProtobufSerializer` | Protobuf | yes |
+| `io.confluent.kafka.serializers.json.KafkaJsonSchemaSerializer` | JSON Schema | yes |
+| `io.confluent.kafka.serializers.KafkaJsonSerializer` | JSON | no — **note the package: no `.json` segment, and no registry** |
 | `org.springframework.kafka.support.serializer.JsonSerializer` | JSON | no |
 
 ### 4.2 Binding the spec
@@ -461,7 +464,7 @@ one HTTP route.
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
 | Java | Spring GraphQL `@QueryMapping`, `@MutationMapping`, `@SubscriptionMapping`, `@SchemaMapping`, `@BatchMapping` | code-first | `annotation` | A |
-| Java | Netflix DGS `@DgsComponent` + `@DgsQuery` / `@DgsData` ⚠️ | code-first | `annotation` | A |
+| Java | Netflix DGS `com.netflix.graphql.dgs.{DgsComponent, DgsData, DgsQuery, DgsMutation, DgsSubscription}` | code-first; the shorthands are equivalent to `@DgsData` | `annotation` | A |
 | Java | MicroProfile GraphQL `org.eclipse.microprofile.graphql.{GraphQLApi, Query, Mutation}` (Quarkus) | code-first | `annotation` | A |
 | Java | `graphql-java` schema-first — `.graphqls` + `RuntimeWiring` | **the SDL file is the contract** | artifact + `registration_call` | A |
 | Go | `gqlgen` — schema-first, resolvers generated from `.graphql` | SDL is authoritative | artifact | A |
@@ -483,7 +486,7 @@ matchable exactly like a Kafka topic; `/ws` on its own tells us nothing.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
-| Java | JSR-356 `jakarta.websocket.server.ServerEndpoint("/ws")` ⚠️ | annotation on the class | `annotation` | A |
+| Java | Jakarta WebSocket `jakarta.websocket.server.ServerEndpoint("/ws")` (was `javax.websocket.*` — **match both**) | annotation on the class; the value is a URI template | `annotation` | A |
 | Java | Spring STOMP `@MessageMapping("/topic/x")`, `@SubscribeMapping` | annotation | `annotation` | A |
 | Java | Spring `registerWebSocketHandlers(registry).addHandler(h, "/ws")` | programmatic | `fluent_chain` | B |
 | Go | `gorilla/websocket` `upgrader.Upgrade(w, r, nil)` | **the protocol is decided by a call *inside* the HTTP handler**, not by the route registration | `registration_call` in a body | B |
@@ -506,7 +509,7 @@ property — see §8.
 
 | Language | Library | How it is actually detected | Shape | Tier |
 |---|---|---|---|---|
-| Java | Spring MVC — returns `org.springframework.web.servlet.mvc.method.annotation.SseEmitter` ⚠️ | **return type** | return-type read | B |
+| Java | Spring MVC — returns `org.springframework.web.servlet.mvc.method.annotation.SseEmitter` | **return type**; present since 4.2 and still in 7.x | return-type read | B |
 | Java | WebFlux — returns `Flux<ServerSentEvent<T>>`, or `produces = MediaType.TEXT_EVENT_STREAM_VALUE` | return type **or** a `produces` string | return-type read | B |
 | Java | JAX-RS — `@Produces(MediaType.SERVER_SENT_EVENTS)` + `SseEventSink` | **an annotation argument** — the one good case | `annotation` | A |
 | Go | manual — `w.Header().Set("Content-Type", "text/event-stream")` then flush in a loop | **a bare string in the handler body.** No library, pure convention | `runtime_dynamic`-adjacent | **C** |
@@ -529,7 +532,7 @@ complete answer.
 | Java | generated `FooGrpc.FooImplBase` implementing `io.grpc.BindableService`; stubs extend `Abstract{Async,Blocking,Future}Stub` | inheritance, not a call | `interface_implementation` | **B — the JVM is the outlier here** |
 | Java | `net.devh.boot.grpc.{server.service.GrpcService, client.inject.GrpcClient}` | — | `annotation` | A |
 | Java | Quarkus `io.quarkus.grpc.{GrpcService, GrpcClient}` | — | `annotation` | A |
-| Java | official `org.springframework.grpc` starter ⚠️ | names unconfirmed | `annotation` | A |
+| Java | Spring gRPC `org.springframework.grpc.server.service.GrpcService` | **the annotation is optional** — Spring gRPC exposes *any* `BindableService` bean, so `interface_implementation` is the reliable match and the annotation only adds interceptors | `annotation` + `interface_implementation` | A |
 | Go | `pb.RegisterFooServer(s, impl)`, `pb.NewFooClient(conn)` | **the generated function names the service** | `registration_call` | A |
 | Python | `_pb2_grpc.py`: `FooServicer`, `add_FooServicer_to_server`, `FooStub(channel)` | — | `registration_call` | A |
 | Rust | `tonic` `FooServer::new(impl)`, `FooClient::connect(url)` | — | `registration_call` | A |
@@ -551,14 +554,14 @@ complete answer.
 | Java | **SmallRye** `@Incoming("orders")` / `@Outgoing` | channel in code, topic in `application.properties` | `config_join` | **C** |
 | Java | Alpakka / Pekko Connectors `Consumer.plainSource(s, Subscriptions.topics("t"))` | — | `registration_call` | B |
 | Go | `segmentio/kafka-go` `kafka.NewReader(kafka.ReaderConfig{Topic: "t"})` | **topic is a struct-literal field** — easier than positional | `registration_call` | A |
-| Go | `IBM/sarama` ⚠️ (was `Shopify/sarama`), `confluent-kafka-go` | — | `registration_call` | A |
+| Go | `IBM/sarama` (was `Shopify/sarama`), `confluent-kafka-go` | **both import paths are live in the wild** — the module declared the Shopify path for a period after the move, so neither can be dropped | `registration_call` | A |
 | TS | `kafkajs` `consumer.subscribe({topic})`, `producer.send({topic, messages})` | topic in an object literal | `registration_call` | A |
 | Python | `confluent-kafka`, `kafka-python` `KafkaConsumer("topic", …)` | **topic is a constructor argument** | `registration_call` | A |
 | Python | `faust-streaming` `app.topic("orders")` + `@app.agent(topic)` | — | `annotation` + `registration_call` | A |
 | Rust | `rdkafka` `consumer.subscribe(&["topic"])`, `FutureRecord::to("topic")` | — | `registration_call` | A |
-| Swift | — | **no mature Swift Kafka client**; server-side Swift reaches it through C interop ⚠️ | — | — |
+| Swift | `swift-server/swift-kafka-client` — a `librdkafka` wrapper with an async/await producer and an `AsyncSequence` consumer | **three years of development and no tagged release**; the tier is the detection cost, not an endorsement | `registration_call` | A |
 
-⚠️ `KafkaTemplate.send` returns `ListenableFuture` in older Spring Kafka, `CompletableFuture` in current.
+`KafkaTemplate.send` returns `ListenableFuture` before Spring Kafka 3.0 and `CompletableFuture` from 3.0 on; 2.9 added a `usingCompletableFuture()` bridge that 3.0 removed.
 
 ### 5.9 JMS and AMQP
 
@@ -572,7 +575,7 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 | Java | `JmsTemplate.send` / `convertAndSend` | — | `registration_call` | B |
 | Java | Direct `jakarta.jms.{Session, MessageProducer, MessageConsumer}` | — | `fluent_chain` | B |
 | Java | `@RabbitListener`, `@PulsarListener` | — | `annotation` | A |
-| Go | `rabbitmq/amqp091-go` ⚠️ (was `streadway/amqp`) `ch.Publish(exchange, key, …)` | — | `registration_call` | A |
+| Go | `rabbitmq/amqp091-go` (was `streadway/amqp`) `ch.Publish(exchange, key, …)` | — | `registration_call` | A |
 | TS | `amqplib` `ch.publish(exchange, key, …)`, `ch.consume(queue, cb)` | — | `registration_call` | A |
 | Python | `pika`, `kombu` `channel.basic_publish(exchange, routing_key, …)` | — | `registration_call` | A |
 | Swift | — | **no JMS or AMQP client in common iOS use** | — | — |
@@ -586,13 +589,14 @@ Both must be matched.
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
 | Java | Spring Cloud AWS 3.x `io.awspring.cloud.sqs.annotation.SqsListener`, `SqsTemplate` | — | `annotation` | A |
-| Java | Spring Cloud AWS 2.x `io.awspring.cloud.messaging.listener.annotation.SqsListener` ⚠️ | **different package** | `annotation` | A |
+| Java | Spring Cloud AWS 2.x `io.awspring.cloud.messaging.listener.annotation.SqsListener` | **different package** | `annotation` | A |
+| Java | Spring Cloud AWS 1.x/2.2 `org.springframework.cloud.aws.messaging.listener.annotation.SqsListener` | **a third generation**, under the old `org.springframework.cloud` group | `annotation` | A |
 | Java | AWS SDK v2 `SqsClient.sendMessage(SendMessageRequest)`, `…builder().queueUrl(u)` | — | `fluent_chain` | B |
 | Go | `aws-sdk-go-v2` `client.SendMessage(ctx, &sqs.SendMessageInput{QueueUrl: …})` | struct literal | `registration_call` | A |
 | TS | `@aws-sdk/client-sqs` v3 `client.send(new SendMessageCommand({QueueUrl}))` | **command classes are real, statically visible types** | `registration_call` | A |
 | **Python** | **`boto3`** `boto3.client("sqs").send_message(QueueUrl=…)` | **clients synthesised at runtime from JSON service models — `send_message` is defined in no Python file** | `runtime_dynamic` | **C — ceiling is a `name_match` on the service string; `resolution: narrowed` at best** |
 | Rust | `aws-sdk-rust` `client.send_message().queue_url(u).send()` | — | `fluent_chain` | B |
-| Swift | `Soto`, the community AWS SDK for Swift ⚠️ | `sqs.sendMessage(.init(queueUrl: …))` | `registration_call` | B |
+| Swift | `Soto`, the community AWS SDK for Swift — actively maintained, Linux/macOS/iOS | `sqs.sendMessage(.init(queueUrl: …))` | `registration_call` | B |
 | Java | Micronaut | **no first-party annotations** — raw SDK or `micronaut-jms-sqs` | — | B |
 
 ### 5.11 Google Cloud Pub/Sub
@@ -609,10 +613,10 @@ first-party annotation.
 | Go | `client.Topic("n").Publish(ctx, m)`, `client.Subscription("s").Receive(ctx, fn)` | — | `fluent_chain` | B |
 | TS | `pubsub.topic("n").publishMessage(…)`, `subscription.on("message", cb)` | — | `fluent_chain` | B |
 | Python | `publisher.publish(topic_path, data)`, path built by `publisher.topic_path(proj, t)` | topic assembled from a helper call | `fluent_chain` | B |
-| Rust | `google-cloud-rust` ⚠️ | maturity unconfirmed | — | ⚠️ |
+| Rust | `google-cloud-pubsub` (official `googleapis/google-cloud-rust`) | **publish only — receiving messages is not implemented**, and the crate is pre-GA with breaking changes expected. So Rust Pub/Sub has no inbound side to detect at all | `fluent_chain` | B |
 | Swift | — | **no first-party or mature community Swift client** | — | — |
 
-⚠️ Spring Cloud GCP packages moved `org.springframework.cloud.gcp.*` → `com.google.cloud.spring.*`; version of the rename unconfirmed.
+Spring Cloud GCP moved to Google's own repository **at version 2.0**, renaming packages `org.springframework.cloud.gcp.*` → `com.google.cloud.spring.*` and the Maven group `org.springframework.cloud` → `com.google.cloud`. Both generations are in the wild.
 
 ### 5.12 Async and internal boundaries
 
@@ -630,7 +634,8 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 | Go | `robfig/cron` `c.AddFunc("@hourly", fn)`; Temporal Go SDK `w.RegisterWorkflow(fn)` | `registration_call` | A |
 | Go | `asynq`, `machinery` task queues — `mux.HandleFunc("task:name", h)` | `registration_call` | A |
 | Rust | `tokio-cron-scheduler` `Job::new("0 * * * * *", fn)` | `registration_call` | A |
-| Rust | Temporal / `apalis` job queues ⚠️ | `registration_call` | B |
+| Rust | Temporal Rust SDK — `register_workflow::<T>()`, `register_activities()`; **public preview, API still evolving** | `registration_call` | A |
+| Rust | `apalis` — worker pulls from a Postgres/Redis/SQLite backend | `registration_call` | B |
 | Python | APScheduler `@scheduler.scheduled_job("cron", …)` | `annotation` | A |
 | Swift | `BGTaskScheduler.register(forTaskWithIdentifier:)` — identifiers also declared in `Info.plist` (§6) | `registration_call` | B |
 | Any | Database access — Room `@Query`, JPA repositories, ORM models | a data boundary, not a protocol | `annotation` | B |
@@ -653,7 +658,7 @@ all. These need new `protocol` values, not new columns in §2.
 | Android | **Retrofit** `@GET("users/{id}")` (outbound) | interface annotations | `annotation` | **A — highest-value Android catalog** |
 | iOS | Custom URL schemes | `Info.plist` `CFBundleURLTypes` | artifact | B |
 | iOS | **Universal Links** | `apple-app-site-association` — **lives on the server, outside the app repository** | artifact | C — cross-repository join |
-| iOS | App Intents / Siri ⚠️ | `AppIntent` conformances | `interface_implementation` | B |
+| iOS | App Intents / Siri — `AppIntents` framework, iOS 16+ | structs conforming to `AppIntent` with a `perform()` method; **they live in the main binary**, not an extension | `interface_implementation` | B |
 | iOS | Push, share extensions, background tasks | delegate methods, `NSExtension` keys, `BGTaskScheduler` ids | mixed | B |
 
 **Android needs no new scanner.** The build emits ordinary JVM `.class` intermediates
@@ -712,11 +717,12 @@ correlates with **framework modernity, not language**. The right response is `re
 per endpoint, which [D00](components/D00-fact-schema.md) already supports — not one verdict
 per language.
 
-**"Python is typed now" is false at our granularity.** ⚠️ A 2026 study found **91% of
-libraries contain at least one type hint, but half cover only 13.6% of their members**;
-among systematic users, median coverage is 45.8% of parameters and 35.9% of returns.
+**"Python is typed now" is false at our granularity.** A 2026 ICPC study of **1,000 popular
+GitHub repositories** found that **91% use type hints at least once, but half cover only 13.6%
+of their members**; among libraries using them systematically, median coverage is 45.8% of
+parameters and 35.9% of returns.
 
-**Benchmark evidence sets the LLM boundary.** ⚠️ An empirical study of 24 LLMs (arXiv
+**Benchmark evidence sets the LLM boundary.** An empirical study of 24 LLMs (arXiv
 2410.00603) against TypeEvalPy and SWARM-CG/SWARM-JS found that **traditional static
 analysis consistently beat every model on call graphs** (`PyCG` for Python, `Jelly` for
 JavaScript — models "struggle with completeness and soundness"), while **LLMs clearly beat
@@ -893,10 +899,34 @@ statically, and the coverage report has to say so.
 
 ## 9. Verification status
 
-Researched August 2026 against primary sources — Spring, Micronaut, Quarkus, Apache Kafka,
-AWS, Google Cloud, gRPC, Avro, Protocol Buffers, Apache Pekko, Vert.x, the Go and Swift
-toolchains, and the academic literature on LLM-assisted static analysis. Items marked ⚠️ rest
-on secondary sources or could not be confirmed, and **must be checked against the library's
-own documentation or source before entering a catalog**. A wrong annotation name does not
-fail loudly; it silently matches nothing, which is exactly how petclinic returned zero
-endpoints.
+Researched against primary sources in August 2026 and **re-verified end to end**: every fully
+qualified name, package relocation and maturity claim below has been traced to the library's
+own documentation, javadoc, or repository. Three checks changed an answer rather than
+confirming one.
+
+**A third generation of `@SqsListener`.** Spring Cloud AWS has had the annotation in
+`org.springframework.cloud.aws.messaging.listener.annotation` (1.x/2.2, old Maven group),
+`io.awspring.cloud.messaging.listener.annotation` (2.x) and
+`io.awspring.cloud.sqs.annotation` (3.x). A catalog matching two of the three silently misses
+the rest.
+
+**Rust Pub/Sub has no inbound side.** The official `google-cloud-pubsub` crate is pre-GA and
+**does not implement receiving messages**, so there is nothing to detect on the consumer side
+at all — a stronger statement than the unverified "maturity unknown" it replaces.
+
+**Swift does have a Kafka client.** `swift-server/swift-kafka-client` wraps `librdkafka` with
+an async/await producer and an `AsyncSequence` consumer, contradicting the earlier claim that
+none existed — though it has three years of commits and no tagged release.
+
+Two further details were sharpened. Spring gRPC's `@GrpcService` is **optional** — Spring
+gRPC exposes any `BindableService` bean, so the supertype is the reliable match and the
+annotation only adds interceptors. And the `sarama` move left **both import paths live**,
+because the module declared the Shopify path for a period after moving to IBM.
+
+The research citations were traced to their sources: the Python typing figures come from an
+ICPC 2026 study of **1,000 popular GitHub repositories**, and the LLM benchmark findings from
+the arXiv abstract for 2410.00603.
+
+`⚠️` now appears nowhere in this document outside the legend. If it returns, it marks a claim
+that has not been checked — and a wrong annotation name does not fail loudly, it silently
+matches nothing.
