@@ -44,3 +44,16 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderCommand.jsonl", "OrderController.jsonl",
         "OrderResult.jsonl", "OrderService.jsonl",
     ]
+
+
+def test_scan_names_the_class_files_it_skipped_when_the_fixture_has_a_nested_class(
+    tmp_path: Path,
+):
+    """A nested class is dropped by this scanner. Dropping it silently is the
+    failure — `uncovered` is the channel M03 makes an honesty obligation and
+    FR-17 requires, and an empty one when something was skipped is a lie."""
+    report = AsmScanner(JAR).scan(ScanRequest(
+        module_id="com.acme:orders", coordinates="com.acme/orders", version="1.0.0",
+        classes_dir=CLASSES, out_dir=tmp_path,
+    ))
+    assert report.uncovered == ("com/acme/orders/OrderResult$Detail.class",)

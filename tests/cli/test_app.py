@@ -97,3 +97,23 @@ def test_render_names_the_catalog_and_capability_analyze_skipped(tmp_path: Path)
     document = (tmp_path / "render" / "architecture.md").read_text()
     assert "spring-web" in document
     assert "annotation_args" in document
+
+
+def test_analyze_and_render_name_the_uncovered_source_when_one_was_skipped(tmp_path: Path):
+    """The scanner skips the fixture's nested class. `analyze` must carry that
+    out of the scan and into `metadata.json`, and `render` must put it in the
+    gap list — a source nothing read, reported nowhere, is the silent hole
+    FR-17 exists to close."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    assert runner.invoke(
+        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+    ).exit_code == 0
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert metadata["uncovered"] == ["com/acme/orders/OrderResult$Detail.class"]
+
+    assert runner.invoke(
+        cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
+    ).exit_code == 0
+    document = (tmp_path / "render" / "architecture.md").read_text()
+    assert "OrderResult$Detail.class" in document.split("## Known gaps", 1)[1]

@@ -28,6 +28,7 @@ def write_metadata(
     scanner_id: str,
     scanner_version: str,
     commit: str,
+    uncovered: tuple[str, ...] = (),
 ) -> None:
     """Written as the final act of analyze (D05 §3), so it exists whenever the
     workspace does and always describes the graph beside it."""
@@ -51,6 +52,9 @@ def write_metadata(
         },
         "coverage": report.coverage,
         "gaps": PHASE_1_GAPS,
+        # Which compiled sources the facts do not account for (FR-17). Listed
+        # in full rather than counted: a count cannot be acted on.
+        "uncovered": list(uncovered),
         "endpoints": {"inbound": inbound, "outbound": {}},
         "skipped_catalogs": [
             {"catalog_id": skipped.catalog_id,

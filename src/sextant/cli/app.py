@@ -59,6 +59,7 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
         write_metadata(
             workspace_dir / "metadata.json", result.module, result.report,
             result.scanner_id, result.scanner_version, _commit_of(path),
+            result.uncovered,
         )
     finally:
         workspace.close()
@@ -103,7 +104,10 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             coverage=workspace.query("coverage")[0],
             skipped_catalogs=skipped_catalogs,
         )
-        text = render_module_document(reconstructed, report, _commit_of(path))
+        text = render_module_document(
+            reconstructed, report, _commit_of(path),
+            tuple(metadata.get("uncovered", [])),
+        )
         target = workspace_dir / "render" / "architecture.md"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")

@@ -14,6 +14,10 @@ class AnalyzeResult:
     report: ResolveReport
     scanner_id: str
     scanner_version: str
+    # Compiled sources the scan did not account for. Carried out of the stage
+    # rather than dropped here: a source nothing read is a gap the artifacts
+    # must name (FR-17, M03), and this is the only place that knows it.
+    uncovered: tuple[str, ...] = ()
 
 
 def analyze(
@@ -40,4 +44,7 @@ def analyze(
     report = resolve(workspace, fact_root, catalogs_dir, scanner.capabilities())
     progress.finish("resolve", f"{len(report.endpoints)} endpoints")
 
-    return AnalyzeResult(module, report, scan_report.scanner_id, scan_report.scanner_version)
+    return AnalyzeResult(
+        module, report, scan_report.scanner_id, scan_report.scanner_version,
+        scan_report.uncovered,
+    )

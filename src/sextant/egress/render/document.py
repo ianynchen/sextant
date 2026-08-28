@@ -23,7 +23,10 @@ _GAPS = [
 ]
 
 
-def render_module_document(module: ModuleModel, report: ResolveReport, commit: str) -> str:
+def render_module_document(
+    module: ModuleModel, report: ResolveReport, commit: str,
+    uncovered: tuple[str, ...] = (),
+) -> str:
     """Adds no information. Every row comes from the graph, and every omission
     is stated (M07). Rendering the same report twice is byte-identical
     (NFR-1): nothing here reads a clock, and endpoint order is whatever the
@@ -55,6 +58,13 @@ def render_module_document(module: ModuleModel, report: ResolveReport, commit: s
 
     lines += ["", "## Known gaps", ""]
     lines += [f"- {gap}" for gap in _GAPS]
+    # Named one by one, because a compiled source nothing read is the one gap
+    # a reader can act on: it says which part of the module this document is
+    # silent about (FR-17, M03).
+    lines += [
+        f"- Not read, so nothing above accounts for it: `{source}`."
+        for source in uncovered
+    ]
     if report.skipped_catalogs:
         lines += ["", "## Catalogs skipped", ""]
         for skipped in report.skipped_catalogs:

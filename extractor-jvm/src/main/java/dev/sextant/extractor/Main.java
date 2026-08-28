@@ -20,16 +20,24 @@ public final class Main {
 
             int documents = 0;
             int facts = 0;
+            List<String> uncovered = new ArrayList<>();
             try (Stream<Path> walk = Files.walk(classes)) {
                 List<Path> classFiles = walk
                     .filter(p -> p.toString().endsWith(".class"))
-                    .filter(p -> !p.getFileName().toString().contains("$"))
                     .sorted()
                     .toList();
                 for (Path classFile : classFiles) {
+                    String classRelative = posix(classes.relativize(classFile));
+                    // Nested and anonymous classes are not read yet. That is a
+                    // gap, not a non-event: a compiled source the facts do not
+                    // account for is exactly what FR-17 requires be reported,
+                    // and M03 makes the uncovered list an honesty obligation.
+                    if (classFile.getFileName().toString().contains("$")) {
+                        uncovered.add(classRelative);
+                        continue;
+                    }
                     byte[] bytes = Files.readAllBytes(classFile);
-                    String relative =
-                        replaceSuffix(posix(classes.relativize(classFile)), ".class", ".java");
+                    String relative = replaceSuffix(classRelative, ".class", ".java");
                     String documentId = sha256(relative);
                     List<String> lines = scanner.scan(bytes, documentId);
                     writeFactFile(out.resolve(replaceSuffix(relative, ".java", ".jsonl")),
@@ -38,7 +46,7 @@ public final class Main {
                     facts += lines.size();
                 }
             }
-            System.out.println(report(documents, facts));
+            System.out.println(report(documents, facts, uncovered));
         } catch (Exception failure) {
             System.err.println("extractor failed: " + failure);
             System.exit(1);
@@ -94,13 +102,15 @@ public final class Main {
         return value.substring(0, value.length() - from.length()) + to;
     }
 
-    private static String report(int documents, int facts) {
+    private static String report(int documents, int facts, List<String> uncovered) {
+        List<String> quoted = new ArrayList<>();
+        for (String source : uncovered) quoted.add(JsonOut.string(source));
         TreeMap<String, String> fields = new TreeMap<>();
         fields.put("documents", String.valueOf(documents));
         fields.put("facts", String.valueOf(facts));
         fields.put("scanner_id", JsonOut.string("asm"));
         fields.put("scanner_version", JsonOut.string("9.7"));
-        fields.put("uncovered", "[]");
+        fields.put("uncovered", JsonOut.array(quoted));
         return JsonOut.object(fields);
     }
 
