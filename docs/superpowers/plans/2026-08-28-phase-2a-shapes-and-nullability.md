@@ -51,7 +51,7 @@ Three cases, not two:
 |---|---|---|
 | Module output or first-party | `com.acme.orders.CustomerRef` | Expand structurally, any depth |
 | **Known type with a defined wire form** | `Instant`, `UUID`, `google.protobuf.Timestamp` | **Map to that form; never expand** |
-| Unknown third-party | `com.othervendor.Thing` | Stop, keep the reference, mark the shape open, **report it** |
+| Unknown third-party | `org.springframework.http.HttpHeaders` | Stop, keep the reference, mark the shape open, **report it** |
 
 Expanding a known type is not merely wasteful, it is wrong: open `BigDecimal` and you get
 `intVal`, `scale`, `intCompact`, `precision` — internal machinery, none of which reaches the
@@ -244,25 +244,53 @@ package com.acme.orders.contracts;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
+import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 public class OrderRequest {
     // No annotation: nullable by Java's rule, at resolution `partial` (D3).
     public String reference;
-    // Declared: nullable at resolution `resolved`.
+    // Declared nullable: resolution `resolved`.
     public @Nullable String note;
-    // A renamed field — `wire_name` is `customer_id`, never `customerId`.
+    // Declared not-null, overriding Java's permissive default — and renamed,
+    // so `wire_name` is `customer_id` and never `customerId`.
     @JsonProperty("customer_id")
-    public String customerId;
+    public @NonNull String customerId;
+    // Optional is a declared wrapper with `semantics: optional`, so this field
+    // is `required: false` while staying `nullable: false`. The only case that
+    // separates the two flags D00 §5a insists are independent.
+    public Optional<String> note2;
     // Absent from the wire entirely: no shape_field at all.
     @JsonIgnore
     public String internalTrace;
     // A nested object, and a collection of them.
     public CustomerRef customer;
     public List<CustomerRef> alternates;
-    // A primitive: not_null by the type system, no annotation needed.
+    // A primitive: not_null by the type system, projected by the extractor.
     public long total;
+    // A known type: an object in code, a number on the wire. Expanding it
+    // would contribute intVal, scale, intCompact and precision — none of which
+    // exists on any payload (D2).
+    @JsonProperty("total_amount")
+    public BigDecimal totalAmount;
+}
+```
+
+- [ ] **Step 2b: Write `OrderView` with a field whose type expansion must stop**
+
+```java
+package com.acme.orders.contracts;
+
+import org.springframework.http.HttpHeaders;
+
+public class OrderView {
+    public String id;
+    // Third-party, an object, and in no `known_types` entry — so expansion
+    // stops here, the shape is marked open, and the type is reported.
+    public HttpHeaders headers;
 }
 ```
 
@@ -591,8 +619,19 @@ known_types:
   - { type: java.util.UUID,       wire: string, format: uuid }
 ```
 
-- [ ] **Step 2: Test that the catalog loads and declares all five wrappers**
-- [ ] **Step 3: Commit**
+- [ ] **Step 2: Raise `requires` to match what the catalog now depends on**
+
+```yaml
+requires: [annotation_args, type_annotations]
+```
+
+Without this a scanner lacking `type_annotations` runs the catalog anyway and silently
+produces no nullability — the exact bypass capability gating exists to prevent, and
+[FR-17](../../REQUIREMENTS.md#fr-17--coverage-reporting) requires every skip to trace to a
+cause.
+
+- [ ] **Step 3: Test that the catalog loads, declares all five wrappers, and requires the new capability**
+- [ ] **Step 4: Commit**
 
 ---
 
@@ -672,7 +711,7 @@ def test_expansion_stops_at_an_unknown_third_party_type_and_marks_the_shape_open
 def test_the_report_names_the_type_that_stopped_expansion():
     """The catalog grows from observation. A gap nobody can see is a gap
     nobody closes."""
-    assert "com/othervendor/Thing#" in unexpanded_types_reported()
+    assert "org/springframework/http/HttpHeaders#" in unexpanded_types_reported()
 ```
 
 - [ ] **Step 4: Commit**
