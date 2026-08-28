@@ -12,6 +12,9 @@ _NAMED_QUERIES = {
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
         FROM documents
     """,
+    # A cheap read of what `analyze` already loaded — for `render`, which
+    # queries the workspace instead of reloading fact files from disk.
+    "facts": "SELECT count(*) AS facts FROM raw_facts",
 }
 
 _NAMED_DERIVATIONS = {"endpoints": "derive_endpoints.sql"}
