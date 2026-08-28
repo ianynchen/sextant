@@ -33,19 +33,21 @@ controllers AS (
     WHERE annotation = $type_annotation
 ),
 prefixes AS (
-    -- A compiled array-typed annotation argument arrives as a JSON array;
-    -- the first element is the path, and an annotation used with no
-    -- argument at all falls back to the empty string rather than being
-    -- assumed present.
+    -- An annotation argument arrives as a JSON array where the annotation
+    -- declares an array type, and as a bare value where it declares a
+    -- scalar. Both forms occur among the catalogs this engine serves, so
+    -- element 0 is read first and the value itself second; an annotation
+    -- used with no argument at all falls back to the empty string rather
+    -- than being assumed present.
     SELECT target AS type_symbol,
-           coalesce(args -> $prefix_arg ->> 0, '') AS prefix
+           coalesce(args -> $prefix_arg ->> 0, args ->> $prefix_arg, '') AS prefix
     FROM annotations
     WHERE annotation = $prefix_annotation
 ),
 mappings AS (
     SELECT a.target AS method_symbol,
            mc.http_method AS http_method,
-           coalesce(a.args -> mc.path_arg ->> 0, '') AS path_suffix
+           coalesce(a.args -> mc.path_arg ->> 0, a.args ->> mc.path_arg, '') AS path_suffix
     FROM annotations a
     JOIN method_catalog mc ON mc.fqn = a.annotation
 ),

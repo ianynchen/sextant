@@ -275,3 +275,73 @@ def test_derive_endpoints_sql_names_no_framework_when_read():
     text = sql.read_text(encoding="utf-8").lower()
     assert "spring" not in text
     assert "org/springframework" not in text
+
+
+def _scalar_path_facts(root: Path) -> None:
+    """A framework whose path arguments are declared `String`, not `String[]`.
+    JAX-RS `@Path` is the real one: its `value()` is a plain String, so the
+    compiled annotation argument is a bare JSON string and not a one-element
+    array."""
+    document = Document(
+        document_id="doc_1", relative_path="com/acme/rest/OrderResource.java",
+        module_id="com.acme:orders-service", language="java", sextant_version="0.1.0",
+        fact_schema_version="1.0.0", scanner_id="asm", scanner_version="9.7",
+        content_hash="sha256:a", origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT, redaction_set_hash="sha256:b",
+    )
+    resource = "com/acme/rest/OrderResource#"
+    find = "com/acme/rest/OrderResource#find()."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=resource, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1", symbol=find, construct_kind=ConstructKind.METHOD,
+            enclosing=resource,
+        ),
+        AnnotationFact(
+            document_id="doc_1", target=resource, retention="runtime",
+            use=AnnotationUse(annotation="com/acme/rest/Resource#", args={}),
+        ),
+        AnnotationFact(
+            document_id="doc_1", target=resource, retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/rest/Path#", args={"value": "/rest/orders"},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1", target=find, retention="runtime",
+            use=AnnotationUse(annotation="com/acme/rest/Get#", args={"value": "/{id}"}),
+        ),
+    ]
+    write_fact_file(root / "OrderResource.jsonl", document, facts)
+
+
+_SCALAR_PATH_CATALOG = Catalog(
+    id="invented-scalar-path", style="annotation_driven", protocol="http",
+    direction="inbound", requires=("annotation_args",),
+    matches={
+        "type_annotation": "com/acme/rest/Resource#",
+        "path_prefix_from": {"annotation": "com/acme/rest/Path#", "arg": "value"},
+        "method_annotations": [
+            {"fqn": "com/acme/rest/Get#", "http_method": "GET", "path_arg": "value"},
+        ],
+    },
+)
+
+
+def test_derive_endpoints_reads_a_scalar_annotation_argument_when_it_is_not_an_array(
+    tmp_path: Path,
+):
+    """Reading only element 0 of an array silently yields NULL on a scalar, and
+    the path collapses to the prefix alone — a wrong route reported with full
+    `resolved`/`compiler` confidence. Spring's `value()` is `String[]`, so this
+    is invisible there and fatal for any catalog whose argument is a plain
+    String."""
+    _scalar_path_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    derive_endpoints(workspace, [_SCALAR_PATH_CATALOG], capabilities={"annotation_args"})
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["path"]) for r in rows] == [("GET", "/rest/orders/{id}")]
