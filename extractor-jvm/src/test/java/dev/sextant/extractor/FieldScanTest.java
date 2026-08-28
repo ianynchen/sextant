@@ -38,4 +38,19 @@ class FieldScanTest {
         assertTrue(lines.stream().anyMatch(l -> l.contains("OrderRequest#total.")
             && l.contains("\"nullable\":false") && l.contains("\"nullable_resolution\":\"resolved\"")));
     }
+
+    /** D1 assigns collections to the extractor's own projection, but a known
+     *  wire form like BigDecimal's is catalog knowledge (D2) — expanding it
+     *  structurally would surface intVal/scale/intCompact/precision, none of
+     *  which is on the wire. Mapping it to "object" here, rather than
+     *  guessing "number", is what leaves Task 8's known_types entry
+     *  something to override. */
+    @Test
+    void projects_a_collection_field_to_array_and_leaves_a_known_type_field_open() throws Exception {
+        List<String> lines = scan("OrderRequest");
+        assertTrue(lines.stream().anyMatch(l -> l.contains("OrderRequest#alternates.")
+            && l.contains("\"wire_type\":\"array\"")));
+        assertTrue(lines.stream().anyMatch(l -> l.contains("OrderRequest#totalAmount.")
+            && l.contains("\"wire_type\":\"object\"")));
+    }
 }
