@@ -5,6 +5,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
+import java.util.function.Consumer;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.FieldVisitor;
@@ -23,8 +24,21 @@ public final class ClassScanner {
     }
 
     public List<String> scan(byte[] classBytes, String documentId) {
+        return scan(classBytes, documentId, reason -> {});
+    }
+
+    /** {@code onKotlinMetadataUnsupported} fires when this class's own {@code @Metadata}
+     *  named a compiler version {@code kotlin-metadata-jvm} does not understand — the
+     *  library's supported version always trails the compiler's, so this is the ordinary
+     *  path for a module built on a newer Kotlin, not a corrupt class file. The class is
+     *  still scanned in full; only its Kotlin-declared nullability is unavailable, and
+     *  the caller decides what "unavailable" means for coverage reporting (Main does, at
+     *  the class-file level M03/FR-17 requires). */
+    public List<String> scan(byte[] classBytes, String documentId,
+                              Consumer<String> onKotlinMetadataUnsupported) {
         List<String> lines = new ArrayList<>();
-        new ClassReader(classBytes).accept(new Visitor(lines, documentId), ClassReader.SKIP_FRAMES);
+        new ClassReader(classBytes)
+            .accept(new Visitor(lines, documentId, onKotlinMetadataUnsupported), ClassReader.SKIP_FRAMES);
         return lines;
     }
 
@@ -62,16 +76,18 @@ public final class ClassScanner {
     private final class Visitor extends ClassVisitor {
         private final List<String> lines;
         private final String documentId;
+        private final Consumer<String> onKotlinMetadataUnsupported;
         private String typeSymbol;
         // Populated from @Metadata before any field is visited (ASM visits class-level
         // annotations before fields — see visitAnnotation below); empty for every
         // non-Kotlin class, which leaves Java's rule as the only source.
         private java.util.Map<String, Boolean> kotlinNullability = KotlinNullability.NONE;
 
-        Visitor(List<String> lines, String documentId) {
+        Visitor(List<String> lines, String documentId, Consumer<String> onKotlinMetadataUnsupported) {
             super(Opcodes.ASM9);
             this.lines = lines;
             this.documentId = documentId;
+            this.onKotlinMetadataUnsupported = onKotlinMetadataUnsupported;
         }
 
         @Override
@@ -193,7 +209,8 @@ public final class ClassScanner {
             // annotations someone wrote) — decode it into the property lookup instead
             // of letting its protobuf blob out through the normal annotation stream.
             if (KotlinNullability.DESCRIPTOR.equals(descriptor)) {
-                return KotlinNullability.collector(decoded -> kotlinNullability = decoded);
+                return KotlinNullability.collector(
+                    decoded -> kotlinNullability = decoded, onKotlinMetadataUnsupported);
             }
             return annotationVisitor(typeSymbol, descriptor, visible);
         }

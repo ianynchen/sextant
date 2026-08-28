@@ -39,7 +39,14 @@ public final class Main {
                     byte[] bytes = Files.readAllBytes(classFile);
                     String relative = replaceSuffix(classRelative, ".class", ".java");
                     String documentId = sha256(relative);
-                    List<String> lines = scanner.scan(bytes, documentId);
+                    // A Kotlin class compiled by a newer compiler than
+                    // kotlin-metadata-jvm supports is not a corrupt class file —
+                    // its nullability just cannot be read. The class is still
+                    // scanned and its fact file still written (with Java's own
+                    // rule standing in for the field), but the gap itself is an
+                    // honesty obligation the same as a nested class's (FR-17).
+                    List<String> lines = scanner.scan(bytes, documentId, reason ->
+                        uncovered.add(classRelative + ": kotlin metadata unreadable (" + reason + ")"));
                     writeFactFile(out.resolve(replaceSuffix(relative, ".java", ".jsonl")),
                                   relative, documentId, options, sha256Bytes(bytes), lines);
                     documents++;

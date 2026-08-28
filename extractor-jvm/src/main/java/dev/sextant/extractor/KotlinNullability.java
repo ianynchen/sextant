@@ -32,8 +32,18 @@ public final class KotlinNullability {
      *  nullability once the annotation is fully read and hands the result to
      *  {@code onDecoded}. Per {@link AnnotationVisitor#visit}'s own contract, `mv` — an
      *  {@code int[]} — arrives as one array object through {@code visit}; only the
-     *  {@code String[]} elements (`d1`, `d2`) are itemized through {@code visitArray}. */
-    public static AnnotationVisitor collector(Consumer<Map<String, Boolean>> onDecoded) {
+     *  {@code String[]} elements (`d1`, `d2`) are itemized through {@code visitArray}.
+     *
+     *  <p>{@code kotlin-metadata-jvm}'s supported metadata version always trails the
+     *  compiler's own — a class compiled by a newer Kotlin than this library understands
+     *  is not a bug in the class, and must not take the rest of the module's scan down
+     *  with it (M03, FR-17). {@code onUnsupported} receives the library's own explanation
+     *  (it already names both the class's version and the maximum supported) instead of
+     *  the read failing loudly; {@code onDecoded} still receives {@link #NONE} for that
+     *  class, so every field falls back to Java's own rule — an honest partial answer,
+     *  not a guess dressed up as one. */
+    public static AnnotationVisitor collector(
+            Consumer<Map<String, Boolean>> onDecoded, Consumer<String> onUnsupported) {
         int[] k = {0};
         int[][] mv = {new int[0]};
         List<String> d1 = new ArrayList<>();
@@ -65,9 +75,19 @@ public final class KotlinNullability {
 
             @Override
             public void visitEnd() {
-                onDecoded.accept(propertyNullability(new MetadataValues(
+                Metadata metadata = new MetadataValues(
                     k[0], mv[0], d1.toArray(new String[0]), d2.toArray(new String[0]),
-                    xs[0], pn[0], xi[0])));
+                    xs[0], pn[0], xi[0]);
+                try {
+                    onDecoded.accept(propertyNullability(metadata));
+                } catch (IllegalArgumentException unreadable) {
+                    // kotlin-metadata-jvm throws this for metadata it cannot make sense
+                    // of — most commonly a compiler version newer than the library
+                    // supports, which its message already names alongside the maximum
+                    // it does support.
+                    onUnsupported.accept(unreadable.getMessage());
+                    onDecoded.accept(NONE);
+                }
             }
         };
     }
