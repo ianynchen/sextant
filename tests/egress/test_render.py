@@ -7,15 +7,28 @@ from sextant.egress.render.document import render_module_document
 from sextant.egress.render.metadata import write_metadata
 
 MODULE = ModuleModel(
-    module_id="com.acme:orders-service", coordinates="com.acme/orders-service",
-    version="1.0.0", root=Path("fixtures/orders-service"), kind="service",
-    languages=frozenset({"java"}), source_roots=(), output_dirs=(),
+    module_id="com.acme:orders-service",
+    coordinates="com.acme/orders-service",
+    version="1.0.0",
+    root=Path("fixtures/orders-service"),
+    kind="service",
+    languages=frozenset({"java"}),
+    source_roots=(),
+    output_dirs=(),
 )
 REPORT = ResolveReport(
     facts_loaded=42,
-    endpoints=[{"protocol": "http", "direction": "inbound", "method": "GET",
-                "path": "/v1/orders", "handler": "s maven c 1 com/acme/C#list().",
-                "resolution": "resolved", "evidence": "compiler"}],
+    endpoints=[
+        {
+            "protocol": "http",
+            "direction": "inbound",
+            "method": "GET",
+            "path": "/v1/orders",
+            "handler": "s maven c 1 com/acme/C#list().",
+            "resolution": "resolved",
+            "evidence": "compiler",
+        }
+    ],
     coverage={"documents": 4, "partial_documents": 0},
 )
 

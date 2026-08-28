@@ -43,8 +43,8 @@ def _hits(path: Path) -> list[str]:
 
 def test_no_language_name_appears_outside_the_jvm_adapter():
     offences = [hit for path in _confined_sources() for hit in _hits(path)]
-    assert offences == [], (
-        "a language name outside sextant.ingress.extract.jvm:\n" + "\n".join(offences)
+    assert offences == [], "a language name outside sextant.ingress.extract.jvm:\n" + "\n".join(
+        offences
     )
 
 

@@ -24,7 +24,9 @@ _GAPS = [
 
 
 def render_module_document(
-    module: ModuleModel, report: ResolveReport, commit: str,
+    module: ModuleModel,
+    report: ResolveReport,
+    commit: str,
     uncovered: tuple[str, ...] = (),
 ) -> str:
     """Adds no information. Every row comes from the graph, and every omission
@@ -61,15 +63,11 @@ def render_module_document(
     # Named one by one, because a compiled source nothing read is the one gap
     # a reader can act on: it says which part of the module this document is
     # silent about (FR-17, M03).
-    lines += [
-        f"- Not read, so nothing above accounts for it: `{source}`."
-        for source in uncovered
-    ]
+    lines += [f"- Not read, so nothing above accounts for it: `{source}`." for source in uncovered]
     if report.skipped_catalogs:
         lines += ["", "## Catalogs skipped", ""]
         for skipped in report.skipped_catalogs:
             lines.append(
-                f"- `{skipped.catalog_id}` requires "
-                f"{', '.join(skipped.missing_capabilities)}"
+                f"- `{skipped.catalog_id}` requires {', '.join(skipped.missing_capabilities)}"
             )
     return "\n".join(lines) + "\n"

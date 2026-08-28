@@ -27,14 +27,23 @@ class AsmScanner:
     def scan(self, request: ScanRequest) -> ScanReport:
         completed = subprocess.run(
             [
-                "java", "-jar", str(self._jar),
-                "--module-id", request.module_id,
-                "--coordinates", request.coordinates,
-                "--version", request.version,
-                "--classes", str(request.classes_dir),
-                "--out", str(request.out_dir),
+                "java",
+                "-jar",
+                str(self._jar),
+                "--module-id",
+                request.module_id,
+                "--coordinates",
+                request.coordinates,
+                "--version",
+                request.version,
+                "--classes",
+                str(request.classes_dir),
+                "--out",
+                str(request.out_dir),
             ],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if completed.returncode != 0:
             raise RuntimeError(f"extractor failed: {completed.stderr.strip()}")

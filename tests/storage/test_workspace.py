@@ -8,10 +8,17 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 def _fixture_facts(root: Path) -> None:
     document = Document(
-        document_id="doc_1", relative_path="com/acme/A.java", module_id="com.acme:orders",
-        language="java", sextant_version="0.1.0", fact_schema_version="1.0.0",
-        scanner_id="asm", scanner_version="9.7", content_hash="sha256:a",
-        origin_entry="target/classes", origin_tier=OriginTier.MODULE_OUTPUT,
+        document_id="doc_1",
+        relative_path="com/acme/A.java",
+        module_id="com.acme:orders",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
         redaction_set_hash="sha256:b",
     )
     symbol = SymbolFact(

@@ -19,10 +19,15 @@ CATALOGS = REPO / "catalogs"
 def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(tmp_path: Path):
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     facts = tmp_path / "facts"
-    AsmScanner(JAR).scan(ScanRequest(
-        module_id="com.acme:orders-service", coordinates="com.acme/orders-service",
-        version="1.0.0", classes_dir=FIXTURE / "target" / "classes", out_dir=facts,
-    ))
+    AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders-service",
+            coordinates="com.acme/orders-service",
+            version="1.0.0",
+            classes_dir=FIXTURE / "target" / "classes",
+            out_dir=facts,
+        )
+    )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     report = resolve(workspace, facts, REPO / "catalogs", {"annotation_args", "typed_signatures"})
     workspace.close()
@@ -50,11 +55,18 @@ def test_resolve_reports_the_skip_instead_of_crashing_when_no_catalog_is_satisfi
     never derived (the one path capability gating exists to protect)."""
     facts = tmp_path / "facts"
     document = Document(
-        document_id="doc_1", relative_path="com/acme/orders/OrderController.java",
-        module_id="com.acme:orders-service", language="java", sextant_version="0.1.0",
-        fact_schema_version="1.0.0", scanner_id="asm", scanner_version="9.7",
-        content_hash="sha256:a", origin_entry="target/classes",
-        origin_tier=OriginTier.MODULE_OUTPUT, redaction_set_hash="sha256:b",
+        document_id="doc_1",
+        relative_path="com/acme/orders/OrderController.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
     )
     write_fact_file(facts / "OrderController.jsonl", document, [])
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")

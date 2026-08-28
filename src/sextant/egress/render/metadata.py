@@ -57,13 +57,13 @@ def write_metadata(
         "uncovered": list(uncovered),
         "endpoints": {"inbound": inbound, "outbound": {}},
         "skipped_catalogs": [
-            {"catalog_id": skipped.catalog_id,
-             "missing_capabilities": list(skipped.missing_capabilities)}
+            {
+                "catalog_id": skipped.catalog_id,
+                "missing_capabilities": list(skipped.missing_capabilities),
+            }
             for skipped in report.skipped_catalogs
         ],
         "query": ["sextant module render"],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")

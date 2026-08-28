@@ -54,9 +54,7 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
 def test_render_writes_the_document_after_analyze(tmp_path: Path):
     runner = CliRunner()
     runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
-    result = runner.invoke(
-        cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
-    )
+    result = runner.invoke(cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)])
     assert result.exit_code == 0, result.output
     document = (tmp_path / "render" / "architecture.md").read_text()
     assert "POST" in document and "/v1/orders" in document
@@ -79,13 +77,22 @@ def test_render_names_the_catalog_and_capability_analyze_skipped(tmp_path: Path)
     workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
     try:
         result = analyze(
-            path=FIXTURE, workspace=workspace, detector=MavenDetector(),
-            scanner=_NoCapabilitiesScanner(AsmScanner(_JAR)), catalogs_dir=_CATALOGS,
-            fact_root=tmp_path / "facts", progress=NullProgress(),
+            path=FIXTURE,
+            workspace=workspace,
+            detector=MavenDetector(),
+            scanner=_NoCapabilitiesScanner(AsmScanner(_JAR)),
+            catalogs_dir=_CATALOGS,
+            fact_root=tmp_path / "facts",
+            progress=NullProgress(),
         )
         assert result.report.skipped_catalogs, "the catalog was not actually skipped"
         write_metadata(
-            tmp_path / "metadata.json", result.module, result.report, "asm", "9.7", "deadbeef",
+            tmp_path / "metadata.json",
+            result.module,
+            result.report,
+            "asm",
+            "9.7",
+            "deadbeef",
         )
     finally:
         workspace.close()
@@ -106,14 +113,20 @@ def test_analyze_and_render_name_the_uncovered_source_when_one_was_skipped(tmp_p
     FR-17 exists to close."""
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     runner = CliRunner()
-    assert runner.invoke(
-        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
-    ).exit_code == 0
+    assert (
+        runner.invoke(
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["uncovered"] == ["com/acme/orders/OrderResult$Detail.class"]
 
-    assert runner.invoke(
-        cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
-    ).exit_code == 0
+    assert (
+        runner.invoke(
+            cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
     document = (tmp_path / "render" / "architecture.md").read_text()
     assert "OrderResult$Detail.class" in document.split("## Known gaps", 1)[1]

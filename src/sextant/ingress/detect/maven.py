@@ -14,9 +14,12 @@ _MAIN_CLASS = f"{{{_POM_NS['m']}}}mainClass"
 _NON_SOURCE_DIRECTORIES = frozenset({"resources", "webapp", "filters"})
 
 _CONTAINER_FILES = (
-    "Dockerfile", "Containerfile",
-    "compose.yaml", "compose.yml",
-    "docker-compose.yaml", "docker-compose.yml",
+    "Dockerfile",
+    "Containerfile",
+    "compose.yaml",
+    "compose.yml",
+    "docker-compose.yaml",
+    "docker-compose.yml",
 )
 
 
@@ -78,11 +81,16 @@ class MavenDetector:
         main = path / "src" / "main"
         if not main.is_dir():
             return ()
-        return tuple(sorted(
-            (child for child in main.iterdir()
-             if child.is_dir() and child.name not in _NON_SOURCE_DIRECTORIES),
-            key=lambda child: child.name,
-        ))
+        return tuple(
+            sorted(
+                (
+                    child
+                    for child in main.iterdir()
+                    if child.is_dir() and child.name not in _NON_SOURCE_DIRECTORIES
+                ),
+                key=lambda child: child.name,
+            )
+        )
 
     @staticmethod
     def _classify(path: Path, pom: ElementTree.Element) -> str:

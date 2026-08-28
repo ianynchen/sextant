@@ -16,14 +16,21 @@ def test_scanner_accepts_java_and_kotlin_but_not_python():
 
 def test_scan_writes_one_fact_file_per_source_file_when_run_on_the_fixture(tmp_path: Path):
     scanner = AsmScanner(JAR)
-    report = scanner.scan(ScanRequest(
-        module_id="com.acme:orders", coordinates="com.acme/orders", version="1.0.0",
-        classes_dir=CLASSES, out_dir=tmp_path,
-    ))
+    report = scanner.scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=CLASSES,
+            out_dir=tmp_path,
+        )
+    )
     written = sorted(p.name for p in tmp_path.rglob("*.jsonl"))
     assert written == [
-        "OrderCommand.jsonl", "OrderController.jsonl",
-        "OrderResult.jsonl", "OrderService.jsonl",
+        "OrderCommand.jsonl",
+        "OrderController.jsonl",
+        "OrderResult.jsonl",
+        "OrderService.jsonl",
     ]
     assert report.documents == 4
 
@@ -36,13 +43,20 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
     own directory happens to hold `.java` had its output paths corrupted
     mid-string — facts written somewhere nobody would look for them."""
     out = tmp_path / "work.java" / "facts"
-    AsmScanner(JAR).scan(ScanRequest(
-        module_id="com.acme:orders", coordinates="com.acme/orders", version="1.0.0",
-        classes_dir=CLASSES, out_dir=out,
-    ))
+    AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=CLASSES,
+            out_dir=out,
+        )
+    )
     assert sorted(p.name for p in out.rglob("*.jsonl")) == [
-        "OrderCommand.jsonl", "OrderController.jsonl",
-        "OrderResult.jsonl", "OrderService.jsonl",
+        "OrderCommand.jsonl",
+        "OrderController.jsonl",
+        "OrderResult.jsonl",
+        "OrderService.jsonl",
     ]
 
 
@@ -52,8 +66,13 @@ def test_scan_names_the_class_files_it_skipped_when_the_fixture_has_a_nested_cla
     """A nested class is dropped by this scanner. Dropping it silently is the
     failure — `uncovered` is the channel M03 makes an honesty obligation and
     FR-17 requires, and an empty one when something was skipped is a lie."""
-    report = AsmScanner(JAR).scan(ScanRequest(
-        module_id="com.acme:orders", coordinates="com.acme/orders", version="1.0.0",
-        classes_dir=CLASSES, out_dir=tmp_path,
-    ))
+    report = AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=CLASSES,
+            out_dir=tmp_path,
+        )
+    )
     assert report.uncovered == ("com/acme/orders/OrderResult$Detail.class",)

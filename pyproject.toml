@@ -26,6 +26,10 @@ packages = ["src/sextant"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+# The formatter rewrites fenced Python in Markdown too, and `docs/` holds the
+# specs and the phase plans — documents that are a contract, not code to be
+# restyled. Their illustrative snippets stay as written.
+extend-exclude = ["docs"]
 
 [tool.mypy]
 strict = true

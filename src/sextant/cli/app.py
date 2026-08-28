@@ -24,7 +24,9 @@ _CATALOGS = _REPO / "catalogs"
 def _commit_of(path: Path) -> str:
     result = subprocess.run(
         ["git", "-C", str(path), "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     return result.stdout.strip() or "unknown"
 
@@ -52,13 +54,21 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
         result = analyze(
-            path=path, workspace=workspace, detector=MavenDetector(),
-            scanner=AsmScanner(_JAR), catalogs_dir=_CATALOGS,
-            fact_root=workspace_dir / "facts", progress=progress,
+            path=path,
+            workspace=workspace,
+            detector=MavenDetector(),
+            scanner=AsmScanner(_JAR),
+            catalogs_dir=_CATALOGS,
+            fact_root=workspace_dir / "facts",
+            progress=progress,
         )
         write_metadata(
-            workspace_dir / "metadata.json", result.module, result.report,
-            result.scanner_id, result.scanner_version, _commit_of(path),
+            workspace_dir / "metadata.json",
+            result.module,
+            result.report,
+            result.scanner_id,
+            result.scanner_version,
+            _commit_of(path),
             result.uncovered,
         )
     finally:
@@ -85,9 +95,14 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     module_info = metadata["module"]
     reconstructed = ModuleModel(
-        module_id=module_info["id"], coordinates=module_info["id"], version="unknown",
-        root=path, kind=module_info["kind"], languages=frozenset(module_info["languages"]),
-        source_roots=(), output_dirs=(),
+        module_id=module_info["id"],
+        coordinates=module_info["id"],
+        version="unknown",
+        root=path,
+        kind=module_info["kind"],
+        languages=frozenset(module_info["languages"]),
+        source_roots=(),
+        output_dirs=(),
     )
     # Read back what `analyze` already established, rather than re-deriving
     # it — a skipped catalog must stay visible on `render` too (M04, FR-17).
@@ -105,7 +120,9 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             skipped_catalogs=skipped_catalogs,
         )
         text = render_module_document(
-            reconstructed, report, _commit_of(path),
+            reconstructed,
+            report,
+            _commit_of(path),
             tuple(metadata.get("uncovered", [])),
         )
         target = workspace_dir / "render" / "architecture.md"

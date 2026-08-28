@@ -51,14 +51,16 @@ def load_catalogs(directory: Path) -> list[Catalog]:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise CatalogError(f"loading catalog {path}: not a YAML mapping")
-        catalogs.append(Catalog(
-            id=_required(raw, "id", path),
-            style=_required(raw, "style", path),
-            protocol=_closed(raw, "protocol", Protocol, path),
-            direction=_closed(raw, "direction", Direction, path),
-            requires=tuple(raw.get("requires", [])),
-            matches=_required(raw, "matches", path),
-        ))
+        catalogs.append(
+            Catalog(
+                id=_required(raw, "id", path),
+                style=_required(raw, "style", path),
+                protocol=_closed(raw, "protocol", Protocol, path),
+                direction=_closed(raw, "direction", Direction, path),
+                requires=tuple(raw.get("requires", [])),
+                matches=_required(raw, "matches", path),
+            )
+        )
     return catalogs
 
 

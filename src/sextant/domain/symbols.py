@@ -16,8 +16,7 @@ class Symbol:
 
     def __str__(self) -> str:
         return (
-            f"{self.scheme} {self.package_manager} {self.package} "
-            f"{self.version} {self.descriptor}"
+            f"{self.scheme} {self.package_manager} {self.package} {self.version} {self.descriptor}"
         )
 
     @property

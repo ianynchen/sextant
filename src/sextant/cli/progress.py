@@ -31,8 +31,10 @@ class RichProgress:
     def _render(self) -> Table:
         table = Table.grid(padding=(0, 2))
         for row in self._rows.values():
-            elapsed = row["elapsed"] if row["state"] in (_DONE, _FAILED) else (
-                time.monotonic() - row["started"] if row["started"] else 0.0
+            elapsed = (
+                row["elapsed"]
+                if row["state"] in (_DONE, _FAILED)
+                else (time.monotonic() - row["started"] if row["started"] else 0.0)
             )
             table.add_row(row["state"], row["label"], row["detail"], f"{elapsed:5.1f}s")
         return table
@@ -48,8 +50,11 @@ class RichProgress:
 
     def define(self, task_id: str, label: str) -> None:
         self._rows[task_id] = {
-            "state": _PENDING, "label": label, "detail": "pending",
-            "started": None, "elapsed": 0.0,
+            "state": _PENDING,
+            "label": label,
+            "detail": "pending",
+            "started": None,
+            "elapsed": 0.0,
         }
         self._refresh()
 

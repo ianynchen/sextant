@@ -19,17 +19,22 @@ CATALOGS = Path(__file__).parents[2] / "catalogs"
 # A second, invented annotation_driven shape — deliberately not Spring — so a
 # test can hand `derive_endpoints` two catalogs that are genuinely different.
 _INVENTED_LISTENER = Catalog(
-    id="invented-listener", style="annotation_driven", protocol="message",
-    direction="outbound", requires=("annotation_args",),
+    id="invented-listener",
+    style="annotation_driven",
+    protocol="message",
+    direction="outbound",
+    requires=("annotation_args",),
     matches={
         "type_annotation": "com/acme/messaging/annotation/Listener#",
         "path_prefix_from": {
-            "annotation": "com/acme/messaging/annotation/Topic#", "arg": "value",
+            "annotation": "com/acme/messaging/annotation/Topic#",
+            "arg": "value",
         },
         "method_annotations": [
             {
                 "fqn": "com/acme/messaging/annotation/OnMessage#",
-                "http_method": "PUBLISH", "path_arg": "value",
+                "http_method": "PUBLISH",
+                "path_arg": "value",
             },
         ],
     },
@@ -59,11 +64,18 @@ def _controller_facts(root: Path) -> None:
     argument at all, and one GetMapping whose `value` is a one-element
     array."""
     document = Document(
-        document_id="doc_1", relative_path="com/acme/orders/OrderController.java",
-        module_id="com.acme:orders-service", language="java", sextant_version="0.1.0",
-        fact_schema_version="1.0.0", scanner_id="asm", scanner_version="9.7",
-        content_hash="sha256:a", origin_entry="target/classes",
-        origin_tier=OriginTier.MODULE_OUTPUT, redaction_set_hash="sha256:b",
+        document_id="doc_1",
+        relative_path="com/acme/orders/OrderController.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
     )
     controller = "com/acme/orders/OrderController#"
     create = "com/acme/orders/OrderController#create()."
@@ -72,47 +84,66 @@ def _controller_facts(root: Path) -> None:
     facts = [
         SymbolFact(document_id="doc_1", symbol=controller, construct_kind=ConstructKind.CLASS),
         SymbolFact(
-            document_id="doc_1", symbol=create, construct_kind=ConstructKind.METHOD,
+            document_id="doc_1",
+            symbol=create,
+            construct_kind=ConstructKind.METHOD,
             enclosing=controller,
         ),
         SymbolFact(
-            document_id="doc_1", symbol=get, construct_kind=ConstructKind.METHOD,
+            document_id="doc_1",
+            symbol=get,
+            construct_kind=ConstructKind.METHOD,
             enclosing=controller,
         ),
         SymbolFact(
-            document_id="doc_1", symbol=list_, construct_kind=ConstructKind.METHOD,
+            document_id="doc_1",
+            symbol=list_,
+            construct_kind=ConstructKind.METHOD,
             enclosing=controller,
         ),
         AnnotationFact(
-            document_id="doc_1", target=controller, retention="runtime",
+            document_id="doc_1",
+            target=controller,
+            retention="runtime",
             use=AnnotationUse(
-                annotation="org/springframework/web/bind/annotation/RestController#", args={},
+                annotation="org/springframework/web/bind/annotation/RestController#",
+                args={},
             ),
         ),
         AnnotationFact(
-            document_id="doc_1", target=controller, retention="runtime",
+            document_id="doc_1",
+            target=controller,
+            retention="runtime",
             use=AnnotationUse(
                 annotation="org/springframework/web/bind/annotation/RequestMapping#",
                 args={"value": ["/v1/orders"]},
             ),
         ),
         AnnotationFact(
-            document_id="doc_1", target=create, retention="runtime",
+            document_id="doc_1",
+            target=create,
+            retention="runtime",
             use=AnnotationUse(
-                annotation="org/springframework/web/bind/annotation/PostMapping#", args={},
+                annotation="org/springframework/web/bind/annotation/PostMapping#",
+                args={},
             ),
         ),
         AnnotationFact(
-            document_id="doc_1", target=get, retention="runtime",
+            document_id="doc_1",
+            target=get,
+            retention="runtime",
             use=AnnotationUse(
                 annotation="org/springframework/web/bind/annotation/GetMapping#",
                 args={"value": ["/{id}"]},
             ),
         ),
         AnnotationFact(
-            document_id="doc_1", target=list_, retention="runtime",
+            document_id="doc_1",
+            target=list_,
+            retention="runtime",
             use=AnnotationUse(
-                annotation="org/springframework/web/bind/annotation/GetMapping#", args={},
+                annotation="org/springframework/web/bind/annotation/GetMapping#",
+                args={},
             ),
         ),
     ]
@@ -147,32 +178,48 @@ def _invented_listener_facts(root: Path) -> None:
     same style with `protocol: message`; a catalog like this one is exactly
     what would have silently come out labelled http/inbound before this fix."""
     document = Document(
-        document_id="doc_1", relative_path="com/acme/notify/OrderListener.java",
-        module_id="com.acme:orders-service", language="java", sextant_version="0.1.0",
-        fact_schema_version="1.0.0", scanner_id="asm", scanner_version="9.7",
-        content_hash="sha256:a", origin_entry="target/classes",
-        origin_tier=OriginTier.MODULE_OUTPUT, redaction_set_hash="sha256:b",
+        document_id="doc_1",
+        relative_path="com/acme/notify/OrderListener.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
     )
     listener = "com/acme/notify/OrderListener#"
     handle = "com/acme/notify/OrderListener#onOrderCreated()."
     facts = [
         SymbolFact(document_id="doc_1", symbol=listener, construct_kind=ConstructKind.CLASS),
         SymbolFact(
-            document_id="doc_1", symbol=handle, construct_kind=ConstructKind.METHOD,
+            document_id="doc_1",
+            symbol=handle,
+            construct_kind=ConstructKind.METHOD,
             enclosing=listener,
         ),
         AnnotationFact(
-            document_id="doc_1", target=listener, retention="runtime",
+            document_id="doc_1",
+            target=listener,
+            retention="runtime",
             use=AnnotationUse(annotation="com/acme/messaging/annotation/Listener#", args={}),
         ),
         AnnotationFact(
-            document_id="doc_1", target=listener, retention="runtime",
+            document_id="doc_1",
+            target=listener,
+            retention="runtime",
             use=AnnotationUse(
-                annotation="com/acme/messaging/annotation/Topic#", args={"value": ["orders."]},
+                annotation="com/acme/messaging/annotation/Topic#",
+                args={"value": ["orders."]},
             ),
         ),
         AnnotationFact(
-            document_id="doc_1", target=handle, retention="runtime",
+            document_id="doc_1",
+            target=handle,
+            retention="runtime",
             use=AnnotationUse(
                 annotation="com/acme/messaging/annotation/OnMessage#",
                 args={"value": ["created"]},
@@ -189,9 +236,7 @@ def test_derive_endpoints_carries_the_catalogs_own_protocol_and_direction_when_n
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
-    skipped = derive_endpoints(
-        workspace, [_INVENTED_LISTENER], capabilities={"annotation_args"}
-    )
+    skipped = derive_endpoints(workspace, [_INVENTED_LISTENER], capabilities={"annotation_args"})
     rows = workspace.query("endpoints")
     workspace.close()
 
@@ -257,8 +302,12 @@ def test_derive_endpoints_skips_and_reports_when_a_required_capability_is_missin
 ):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     catalog = Catalog(
-        id="spring-web", style="annotation_driven", protocol="http", direction="inbound",
-        requires=("annotation_args",), matches={},
+        id="spring-web",
+        style="annotation_driven",
+        protocol="http",
+        direction="inbound",
+        requires=("annotation_args",),
+        matches={},
     )
 
     skipped = derive_endpoints(workspace, [catalog], capabilities=set())
@@ -272,9 +321,14 @@ def test_derive_endpoints_sql_names_no_framework_when_read():
     interpreters — is falsified the moment a framework's own identifier
     shows up as a literal in the engine's SQL. A second annotation_driven
     framework must be addable as one YAML file with no change here."""
-    sql = Path(
-        __file__
-    ).parents[2] / "src" / "sextant" / "storage" / "duckdb" / "derive_endpoints.sql"
+    sql = (
+        Path(__file__).parents[2]
+        / "src"
+        / "sextant"
+        / "storage"
+        / "duckdb"
+        / "derive_endpoints.sql"
+    )
     text = sql.read_text(encoding="utf-8").lower()
     assert "spring" not in text
     assert "org/springframework" not in text
@@ -286,32 +340,48 @@ def _scalar_path_facts(root: Path) -> None:
     compiled annotation argument is a bare JSON string and not a one-element
     array."""
     document = Document(
-        document_id="doc_1", relative_path="com/acme/rest/OrderResource.java",
-        module_id="com.acme:orders-service", language="java", sextant_version="0.1.0",
-        fact_schema_version="1.0.0", scanner_id="asm", scanner_version="9.7",
-        content_hash="sha256:a", origin_entry="target/classes",
-        origin_tier=OriginTier.MODULE_OUTPUT, redaction_set_hash="sha256:b",
+        document_id="doc_1",
+        relative_path="com/acme/rest/OrderResource.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
     )
     resource = "com/acme/rest/OrderResource#"
     find = "com/acme/rest/OrderResource#find()."
     facts = [
         SymbolFact(document_id="doc_1", symbol=resource, construct_kind=ConstructKind.CLASS),
         SymbolFact(
-            document_id="doc_1", symbol=find, construct_kind=ConstructKind.METHOD,
+            document_id="doc_1",
+            symbol=find,
+            construct_kind=ConstructKind.METHOD,
             enclosing=resource,
         ),
         AnnotationFact(
-            document_id="doc_1", target=resource, retention="runtime",
+            document_id="doc_1",
+            target=resource,
+            retention="runtime",
             use=AnnotationUse(annotation="com/acme/rest/Resource#", args={}),
         ),
         AnnotationFact(
-            document_id="doc_1", target=resource, retention="runtime",
+            document_id="doc_1",
+            target=resource,
+            retention="runtime",
             use=AnnotationUse(
-                annotation="com/acme/rest/Path#", args={"value": "/rest/orders"},
+                annotation="com/acme/rest/Path#",
+                args={"value": "/rest/orders"},
             ),
         ),
         AnnotationFact(
-            document_id="doc_1", target=find, retention="runtime",
+            document_id="doc_1",
+            target=find,
+            retention="runtime",
             use=AnnotationUse(annotation="com/acme/rest/Get#", args={"value": "/{id}"}),
         ),
     ]
@@ -319,8 +389,11 @@ def _scalar_path_facts(root: Path) -> None:
 
 
 _SCALAR_PATH_CATALOG = Catalog(
-    id="invented-scalar-path", style="annotation_driven", protocol="http",
-    direction="inbound", requires=("annotation_args",),
+    id="invented-scalar-path",
+    style="annotation_driven",
+    protocol="http",
+    direction="inbound",
+    requires=("annotation_args",),
     matches={
         "type_annotation": "com/acme/rest/Resource#",
         "path_prefix_from": {"annotation": "com/acme/rest/Path#", "arg": "value"},
