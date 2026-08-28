@@ -36,9 +36,9 @@ baseline is `annotation`, which is why `WebClient` is B there. Go's baseline is
 
 | | |
 |---|---|
-| ✅ | Shipped and verified against a real project |
-| ◐ | Partly shipped — known gaps in the same cell |
-| **A** / **B** / **C** | Not built; tier is the cost of the mainstream library |
+| ✅ | **Shipped today** — implemented, tested, verified against a real project |
+| ◐ | **Partly shipped** — working, with known gaps in the same cell |
+| **A** / **B** / **C** | **Not built.** Tier is the *marginal* cost of the mainstream library, measured against that language's baseline — not against what ships today |
 | — | Not applicable — the protocol does not exist in that ecosystem |
 | ⛔ | Blocked by the language toolchain, not by our effort |
 | † | The cell hides a significantly worse case; see §5 |
@@ -110,17 +110,29 @@ Rows are languages. **Scanner** is the prerequisite: without it, nothing else in
 reachable regardless of tier. Split in two because the address shapes differ (§1) and one
 eleven-column table is unreadable.
 
+### What ships today
+
+**One cell of one row.** Java and Kotlin, REST inbound, read from compiled bytecode, via two
+catalogs — `spring-web` (`@RestController`) and `spring-mvc` (`@Controller`) — each matching
+five verb annotations and reading the `value` attribute only. Two of eight designed scanner
+capabilities are implemented: `annotation_args` and `typed_signatures`. Verified end-to-end
+on spring-petclinic: 17 endpoints, byte-identical across runs.
+
+**Everything else in both matrices is a gap.** In particular, per Q1 a tier in a row whose
+**Scanner** reads `none` is a *marginal* cost — what the cell would take once a scanner for
+that language exists. It is not a cost you can pay today. Only ✅ and ◐ mean working code.
+
 ### 2a. Application protocols over HTTP
 
 | Language | Scanner | REST in | REST out | SOAP | GraphQL | WebSocket | SSE |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ | ◐ † | A † | A | A | A † | **B** |
-| **Go** | — | A | A | — | A | B | **C** |
-| **TypeScript** | — | A † | A | — | A | A | B |
-| **JavaScript** | — | A † | A | — | A | A | B |
-| **Python** | — | A † | A | B | A | A | B |
-| **Rust** | — | A † | B | — | A | A | B |
-| **Swift** | — | — † | A † | — | A † | B | — |
+| **Java / Kotlin** | ✅ ASM | ◐ † | A † | A | A | A † | **B** |
+| **Go** | none | A | A | — | A | B | **C** |
+| **TypeScript** | none | A † | A | — | A | A | B |
+| **JavaScript** | none | A † | A | — | A | A | B |
+| **Python** | none | A † | A | B | A | A | B |
+| **Rust** | none | A † | B | — | A | A | B |
+| **Swift** | none | — † | A † | — | A † | B | — |
 
 ### 2b. Messaging and RPC
 
@@ -172,10 +184,10 @@ because `boto3` has no static form at all. Java WebSocket is A for `@ServerEndpo
 
 | Language | Compiler-grade fact source | Types | Build needed | Call graph | Baseline engines |
 |---|---|---|---|---|---|
-| **Java / Kotlin** | JVM bytecode via **ASM** ✅ | Full | Yes | We write it | `annotation` ✅ |
-| **Go** | **`go/packages`** + `go/ssa` | Full | No (deps only) | ✅ **`callgraph/{cha,rta,vta}` ships with the toolchain** | `registration_call` |
-| **TypeScript** | **`ts.TypeChecker`** compiler API | Full where annotated | No | `Jelly` ✅ | `registration_call` + `annotation` + `filesystem` |
-| **Swift** | **IndexStoreDB** (index-while-building) ✅ | Full | Yes (macOS) | Index carries call relations | `registration_call` |
+| **Java / Kotlin** | JVM bytecode via **ASM** | Full | Yes | We write it | `annotation` ✅ built |
+| **Go** | **`go/packages`** + `go/ssa` | Full | No (deps only) | **`callgraph/{cha,rta,vta}` ships with the Go toolchain** | `registration_call` |
+| **TypeScript** | **`ts.TypeChecker`** compiler API | Full where annotated | No | `Jelly` | `registration_call` + `annotation` + `filesystem` |
+| **Swift** | **IndexStoreDB** (index-while-building) | Full | Yes (macOS) | Index carries call relations | `registration_call` |
 | **Python** | None — pyright has **no programmatic API**, only LSP ⚠️ | Sparse (§7) | No | `PyCG` | `annotation` + `registration_call` |
 | **Rust** | None stable — `syn` has no types; rustdoc JSON unstable ⚠️ | Syntax only | — | None | `annotation` (syntax-only) |
 | **JavaScript** | None | None | No | `Jelly`, degraded | as TypeScript, payloads ⛔ |
@@ -183,14 +195,14 @@ because `boto3` has no static form at all. Java WebSocket is A for `@ServerEndpo
 **Three findings worth stating outright.**
 
 **Go ships the analysis we deferred.** `golang.org/x/tools/go/callgraph` provides `static`,
-`cha`, `rta` and `vta` as maintained library code ✅, and `cha` is documented sound on
+`cha`, `rta` and `vta` as maintained library code, and `cha` is documented sound on
 partial programs — libraries with no `main`, which is our situation exactly. For the JVM we
 planned to write class hierarchy analysis and defer variable type analysis. **Go's dispatch
 resolution starts ahead of the JVM's.**
 
 **Swift is not the hard case people assume.** `swiftc` emits index data as a side effect of
 compilation; `IndexStoreDB` reads it into a queryable store of symbols, occurrences and
-relations ✅ — the same data `sourcekit-lsp` uses for call hierarchy. It needs a build,
+relations — the same data `sourcekit-lsp` uses for call hierarchy. It needs a build,
 which fits DR-4 precisely. Periphery already works this way.
 
 **For TypeScript the JVM rule inverts.** We scan compiled output on the JVM because bytecode
@@ -223,7 +235,7 @@ generated code carries the schema in every language, always as `generated_descri
 
 **Two version traps.** JVM protobuf generated classes extend `GeneratedMessageV3`
 (protobuf-java 3.x) **or `GeneratedMessage`** (4.26+, with `V3` deprecated and slated for
-removal in 5.x ✅). Both must be matched. And Confluent's serializer FQNs ⚠️ are unconfirmed.
+removal in 5.x). Both must be matched. And Confluent's serializer FQNs ⚠️ are unconfirmed.
 
 ---
 
@@ -240,7 +252,7 @@ is, what it costs.
 | Java | **`@RequestMapping(method = RequestMethod.GET)`** | the pre-4.3 form | `annotation` | **A — biggest single gap; yields zero endpoints today** |
 | Java | `path =` alias for `value =` | — | `annotation` | **A — currently produces an *empty path*, wrong output not missing output** |
 | Java | `produces` / `consumes` | — | `annotation` | A |
-| Java | Spring 7 `version = "1.1"` / `"1.2+"` on `@RequestMapping` ✅ | API versioning | `annotation` | A |
+| Java | Spring 7 `version = "1.1"` / `"1.2+"` on `@RequestMapping` | API versioning | `annotation` | A |
 | Java | Micronaut `@Controller` + `@Get`/`@Post`… (`value`/`uri` String, **`uris` String[]**) | — | `annotation` | A |
 | Java | Quarkus / JAX-RS **`jakarta.ws.rs`** `@Path` + `@GET`… | `@Path` value is a scalar String | `annotation` | A |
 | Java | Quarkus `io.quarkus.vertx.web.Route` | second Quarkus style | `annotation` | A |
@@ -249,7 +261,7 @@ is, what it costs.
 | Java | **Meta-annotations** — custom `@ApiGet` composed from `@GetMapping` | Spring resolves transitively | `annotation` (recursive) | B |
 | Java | Nested / inner classes | currently skipped **and reported** | — | B |
 | Java | WebFlux `Mono`/`Flux` return types | endpoint found, response type is the wrapper | — | B (unwrapping, [D02](components/D02-catalog-schema.md) §2a) |
-| Java | **Vert.x** `router.get("/x").handler(this::h)` ✅ | receiver + verb + first arg | `fluent_chain` | **B — the cleanest first exercise for chain reconstruction** |
+| Java | **Vert.x** `router.get("/x").handler(this::h)` | receiver + verb + first arg | `fluent_chain` | **B — the cleanest first exercise for chain reconstruction** |
 | Java | WebFlux functional `RouterFunctions.route().GET(…)`, `coRouter { }` | — | `combinator` | B |
 | Java | **Akka HTTP** `path("users" / IntNumber) { get { complete(…) } }` | nested closures, route is a *value* | `combinator` | **C-ish — the hardest inbound form surveyed** |
 | Java | Ktor `routing { get("/path") { … } }` | Kotlin DSL | `combinator` | B |
@@ -258,7 +270,7 @@ is, what it costs.
 | Java | `@ControllerAdvice` + `@ExceptionHandler` | defines the error contract of every endpoint | — | C |
 | Java | Servlets, filters, interceptors, built-in Actuator endpoints | `@WebServlet`, `FilterRegistrationBean`, dependency + property | — | C |
 | Java | `@ConditionalOnProperty` / `@Profile` controllers | exists in one environment only | — | C |
-| Go | `net/http` 1.22+ `mux.HandleFunc("GET /items/{id}", h)` ✅ | **verb and path in one literal** | `registration_call` | A |
+| Go | `net/http` 1.22+ `mux.HandleFunc("GET /items/{id}", h)` | **verb and path in one literal** | `registration_call` | A |
 | Go | `gin`, `echo`, `chi`, `fiber` | `r.GET("/p", h)`, groups nest a prefix | `registration_call` | A |
 | Go | `gorilla/mux` `r.HandleFunc(p, h).Methods("GET")` | verb is a sibling call | `fluent_chain` | B |
 | Go | `net/http` pre-1.22 | verb is an `if r.Method` inside the handler | `runtime_dynamic` | C |
@@ -288,7 +300,7 @@ has nothing to match on.
 | Language | Library | Shape | Tier |
 |---|---|---|---|
 | Java | Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange`, Micronaut `@Client`, MicroProfile `@RegisterRestClient` | `annotation` | A |
-| Java | Spring 7 `ImportHttpServices` registration ✅ | `annotation` | A |
+| Java | Spring 7 `ImportHttpServices` registration | `annotation` | A |
 | Java | `RestTemplate` | `registration_call` | A |
 | Java | `RestClient`, `WebClient`, OkHttp, JDK `HttpClient`, Apache HttpClient, `URL.openConnection()` | `fluent_chain` | **B — gates every client written in the last five years** |
 | Java | **Apache Camel** `from("kafka:orders").to("http://svc/api")` | `fluent_chain` over **URI strings** | **B — largest single payoff: protocol, direction and destination in one literal** |
@@ -507,7 +519,7 @@ all. These need new `protocol` values, not new columns in §2.
 | iOS | App Intents / Siri ⚠️ | `AppIntent` conformances | `interface_implementation` | B |
 | iOS | Push, share extensions, background tasks | delegate methods, `NSExtension` keys, `BGTaskScheduler` ids | mixed | B |
 
-✅ **Android needs no new scanner.** The build emits ordinary JVM `.class` intermediates
+**Android needs no new scanner.** The build emits ordinary JVM `.class` intermediates
 before D8 dexes them, and the Android Gradle Plugin's own instrumentation API takes an **ASM
 `ClassVisitor`** over exactly those files. Point the scanner at the intermediates and our
 extractor works unchanged. Android-specific features are **post-MVP by decision**; the work
@@ -539,7 +551,7 @@ destination is a property key derived from this bean's name". That is a gap in
 
 ### Akka and Pekko are a silent doubling
 
-✅ Lightbend moved Akka to the Business Source License from 2.7; **Apache Pekko** is the
+Lightbend moved Akka to the Business Source License from 2.7; **Apache Pekko** is the
 Apache-2.0 fork of Akka 2.6.x, renaming `akka.*` → `org.apache.pekko.*` and `alpakka` →
 `connectors` (`akka.stream.alpakka.jms` → `org.apache.pekko.stream.connectors.jms`). **Every
 Akka matcher needs a Pekko twin**, and the split runs through the middle of the Scala/JVM
@@ -589,7 +601,7 @@ our own output against**, rather than asserting quality.
 
 ### JSpecify lands in an attribute we do not read
 
-✅ Spring 7 adopts JSpecify (`org.jspecify.annotations.*`), which is `TYPE_USE` with
+Spring 7 adopts JSpecify (`org.jspecify.annotations.*`), which is `TYPE_USE` with
 `RUNTIME` retention — so it lands in `RuntimeVisibleTypeAnnotations`.
 [M03](components/M03-scanner.md) names the **Invisible** attribute, and the scanner does not
 override `visitTypeAnnotation` at all, so neither is read. Nullability sets `required` on

@@ -3,6 +3,8 @@
 Not in the MVP. Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1.
 The typing analysis is in [COVERAGE.md](../COVERAGE.md) §10.
 
+> **Nothing in this file ships today** — see [COVERAGE.md](../COVERAGE.md) §2.
+>
 > **Scope.** [COVERAGE.md](../COVERAGE.md) §5 is canonical for tier and status,
 > organised by protocol. This file holds what does not fit a protocol row: the
 > toolchain verdict, the payload story, and the structural oddities of the language.
@@ -17,7 +19,7 @@ The typing analysis is in [COVERAGE.md](../COVERAGE.md) §10.
 |---|---|
 | **TypeScript Compiler API** (`typescript` package, `ts.TypeChecker`) | A real type checker: `getTypeAtLocation`, `getSignatureFromDeclaration`, symbol resolution, declaration following. Shipped, supported, stable, and usable as a library — unlike anything in Python or Rust. |
 | `ts-morph` | Ergonomic wrapper over the same checker |
-| `Jelly` (`@cs-au-dk/jelly`) ✅ | JS/TS call-graph construction — flow-insensitive control-flow and points-to analysis with access paths. Named in the literature as the reference JS call-graph tool (§10). BSD-3-Clause. |
+| `Jelly` (`@cs-au-dk/jelly`) | JS/TS call-graph construction — flow-insensitive control-flow and points-to analysis with access paths. Named in the literature as the reference JS call-graph tool (§10). BSD-3-Clause. |
 | Babel / SWC / `oxc` parsers | Syntax only, no types |
 
 ### Why compiled output is useless to us

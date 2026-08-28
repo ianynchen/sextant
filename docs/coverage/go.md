@@ -4,6 +4,8 @@ Not in the MVP. This is the checklist for when it is.
 
 Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1.
 
+> **Nothing in this file ships today** — see [COVERAGE.md](../COVERAGE.md) §2.
+>
 > **Scope.** [COVERAGE.md](../COVERAGE.md) §5 is canonical for tier and status,
 > organised by protocol. This file holds what does not fit a protocol row: the
 > toolchain verdict, the payload story, and the structural oddities of the language.
@@ -18,7 +20,7 @@ Go hands us more than the JVM does, and it hands it over without a build.
 |---|---|---|
 | Parse + fully type-check a program | `golang.org/x/tools/go/packages` | Loads, resolves imports, runs the type checker. Types are **complete** — Go has no untyped escape hatch comparable to `dict` or `any` in practice. |
 | SSA form | `golang.org/x/tools/go/ssa` | |
-| **Call graph** | `golang.org/x/tools/go/callgraph/{static,cha,rta,vta}` | ✅ verified |
+| **Call graph** | `golang.org/x/tools/go/callgraph/{static,cha,rta,vta}` | verified |
 
 **Go ships CHA, RTA and VTA as library code.** For the JVM we planned to write class hierarchy analysis ourselves and deferred variable type analysis to a later version; for Go, all three already exist, are maintained by the Go team, and run off `go/packages`. `cha` is explicitly documented as sound on partial programs — libraries with no `main` — which is exactly our situation when scanning a module in isolation.
 
@@ -32,7 +34,7 @@ Go hands us more than the JVM does, and it hands it over without a build.
 
 | Library | Shape | Detection | Note |
 |---|---|---|---|
-| `net/http` (Go 1.22+) | `mux.HandleFunc("GET /items/{id}", h)` | `registration_call` | ✅ verified. Method and wildcards are **inside the pattern string** — one literal carries verb *and* path. Parse the string, don't just record it. |
+| `net/http` (Go 1.22+) | `mux.HandleFunc("GET /items/{id}", h)` | `registration_call` | Method and wildcards are **inside the pattern string** — one literal carries verb *and* path. Parse the string, don't just record it. |
 | `net/http` (pre-1.22) | `mux.HandleFunc("/items/", h)` then `if r.Method == …` | `runtime_dynamic` | The verb is a branch inside the handler. Recoverable only by reading control flow. |
 | `gin` | `r.GET("/path", h)`, groups via `r.Group("/api")` | `registration_call` | Groups nest a prefix — needs the receiver's provenance, like a class-level `@RequestMapping`. |
 | `echo` | `e.GET("/path", h)`, `e.Group` | `registration_call` | |

@@ -8,6 +8,8 @@ a small number of inbound boundaries that are not HTTP at all — a deep link, a
 notification, a share intent. The endpoint model still fits, but the protocol values and
 the address shapes are new.
 
+> **Nothing in this file ships today** — see [COVERAGE.md](../COVERAGE.md) §2.
+>
 > **Scope.** [COVERAGE.md](../COVERAGE.md) §5 is canonical for tier and status,
 > organised by protocol. This file holds what does not fit a protocol row: the
 > toolchain verdict, the payload story, and the structural oddities of the language.
@@ -20,7 +22,7 @@ Kotlin is already an MVP language. Android-specific features are **post-MVP by d
 
 ### The toolchain answer is: nothing changes
 
-✅ Verified. The Android build compiles Kotlin and Java to **ordinary JVM `.class` files** and only then runs D8 to produce DEX. The intermediates sit at `app/build/intermediates/…/*.class` before dexing, and the Android Gradle Plugin exposes its own instrumentation API that takes an **ASM `ClassVisitor`** over exactly those files.
+ The Android build compiles Kotlin and Java to **ordinary JVM `.class` files** and only then runs D8 to produce DEX. The intermediates sit at `app/build/intermediates/…/*.class` before dexing, and the Android Gradle Plugin exposes its own instrumentation API that takes an **ASM `ClassVisitor`** over exactly those files.
 
 So our existing extractor works on Android **unchanged**, provided we point the scanner at the pre-dex intermediates rather than at the APK or AAB. If we ever needed to read a shipped artifact instead, DEX requires a different reader (`dexlib2`) — but there is no reason to, because the intermediates are a build output we already have.
 
@@ -62,7 +64,7 @@ Per decision, MVP covers Kotlin as a JVM language — the language, the bytecode
 
 ### Toolchain — better than expected, and it needs a build
 
-✅ Verified. Swift's compiler emits index data **as a side effect of compilation** — "index while building". `swiftc` and `clang` write a raw index store, which `IndexStoreDB` reads into a queryable database of symbols, symbol occurrences and **relations**, backed by LMDB. `sourcekit-lsp` uses exactly this to answer call-hierarchy, find-references and jump-to-definition across module boundaries.
+ Swift's compiler emits index data **as a side effect of compilation** — "index while building". `swiftc` and `clang` write a raw index store, which `IndexStoreDB` reads into a queryable database of symbols, symbol occurrences and **relations**, backed by LMDB. `sourcekit-lsp` uses exactly this to answer call-hierarchy, find-references and jump-to-definition across module boundaries.
 
 That is a compiler-backed, type-accurate fact source — **the closest analogue to JVM bytecode of any non-JVM language here**, and better than anything Python or Rust offers. It requires a build, which fits DR-4 exactly: authority follows the build. The static-analysis tool Periphery already works this way (build first, then analyse), so the approach has precedent.
 
