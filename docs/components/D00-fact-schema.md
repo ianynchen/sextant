@@ -205,28 +205,47 @@ knowledge, so unwrapping is catalog data ([D02](D02-catalog-schema.md)) applied 
 deliberately small role set — `read`, `write`, `import`, `generated`, `type_use` — for
 body-level uses only; signature-level type uses come from the structured signatures.
 
-**A type reference carries nullability, and it is three-valued.** `nullable`, `not_null`,
-`unknown` — never a boolean. An unannotated Java field is **`unknown`**, not optional, and
-collapsing the two would let an absent annotation masquerade as a positive statement that a
-field may be omitted. This is the same rule as [D02](D02-catalog-schema.md) §2c's on formats:
-an assumption must not wear an observation's clothes.
+**Presence and nullability are two independent flags, and both are two-valued.** A field
+either accepts null or it does not; a field either has to appear or it does not. Neither
+carries an `unknown` value — doubt about what we managed to work out is what `resolution` and
+`evidence` (§4) are for, and duplicating them inside the value would let one fact disagree
+with itself.
 
-It sits on the **type reference** rather than the field, because the two differ:
-`@Nullable List<String>` is not `List<@Nullable String>`, and only a per-reference value can
-tell them apart.
+| | Means | Decided by |
+|---|---|---|
+| `required` | The field must be **present** in the payload | The contract |
+| `nullable` | If present, its value may be **null** | The type |
 
-**Which annotation means nullable is framework knowledge, so it is catalog data**
-([D02](D02-catalog-schema.md) §2e), never a list in the scanner. The same concept is spelled
+**All four combinations are real, which is why one flag cannot serve.** JSON distinguishes a
+field that is absent from a field present with value `null` — the same distinction JavaScript
+draws between `undefined` and `null` — and OpenAPI models them as separate keywords for that
+reason: membership of the `required` array, versus `nullable: true` in 3.0 or
+`type: ["string", "null"]` in 3.1, which dropped the keyword to align with JSON Schema. A
+field may be required-and-nullable (must appear, may be null) or optional-and-not-null (may be
+absent, but never null when present).
+
+**Nullability sits on the type reference**, so it reaches parameters and class members through
+the same route their types do (§5a) — `@Nullable List<String>` is not `List<@Nullable String>`,
+and only a per-reference value distinguishes them.
+
+**In most languages the type system already answers it.** Kotlin's `String?`, Rust's
+`Option<T>`, Swift's `T?`, TypeScript's `T | null`, and a Go pointer versus a value all decide
+it outright. **Java is the awkward one**: every reference type is nullable by language rule, so
+the ecosystem uses annotations to say "actually not" — and the same concept is spelled
 `org.jspecify.annotations.Nullable`, `org.springframework.lang.Nullable`,
 `javax.annotation.Nullable`, `jakarta.annotation.Nullable`,
-`org.jetbrains.annotations.Nullable` and `androidx.annotation.Nullable`, and a codebase
-compiled over a decade may carry several at once. A scanner that hard-coded one would report
-`unknown` for the rest.
+`org.jetbrains.annotations.Nullable` and `androidx.annotation.Nullable`. Which spelling counts
+is framework knowledge, so it is catalog data ([D02](D02-catalog-schema.md) §2e), never a list
+in the scanner.
+
+**Where the language decides and nothing narrows it, the fact records the language's answer at
+`resolution: partial`.** An unannotated Java reference field is `nullable` — that is what the
+language permits — but partially resolved, because no one declared it. That is a weaker claim
+than an annotated field, and the trust fields say so without a third enum value.
 
 **Kotlin's nullability is in its type system, not an annotation**, so it arrives through
-`ext.kotlin.nullable` (§6) — but the adapter **projects it into the shared three-valued field**
-rather than leaving it in the extension. Nullability crosses languages: it decides `required`
-on a shape field, which is what DR-5 compares. Anything the comparison needs cannot live
+`ext.kotlin.nullable` (§6) — but the adapter **projects it into the shared field** rather than
+leaving it in the extension. Nullability crosses languages; anything DR-5 compares cannot live
 behind an extension read boundary.
 
 **Literal values have a typed model**: string, number, boolean, enum reference, **class
@@ -246,14 +265,22 @@ Java `long` and an OpenAPI `integer/int64` meet in the middle as `integer/int64`
 vocabulary is a closed set, and it is the comparison level of DR-5's structural matching
 and FR-11's drift report — never Java types against spec types directly.
 
-**A code shape's `required` is derived, and records how.** `declared_shape` fields carry
-`required` because schema formats state it outright; a shape rooted from code has to work it
-out, from a nullability annotation (§5a), from a Kotlin type, from a `wrapper` declared
-`optional` such as `java.util.Optional`, or from a framework's own attribute — Jakarta REST's
-`@DefaultValue`, a Pydantic default, `serde`'s `skip_serializing_if`. Where nothing states it,
-`required` is `unknown` and the endpoint says so. **DR-5 must not read `unknown` as
-`optional`**: a request contract missing a field the callee requires is a real defect, and a
-contract that never said either way is not evidence that it is safe.
+**A code shape's `required` is derived from presence rules, not from nullability.**
+`declared_shape` fields carry it because schema formats state it outright — OpenAPI's
+`required` array, protobuf field presence, an Avro union carrying a default. A shape rooted
+from code works it out from the presence machinery its language offers: a `wrapper` declared
+`optional` such as `java.util.Optional`, a TypeScript `?`, a Pydantic or Kotlin default
+argument, `serde`'s `skip_serializing_if`, Go's `omitempty`, Jackson's
+`@JsonProperty(required = true)`.
+
+**Do not read a nullability annotation as a presence rule.** They answer different questions,
+and Bean Validation's `@NotNull` is the trap: it constrains the *value* at validation time and
+says nothing about whether the field may be omitted from the payload.
+
+**DR-5 compares both flags, and must report a comparison that leaned on a partial one.** A
+request contract missing a field the callee requires is a real defect; a contract whose
+`required` we only inferred from a language default is not evidence that it is safe. That is
+the general `resolution` rule, not a special case for nullability.
 
 ### Why `module` is a fact and not a passing argument
 

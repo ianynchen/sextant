@@ -304,8 +304,10 @@ a partially-configured module look like a module with fewer boundaries.
 
 ## 2e. Nullability declarations
 
-Which annotation means "may be absent" is framework knowledge, so catalogs declare it and
-[D00](D00-fact-schema.md) §5a's three-valued nullability is populated from it:
+Which annotation means "may be null" is framework knowledge, so catalogs declare it and
+[D00](D00-fact-schema.md) §5a's `nullable` flag is populated from it. Note the question: this
+is about the **value**, not about whether the field must appear — those are separate flags in
+D00 and separate keywords in every schema format:
 
 ```yaml
 nullability:
@@ -326,8 +328,14 @@ nullability:
 
 **Several of these coexist in one codebase.** A module compiled over a decade may carry the
 JetBrains annotations in old code, Spring's in middle-aged code, and JSpecify in new code, all
-reaching the same shape. A catalog listing one of them reports `unknown` for the others, which
-DR-5 must not read as `optional`.
+reaching the same shape. A catalog listing one of them falls back to the language default for
+the rest — for Java that is `nullable` at `resolution: partial`, which is a weaker claim than
+an annotated field and is recorded as one.
+
+**Bean Validation's `@NotNull` does not belong in this list.** It constrains a value at
+validation time and says nothing about whether the field may be omitted from the payload, so
+it is a presence-adjacent rule, not a type one. Putting it here would make every validated
+field look non-nullable in its type.
 
 **`NullMarked` is a scope, not a field marker.** JSpecify's default-non-null applies to a
 package or class, so a field with *no* annotation inside a `@NullMarked` scope is `not_null` —
