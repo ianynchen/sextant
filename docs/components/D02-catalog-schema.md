@@ -385,6 +385,68 @@ skipped.
 
 ---
 
+## 2f. Serialisation naming
+
+`shape_fields.wire_name` is the identity ([D01](D01-graph-schema.md) §5), and a source field
+name is not it: `customerId` reaches the wire as `customer_id` under a snake-case strategy, or
+as whatever `@JsonProperty` says. Which annotation carries the name, and what happens when
+none does, is framework knowledge:
+
+```yaml
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore:
+    - com.fasterxml.jackson.annotation.JsonIgnore
+  default_strategy: as_declared      # as_declared | snake_case | kebab_case | upper_camel
+```
+
+**`default_strategy` is a declaration, not an observation.** A module may configure a strategy
+globally, in which case the value the catalog states is a default that configuration overrides
+— so a `wire_name` derived from the default carries `evidence: declared`, while one from an
+explicit annotation carries the evidence of the code that declared it. Comparing a declared
+name against an observed one is how a matcher reports agreement it has not established
+(§2c).
+
+**A field the catalog says to ignore produces no `shape_field` at all.** It is absent from the
+wire, and a shape carrying it would fail DR-5's directional comparison against a peer that
+correctly omits it.
+
+---
+
+## 2g. Types with a known wire form
+
+Some types are objects in code and something else entirely on the wire. `java.time.Instant`
+is an ISO-8601 string; `java.math.BigDecimal` is a number; `google.protobuf.Timestamp` has
+`seconds` and `nanos` fields and serialises to an RFC-3339 string. **Expanding them
+structurally produces a shape no payload can match** — `BigDecimal` would contribute
+`intVal`, `scale`, `intCompact` and `precision`, none of which exists on the wire.
+
+Which types these are is **serialiser knowledge, not language knowledge**: `Instant` is an ISO
+string under Jackson's `JavaTimeModule`, epoch millis without it, and whatever a custom
+serialiser says. So a catalog declares them:
+
+```yaml
+known_types:
+  - { type: java.time.Instant,           wire: string, format: date-time }
+  - { type: java.time.LocalDate,         wire: string, format: date }
+  - { type: java.math.BigDecimal,        wire: number }
+  - { type: java.util.UUID,              wire: string, format: uuid }
+  - { type: google.protobuf.Timestamp,   wire: string, format: date-time }
+  - { type: google.protobuf.StringValue, wire: string, nullable: true }
+```
+
+This is the boundary against the extractor's own projection (§D1 of the Phase 2A plan): the
+extractor converts what the **language** leaves no choice about — primitives, their boxes,
+`String`, arrays, collections. A catalog converts what the **serialiser** decides.
+
+**A third-party type with no entry here is not guessed at.** Expansion stops, the shape is
+marked open, the type reference is kept, and [M04](M04-resolver.md) reports the type that
+stopped it — so the catalog grows from observation rather than from a structural guess about
+what looks "simple".
+
+---
+
 ## 3. Ordering
 
 Engines run in a fixed order because later passes depend on earlier ones: inbound first,
@@ -444,4 +506,5 @@ were skipped, and why.
 | A `meta_annotations` capability: follow an annotation's own meta-annotations so composed annotations resolve, instead of listing each one | §2 `annotation_driven`, and every custom composed mapping annotation |
 | Whether a scope rule (`@NullMarked`) may be declared on a package as well as a class, and how it interacts with `@NullUnmarked` | §2e |
 | Whether the manifest reader pins framework versions, given the files are undocumented internals that may shift | §2's `filesystem` style |
+| Whether a globally configured naming strategy is read from configuration, or only declared per catalog | §2f, and any module that sets one in `application.yml` |
 | **How much expressiveness `address_from_config` needs before it stops being data.** Spring Cloud Stream's binding suffix depends on the functional interface, gains an index for multiple inputs, and can be overridden wholesale by `spring.cloud.function.definition` | §2d, and the Spring Cloud Stream catalog |
