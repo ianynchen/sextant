@@ -432,42 +432,104 @@ JetBrains ones — are mostly `CLASS` retention and land in the **Invisible** ta
 `visitTypeAnnotation` at neither level, so **today neither is read**.
 
 **Files:**
-- Modify: `extractor-jvm/.../ClassScanner.java`, `docs/components/M03-scanner.md`
+- Modify: `extractor-jvm/.../ClassScanner.java`, `extractor-jvm/build.gradle.kts`,
+  `extractor-jvm/src/test/java/dev/sextant/extractor/FieldSample.java`,
+  `docs/components/M03-scanner.md`
 - Test: `extractor-jvm/src/test/java/dev/sextant/extractor/TypeAnnotationScanTest.java`
+
+**Two things Task 3 settled that this task inherits:**
+
+- Extractor tests load a **committed** fixture via `getResourceAsStream`, never the sibling
+  Maven module's gitignored build output. `./gradlew test` must pass on a fresh checkout with
+  `fixtures/orders-service/target` absent — verify that, do not assume it.
+- `extractor-jvm` has no JSpecify dependency, so a committed fixture cannot carry `@Nullable`
+  until one is added. Add it **test-scope only**, so it stays out of the shaded jar:
+  `testImplementation("org.jspecify:jspecify:1.0.0")`.
 
 **Interfaces:**
 - Produces: type annotations attached to the type reference they annotate, with `retention`
   recorded as `runtime` or `class` exactly as ordinary annotations already do.
 
-- [ ] **Step 1: Write the failing test, covering both tables**
+- [ ] **Step 1: Give the committed fixture annotated fields**
+
+Add to `FieldSample.java`:
+
+```java
+public @org.jspecify.annotations.Nullable String note;
+public @org.jspecify.annotations.NonNull String required;
+// The distinction D00 §5a says only a per-reference value can express:
+// the outer type is nullable here, the element type below.
+public @org.jspecify.annotations.Nullable java.util.List<String> maybeList;
+public java.util.List<@org.jspecify.annotations.Nullable String> listOfMaybe;
+```
+
+- [ ] **Step 2: Write the failing tests, covering both tables and both positions**
 
 ```java
 @Test
-void records_a_type_use_annotation_on_a_field_from_either_retention_table() throws Exception {
-    List<String> lines = scan("OrderRequest");
+void records_a_type_use_annotation_on_a_field() throws Exception {
+    assertTrue(scan().stream().anyMatch(l ->
+        l.contains("FieldSample#note.") && l.contains("org/jspecify/annotations/Nullable#")));
+}
+
+@Test
+void distinguishes_an_annotation_on_the_outer_type_from_one_on_a_type_argument() throws Exception {
+    // `@Nullable List<String>` and `List<@Nullable String>` are different
+    // contracts, and ASM tells them apart only through the TypePath. Without
+    // it both collapse to "this field has a Nullable somewhere on it", which
+    // is the ambiguity D00 §5a says the per-reference value exists to remove.
+    List<String> lines = scan();
     assertTrue(lines.stream().anyMatch(l ->
-        l.contains("OrderRequest#note.") && l.contains("org/jspecify/annotations/Nullable#")));
+        l.contains("FieldSample#maybeList.") && l.contains("\"type_path\":\"\"")));
+    assertTrue(lines.stream().anyMatch(l ->
+        l.contains("FieldSample#listOfMaybe.") && l.contains("\"type_path\":\"0;\"")));
 }
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [ ] **Step 3: Run them and watch them fail**
 
 Expected: FAIL — `visitTypeAnnotation` is never called back into.
 
-- [ ] **Step 3: Override `visitTypeAnnotation` on the field and method visitors**
+- [ ] **Step 4: Override `visitTypeAnnotation` on the field and method visitors**
 
-Both take the `visible` flag, and both reuse `useCollectingVisitor` so an enum or class
-argument is recorded exactly as it already is elsewhere.
+Signature is `visitTypeAnnotation(int typeRef, TypePath typePath, String descriptor,
+boolean visible)`. Three things must be recorded, not two:
+
+- the annotation itself, through the existing `useCollectingVisitor` so an enum or class
+  argument is captured exactly as elsewhere;
+- `retention`, from `visible` — `runtime` or `class`. **Both tables must be read.** JSpecify is
+  `RUNTIME`; `javax.annotation.Nullable` and the JetBrains spellings are mostly `CLASS`, and a
+  decade-old module carries several at once;
+- **`type_path`**, as `String.valueOf(typePath)` (`null` renders as the empty string, meaning
+  the outer type). Dropping it makes `@Nullable List<String>` and `List<@Nullable String>`
+  indistinguishable, and Task 11 cannot then attach nullability to the right reference.
 
 - [ ] **Step 4: Correct M03's capability row**
 
 The row for `type_annotations` says the Invisible attribute; it must say both, and say why:
 a codebase compiled over a decade carries several spellings at different retentions.
 
-- [ ] **Step 5: Run and commit**
+- [ ] **Step 5: Correct M03's capability row**
+
+The row for `type_annotations` names the Invisible attribute; it must name both, and say why —
+a codebase compiled over a decade carries several spellings at different retentions.
+
+- [ ] **Step 6: Verify, including the fresh-checkout case**
 
 ```bash
-cd extractor-jvm && ./gradlew test
+cd extractor-jvm && ./gradlew clean build
+rm -rf ../fixtures/orders-service/target && ./gradlew clean test   # must pass
+cd ../fixtures/orders-service && mvn -q -o compile                 # restore for later tasks
+cd ../.. && .venv/bin/pytest -q                                    # the FULL suite
+```
+
+The full Python suite matters: new fact output has broken stale assertions before. **If a
+Python test fails, correct the assertion to the new truth — never loosen it — and say in the
+report exactly what changed and why.**
+
+- [ ] **Step 7: Commit**
+
+```bash
 git add extractor-jvm docs/components/M03-scanner.md
 git commit -m "feat: read type annotations from both retention tables"
 ```
@@ -492,39 +554,122 @@ DR-5 compares cannot sit behind an extension read boundary.
   property, and `ext.kotlin.nullable` alongside it, so the shared field is populated and the
   raw fact is still recoverable.
 
-- [ ] **Step 1: Add `kotlinx-metadata-jvm` to the extractor, shaded**
+- [ ] **Step 1: Add the metadata library, and Kotlin to the test source set**
 
 ```kotlin
-implementation("org.jetbrains.kotlin:kotlin-metadata-jvm:2.0.21")
+plugins {
+    java
+    // Test-only: the committed Kotlin fixture below must be compiled by Gradle,
+    // so `./gradlew test` stays self-contained on a fresh checkout. No Kotlin
+    // reaches the shaded jar.
+    kotlin("jvm") version "2.0.21"
+    id("com.gradleup.shadow") version "9.6.1"
+}
+
+dependencies {
+    implementation("org.jetbrains.kotlin:kotlin-metadata-jvm:2.0.21")
+}
 ```
 
-- [ ] **Step 2: Add the Kotlin fixture and its compiler plugin**
+⚠️ **The artifact was renamed at Kotlin 2.0** — `org.jetbrains.kotlinx:kotlinx-metadata-jvm`
+became `org.jetbrains.kotlin:kotlin-metadata-jvm`, **and the package changed from
+`kotlinx.metadata` to `kotlin.metadata`**. ARCHITECTURE §9 still names the old artifact; the
+coordinate above is the current one. Import `kotlin.metadata.jvm.KotlinClassMetadata`, not
+`kotlinx.metadata.*`, or nothing resolves.
+
+- [ ] **Step 2: Commit a Kotlin fixture Gradle compiles**
+
+`extractor-jvm/src/test/kotlin/dev/sextant/extractor/KotlinSample.kt`:
 
 ```kotlin
+package dev.sextant.extractor
+
+data class KotlinSample(val id: String, val note: String?)
+```
+
+Loaded with `getResourceAsStream("/dev/sextant/extractor/KotlinSample.class")`, exactly as
+`FieldSample` is — **not** from the Maven fixture, whose `target/` is gitignored and which
+Gradle has no dependency on.
+
+- [ ] **Step 2b: Also add the Kotlin fixture to the Maven module, for the end-to-end path**
+
+`fixtures/orders-service/pom.xml` needs `kotlin-maven-plugin` bound so `mvn compile` builds
+`src/main/kotlin` alongside `src/main/java`:
+
+```xml
+<plugin>
+  <groupId>org.jetbrains.kotlin</groupId>
+  <artifactId>kotlin-maven-plugin</artifactId>
+  <version>2.0.21</version>
+  <executions>
+    <execution>
+      <id>compile</id>
+      <phase>process-sources</phase>
+      <goals><goal>compile</goal></goals>
+      <configuration>
+        <sourceDirs>
+          <sourceDir>${project.basedir}/src/main/kotlin</sourceDir>
+          <sourceDir>${project.basedir}/src/main/java</sourceDir>
+        </sourceDirs>
+      </configuration>
+    </execution>
+  </executions>
+</plugin>
+```
+
+with `fixtures/orders-service/src/main/kotlin/com/acme/orders/contracts/KotlinOrder.kt`:
+
+```kotlin
+package com.acme.orders.contracts
+
 data class KotlinOrder(val id: String, val note: String?)
 ```
 
-- [ ] **Step 3: Write the failing test**
+The Kotlin plugin must run **before** `maven-compiler-plugin` for mixed sources. Fetch the
+plugin once with `mvn -q compile` (no `-o`), then confirm `mvn -q -o compile` works.
+
+- [ ] **Step 3: Write the failing test against the committed Kotlin fixture**
 
 ```java
 @Test
 void projects_kotlin_type_system_nullability_onto_the_shared_field() throws Exception {
-    List<String> lines = scan("KotlinOrder");
-    assertTrue(lines.stream().anyMatch(l ->
-        l.contains("KotlinOrder#note.") && l.contains("\"nullable\":true")));
-    assertTrue(lines.stream().anyMatch(l ->
-        l.contains("KotlinOrder#id.") && l.contains("\"nullable\":false")));
+    List<String> lines = scan("KotlinSample");
+    // Resolved, not partial: unlike Java, the Kotlin type itself declares it.
+    assertTrue(lines.stream().anyMatch(l -> l.contains("KotlinSample#note.")
+        && l.contains("\"nullable\":true")
+        && l.contains("\"nullable_resolution\":\"resolved\"")));
+    assertTrue(lines.stream().anyMatch(l -> l.contains("KotlinSample#id.")
+        && l.contains("\"nullable\":false")
+        && l.contains("\"nullable_resolution\":\"resolved\"")));
 }
 ```
 
+Note what this test would catch: a Kotlin field reaching Java's `partial` default means the
+`@Metadata` read silently did nothing, which is the failure mode worth guarding.
+
 - [ ] **Step 4: Read `@Metadata` and map property nullability**
 
-- [ ] **Step 5: Run, then verify the shaded jar still starts**
+- [ ] **Step 5: Verify the shaded jar actually carries the new dependency**
 
-Run: `cd extractor-jvm && ./gradlew build && java -jar ../src/sextant/extractor-jvm/sextant-extractor.jar --help`
-Expected: the new dependency is inside the jar and nothing at runtime is missing.
+```bash
+cd extractor-jvm && ./gradlew clean build
+unzip -l build/libs/sextant-extractor.jar | grep -c "kotlin/metadata"   # must be > 0
+```
 
-- [ ] **Step 6: Commit**
+The jar Gradle builds is at `extractor-jvm/build/libs/sextant-extractor.jar`. **Do not run it
+with `--help`** — `Main` parses `--key value` pairs, so a flag with no value walks off the end
+of `args`. Listing the jar's contents is the check that matters here: whether shading pulled
+the dependency in.
+
+- [ ] **Step 6: Verify the fresh-checkout case and the full Python suite**
+
+```bash
+cd extractor-jvm && rm -rf ../fixtures/orders-service/target && ./gradlew clean test  # must pass
+cd ../fixtures/orders-service && mvn -q -o compile                                    # restore
+cd ../.. && .venv/bin/pytest -q
+```
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add extractor-jvm fixtures/orders-service
@@ -568,16 +713,50 @@ exists.
 **Files:** Modify `src/sextant/storage/duckdb/schema.sql`; Test `tests/storage/test_workspace.py`.
 
 **Interfaces:**
-- Produces: `shapes(shape_id, content_hash, open)`, `shape_fields(shape_id, ordinal, wire_name, wire_type, wire_format, required, nullable, resolution, evidence)`, and `request_shape` / `response_shape` on `endpoints`.
+- Produces: `shapes(shape_id, content_hash, open)`, `shape_fields(shape_id, ordinal,
+  wire_name, wire_type, wire_format, required, nullable, resolution, evidence, tags)`, and
+  `request_shape` / `response_shape` on `endpoints`.
 
-- [ ] **Step 1: Write the failing test** — the `endpoints` query returns the two new columns,
-  and both shape tables answer an empty query rather than raising, exactly as `endpoints` is
-  pre-declared for the all-catalogs-skipped path.
-- [ ] **Step 2: Run, watch it fail, add the tables, run again**
-- [ ] **Step 3: Commit**
+- [ ] **Step 1: Amend D01 §5 first — the column set differs from what it declares**
+
+D01 §5 currently says `shape_fields` holds *"Shape, ordinal, wire name, type, required,
+tags"*. The set above splits `type` into `wire_type` and `wire_format`, and adds `nullable`,
+`resolution` and `evidence`. Those additions are required by decisions D1 and D3 — nullability
+is two flags, and each carries its own trust — but **a schema differing from its spec is a
+deviation, not an implementation detail** (`GUIDELINES.md` §1.1, §5.1). Amend D01 §5 to state
+the full column list and why, before writing the DDL. `tags` stays: it is in the spec, and
+dropping it silently would be the same defect in the other direction.
+
+- [ ] **Step 2: Write the failing test**
+
+```python
+def test_the_shape_tables_answer_an_empty_query_rather_than_raising(tmp_path: Path):
+    """Pre-declared for the same reason `endpoints` is: a scanner too weak to
+    populate them must degrade visibly through skipped_catalogs, not crash."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    assert workspace.query("shapes") == []
+    assert workspace.query("shape_fields") == []
+    workspace.close()
+
+
+def test_endpoints_carry_the_two_shape_columns(tmp_path: Path):
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.derive("endpoints_reset")
+    columns = workspace.query("endpoints")
+    workspace.close()
+    # Empty result, so assert on the declared schema rather than on rows.
+    assert columns == []
+```
+
+Add `shapes` and `shape_fields` to `_NAMED_QUERIES` with a deterministic `ORDER BY`
+(`shape_id` and `shape_id, ordinal` respectively) — an ordering with ties is an ordering that
+can change between runs (NFR-1).
+
+- [ ] **Step 3: Run, watch it fail, add the tables and named queries, run again**
+- [ ] **Step 4: Run the full suite and commit**
 
 ```bash
-git commit -m "feat: shapes and shape_fields tables, and endpoint shape columns"
+.venv/bin/pytest -q && git commit -m "feat: shapes and shape_fields tables, and endpoint shape columns"
 ```
 
 ---
@@ -641,11 +820,62 @@ cause.
 unwrapped** — the shape roots at the wrapper and records that no rule matched, so an
 incomplete catalog degrades visibly rather than guessing (D02 §2a).
 
-**Files:** Create `src/sextant/application/resolve/shapes.py`; Test `tests/application/test_shapes.py`.
+**Files:** Create `src/sextant/application/resolve/shapes.py`,
+`tests/application/shape_helpers.py`; Test `tests/application/test_shapes.py`.
 
 **Interfaces:**
-- Produces: `root_type(type_ref, wrappers) -> RootedType` carrying the rooted reference, the
-  ordered chain of wrappers removed, and whether an unmatched wrapper stopped it.
+- Produces: `root_type(type_ref: dict, wrappers: list[dict]) -> RootedType`, a frozen
+  dataclass with `symbol: str`, `chain: tuple[str, ...]` (the `semantics` values removed,
+  outermost first) and `unmatched_wrapper: bool`.
+- Produces `tests/application/shape_helpers.py`, used by Tasks 10, 11 and 12.
+
+**The test helpers Tasks 9–12 share must be written here, once.** They are referenced by name
+in every later task, and each defines them differently if left implicit:
+
+```python
+# tests/application/shape_helpers.py
+def type_ref(symbol: str, *arguments: dict) -> dict:
+    """A D00 §5a type reference: a symbol plus recursive type arguments."""
+    return {"symbol": symbol, "arguments": list(arguments)}
+
+
+ORDER_VIEW = type_ref("com/acme/orders/contracts/OrderView#")
+
+
+def mono_of(inner: dict) -> dict:
+    return type_ref("reactor/core/publisher/Mono#", inner)
+
+
+def response_entity_of(inner: dict) -> dict:
+    return type_ref("org/springframework/http/ResponseEntity#", inner)
+
+
+def unknown_box_of(inner: dict) -> dict:
+    return type_ref("com/acme/UnknownBox#", inner)
+
+
+SPRING_WRAPPERS = [
+    {"type": "reactor.core.publisher.Mono", "payload_arg": 0, "semantics": "async"},
+    {"type": "org.springframework.http.ResponseEntity", "payload_arg": 0,
+     "semantics": "http_envelope"},
+    {"type": "java.util.Optional", "payload_arg": 0, "semantics": "optional"},
+]
+
+
+def shape_fields_of(workspace, shape_id: str) -> list[dict]:
+    """Every field of one shape, in ordinal order."""
+    return [f for f in workspace.query("shape_fields") if f["shape_id"] == shape_id]
+
+
+def field_of(workspace, shape_id: str, wire_name: str) -> dict:
+    """One field, **keyed by its wire name — never the source field name.**
+
+    D01 §5 makes `wire_name` the identity, so `customerId` is looked up as
+    `customer_id`. Keying on the source name here would quietly reintroduce
+    the thing that section exists to forbid.
+    """
+    return next(f for f in shape_fields_of(workspace, shape_id) if f["wire_name"] == wire_name)
+```
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -691,6 +921,38 @@ def test_expands_a_rooted_type_into_its_wire_fields():
 ```
 
 - [ ] **Step 2: Run, watch it fail, write the derivation, run again**
+
+The derivation is the largest unwritten piece in this plan, so its contract is stated here
+rather than left to inference. `derive_shapes.sql` takes these bound parameters, all catalog
+data forwarded unmodified exactly as `derive_endpoints.sql` already forwards its own:
+
+| Parameter | From |
+|---|---|
+| `$known_types` | D02 §2g — `{type, wire, format, nullable}` rows |
+| `$name_from` | D02 §2f — `{annotation, arg}` rows supplying a wire name |
+| `$ignore` | D02 §2f — annotations meaning "absent from the wire" |
+| `$default_strategy` | D02 §2f |
+| `$first_party_prefixes` | the module's own coordinates, so origin can be decided |
+
+and produces `shapes` and `shape_fields` rows. Per field, in this order:
+
+1. **Ignored?** If the field carries an `$ignore` annotation, emit nothing. Not a field marked
+   absent — *no row*, or DR-5 compares it against a peer that correctly omits it.
+2. **Wire name.** First `$name_from` annotation whose argument is present, else the source
+   name under `$default_strategy`. A name from the default carries `evidence: declared`; one
+   from an annotation carries the evidence of the code that declared it (D02 §2f).
+3. **Wire type.** `$known_types` first — a known type is mapped and **never expanded**. Then
+   the `wire_type`/`wire_format` the extractor already put on the type reference (D1).
+4. **Expand or stop.** A first-party `object` expands to its own shape, recursively. Anything
+   else stops: keep the type reference, mark the shape `open`, and record the type so
+   [M04](../../components/M04-resolver.md) can report it (D2).
+
+**Cycles terminate by construction** — `object` is a *reference* to another shape, never an
+inlining, so `Node { Node parent; }` needs no depth counter.
+
+**Determinism (NFR-1):** `ordinal` is the class file's declaration order, and `content_hash`
+is derived from the ordered field list. Neither may come from a set or a dictionary iteration
+order, or two runs differ.
 - [ ] **Step 3: Add the three boundary tests**
 
 ```python
@@ -750,7 +1012,10 @@ def test_a_declared_annotation_overrides_the_language_default_and_resolves_it():
 
 
 def test_a_not_null_annotation_overrides_javas_permissive_default():
-    assert field_of("OrderRequest", "customerId") == {"nullable": False, "resolution": "resolved"}
+    # Looked up by WIRE name: the field is `customerId` in Java and
+    # `customer_id` on the wire, and D01 §5 makes the wire name the identity.
+    assert field_of(ws, ORDER_REQUEST, "customer_id") == {
+        "nullable": False, "resolution": "resolved"}
 
 
 def test_kotlin_arrives_already_resolved_and_is_not_downgraded():
@@ -813,34 +1078,59 @@ git commit -m "feat: apply catalog nullability over the language's own answer"
 
 **Files:** Modify `derive_endpoints.sql`, `pipeline.py`, `egress/render/metadata.py`, `document.py`; Test `tests/application/test_pipeline.py`, `tests/e2e/test_vertical_slice.py`.
 
-- [ ] **Step 1: Write the failing end-to-end test**
+- [ ] **Step 1: Give the fixture an endpoint that actually carries these shapes**
 
-```python
-def test_an_endpoint_carries_the_request_and_response_shapes_it_declares():
-    endpoint = endpoint_at("POST", "/v1/orders")
-    assert endpoint["request_shape"] is not None
-    assert "customer_id" in wire_names_of(endpoint["request_shape"])
+The fixture's existing `POST /v1/orders` takes `OrderCommand` and returns a bare
+`OrderResult`. **Nothing in the fixture takes `OrderRequest`, and nothing returns a wrapped
+type** — so Task 9's unwrapping has no end-to-end coverage and the test below cannot be
+written against what exists. Add to `OrderController`:
+
+```java
+// The one endpoint that exercises the whole chain: a request payload covering
+// every nullability and naming case, and a response wrapped twice, so rooting
+// has something real to unwrap.
+@PostMapping("/detailed")
+public ResponseEntity<OrderView> createDetailed(@RequestBody OrderRequest request) {
+    return ResponseEntity.ok(new OrderView());
+}
 ```
 
-- [ ] **Step 2: Join endpoints to shapes through the `@RequestBody` parameter and the rooted return type**
-- [ ] **Step 3: Stop declaring the gap that no longer exists**
+Rebuild: `cd fixtures/orders-service && mvn -q -o compile`.
+
+- [ ] **Step 2: Write the failing end-to-end test**
+
+```python
+def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_path: Path):
+    report = analyze_fixture(tmp_path)
+    endpoint = next(e for e in report.endpoints
+                    if e["method"] == "POST" and e["path"] == "/v1/orders/detailed")
+
+    assert endpoint["request_shape"] is not None
+    assert "customer_id" in [f["wire_name"] for f in fields_of(endpoint["request_shape"])]
+    # The response is ResponseEntity<OrderView>; the shape must root at
+    # OrderView, or the wrapper declarations in Task 8 did nothing.
+    assert endpoint["response_shape"] == shape_id_of("com/acme/orders/contracts/OrderView#")
+```
+
+- [ ] **Step 3: Join endpoints to shapes through the `@RequestBody` parameter and the rooted return type**
+- [ ] **Step 4: Stop declaring the gap that no longer exists**
 
 `shape_expansion_not_implemented` comes out of `metadata.py`'s omission list. **Any part still
 unimplemented keeps its own named omission** — removing the label without removing the gap is
 the failure FR-17 exists to prevent.
 
-- [ ] **Step 4: Verify determinism**
+- [ ] **Step 5: Verify determinism**
 
 Run the pipeline twice into different workspaces and diff `metadata.json`. Field order must be
 declaration order, and shape identity must be content-derived, or the two runs differ.
 
-- [ ] **Step 5: Run every gate**
+- [ ] **Step 6: Run every gate**
 
 Run: `scripts/check.sh`
 Expected: all green, including the architecture source rules — no framework name has leaked
 into the derivation, and `application/` still performs no file I/O.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git commit -m "feat: endpoints carry their request and response contracts"
