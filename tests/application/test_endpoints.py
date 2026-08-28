@@ -13,6 +13,25 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CATALOGS = Path(__file__).parents[2] / "catalogs"
 
+# A second, invented annotation_driven shape — deliberately not Spring — so a
+# test can hand `derive_endpoints` two catalogs that are genuinely different.
+_INVENTED_LISTENER = Catalog(
+    id="invented-listener", style="annotation_driven", protocol="message",
+    direction="outbound", requires=("annotation_args",),
+    matches={
+        "type_annotation": "com/acme/messaging/annotation/Listener#",
+        "path_prefix_from": {
+            "annotation": "com/acme/messaging/annotation/Topic#", "arg": "value",
+        },
+        "method_annotations": [
+            {
+                "fqn": "com/acme/messaging/annotation/OnMessage#",
+                "http_method": "PUBLISH", "path_arg": "value",
+            },
+        ],
+    },
+)
+
 
 def test_catalog_declares_its_style_and_required_capabilities_when_loaded():
     catalogs = load_catalogs(CATALOGS)
@@ -166,24 +185,10 @@ def test_derive_endpoints_carries_the_catalogs_own_protocol_and_direction_when_n
     _invented_listener_facts(tmp_path / "facts")
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
-    catalog = Catalog(
-        id="invented-listener", style="annotation_driven", protocol="message",
-        direction="outbound", requires=("annotation_args",),
-        matches={
-            "type_annotation": "com/acme/messaging/annotation/Listener#",
-            "path_prefix_from": {
-                "annotation": "com/acme/messaging/annotation/Topic#", "arg": "value",
-            },
-            "method_annotations": [
-                {
-                    "fqn": "com/acme/messaging/annotation/OnMessage#",
-                    "http_method": "PUBLISH", "path_arg": "value",
-                },
-            ],
-        },
-    )
 
-    skipped = derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    skipped = derive_endpoints(
+        workspace, [_INVENTED_LISTENER], capabilities={"annotation_args"}
+    )
     rows = workspace.query("endpoints")
     workspace.close()
 
@@ -193,6 +198,55 @@ def test_derive_endpoints_carries_the_catalogs_own_protocol_and_direction_when_n
     assert rows[0]["direction"] == "outbound"
     assert rows[0]["protocol"] != "http"
     assert rows[0]["direction"] != "inbound"
+
+
+def test_derive_endpoints_keeps_both_catalogs_results_when_two_catalogs_match(
+    tmp_path: Path,
+):
+    """D02 §5: "Two catalogs may both match; both produce endpoints, and
+    duplicates merge on wire identity." A derivation that replaces the table
+    per catalog makes the last catalog the only catalog, and every endpoint
+    the earlier ones found disappears with no skip, no gap, and no warning —
+    the silent-loss failure capability gating exists to prevent."""
+    _controller_facts(tmp_path / "facts")
+    _invented_listener_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    spring = next(c for c in load_catalogs(CATALOGS) if c.id == "spring-web")
+
+    skipped = derive_endpoints(
+        workspace, [spring, _INVENTED_LISTENER], capabilities={"annotation_args"}
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert skipped == []
+    assert {(r["protocol"], r["method"], r["path"]) for r in rows} == {
+        ("http", "POST", "/v1/orders"),
+        ("http", "GET", "/v1/orders/{id}"),
+        ("http", "GET", "/v1/orders"),
+        ("message", "PUBLISH", "orders.created"),
+    }
+
+
+def test_derive_endpoints_merges_on_wire_identity_when_two_catalogs_match_the_same_code(
+    tmp_path: Path,
+):
+    """The other half of D02 §5: accumulating must not double-report. Two
+    catalogs that describe the same annotations — the realistic case of a
+    framework catalog and its umbrella — see the same routes, and the wire
+    is where sameness is decided."""
+    _controller_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    spring = next(c for c in load_catalogs(CATALOGS) if c.id == "spring-web")
+    twin = Catalog(**{**vars(spring), "id": "spring-web-twin"})
+
+    derive_endpoints(workspace, [spring, twin], capabilities={"annotation_args"})
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert len(rows) == 3
 
 
 def test_derive_endpoints_skips_and_reports_when_a_required_capability_is_missing(

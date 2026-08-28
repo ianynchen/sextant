@@ -6,7 +6,10 @@ _SQL_DIR = Path(__file__).parent
 
 _NAMED_QUERIES = {
     "documents": "SELECT * FROM documents ORDER BY document_id",
-    "endpoints": "SELECT * FROM endpoints ORDER BY protocol, method, path",
+    # `handler` is part of the ordering, not decoration: two mappings may share
+    # a wire identity, and an ordering with ties is an ordering that can change
+    # between runs (NFR-1).
+    "endpoints": "SELECT * FROM endpoints ORDER BY protocol, method, path, handler",
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
@@ -17,7 +20,10 @@ _NAMED_QUERIES = {
     "facts": "SELECT count(*) AS facts FROM raw_facts",
 }
 
-_NAMED_DERIVATIONS = {"endpoints": "derive_endpoints.sql"}
+_NAMED_DERIVATIONS = {
+    "endpoints": "derive_endpoints.sql",
+    "endpoints_reset": "reset_endpoints.sql",
+}
 
 
 class DuckDbWorkspace:

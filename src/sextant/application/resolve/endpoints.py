@@ -47,6 +47,12 @@ def derive_endpoints(
 ) -> list[SkippedCatalog]:
     """Runs each catalog whose required capabilities are met, and reports the
     rest. A skipped catalog is never silent (M04, FR-17)."""
+    # Emptied once, here, rather than once per catalog: D02 §5 has two
+    # catalogs both matching and both producing endpoints, so a per-catalog
+    # rebuild would leave only whichever ran last. Unconditional, so a resolve
+    # in which every catalog is skipped still leaves an empty table rather
+    # than the previous run's rows.
+    workspace.derive("endpoints_reset")
     skipped = []
     for catalog in catalogs:
         missing = tuple(sorted(set(catalog.requires) - capabilities))
