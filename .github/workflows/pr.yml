@@ -1,0 +1,50 @@
+name: PR gates
+
+# Blocks a merge on compilation and unit tests. Runs on pull requests and on
+# pushes to main, so a merge that breaks the branch is visible immediately
+# rather than at the next pull request.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push supersedes the run in flight for the same ref.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python — lint, types, contracts, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # the floor in pyproject; a newer local version must not hide a break
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint gates
+        run: scripts/check.sh --lint
+      - name: Tests
+        run: pytest -q
+
+  extractor:
+    name: JVM extractor — compile and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build and test
+        working-directory: extractor-jvm
+        # `build` compiles main and test, runs JUnit, and assembles the shaded
+        # jar. javac runs with -Xlint:all -Werror, so a warning fails here too.
+        run: ./gradlew --no-daemon build

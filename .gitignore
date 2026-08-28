@@ -27,3 +27,6 @@ target/
 .idea/
 .vscode/
 *.iml
+
+# Example projects cloned for testing — not ours, never committed
+examples/

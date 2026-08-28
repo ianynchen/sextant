@@ -124,7 +124,10 @@ def main() -> int:
     msg = render(counts, numbers, MSG_COLUMNS)
 
     new = md
-    for marker, table in (("2a. Application protocols over HTTP", http), ("2b. Messaging and RPC", msg)):
+    for marker, table in (
+        ("2a. Application protocols over HTTP", http),
+        ("2b. Messaging and RPC", msg),
+    ):
         start = new.index(f"### {marker}")
         tbl_start = new.index("| Language", start)
         tbl_end = new.index("\n\n", tbl_start)

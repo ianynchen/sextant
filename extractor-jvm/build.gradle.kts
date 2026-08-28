@@ -14,6 +14,9 @@ dependencies {
 
 tasks.withType<JavaCompile> {
     options.release.set(21)
+    // javac is the linter here: no new dependency, and a warning that reaches
+    // main is a warning nobody will read.
+    options.compilerArgs.addAll(listOf("-Xlint:all", "-Werror"))
 }
 
 tasks.test { useJUnitPlatform() }
