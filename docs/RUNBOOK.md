@@ -150,3 +150,49 @@ honest statement when a check has not been run. Better to run the check.
 `GUIDELINES.md` §1.1. A decomposition, a dependency choice, a schema shape — none of these
 are agent decisions, even when they look obvious. Proposing a component breakdown before
 writing seventeen documents against it saved rewriting all of them.
+
+---
+
+## Implementation
+
+### An explicit `read_json` column spec silently nulls out NDJSON
+
+`read_json(path, columns={'json': 'JSON'})` looks for a field literally named `json` in
+every record. A newline-delimited fact file has no such field, so every row still loads —
+row counts look right — and every column comes back `NULL`. Nothing errors. `read_ndjson_objects(path)`
+is the form that actually reads one-JSON-object-per-line files; see `load_facts` in
+`workspace.py`. The lesson is not "use this one function" — it's that an ingestion path can
+fail by going silently null instead of loudly wrong, and a passing row count does not rule
+that out. Spot-check a value, not just a count.
+
+### "Ruff clean" is a claim, not a result
+
+Two implementers reported the lint gate clean while `ruff` was in fact reporting an error.
+The controller only caught it by running the linters itself rather than trusting the report.
+Reported gate output is not gate output — run it yourself before believing it.
+
+### A test asserting on a return code needs `check=False`
+
+`subprocess.run(..., check=True)` raises before a test gets to assert on
+`result.returncode` — the assertion never runs, and a red test looks like a crash instead.
+Pass `check=False` explicitly whenever the return code itself is under test; the linter
+that insists on an explicit `check=` argument is catching a real bug here, not
+bikeshedding.
+
+### Shadow's classic plugin ID doesn't work under Gradle 9
+
+`com.github.johnrengelman.shadow` fails on Gradle 9 with an opaque `MissingPropertyException`
+that points nowhere near the real cause. The maintained coordinates are
+`com.gradleup.shadow` — that's what `extractor-jvm/build.gradle.kts` declares.
+
+### Pre-declare a table that only a derivation creates
+
+`derive_endpoints.sql` runs only when a catalog's required capabilities are met, and every
+catalog can legitimately be skipped — capability gating exists precisely so a weaker
+scanner degrades instead of failing. But the named `endpoints` query didn't know that:
+with no catalog run, the table never existed, and the query crashed on exactly the path
+whose entire purpose is to report rather than fail. Fix: `schema.sql` pre-declares an empty
+`endpoints` table with `CREATE TABLE IF NOT EXISTS`; `derive_endpoints.sql` replaces it
+whole with `CREATE OR REPLACE TABLE` whenever at least one catalog runs. A named query
+against a sometimes-created table needs the table declared unconditionally, not just
+populated conditionally.
