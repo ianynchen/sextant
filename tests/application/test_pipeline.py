@@ -38,11 +38,16 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
         ("GET", "/v1/orders/{id}"),
         ("GET", "/v1/orders/{id}/{view}"),
         ("GET", "/v1/orders"),
+        # OrderPageController: a `@Controller`, not `@RestController` — the
+        # spring-mvc catalog's own two routes, prefixed by its class-level
+        # `@RequestMapping`.
+        ("GET", "/orders"),
+        ("POST", "/orders/new"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
     # disambiguate them (D00 §1) makes this join multiply instead of match.
-    assert len(report.endpoints) == 4
+    assert len(report.endpoints) == 6
     assert report.skipped_catalogs == []
 
 
