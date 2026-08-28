@@ -136,6 +136,8 @@ that language exists. It is not a cost you can pay today. Only ✅ and ◐ mean 
 
 ### 2b. Messaging and RPC
 
+SNS and Redis are **out of scope by decision**, not oversight — each would be a new column.
+
 | Language | gRPC | Kafka | JMS / AMQP | SQS | Pub/Sub | Async |
 |---|---|---|---|---|---|---|
 | **Java / Kotlin** | B | A † | A | A | B | A |
@@ -709,15 +711,16 @@ so a model that stopped at the HTTP route would report "1 endpoint" for a servic
 200 GraphQL fields. Direction still earns two columns for REST, where the tiers genuinely
 diverge.
 
-**Q4 — Does "pubsub" mean the GCP product or the publish-subscribe pattern?**
-Read as **the GCP product**, since Kafka and JMS already have columns. Publish-subscribe as a
-pattern is a property of an endpoint, not a column — otherwise Kafka, JMS topics, SNS and
-Redis all belong in it too.
+**Q4 — Does "pubsub" mean the GCP product or the publish-subscribe pattern? resolved.**
+The **GCP product** — messaging middleware to support alongside Kafka, JMS and SQS, not the
+publish-subscribe pattern in general. **SNS and Redis are explicitly out of scope** for now;
+they are absent by decision, not by oversight, and would each be a new column when wanted.
 
-**Q5 — Is direction a third dimension?**
-Recommend **no**, except for HTTP. For Kafka, JMS, SQS and Pub/Sub, producer and consumer sit
-in the same library and usually the same tier, so direction belongs in the library row. For
-HTTP the tiers genuinely diverge, so it earns two columns.
+**Q5 — Is direction a third dimension? resolved — no.**
+Except for REST, where the tiers genuinely diverge: inbound is `annotation`-shaped and mostly
+cheap, outbound is `fluent_chain`-shaped and mostly not, so it earns two columns. For Kafka,
+JMS, SQS and Pub/Sub, producer and consumer sit in the same library at the same tier, so
+direction belongs in the library row.
 
 **Q6 — What does a cell mean when it holds several libraries at different tiers?**
 The cell shows the tier of the **mainstream** library and carries `†` when it hides a
