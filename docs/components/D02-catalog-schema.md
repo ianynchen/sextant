@@ -37,7 +37,7 @@ matches:
 |---|---|
 | `id` | Stable. Appears in `evidence` and in skip reports. |
 | `style` | Which engine interprets `matches` |
-| `protocol`, `direction` | From [D00](D00-fact-schema.md)'s closed sets |
+| `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c |
 | `detect` | Coordinates that make this catalog active for a module |
 | `requires` | Scanner capabilities. **If unmet, the catalog does not run and the skip is reported.** |
 | `matches` | Style-specific |
@@ -106,6 +106,12 @@ Runs last, and **reclassifies endpoints other engines already produced** — a s
 response, a long-poll. It changes protocol, never direction, and it never creates an
 endpoint.
 
+**It must not touch direction, and the reason is §3's ordering.** Inbound runs before
+outbound so that a path a module both exposes and calls merges into one endpoint with
+direction `both`. A later pass that changed direction would arrive after that merge has
+already happened, silently corrupting it. Direction is therefore resolved **at match
+time** — §2c — never afterwards.
+
 ## 2a. Wrapper declarations
 
 A return or parameter type is often an envelope around the wire payload:
@@ -162,6 +168,54 @@ graph already holds — the same property that keeps overlays incapable of inven
 structure. (`throws` needs no catalog: throw sites are recorded by the scanner directly,
 and declared exceptions ride the typed signature.)
 
+## 2c. Resolving `direction`, `protocol` and `format` per match
+
+`protocol`, `direction` and `format` are declared on the catalog as **defaults**, because for
+most catalogs they are constant. Three cases break that, and all three are real:
+
+- **`@HttpExchange` is inbound or outbound depending on use.** It normally declares an
+  outbound client; Spring 6.1+ also allows *implementing* the interface server-side, which
+  makes the same annotation inbound.
+- **A `@GetMapping` returning `SseEmitter` is not REST.** Handled already by `wrappers` with
+  `semantics: streaming` feeding `protocol_hint` — recorded here for completeness.
+- **Format is rarely constant.** `produces = "application/x-protobuf"` changes the wire; a
+  payload type extending a generated message says the same thing; a Kafka `value.serializer`
+  says it in configuration rather than code.
+
+So a catalog may declare resolution rules alongside its defaults:
+
+```yaml
+protocol: rest
+direction: outbound        # the default
+format: json               # the default
+
+resolves:
+  direction:
+    - { when: { owner_implemented_in_module: true }, then: inbound }
+  format:
+    - { when: { annotation_arg: { name: produces, contains: "application/x-protobuf" } },
+        then: protobuf }
+    - { when: { payload_hierarchy: com.google.protobuf.GeneratedMessage }, then: protobuf }
+```
+
+**Rules are evaluated at match time**, in order, first match wins. `direction` resolution must
+complete before §3's inbound/outbound merge, which is why it cannot be a later pass.
+
+**A default that survives unchallenged is not an observation.** If no rule fires and the
+endpoint takes the catalog's declared `format: json` — because Jackson is simply the framework
+default — that value is recorded at `evidence: declared`, never at the `compiler` or `syntax`
+level a `produces` attribute would earn. The distinction matters: an assumed format compared
+against an observed one is how a matcher reports agreement it has not established.
+
+**Format also gates comparison.** [D00](D00-fact-schema.md)'s directional structural
+compatibility assumes both sides describe the same wire. Two contracts in different formats
+are not comparable until one is projected into the other — and the projection is not always
+identity. Proto3's JSON mapping renames fields to lowerCamelCase by default, so a `.proto`
+field `total_amount` reaches a JSON wire as `totalAmount`. A service defined by a `.proto` but
+exposed over REST therefore carries different field names than its own schema states.
+
+---
+
 ## 3. Ordering
 
 Engines run in a fixed order because later passes depend on earlier ones: inbound first,
@@ -216,3 +270,5 @@ were skipped, and why.
 | Argument addressing — position only, or names where `-parameters` is present | Catalog authoring for overloaded APIs |
 | Whether `fluent` needs conditional steps, for builders where one call sets several fields | The OkHttp and WebClient catalogs |
 | How a catalog expresses a topic name assembled from a constant and a literal | Kafka catalogs |
+| The closed set for `format`, and whether a schema-registry subject is part of it | §2c, and Avro or Protobuf on Kafka |
+| Whether `resolves` needs config-sourced conditions, for a Kafka `value.serializer` in properties | §2c format resolution for Kafka |

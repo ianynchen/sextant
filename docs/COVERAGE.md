@@ -815,23 +815,28 @@ the **essay** (toolchain verdict, payload handling, structural oddities such as 
 `urls.py`, Next.js filesystem routing, `boto3`). No fact carries a tier in two places. If Q7
 lands, §5 becomes generated and the essays stay hand-written.
 
-**Q9 — Can `protocol` stay a property of the catalog? needs a decision. New — surfaced by adding SSE.**
-**No.** A Spring `@GetMapping` returning `List<Order>` is REST; the identical annotation
-returning `SseEmitter` or `Flux<ServerSentEvent<T>>` is SSE. The declaration does not
-distinguish them — the **return type** does. This is the same shape as the `@HttpExchange`
-problem, where *direction* depends on use rather than on the catalog. Recommend treating both
-`protocol` and `direction` as **per-match, with a catalog-level default**: a catalog declares
-what it usually produces, and a rule may override it from the match. That is a smaller change
-than it sounds and it closes two gaps at once.
+**Q9 — Can `protocol`, `direction` and `format` stay properties of the catalog? resolved — no, they become per-match with a catalog default.**
+Recorded in [D02](components/D02-catalog-schema.md) §2c. Reading D02 to make the change
+corrected part of the question: **`protocol` was already handled.** The `protocol_hint` style
+reclassifies endpoints other engines produced, and `wrappers` with `semantics: streaming` is
+named as its trigger — so a `@GetMapping` returning `Flux<ServerSentEvent<T>>` was always
+going to be reclassified as SSE.
+
+Two things genuinely needed the change, and one part of the original proposal was wrong.
+**`direction` cannot be a later pass.** D02 §3 runs inbound before outbound so a path a module
+both exposes and calls merges into `direction: both`; a pass that changed direction afterwards
+would arrive after that merge and corrupt it. Direction resolves **at match time**.
+**`format` had no home in the schema at all** — §4's whole analysis, including the assumed-JSON
+problem and Kafka serializers, had nowhere to live. It is now a catalog default with per-match
+resolution, and a default that survives unchallenged is recorded at `evidence: declared`
+rather than at an observed level.
 
 ### Still-open design questions, unchanged by this reorganisation
 
 Four shapes the schema cannot express today. All four surfaced from the research, none is an
 organisational problem:
 
-1. **Context-dependent `direction` and `protocol`.** `@HttpExchange` is inbound or outbound
-   depending on use; `@GetMapping` is REST or SSE depending on its return type. Both are
-   catalog properties today and both need to be per-match (Q9).
+1. ~~Context-dependent `direction` and `protocol`~~ — **resolved**, [D02](components/D02-catalog-schema.md) §2c.
 2. **Config-derived destinations** (§7) — no catalog style says "the destination is a
    property key derived from this bean's name".
 3. **Filesystem-derived paths** — Next.js, SvelteKit, Remix and Nuxt put the route in the
