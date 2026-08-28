@@ -3,9 +3,7 @@ package dev.sextant.extractor;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.TreeMap;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
@@ -25,31 +23,26 @@ public final class ClassScanner {
 
     public List<String> scan(byte[] classBytes, String documentId) {
         List<String> lines = new ArrayList<>();
-        ClassReader reader = new ClassReader(classBytes);
-        reader.accept(new Visitor(lines, documentId, methodNameCounts(reader)), ClassReader.SKIP_FRAMES);
+        new ClassReader(classBytes).accept(new Visitor(lines, documentId), ClassReader.SKIP_FRAMES);
         return lines;
     }
 
-    /** How many methods share each name. D00 §1 spends the disambiguator only
-     *  on "one overload among several", so a name cannot be built until the
-     *  whole class has been seen — hence one cheap extra pass over the same
-     *  already-parsed bytes rather than deferring every emission. */
-    private static Map<String, Integer> methodNameCounts(ClassReader reader) {
-        Map<String, Integer> counts = new HashMap<>();
-        reader.accept(new ClassVisitor(Opcodes.ASM9) {
-            @Override
-            public MethodVisitor visitMethod(int a, String name, String d, String s, String[] e) {
-                counts.merge(name, 1, Integer::sum);
-                return null;
-            }
-        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
-        return counts;
-    }
-
     /** D00 §1: overloads are disambiguated by **descriptor hash**, never by an
-     *  ordinal — an ordinal changes the moment a sibling is added, and a symbol
-     *  that moves is a symbol nothing downstream can join on. Prefixed rather
-     *  than bare hexadecimal, for the reason the same section gives. */
+     *  ordinal, because "an ordinal changes when a sibling is added" and a
+     *  symbol that moves is a symbol nothing downstream can join on — NFR-3,
+     *  and every curation, link and blast radius that depends on it.
+     *
+     *  <p>Spent on every method, not only on names that are currently shared.
+     *  Making its *presence* conditional reintroduces the very instability the
+     *  rule forbids one level up: `save().` becomes `save(sig_…).` the day
+     *  somebody adds an overload beside it, and the identity of a method
+     *  nobody touched has moved. §1's bare `save().` is the common case
+     *  written for readability; its stated reasoning is the binding part.
+     *
+     *  <p>The whole descriptor is hashed, return type included: two methods
+     *  differing only in return type are legal bytecode, and a colliding
+     *  symbol is the defect this exists to prevent. Prefixed rather than bare
+     *  hexadecimal, for the reason the same section gives. */
     static String disambiguatorOf(String descriptor) {
         try {
             StringBuilder hex = new StringBuilder();
@@ -68,14 +61,12 @@ public final class ClassScanner {
     private final class Visitor extends ClassVisitor {
         private final List<String> lines;
         private final String documentId;
-        private final Map<String, Integer> methodNameCounts;
         private String typeSymbol;
 
-        Visitor(List<String> lines, String documentId, Map<String, Integer> methodNameCounts) {
+        Visitor(List<String> lines, String documentId) {
             super(Opcodes.ASM9);
             this.lines = lines;
             this.documentId = documentId;
-            this.methodNameCounts = methodNameCounts;
         }
 
         @Override
@@ -88,9 +79,7 @@ public final class ClassScanner {
         @Override
         public MethodVisitor visitMethod(int access, String name, String descriptor, String sig, String[] ex) {
             String owner = typeSymbol.substring(typeSymbol.lastIndexOf(' ') + 1);
-            boolean overloaded = methodNameCounts.getOrDefault(name, 1) > 1;
-            String methodSymbol = symbolOf(
-                owner + name + (overloaded ? "(" + disambiguatorOf(descriptor) + ")." : "()."));
+            String methodSymbol = symbolOf(owner + name + "(" + disambiguatorOf(descriptor) + ").");
             String constructKind = "<init>".equals(name) ? "constructor" : "method";
             int parameterCount = Type.getArgumentTypes(descriptor).length;
             String[] parameterNames = new String[parameterCount];

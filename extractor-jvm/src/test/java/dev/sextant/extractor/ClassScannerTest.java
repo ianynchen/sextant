@@ -23,6 +23,6 @@ class ClassScannerTest {
     @Test
     void emits_a_method_symbol_with_its_return_type_when_a_method_is_scanned() throws Exception {
         assertTrue(scanSelf().stream().anyMatch(line ->
-            line.contains("Sample#greet().") && line.contains("java/lang/String#")));
+            line.contains("Sample#greet(sig_") && line.contains("java/lang/String#")));
     }
 }

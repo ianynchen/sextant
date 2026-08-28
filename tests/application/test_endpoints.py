@@ -62,7 +62,8 @@ def _controller_facts(root: Path) -> None:
     RestController with no argument, a RequestMapping whose `value` is a
     one-element JSON array, one PostMapping and one GetMapping with no
     argument at all, and one GetMapping whose `value` is a one-element
-    array."""
+    array. Method symbols carry the descriptor-hash disambiguator D00 §1
+    requires on every method, because that is what the extractor writes."""
     document = Document(
         document_id="doc_1",
         relative_path="com/acme/orders/OrderController.java",
@@ -78,9 +79,9 @@ def _controller_facts(root: Path) -> None:
         redaction_set_hash="sha256:b",
     )
     controller = "com/acme/orders/OrderController#"
-    create = "com/acme/orders/OrderController#create()."
-    get = "com/acme/orders/OrderController#get()."
-    list_ = "com/acme/orders/OrderController#list()."
+    create = "com/acme/orders/OrderController#create(sig_1f0a4c2e)."
+    get = "com/acme/orders/OrderController#get(sig_74b3d901)."
+    list_ = "com/acme/orders/OrderController#list(sig_08c5be17)."
     facts = [
         SymbolFact(document_id="doc_1", symbol=controller, construct_kind=ConstructKind.CLASS),
         SymbolFact(
@@ -192,7 +193,7 @@ def _invented_listener_facts(root: Path) -> None:
         redaction_set_hash="sha256:b",
     )
     listener = "com/acme/notify/OrderListener#"
-    handle = "com/acme/notify/OrderListener#onOrderCreated()."
+    handle = "com/acme/notify/OrderListener#onOrderCreated(sig_3d92af60)."
     facts = [
         SymbolFact(document_id="doc_1", symbol=listener, construct_kind=ConstructKind.CLASS),
         SymbolFact(
@@ -354,7 +355,7 @@ def _scalar_path_facts(root: Path) -> None:
         redaction_set_hash="sha256:b",
     )
     resource = "com/acme/rest/OrderResource#"
-    find = "com/acme/rest/OrderResource#find()."
+    find = "com/acme/rest/OrderResource#find(sig_5ea17c38)."
     facts = [
         SymbolFact(document_id="doc_1", symbol=resource, construct_kind=ConstructKind.CLASS),
         SymbolFact(
