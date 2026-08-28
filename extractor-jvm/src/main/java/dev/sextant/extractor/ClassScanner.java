@@ -51,12 +51,41 @@ public final class ClassScanner {
         public MethodVisitor visitMethod(int access, String name, String descriptor, String sig, String[] ex) {
             String owner = typeSymbol.substring(typeSymbol.lastIndexOf(' ') + 1);
             String methodSymbol = symbolOf(owner + name + "().");
-            emit(methodSymbol, "<init>".equals(name) ? "constructor" : "method",
-                 typeSymbol, signatureJson(descriptor, sig), access);
+            String constructKind = "<init>".equals(name) ? "constructor" : "method";
+            int parameterCount = Type.getArgumentTypes(descriptor).length;
+            String[] parameterNames = new String[parameterCount];
+            List<List<String>> parameterAnnotations = new ArrayList<>();
+            for (int i = 0; i < parameterCount; i++) parameterAnnotations.add(new ArrayList<>());
+
+            // Parameter names (visitParameter) and parameter annotations
+            // (visitParameterAnnotation) arrive as callbacks during the visit, so the
+            // symbol fact — whose signature embeds both — is only emitted at visitEnd,
+            // once every callback for this method has fired.
             return new MethodVisitor(Opcodes.ASM9) {
+                private int parameterIndex = 0;
+
+                @Override
+                public void visitParameter(String parameterName, int parameterAccess) {
+                    if (parameterIndex < parameterNames.length) parameterNames[parameterIndex] = parameterName;
+                    parameterIndex++;
+                }
+
                 @Override
                 public org.objectweb.asm.AnnotationVisitor visitAnnotation(String d, boolean visible) {
                     return annotationVisitor(methodSymbol, d, visible);
+                }
+
+                @Override
+                public org.objectweb.asm.AnnotationVisitor visitParameterAnnotation(
+                        int parameter, String d, boolean visible) {
+                    if (parameter < 0 || parameter >= parameterAnnotations.size()) return null;
+                    return parameterAnnotationVisitor(d, parameterAnnotations.get(parameter));
+                }
+
+                @Override
+                public void visitEnd() {
+                    emit(methodSymbol, constructKind, typeSymbol,
+                         signatureJson(descriptor, sig, parameterNames, parameterAnnotations), access);
                 }
             };
         }
@@ -66,8 +95,32 @@ public final class ClassScanner {
             return annotationVisitor(typeSymbol, descriptor, visible);
         }
 
+        /** A type- or method-level annotation is a fact of its own (D00 §5, "annotation"). */
         private org.objectweb.asm.AnnotationVisitor annotationVisitor(
                 String target, String descriptor, boolean visible) {
+            return useCollectingVisitor(descriptor, use -> {
+                TreeMap<String, String> fact = new TreeMap<>();
+                fact.put("kind", JsonOut.string("annotation"));
+                fact.put("document_id", JsonOut.string(documentId));
+                fact.put("target", JsonOut.string(target));
+                fact.put("use", use);
+                fact.put("retention", JsonOut.string(visible ? "runtime" : "class"));
+                lines.add(JsonOut.object(fact));
+            });
+        }
+
+        /** A parameter-level annotation is not a fact: it attaches inline on the
+         *  parameter's entry in the signature (D00 §5a — "annotations attach without
+         *  the parameter needing a symbol of its own"). */
+        private org.objectweb.asm.AnnotationVisitor parameterAnnotationVisitor(
+                String descriptor, List<String> sink) {
+            return useCollectingVisitor(descriptor, sink::add);
+        }
+
+        /** Collects one annotation's argument values and hands the finished
+         *  {@code {"annotation":...,"args":{...}}} JSON to {@code onUse}. */
+        private org.objectweb.asm.AnnotationVisitor useCollectingVisitor(
+                String descriptor, java.util.function.Consumer<String> onUse) {
             String annotation = Type.getType(descriptor).getInternalName() + "#";
             TreeMap<String, String> args = new TreeMap<>();
             return new org.objectweb.asm.AnnotationVisitor(Opcodes.ASM9) {
@@ -89,13 +142,7 @@ public final class ClassScanner {
                     TreeMap<String, String> use = new TreeMap<>();
                     use.put("annotation", JsonOut.string(annotation));
                     use.put("args", JsonOut.object(args));
-                    TreeMap<String, String> fact = new TreeMap<>();
-                    fact.put("kind", JsonOut.string("annotation"));
-                    fact.put("document_id", JsonOut.string(documentId));
-                    fact.put("target", JsonOut.string(target));
-                    fact.put("use", JsonOut.object(use));
-                    fact.put("retention", JsonOut.string(visible ? "runtime" : "class"));
-                    lines.add(JsonOut.object(fact));
+                    onUse.accept(JsonOut.object(use));
                 }
             };
         }
@@ -107,13 +154,15 @@ public final class ClassScanner {
             return JsonOut.string(String.valueOf(value));
         }
 
-        private String signatureJson(String descriptor, String genericSignature) {
+        private String signatureJson(String descriptor, String genericSignature,
+                                      String[] parameterNames, List<List<String>> parameterAnnotations) {
+            Type[] argumentTypes = Type.getArgumentTypes(descriptor);
             List<String> parameters = new ArrayList<>();
-            for (Type argument : Type.getArgumentTypes(descriptor)) {
+            for (int i = 0; i < argumentTypes.length; i++) {
                 TreeMap<String, String> parameter = new TreeMap<>();
-                parameter.put("annotations", "[]");
-                parameter.put("name", "null");
-                parameter.put("type", TypeRefs.fromType(argument));
+                parameter.put("annotations", JsonOut.array(parameterAnnotations.get(i)));
+                parameter.put("name", parameterNames[i] == null ? "null" : JsonOut.string(parameterNames[i]));
+                parameter.put("type", TypeRefs.fromType(argumentTypes[i]));
                 parameters.add(JsonOut.object(parameter));
             }
             String generic = TypeRefs.returnFromSignature(genericSignature);
