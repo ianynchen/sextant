@@ -44,8 +44,10 @@ estate. A 2B export always writes both; a `--what graph` mode that omits facts w
 matters more than re-derivability is deferred (§8).
 
 **The facts-Parquet schema is pinned for this phase**: raw-fact rows — *(kind, document_id,
-payload as a JSON string column)* — partitioned per source file, mirroring the JSONL tree.
-Honest and barely columnar, sufficient until a columnar need per fact kind is stated.
+payload as a JSON string column)* — one file per source document, named by its document id (a
+content-derived hex digest), flat under `facts/`. The per-file partitioning survives from the
+JSONL tree; the directory nesting does not. Honest and barely columnar, sufficient until a
+columnar need per fact kind is stated.
 
 ---
 
@@ -68,7 +70,7 @@ Honest and barely columnar, sufficient until a columnar need per fact kind is st
                 "facts_files": 1283 },
   "gaps": ["soap_contracts_not_read"],
   "uncovered": ["src/main/java/…/LegacyController.java"],
-  "skipped_catalogs": ["spring-webclient"]
+  "skipped_catalogs": [{ "catalog_id": "spring-webclient", "missing_capabilities": ["string_constants"] }]
 }
 ```
 

@@ -1,13 +1,13 @@
 # Phase 2 — Spring Boot completeness: roadmap
 
-Five sub-phases, each its own plan. Phase 1 proved a vertical slice; Phase 2 makes one
+Six sub-phases, each its own plan. Phase 1 proved a vertical slice; Phase 2 makes one
 framework genuinely covered before a second is attempted.
 
-**Where we actually are.** Four of the seventy-two Java rows in
-[COVERAGE.md](../../COVERAGE.md) §5 are shipped — about 6%. An endpoint today carries a verb,
-a path, a handler symbol and a raw signature. It carries **no contract at all**: there are no
-`shapes` or `shape_fields` tables, no request or response columns, and
-`shape_expansion_not_implemented` is already a declared gap in the rendered metadata.
+**Where we actually are.** Six of the seventy-two Java rows in
+[COVERAGE.md](../../COVERAGE.md) §5 are shipped — about 8%. An endpoint carries request and
+response contracts field by field, in both directions, with `required` and `nullable`
+resolved; Feign, Retrofit and `@HttpExchange` outbound clients are read, linked to their
+inbound peers, and exported as a D06 bundle.
 
 ## Why this order
 

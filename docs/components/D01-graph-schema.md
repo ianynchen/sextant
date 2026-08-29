@@ -106,6 +106,12 @@ calls merges into one endpoint row rather than two — `handler` names the serve
 outbound target hint — a declared service name or a literal authority — that the system tier
 later resolves against `participants`; it carries no meaning on an inbound-only row.
 
+**The merge keeps only the handler's request and response payload descriptors.** Where the
+module both exposes a path and calls it through a client with its own declared contract, the
+two declarations can differ — the handler's survives on the `both` row and the client's is
+discarded. This is a named gap (`merged_endpoints_keep_only_the_handlers_contract`), not a
+silent loss.
+
 **Declared shapes land in these same two tables**, loaded from `declared_shape` facts with
 `evidence: declared`, their field types already in the wire-type vocabulary
 ([D00](D00-fact-schema.md) §5b). Code-derived shapes project into that vocabulary during

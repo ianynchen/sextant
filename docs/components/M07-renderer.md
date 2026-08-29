@@ -70,7 +70,7 @@ here; each is either derived now or carries its gap by name:
 
 | Section | Source | Status in 2B |
 |---|---|---|
-| Overview | module identity, kind, languages, coverage, commit | shipped (polish) |
+| Overview | module id, coverage, commit | shipped (polish) |
 | Structure — contract class diagram | `shapes`/`shape_fields`; nodes are payload types with wire fields, edges are `shape_id` references | **built in 2B** (Mermaid `classDiagram`) |
 | Structure — full class diagram (inheritance) | `inherits`/`implements` edges — table does not exist | named gap; call-graph phase |
 | Inbound endpoints — contract field tables per endpoint | endpoints + descriptors + shapes | **built in 2B** |

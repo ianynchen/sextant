@@ -27,6 +27,8 @@ KNOWN_GAPS = [
     "catalog_module_matching_not_implemented",
     "nested_and_anonymous_classes_not_read",
     "module_classification_evidence_incomplete",
+    "merged_endpoints_keep_only_the_handlers_contract",
+    "shape_rules_unscoped_to_the_producing_catalog",
 ]
 
 

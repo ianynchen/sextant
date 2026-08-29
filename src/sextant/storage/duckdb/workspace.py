@@ -62,9 +62,11 @@ _NAMED_QUERIES = {
     "facts": "SELECT count(*) AS facts FROM raw_facts",
 }
 
-# The tables a bundle carries (D06 §5), each exported through its named
-# query so the row order is the one NFR-1 already fixed. Sorted by name so
-# the manifest's contents list is deterministic too.
+# The tables a bundle carries (D06 §5). `documents`, `endpoints`, `shapes`
+# and `shape_fields` export through their named query, so the row order is
+# the one NFR-1 already fixed; `symbols` and `annotations` have no named
+# query and export through their own ordered SELECT below, for the same
+# reason. Sorted by name so the manifest's contents list is deterministic too.
 _EXPORTED_TABLES = ("annotations", "documents", "endpoints", "shape_fields", "shapes", "symbols")
 
 _EXPORT_QUERIES = {

@@ -33,9 +33,10 @@ def derive_endpoints(
     # in which every catalog is skipped still leaves an empty table rather
     # than the previous run's rows.
     workspace.derive("endpoints_reset")
-    # D02 §3: inbound engines run before outbound so the merge below finds the
-    # exposed row already present. Filename breaks the tie, which is the
-    # loader's own order (NFR-1).
+    # D02 §3: the merge runs once, after every engine, so this ordering does
+    # not affect which rows it finds — it exists for determinism only (NFR-1):
+    # inbound before outbound, filename breaking the tie within a direction,
+    # which is the loader's own order.
     ordered = sorted(
         engines, key=lambda pair: (pair[0].direction != "inbound", str(pair[0].source))
     )

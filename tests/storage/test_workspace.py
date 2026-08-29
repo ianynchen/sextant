@@ -2,9 +2,12 @@ from pathlib import Path
 
 import duckdb
 
+from sextant.application.resolve.endpoints import derive_endpoints
+from sextant.cli.resources import catalogs_dir
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import Document, SymbolFact
+from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 
@@ -33,6 +36,74 @@ def _loaded_workspace(tmp_path: Path) -> DuckDbWorkspace:
     _fixture_facts(tmp_path / "facts")
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
+    return workspace
+
+
+def _endpoint_facts(root: Path) -> None:
+    """A minimal RestController with one GetMapping — enough for
+    derive_endpoints to produce a single inbound endpoint row (mirrors the
+    shape tests/application/test_endpoints.py's `_controller_facts` builds)."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/orders/OrderController.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    controller = "com/acme/orders/OrderController#"
+    list_ = "com/acme/orders/OrderController#list(sig_08c5be17)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=controller, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=list_,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=controller,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=controller,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/web/bind/annotation/RestController#",
+                args={},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=controller,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/web/bind/annotation/RequestMapping#",
+                args={"value": ["/v1/orders"]},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=list_,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/web/bind/annotation/GetMapping#",
+                args={},
+            ),
+        ),
+    ]
+    write_fact_file(root / "OrderController.jsonl", document, facts)
+
+
+def _workspace_with_an_endpoint(tmp_path: Path) -> DuckDbWorkspace:
+    _endpoint_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    spring = next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-web")
+    derive_endpoints(workspace, [spring], capabilities={"annotation_args", "type_annotations"})
     return workspace
 
 
@@ -85,13 +156,15 @@ def test_query_rejects_a_name_that_is_not_a_named_query(tmp_path: Path):
 
 
 def test_exported_tables_read_back_equal_to_the_workspace_query(tmp_path: Path):
-    workspace = _loaded_workspace(tmp_path)
+    workspace = _workspace_with_an_endpoint(tmp_path)
     written = workspace.export_tables(tmp_path / "bundle")
     assert written == ["annotations", "documents", "endpoints", "shape_fields", "shapes", "symbols"]
     back = duckdb.sql(
         f"SELECT * FROM read_parquet('{tmp_path / 'bundle' / 'graph' / 'endpoints.parquet'}')"
     ).fetchall()
-    assert len(back) == len(workspace.query("endpoints"))
+    workspace_count = len(workspace.query("endpoints"))
+    assert len(back) == workspace_count
+    assert workspace_count > 0
     workspace.close()
 
 

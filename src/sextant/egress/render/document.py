@@ -51,6 +51,17 @@ _GAPS = [
         "class: a module showing neither is reported `undetermined` rather than "
         "weighed against the rest of the evidence."
     ),
+    (
+        "A path the module both exposes and calls keeps only the handler's "
+        "declared contract: where the client's declaration differs, that "
+        "difference is not recorded."
+    ),
+    (
+        "A payload type reachable from several catalogs is expanded under the "
+        "first catalog's serialisation and nullability rules, not necessarily "
+        "the one that produced its endpoint; the shipped catalogs declare "
+        "compatible rules, so no answer differs today."
+    ),
 ]
 
 
