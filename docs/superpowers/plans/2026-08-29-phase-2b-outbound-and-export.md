@@ -119,6 +119,7 @@ git commit -m "docs: amend D01, D02, M07, M08 and D06 for outbound endpoints and
 - Create: `fixtures/orders-service/src/main/java/com/acme/orders/clients/BillingClient.java`
 - Create: `fixtures/orders-service/src/main/java/com/acme/orders/clients/InventoryExchange.java`
 - Create: `fixtures/orders-service/src/main/java/com/acme/orders/clients/LegacyBillingApi.java`
+- Create: `fixtures/orders-service/src/main/java/com/acme/orders/clients/OrdersLoopClient.java`
 - Test: `tests/ingress/test_asm_scanner.py` (exact lists extended)
 
 **Interfaces:**
@@ -172,15 +173,29 @@ public interface BillingClient {
     @GetMapping("/invoices")
     List<OrderView> invoices();
 
-    // The same wire identity the module itself exposes (OrderController's
-    // POST /v1/orders): D02 §3 merges these into one endpoint, direction
-    // `both`. The sole unannotated parameter is the body (Feign's contract).
+}
+```
+
+```java
+// OrdersLoopClient.java — its own interface, deliberately: @FeignClient's
+// `path` prefix applies to every method in the interface, and this method's
+// wire identity must be exactly the POST /v1/orders the module itself
+// exposes, or D02 §3's merge has nothing to match (pre-flight ruling R1).
+package com.acme.orders.clients;
+
+import com.acme.orders.contracts.OrderRequest;
+import com.acme.orders.contracts.OrderView;
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.PostMapping;
+
+@FeignClient(name = "orders-loop")
+public interface OrdersLoopClient {
+    // The sole unannotated parameter is the body (Feign's contract — the
+    // fallback rule Task 6 implements).
     @PostMapping("/v1/orders")
     OrderView createOrder(OrderRequest order);
 }
 ```
-
-Note: `createOrder`'s path must resolve to exactly `/v1/orders` — Feign's `path = "/billing"` prefix applies to the other two methods, so `createOrder` moves to a second interface if prefixing would break the identity match. **Decide by what the derivation produces:** the merge test (Task 4) asserts the merged row exists; if the prefix applies, move `createOrder` to its own `@FeignClient(name = "orders-loop")` interface with no `path` attribute, and record that in the report.
 
 ```java
 // InventoryExchange.java
@@ -231,7 +246,7 @@ public interface LegacyBillingApi {
 - [ ] **Step 3: Rebuild offline and update the exact lists**
 
 Run: `cd fixtures/orders-service && mvn -q -o compile` — expected exit 0.
-Run: `.venv/bin/pytest tests/ingress -q` — expected: the two exact-list tests FAIL (three new `.jsonl` files, document count 13 → 16). Extend both lists with the three new class names and the count, keeping them exact and sorted. Retrofit methods return `Response`-free types, so no new wrapper facts are expected; verify the interfaces' facts appear with `construct_kind: "interface"` and their method annotations carry args (e.g. `retrofit2/http/GET#` with `{'value': 'legacy/invoices/{id}'}`).
+Run: `.venv/bin/pytest tests/ingress -q` — expected: the two exact-list tests FAIL (four new `.jsonl` files, document count 13 → 17). Extend both lists with the four new class names and the count, keeping them exact and sorted. Retrofit methods return `Response`-free types, so no new wrapper facts are expected; verify the interfaces' facts appear with `construct_kind: "interface"` and their method annotations carry args (e.g. `retrofit2/http/GET#` with `{'value': 'legacy/invoices/{id}'}`).
 
 - [ ] **Step 4: Run the full suite, then commit**
 
@@ -288,6 +303,18 @@ def test_the_service_name_never_leaks_into_the_path(tmp_path):
     [endpoint] = [e for e in workspace.query("endpoints") if e["direction"] == "outbound"]
     assert endpoint["path"] == "/invoices"
     assert endpoint["peer"] == "billing"
+    workspace.close()
+
+
+def test_a_type_level_mapping_annotation_mints_no_endpoint_of_its_own(tmp_path):
+    """In a catalog with no type gate, a prefix-carrying type-level annotation
+    that is also in the mapping list (@HttpExchange's shape) must contribute
+    the prefix and nothing else — its type symbol is not a method, and without
+    the construct-kind guard it would mint one phantom endpoint per method in
+    all_methods (pre-flight ruling R2)."""
+    workspace = _ungated_prefixed_workspace(tmp_path)  # type-level @HttpExchange("/v1/inventory") + one @GetExchange("/levels")
+    rows = [e for e in workspace.query("endpoints") if e["direction"] == "outbound"]
+    assert [(e["method"], e["path"]) for e in rows] == [("GET", "/v1/inventory/levels")]
     workspace.close()
 ```
 
@@ -401,7 +428,13 @@ derived AS (
         'resolved'  AS resolution,
         'compiler'  AS evidence
     FROM mappings m
-    JOIN symbols s ON s.symbol = m.method_symbol
+    -- A handler or caller is always a method. Without this, a TYPE-level
+    -- mapping annotation (a prefix-carrying @HttpExchange, a class-level
+    -- @RequestMapping) joins its own type symbol and, in a catalog with no
+    -- type gate, mints one phantom endpoint per method in all_methods
+    -- (pre-flight ruling R2). The inbound catalogs were protected only by
+    -- their gate's enclosing-join; this names the real rule instead.
+    JOIN symbols s ON s.symbol = m.method_symbol AND s.construct_kind = 'method'
     LEFT JOIN controllers c ON s.enclosing = c.type_symbol
     LEFT JOIN prefixes p ON p.type_symbol = s.enclosing
     WHERE $type_annotation IS NULL OR c.type_symbol IS NOT NULL
@@ -1264,7 +1297,7 @@ def module_export(path: Path, workspace_dir: Path | None, out_dir: Path | None) 
     write_manifest(
         bundle / "manifest.json",
         metadata,
-        source={"repo": _remote_of(path), "commit": commit, "module_commit": _module_commit_of(path)},
+        source={"repo": _remote_of(path), "commit": commit},
         catalog_hash=_catalog_hash(catalogs_dir()),
         module_commit=_module_commit_of(path),
         tables=tables,
