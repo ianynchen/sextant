@@ -62,7 +62,7 @@ The declaration is an annotation and its arguments.
 style: annotation_driven
 matches:
   type_annotation: org.springframework.web.bind.annotation.RestController
-  request_body_annotation: "…annotation.RequestBody"
+  request_body: { annotation: "…annotation.RequestBody", fallback: none }
   mapping:
     path_from: [value, path]
     method_from: method

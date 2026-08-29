@@ -9,7 +9,7 @@ _CAPABILITIES = {"annotation_args", "typed_signatures", "type_annotations", "kot
 
 
 class AsmScanner:
-    """One backend covering every JVM language. Phase 1 declares two
+    """One backend covering every JVM language. Phase 1 declares four
     capabilities; control flow and chain reconstruction arrive in Phase 2."""
 
     def __init__(self, jar: Path) -> None:

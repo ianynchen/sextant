@@ -60,12 +60,15 @@ Honest and barely columnar, sufficient until a columnar need per fact kind is st
                 "fact_schema_version": "1.0.0",
                 "graph_schema_version": "1.0.0",
                 "scanners": [{ "id": "asm", "version": "9.7" }],
-                "catalog_hash": "…", "redaction_set_hash": "…" },
+                "catalog_hash": "…" },
   "environments": ["dev", "staging", "prod"],
-  "coverage": { "sources": 1283, "covered": 1283, "partial": false },
+  "coverage": { "documents": 1283, "partial_documents": 0, "partial": false },
   "contents": { "facts": true, "graph": true, "tables": ["symbols", "edges", "endpoints",
-                                                          "shapes", "shape_fields", "dispatch", "trace_summary"] },
-  "gaps": ["soap_contracts_not_read"]
+                                                          "shapes", "shape_fields", "dispatch", "trace_summary"],
+                "facts_files": 1283 },
+  "gaps": ["soap_contracts_not_read"],
+  "uncovered": ["src/main/java/…/LegacyController.java"],
+  "skipped_catalogs": ["spring-webclient"]
 }
 ```
 
@@ -76,6 +79,10 @@ system graph becomes an error instead of a silent result.
 invalidate different things at very different cost, and `sextant_version` changes results
 without either of them moving — a fixed bug in dispatch resolution produces a different graph
 from identical facts. See [D01](D01-graph-schema.md) §7.
+
+**`redaction_set_hash` does not appear in a produced manifest today.** `analyze` records no
+redaction set, so the field is omitted rather than written empty or invented; it joins
+`producer` the day redaction ships.
 
 **`module_commit`** is the last commit touching this module's own path, computed locally at
 scan time where a clone already exists. It is what lets the system tier judge staleness in a
