@@ -714,8 +714,21 @@ exists.
 
 **Interfaces:**
 - Produces: `shapes(shape_id, content_hash, open)`, `shape_fields(shape_id, ordinal,
-  wire_name, wire_type, wire_format, required, nullable, resolution, evidence, tags)`, and
-  `request_shape` / `response_shape` on `endpoints`.
+  wire_name, wire_type, wire_format, required, nullable, resolution, evidence, tags, item)`,
+  and `request_shape` / `response_shape` on `endpoints`.
+
+**`item` exists because a single `wire_type` cannot describe a collection.** `List<String>`
+and `List<CustomerRef>` are both `array`; without an element descriptor they are
+indistinguishable, and DR-5 would match a caller sending an array of strings against a callee
+expecting an array of records. Since Task 3's fix, the facts carry the element type — this is
+where it lands.
+
+`item` is JSON holding the same recursive descriptor a fact-level type reference uses:
+`{wire_type, wire_format, nullable, shape_id?, item?}`. One shape in two places, so a reader
+learns it once. It is `NULL` for a scalar, the element descriptor for an `array`, and the
+**value** descriptor for a `map` — a JSON object's keys are always strings, so a key
+descriptor would carry no information. Nesting recurses through `item`, so
+`Map<String, List<String>>` needs no special case.
 
 - [ ] **Step 1: Amend D01 §5 first — the column set differs from what it declares**
 
@@ -933,6 +946,18 @@ def test_expands_a_rooted_type_into_its_wire_fields():
     assert "customerId" not in names       # the source name is never the identity
     assert "internalTrace" not in names    # @JsonIgnore produces no field at all
     assert next(f for f in fields if f["wire_name"] == "total")["wire_format"] == "int64"
+
+
+def test_a_collection_field_records_what_it_holds():
+    """`List<String>` and `List<CustomerRef>` are both `array`. Without the
+    element descriptor DR-5 matches a caller sending strings against a callee
+    expecting records — a fabricated link, which is the failure the whole
+    payload-comparison rule exists to prevent."""
+    field = field_of(ws, ORDER_REQUEST, "alternates")
+
+    assert field["wire_type"] == "array"
+    assert json.loads(field["item"])["shape_id"] == shape_id_of(
+        "com/acme/orders/contracts/CustomerRef#")
 ```
 
 - [ ] **Step 2: Run, watch it fail, write the derivation, run again**
@@ -958,6 +983,11 @@ and produces `shapes` and `shape_fields` rows. Per field, in this order:
    from an annotation carries the evidence of the code that declared it (D02 §2f).
 3. **Wire type.** `$known_types` first — a known type is mapped and **never expanded**. Then
    the `wire_type`/`wire_format` the extractor already put on the type reference (D1).
+   **For an `array` or a `map`, recurse into the type reference's `arguments` and build the
+   `item` descriptor**, applying rules 3 and 4 to the element exactly as to any other type: a
+   known element type is mapped, a first-party one expands to its own shape and `item` carries
+   that `shape_id`, and an unknown third-party one stops and marks the shape open. Without
+   this, `List<CustomerRef>` and `List<String>` are the same field.
 4. **Expand or stop.** A first-party `object` expands to its own shape, recursively. Anything
    else stops: keep the type reference, mark the shape `open`, and record the type so
    [M04](../../components/M04-resolver.md) can report it (D2).
