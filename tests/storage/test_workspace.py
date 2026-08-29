@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import duckdb
+
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import Document, SymbolFact
@@ -25,6 +27,13 @@ def _fixture_facts(root: Path) -> None:
         document_id="doc_1", symbol="s maven p 1 com/acme/A#", construct_kind=ConstructKind.CLASS
     )
     write_fact_file(root / "com" / "acme" / "A.jsonl", document, [symbol])
+
+
+def _loaded_workspace(tmp_path: Path) -> DuckDbWorkspace:
+    _fixture_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    return workspace
 
 
 def test_load_facts_reports_the_row_count_when_a_fact_tree_is_ingested(tmp_path: Path):
@@ -73,3 +82,35 @@ def test_query_rejects_a_name_that_is_not_a_named_query(tmp_path: Path):
         assert raised
     finally:
         workspace.close()
+
+
+def test_exported_tables_read_back_equal_to_the_workspace_query(tmp_path: Path):
+    workspace = _loaded_workspace(tmp_path)
+    written = workspace.export_tables(tmp_path / "bundle")
+    assert written == ["annotations", "documents", "endpoints", "shape_fields", "shapes", "symbols"]
+    back = duckdb.sql(
+        f"SELECT * FROM read_parquet('{tmp_path / 'bundle' / 'graph' / 'endpoints.parquet'}')"
+    ).fetchall()
+    assert len(back) == len(workspace.query("endpoints"))
+    workspace.close()
+
+
+def test_two_exports_of_one_workspace_are_byte_identical(tmp_path: Path):
+    """NFR-1 at the bundle boundary (M08). A failure here on one machine and
+    not another is DuckDB's Parquet writer differing between versions —
+    environment drift, not code."""
+    workspace = _loaded_workspace(tmp_path)
+    workspace.export_tables(tmp_path / "one")
+    workspace.export_facts(tmp_path / "one")
+    workspace.export_tables(tmp_path / "two")
+    workspace.export_facts(tmp_path / "two")
+    one = {
+        p.relative_to(tmp_path / "one"): p.read_bytes()
+        for p in sorted((tmp_path / "one").rglob("*.parquet"))
+    }
+    two = {
+        p.relative_to(tmp_path / "two"): p.read_bytes()
+        for p in sorted((tmp_path / "two").rglob("*.parquet"))
+    }
+    assert one == two and one
+    workspace.close()

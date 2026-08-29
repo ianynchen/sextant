@@ -26,4 +26,10 @@ class Workspace(Protocol):
     def query(self, name: str, **params: object) -> list[dict[str, object]]:
         """Run one named query. Unknown names raise KeyError."""
 
+    def export_tables(self, destination: Path) -> list[str]:
+        """Write the bundle's graph tables as Parquet, one file per table."""
+
+    def export_facts(self, destination: Path) -> int:
+        """Write the raw facts as Parquet, one file per document."""
+
     def close(self) -> None: ...

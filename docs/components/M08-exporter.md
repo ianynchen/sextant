@@ -7,11 +7,12 @@ Write a workspace out as a bundle.
 ## Interface
 
 ```
-Exporter
-  export(workspace, what, destination) -> BundlePath
+Workspace
+  export_tables(destination) -> list[str]   # graph/<name>.parquet, one per table
+  export_facts(destination) -> int          # facts/<document>.parquet, one per document
 ```
 
-`what` is `facts`, `graph` or `both`.
+`--what` is deferred (see below): export always writes both.
 
 ## Inputs
 
