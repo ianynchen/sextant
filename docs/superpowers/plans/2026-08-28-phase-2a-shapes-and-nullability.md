@@ -108,8 +108,8 @@ throughout.
 | `fixtures/orders-service/.../KotlinOrder.kt` | **Create**: Kotlin data class with a nullable and a non-null property |
 | `src/sextant/domain/facts.py` | **Modify**: `FieldFact`, and `nullable`/`wire_type` on `TypeRef` |
 | `src/sextant/storage/duckdb/schema.sql` | **Modify**: `shapes`, `shape_fields`, `fields` view, endpoint shape columns |
-| `src/sextant/storage/duckdb/derive_shapes.sql` | **Create**: root, expand, project |
-| `src/sextant/application/resolve/shapes.py` | **Create**: wrapper unwrapping and the shape pass |
+| `src/sextant/storage/duckdb/derive_shapes.sql` | **Create**: materialise the computed shape rows (reset + parameterised insert) |
+| `src/sextant/application/resolve/shapes.py` | **Create**: wrapper unwrapping and the shape pass (root, expand, project) |
 | `src/sextant/catalogs/spring-web.yml`, `spring-mvc.yml` | **Modify**: `wrappers`, `nullability`, `serialization`, `known_types` |
 | `src/sextant/egress/render/metadata.py` | **Modify**: report shapes; drop `shape_expansion_not_implemented` |
 
@@ -929,18 +929,55 @@ def test_stops_at_an_unfamiliar_wrapper_and_says_so():
 
 ## Task 10: Expand a rooted type into fields
 
-**Implements D2.** Expand module-output and first-party types to any depth. A type with a
-`known_types` entry is mapped to its wire form and never expanded. An unknown third-party type
-stops expansion: the reference is kept, the shape is marked open, and the type is reported so
-the catalog can grow from evidence.
+**Implements D2.** Expand types with field facts to any depth. A type with a
+`known_types` entry is mapped to its wire form and never expanded. Any other type without
+field facts stops expansion: the reference is kept, the shape is marked open, and the type is
+reported so the catalog can grow from evidence.
 
-**Files:** Create `src/sextant/storage/duckdb/derive_shapes.sql`; Modify `shapes.py`; Test `tests/application/test_shapes.py`.
+**Files:** Create `src/sextant/storage/duckdb/derive_shapes.sql`; Modify `shapes.py`,
+`src/sextant/storage/duckdb/schema.sql`, `workspace.py`, `tests/application/shape_helpers.py`;
+Test `tests/application/test_shapes.py`.
 
-- [ ] **Step 1: Write the failing test against the fixture's `OrderRequest`**
+**Where the pass runs (pre-flight ruling F5).** The expansion pass is computed in
+`shapes.py` — it must reuse Task 9's `root_type` and `_catalog_symbol` for field-level
+wrappers and dotted→SCIP conversion, and the recursive `item` descriptor cannot be assembled
+bottom-up in one SQL statement. `derive_shapes.sql` is the materialisation step: it resets
+`shapes`/`shape_fields` (`CREATE OR REPLACE TABLE`) and inserts the rows the pass computed,
+handed over as bound JSON parameters. Language-blindness still holds — the architecture tests
+already scan `shapes.py`, and the grep test on `derive_shapes.sql` stays in Task 11. The
+pass reads field facts through the workspace port: add a `fields` named query (or view) to
+`schema.sql`/`workspace.py` exposing, per field symbol fact, its symbol, its defining
+document, its `signature.returns` JSON, and a `seq` column from `rowid` — declaration order
+within a document, the `ordinal` source. Add an `annotations_of` route for the pass to read
+serialisation annotations by target.
+
+**Shape identity (pre-flight ruling F1).** `shape_id` **is** the type's descriptor symbol —
+`com/acme/orders/contracts/OrderRequest#` — the same grammar type references already use.
+`content_hash` is md5 over the ordered projected field rows and is the change-detection
+value, never the identity: `item` descriptors reference other shapes by `shape_id`, so a
+content-derived *identity* for `Node { Node parent; }` would depend on itself.
+
+**Entry point.** `derive_shapes(workspace, catalog, roots: Sequence[str])` — the roots are
+type-descriptor symbols, handed in explicitly. Task 12 computes them from endpoints; this
+task's tests pass them directly. Two catalogs may both run (D02 §5): the reset happens once
+per resolve, and a shape already present for the same `shape_id` is not inserted twice —
+the same insert-if-absent discipline `derive_endpoints.sql` uses.
+
+- [ ] **Step 1: Write the failing tests**
+
+Hand-build the fact files with `write_fact_file`, following `test_endpoints.py`'s pattern —
+never read the gitignored Maven `target/classes` from a unit test (Task 3's lesson). Mirror
+the fixture's contracts classes verbatim (same symbols, same annotations, the
+`signature.returns` JSON exactly as the extractor emits it: `symbol`, `arguments`,
+`wire_type`, `wire_format`, `nullable`, `nullable_resolution` at every level). Add to
+`shape_helpers.py`: `ORDER_REQUEST = "com/acme/orders/contracts/OrderRequest#"`, and
+`shape_of(workspace, shape_id)` returning the one `shapes` row. `shape_id_of` is not needed
+— a shape's id IS the descriptor symbol (ruling F1).
 
 ```python
-def test_expands_a_rooted_type_into_its_wire_fields():
-    fields = shape_fields_of("com/acme/orders/contracts/OrderRequest#")
+def test_expands_a_rooted_type_into_its_wire_fields(tmp_path):
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])   # local helper: facts + catalog + derive_shapes
+    fields = shape_fields_of(ws, ORDER_REQUEST)
     names = [f["wire_name"] for f in fields]
     assert "customer_id" in names          # @JsonProperty wins over the source name
     assert "customerId" not in names       # the source name is never the identity
@@ -948,80 +985,101 @@ def test_expands_a_rooted_type_into_its_wire_fields():
     assert next(f for f in fields if f["wire_name"] == "total")["wire_format"] == "int64"
 
 
-def test_a_collection_field_records_what_it_holds():
+def test_a_collection_field_records_what_it_holds(tmp_path):
     """`List<String>` and `List<CustomerRef>` are both `array`. Without the
     element descriptor DR-5 matches a caller sending strings against a callee
     expecting records — a fabricated link, which is the failure the whole
     payload-comparison rule exists to prevent."""
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
     field = field_of(ws, ORDER_REQUEST, "alternates")
 
     assert field["wire_type"] == "array"
-    assert json.loads(field["item"])["shape_id"] == shape_id_of(
-        "com/acme/orders/contracts/CustomerRef#")
+    assert json.loads(field["item"])["shape_id"] == "com/acme/orders/contracts/CustomerRef#"
 ```
 
-- [ ] **Step 2: Run, watch it fail, write the derivation, run again**
+- [ ] **Step 2: Run, watch it fail, write the pass, run again**
 
-The derivation is the largest unwritten piece in this plan, so its contract is stated here
-rather than left to inference. `derive_shapes.sql` takes these bound parameters, all catalog
-data forwarded unmodified exactly as `derive_endpoints.sql` already forwards its own:
+The pass takes the catalog data below (dotted names converted through `_catalog_symbol` at
+the binding seam, exactly where Task 9 converts wrapper names):
 
-| Parameter | From |
+| Input | From |
 |---|---|
-| `$known_types` | D02 §2g — `{type, wire, format, nullable}` rows |
-| `$name_from` | D02 §2f — `{annotation, arg}` rows supplying a wire name |
-| `$ignore` | D02 §2f — annotations meaning "absent from the wire" |
-| `$default_strategy` | D02 §2f |
-| `$first_party_prefixes` | the module's own coordinates, so origin can be decided |
+| `known_types` | D02 §2g — `{type, wire, format, nullable}` rows |
+| `name_from` | D02 §2f — `{annotation, arg}` rows supplying a wire name |
+| `ignore` | D02 §2f — annotations meaning "absent from the wire" |
+| `default_strategy` | D02 §2f |
+| `wrappers` | D02 §2a — for field-level envelopes (rule 3 below) |
 
 and produces `shapes` and `shape_fields` rows. Per field, in this order:
 
-1. **Ignored?** If the field carries an `$ignore` annotation, emit nothing. Not a field marked
+1. **Ignored?** If the field carries an `ignore` annotation, emit nothing. Not a field marked
    absent — *no row*, or DR-5 compares it against a peer that correctly omits it.
-2. **Wire name.** First `$name_from` annotation whose argument is present, else the source
-   name under `$default_strategy`. A name from the default carries `evidence: declared`; one
+2. **Wire name.** First `name_from` annotation whose argument is present, else the source
+   name under `default_strategy`. A name from the default carries `evidence: declared`; one
    from an annotation carries the evidence of the code that declared it (D02 §2f).
-3. **Wire type.** `$known_types` first — a known type is mapped and **never expanded**. Then
+3. **Unwrap.** Root the field's type reference through the catalog's `wrappers` with Task 9's
+   `root_type` and continue from the rooted type. The semantics chain is recorded for Task 11
+   — `optional` in the chain is the presence machinery that makes `required: false`. Without
+   this rule, `Optional<String>` falls to rule 5 as an unknown generic and wrongly marks the
+   shape open.
+4. **Wire type.** `known_types` first — a known type is mapped and **never expanded**. Then
    the `wire_type`/`wire_format` the extractor already put on the type reference (D1).
    **For an `array` or a `map`, recurse into the type reference's `arguments` and build the
-   `item` descriptor**, applying rules 3 and 4 to the element exactly as to any other type: a
-   known element type is mapped, a first-party one expands to its own shape and `item` carries
-   that `shape_id`, and an unknown third-party one stops and marks the shape open. Without
-   this, `List<CustomerRef>` and `List<String>` are the same field.
-4. **Expand or stop.** A first-party `object` expands to its own shape, recursively. Anything
-   else stops: keep the type reference, mark the shape `open`, and record the type so
-   [M04](../../components/M04-resolver.md) can report it (D2).
+   `item` descriptor**, applying rules 4 and 5 to the element exactly as to any other type
+   (the **value** argument for a map — a JSON object's keys are always strings): a known
+   element type is mapped, an element with field facts expands to its own shape and `item`
+   carries that `shape_id`, and an unknown one stops and marks the shape open. Without this,
+   `List<CustomerRef>` and `List<String>` are the same field.
+5. **Expand or stop.** An `object` **with field facts** expands to its own shape,
+   recursively. Anything else stops: the referenced type still gets a `shapes` row — open,
+   zero fields — so the reference is kept (D2) and the report can name it; the shape holding
+   the field is marked `open` too (direct, not transitive). **An `object` field's `item`
+   carries the reference either way**: `{"wire_type": "object", "shape_id": <ref>}` —
+   without it, nothing links the field to the shape it holds (pre-flight ruling F3).
+   `unexpanded_types` = the open shapes with zero fields, exposed by the pass's return value
+   so [M04](../../components/M04-resolver.md) can report it (D2).
+
+There is no origin test: expansion needs field facts, and only scanned types have them — a
+first-party type from a jar stops exactly as a third-party one does (pre-flight ruling F4).
 
 **Cycles terminate by construction** — `object` is a *reference* to another shape, never an
-inlining, so `Node { Node parent; }` needs no depth counter.
+inlining, so `Node { Node parent; }` needs no depth counter. Expand each `shape_id` at most
+once per pass.
 
-**Determinism (NFR-1):** `ordinal` is the class file's declaration order, and `content_hash`
-is derived from the ordered field list. Neither may come from a set or a dictionary iteration
-order, or two runs differ.
+**Determinism (NFR-1):** `ordinal` is declaration order — the `seq` (rowid) order of the
+field facts within their defining document — and `content_hash` is md5 over the ordered
+field list. Neither may come from a set or a dictionary iteration order, or two runs differ.
+
+Columns this task leaves for Task 11: `required`, `nullable`, `resolution` may carry the
+extractor's raw answer (or NULL) until Task 11 applies the catalog; `tags` stays NULL.
+
 - [ ] **Step 3: Add the three boundary tests**
 
 ```python
-def test_a_known_type_is_mapped_to_its_wire_form_and_never_expanded():
+def test_a_known_type_is_mapped_to_its_wire_form_and_never_expanded(tmp_path):
     """Expanding BigDecimal yields intVal, scale, intCompact and precision —
     internal machinery, none of it on the wire, producing a shape no real
     payload could match."""
-    field = field_of("OrderRequest", "total_amount")
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    field = field_of(ws, ORDER_REQUEST, "total_amount")
     assert field["wire_type"] == "number"
-    assert shape_fields_of(field["type_ref"]) == []
+    # Mapped, never expanded: no shape exists for it, open or otherwise.
+    assert not any(s["shape_id"] == "java/math/BigDecimal#" for s in ws.query("shapes"))
 
 
-def test_expansion_stops_at_an_unknown_third_party_type_and_marks_the_shape_open():
-    shape = shape_of("com/acme/orders/contracts/OrderView#")
-    assert shape["open"] is True
+def test_expansion_stops_at_an_unknown_third_party_type_and_marks_the_shape_open(tmp_path):
+    ws = _expanded_workspace(tmp_path, roots=["com/acme/orders/contracts/OrderView#"])
+    assert shape_of(ws, "com/acme/orders/contracts/OrderView#")["open"] is True
 
 
-def test_the_report_names_the_type_that_stopped_expansion():
+def test_the_report_names_the_type_that_stopped_expansion(tmp_path):
     """The catalog grows from observation. A gap nobody can see is a gap
     nobody closes."""
-    assert "org/springframework/http/HttpHeaders#" in unexpanded_types_reported()
+    result = _expand(tmp_path, roots=["com/acme/orders/contracts/OrderView#"])
+    assert "org/springframework/http/HttpHeaders#" in result.unexpanded_types
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Run the full suite and commit**
 
 ---
 
@@ -1040,54 +1098,80 @@ annotation, because they answer different questions.
 
 **Interfaces:**
 - Consumes: `nullable` / `nullable_resolution` on type references (Tasks 3, 5); the
-  `nullability` block (Task 8).
+  `nullability` block (Task 8); the per-field wrapper chain rule 3 of Task 10 recorded.
 - Produces: `shape_fields.nullable`, `.required`, `.resolution`, `.evidence`.
+
+Tests hand-build facts exactly as Task 10's do, mirroring the fixture classes. The
+`annotations` view does not yet project `type_path` or `retention` — extend it (pre-flight
+ruling F7): **only an annotation whose `type_path` is NULL or `''` speaks about the field's
+own type**; `List<@Nullable String>` annotates the element, not the field, and must not flip
+the field's `nullable`. Catalog `nullability` names are dotted and convert through
+`_catalog_symbol` at the binding seam, like every other catalog block.
 
 - [ ] **Step 1: Write the failing tests — the language answer, the override, and the scope**
 
+Under ruling B (ledgered; D00 §5a as amended), the JVM extractor emits `resolution:
+resolved` for every field — Java's type system settles nullability outright. The override
+rule "a catalog-declared source sets `resolution` to `resolved`" stays, because it is what
+lifts a genuinely weaker answer (unannotated Python, later) — on the JVM it is a no-op.
+
 ```python
-def test_the_language_answer_survives_when_no_catalog_annotation_applies():
+def test_the_language_answer_survives_when_no_catalog_annotation_applies(tmp_path):
     """The extractor already decided. The derivation must not re-derive it, or
     the same rule ends up in two places and they will diverge."""
-    assert field_of("OrderRequest", "reference") == {"nullable": True, "resolution": "partial"}
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    field = field_of(ws, ORDER_REQUEST, "reference")
+    assert field["nullable"] is True
+    assert field["resolution"] == "resolved"    # ruling B: Java answers outright
 
 
-def test_a_declared_annotation_overrides_the_language_default_and_resolves_it():
-    assert field_of("OrderRequest", "note") == {"nullable": True, "resolution": "resolved"}
-
-
-def test_a_not_null_annotation_overrides_javas_permissive_default():
+def test_a_not_null_annotation_overrides_javas_permissive_default(tmp_path):
     # Looked up by WIRE name: the field is `customerId` in Java and
     # `customer_id` on the wire, and D01 §5 makes the wire name the identity.
-    assert field_of(ws, ORDER_REQUEST, "customer_id") == {
-        "nullable": False, "resolution": "resolved"}
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    field = field_of(ws, ORDER_REQUEST, "customer_id")
+    assert field["nullable"] is False
+    assert field["resolution"] == "resolved"
 
 
-def test_kotlin_arrives_already_resolved_and_is_not_downgraded():
-    assert field_of("KotlinOrder", "note") == {"nullable": True, "resolution": "resolved"}
-    assert field_of("KotlinOrder", "id") == {"nullable": False, "resolution": "resolved"}
+def test_a_declared_nullable_annotation_agrees_with_the_language_default(tmp_path):
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    field = field_of(ws, ORDER_REQUEST, "note")
+    assert field["nullable"] is True
+    assert field["resolution"] == "resolved"
 
 
-def test_a_null_marked_scope_inverts_the_default_for_everything_inside_it():
-    """The scope is itself a declaration, so absence carries meaning and the
-    result is resolved rather than partial."""
-    assert field_of("ScopedRequest", "code") == {"nullable": False, "resolution": "resolved"}
+def test_kotlin_arrives_already_resolved_and_is_not_downgraded(tmp_path):
+    ws = _expanded_workspace(tmp_path, roots=[KOTLIN_ORDER])
+    assert field_of(ws, KOTLIN_ORDER, "note")["nullable"] is True
+    assert field_of(ws, KOTLIN_ORDER, "id")["nullable"] is False
 
 
-def test_presence_is_never_read_from_a_nullability_annotation():
+def test_a_null_marked_scope_inverts_the_default_for_everything_inside_it(tmp_path):
+    """The scope is itself a declaration, so absence carries meaning."""
+    ws = _expanded_workspace(tmp_path, roots=[SCOPED_REQUEST])
+    field = field_of(ws, SCOPED_REQUEST, "code")
+    assert field["nullable"] is False
+    assert field["resolution"] == "resolved"
+
+
+def test_presence_is_never_read_from_a_nullability_annotation(tmp_path):
     """`required` and `nullable` answer different questions (D00 §5a). Bean
     Validation's @NotNull is the trap: it constrains a value at validation time
     and says nothing about whether the field may be omitted."""
-    assert field_of("OrderRequest", "note")["required"] is True
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    assert field_of(ws, ORDER_REQUEST, "note")["required"] is True
 
 
-def test_an_optional_wrapper_makes_a_field_not_required():
-    assert field_of("OrderRequest", "note2")["required"] is False
+def test_an_optional_wrapper_makes_a_field_not_required(tmp_path):
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    assert field_of(ws, ORDER_REQUEST, "note2")["required"] is False
 
 
 def test_the_derivation_names_no_language():
     """Language-blind by test, not by intention. The per-language rules live in
-    the extractors; this file must contain none of them."""
+    the extractors; this file must contain none of them. (The pass itself lives
+    in shapes.py, which the architecture tests already scan.)"""
     source = (SQL_DIR / "derive_shapes.sql").read_text().lower()
     assert not {"java", "kotlin", "jvm"} & set(re.findall(r"[a-z]+", source))
 ```
@@ -1104,11 +1188,20 @@ Expected: FAIL — `shape_fields` carries no nullability yet.
 package com.acme.orders.scoped;
 ```
 
+The fixture addition keeps the conformance fixture honest (D02 §4) and feeds Task 12's
+end-to-end run; the unit tests above hand-build the same facts. The scope rule is symbol
+**prefix** matching: a scope annotation's target claims every field symbol it prefixes — a
+type-level target (`com/acme/X#`) is naturally a prefix of its members (`com/acme/X#code.`),
+and a package-scope target claims the package after its trailing file-class name is
+stripped. No language name appears: it is string prefixing over one symbol grammar.
+
 - [ ] **Step 4: Implement the override, then run again**
 
 The order is: the extractor's answer, then a scope rule if one encloses the field, then an
-explicit annotation. Last wins, and any catalog-declared source raises `resolution` to
-`resolved`.
+explicit annotation on the field's own type (`type_path` NULL or `''`). Last wins, and any
+catalog-declared source sets `resolution` to `resolved`. `required` is `True` unless
+presence machinery says otherwise — in this phase, the `optional` wrapper semantics recorded
+by Task 10's rule 3.
 
 - [ ] **Step 5: Commit**
 
@@ -1144,30 +1237,53 @@ Rebuild: `cd fixtures/orders-service && mvn -q -o compile`.
 
 - [ ] **Step 2: Write the failing end-to-end test**
 
+The pipeline-level test follows `test_pipeline.py`'s existing end-to-end pattern (compile
+the fixture, scan, `resolve`); `workspace.query("shape_fields")` reads the fields.
+
 ```python
 def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_path: Path):
-    report = analyze_fixture(tmp_path)
+    report = _resolved_fixture(tmp_path)     # the module-level e2e helper pattern
     endpoint = next(e for e in report.endpoints
                     if e["method"] == "POST" and e["path"] == "/v1/orders/detailed")
 
-    assert endpoint["request_shape"] is not None
-    assert "customer_id" in [f["wire_name"] for f in fields_of(endpoint["request_shape"])]
+    assert endpoint["request_shape"] == "com/acme/orders/contracts/OrderRequest#"
+    ws_fields = shape_fields_of(workspace, endpoint["request_shape"])
+    assert "customer_id" in [f["wire_name"] for f in ws_fields]
     # The response is ResponseEntity<OrderView>; the shape must root at
     # OrderView, or the wrapper declarations in Task 8 did nothing.
-    assert endpoint["response_shape"] == shape_id_of("com/acme/orders/contracts/OrderView#")
+    assert endpoint["response_shape"] == "com/acme/orders/contracts/OrderView#"
 ```
 
 - [ ] **Step 3: Join endpoints to shapes through the `@RequestBody` parameter and the rooted return type**
+
+The roots are computed in the resolve pass (Python), not re-derived in SQL: for each
+endpoint's handler signature, the request root is the type of the parameter annotated with
+the catalog's `request_body_annotation` (already in `matches`), and the response root is the
+return type unwrapped through Task 9's `root_type`. Hand the collected roots to Task 10's
+`derive_shapes`, then set each endpoint's `request_shape`/`response_shape` — a small
+parameterised UPDATE derivation is fine; `derive_endpoints.sql` itself need not change. **A
+scalar root produces no shape and leaves the column NULL** — a `String` response has no
+field list to compare, and an invented shape row would be noise presented as fact. A rooted
+type that stopped expansion still gets its open, zero-field shape row (Task 10 rule 5), so
+the endpoint's column still points at a real row.
+
+`ResolveReport` gains `shapes` and `unexpanded_types`; `metadata.json` carries the shape
+count and the full unexpanded list (a count cannot be acted on — same rule as `uncovered`).
+
 - [ ] **Step 4: Stop declaring the gap that no longer exists**
 
-`shape_expansion_not_implemented` comes out of `metadata.py`'s omission list. **Any part still
-unimplemented keeps its own named omission** — removing the label without removing the gap is
-the failure FR-17 exists to prevent.
+`shape_expansion_not_implemented` comes out of `metadata.py`'s omission list **and its paired
+sentence out of `document.py`'s `_GAPS`** — the two are kept in lockstep by that file's own
+comment. **Any part still unimplemented keeps its own named omission** — removing the label
+without removing the gap is the failure FR-17 exists to prevent.
 
 - [ ] **Step 5: Verify determinism**
 
-Run the pipeline twice into different workspaces and diff `metadata.json`. Field order must be
-declaration order, and shape identity must be content-derived, or the two runs differ.
+Run the pipeline twice into different workspaces and diff `metadata.json`. Field order must
+be declaration order, and `content_hash` must be derived from the ordered field list
+(`shape_id` is the rooted type's symbol — pre-flight ruling F1), or the two runs differ.
+The existing byte-identical double-run e2e test is the net; extend its assertions only if
+shapes do not already flow into the compared files.
 
 - [ ] **Step 6: Run every gate**
 
