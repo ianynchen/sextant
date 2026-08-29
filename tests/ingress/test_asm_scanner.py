@@ -38,8 +38,10 @@ def test_scan_writes_one_fact_file_per_source_file_when_run_on_the_fixture(tmp_p
         "OrderResult.jsonl",
         "OrderService.jsonl",
         "OrderView.jsonl",
+        "ScopedRequest.jsonl",
+        "package-info.jsonl",
     ]
-    assert report.documents == 10
+    assert report.documents == 12
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -70,6 +72,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderResult.jsonl",
         "OrderService.jsonl",
         "OrderView.jsonl",
+        "ScopedRequest.jsonl",
+        "package-info.jsonl",
     ]
 
 
