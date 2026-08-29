@@ -575,7 +575,7 @@ _OUTBOUND_CATALOG = Catalog(
     source=Path("tests/invented.yml"),
     matches={
         "type_annotation": "com/acme/billing/annotation/ServiceClient#",
-        "request_body_annotation": "com/acme/billing/annotation/Body#",
+        "request_body": {"annotation": "com/acme/billing/annotation/Body#", "fallback": "none"},
         "mapping": {
             "path_from": ["value"],
             # `path` carries the prefix; `name` (read by peer_from below)

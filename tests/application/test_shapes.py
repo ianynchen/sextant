@@ -913,7 +913,7 @@ _ENDPOINT_CATALOG = Catalog(
         "id": "invented-endpoints",
         "matches": {
             "type_annotation": "com/acme/rest/Resource#",
-            "request_body_annotation": "com/acme/rest/Body#",
+            "request_body": {"annotation": "com/acme/rest/Body#", "fallback": "none"},
             "mapping": {
                 "path_from": ["value"],
                 "prefix_from": ["value"],
@@ -969,6 +969,17 @@ def _body_parameter(reference: dict) -> dict:
     return {
         "name": "request",
         "annotations": [{"annotation": "com/acme/rest/Body#", "args": {}}],
+        "type": reference,
+        "type_annotations": [],
+    }
+
+
+def _bare_parameter(reference: dict, name: str = "request") -> dict:
+    """A parameter with no annotations of its own — Feign's contract: no
+    annotation marks the body, being the only bare parameter does."""
+    return {
+        "name": name,
+        "annotations": [],
         "type": reference,
         "type_annotations": [],
     }
@@ -1135,6 +1146,75 @@ def test_no_payload_stays_null_and_means_exactly_that(tmp_path):
     could not describe'."""
     endpoint = _resolved_void_handler(tmp_path)
     assert endpoint["response_shape"] is None
+
+
+# A catalog whose request-body rule falls back to the sole unannotated
+# parameter (D02 §2 as amended) — Feign's contract, invented here rather than
+# reached for a shipped catalog so this test exercises the pass, not a file.
+_SOLE_UNANNOTATED_CATALOG = Catalog(
+    **{
+        **vars(_ENDPOINT_CATALOG),
+        "id": "invented-endpoints-sole-unannotated",
+        "matches": {
+            **_ENDPOINT_CATALOG.matches,
+            "request_body": {
+                "annotation": "com/acme/rest/Body#",
+                "fallback": "sole_unannotated",
+            },
+        },
+    }
+)
+
+
+def _resolved_bare_handler(tmp_path: Path, parameters: tuple[dict, ...]) -> dict:
+    """The same endpoint-to-contract path `_resolved_handler` runs, but over
+    `_SOLE_UNANNOTATED_CATALOG` so the fallback rule is exercised."""
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(
+        root,
+        _signature(returns=_ref(ORDER_VIEW_SHAPE, "object"), parameters=parameters),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [_SOLE_UNANNOTATED_CATALOG], capabilities=set())
+    derive_endpoint_shapes(workspace, [_SOLE_UNANNOTATED_CATALOG], capabilities=set())
+    endpoint = workspace.query("endpoints")[0]
+    workspace.close()
+    return endpoint
+
+
+def _resolved_bare_body_handler(tmp_path: Path) -> dict:
+    return _resolved_bare_handler(
+        tmp_path, parameters=(_bare_parameter(_ref(ORDER_REQUEST, "object")),)
+    )
+
+
+def _resolved_two_bare_handler(tmp_path: Path) -> dict:
+    return _resolved_bare_handler(
+        tmp_path,
+        parameters=(
+            _bare_parameter(_ref(ORDER_REQUEST, "object"), name="request"),
+            _bare_parameter(_ref(CUSTOMER_REF, "object"), name="customer"),
+        ),
+    )
+
+
+def test_the_sole_unannotated_parameter_is_the_body_when_the_catalog_says_so(tmp_path):
+    """Feign's contract: no annotation marks the body; being the only bare
+    parameter does. The rule is catalog data — inferring it for a catalog that
+    declares no fallback would be a guess presented as an observation."""
+    endpoint = _resolved_bare_body_handler(tmp_path)
+    assert json.loads(endpoint["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderRequest#"
+    )
+
+
+def test_two_bare_parameters_mean_no_body_at_all(tmp_path):
+    """'Sole' is load-bearing: with two candidates, picking either is a coin
+    flip recorded as fact."""
+    endpoint = _resolved_two_bare_handler(tmp_path)
+    assert endpoint["request_shape"] is None
 
 
 def test_the_derivation_names_no_language():

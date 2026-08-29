@@ -233,7 +233,7 @@ def test_a_catalog_skipped_by_capability_gating_contributes_no_shapes(tmp_path: 
     assert "internalTrace" not in names
 
 
-def test_a_catalog_that_names_no_request_body_annotation_claims_no_request_shape(
+def test_a_catalog_that_names_no_request_body_rule_claims_no_request_shape(
     tmp_path: Path,
 ):
     """Which annotation marks the request payload is framework knowledge, so a
@@ -243,9 +243,7 @@ def test_a_catalog_that_names_no_request_body_annotation_claims_no_request_shape
         **{
             **vars(_spring_web()),
             "matches": {
-                key: value
-                for key, value in _spring_web().matches.items()
-                if key != "request_body_annotation"
+                key: value for key, value in _spring_web().matches.items() if key != "request_body"
             },
         }
     )

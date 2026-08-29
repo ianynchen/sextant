@@ -291,20 +291,23 @@ def _contracts_of(
 
 
 def _body_type(signature: dict[str, Any], catalog: Catalog) -> dict[str, Any] | None:
-    """The type of the parameter the catalog's request-body annotation marks
-    (D00 §5a: "the request body is the type of the parameter annotated
-    `@RequestBody`" becomes a field read, not a positional join).
-
-    Which annotation that is, is framework knowledge, so a catalog that
-    declares none contributes no request shapes — inferring one from position
-    would be a guess presented as an observation.
-    """
-    marker = catalog.matches.get("request_body_annotation")
-    if marker is None:
+    """The type of the parameter the catalog's body rule marks (D02 §2 as
+    amended). The marker wins; the sole-unannotated fallback exists because
+    one contract (Feign's) marks the body by being the only bare parameter.
+    A catalog declaring neither contributes no request shapes."""
+    declared = catalog.matches.get("request_body")
+    if declared is None:
         return None
-    for parameter in signature.get("parameters", []):
-        if any(use["annotation"] == marker for use in parameter.get("annotations", [])):
+    parameters = signature.get("parameters", [])
+    for parameter in parameters:
+        if any(
+            use["annotation"] == declared["annotation"] for use in parameter.get("annotations", [])
+        ):
             return dict(parameter["type"])
+    if declared.get("fallback") == "sole_unannotated":
+        bare = [p for p in parameters if not p.get("annotations")]
+        if len(bare) == 1:
+            return dict(bare[0]["type"])
     return None
 
 
