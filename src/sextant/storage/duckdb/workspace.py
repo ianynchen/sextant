@@ -14,6 +14,21 @@ _NAMED_QUERIES = {
     # `ordinal` alone would tie across shapes; `shape_id` first is what makes
     # the ordering total rather than merely stable within one shape (NFR-1).
     "shape_fields": "SELECT * FROM shape_fields ORDER BY shape_id, ordinal",
+    # The field facts the shape pass expands, in declaration order within each
+    # defining document — `seq` is what `ordinal` is derived from, so the
+    # ordering is part of the answer rather than a convenience (NFR-1).
+    "fields": """
+        SELECT symbol, document_id, seq, signature -> 'returns' AS returns
+        FROM symbols
+        WHERE construct_kind = 'field'
+        ORDER BY document_id, seq
+    """,
+    # Annotations on one target. Ordered by name so a target carrying two of
+    # them is read the same way twice; which one wins is the caller's rule,
+    # never this ordering.
+    "annotations_of": """
+        SELECT annotation, args FROM annotations WHERE target = ? ORDER BY annotation
+    """,
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
@@ -27,6 +42,8 @@ _NAMED_QUERIES = {
 _NAMED_DERIVATIONS = {
     "endpoints": "derive_endpoints.sql",
     "endpoints_reset": "reset_endpoints.sql",
+    "shapes": "derive_shapes.sql",
+    "shape_fields": "derive_shape_fields.sql",
 }
 
 

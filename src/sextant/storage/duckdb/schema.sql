@@ -63,7 +63,13 @@ SELECT document_id,
 FROM raw_facts WHERE kind = 'document';
 
 CREATE OR REPLACE VIEW symbols AS
-SELECT document_id,
+-- `seq` is the load order of the fact within its file, and a fact file is
+-- written in declaration order (D00 §7). It is the only ordering that survives
+-- into the workspace, and shape_fields.ordinal is declaration order (D01 §5),
+-- so it is projected here rather than re-derived from anything the payload
+-- happens to carry. A view over a table keeps the base table's rowid.
+SELECT rowid                        AS seq,
+       document_id,
        payload ->> 'symbol'         AS symbol,
        payload ->> 'construct_kind' AS construct_kind,
        payload ->> 'enclosing'      AS enclosing,

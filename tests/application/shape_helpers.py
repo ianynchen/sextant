@@ -11,6 +11,11 @@ def type_ref(symbol: str, *arguments: dict) -> dict:
 
 ORDER_VIEW = type_ref("com/acme/orders/contracts/OrderView#")
 
+# A shape's id **is** its descriptor symbol (pre-flight ruling F1), so there is
+# no `shape_id_of`: the constant below is both the type reference's symbol and
+# the row key every shape query uses.
+ORDER_REQUEST = "com/acme/orders/contracts/OrderRequest#"
+
 
 def mono_of(inner: dict) -> dict:
     return type_ref("reactor/core/publisher/Mono#", inner)
@@ -33,6 +38,11 @@ SPRING_WRAPPERS = [
     },
     {"type": "java.util.Optional", "payload_arg": 0, "semantics": "optional"},
 ]
+
+
+def shape_of(workspace, shape_id: str) -> dict:
+    """The one `shapes` row for a shape id."""
+    return next(s for s in workspace.query("shapes") if s["shape_id"] == shape_id)
 
 
 def shape_fields_of(workspace, shape_id: str) -> list[dict]:
