@@ -41,3 +41,6 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     for route in ("POST", "GET", "/v1/orders", "/v1/orders/{id}"):
         assert route in document
     assert "Known gaps" in document
+    assert "## Outbound endpoints" in document
+    assert "/billing/invoices" in document
+    assert "classDiagram" in document

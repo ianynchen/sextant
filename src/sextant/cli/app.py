@@ -132,6 +132,7 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             report,
             _commit_of(path),
             tuple(metadata.get("uncovered", [])),
+            shape_fields=workspace.query("shape_fields"),
         )
         target = workspace_dir / "render" / "architecture.md"
         target.parent.mkdir(parents=True, exist_ok=True)

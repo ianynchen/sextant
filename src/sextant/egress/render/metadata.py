@@ -10,11 +10,18 @@ from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
 
-# What Sextant knowingly did not do in phase 1. Every entry here has a
-# matching human-readable sentence in document.py's _GAPS, so a catalog that
-# cannot be complete never reads as complete (M07 "Honesty obligations").
-PHASE_1_GAPS = [
-    "outbound_endpoints_not_implemented",
+# What Sextant knowingly does not do, rotated whole rather than narrowed as
+# capability lands (spec ruling I3): a gap that closes retires by name, and
+# every entry here has a matching human-readable sentence in document.py's
+# _GAPS in the same order, so a catalog that cannot be complete never reads
+# as complete (M07 "Honesty obligations").
+KNOWN_GAPS = [
+    "call_site_clients_not_read",
+    "messaging_endpoints_not_read",
+    "http_exchange_inbound_use_not_detected",
+    "client_base_addresses_not_resolved",
+    "sequence_diagrams_pending_call_graph",
+    "structure_diagram_limited_to_contracts",
     "call_graph_not_implemented",
     "maven_parent_and_profile_resolution_not_implemented",
     "catalog_module_matching_not_implemented",
@@ -61,7 +68,7 @@ def write_metadata(
             "scanners": [{"id": scanner_id, "version": scanner_version}],
         },
         "coverage": report.coverage,
-        "gaps": PHASE_1_GAPS,
+        "gaps": KNOWN_GAPS,
         # Which compiled sources the facts do not account for (FR-17). Listed
         # in full rather than counted: a count cannot be acted on.
         "uncovered": list(uncovered),
