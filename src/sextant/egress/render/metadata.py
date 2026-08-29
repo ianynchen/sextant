@@ -14,7 +14,6 @@ from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SE
 # matching human-readable sentence in document.py's _GAPS, so a catalog that
 # cannot be complete never reads as complete (M07 "Honesty obligations").
 PHASE_1_GAPS = [
-    "collection_payloads_carry_no_shape",
     "outbound_endpoints_not_implemented",
     "call_graph_not_implemented",
     "maven_parent_and_profile_resolution_not_implemented",

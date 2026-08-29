@@ -8,12 +8,6 @@ from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.pipeline import ResolveReport
 
 _GAPS = [
-    (
-        "A payload that is a collection carries no shape: an endpoint holds one shape "
-        "identity for its request and one for its response, with nowhere to say what a "
-        "list holds, so those endpoints are reported with no contract at all rather "
-        "than with their element's."
-    ),
     "Outbound endpoints are not implemented: this catalog is inbound only.",
     "The call graph is not implemented: there are no traces or sequence diagrams.",
     (

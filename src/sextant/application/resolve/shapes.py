@@ -194,23 +194,35 @@ def derive_endpoint_shapes(
         # would be the same gap said twice.
         if missing_capabilities(catalog, capabilities):
             continue
-        found = _contracts_of(endpoints, catalog, settled)
+        rules = _rules_of(catalog)
+        enums = _enum_symbols(workspace)
+        # `_described` appends every object it meets — including a
+        # collection's element — while it builds each column's descriptor, so
+        # the roots this catalog expands are read back from there rather than
+        # picked out of the two columns by hand: strictly more complete than
+        # the 2A roots, which only a bare `object` payload ever reached.
+        referenced: list[str] = []
+        found = _contracts_of(endpoints, catalog, settled, rules, enums, referenced)
         # Deduped in the order the endpoints reached them, which is the order
         # the shape rows are written and the report names gaps (NFR-1).
-        roots = list(dict.fromkeys(root for columns in found.values() for root in columns.values()))
+        roots = list(dict.fromkeys(referenced))
         unexpanded.extend(derive_shapes(workspace, catalog, roots).unexpanded_types)
-        for handler, columns in found.items():
-            settled.setdefault(handler, {}).update(columns)
+        for owner, columns in found.items():
+            settled.setdefault(owner, {}).update(columns)
 
     workspace.derive(
         "endpoint_contracts",
         contracts=[
             {
-                "handler": handler,
+                # Still the SQL column's name: the owner is the handler for an
+                # inbound row and the caller for an outbound one, and the
+                # derivation script coalesces both to match it (D01 §3,
+                # amended).
+                "handler": owner,
                 "request_shape": columns.get(_REQUEST),
                 "response_shape": columns.get(_RESPONSE),
             }
-            for handler, columns in settled.items()
+            for owner, columns in settled.items()
         ],
     )
     # Two catalogs reaching one type report it once: the gap is in the type,
@@ -226,20 +238,29 @@ _RESPONSE = "response_shape"
 
 
 def _contracts_of(
-    endpoints: list[dict[str, object]], catalog: Catalog, settled: dict[str, dict[str, str]]
+    endpoints: list[dict[str, object]],
+    catalog: Catalog,
+    settled: dict[str, dict[str, str]],
+    rules: "_Rules",
+    enums: set[str],
+    referenced: list[str],
 ) -> dict[str, dict[str, str]]:
-    """The shape ids one catalog can name for each handler, leaving out every
-    column an earlier catalog already answered.
+    """The descriptors one catalog can name for each endpoint's owner, leaving
+    out every column an earlier catalog already answered.
 
-    Keyed on the handler rather than on the endpoint's wire identity because
-    the signature is what the shapes come from: one handler mapped to every
+    Keyed on the owner rather than on the endpoint's wire identity because the
+    signature is what the shapes come from: one handler mapped to every
     method (an annotation that names none) is several rows sharing one
-    signature, and they all carry the same contract.
+    signature, and they all carry the same contract. The owner is the
+    handler for an inbound row, the caller for an outbound one — the two
+    directions never both carry a symbol on the same row (D01 §3, amended) —
+    so coalescing them is what lets an outbound row, whose `handler` is SQL
+    NULL, receive contracts at all.
     """
     found: dict[str, dict[str, str]] = {}
     for endpoint in endpoints:
-        handler = str(endpoint["handler"])
-        if handler in found:
+        owner = str(endpoint["handler"] or endpoint["caller"] or "")
+        if not owner or owner in found:
             continue
         # A handler with no recorded signature declares no payload. `signature`
         # is optional in D00 §5, so the column is SQL NULL — read back as
@@ -252,18 +273,18 @@ def _contracts_of(
         signature = None if declared is None else json.loads(str(declared))
         if not isinstance(signature, dict):
             continue
-        already = settled.get(handler, {})
+        already = settled.get(owner, {})
         columns = {
-            _REQUEST: _payload_root(_body_type(signature, catalog), catalog.wrappers),
-            _RESPONSE: _payload_root(signature.get("returns"), catalog.wrappers),
+            _REQUEST: _payload_descriptor(_body_type(signature, catalog), rules, enums, referenced),
+            _RESPONSE: _payload_descriptor(signature.get("returns"), rules, enums, referenced),
         }
         kept = {
-            column: root
-            for column, root in columns.items()
-            if root is not None and column not in already
+            column: descriptor
+            for column, descriptor in columns.items()
+            if descriptor is not None and column not in already
         }
         if kept:
-            found[handler] = kept
+            found[owner] = kept
     return found
 
 
@@ -285,31 +306,33 @@ def _body_type(signature: dict[str, Any], catalog: Catalog) -> dict[str, Any] | 
     return None
 
 
-def _payload_root(reference: dict[str, Any] | None, wrappers: list[dict[str, Any]]) -> str | None:
-    """The shape id a signature-level reference roots at, or `None` when it
-    roots at something that is not a payload.
+def _payload_descriptor(
+    reference: dict[str, Any] | None,
+    rules: "_Rules",
+    enums: set[str],
+    referenced: list[str],
+) -> str | None:
+    """The wire descriptor a signature-level reference roots at, or None for
+    *no payload* — a `void` return, an absent body. Scalars are recorded: a
+    String response is a real contract, and NULL must keep exactly one
+    meaning.
 
-    Only an `object` has a field list to expand. A scalar, a collection, or a
-    handler that answers with nothing at all would produce an open, zero-field
-    shape row and be reported as a type nobody could expand — noise that
-    buries the gaps a reader can act on. Rooting first is what makes the test
-    a single one: the envelope is not the payload (D02 §2a).
-
-    Rooting can also stop *on* a declared envelope, when the reference carries
-    nothing at the payload position. That is not a payload either, and it is
-    the one stop worth naming separately: the type is an `object`, so the test
-    below would take it, and the shape row would report the envelope — a type
-    the catalog already describes — as a payload nobody could expand. That is
-    a gap pointing at an entry that is already there. An envelope *nobody*
-    declared still becomes a shape and is still reported, which is how an
-    incomplete catalog stays visible.
+    Rooting can stop *on* a declared envelope when the reference carries
+    nothing at the payload position (a raw `ResponseEntity`, every erased
+    parameter). That is no payload either: describing the envelope would
+    report a type the catalog already declares as one nobody could expand — a
+    gap pointing at an entry that is already there. An envelope *nobody*
+    declared still becomes a shape and is still reported.
     """
     if reference is None:
         return None
-    rooted = root_type(reference, wrappers)
-    if _matching_wrapper(rooted.symbol, wrappers) is not None:
+    rooted = root_type(reference, rules.wrappers)
+    if _matching_wrapper(rooted.symbol, rules.wrappers) is not None:
         return None
-    return rooted.symbol if rooted.reference.get("wire_type") == "object" else None
+    if rooted.reference.get("wire_type") in (None, ""):
+        return None
+    described = _described(rules, rooted.reference, enums, referenced)
+    return json.dumps(described, sort_keys=True, separators=(",", ":"))
 
 
 @dataclass(frozen=True)

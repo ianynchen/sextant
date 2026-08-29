@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 
@@ -108,31 +109,48 @@ def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_pat
         e for e in report.endpoints if e["method"] == "POST" and e["path"] == "/v1/orders/detailed"
     )
 
-    assert endpoint["request_shape"] == "com/acme/orders/contracts/OrderRequest#"
-    fields = shape_fields_of(workspace, endpoint["request_shape"])
+    assert json.loads(endpoint["request_shape"]) == {
+        "nullable": True,
+        "shape_id": "com/acme/orders/contracts/OrderRequest#",
+        "wire_format": "",
+        "wire_type": "object",
+    }
+    fields = shape_fields_of(workspace, json.loads(endpoint["request_shape"])["shape_id"])
     assert "customer_id" in [f["wire_name"] for f in fields]
     # The response is a declared envelope around the payload; the shape must
     # root at what the envelope holds, or the wrapper declarations did nothing.
-    assert endpoint["response_shape"] == "com/acme/orders/contracts/OrderView#"
+    assert json.loads(endpoint["response_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderView#"
+    )
     workspace.close()
 
 
-def test_an_endpoint_whose_response_is_not_a_payload_carries_no_shape(tmp_path: Path):
-    """A scalar response has no field list to compare, and a shape row invented
-    for it would be noise presented as fact (D01 §5). A collection has one, but
-    the column holds a single shape identity with nowhere to say what a list
-    holds — the gap `collection_payloads_carry_no_shape` names."""
+def test_an_endpoint_whose_response_is_a_collection_records_its_element_shape(tmp_path: Path):
+    """List<OrderResult> was 2A's parked gap: the endpoint said nothing at
+    all. The descriptor keeps the array-ness — it IS the wire contract — and
+    points at the element's shape, all the way through on real bytecode."""
     workspace, report = _resolved_fixture(tmp_path)
     workspace.close()
-    rendered = next(e for e in report.endpoints if e["path"] == "/orders" and e["method"] == "GET")
     listing = next(
         e for e in report.endpoints if e["path"] == "/v1/orders" and e["method"] == "GET"
     )
 
-    assert rendered["response_shape"] is None
+    descriptor = json.loads(listing["response_shape"])
+    assert descriptor["wire_type"] == "array"
+    assert descriptor["item"]["shape_id"] == "com/acme/orders/OrderResult#"
+
+
+def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path: Path):
+    """A server-rendered view name has no field list to compare, but NULL is
+    reserved for exactly one meaning — no payload — so a scalar response is a
+    real contract, recorded rather than silently dropped (D01 §5)."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    rendered = next(e for e in report.endpoints if e["path"] == "/orders" and e["method"] == "GET")
+
+    assert json.loads(rendered["response_shape"])["wire_type"] == "string"
     # Nothing annotated the request body either, so there is no root at all.
     assert rendered["request_shape"] is None
-    assert listing["response_shape"] is None
 
 
 def test_only_the_fixtures_payload_fields_reach_the_request_contract(tmp_path: Path):
@@ -238,7 +256,9 @@ def test_a_catalog_that_names_no_request_body_annotation_claims_no_request_shape
     assert endpoint["request_shape"] is None
     # The response is rooted from the return type, which no catalog field
     # names, so it is unaffected.
-    assert endpoint["response_shape"] == "com/acme/orders/contracts/OrderView#"
+    assert json.loads(endpoint["response_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderView#"
+    )
 
 
 def test_two_runs_agree_on_every_shape_and_every_field(tmp_path: Path):

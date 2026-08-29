@@ -987,6 +987,33 @@ def _resolved_handler(tmp_path: Path, signature: dict | None) -> DuckDbWorkspace
     return workspace
 
 
+def _resolved_endpoint(tmp_path: Path, signature: dict | None) -> dict:
+    """The one endpoint `_resolved_handler` derives, with its workspace closed
+    behind it — every test below reads only the row, never the shapes it
+    settled alongside it."""
+    ws = _resolved_handler(tmp_path, signature)
+    endpoint = ws.query("endpoints")[0]
+    ws.close()
+    return endpoint
+
+
+def _resolved_list_handler(tmp_path: Path) -> dict:
+    return _resolved_endpoint(
+        tmp_path,
+        _signature(
+            returns=_ref("java/util/List#", "array", arguments=[_ref(ORDER_VIEW_SHAPE, "object")])
+        ),
+    )
+
+
+def _resolved_string_handler(tmp_path: Path) -> dict:
+    return _resolved_endpoint(tmp_path, _signature(returns=_string()))
+
+
+def _resolved_void_handler(tmp_path: Path) -> dict:
+    return _resolved_endpoint(tmp_path, _signature(returns=_ref("void#", "")))
+
+
 def test_a_declared_wrapper_with_no_payload_argument_stops_instead_of_raising():
     """The catalog said "envelope", and the reference offers nothing at the
     payload position. Descending anyway is impossible and crashing is not an
@@ -1017,7 +1044,12 @@ def test_an_erased_wrapper_parameter_leaves_the_request_shape_null(tmp_path):
     endpoint = ws.query("endpoints")[0]
 
     assert endpoint["request_shape"] is None
-    assert endpoint["response_shape"] == ORDER_VIEW_SHAPE
+    assert json.loads(endpoint["response_shape"]) == {
+        "nullable": True,
+        "shape_id": ORDER_VIEW_SHAPE,
+        "wire_format": "",
+        "wire_type": "object",
+    }
     assert not any(s["shape_id"] == _ERASED_OPTIONAL for s in ws.query("shapes"))
     ws.close()
 
@@ -1044,6 +1076,32 @@ def test_a_handler_with_no_recorded_signature_declares_no_payload(tmp_path):
     assert endpoint["request_shape"] is None
     assert endpoint["response_shape"] is None
     ws.close()
+
+
+def test_a_collection_response_records_what_the_array_holds(tmp_path):
+    """List<OrderView> was 2A's parked gap: the endpoint said nothing at all.
+    The descriptor keeps the array-ness — it IS the wire contract — and points
+    at the element's shape."""
+    endpoint = _resolved_list_handler(tmp_path)
+    descriptor = json.loads(endpoint["response_shape"])
+    assert descriptor["wire_type"] == "array"
+    assert descriptor["item"]["shape_id"] == ORDER_VIEW_SHAPE
+
+
+def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path):
+    endpoint = _resolved_string_handler(tmp_path)
+    assert json.loads(endpoint["response_shape"]) == {
+        "nullable": True,
+        "wire_format": "",
+        "wire_type": "string",
+    }
+
+
+def test_no_payload_stays_null_and_means_exactly_that(tmp_path):
+    """NULL stops being ambiguous: it is `void`/no-body, never 'a payload we
+    could not describe'."""
+    endpoint = _resolved_void_handler(tmp_path)
+    assert endpoint["response_shape"] is None
 
 
 def test_the_derivation_names_no_language():
