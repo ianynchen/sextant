@@ -17,7 +17,12 @@ from shape_helpers import (
 )
 
 from sextant.application.ports.catalogs import Catalog
-from sextant.application.resolve.shapes import ExpandedShapes, derive_shapes, root_type
+from sextant.application.resolve.shapes import (
+    ExpandedShapes,
+    _scope_nullable,
+    derive_shapes,
+    root_type,
+)
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.facts import Document
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -596,6 +601,167 @@ def test_presence_is_never_read_from_a_nullability_annotation(tmp_path):
 def test_an_optional_wrapper_makes_a_field_not_required(tmp_path):
     ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
     assert field_of(ws, ORDER_REQUEST, "note2")["required"] is False
+
+
+def test_a_known_types_own_nullable_overrides_the_references_answer(tmp_path):
+    """D02 §2g, carried forward from Task 10's review: a `known_types` entry
+    may declare its own `nullable` — a wrapper type such as protobuf's, whose
+    wire behaviour the reference's own flag does not describe — which then
+    overrides the reference's answer for that field. Verified only by
+    hand-invocation until now; a regression here would be silent."""
+    owner = "com/acme/orders/contracts/KnownOverride#"
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _write(
+        root / "KnownOverride.jsonl",
+        _document("doc_known_override", "com/acme/orders/contracts/KnownOverride.java"),
+        [
+            _type("doc_known_override", owner),
+            _field(
+                "doc_known_override",
+                owner,
+                "value",
+                _ref("com/acme/Wrapper#", "object", nullable=False),
+            ),
+        ],
+    )
+    declared = Catalog(
+        **{
+            **vars(_CATALOG),
+            "known_types": [
+                *_CATALOG.known_types,
+                {"type": "com.acme.Wrapper", "wire": "string", "nullable": True},
+            ],
+        }
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_shapes(workspace, declared, [owner])
+
+    field = field_of(workspace, owner, "value")
+    assert field["nullable"] is True
+    assert field["resolution"] == "resolved"
+
+
+def test_a_type_argument_annotation_does_not_flip_the_fields_own_nullable(tmp_path):
+    """D00 §5a's named trap: `List<@Nullable String>` annotates the element,
+    not the field. Every annotation fact in the existing test data carries
+    `type_path` `""` or absent, so this guard (`_explicit_nullable`) was never
+    exercised by a non-empty `type_path` before now."""
+    owner = "com/acme/orders/contracts/TypeArgAnnotated#"
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _write(
+        root / "TypeArgAnnotated.jsonl",
+        _document("doc_type_arg", "com/acme/orders/contracts/TypeArgAnnotated.java"),
+        [
+            _type("doc_type_arg", owner),
+            _field(
+                "doc_type_arg",
+                owner,
+                "tags",
+                _ref("java/util/List#", "array", arguments=[_string()]),
+            ),
+            # Targets the field, but its `type_path` locates the list's
+            # element (`0;`), not the field's own type — must not flip
+            # `tags`' own `nullable`, only (an as-yet-unmodelled) element one.
+            _annotation(
+                "doc_type_arg",
+                _MODULE + owner + "tags.",
+                "org/jspecify/annotations/NonNull#",
+                {},
+                type_path="0;",
+            ),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_shapes(workspace, _CATALOG, [owner])
+
+    field = field_of(workspace, owner, "tags")
+    assert field["nullable"] is True
+    assert field["resolution"] == "resolved"
+
+
+def test_a_package_scope_does_not_claim_a_sibling_package_sharing_its_prefix(tmp_path):
+    """`com/acme/orders/scoped/` must not match `com/acme/orders/scopedextra/`
+    by bare substring — the trailing `/` `_scope_prefix` leaves in the claimed
+    prefix is the actual package boundary."""
+    owner = "com/acme/orders/scopedextra/ExtraRequest#"
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _write(
+        root / "ExtraRequest.jsonl",
+        _document("doc_extra", "com/acme/orders/scopedextra/ExtraRequest.java"),
+        [
+            _type("doc_extra", owner),
+            _field("doc_extra", owner, "code", _string()),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_shapes(workspace, _CATALOG, [owner])
+
+    field = field_of(workspace, owner, "code")
+    assert field["nullable"] is True
+    assert field["resolution"] == "resolved"
+
+
+def test_a_type_level_scope_does_not_claim_a_sibling_type_sharing_its_prefix(tmp_path):
+    """`…/ScopedType#` must not match `…/ScopedTypeLarge#code.` — the trailing
+    `#` a type-level target already carries is the boundary."""
+    scoped_owner = "com/acme/orders/contracts/ScopedType#"
+    sibling_owner = "com/acme/orders/contracts/ScopedTypeLarge#"
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _write(
+        root / "ScopedType.jsonl",
+        _document("doc_scoped_type", "com/acme/orders/contracts/ScopedType.java"),
+        [
+            _type("doc_scoped_type", scoped_owner),
+            _field("doc_scoped_type", scoped_owner, "code", _string()),
+            _annotation(
+                "doc_scoped_type",
+                _MODULE + scoped_owner,
+                "org/jspecify/annotations/NullMarked#",
+                {},
+            ),
+        ],
+    )
+    _write(
+        root / "ScopedTypeLarge.jsonl",
+        _document("doc_scoped_type_large", "com/acme/orders/contracts/ScopedTypeLarge.java"),
+        [
+            _type("doc_scoped_type_large", sibling_owner),
+            _field("doc_scoped_type_large", sibling_owner, "code", _string()),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_shapes(workspace, _CATALOG, [scoped_owner, sibling_owner])
+
+    # The type-level scope does reach its own field...
+    assert field_of(workspace, scoped_owner, "code")["nullable"] is False
+    # ...but not a sibling type whose symbol merely starts the same way.
+    sibling = field_of(workspace, sibling_owner, "code")
+    assert sibling["nullable"] is True
+    assert sibling["resolution"] == "resolved"
+
+
+def test_a_more_specific_scope_prefix_wins_over_a_broader_one():
+    """D02 §2e defines one scope meaning today (`not_null_by_default`), so two
+    *real*, catalog-driven nested scopes always agree — a full derive_shapes
+    pass cannot yet produce a genuine conflict between them to assert on.
+    This pins `_scope_nullable`'s selection rule directly instead: the
+    longer, more specific prefix must win regardless of which order its
+    matches were found in — the discipline an eventual `NullUnmarked` (D02
+    §7's open decision) will rely on once a catalog can express it."""
+    broad = (_MODULE + "com/acme/orders/scoped/", False)
+    specific = (_MODULE + "com/acme/orders/scoped/Inner#", True)
+    field_symbol = _MODULE + "com/acme/orders/scoped/Inner#code."
+
+    assert _scope_nullable([broad, specific], field_symbol) is True
+    assert _scope_nullable([specific, broad], field_symbol) is True
 
 
 def test_the_derivation_names_no_language():
