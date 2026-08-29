@@ -197,7 +197,7 @@ public final class ClassScanner {
 
                 @Override
                 public void visitEnd() {
-                    emit(fieldSymbol, "field", typeSymbol, fieldSignatureJson(type, kotlinNullable), access,
+                    emit(fieldSymbol, "field", typeSymbol, fieldSignatureJson(type, sig, kotlinNullable), access,
                          kotlinNullable == null ? null : kotlinExt(kotlinNullable));
                 }
             };
@@ -367,40 +367,20 @@ public final class ClassScanner {
         }
 
         /** A field has no parameter list, only the type reference D00 §5a says it
-         *  carries "the same way" a return type does. */
-        private String fieldSignatureJson(Type type, Boolean kotlinNullable) {
+         *  carries "the same way" a return type does. {@code TypeRefs.fieldRef} reads
+         *  the field's generic {@code Signature} when present, so `List<CustomerRef>`
+         *  keeps `CustomerRef` rather than erasing to plain `List` (D00 §5a) — the
+         *  erased {@code type} is still passed as the fallback for a field whose
+         *  descriptor carries no type argument to lose, and never gets one.
+         *
+         *  <p>{@code kotlinNullable} overrides only the top-level nullability, never a
+         *  nested type argument: Kotlin's `@Metadata` resolves a property's own
+         *  nullability, not its generic arguments' (out of this task's scope either
+         *  way, same as it is for an unannotated Java field's arguments). */
+        private String fieldSignatureJson(Type type, String genericSignature, Boolean kotlinNullable) {
             TreeMap<String, String> signature = new TreeMap<>();
-            signature.put("returns", fieldTypeRef(type, kotlinNullable));
+            signature.put("returns", TypeRefs.fieldRef(type, genericSignature, kotlinNullable));
             return JsonOut.object(signature);
-        }
-
-        /** D1 and D3 both land on the type reference, alongside the symbol
-         *  TypeRefs.ref already carries — nullability "sits on the type
-         *  reference" (D00 §5a), not beside it. */
-        private String fieldTypeRef(Type type, Boolean kotlinNullable) {
-            TreeMap<String, String> ref = new TreeMap<>();
-            ref.put("symbol", JsonOut.string(TypeRefs.descriptorName(type)));
-            ref.put("arguments", JsonOut.array(List.of()));
-            ref.put("wire_type", JsonOut.string(WireTypes.of(type)));
-            ref.put("wire_format", JsonOut.string(WireTypes.format(type)));
-            if (kotlinNullable != null) {
-                // Kotlin's `String` vs `String?` is a declaration, not a default the
-                // language falls back to absent other evidence — unlike Java's "no
-                // annotation found" guess, this is `resolved` (D00 §5a). A Kotlin
-                // field landing here as `partial` instead would mean the @Metadata
-                // read silently did nothing.
-                ref.put("nullable", String.valueOf(kotlinNullable));
-                ref.put("nullable_resolution", JsonOut.string("resolved"));
-            } else {
-                // The language's own answer, not an annotation's. A primitive cannot
-                // hold null and the type system settles it; a reference may, but
-                // nothing declared that it should — so the claim is weaker and says
-                // so, rather than a third enum value existing (D00 §5a).
-                boolean nullable = type.getSort() == Type.OBJECT || type.getSort() == Type.ARRAY;
-                ref.put("nullable", String.valueOf(nullable));
-                ref.put("nullable_resolution", JsonOut.string(nullable ? "partial" : "resolved"));
-            }
-            return JsonOut.object(ref);
         }
 
         /** D00 §6: the raw @Metadata read stays recoverable behind the extension

@@ -31,11 +31,17 @@ class FieldScanTest {
                 && line.contains("\"wire_format\":\"int64\"")));
     }
 
+    /** D3 (corrected): Java's type system settles nullability outright — every
+     *  reference permits null and every primitive forbids it — so both cases are
+     *  `resolved`, never `partial`. `resolution` is candidate-set semantics
+     *  (CONTEXT.md) that a boolean has no analogue for; whether anyone
+     *  *declared* intent is a separate question, answered elsewhere by counting
+     *  annotated fields, not by weakening this flag. */
     @Test
     void states_javas_own_nullability_rule_without_reading_any_annotation() throws Exception {
         List<String> lines = scanFieldSample();
         assertTrue(lines.stream().anyMatch(l -> l.contains("FieldSample#reference.")
-            && l.contains("\"nullable\":true") && l.contains("\"nullable_resolution\":\"partial\"")));
+            && l.contains("\"nullable\":true") && l.contains("\"nullable_resolution\":\"resolved\"")));
         assertTrue(lines.stream().anyMatch(l -> l.contains("FieldSample#total.")
             && l.contains("\"nullable\":false") && l.contains("\"nullable_resolution\":\"resolved\"")));
     }
@@ -74,5 +80,47 @@ class FieldScanTest {
     void projects_a_map_field_to_the_map_wire_type() throws Exception {
         assertTrue(scanFieldSample().stream().anyMatch(l -> l.contains("FieldSample#attributes.")
             && l.contains("\"wire_type\":\"map\"")));
+    }
+
+    /** D00 §5a: "`List<OrderLine>` keeps `OrderLine`" — a generic argument is a
+     *  full type reference of its own, not a bare string. The erased descriptor
+     *  alone cannot say this (`List<String>` and a raw `List` erase identically);
+     *  it can only come from reading the field's generic {@code Signature}. */
+    @Test
+    void keeps_a_simple_generics_argument_as_a_full_type_reference() throws Exception {
+        assertTrue(scanFieldSample().stream().anyMatch(l -> l.contains("FieldSample#tags.")
+            && l.contains("\"arguments\":[{\"arguments\":[],\"nullable\":true,"
+                + "\"nullable_resolution\":\"resolved\",\"symbol\":\"java/lang/String#\","
+                + "\"wire_format\":\"\",\"wire_type\":\"string\"}]")));
+    }
+
+    /** The generic argument is one of our own types, not a JDK box or
+     *  collection — it must keep its own real symbol and wire type
+     *  ({@code object}, since nothing here expands it structurally; that is a
+     *  later task's job), never collapse to a bare {@code List#}. */
+    @Test
+    void keeps_a_first_party_generics_argument_as_a_full_type_reference() throws Exception {
+        assertTrue(scanFieldSample().stream().anyMatch(l -> l.contains("FieldSample#items.")
+            && l.contains("\"wire_type\":\"array\"")
+            && l.contains("\"arguments\":[{\"arguments\":[],\"nullable\":true,"
+                + "\"nullable_resolution\":\"resolved\","
+                + "\"symbol\":\"dev/sextant/extractor/FieldSampleItem#\","
+                + "\"wire_format\":\"\",\"wire_type\":\"object\"}]")));
+    }
+
+    /** {@code Map<String, List<String>>}: the second argument is itself
+     *  parameterized, proving the recursion actually recurses rather than
+     *  stopping one level down. */
+    @Test
+    void recurses_into_a_nested_generics_argument() throws Exception {
+        assertTrue(scanFieldSample().stream().anyMatch(l -> l.contains("FieldSample#nestedTags.")
+            && l.contains("\"wire_type\":\"map\"")
+            && l.contains("\"arguments\":[{\"arguments\":[],\"nullable\":true,"
+                + "\"nullable_resolution\":\"resolved\",\"symbol\":\"java/lang/String#\","
+                + "\"wire_format\":\"\",\"wire_type\":\"string\"},{\"arguments\":[{\"arguments\":[],"
+                + "\"nullable\":true,\"nullable_resolution\":\"resolved\",\"symbol\":\"java/lang/String#\","
+                + "\"wire_format\":\"\",\"wire_type\":\"string\"}],\"nullable\":true,"
+                + "\"nullable_resolution\":\"resolved\",\"symbol\":\"java/util/List#\","
+                + "\"wire_format\":\"\",\"wire_type\":\"array\"}]")));
     }
 }

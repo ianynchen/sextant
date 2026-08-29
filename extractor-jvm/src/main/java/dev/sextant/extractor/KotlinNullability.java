@@ -40,7 +40,7 @@ public final class KotlinNullability {
      *  with it (M03, FR-17). {@code onUnsupported} receives the library's own explanation
      *  (it already names both the class's version and the maximum supported) instead of
      *  the read failing loudly; {@code onDecoded} still receives {@link #NONE} for that
-     *  class, so every field falls back to Java's own rule — an honest partial answer,
+     *  class, so every field falls back to Java's own rule — an honest fallback,
      *  not a guess dressed up as one. */
     public static AnnotationVisitor collector(
             Consumer<Map<String, Boolean>> onDecoded, Consumer<String> onUnsupported) {

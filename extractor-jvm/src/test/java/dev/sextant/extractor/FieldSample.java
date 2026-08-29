@@ -23,6 +23,13 @@ public class FieldSample {
     // CLASS retention: the invisible-type-annotation table, unlike everything
     // else in this file which is JSpecify's RUNTIME.
     public @ClassRetainedNullable String classRetained;
+    // A generic argument that is one of our own first-party types, not a
+    // JDK box or collection — proves the recursion keeps a real reference
+    // (with its own wire_type/nullable) rather than a bare string (D00 §5a).
+    public List<FieldSampleItem> items;
+    // A generic argument that is itself parameterized — the case that
+    // proves the recursion actually recurses, not just one level deep.
+    public Map<String, List<String>> nestedTags;
 
     // Both the return type and the parameter type are annotated, so a scanner
     // that discarded which type reference an annotation belongs to (as opposed

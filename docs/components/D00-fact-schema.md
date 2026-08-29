@@ -249,10 +249,19 @@ the ecosystem uses annotations to say "actually not" — and the same concept is
 is framework knowledge, so it is catalog data ([D02](D02-catalog-schema.md) §2e), never a list
 in the scanner.
 
-**Where the language decides and nothing narrows it, the fact records the language's answer at
-`resolution: partial`.** An unannotated Java reference field is `nullable` — that is what the
-language permits — but partially resolved, because no one declared it. That is a weaker claim
-than an annotated field, and the trust fields say so without a third enum value.
+**Where the language's type system decides, the fact records that answer at `resolution:
+resolved`.** Java's type system settles nullability outright: every reference type permits
+null and every primitive forbids it. An unannotated Java reference field is `nullable: true`
+at `resolution: resolved`, exactly as a primitive is `nullable: false` at `resolution:
+resolved` — a consumer must handle null whether or not anyone wrote `@Nullable`, so the fact
+is certain, not a weaker claim awaiting confirmation. `resolution` is not a stand-in for "was
+this declared": [CONTEXT.md](../../CONTEXT.md) defines it as how certain a fact's *target* is,
+with candidate-set semantics (`narrowed` — several targets, set complete; `partial` — several
+targets, set incomplete) that a boolean has no analogue for, and `unresolved` is reserved for
+a language where no type exists to answer the question at all — it does not arise on the JVM.
+Whether anyone *declared* intent is a real, separate question, answered by counting annotated
+fields against unannotated ones — it does not need its own per-fact flag, and one would make
+every unannotated Java field look uncertain and downgrade every link built on it.
 
 **Kotlin's nullability is in its type system, not an annotation**, so it arrives through
 `ext.kotlin.nullable` (§6) — but the adapter **projects it into the shared field** rather than
