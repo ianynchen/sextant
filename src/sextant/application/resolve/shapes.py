@@ -120,6 +120,7 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     rules = _rules_of(catalog)
     scope_prefixes = _scope_prefixes(workspace, rules)
     declared = _declared_fields(workspace)
+    enums = _enum_symbols(workspace)
     shapes: list[dict[str, object]] = []
     fields: list[dict[str, object]] = []
     unexpanded: list[str] = []
@@ -134,7 +135,9 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
             continue
         expanded.add(shape_id)
         referenced: list[str] = []
-        rows = _rows_of(workspace, rules, scope_prefixes, declared.get(shape_id, []), referenced)
+        rows = _rows_of(
+            workspace, rules, scope_prefixes, declared.get(shape_id, []), enums, referenced
+        )
         pending.extend(referenced)
         # Expansion needs field facts, and only scanned types have them, so a
         # type without them stops here whoever wrote it (ruling F4). Its
@@ -378,9 +381,22 @@ def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
                 "symbol": symbol,
                 "name": descriptor[len(owner) :].removesuffix("."),
                 "returns": json.loads(str(row["returns"])),
+                "static": bool(row["static"]),
+                "transient": bool(row["transient"]),
             }
         )
     return owners
+
+
+def _enum_symbols(workspace: Workspace) -> set[str]:
+    """The declared types the facts call enumerations, as the descriptors a
+    type reference is keyed on.
+
+    Read once per pass rather than once per field, for the reason
+    `_scope_prefixes` is: the answer is on the referenced type's own fact, not
+    on the reference that reaches it.
+    """
+    return {str(row["symbol"]).rpartition(" ")[2] for row in workspace.query("enum_types")}
 
 
 # The reserved file-class name the JVM compiles a package-level annotation
@@ -479,12 +495,23 @@ def _rows_of(
     rules: _Rules,
     scope_prefixes: list[tuple[str, bool]],
     declared: list[dict[str, Any]],
+    enums: set[str],
     referenced: list[str],
 ) -> list[dict[str, object]]:
     """One projected row per field that reaches the wire, appending every shape
     the fields reference to `referenced`."""
     rows: list[dict[str, object]] = []
     for field in declared:
+        # On no payload, whoever wrote it: a value bound to the type rather than
+        # to an instance, or one the language declares as not serialized. Both
+        # are ordinary declarations — the facts keep them — and only the
+        # modifier the language recorded separates them from a contract field.
+        # Filtered here rather than where the facts are grouped, so a type whose
+        # every field is excluded stays a type the pass expanded rather than one
+        # it reports as a gap. No row at all, for the reason the ignore rule
+        # below gives.
+        if field["static"] or field["transient"]:
+            continue
         annotations = workspace.query("annotations_of", target=field["symbol"])
         # No row, not a row marked absent: DR-5 would compare a field the
         # catalog says is off the wire against a peer that correctly omits it.
@@ -494,7 +521,7 @@ def _rows_of(
         # Rooted first: a field inside a declared envelope is described by what
         # the envelope holds, not by the envelope (D02 §2a).
         rooted = root_type(field["returns"], rules.wrappers)
-        described = _described(rules, rooted.reference, referenced)
+        described = _described(rules, rooted.reference, enums, referenced)
         nullable, resolution = _nullability_of(
             rules,
             rooted.reference,
@@ -554,7 +581,9 @@ _STRATEGIES: dict[str, Callable[[str], str]] = {
 _COLLECTIONS = ("array", "map")
 
 
-def _described(rules: _Rules, reference: dict[str, Any], referenced: list[str]) -> dict[str, Any]:
+def _described(
+    rules: _Rules, reference: dict[str, Any], enums: set[str], referenced: list[str]
+) -> dict[str, Any]:
     """The recursive `{wire_type, wire_format, nullable, shape_id?, item?}`
     descriptor for one type reference (D01 §5)."""
     known = rules.known_types.get(reference["symbol"])
@@ -575,12 +604,22 @@ def _described(rules: _Rules, reference: dict[str, Any], referenced: list[str]) 
         "wire_format": reference["wire_format"],
         "nullable": reference["nullable"],
     }
+    if reference["symbol"] in enums:
+        # A closed set of constants is one value on the wire, which is why D00
+        # §5b keeps `enum` in the vocabulary — so it is mapped and never
+        # expanded, exactly as a known type is. Expanded, its constants become
+        # fields of a payload nobody sends; left as the `object` the reference
+        # says it is, it marks its owner open and is reported as a gap the
+        # catalog cannot close, because nothing is missing. The overridden
+        # answer comes from the referenced type's own construct kind, which is
+        # fact data every language produces, not knowledge of one of them.
+        return {**described, "wire_type": "enum"}
     if described["wire_type"] in _COLLECTIONS:
         # What a collection holds is its last type argument: a keyed
         # collection's keys are strings on the wire, so only its value
         # argument describes the payload, and a sequence has just the one.
         if reference["arguments"]:
-            described["item"] = _described(rules, reference["arguments"][-1], referenced)
+            described["item"] = _described(rules, reference["arguments"][-1], enums, referenced)
     elif described["wire_type"] == "object":
         described["shape_id"] = reference["symbol"]
         referenced.append(reference["symbol"])
@@ -591,10 +630,16 @@ def _item_of(described: dict[str, Any]) -> str | None:
     """What the field holds, as JSON — a collection's element, or the shape an
     object field points at (ruling F3). Without it nothing links a field to the
     shape carrying its fields, and one `wire_type` cannot tell a sequence of
-    strings from a sequence of records."""
+    strings from a sequence of records.
+
+    D01 §5 states one grammar, `{wire_type, wire_format, nullable, shape_id?,
+    item?}`, so an object field's descriptor is the whole one and not a shorter
+    variant: two shapes of `item` would make every consumer detect which it was
+    holding before it could read a single key.
+    """
     held = described.get("item")
     if held is None and "shape_id" in described:
-        held = {"wire_type": described["wire_type"], "shape_id": described["shape_id"]}
+        held = described
     return None if held is None else json.dumps(held, sort_keys=True, separators=(",", ":"))
 
 

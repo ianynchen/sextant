@@ -1,7 +1,7 @@
 import subprocess
 from pathlib import Path
 
-from shape_helpers import ORDER_REQUEST, shape_fields_of
+from shape_helpers import ORDER_REQUEST, ORDER_STATUS, shape_fields_of
 
 from sextant.application.ports.catalogs import Catalog, CatalogSource
 from sextant.application.ports.scanner import ScanRequest
@@ -133,6 +133,51 @@ def test_an_endpoint_whose_response_is_not_a_payload_carries_no_shape(tmp_path: 
     # Nothing annotated the request body either, so there is no root at all.
     assert rendered["request_shape"] is None
     assert listing["response_shape"] is None
+
+
+def test_only_the_fixtures_payload_fields_reach_the_request_contract(tmp_path: Path):
+    """On real bytecode, the whole way through. Every field of the fixture's
+    request class is public and typed; what separates a contract term from a
+    constant bound to the type or a field declared not serialized is nothing
+    the shape pass can see for itself — so a regression anywhere along the
+    chain publishes a contract nobody wrote, and D02 §4 makes the fixture the
+    place that is caught."""
+    workspace, _ = _resolved_fixture(tmp_path)
+    names = [f["wire_name"] for f in shape_fields_of(workspace, ORDER_REQUEST)]
+    workspace.close()
+
+    assert "SOURCE" not in names
+    assert "cachedSummary" not in names
+    # The fields that are on the wire are all still there, in declaration order.
+    assert names == [
+        "reference",
+        "note",
+        "customer_id",
+        "note2",
+        "customer",
+        "alternates",
+        "total",
+        "total_amount",
+        "status",
+    ]
+
+
+def test_an_enumeration_typed_field_is_mapped_rather_than_expanded(tmp_path: Path):
+    """`OrderStatus` is scanned like any other contract type, and expanding it
+    structurally would put `NEW` and `DONE` on the wire as payload fields.
+    D00 §5b keeps `enum` in the vocabulary so the whole type is one value."""
+    workspace, report = _resolved_fixture(tmp_path)
+    status = next(
+        f for f in shape_fields_of(workspace, ORDER_REQUEST) if f["wire_name"] == "status"
+    )
+    shapes = [s["shape_id"] for s in workspace.query("shapes")]
+    workspace.close()
+
+    assert status["wire_type"] == "enum"
+    assert ORDER_STATUS not in shapes
+    # Nothing is missing from the catalog, so nothing is reported: the gap list
+    # is only useful while everything on it is actionable.
+    assert ORDER_STATUS not in report.unexpanded_types
 
 
 def test_the_report_names_the_types_expansion_could_not_open(tmp_path: Path):

@@ -171,7 +171,7 @@ Thirteen. Every one exists because a stated requirement consumes it (NFR-6).
 | Kind | Carries | Consumed by |
 |---|---|---|
 | `module` | Identifier, kind, languages, source sets, output directories, **classpath tiering**, active catalogs | Dispatch tiering, noise filtering, coverage |
-| `symbol` | Identifier, construct kind, enclosing symbol, **typed signature** (§5a), visibility, range | Symbol graph, shapes, endpoints, class diagrams |
+| `symbol` | Identifier, construct kind, enclosing symbol, **typed signature** (§5a), visibility, **declaration modifiers** (§5a), range | Symbol graph, shapes, endpoints, class diagrams |
 | `relationship` | Subject, object, relationship kind | Hierarchy, dispatch, class diagrams |
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
@@ -195,6 +195,16 @@ of the parameter annotated `@RequestBody`" becomes a field read rather than a po
 join, and where a parameter's annotations attach without the parameter needing a symbol of
 its own. (The SCIP parameter descriptor exists for the rare case of naming one from
 outside — a curation, say — and is deferred until something needs it.)
+
+**A field symbol also carries the declaration modifiers that decide whether it reaches a
+payload at all**, as `modifiers.static` and `modifiers.transient` — a value bound to the type
+rather than to an instance, and a declaration the language marks as not serialized. Neither
+is visibility and neither is nullability: a public constant is as public as any field and is
+on no payload, so a shape pass filtering on what it already had would have to guess. Both
+flags are always written on a field fact, because an absent one cannot be told apart from a
+scanner that does not report the modifier. **A compiler-synthesized field is not a
+declaration and produces no fact at all** — a modifier would say "somebody wrote this and it
+stays off the wire", where the truth is that no source file contains it.
 
 **A type-use annotation attaches to the type reference it annotates, not to a flat fact.**
 A method has more than one type reference — the return type, and each parameter — so the
@@ -284,6 +294,13 @@ declared shapes arrive in it already, because it is what schema formats natively
 Java `long` and an OpenAPI `integer/int64` meet in the middle as `integer/int64`. This
 vocabulary is a closed set, and it is the comparison level of DR-5's structural matching
 and FR-11's drift report — never Java types against spec types directly.
+
+**An enumeration reaches the wire as `enum`, never as a record.** A type reference cannot say
+which of the two it points at, so the answer comes from the referenced type's own
+`construct_kind` (§4) — generic fact data, which is why the language-blind half may read it.
+Expanded structurally the constants backing it become fields of a payload nobody sends; left
+as the `object` its reference calls it, it marks its owner open and is reported as a gap in a
+catalog that is missing nothing.
 
 **A code shape's `required` is derived from presence rules, not from nullability.**
 `declared_shape` fields carry it because schema formats state it outright — OpenAPI's

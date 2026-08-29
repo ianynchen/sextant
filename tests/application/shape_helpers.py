@@ -16,6 +16,10 @@ ORDER_VIEW = type_ref("com/acme/orders/contracts/OrderView#")
 # the row key every shape query uses.
 ORDER_REQUEST = "com/acme/orders/contracts/OrderRequest#"
 
+# The enumeration `OrderRequest.status` points at: mapped to the `enum` wire
+# type and never expanded, so no shape is ever written for it (D00 §5b).
+ORDER_STATUS = "com/acme/orders/contracts/OrderStatus#"
+
 # A type whose fields already arrive with a settled type-system answer
 # (Task 11): the derivation must pass that answer through, never re-derive or
 # downgrade it.

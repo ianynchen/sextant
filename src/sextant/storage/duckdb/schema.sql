@@ -80,7 +80,13 @@ SELECT rowid                        AS seq,
        payload ->> 'symbol'         AS symbol,
        payload ->> 'construct_kind' AS construct_kind,
        payload ->> 'enclosing'      AS enclosing,
-       payload ->  'signature'      AS signature
+       payload ->  'signature'      AS signature,
+       -- Declaration modifiers (D00 §5): what only the declaring language can
+       -- say about whether a field reaches a payload at all. Absent on every
+       -- other construct, and on a fact from a scanner that does not report
+       -- them, so each reader supplies its own default rather than this view
+       -- inventing one for constructs the modifier means nothing for.
+       payload ->  'modifiers'      AS modifiers
 FROM raw_facts WHERE kind = 'symbol';
 
 CREATE OR REPLACE VIEW annotations AS

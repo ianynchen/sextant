@@ -139,6 +139,35 @@ class FieldScanTest {
                 + "\"wire_format\":\"\",\"wire_type\":\"array\"}]")));
     }
 
+    /** A field bound to the type rather than to an instance is a real
+     *  declaration — somebody wrote it, and a symbol graph that lost it would
+     *  answer "no such field" about code that has one. What it is not is a
+     *  payload field, and only the modifier says so: without it the shape pass
+     *  has nothing to filter on and every constant becomes a contract nobody
+     *  wrote. */
+    @Test
+    void marks_a_field_bound_to_the_type_rather_than_to_an_instance() throws Exception {
+        assertTrue(scanFieldSample().stream().anyMatch(l -> l.contains("FieldSample#SOURCE.")
+            && l.contains("\"static\":true")));
+    }
+
+    /** The same claim, declared rather than implied: a field the language marks
+     *  as not serialized reaches no payload. */
+    @Test
+    void marks_a_field_the_language_declares_as_not_serialized() throws Exception {
+        assertTrue(scanFieldSample().stream().anyMatch(l -> l.contains("FieldSample#cachedSummary.")
+            && l.contains("\"transient\":true")));
+    }
+
+    /** Both flags are always present on a field fact, never only the true one:
+     *  a consumer reading an absent key cannot tell "not static" from "this
+     *  scanner does not report staticness". */
+    @Test
+    void states_both_modifiers_on_an_ordinary_payload_field() throws Exception {
+        assertTrue(scanFieldSample().stream().anyMatch(l -> l.contains("FieldSample#reference.")
+            && l.contains("\"static\":false") && l.contains("\"transient\":false")));
+    }
+
     /** {@code Map<String, List<String>>}: the second argument is itself
      *  parameterized, proving the recursion actually recurses rather than
      *  stopping one level down. */

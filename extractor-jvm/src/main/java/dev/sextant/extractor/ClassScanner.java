@@ -93,8 +93,24 @@ public final class ClassScanner {
         @Override
         public void visit(int v, int access, String name, String sig, String superName, String[] ifaces) {
             typeSymbol = symbolOf(name + "#");
-            boolean isInterface = (access & Opcodes.ACC_INTERFACE) != 0;
-            emit(typeSymbol, isInterface ? "interface" : "class", null, null, access);
+            emit(typeSymbol, constructKindOf(access), null, null, access);
+        }
+
+        /** D00 §4's construct kinds carry `enum` beside `class` and `interface`, and
+         *  the type's own fact is the only place the distinction survives: a type
+         *  reference to an enumeration is indistinguishable from a reference to a
+         *  record. Called `class`, a closed set of constants is expanded structurally
+         *  by a consumer that has no way to know better, and each constant becomes a
+         *  field of a payload nobody sends — where D00 §5b's `enum` wire type says the
+         *  whole thing in one value.
+         *
+         *  <p>The interface test comes first because an annotation type is both, and
+         *  the enum test before the fallback because an enum is a class in the JVM's
+         *  own model. */
+        private String constructKindOf(int access) {
+            if ((access & Opcodes.ACC_INTERFACE) != 0) return "interface";
+            if ((access & Opcodes.ACC_ENUM) != 0) return "enum";
+            return "class";
         }
 
         @Override
@@ -176,6 +192,13 @@ public final class ClassScanner {
 
         @Override
         public FieldVisitor visitField(int access, String name, String descriptor, String sig, Object value) {
+            // Compiler machinery — an enumeration's constant array, a captured
+            // outer instance — is not a declaration: nobody wrote it, so there is
+            // no fact to make about it. A modifier would be the wrong answer,
+            // because that says "somebody declared this, and it stays off the
+            // wire"; this is a member no source file contains, and a symbol graph
+            // carrying it answers questions about code that does not exist.
+            if ((access & Opcodes.ACC_SYNTHETIC) != 0) return null;
             String owner = typeSymbol.substring(typeSymbol.lastIndexOf(' ') + 1);
             String fieldSymbol = symbolOf(owner + name + ".");
             Type type = Type.getType(descriptor);
@@ -198,7 +221,7 @@ public final class ClassScanner {
                 @Override
                 public void visitEnd() {
                     emit(fieldSymbol, "field", typeSymbol, fieldSignatureJson(type, sig, kotlinNullable), access,
-                         kotlinNullable == null ? null : kotlinExt(kotlinNullable));
+                         kotlinNullable == null ? null : kotlinExt(kotlinNullable), modifiersJson(access));
                 }
             };
         }
@@ -394,12 +417,31 @@ public final class ClassScanner {
             return JsonOut.object(ext);
         }
 
+        /** The declaration modifiers that decide whether a field reaches a payload at
+         *  all, beside `visibility` and in the same language-blind spelling: `static`
+         *  is a value bound to the type rather than to an instance, `transient` a
+         *  declaration the language marks as not serialized. Neither is nullability
+         *  and neither is visibility — a public constant is as public as any field
+         *  and still on no payload — so a consumer filtering on what it already had
+         *  would have to guess.
+         *
+         *  <p>Both keys are always written, never only the true one: an absent key
+         *  cannot be told apart from a scanner that does not report the modifier.
+         *  Emitted for fields only, because a field is the only construct whose
+         *  answer anything reads today (D00 §5). */
+        private String modifiersJson(int access) {
+            TreeMap<String, String> modifiers = new TreeMap<>();
+            modifiers.put("static", String.valueOf((access & Opcodes.ACC_STATIC) != 0));
+            modifiers.put("transient", String.valueOf((access & Opcodes.ACC_TRANSIENT) != 0));
+            return JsonOut.object(modifiers);
+        }
+
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access) {
-            emit(symbol, constructKind, enclosing, signature, access, null);
+            emit(symbol, constructKind, enclosing, signature, access, null, null);
         }
 
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
-                           String ext) {
+                           String ext, String modifiers) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -411,6 +453,7 @@ public final class ClassScanner {
             fact.put("line_start", "0");
             fact.put("line_end", "0");
             if (ext != null) fact.put("ext", ext);
+            if (modifiers != null) fact.put("modifiers", modifiers);
             lines.add(JsonOut.object(fact));
         }
     }

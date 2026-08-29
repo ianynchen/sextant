@@ -38,6 +38,14 @@ public class FieldSample {
     // The other array path: inside a generic argument the element arrives
     // through the Signature attribute instead of the descriptor.
     public List<String[]> nameGroups;
+    // A constant bound to the type rather than to any instance. Somebody wrote
+    // it, so the fact is emitted — with the modifier that lets a consumer keep
+    // it off the wire, which is the only thing separating it from a payload
+    // field the scanner must not lose.
+    public static final String SOURCE = "web";
+    // The same claim, declared outright: the language marks this field as not
+    // serialized, so no payload carries it.
+    public transient String cachedSummary;
 
     // Both the return type and the parameter type are annotated, so a scanner
     // that discarded which type reference an annotation belongs to (as opposed

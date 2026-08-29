@@ -5,6 +5,7 @@ from pathlib import Path
 from shape_helpers import (
     KOTLIN_ORDER,
     ORDER_REQUEST,
+    ORDER_STATUS,
     ORDER_VIEW,
     SCOPED_REQUEST,
     SPRING_WRAPPERS,
@@ -137,12 +138,12 @@ def _document(document_id: str, relative_path: str) -> Document:
     )
 
 
-def _type(document_id: str, owner: str) -> dict:
+def _type(document_id: str, owner: str, construct_kind: str = "class") -> dict:
     return {
         "kind": "symbol",
         "document_id": document_id,
         "symbol": _MODULE + owner,
-        "construct_kind": "class",
+        "construct_kind": construct_kind,
         "enclosing": None,
         "signature": None,
         "visibility": "public",
@@ -151,7 +152,18 @@ def _type(document_id: str, owner: str) -> dict:
     }
 
 
-def _field(document_id: str, owner: str, name: str, returns: dict) -> dict:
+def _field(
+    document_id: str,
+    owner: str,
+    name: str,
+    returns: dict,
+    *,
+    static: bool = False,
+    transient: bool = False,
+) -> dict:
+    """One field fact. `modifiers` carries what only the declaring language can
+    say about whether the field reaches a payload at all — bound to the type
+    rather than an instance, or declared not serialized."""
     return {
         "kind": "symbol",
         "document_id": document_id,
@@ -160,6 +172,7 @@ def _field(document_id: str, owner: str, name: str, returns: dict) -> dict:
         "enclosing": _MODULE + owner,
         "signature": {"returns": returns},
         "visibility": "public",
+        "modifiers": {"static": static, "transient": transient},
         "line_start": 0,
         "line_end": 0,
     }
@@ -221,6 +234,12 @@ def _contract_facts(root: Path) -> None:
         _field(
             "doc_request", ORDER_REQUEST, "totalAmount", _ref("java/math/BigDecimal#", "object")
         ),
+        # An enumeration reference is an `object` to the extractor — nothing in
+        # the reference itself can say otherwise. Only ORDER_STATUS's own
+        # symbol fact, below, carries the construct kind that decides it.
+        _field("doc_request", ORDER_REQUEST, "status", _ref(ORDER_STATUS, "object")),
+        _field("doc_request", ORDER_REQUEST, "SOURCE", _string(), static=True),
+        _field("doc_request", ORDER_REQUEST, "cachedSummary", _string(), transient=True),
         _annotation(
             "doc_request",
             _MODULE + ORDER_REQUEST + "note.",
@@ -264,6 +283,21 @@ def _contract_facts(root: Path) -> None:
             _type("doc_customer", CUSTOMER_REF),
             _field("doc_customer", CUSTOMER_REF, "id", _string()),
             _field("doc_customer", CUSTOMER_REF, "name", _string()),
+        ],
+    )
+
+    # The enumeration `OrderRequest.status` points at, as the extractor writes
+    # it: the type's own construct kind, and its constants as ordinary field
+    # facts bound to the type. The compiler's `$VALUES` array is absent because
+    # nobody declared it.
+    status = _document("doc_status", "com/acme/orders/contracts/OrderStatus.java")
+    _write(
+        root / "OrderStatus.jsonl",
+        status,
+        [
+            _type("doc_status", ORDER_STATUS, construct_kind="enum"),
+            _field("doc_status", ORDER_STATUS, "NEW", _ref(ORDER_STATUS, "object"), static=True),
+            _field("doc_status", ORDER_STATUS, "DONE", _ref(ORDER_STATUS, "object"), static=True),
         ],
     )
 
@@ -393,7 +427,15 @@ def test_a_nested_object_field_carries_the_shape_it_references(tmp_path):
     ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
     field = field_of(ws, ORDER_REQUEST, "customer")
 
-    assert json.loads(field["item"]) == {"wire_type": "object", "shape_id": CUSTOMER_REF}
+    # D01 §5 states one item grammar, {wire_type, wire_format, nullable,
+    # shape_id?, item?}. An object field's item is that same descriptor, not a
+    # shorter one a consumer would have to detect before it could read.
+    assert json.loads(field["item"]) == {
+        "wire_type": "object",
+        "wire_format": "",
+        "nullable": True,
+        "shape_id": CUSTOMER_REF,
+    }
     assert shape_of(ws, CUSTOMER_REF)["open"] is False
     assert [f["wire_name"] for f in shape_fields_of(ws, CUSTOMER_REF)] == ["id", "name"]
 
@@ -422,8 +464,76 @@ def test_field_order_is_declaration_order_and_the_hash_follows_it(tmp_path):
         "alternates",
         "total",
         "total_amount",
+        "status",
     ]
     assert shape_of(ws, ORDER_REQUEST)["content_hash"].startswith("md5:")
+
+
+def test_a_field_bound_to_the_type_is_not_a_field_of_the_payload(tmp_path):
+    """A constant is a declaration, so the fact exists — but no instance of the
+    type carries it, and a shape_field for it publishes a contract term nobody
+    wrote. The pass cannot tell it from a payload field on its own: the
+    modifier the language recorded is the only evidence there is."""
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    assert "SOURCE" not in [f["wire_name"] for f in shape_fields_of(ws, ORDER_REQUEST)]
+
+
+def test_a_field_the_language_declares_as_not_serialized_reaches_no_payload(tmp_path):
+    """The same exclusion, from a declaration rather than from staticness — and
+    excluded outright rather than recorded absent, exactly as an ignored field
+    is: DR-5 would otherwise compare it against a peer that correctly omits
+    it."""
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    assert "cachedSummary" not in [f["wire_name"] for f in shape_fields_of(ws, ORDER_REQUEST)]
+
+
+def test_a_type_of_only_excluded_fields_is_still_a_settled_shape(tmp_path):
+    """Excluding every field of a scanned type is not the same as never having
+    seen it. Filtered where the rows are built rather than where the facts are
+    grouped, so the type stays expandable: dropped earlier it would be reported
+    as a gap in the catalog, which is a gap nobody can close."""
+    owner = "com/acme/orders/contracts/Constants#"
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _write(
+        root / "Constants.jsonl",
+        _document("doc_constants", "com/acme/orders/contracts/Constants.java"),
+        [
+            _type("doc_constants", owner),
+            _field("doc_constants", owner, "SOURCE", _string(), static=True),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    result = derive_shapes(workspace, _CATALOG, [owner])
+
+    assert shape_fields_of(workspace, owner) == []
+    assert shape_of(workspace, owner)["open"] is False
+    assert owner not in result.unexpanded_types
+
+
+def test_an_enumeration_is_mapped_to_its_wire_type_and_never_expanded(tmp_path):
+    """A closed set of constants is one value on the wire (D00 §5b), not a
+    record. Expanded structurally it contributes NEW and DONE as payload
+    fields; left as an unrecognised `object` it marks its owner open and is
+    reported as a gap the catalog cannot close, because there is nothing wrong
+    with it. Only the enumeration's own construct kind separates the three, and
+    that is generic fact data, not language knowledge."""
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    field = field_of(ws, ORDER_REQUEST, "status")
+
+    assert field["wire_type"] == "enum"
+    assert field["item"] is None
+    assert not any(s["shape_id"] == ORDER_STATUS for s in ws.query("shapes"))
+    assert shape_of(ws, ORDER_REQUEST)["open"] is False
+
+
+def test_an_enumeration_is_not_reported_as_a_type_expansion_could_not_open(tmp_path):
+    """The unexpanded report is where a catalog grows from observation, so it
+    must name only gaps somebody could act on. An enumeration is fully
+    described; naming it would be noise burying the entries that are missing."""
+    result = _expand(tmp_path, roots=[ORDER_REQUEST])
+    assert ORDER_STATUS not in result.unexpanded_types
 
 
 def test_the_default_strategy_names_a_field_no_annotation_names(tmp_path):
@@ -466,7 +576,7 @@ def test_a_second_catalog_leaves_an_existing_shapes_field_list_whole(tmp_path):
     hash_before = shape_of(workspace, ORDER_REQUEST)["content_hash"]
 
     # This catalog ignores nothing and renames nothing: on its own it would
-    # yield nine fields, `internalTrace` among them.
+    # yield ten fields, `internalTrace` among them.
     derive_shapes(workspace, permissive, [ORDER_REQUEST])
 
     assert shape_fields_of(workspace, ORDER_REQUEST) == settled

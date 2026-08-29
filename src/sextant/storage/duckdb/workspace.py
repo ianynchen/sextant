@@ -17,11 +17,27 @@ _NAMED_QUERIES = {
     # The field facts the shape pass expands, in declaration order within each
     # defining document — `seq` is what `ordinal` is derived from, so the
     # ordering is part of the answer rather than a convenience (NFR-1).
+    #
+    # The two modifiers come through because nothing else can say whether a
+    # declared field reaches a payload: a constant bound to the type and a
+    # field declared not serialized are as public and as typed as any other,
+    # and a pass with nothing to filter on turns both into contract terms
+    # nobody wrote. False where a scanner reports no modifiers at all — an
+    # absent answer is not a claim that the field is off the wire.
     "fields": """
-        SELECT symbol, document_id, seq, signature -> 'returns' AS returns
+        SELECT symbol, document_id, seq, signature -> 'returns' AS returns,
+               coalesce((modifiers ->> 'static')::BOOLEAN, false) AS "static",
+               coalesce((modifiers ->> 'transient')::BOOLEAN, false) AS "transient"
         FROM symbols
         WHERE construct_kind = 'field'
         ORDER BY document_id, seq
+    """,
+    # The declared types the facts call enumerations. A reference to an
+    # enumeration is indistinguishable from a reference to a record — only the
+    # referenced type's own fact carries the construct kind — so the pass reads
+    # them all once rather than looking one up per field.
+    "enum_types": """
+        SELECT symbol FROM symbols WHERE construct_kind = 'enum' ORDER BY symbol
     """,
     # Annotations on one target. Ordered by name so a target carrying two of
     # them is read the same way twice; which one wins is the caller's rule,
