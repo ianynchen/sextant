@@ -17,7 +17,40 @@ CREATE TABLE IF NOT EXISTS endpoints (
     handler           TEXT,
     handler_signature JSON,
     resolution        TEXT,
-    evidence          TEXT
+    evidence          TEXT,
+    request_shape     TEXT,
+    response_shape    TEXT
+);
+
+-- Pre-declared for the same reason as `endpoints` above: a scanner too weak
+-- to populate shapes must still answer the "shapes"/"shape_fields" query
+-- with an empty result, not an error, and degrade visibly through
+-- skipped_catalogs instead. Tasks 9-11 replace these whole via CREATE OR
+-- REPLACE TABLE once shape derivation runs.
+CREATE TABLE IF NOT EXISTS shapes (
+    shape_id     TEXT,
+    content_hash TEXT,
+    open         BOOLEAN
+);
+
+CREATE TABLE IF NOT EXISTS shape_fields (
+    shape_id    TEXT,
+    ordinal     INTEGER,
+    wire_name   TEXT,
+    wire_type   TEXT,
+    wire_format TEXT,
+    required    BOOLEAN,
+    nullable    BOOLEAN,
+    resolution  TEXT,
+    evidence    TEXT,
+    tags        JSON,
+    -- The recursive descriptor {wire_type, wire_format, nullable, shape_id?,
+    -- item?} for a collection's element (array) or value (map) type — NULL
+    -- for a scalar field. A single wire_type cannot distinguish
+    -- List<String> from List<CustomerRef>; without item, DR-5 would match a
+    -- caller sending an array of strings against a callee expecting an
+    -- array of records (D01 §3 Contracts).
+    item        JSON
 );
 
 CREATE OR REPLACE VIEW documents AS

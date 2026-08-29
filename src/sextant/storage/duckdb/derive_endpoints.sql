@@ -22,7 +22,12 @@
 --   $method_from         -- attribute name holding the method, where one is given
 --   $all_methods         -- the methods a mapping annotation means when it names none
 
-INSERT INTO endpoints
+-- Named explicitly: `endpoints` also carries request_shape/response_shape
+-- (D01 §3 Contracts), which this engine does not populate — that is the
+-- shape pass's job, not the annotation-driven endpoint engine's.
+INSERT INTO endpoints (
+    protocol, direction, method, path, handler, handler_signature, resolution, evidence
+)
 WITH mapping_catalog AS (
     SELECT s.fqn AS fqn, s.methods AS methods
     FROM (SELECT UNNEST(

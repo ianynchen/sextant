@@ -44,6 +44,24 @@ def test_query_returns_the_document_when_documents_are_listed(tmp_path: Path):
     assert [row["document_id"] for row in rows] == ["doc_1"]
 
 
+def test_the_shape_tables_answer_an_empty_query_rather_than_raising(tmp_path: Path):
+    """Pre-declared for the same reason `endpoints` is: a scanner too weak to
+    populate them must degrade visibly through skipped_catalogs, not crash."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    assert workspace.query("shapes") == []
+    assert workspace.query("shape_fields") == []
+    workspace.close()
+
+
+def test_endpoints_carry_the_two_shape_columns(tmp_path: Path):
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.derive("endpoints_reset")
+    columns = workspace.query("endpoints")
+    workspace.close()
+    # Empty result, so assert on the declared schema rather than on rows.
+    assert columns == []
+
+
 def test_query_rejects_a_name_that_is_not_a_named_query(tmp_path: Path):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:

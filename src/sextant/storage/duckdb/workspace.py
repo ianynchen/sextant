@@ -10,6 +10,10 @@ _NAMED_QUERIES = {
     # a wire identity, and an ordering with ties is an ordering that can change
     # between runs (NFR-1).
     "endpoints": "SELECT * FROM endpoints ORDER BY protocol, method, path, handler",
+    "shapes": "SELECT * FROM shapes ORDER BY shape_id",
+    # `ordinal` alone would tie across shapes; `shape_id` first is what makes
+    # the ordering total rather than merely stable within one shape (NFR-1).
+    "shape_fields": "SELECT * FROM shape_fields ORDER BY shape_id, ordinal",
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
