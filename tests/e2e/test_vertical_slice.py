@@ -1,6 +1,8 @@
+import json
 import subprocess
 from pathlib import Path
 
+import duckdb
 from click.testing import CliRunner
 
 from sextant.cli.app import cli
@@ -11,7 +13,7 @@ FIXTURE = REPO / "fixtures" / "orders-service"
 
 def _run(workspace: Path) -> None:
     runner = CliRunner()
-    for command in ("analyze", "render"):
+    for command in ("analyze", "render", "export"):
         result = runner.invoke(
             cli, ["module", command, str(FIXTURE), "--workspace", str(workspace)]
         )
@@ -21,7 +23,7 @@ def _run(workspace: Path) -> None:
 def _fingerprint(workspace: Path) -> dict[str, bytes]:
     captured = {}
     for path in sorted(workspace.rglob("*")):
-        if path.is_file() and path.suffix in {".jsonl", ".json", ".md"}:
+        if path.is_file() and path.suffix in {".jsonl", ".json", ".md", ".parquet"}:
             captured[str(path.relative_to(workspace))] = path.read_bytes()
     return captured
 
@@ -44,3 +46,21 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     assert "## Outbound endpoints" in document
     assert "/billing/invoices" in document
     assert "classDiagram" in document
+
+
+def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)  # analyze + render + export
+    runner = CliRunner()
+    result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    bundle = Path(result.output.strip())
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    assert manifest["producer"]["catalog_hash"].startswith("sha256:")
+    assert "call_site_clients_not_read" in manifest["gaps"]
+    assert "endpoints" in manifest["contents"]["tables"]
+    rows = duckdb.sql(
+        f"SELECT direction, count(*) AS n FROM read_parquet('{bundle / 'graph' / 'endpoints.parquet'}') "
+        "GROUP BY direction ORDER BY direction"
+    ).fetchall()
+    assert rows == [("both", 1), ("inbound", 17), ("outbound", 6)]
