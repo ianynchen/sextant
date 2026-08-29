@@ -8,7 +8,14 @@ from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoin
 from sextant.cli.resources import catalogs_dir
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
+from sextant.domain.facts import (
+    AnnotationFact,
+    AnnotationUse,
+    Document,
+    Signature,
+    SymbolFact,
+    TypeRef,
+)
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -27,6 +34,7 @@ _INVENTED_LISTENER = Catalog(
         "type_annotation": "com/acme/messaging/annotation/Listener#",
         "mapping": {
             "path_from": ["value"],
+            "prefix_from": ["value"],
             "method_from": "method",
             "all_methods": ["PUBLISH"],
             "prefix_annotation": "com/acme/messaging/annotation/Topic#",
@@ -474,6 +482,7 @@ _SCALAR_PATH_CATALOG = Catalog(
         "type_annotation": "com/acme/rest/Resource#",
         "mapping": {
             "path_from": ["value"],
+            "prefix_from": ["value"],
             "method_from": "method",
             "all_methods": ["GET"],
             # Not a mapping annotation: this catalog is the JAX-RS shape, where
@@ -502,6 +511,302 @@ def test_derive_endpoints_reads_a_scalar_annotation_argument_when_it_is_not_an_a
     workspace.close()
 
     assert [(r["method"], r["path"]) for r in rows] == [("GET", "/rest/orders/{id}")]
+
+
+def _client_facts(root: Path, type_args: dict[str, object]) -> None:
+    """A client interface in the outbound shape D02 §2 (amended) describes: a
+    type-level marker that also carries the service name and address prefix
+    — the exact @FeignClient hazard the prefix_from/peer_from split exists
+    for — and a method-level mapping annotation with no argument beyond its
+    own path."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/billing/BillingClient.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    client = "com/acme/billing/BillingClient#"
+    submit = "com/acme/billing/BillingClient#submit(sig_9f1c2b47)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=client, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=submit,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=client,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void")),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=client,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/billing/annotation/ServiceClient#",
+                args=type_args,
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=submit,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/billing/annotation/PostExchange#",
+                args={"value": ["/invoices"]},
+            ),
+        ),
+    ]
+    write_fact_file(root / "BillingClient.jsonl", document, facts)
+
+
+_OUTBOUND_CATALOG = Catalog(
+    id="invented-outbound",
+    style="annotation_driven",
+    protocol="http",
+    direction="outbound",
+    requires=("annotation_args",),
+    source=Path("tests/invented.yml"),
+    matches={
+        "type_annotation": "com/acme/billing/annotation/ServiceClient#",
+        "request_body_annotation": "com/acme/billing/annotation/Body#",
+        "mapping": {
+            "path_from": ["value"],
+            # `path` carries the prefix; `name` (read by peer_from below)
+            # never does — the leak the split exists to prevent.
+            "prefix_from": ["path"],
+            "peer_from": ["name", "value"],
+            "method_from": "method",
+            "all_methods": ["GET"],
+            "prefix_annotation": "com/acme/billing/annotation/ServiceClient#",
+            "annotations": [
+                {"fqn": "com/acme/billing/annotation/PostExchange#", "method": ["POST"]},
+            ],
+        },
+    },
+)
+
+
+def _outbound_workspace(tmp_path: Path, type_args: dict[str, object] | None = None):
+    args = type_args if type_args is not None else {"name": "billing", "path": "/billing"}
+    _client_facts(tmp_path / "facts", args)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [_OUTBOUND_CATALOG], capabilities={"annotation_args"})
+    assert skipped == []
+    return workspace
+
+
+def test_an_outbound_catalog_produces_caller_rows_with_peer_and_prefixed_path(tmp_path):
+    workspace = _outbound_workspace(tmp_path)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["direction"] == "outbound"]
+    assert endpoint["path"] == "/billing/invoices"
+    assert endpoint["peer"] == "billing"
+    assert endpoint["handler"] is None
+    assert str(endpoint["caller"]).endswith("#submit(sig_") or "#" in str(endpoint["caller"])
+    workspace.close()
+
+
+def _legacy_facts(root: Path) -> None:
+    """A client interface with no type-level marker at all — the Retrofit
+    shape: the mapping annotation on the method is the whole evidence."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/legacy/LegacyClient.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    client = "com/acme/legacy/LegacyClient#"
+    fetch = "com/acme/legacy/LegacyClient#fetch(sig_2a77e410)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=client, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=fetch,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=client,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void")),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=fetch,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/legacy/annotation/GET#",
+                args={"value": "legacy/invoices"},
+            ),
+        ),
+    ]
+    write_fact_file(root / "LegacyClient.jsonl", document, facts)
+
+
+_UNGATED_CATALOG = Catalog(
+    id="invented-ungated",
+    style="annotation_driven",
+    protocol="http",
+    direction="outbound",
+    requires=("annotation_args",),
+    source=Path("tests/invented.yml"),
+    matches={
+        # No type-level gate at all: absence, not a marker no fact ever
+        # carries.
+        "type_annotation": None,
+        "mapping": {
+            "path_from": ["value"],
+            "prefix_from": ["path"],
+            "peer_from": [],
+            "method_from": "method",
+            "all_methods": ["GET"],
+            "prefix_annotation": "com/acme/legacy/annotation/Prefix#",
+            "annotations": [
+                {"fqn": "com/acme/legacy/annotation/GET#", "method": ["GET"]},
+            ],
+        },
+    },
+)
+
+
+def _ungated_workspace(tmp_path):
+    _legacy_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [_UNGATED_CATALOG], capabilities={"annotation_args"})
+    assert skipped == []
+    return workspace
+
+
+def test_a_catalog_with_no_type_gate_matches_on_method_annotations_alone(tmp_path):
+    """A Retrofit interface has no type-level marker; the mapping annotation
+    is the whole evidence."""
+    workspace = _ungated_workspace(tmp_path)
+    rows = [e for e in workspace.query("endpoints") if e["direction"] == "outbound"]
+    assert [e["path"] for e in rows] == ["legacy/invoices"]
+    workspace.close()
+
+
+def test_the_service_name_never_leaks_into_the_path(tmp_path):
+    """@FeignClient(name=…) with NO path attribute: the prefix is empty, not
+    the name — the exact bug the prefix_from/peer_from split exists for."""
+    workspace = _outbound_workspace(tmp_path, type_args={"name": "billing"})
+    [endpoint] = [e for e in workspace.query("endpoints") if e["direction"] == "outbound"]
+    assert endpoint["path"] == "/invoices"
+    assert endpoint["peer"] == "billing"
+    workspace.close()
+
+
+def _inventory_facts(root: Path) -> None:
+    """A type-level @HttpExchange("/v1/inventory") that is also, itself, one
+    of the mapping annotations — @HttpExchange's shape: it carries the
+    prefix and, on a method, a mapping in its own right. Without the
+    construct-kind guard the type-level use would mint a phantom endpoint of
+    its own."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/inventory/InventoryClient.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    client = "com/acme/inventory/InventoryClient#"
+    levels = "com/acme/inventory/InventoryClient#levels(sig_6b4f9e02)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=client, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=levels,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=client,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void")),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=client,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/inventory/annotation/Exchange#",
+                args={"value": ["/v1/inventory"]},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=levels,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/inventory/annotation/GetExchange#",
+                args={"value": ["/levels"]},
+            ),
+        ),
+    ]
+    write_fact_file(root / "InventoryClient.jsonl", document, facts)
+
+
+_UNGATED_PREFIXED_CATALOG = Catalog(
+    id="invented-ungated-prefixed",
+    style="annotation_driven",
+    protocol="http",
+    direction="outbound",
+    requires=("annotation_args",),
+    source=Path("tests/invented.yml"),
+    matches={
+        "type_annotation": None,
+        "mapping": {
+            "path_from": ["value"],
+            "prefix_from": ["value"],
+            "peer_from": [],
+            "method_from": "method",
+            "all_methods": ["GET"],
+            "prefix_annotation": "com/acme/inventory/annotation/Exchange#",
+            "annotations": [
+                {"fqn": "com/acme/inventory/annotation/Exchange#"},
+                {"fqn": "com/acme/inventory/annotation/GetExchange#", "method": ["GET"]},
+            ],
+        },
+    },
+)
+
+
+def _ungated_prefixed_workspace(tmp_path):
+    _inventory_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(
+        workspace, [_UNGATED_PREFIXED_CATALOG], capabilities={"annotation_args"}
+    )
+    assert skipped == []
+    return workspace
+
+
+def test_a_type_level_mapping_annotation_mints_no_endpoint_of_its_own(tmp_path):
+    """In a catalog with no type gate, a prefix-carrying type-level annotation
+    that is also in the mapping list (@HttpExchange's shape) must contribute
+    the prefix and nothing else — its type symbol is not a method, and without
+    the construct-kind guard it would mint one phantom endpoint per method in
+    all_methods (pre-flight ruling R2)."""
+    workspace = _ungated_prefixed_workspace(tmp_path)
+    rows = [e for e in workspace.query("endpoints") if e["direction"] == "outbound"]
+    assert [(e["method"], e["path"]) for e in rows] == [("GET", "/v1/inventory/levels")]
+    workspace.close()
 
 
 _UNKNOWN_STYLE_CATALOG = """id: invented

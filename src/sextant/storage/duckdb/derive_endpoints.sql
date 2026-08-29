@@ -13,12 +13,25 @@
 -- Parameters:
 --   $protocol            -- the catalog's declared protocol (D00's closed set)
 --   $direction           -- the catalog's declared direction (D00's closed set)
---   $type_annotation     -- fqn of the type-level annotation that marks a controller
+--   $type_annotation     -- fqn of the type-level annotation that marks a
+--                           controller or client, or NULL where the catalog
+--                           declares no type-level gate at all (D02 §2,
+--                           amended) — a Retrofit interface carries no marker,
+--                           so its method annotations are the whole evidence.
 --   $mapping_annotations -- list of {fqn, methods} rows: one per mapping annotation,
 --                           `methods` holding the methods that annotation pre-sets,
 --                           or NULL where it pre-sets none
 --   $prefix_annotation   -- fqn of the type-level annotation carrying the path prefix
 --   $path_from           -- attribute names that alias one another, first present wins
+--   $prefix_from         -- attribute names the prefix annotation's address
+--                           prefix is read from (D02 §2, amended, spec ruling
+--                           I2): kept apart from $peer_from because on some
+--                           catalogs' marker annotation the same annotation
+--                           carries both a prefix and a service name, and only
+--                           one of its attributes means each.
+--   $peer_from           -- attribute names the prefix annotation's peer hint
+--                           (a service name) is read from, or an empty list
+--                           where the catalog declares no peer at all.
 --   $method_from         -- attribute name holding the method, where one is given
 --   $all_methods         -- the methods a mapping annotation means when it names none
 
@@ -26,7 +39,8 @@
 -- (D01 §3 Contracts), which this engine does not populate — that is the
 -- shape pass's job, not the annotation-driven endpoint engine's.
 INSERT INTO endpoints (
-    protocol, direction, method, path, handler, handler_signature, resolution, evidence
+    protocol, direction, method, path, handler, caller, peer,
+    handler_signature, resolution, evidence
 )
 WITH mapping_catalog AS (
     SELECT s.fqn AS fqn, s.methods AS methods
@@ -34,39 +48,22 @@ WITH mapping_catalog AS (
         $mapping_annotations::STRUCT(fqn VARCHAR, methods VARCHAR[])[]
     ) AS s)
 ),
+-- The type-level gate is optional (D02 §2, amended): a catalog that declares
+-- none matches on method annotations alone — a Retrofit interface has no
+-- type-level marker at all.
 controllers AS (
     SELECT DISTINCT target AS type_symbol
     FROM annotations
     WHERE annotation = $type_annotation
 ),
--- Every annotation this catalog reads a path from — the mapping annotations and
--- the prefix annotation, which for some frameworks is one of them and for
--- others is not (D02 §2).
 declared AS (
     SELECT
         a.target AS target,
-        a.annotation AS annotation,
-        -- The prefix annotation is not always a mapping annotation, so only a
-        -- row that matched the catalog's mapping list may declare an endpoint.
-        mc.fqn IS NOT NULL AS is_mapping,
-        -- An annotation argument arrives as a JSON array where the annotation
-        -- declares an array type, and as a bare value where it declares a
-        -- scalar. Both forms occur among the catalogs this engine serves, so
-        -- element 0 is read first and the value itself second. The catalog's
-        -- alias order decides which name wins, so the result is deterministic;
-        -- an annotation naming no path falls back to the empty string rather
-        -- than being assumed present.
         coalesce(list_extract(list_filter(list_transform(
             $path_from::VARCHAR[],
             n -> coalesce(a.args -> n ->> 0, a.args ->> n)
         ), v -> v IS NOT NULL), 1), '') AS path,
-        -- The attribute wins, then what the annotation pre-sets, then every
-        -- method. An enum argument is a symbol reference (D00 §5a), so the
-        -- constant is taken from its tail.
         coalesce(
-            -- An empty list is absence, not an answer: it is what a dropped
-            -- argument looks like, and taking it literally yields no endpoint
-            -- at all rather than falling through to the methods below.
             CASE WHEN len(coalesce(
                 TRY_CAST(a.args -> $method_from AS VARCHAR[]),
                 CASE WHEN a.args ->> $method_from IS NOT NULL
@@ -84,22 +81,31 @@ declared AS (
             $all_methods::VARCHAR[]
         ) AS methods
     FROM annotations a
-    LEFT JOIN mapping_catalog mc ON mc.fqn = a.annotation
-    WHERE mc.fqn IS NOT NULL OR a.annotation = $prefix_annotation
+    JOIN mapping_catalog mc ON mc.fqn = a.annotation
 ),
+-- Type-level and method-level annotations are different roles: on
+-- @RequestMapping value/path both mean *path*, on @FeignClient value aliases
+-- *name* — the service id — and only path means prefix. prefix_from and
+-- peer_from keep the roles apart (spec ruling I2).
 prefixes AS (
-    SELECT d.target AS type_symbol, d.path AS prefix
-    FROM declared d
-    WHERE d.annotation = $prefix_annotation
+    SELECT
+        a.target AS type_symbol,
+        coalesce(list_extract(list_filter(list_transform(
+            $prefix_from::VARCHAR[],
+            n -> coalesce(a.args -> n ->> 0, a.args ->> n)
+        ), v -> v IS NOT NULL), 1), '') AS prefix,
+        list_extract(list_filter(list_transform(
+            $peer_from::VARCHAR[],
+            n -> coalesce(a.args -> n ->> 0, a.args ->> n)
+        ), v -> v IS NOT NULL), 1) AS peer
+    FROM annotations a
+    WHERE a.annotation = $prefix_annotation
 ),
 mappings AS (
-    -- A mapping annotation naming no method means every method, and each is a
-    -- distinct wire contract, so each is its own endpoint (D02 §2).
     SELECT d.target AS method_symbol,
            UNNEST(d.methods) AS wire_method,
            d.path AS path_suffix
     FROM declared d
-    WHERE d.is_mapping
 ),
 derived AS (
     SELECT
@@ -107,14 +113,25 @@ derived AS (
         $direction  AS direction,
         m.wire_method AS method,
         coalesce(p.prefix, '') || m.path_suffix AS path,
-        s.symbol    AS handler,
+        -- The symbol lands by direction (D01 §3, amended): the server side
+        -- handles, the client side calls, and a later merge may hold both.
+        CASE WHEN $direction = 'outbound' THEN NULL ELSE s.symbol END AS handler,
+        CASE WHEN $direction = 'outbound' THEN s.symbol END AS caller,
+        p.peer      AS peer,
         s.signature AS handler_signature,
         'resolved'  AS resolution,
         'compiler'  AS evidence
     FROM mappings m
-    JOIN symbols s ON s.symbol = m.method_symbol
-    JOIN controllers c ON s.enclosing = c.type_symbol
-    LEFT JOIN prefixes p ON p.type_symbol = c.type_symbol
+    -- A handler or caller is always a method. Without this, a TYPE-level
+    -- mapping annotation (a prefix-carrying @HttpExchange, a class-level
+    -- @RequestMapping) joins its own type symbol and, in a catalog with no
+    -- type gate, mints one phantom endpoint per method in all_methods
+    -- (pre-flight ruling R2). The inbound catalogs were protected only by
+    -- their gate's enclosing-join; this names the real rule instead.
+    JOIN symbols s ON s.symbol = m.method_symbol AND s.construct_kind = 'method'
+    LEFT JOIN controllers c ON s.enclosing = c.type_symbol
+    LEFT JOIN prefixes p ON p.type_symbol = s.enclosing
+    WHERE $type_annotation IS NULL OR c.type_symbol IS NOT NULL
 )
 SELECT * FROM derived d
 WHERE NOT EXISTS (

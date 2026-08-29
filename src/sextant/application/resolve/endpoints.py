@@ -84,7 +84,8 @@ def _run_annotation_driven(workspace: Workspace, catalog: Catalog) -> None:
         "endpoints",
         protocol=catalog.protocol,
         direction=catalog.direction,
-        type_annotation=catalog.matches["type_annotation"],
+        # Optional (D02 §2, amended): absence means "no type-level gate".
+        type_annotation=catalog.matches.get("type_annotation"),
         prefix_annotation=mapping["prefix_annotation"],
         # `method` is absent for an annotation that pre-sets none, and the
         # derivation reads that absence as "every method in all_methods".
@@ -92,6 +93,8 @@ def _run_annotation_driven(workspace: Workspace, catalog: Catalog) -> None:
             {"fqn": m["fqn"], "methods": m.get("method")} for m in mapping["annotations"]
         ],
         path_from=list(mapping["path_from"]),
+        prefix_from=list(mapping["prefix_from"]),
+        peer_from=list(mapping.get("peer_from", [])),
         method_from=mapping["method_from"],
         all_methods=list(mapping["all_methods"]),
     )

@@ -916,6 +916,7 @@ _ENDPOINT_CATALOG = Catalog(
             "request_body_annotation": "com/acme/rest/Body#",
             "mapping": {
                 "path_from": ["value"],
+                "prefix_from": ["value"],
                 "method_from": "method",
                 "all_methods": ["POST"],
                 "prefix_annotation": "com/acme/rest/Path#",
