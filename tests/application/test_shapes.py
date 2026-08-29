@@ -997,15 +997,6 @@ def _resolved_endpoint(tmp_path: Path, signature: dict | None) -> dict:
     return endpoint
 
 
-def _resolved_list_handler(tmp_path: Path) -> dict:
-    return _resolved_endpoint(
-        tmp_path,
-        _signature(
-            returns=_ref("java/util/List#", "array", arguments=[_ref(ORDER_VIEW_SHAPE, "object")])
-        ),
-    )
-
-
 def _resolved_string_handler(tmp_path: Path) -> dict:
     return _resolved_endpoint(tmp_path, _signature(returns=_string()))
 
@@ -1082,10 +1073,52 @@ def test_a_collection_response_records_what_the_array_holds(tmp_path):
     """List<OrderView> was 2A's parked gap: the endpoint said nothing at all.
     The descriptor keeps the array-ness — it IS the wire contract — and points
     at the element's shape."""
-    endpoint = _resolved_list_handler(tmp_path)
+    ws = _resolved_handler(
+        tmp_path,
+        _signature(
+            returns=_ref("java/util/List#", "array", arguments=[_ref(ORDER_VIEW_SHAPE, "object")])
+        ),
+    )
+    endpoint = ws.query("endpoints")[0]
     descriptor = json.loads(endpoint["response_shape"])
     assert descriptor["wire_type"] == "array"
     assert descriptor["item"]["shape_id"] == ORDER_VIEW_SHAPE
+    # This handler's only payload is the array itself, so the element's shape
+    # row reaches `shapes` solely through `referenced` — a regression back to
+    # picking roots from the settled columns (the 2A path) would leave it
+    # unexpanded, since no column ever holds a bare `OrderView` root here.
+    assert any(s["shape_id"] == ORDER_VIEW_SHAPE for s in ws.query("shapes"))
+    ws.close()
+
+
+def test_an_outbound_row_with_no_handler_still_receives_contracts(tmp_path):
+    """An outbound row carries `caller` with `handler` NULL (D01 §3,
+    amended): the annotation-driven engine never writes a handler symbol for
+    a catalog whose declared direction is `outbound`. `_contracts_of`'s owner
+    falls through to `caller` in that case, and `derive_endpoint_contracts.sql`
+    coalesces the same two columns to match, so the row still gets a
+    descriptor rather than being silently skipped."""
+    outbound_catalog = Catalog(
+        **{**vars(_ENDPOINT_CATALOG), "id": "invented-outbound", "direction": "outbound"}
+    )
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(root, _signature(returns=_ref(ORDER_VIEW_SHAPE, "object")))
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [outbound_catalog], capabilities=set())
+    derive_endpoint_shapes(workspace, [outbound_catalog], capabilities=set())
+    endpoint = workspace.query("endpoints")[0]
+
+    assert endpoint["handler"] is None
+    assert endpoint["caller"] == _MODULE + _HANDLER
+    assert json.loads(endpoint["response_shape"]) == {
+        "nullable": True,
+        "shape_id": ORDER_VIEW_SHAPE,
+        "wire_format": "",
+        "wire_type": "object",
+    }
+    workspace.close()
 
 
 def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path):

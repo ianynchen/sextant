@@ -251,11 +251,13 @@ def _contracts_of(
     Keyed on the owner rather than on the endpoint's wire identity because the
     signature is what the shapes come from: one handler mapped to every
     method (an annotation that names none) is several rows sharing one
-    signature, and they all carry the same contract. The owner is the
-    handler for an inbound row, the caller for an outbound one — the two
-    directions never both carry a symbol on the same row (D01 §3, amended) —
-    so coalescing them is what lets an outbound row, whose `handler` is SQL
-    NULL, receive contracts at all.
+    signature, and they all carry the same contract. A `both` row keeps both
+    `handler` and `caller` (D01 §3, amended), but `handler_signature` on that
+    row is always the handler's own signature — the richer side a merge
+    keeps rather than the caller's (merge_endpoints.sql) — so `handler` must
+    win the or-chain whenever it is present; `caller` only becomes the owner
+    on a genuinely outbound row, the one case `handler` is SQL NULL. The SQL
+    join coalesces the same two columns in the same order to match.
     """
     found: dict[str, dict[str, str]] = {}
     for endpoint in endpoints:
