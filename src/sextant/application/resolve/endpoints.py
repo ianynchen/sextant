@@ -33,13 +33,22 @@ def derive_endpoints(
     # in which every catalog is skipped still leaves an empty table rather
     # than the previous run's rows.
     workspace.derive("endpoints_reset")
+    # D02 §3: inbound engines run before outbound so the merge below finds the
+    # exposed row already present. Filename breaks the tie, which is the
+    # loader's own order (NFR-1).
+    ordered = sorted(
+        engines, key=lambda pair: (pair[0].direction != "inbound", str(pair[0].source))
+    )
     skipped = []
-    for catalog, engine in engines:
+    for catalog, engine in ordered:
         missing = missing_capabilities(catalog, capabilities)
         if missing:
             skipped.append(SkippedCatalog(catalog.id, missing))
             continue
         engine(workspace, catalog)
+    # Once per resolve, after every catalog: a wire identity present in both
+    # directions collapses to one row, direction `both` (D02 §3).
+    workspace.derive("endpoints_merge")
     return skipped
 
 

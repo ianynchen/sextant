@@ -613,6 +613,146 @@ def test_an_outbound_catalog_produces_caller_rows_with_peer_and_prefixed_path(tm
     workspace.close()
 
 
+def _orders_controller_facts(root: Path) -> None:
+    """A controller exposing exactly one route, POST /v1/orders — deliberately
+    narrower than `_controller_facts` (which also exposes two GET routes
+    sharing the same path), so a path-only filter in the merge test names the
+    merged row unambiguously."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/orders/OrderController.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    controller = "com/acme/orders/OrderController#"
+    create = "com/acme/orders/OrderController#create(sig_1f0a4c2e)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=controller, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=create,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=controller,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=controller,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/web/bind/annotation/RestController#",
+                args={},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=controller,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/web/bind/annotation/RequestMapping#",
+                args={"value": ["/v1/orders"]},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=create,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/web/bind/annotation/PostMapping#",
+                args={},
+            ),
+        ),
+    ]
+    write_fact_file(root / "OrderController.jsonl", document, facts)
+
+
+def _orders_client_facts(root: Path) -> None:
+    """A client whose one method calls the same wire identity
+    `_controller_facts` exposes (POST /v1/orders) — used only to prove the
+    cross-direction merge, so the path is hard-coded on the method rather
+    than assembled from a prefix."""
+    document = Document(
+        document_id="doc_2",
+        relative_path="com/acme/billing/OrdersClient.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    client = "com/acme/billing/OrdersClient#"
+    submit = "com/acme/billing/OrdersClient#submit(sig_9f1c2b47)."
+    facts = [
+        SymbolFact(document_id="doc_2", symbol=client, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(
+            document_id="doc_2",
+            symbol=submit,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=client,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void")),
+        ),
+        AnnotationFact(
+            document_id="doc_2",
+            target=client,
+            retention="runtime",
+            use=AnnotationUse(annotation="com/acme/billing/annotation/ServiceClient#", args={}),
+        ),
+        AnnotationFact(
+            document_id="doc_2",
+            target=submit,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/billing/annotation/PostExchange#",
+                args={"value": ["/v1/orders"]},
+            ),
+        ),
+    ]
+    write_fact_file(root / "OrdersClient.jsonl", document, facts)
+
+
+def _two_direction_workspace(tmp_path: Path):
+    """An inbound controller exposing POST /v1/orders and an outbound client
+    calling the very same wire identity, resolved together so the merge in
+    `endpoints_merge` has something to collapse."""
+    _orders_controller_facts(tmp_path / "facts")
+    _orders_client_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+    skipped = derive_endpoints(
+        workspace,
+        [spring, _OUTBOUND_CATALOG],
+        capabilities={"annotation_args", "type_annotations"},
+    )
+    assert skipped == []
+    return workspace
+
+
+def test_a_path_the_module_both_exposes_and_calls_is_one_endpoint_with_both(tmp_path):
+    """D02 §3: inbound runs first so the merged row keeps the server's handler
+    and gains the client's caller — appearing twice would make every consumer
+    re-implement the merge."""
+    workspace = _two_direction_workspace(tmp_path)
+    rows = [e for e in workspace.query("endpoints") if e["path"] == "/v1/orders"]
+    assert len(rows) == 1
+    [merged] = rows
+    assert merged["direction"] == "both"
+    assert merged["handler"] is not None and merged["caller"] is not None
+    workspace.close()
+
+
 def _legacy_facts(root: Path) -> None:
     """A client interface with no type-level marker at all — the Retrofit
     shape: the mapping annotation on the method is the whole evidence."""
