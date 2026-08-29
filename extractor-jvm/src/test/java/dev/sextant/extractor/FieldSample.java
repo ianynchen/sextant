@@ -30,6 +30,14 @@ public class FieldSample {
     // A generic argument that is itself parameterized — the case that
     // proves the recursion actually recurses, not just one level deep.
     public Map<String, List<String>> nestedTags;
+    // An array of a first-party type. javac writes no Signature attribute for
+    // it, so the erased descriptor is the only source — and the element type
+    // survives there solely as the `[]` suffix on the symbol, which is
+    // descriptor grammar the language-blind half must not have to parse.
+    public FieldSampleItem[] alternates;
+    // The other array path: inside a generic argument the element arrives
+    // through the Signature attribute instead of the descriptor.
+    public List<String[]> nameGroups;
 
     // Both the return type and the parameter type are annotated, so a scanner
     // that discarded which type reference an annotation belongs to (as opposed

@@ -108,6 +108,37 @@ class FieldScanTest {
                 + "\"wire_format\":\"\",\"wire_type\":\"object\"}]")));
     }
 
+    /** An array keeps its element as a real type argument, exactly as
+     *  {@code List<E>} does. The element is in the erased descriptor and nowhere else —
+     *  javac writes no Signature attribute for a field typed with no type variable and no
+     *  parameterization — and it survives there only as the {@code []} suffix on the
+     *  symbol. Leaving it there makes {@code FieldSampleItem[]} and {@code String[]} the
+     *  same {@code array} holding nothing, which no consumer can tell apart and no report
+     *  can name. */
+    @Test
+    void keeps_an_erased_arrays_element_as_a_full_type_reference() throws Exception {
+        assertTrue(scanFieldSample().stream().anyMatch(l -> l.contains("FieldSample#alternates.")
+            && l.contains("\"symbol\":\"dev/sextant/extractor/FieldSampleItem#[]\"")
+            && l.contains("\"wire_type\":\"array\"")
+            && l.contains("\"arguments\":[{\"arguments\":[],\"nullable\":true,"
+                + "\"nullable_resolution\":\"resolved\","
+                + "\"symbol\":\"dev/sextant/extractor/FieldSampleItem#\","
+                + "\"wire_format\":\"\",\"wire_type\":\"object\"}]")));
+    }
+
+    /** The same claim through the other path: an array reached inside a generic argument
+     *  is built from the Signature attribute rather than the descriptor, and the two must
+     *  not disagree about whether an array says what it holds. */
+    @Test
+    void keeps_a_signature_arrays_element_as_a_full_type_reference() throws Exception {
+        assertTrue(scanFieldSample().stream().anyMatch(l -> l.contains("FieldSample#nameGroups.")
+            && l.contains("\"arguments\":[{\"arguments\":[{\"arguments\":[],\"nullable\":true,"
+                + "\"nullable_resolution\":\"resolved\",\"symbol\":\"java/lang/String#\","
+                + "\"wire_format\":\"\",\"wire_type\":\"string\"}],\"nullable\":true,"
+                + "\"nullable_resolution\":\"resolved\",\"symbol\":\"java/lang/String#[]\","
+                + "\"wire_format\":\"\",\"wire_type\":\"array\"}]")));
+    }
+
     /** {@code Map<String, List<String>>}: the second argument is itself
      *  parameterized, proving the recursion actually recurses rather than
      *  stopping one level down. */

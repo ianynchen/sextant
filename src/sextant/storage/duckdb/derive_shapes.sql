@@ -4,9 +4,11 @@
 -- Nothing is derived below: the recursive `item` descriptor is assembled
 -- bottom-up over an expansion queue, which one SQL statement cannot express.
 --
--- The fields of these shapes are inserted by derive_shape_fields.sql. Two
--- files rather than one because bound parameters reach only the last statement
--- of a script, and a shape row and a field row carry different parameters.
+-- The fields of these shapes are inserted by derive_shape_fields.sql, which
+-- runs first: this row is what marks a shape settled, so writing it before its
+-- fields would make the guard there skip them. Two files rather than one
+-- because bound parameters reach only the last statement of a script, and a
+-- shape row and a field row carry different parameters.
 --
 -- The derivation appends. Two catalogs may both run (D02 §5), and a type both
 -- of them reach is one shape, not two: a shape_id already present keeps the

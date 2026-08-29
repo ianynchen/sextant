@@ -68,6 +68,13 @@ CREATE OR REPLACE VIEW symbols AS
 -- into the workspace, and shape_fields.ordinal is declaration order (D01 §5),
 -- so it is projected here rather than re-derived from anything the payload
 -- happens to carry. A view over a table keeps the base table's rowid.
+--
+-- That rowid follows the order the loader read the lines in is **tested
+-- behaviour, not a documented contract** — measured on this engine at 300k
+-- rows across 8 files with 10 threads, where the bulk read preserved each
+-- file's line order. An engine upgrade is the moment to re-verify it: if it
+-- ever stops holding, `ordinal` stops being declaration order and every
+-- content hash moves with it (NFR-1).
 SELECT rowid                        AS seq,
        document_id,
        payload ->> 'symbol'         AS symbol,

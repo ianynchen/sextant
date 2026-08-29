@@ -103,7 +103,22 @@ public final class TypeRefs {
 
     private static Node nodeFromType(Type type) {
         boolean nullable = type.getSort() == Type.OBJECT || type.getSort() == Type.ARRAY;
-        return new Node(descriptorName(type), List.of(), nullable, WireTypes.of(type), WireTypes.format(type));
+        return new Node(descriptorName(type), elementArguments(type), nullable,
+            WireTypes.of(type), WireTypes.format(type));
+    }
+
+    /** An array's element as its single type argument. The array's own symbol already ends
+     *  in {@code []}, but that suffix is descriptor grammar — language knowledge (D1) that
+     *  the language-blind half must not have to parse. Without the element as a real
+     *  reference, {@code CustomerRef[]} and {@code String[]} are the same {@code array}
+     *  with nothing held: an expansion pass cannot tell them apart, cannot report the type
+     *  it failed to expand, and DR-5 matches a caller sending strings against a callee
+     *  expecting records. A collection expressed as {@code List<E>} has carried its element
+     *  since D00 §5a; an array is the same claim in different syntax. */
+    private static List<String> elementArguments(Type type) {
+        return type.getSort() == Type.ARRAY
+            ? List.of(toJson(nodeFromType(type.getElementType())))
+            : List.of();
     }
 
     private static String toJson(Node node) {
@@ -159,9 +174,12 @@ public final class TypeRefs {
             onDone.accept(new Node(name, List.of(), true, "object", ""));
         }
 
+        // The signature half of {@link #elementArguments}: the element is already a fully
+        // built node here, so it is kept as the array's single argument rather than
+        // surviving only as the `[]` suffix on the symbol.
         @Override public SignatureVisitor visitArrayType() {
             return new NodeCollector(element -> onDone.accept(
-                new Node(element.symbol() + "[]", List.of(), true, "array", "")));
+                new Node(element.symbol() + "[]", List.of(toJson(element)), true, "array", "")));
         }
 
         @Override public void visitClassType(String name) {

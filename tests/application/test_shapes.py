@@ -395,6 +395,82 @@ def test_an_annotated_wire_name_carries_the_evidence_of_the_code_that_declared_i
     assert field_of(ws, ORDER_REQUEST, "reference")["evidence"] == "declared"
 
 
+def test_a_second_catalog_leaves_an_existing_shapes_field_list_whole(tmp_path):
+    """D02 §5 lets two catalogs both run, and the second must not edit the
+    first's answer. Insert-if-absent per (shape_id, ordinal) rather than per
+    shape appends the surplus of whichever catalog yields more fields, leaving
+    a list no catalog produced and a content_hash describing neither — and DR-5
+    compares that list."""
+    permissive = Catalog(**{**vars(_CATALOG), "id": "invented-permissive", "serialization": {}})
+    workspace = _loaded_workspace(tmp_path)
+    derive_shapes(workspace, _CATALOG, [ORDER_REQUEST])
+    settled = shape_fields_of(workspace, ORDER_REQUEST)
+    hash_before = shape_of(workspace, ORDER_REQUEST)["content_hash"]
+
+    # This catalog ignores nothing and renames nothing: on its own it would
+    # yield nine fields, `internalTrace` among them.
+    derive_shapes(workspace, permissive, [ORDER_REQUEST])
+
+    assert shape_fields_of(workspace, ORDER_REQUEST) == settled
+    assert shape_of(workspace, ORDER_REQUEST)["content_hash"] == hash_before
+    assert len([s for s in workspace.query("shapes") if s["shape_id"] == ORDER_REQUEST]) == 1
+
+
+def _array_facts(root: Path, owner: str, element: dict) -> None:
+    """A type with one array field. The extractor keeps an array's element as
+    the reference's single type argument, the same way `List<E>` does — the
+    `[]` on the symbol is descriptor grammar, and reading it here would put
+    language knowledge back in the language-blind half."""
+    _write(
+        root / "Arrays.jsonl",
+        _document("doc_arrays", "com/acme/orders/contracts/Arrays.java"),
+        [
+            _type("doc_arrays", owner),
+            _field(
+                "doc_arrays",
+                owner,
+                "items",
+                _ref(element["symbol"] + "[]", "array", arguments=[element]),
+            ),
+        ],
+    )
+
+
+def test_an_array_field_records_what_it_holds(tmp_path):
+    """`CustomerRef[]` and `String[]` are both `array`. With the element left in
+    the symbol suffix they are indistinguishable to every consumer — the same
+    fabricated match `List<CustomerRef>` is protected from."""
+    owner = "com/acme/orders/contracts/Alternates#"
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _array_facts(root, owner, _ref(CUSTOMER_REF, "object"))
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_shapes(workspace, _CATALOG, [owner])
+
+    field = field_of(workspace, owner, "items")
+    assert field["wire_type"] == "array"
+    assert json.loads(field["item"])["shape_id"] == CUSTOMER_REF
+    assert shape_of(workspace, CUSTOMER_REF)["open"] is False
+
+
+def test_an_array_of_an_unexpandable_type_marks_the_shape_open_and_reports_it(tmp_path):
+    """The element is subject to rules 4 and 5 exactly as any other type: a gap
+    inside a collection is still a gap, and one that nobody can see is one
+    nobody closes."""
+    owner = "com/acme/orders/contracts/Headers#"
+    unknown = "org/springframework/http/HttpHeaders#"
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _array_facts(root, owner, _ref(unknown, "object"))
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    result = derive_shapes(workspace, _CATALOG, [owner])
+
+    assert shape_of(workspace, owner)["open"] is True
+    assert unknown in result.unexpanded_types
+
+
 def test_a_type_that_refers_to_itself_terminates(tmp_path):
     """`object` is a reference to another shape, never an inlining, so a cycle
     needs no depth counter — but only while each shape is expanded once."""

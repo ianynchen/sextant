@@ -139,9 +139,10 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
             {"shape_id": shape_id, "ordinal": ordinal, **row} for ordinal, row in enumerate(rows)
         )
 
-    # Shapes first: the field rows reference them.
-    workspace.derive("shapes", shapes=shapes)
+    # Fields first: the shape row is what marks a shape settled for a later
+    # catalog, so it is written once its fields are in (D02 §5).
     workspace.derive("shape_fields", fields=fields)
+    workspace.derive("shapes", shapes=shapes)
     return ExpandedShapes(unexpanded_types=tuple(unexpanded))
 
 
