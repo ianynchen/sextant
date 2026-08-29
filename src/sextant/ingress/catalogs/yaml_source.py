@@ -43,6 +43,12 @@ class YamlCatalogSource:
                     requires=tuple(raw.get("requires", [])),
                     matches=_required(raw, "matches", path),
                     source=path,
+                    # D02 §2a, §2e, §2f, §2g — optional blocks. A catalog that
+                    # declares none of them still loads.
+                    wrappers=raw.get("wrappers", []),
+                    nullability=raw.get("nullability", {}),
+                    serialization=raw.get("serialization", {}),
+                    known_types=raw.get("known_types", []),
                 )
             )
         return catalogs
