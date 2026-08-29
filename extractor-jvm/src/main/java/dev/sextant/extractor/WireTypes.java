@@ -9,6 +9,15 @@ final class WireTypes {
 
     static String of(Type type) {
         return switch (type.getSort()) {
+            // Nothing on the wire at all. D00 §5b's vocabulary is a closed
+            // set of the things serialisation distinguishes, and "no payload"
+            // is not one of them — adding a member would be a schema change
+            // (NFR-5), and letting `void` fall through to the reference branch
+            // below would project it as an `object`, which is a shape claim
+            // about a method that returns nothing. The empty string says this
+            // reference reaches no wire type, the way an empty `wire_format`
+            // says it carries no qualifier.
+            case Type.VOID -> "";
             case Type.BOOLEAN -> "boolean";
             case Type.BYTE, Type.SHORT, Type.INT, Type.LONG, Type.CHAR -> "integer";
             case Type.FLOAT, Type.DOUBLE -> "number";

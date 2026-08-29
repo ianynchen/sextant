@@ -73,4 +73,15 @@ class WireTypesTest {
         Type map = Type.getType("Ljava/util/Map;");
         assertEquals("map", WireTypes.of(map));
     }
+
+    /** A method that returns nothing has no payload. Reached only now that a
+     *  return type is projected like a field's: {@code void} is neither a
+     *  primitive with a wire form nor a reference, and the reference branch
+     *  would have called it an {@code object} — a shape claim about a method
+     *  that sends nothing at all. */
+    @Test
+    void projects_void_to_no_wire_type_at_all() {
+        assertEquals("", WireTypes.of(Type.VOID_TYPE));
+        assertEquals("", WireTypes.format(Type.VOID_TYPE));
+    }
 }

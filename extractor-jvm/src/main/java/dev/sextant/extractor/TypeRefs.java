@@ -13,8 +13,15 @@ import org.objectweb.asm.signature.SignatureVisitor;
 public final class TypeRefs {
     private TypeRefs() {}
 
+    /** A type reference built from an erased descriptor — a method parameter, or a return
+     *  type whose method carries no {@code Signature} attribute. Fully projected, exactly
+     *  like {@link #fieldRef}: a signature-level reference and a field's reference describe
+     *  the same thing, and a consumer that has to ask which of the two it is holding before
+     *  it can read {@code wire_type} has two grammars where D00 §5a states one. What the
+     *  descriptor genuinely lost — the type arguments — stays lost; the projection is not a
+     *  claim about arguments that were never there. */
     public static String fromType(Type type) {
-        return ref(descriptorName(type), List.of());
+        return toJson(nodeFromType(type));
     }
 
     // Package-private: ClassScanner's field type references share this exact
@@ -27,46 +34,21 @@ public final class TypeRefs {
         };
     }
 
-    public static String ref(String symbol, List<String> argumentJson) {
-        TreeMap<String, String> fields = new TreeMap<>();
-        fields.put("symbol", JsonOut.string(symbol));
-        fields.put("arguments", JsonOut.array(argumentJson));
-        return JsonOut.object(fields);
-    }
-
-    /** Generic return type from the Signature attribute, or null when absent. */
+    /** Generic return type from the Signature attribute, or null when absent. Walked by the
+     *  same {@link NodeCollector} a field's signature is, so a return type and a field of
+     *  the same declared type produce the same reference — an envelope such as
+     *  {@code ResponseEntity<OrderView>} keeps both its own {@code wire_type} and its
+     *  argument's, which is what lets a later pass root the payload and then say whether
+     *  what it rooted at is a payload at all. */
     public static String returnFromSignature(String signature) {
         if (signature == null) return null;
-        List<String> collected = new ArrayList<>();
+        List<Node> collected = new ArrayList<>();
         new SignatureReader(signature).accept(new SignatureVisitor(org.objectweb.asm.Opcodes.ASM9) {
             @Override public SignatureVisitor visitReturnType() {
-                return new Collector(collected);
+                return new NodeCollector(collected::add);
             }
         });
-        return collected.isEmpty() ? null : collected.get(0);
-    }
-
-    private static final class Collector extends SignatureVisitor {
-        private final List<String> sink;
-        private String owner;
-        private final List<String> arguments = new ArrayList<>();
-
-        Collector(List<String> sink) {
-            super(org.objectweb.asm.Opcodes.ASM9);
-            this.sink = sink;
-        }
-
-        @Override public void visitClassType(String name) {
-            if (owner == null) owner = name + "#";
-        }
-
-        @Override public SignatureVisitor visitTypeArgument(char wildcard) {
-            return new Collector(arguments);
-        }
-
-        @Override public void visitEnd() {
-            if (owner != null) sink.add(ref(owner, arguments));
-        }
+        return collected.isEmpty() ? null : toJson(collected.get(0));
     }
 
     /** A field's fully augmented type reference: the {symbol, arguments} envelope every
@@ -146,11 +128,11 @@ public final class TypeRefs {
     }
 
     /** Walks a {@code FieldTypeSignature} (JVMS 4.7.9.1) — a class type, an array type, a
-     *  type variable, or (nested inside an array) a base type — recursively, handing one
-     *  {@link Node} to {@code onDone} once that level is fully parsed. Mirrors
-     *  {@link Collector}'s traversal shape; kept separate because every level here also
-     *  carries D1's wire-type projection and D3's nullability, which {@link Collector}'s
-     *  bare {symbol, arguments} envelope has no room for. */
+     *  type variable, or a base type — recursively, handing one {@link Node} to
+     *  {@code onDone} once that level is fully parsed. The one collector: a field's
+     *  signature and a method's return-type signature are the same grammar, and a second
+     *  one that walked it without the wire projection would emit references a consumer
+     *  could not read the same way. */
     private static final class NodeCollector extends SignatureVisitor {
         private final Consumer<Node> onDone;
         private String owner;
