@@ -40,9 +40,12 @@ right. The formats differ because the access patterns differ.
 **Facts travel as well as the graph.** They are what makes a bundle re-derivable: when the
 stitching logic improves, a system can be rebuilt from bundles without re-analysing twelve
 repositories. Without facts, every improvement downstream costs a full re-extraction of the
-estate.
+estate. A 2B export always writes both; a `--what graph` mode that omits facts when size
+matters more than re-derivability is deferred (§8).
 
-`--what graph` omits them when size matters more than that.
+**The facts-Parquet schema is pinned for this phase**: raw-fact rows — *(kind, document_id,
+payload as a JSON string column)* — partitioned per source file, mirroring the JSONL tree.
+Honest and barely columnar, sufficient until a columnar need per fact kind is stated.
 
 ---
 
@@ -149,8 +152,12 @@ registry is the caller's business; Sextant does not talk to artifact stores.
 
 ## 8. Open decisions
 
-| Decision | Blocks |
-|---|---|
-| Whether the full-text index travels or is rebuilt on import | M05 and M09 |
-| Whether a bundle is a directory or a single archive | M08 and how it is published |
-| Whether `--what graph` is worth having, given facts are what make a bundle re-derivable | M08 |
+All three resolved for 2B:
+
+- A bundle is a **directory**, never a single archive. Publishing is the caller's business;
+  the archive question waits until publishing exists.
+- `--what graph` is **deferred**. Facts are what make a bundle re-derivable, so a 2B export
+  always carries both (§2).
+- The full-text index does not travel, because none exists yet to travel.
+
+None remain open for this phase.

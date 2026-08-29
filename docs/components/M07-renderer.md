@@ -63,6 +63,27 @@ absent one says *unknown*, and an agent cannot tell those apart.
 
 ## Behaviour
 
+### The module document blueprint
+
+`architecture.md`'s target structure, agreed with the user. Every target section is named
+here; each is either derived now or carries its gap by name:
+
+| Section | Source | Status in 2B |
+|---|---|---|
+| Overview | module identity, kind, languages, coverage, commit | shipped (polish) |
+| Structure — contract class diagram | `shapes`/`shape_fields`; nodes are payload types with wire fields, edges are `shape_id` references | **built in 2B** (Mermaid `classDiagram`) |
+| Structure — full class diagram (inheritance) | `inherits`/`implements` edges — table does not exist | named gap; call-graph phase |
+| Inbound endpoints — contract field tables per endpoint | endpoints + descriptors + shapes | **built in 2B** |
+| Inbound endpoints — sequence diagram per endpoint | `edges` with control-flow, `dispatch`, `trace_of` | named gap `sequence_diagrams_pending_call_graph`; call-site/call-graph phases |
+| Outbound endpoints | 2B's rows | **built in 2B** |
+| Components, descriptions, algorithm design, extension guides | LLM-authored via overlay (M01), `evidence: llm` | later phase |
+
+**A section whose machinery does not exist is never rendered empty.** It is named as a gap
+instead — the same NFR-7 corollary the rest of this document argues from: an empty section
+reads as *Sextant looked and found nothing*, which is a false claim when the underlying
+capability was never built. A gap says *not yet*; only an empty section is permitted to say
+*looked, found nothing*.
+
 ### Cross-service sequence diagrams need no new machinery
 
 [M04](M04-resolver.md) ends each trace at a classified terminal; one kind is

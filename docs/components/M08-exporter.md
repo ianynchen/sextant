@@ -88,6 +88,14 @@ The full-text and token indexes that [M09](M09-query.md) uses belong to the **wo
 not the bundle. They are derived, cheap to rebuild, and would only add size to an artifact
 that travels.
 
+### Resolved for 2B
+
+- A bundle is a **directory**, never a single archive. Publishing is the caller's business;
+  the archive question waits until publishing exists.
+- `--what` is **deferred**. Export always carries facts and graph — facts are what make a
+  bundle re-derivable.
+- The full-text index does not travel, because none exists yet to travel.
+
 ## What it must not do
 
 - **No analysis.** It writes out what exists.
@@ -115,7 +123,4 @@ that travels.
 
 | Decision | Blocks |
 |---|---|
-| Whether a bundle is a directory or a single archive | How it is published |
-| Whether `--what graph` is worth having, given facts are what make a bundle re-derivable | [D06](D06-bundle-format.md) |
-| Whether the full-text index travels or is rebuilt on import | M05, M09 |
 | Whether bundles are signed, given they carry an architecture that will be trusted | Security |
