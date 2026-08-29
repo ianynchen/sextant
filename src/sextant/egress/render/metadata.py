@@ -34,10 +34,18 @@ def write_metadata(
 ) -> None:
     """Written as the final act of analyze (D05 §3), so it exists whenever the
     workspace does and always describes the graph beside it."""
+    # A `both` row (D02 §3) is a wire identity this module both exposes and
+    # calls, so it counts on both sides — bucketing on direction alone would
+    # drop it from whichever side is not its literal `direction` value.
     inbound: dict[str, int] = {}
+    outbound: dict[str, int] = {}
     for endpoint in report.endpoints:
         protocol = str(endpoint["protocol"])
-        inbound[protocol] = inbound.get(protocol, 0) + 1
+        direction = str(endpoint["direction"])
+        if direction in ("inbound", "both"):
+            inbound[protocol] = inbound.get(protocol, 0) + 1
+        if direction in ("outbound", "both"):
+            outbound[protocol] = outbound.get(protocol, 0) + 1
 
     document: dict[str, object] = {
         "schema_version": GRAPH_SCHEMA_VERSION,
@@ -57,7 +65,7 @@ def write_metadata(
         # Which compiled sources the facts do not account for (FR-17). Listed
         # in full rather than counted: a count cannot be acted on.
         "uncovered": list(uncovered),
-        "endpoints": {"inbound": inbound, "outbound": {}},
+        "endpoints": {"inbound": inbound, "outbound": outbound},
         # The count says how much was expanded; the list says what was not, by
         # name. Both, because a reader who only knows how many shapes exist
         # cannot tell a module whose payloads are fully described from one

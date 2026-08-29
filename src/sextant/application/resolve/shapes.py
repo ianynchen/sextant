@@ -187,7 +187,16 @@ def derive_endpoint_shapes(
     endpoints = workspace.query("endpoints")
     settled: dict[str, dict[str, str]] = {}
     unexpanded: list[str] = []
-    for catalog in catalogs:
+    # Inbound catalogs first, same tie-break as derive_endpoints (D02 §3): an
+    # owner's signature is claimed by the first catalog that answers it
+    # (below), and an outbound catalog's own wrapper rules do not describe an
+    # inbound handler's envelope types — so an inbound owner must reach an
+    # inbound catalog before an outbound one gets a turn at it, or it settles
+    # for whatever an unrelated catalog's narrower wrapper list left unopened.
+    ordered = sorted(
+        catalogs, key=lambda catalog: (catalog.direction != "inbound", str(catalog.source))
+    )
+    for catalog in ordered:
         # Gated exactly as derive_endpoints gates it: a catalog skipped there
         # produced no endpoints and must contribute no shapes either. The skip
         # is already reported once, as a SkippedCatalog; a second channel here
