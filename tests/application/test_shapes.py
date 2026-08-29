@@ -13,10 +13,12 @@ from shape_helpers import (
     response_entity_of,
     shape_fields_of,
     shape_of,
+    type_ref,
     unknown_box_of,
 )
 
 from sextant.application.ports.catalogs import Catalog
+from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.shapes import (
     ExpandedShapes,
     _scope_nullable,
@@ -782,6 +784,155 @@ def test_a_second_resolve_does_not_inherit_the_first_ones_shapes(tmp_path):
 
     assert workspace.query("shapes") == []
     assert workspace.query("shape_fields") == []
+
+
+# A declared envelope that arrives with nothing inside it. Every method
+# parameter is read from the erased descriptor, which never carried a type
+# argument, and a raw return type has none either — so a catalog's own wrapper
+# entry matches a reference offering no payload to descend into.
+_ERASED_OPTIONAL = "java/util/Optional#"
+_RAW_ENVELOPE = "org/springframework/http/ResponseEntity#"
+
+# The same invented serialiser with a mapping declaration, so a test can derive
+# a real endpoint and then ask what contract it carries. Invented annotations
+# throughout: reaching for a shipped catalog here would test that file rather
+# than this pass.
+_ENDPOINT_CATALOG = Catalog(
+    **{
+        **vars(_CATALOG),
+        "id": "invented-endpoints",
+        "matches": {
+            "type_annotation": "com/acme/rest/Resource#",
+            "request_body_annotation": "com/acme/rest/Body#",
+            "mapping": {
+                "path_from": ["value"],
+                "method_from": "method",
+                "all_methods": ["POST"],
+                "prefix_annotation": "com/acme/rest/Path#",
+                "annotations": [{"fqn": "com/acme/rest/Post#", "method": ["POST"]}],
+            },
+        },
+    }
+)
+
+_HANDLER_OWNER = "com/acme/orders/EdgeController#"
+_HANDLER = _HANDLER_OWNER + "handle(sig_00000000)."
+
+
+def _handler_facts(root: Path, signature: dict | None) -> None:
+    """One annotated handler carrying the signature a test hands it — the fact
+    the extractor writes for a controller method. `None` omits the key
+    entirely, which is what a scanner that typed no signature leaves behind
+    and what the workspace then reads back as SQL NULL."""
+    handler = {
+        "kind": "symbol",
+        "document_id": "doc_edge",
+        "symbol": _MODULE + _HANDLER,
+        "construct_kind": "method",
+        "enclosing": _MODULE + _HANDLER_OWNER,
+        "visibility": "public",
+        "line_start": 0,
+        "line_end": 0,
+    }
+    if signature is not None:
+        handler["signature"] = signature
+    _write(
+        root / "EdgeController.jsonl",
+        _document("doc_edge", "com/acme/orders/EdgeController.java"),
+        [
+            _type("doc_edge", _HANDLER_OWNER),
+            handler,
+            _annotation("doc_edge", _MODULE + _HANDLER_OWNER, "com/acme/rest/Resource#", {}),
+            _annotation(
+                "doc_edge", _MODULE + _HANDLER, "com/acme/rest/Post#", {"value": ["/edge"]}
+            ),
+        ],
+    )
+
+
+def _signature(returns: dict, parameters: tuple[dict, ...] = ()) -> dict:
+    return {"parameters": list(parameters), "returns": returns, "return_type_annotations": []}
+
+
+def _body_parameter(reference: dict) -> dict:
+    return {
+        "name": "request",
+        "annotations": [{"annotation": "com/acme/rest/Body#", "args": {}}],
+        "type": reference,
+        "type_annotations": [],
+    }
+
+
+def _resolved_handler(tmp_path: Path, signature: dict | None) -> DuckDbWorkspace:
+    """The whole endpoint-to-contract path over hand-built facts: derive the
+    endpoint, then derive the shapes it declares."""
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(root, signature)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [_ENDPOINT_CATALOG], capabilities=set())
+    derive_endpoint_shapes(workspace, [_ENDPOINT_CATALOG], capabilities=set())
+    return workspace
+
+
+def test_a_declared_wrapper_with_no_payload_argument_stops_instead_of_raising():
+    """The catalog said "envelope", and the reference offers nothing at the
+    payload position. Descending anyway is impossible and crashing is not an
+    answer: this is exactly the unmatched-wrapper case D02 §2a already names —
+    something that could be an envelope, left unopened and said so."""
+    rooted = root_type(type_ref(_ERASED_OPTIONAL), SPRING_WRAPPERS)
+
+    assert rooted.symbol == _ERASED_OPTIONAL
+    # The chain records envelopes actually peeled. This one was not, and a
+    # semantics recorded here would let `required: false` be derived from an
+    # unwrapping that never happened.
+    assert rooted.chain == ()
+    assert rooted.unmatched_wrapper is True
+
+
+def test_an_erased_wrapper_parameter_leaves_the_request_shape_null(tmp_path):
+    """A parameter reaches the signature through the erased descriptor, so a
+    declared envelope around the payload arrives with the payload gone. The
+    envelope is not the contract, and a shape row for it would report a type
+    the catalog already describes as a payload nobody could expand."""
+    ws = _resolved_handler(
+        tmp_path,
+        _signature(
+            returns=_ref(ORDER_VIEW_SHAPE, "object"),
+            parameters=(_body_parameter(_ref(_ERASED_OPTIONAL, "object")),),
+        ),
+    )
+    endpoint = ws.query("endpoints")[0]
+
+    assert endpoint["request_shape"] is None
+    assert endpoint["response_shape"] == ORDER_VIEW_SHAPE
+    assert not any(s["shape_id"] == _ERASED_OPTIONAL for s in ws.query("shapes"))
+    ws.close()
+
+
+def test_a_raw_wrapper_return_leaves_the_response_shape_null(tmp_path):
+    """The other half of the same case, and ordinary code: a handler declaring
+    the envelope type without its argument."""
+    ws = _resolved_handler(tmp_path, _signature(returns=_ref(_RAW_ENVELOPE, "object")))
+    endpoint = ws.query("endpoints")[0]
+
+    assert endpoint["response_shape"] is None
+    assert not any(s["shape_id"] == _RAW_ENVELOPE for s in ws.query("shapes"))
+    ws.close()
+
+
+def test_a_handler_with_no_recorded_signature_declares_no_payload(tmp_path):
+    """`signature` is optional in D00 §5, so the column is SQL NULL whenever
+    nothing typed it. Degrading to "no shapes" is the discipline capability
+    gating uses one level up; crashing would end a whole resolve over a fact
+    the schema permits."""
+    ws = _resolved_handler(tmp_path, signature=None)
+    endpoint = ws.query("endpoints")[0]
+
+    assert endpoint["request_shape"] is None
+    assert endpoint["response_shape"] is None
+    ws.close()
 
 
 def test_the_derivation_names_no_language():

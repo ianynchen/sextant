@@ -70,8 +70,21 @@ def root_type(type_ref: dict[str, Any], wrappers: list[dict[str, Any]]) -> Roote
             # and unwrapping it anyway would be a guess presented as fact.
             unmatched = bool(current["arguments"])
             return RootedType(reference=current, chain=tuple(chain), unmatched_wrapper=unmatched)
+        arguments = current["arguments"]
+        if wrapper["payload_arg"] >= len(arguments):
+            # A declared envelope holding nothing at the payload position:
+            # ordinary code, not a broken catalog. A raw `ResponseEntity`, and
+            # every envelope reached through an erased method descriptor,
+            # arrives with its argument already gone. It is the same answer as
+            # an envelope nobody declared — something that could be holding a
+            # payload, left unopened and said so — because the two are the same
+            # situation: the catalog claims an envelope and no payload is
+            # visible inside it. The chain records envelopes actually peeled,
+            # so this one is not added: a `semantics` recorded here would let
+            # `required` be derived from an unwrapping that never happened.
+            return RootedType(reference=current, chain=tuple(chain), unmatched_wrapper=True)
         chain.append(wrapper["semantics"])
-        current = current["arguments"][wrapper["payload_arg"]]
+        current = arguments[wrapper["payload_arg"]]
 
 
 def _matching_wrapper(symbol: str, wrappers: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -225,10 +238,15 @@ def _contracts_of(
         handler = str(endpoint["handler"])
         if handler in found:
             continue
-        signature = json.loads(str(endpoint["handler_signature"]))
-        # A handler with no recorded signature declares no payload. A scanner
-        # too weak to type its signatures degrades to "no shapes", never to a
-        # crash, exactly as capability gating does one level up.
+        # A handler with no recorded signature declares no payload. `signature`
+        # is optional in D00 §5, so the column is SQL NULL — read back as
+        # `None` — whenever nothing typed it, and JSON `null` when a fact
+        # recorded the absence itself; both arrive here, and neither is a
+        # defect. A scanner too weak to type its signatures degrades to "no
+        # shapes", never to a crash, exactly as capability gating does one
+        # level up.
+        declared = endpoint.get("handler_signature")
+        signature = None if declared is None else json.loads(str(declared))
         if not isinstance(signature, dict):
             continue
         already = settled.get(handler, {})
@@ -273,10 +291,21 @@ def _payload_root(reference: dict[str, Any] | None, wrappers: list[dict[str, Any
     shape row and be reported as a type nobody could expand — noise that
     buries the gaps a reader can act on. Rooting first is what makes the test
     a single one: the envelope is not the payload (D02 §2a).
+
+    Rooting can also stop *on* a declared envelope, when the reference carries
+    nothing at the payload position. That is not a payload either, and it is
+    the one stop worth naming separately: the type is an `object`, so the test
+    below would take it, and the shape row would report the envelope — a type
+    the catalog already describes — as a payload nobody could expand. That is
+    a gap pointing at an entry that is already there. An envelope *nobody*
+    declared still becomes a shape and is still reported, which is how an
+    incomplete catalog stays visible.
     """
     if reference is None:
         return None
     rooted = root_type(reference, wrappers)
+    if _matching_wrapper(rooted.symbol, wrappers) is not None:
+        return None
     return rooted.symbol if rooted.reference.get("wire_type") == "object" else None
 
 
