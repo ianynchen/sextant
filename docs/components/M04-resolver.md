@@ -127,8 +127,8 @@ shapes are attached.
 **5a. Find the boundaries.** Catalog engines run in a fixed order: inbound, then outbound,
 then reclassification. Inbound precedes outbound so that a path a module both exposes and
 calls merges into one endpoint with direction `both` rather than appearing twice. Each
-endpoint records its protocol, wire identity, handler or caller, and the **type references**
-of its request and response — not yet their contents.
+endpoint records its protocol, wire identity, handler and/or caller, and the **type
+references** of its request and response — not yet their contents.
 
 **Every catalog whose required capabilities are unmet is skipped and reported.** This is the
 mechanism that keeps a weaker scanner visible instead of silently producing a shorter

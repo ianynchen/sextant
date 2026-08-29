@@ -16,6 +16,13 @@ CREATE TABLE IF NOT EXISTS endpoints (
     path              TEXT,
     handler           TEXT,
     handler_signature JSON,
+    -- The client-side method symbol (D01 §3, amended this phase): an
+    -- outbound row carries `caller` with `handler` NULL; a `both` row keeps
+    -- both. `peer` is the declared target hint — a service name or a literal
+    -- authority — that the system tier later resolves to a participant; NULL
+    -- where the base address lives in builder code the annotations never see.
+    caller            TEXT,
+    peer              TEXT,
     resolution        TEXT,
     evidence          TEXT,
     request_shape     TEXT,

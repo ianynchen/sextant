@@ -119,14 +119,17 @@ eleven-column table is unreadable.
 
 ### What ships today
 
-**One cell of one row — now with contracts.** Java and Kotlin, REST inbound, read from
-compiled bytecode, via two catalogs — `spring-web` (`@RestController`) and `spring-mvc`
-(`@Controller`) — each matching `@RequestMapping` plus the five verb shortcuts and reading
-the `value`/`path` aliases. Since Phase 2A an endpoint also carries its request and response
-contract field by field — wire name, wire type and format, `required`, `nullable`, each with
-its trust fields — rooted through declared wrappers, with known types mapped to their wire
-form and expansion stopping visibly at unknown ones. Four of the designed scanner
-capabilities are implemented: `annotation_args`, `typed_signatures`, `type_annotations` and
+**Two cells, now with contracts and an outbound direction.** Java and Kotlin, REST inbound,
+read from compiled bytecode, via two catalogs — `spring-web` (`@RestController`) and
+`spring-mvc` (`@Controller`) — each matching `@RequestMapping` plus the five verb shortcuts
+and reading the `value`/`path` aliases. Since Phase 2A an endpoint also carries its request
+and response contract field by field — wire name, wire type and format, `required`,
+`nullable`, each with its trust fields — rooted through declared wrappers, with known types
+mapped to their wire form and expansion stopping visibly at unknown ones. Since Phase 2B the
+same `annotation_driven` engine also reads REST outbound — Feign `@FeignClient`, Spring
+`@HttpExchange` and Retrofit `@GET` — carrying the same payload contract, and a module's full
+analysis exports as a self-describing D06 bundle. Four of the designed scanner capabilities
+are implemented: `annotation_args`, `typed_signatures`, `type_annotations` and
 `kotlin_metadata`. Verified end-to-end on spring-petclinic: 17 endpoints, byte-identical
 across runs.
 
@@ -134,11 +137,55 @@ across runs.
 **Scanner** reads `none` is a *marginal* cost — what the cell would take once a scanner for
 that language exists. It is not a cost you can pay today. Only ✅ and ◐ mean working code.
 
+### What a run produces — and what it does not
+
+The matrices above count libraries; this section answers the operator's question. Running
+`sextant module analyze` → `render` → `export` against a compiled Java/Kotlin Spring Boot
+module today produces:
+
+- **Facts** — one JSONL file per compiled source file: symbols with typed signatures,
+  every annotation from both retention tables with `type_path`, field type references with
+  wire types and nullability, Kotlin nullability projected from `@Metadata` and the
+  interop annotations.
+- **A graph workspace** — `endpoints` in both directions (inbound `@RestController`/
+  `@Controller`; outbound Feign, `@HttpExchange`, Retrofit), each with its wire identity,
+  handler and/or caller, `peer` where the code declares one, and its request and response
+  payload descriptors; `shapes`/`shape_fields` holding every reachable payload field by
+  field — wire name, wire type and format, `required`, `nullable`, trust fields — with
+  known types mapped and expansion stopping visibly at unknown ones. A path the module
+  both exposes and calls is one endpoint, direction `both`.
+- **`architecture.md`** — coverage, a Mermaid contract class diagram, per-endpoint
+  contract tables for inbound, an outbound table with peers, and a Known-gaps section
+  naming every omission below.
+- **`metadata.json` and a D06 bundle** — the machine-readable summary, and a portable
+  directory of Parquet tables plus a manifest carrying versions, catalog hash, coverage
+  and the same gaps, byte-identical on every re-run of the same inputs.
+
+What a run does **not** give you, each entry named in the output's own gap list rather
+than silently absent:
+
+| You do not get | Because | Arrives with |
+|---|---|---|
+| Calls made through `RestTemplate`, `WebClient`, `RestClient`, OkHttp | the URL and verb live in method calls the scanner does not yet record (`call_site_clients_not_read`) | Phase 2C |
+| Kafka/JMS/SQS listeners **or** producers | no messaging catalog and no non-HTTP wire identity yet (`messaging_endpoints_not_read`) | Phase 2D |
+| Sequence diagrams, traces, a call graph | no `call_site`/control-flow facts (`sequence_diagrams_pending_call_graph`, `call_graph_not_implemented`) | call-graph phases |
+| A full class diagram (inheritance) | only contract types are drawn (`structure_diagram_limited_to_contracts`) | with the `edges` table |
+| Outbound base addresses for `@HttpExchange`/Retrofit | they live in builder code (`client_base_addresses_not_resolved`); `peer` is NULL there | Phase 2C |
+| Cross-service links or a system document | linking is a system-scope pass over bundles; no `participants`/`links` exist yet | linking phase |
+| WebFlux functional routes, meta-annotations, inherited mappings, nested classes | unimplemented forms, each listed in §5 | per their tiers |
+| Trustworthy analysis of a POM using parents/profiles/interpolation | the detector reads `pom.xml` raw (`maven_parent_and_profile_resolution_not_implemented`) | undecided |
+
+Two honesty caveats also ride every output: a merged `both` endpoint keeps only the
+handler's declared contract (`merged_endpoints_keep_only_the_handlers_contract`), and a
+payload type reachable from several catalogs is expanded under the first catalog's rules
+(`shape_rules_unscoped_to_the_producing_catalog`) — the shipped catalogs declare
+compatible rules, so no answer differs today.
+
 ### 2a. Application protocols over HTTP
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ 6A 7B 5C | 2A 3B | 2A | 4A | 2A 1B | 1A 2B |
+| **Java / Kotlin** | ✅ ASM | ◐ 6A 7B 5C | ◐ 2A 3B | 2A | 4A | 2A 1B | 1A 2B |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -437,12 +484,14 @@ is, what it costs.
 
 ### 5.2 REST outbound
 
-**Nothing is supported anywhere.** Phase 1 records no call sites at all, so the system tier
-has nothing to match on.
+**Phase 2B shipped the first three.** Feign, Retrofit and Spring `@HttpExchange` are read as
+outbound annotation clients — the first linkable endpoints. Everything else in this table
+remains unimplemented; the system tier still has nothing to match against them.
 
 | Language | Library | Shape | Tier |
 |---|---|---|---|
-| Java | Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange`, Micronaut `@Client`, MicroProfile `@RegisterRestClient` | `annotation` | A |
+| Java | Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange` | `annotation` | ✅ shipped |
+| Java | Micronaut `@Client`, MicroProfile `@RegisterRestClient` | `annotation` | A |
 | Java | Spring 7 `ImportHttpServices` registration | `annotation` | A |
 | Java | `RestTemplate` | `registration_call` | B |
 | Java | `RestClient`, `WebClient`, OkHttp, JDK `HttpClient`, Apache HttpClient, `URL.openConnection()` | `fluent_chain` | **B — gates every client written in the last five years** |

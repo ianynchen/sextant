@@ -22,6 +22,9 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.shapes import (
     ExpandedShapes,
+    _contracts_of,
+    _owns,
+    _rules_of,
     _scope_nullable,
     derive_endpoint_shapes,
     derive_shapes,
@@ -913,9 +916,10 @@ _ENDPOINT_CATALOG = Catalog(
         "id": "invented-endpoints",
         "matches": {
             "type_annotation": "com/acme/rest/Resource#",
-            "request_body_annotation": "com/acme/rest/Body#",
+            "request_body": {"annotation": "com/acme/rest/Body#", "fallback": "none"},
             "mapping": {
                 "path_from": ["value"],
+                "prefix_from": ["value"],
                 "method_from": "method",
                 "all_methods": ["POST"],
                 "prefix_annotation": "com/acme/rest/Path#",
@@ -973,6 +977,17 @@ def _body_parameter(reference: dict) -> dict:
     }
 
 
+def _bare_parameter(reference: dict, name: str = "request") -> dict:
+    """A parameter with no annotations of its own — Feign's contract: no
+    annotation marks the body, being the only bare parameter does."""
+    return {
+        "name": name,
+        "annotations": [],
+        "type": reference,
+        "type_annotations": [],
+    }
+
+
 def _resolved_handler(tmp_path: Path, signature: dict | None) -> DuckDbWorkspace:
     """The whole endpoint-to-contract path over hand-built facts: derive the
     endpoint, then derive the shapes it declares."""
@@ -984,6 +999,24 @@ def _resolved_handler(tmp_path: Path, signature: dict | None) -> DuckDbWorkspace
     derive_endpoints(workspace, [_ENDPOINT_CATALOG], capabilities=set())
     derive_endpoint_shapes(workspace, [_ENDPOINT_CATALOG], capabilities=set())
     return workspace
+
+
+def _resolved_endpoint(tmp_path: Path, signature: dict | None) -> dict:
+    """The one endpoint `_resolved_handler` derives, with its workspace closed
+    behind it — every test below reads only the row, never the shapes it
+    settled alongside it."""
+    ws = _resolved_handler(tmp_path, signature)
+    endpoint = ws.query("endpoints")[0]
+    ws.close()
+    return endpoint
+
+
+def _resolved_string_handler(tmp_path: Path) -> dict:
+    return _resolved_endpoint(tmp_path, _signature(returns=_string()))
+
+
+def _resolved_void_handler(tmp_path: Path) -> dict:
+    return _resolved_endpoint(tmp_path, _signature(returns=_ref("void#", "")))
 
 
 def test_a_declared_wrapper_with_no_payload_argument_stops_instead_of_raising():
@@ -1016,7 +1049,12 @@ def test_an_erased_wrapper_parameter_leaves_the_request_shape_null(tmp_path):
     endpoint = ws.query("endpoints")[0]
 
     assert endpoint["request_shape"] is None
-    assert endpoint["response_shape"] == ORDER_VIEW_SHAPE
+    assert json.loads(endpoint["response_shape"]) == {
+        "nullable": True,
+        "shape_id": ORDER_VIEW_SHAPE,
+        "wire_format": "",
+        "wire_type": "object",
+    }
     assert not any(s["shape_id"] == _ERASED_OPTIONAL for s in ws.query("shapes"))
     ws.close()
 
@@ -1043,6 +1081,329 @@ def test_a_handler_with_no_recorded_signature_declares_no_payload(tmp_path):
     assert endpoint["request_shape"] is None
     assert endpoint["response_shape"] is None
     ws.close()
+
+
+def test_a_collection_response_records_what_the_array_holds(tmp_path):
+    """List<OrderView> was 2A's parked gap: the endpoint said nothing at all.
+    The descriptor keeps the array-ness — it IS the wire contract — and points
+    at the element's shape."""
+    ws = _resolved_handler(
+        tmp_path,
+        _signature(
+            returns=_ref("java/util/List#", "array", arguments=[_ref(ORDER_VIEW_SHAPE, "object")])
+        ),
+    )
+    endpoint = ws.query("endpoints")[0]
+    descriptor = json.loads(endpoint["response_shape"])
+    assert descriptor["wire_type"] == "array"
+    assert descriptor["item"]["shape_id"] == ORDER_VIEW_SHAPE
+    # This handler's only payload is the array itself, so the element's shape
+    # row reaches `shapes` solely through `referenced` — a regression back to
+    # picking roots from the settled columns (the 2A path) would leave it
+    # unexpanded, since no column ever holds a bare `OrderView` root here.
+    assert any(s["shape_id"] == ORDER_VIEW_SHAPE for s in ws.query("shapes"))
+    ws.close()
+
+
+def test_an_outbound_row_with_no_handler_still_receives_contracts(tmp_path):
+    """An outbound row carries `caller` with `handler` NULL (D01 §3,
+    amended): the annotation-driven engine never writes a handler symbol for
+    a catalog whose declared direction is `outbound`. `_contracts_of`'s owner
+    falls through to `caller` in that case, and `derive_endpoint_contracts.sql`
+    coalesces the same two columns to match, so the row still gets a
+    descriptor rather than being silently skipped."""
+    outbound_catalog = Catalog(
+        **{**vars(_ENDPOINT_CATALOG), "id": "invented-outbound", "direction": "outbound"}
+    )
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(root, _signature(returns=_ref(ORDER_VIEW_SHAPE, "object")))
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [outbound_catalog], capabilities=set())
+    derive_endpoint_shapes(workspace, [outbound_catalog], capabilities=set())
+    endpoint = workspace.query("endpoints")[0]
+
+    assert endpoint["handler"] is None
+    assert endpoint["caller"] == _MODULE + _HANDLER
+    assert json.loads(endpoint["response_shape"]) == {
+        "nullable": True,
+        "shape_id": ORDER_VIEW_SHAPE,
+        "wire_format": "",
+        "wire_type": "object",
+    }
+    workspace.close()
+
+
+# Task 7 review, Finding 1: direction ownership. `_owns` restricts a catalog
+# to the rows its own direction produced, because ordering alone cannot: an
+# outbound catalog's own wrapper vocabulary (Retrofit's `Call`, say) is no
+# more able to describe an inbound `ResponseEntity` row than an inbound
+# catalog's is able to describe an outbound `Call` row, and *some* catalog
+# always sorts first. `_OUTBOUND_CATALOG` below carries its own unrelated
+# annotation vocabulary (`@Client`/`@Get`, not `@Resource`/`@Post`) so its row
+# is a genuinely separate path from `_ENDPOINT_CATALOG`'s — the two never
+# merge (D02 §3 only merges one shared wire identity), which is what makes
+# each row's ownership unambiguous to assert against.
+_OUTBOUND_CALL = "com/acme/client/Call#"
+_OUTBOUND_OWNER = "com/acme/orders/clients/EdgeClient#"
+_OUTBOUND_CALLER = _OUTBOUND_OWNER + "call(sig_00000001)."
+
+_OUTBOUND_CATALOG = Catalog(
+    **{
+        **vars(_CATALOG),
+        "id": "invented-outbound-call",
+        "direction": "outbound",
+        # Retrofit's own shape: a `Call`-style wrapper and nothing else — no
+        # `ResponseEntity` entry, so this catalog has no idea how to open one.
+        "wrappers": [{"type": "com.acme.client.Call", "payload_arg": 0, "semantics": "async"}],
+        "matches": {
+            "type_annotation": "com/acme/client/Client#",
+            "request_body": {"annotation": "com/acme/client/Body#", "fallback": "none"},
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": ["value"],
+                "method_from": "method",
+                "all_methods": ["GET"],
+                "prefix_annotation": "com/acme/client/Path#",
+                "annotations": [{"fqn": "com/acme/client/Get#", "method": ["GET"]}],
+            },
+        },
+    }
+)
+
+
+def _outbound_caller_facts(root: Path, signature: dict) -> None:
+    """One hand-built outbound client method, on its own annotation
+    vocabulary so `_ENDPOINT_CATALOG`'s `@Resource`/`@Post` gate never sees
+    it (and `_OUTBOUND_CATALOG`'s `@Client`/`@Get` gate never sees
+    `_HANDLER`) — the fact the extractor would write for a Retrofit-style
+    interface method."""
+    caller = {
+        "kind": "symbol",
+        "document_id": "doc_client",
+        "symbol": _MODULE + _OUTBOUND_CALLER,
+        "construct_kind": "method",
+        "enclosing": _MODULE + _OUTBOUND_OWNER,
+        "visibility": "public",
+        "line_start": 0,
+        "line_end": 0,
+        "signature": signature,
+    }
+    _write(
+        root / "EdgeClient.jsonl",
+        _document("doc_client", "com/acme/orders/clients/EdgeClient.java"),
+        [
+            _type("doc_client", _OUTBOUND_OWNER),
+            caller,
+            _annotation("doc_client", _MODULE + _OUTBOUND_OWNER, "com/acme/client/Client#", {}),
+            _annotation(
+                "doc_client",
+                _MODULE + _OUTBOUND_CALLER,
+                "com/acme/client/Get#",
+                {"value": ["/edge-call"]},
+            ),
+        ],
+    )
+
+
+def _paired_direction_workspace(tmp_path: Path) -> DuckDbWorkspace:
+    """One inbound row (`ResponseEntity<OrderView>`, `_ENDPOINT_CATALOG`'s own
+    wrapper) beside one outbound row (`Call<OrderView>`, `_OUTBOUND_CATALOG`'s
+    own wrapper), resolved together — the shape both Finding 1(a) and 1(b)
+    need, from opposite ends."""
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(
+        root,
+        _signature(
+            returns=_ref(_RAW_ENVELOPE, "object", arguments=[_ref(ORDER_VIEW_SHAPE, "object")])
+        ),
+    )
+    _outbound_caller_facts(
+        root,
+        _signature(
+            returns=_ref(_OUTBOUND_CALL, "object", arguments=[_ref(ORDER_VIEW_SHAPE, "object")])
+        ),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [_ENDPOINT_CATALOG, _OUTBOUND_CATALOG], capabilities=set())
+    derive_endpoint_shapes(workspace, [_ENDPOINT_CATALOG, _OUTBOUND_CATALOG], capabilities=set())
+    return workspace
+
+
+def test_an_outbound_catalogs_own_wrapper_reaches_its_own_row(tmp_path):
+    """Finding 1(a): retrofit's wrappers were unreachable dead code under
+    ordering-as-correctness — an inbound catalog sorted first always answered
+    first, no matter what it could actually open. With direction ownership,
+    `_OUTBOUND_CATALOG`'s own `Call` wrapper is what describes its row, and
+    the response roots at the real payload, not the raw `Call` envelope."""
+    workspace = _paired_direction_workspace(tmp_path)
+    outbound_row = next(e for e in workspace.query("endpoints") if e["direction"] == "outbound")
+    descriptor = json.loads(outbound_row["response_shape"])
+    workspace.close()
+
+    assert descriptor["shape_id"] == ORDER_VIEW_SHAPE
+
+
+def test_an_inbound_catalogs_own_wrapper_still_reaches_its_own_row(tmp_path):
+    """Finding 1(b): the original bug's shape, kept green under the fix —
+    sharing a run with an outbound catalog whose wrapper list has never heard
+    of `ResponseEntity` must not leave the inbound row's own envelope
+    unopened."""
+    workspace = _paired_direction_workspace(tmp_path)
+    inbound_row = next(e for e in workspace.query("endpoints") if e["direction"] == "inbound")
+    descriptor = json.loads(inbound_row["response_shape"])
+    workspace.close()
+
+    assert descriptor["shape_id"] == ORDER_VIEW_SHAPE
+
+
+def test_an_outbound_catalog_cannot_claim_an_inbound_row_even_processed_first(tmp_path):
+    """Finding 1(c), made structural: the original bug's exact shape — an
+    outbound catalog with a narrower wrapper list running before the inbound
+    catalog that actually owns the row — called directly against
+    `_contracts_of` so no sort order is in play at all. `derive_endpoint_shapes`
+    always tries inbound catalogs first (readability, not correctness now);
+    this test proves the guarantee holds even when an outbound catalog goes
+    first, which is what `_owns` — not order — is responsible for."""
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(
+        root,
+        _signature(
+            returns=_ref(_RAW_ENVELOPE, "object", arguments=[_ref(ORDER_VIEW_SHAPE, "object")])
+        ),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [_ENDPOINT_CATALOG], capabilities=set())
+    endpoints = workspace.query("endpoints")
+
+    settled: dict[str, dict[str, str]] = {}
+    # The outbound catalog goes first — the original bug's ordering, and the
+    # opposite of what `derive_endpoint_shapes` now sorts to.
+    outbound_found = _contracts_of(
+        endpoints, _OUTBOUND_CATALOG, settled, _rules_of(_OUTBOUND_CATALOG), set(), []
+    )
+    assert outbound_found == {}
+    for owner, columns in outbound_found.items():
+        settled.setdefault(owner, {}).update(columns)
+
+    inbound_found = _contracts_of(
+        endpoints, _ENDPOINT_CATALOG, settled, _rules_of(_ENDPOINT_CATALOG), set(), []
+    )
+    for owner, columns in inbound_found.items():
+        settled.setdefault(owner, {}).update(columns)
+    workspace.close()
+
+    owner = _MODULE + _HANDLER
+    descriptor = json.loads(settled[owner]["response_shape"])
+    assert descriptor["shape_id"] == ORDER_VIEW_SHAPE
+
+
+def test_owns_matches_only_a_catalogs_own_direction_and_both_reads_as_inbound():
+    """`_owns` in isolation, every combination the closed set (D00) allows —
+    the predicate Finding 1's fix is built on, and the fastest thing to
+    mutate-check: reverting its body to `return True` fails exactly the three
+    assertions below that read `is False`."""
+    inbound = Catalog(**{**vars(_CATALOG), "direction": "inbound"})
+    outbound = Catalog(**{**vars(_CATALOG), "direction": "outbound"})
+
+    assert _owns(inbound, {"direction": "inbound"}) is True
+    assert _owns(outbound, {"direction": "outbound"}) is True
+    # A `both` row's surviving `handler_signature` is the handler's own
+    # (merge_endpoints.sql), so it is inbound-owned, never outbound-owned.
+    assert _owns(inbound, {"direction": "both"}) is True
+    assert _owns(outbound, {"direction": "both"}) is False
+    assert _owns(outbound, {"direction": "inbound"}) is False
+    assert _owns(inbound, {"direction": "outbound"}) is False
+
+
+def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path):
+    endpoint = _resolved_string_handler(tmp_path)
+    assert json.loads(endpoint["response_shape"]) == {
+        "nullable": True,
+        "wire_format": "",
+        "wire_type": "string",
+    }
+
+
+def test_no_payload_stays_null_and_means_exactly_that(tmp_path):
+    """NULL stops being ambiguous: it is `void`/no-body, never 'a payload we
+    could not describe'."""
+    endpoint = _resolved_void_handler(tmp_path)
+    assert endpoint["response_shape"] is None
+
+
+# A catalog whose request-body rule falls back to the sole unannotated
+# parameter (D02 §2 as amended) — Feign's contract, invented here rather than
+# reached for a shipped catalog so this test exercises the pass, not a file.
+_SOLE_UNANNOTATED_CATALOG = Catalog(
+    **{
+        **vars(_ENDPOINT_CATALOG),
+        "id": "invented-endpoints-sole-unannotated",
+        "matches": {
+            **_ENDPOINT_CATALOG.matches,
+            "request_body": {
+                "annotation": "com/acme/rest/Body#",
+                "fallback": "sole_unannotated",
+            },
+        },
+    }
+)
+
+
+def _resolved_bare_handler(tmp_path: Path, parameters: tuple[dict, ...]) -> dict:
+    """The same endpoint-to-contract path `_resolved_handler` runs, but over
+    `_SOLE_UNANNOTATED_CATALOG` so the fallback rule is exercised."""
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(
+        root,
+        _signature(returns=_ref(ORDER_VIEW_SHAPE, "object"), parameters=parameters),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [_SOLE_UNANNOTATED_CATALOG], capabilities=set())
+    derive_endpoint_shapes(workspace, [_SOLE_UNANNOTATED_CATALOG], capabilities=set())
+    endpoint = workspace.query("endpoints")[0]
+    workspace.close()
+    return endpoint
+
+
+def _resolved_bare_body_handler(tmp_path: Path) -> dict:
+    return _resolved_bare_handler(
+        tmp_path, parameters=(_bare_parameter(_ref(ORDER_REQUEST, "object")),)
+    )
+
+
+def _resolved_two_bare_handler(tmp_path: Path) -> dict:
+    return _resolved_bare_handler(
+        tmp_path,
+        parameters=(
+            _bare_parameter(_ref(ORDER_REQUEST, "object"), name="request"),
+            _bare_parameter(_ref(CUSTOMER_REF, "object"), name="customer"),
+        ),
+    )
+
+
+def test_the_sole_unannotated_parameter_is_the_body_when_the_catalog_says_so(tmp_path):
+    """Feign's contract: no annotation marks the body; being the only bare
+    parameter does. The rule is catalog data — inferring it for a catalog that
+    declares no fallback would be a guess presented as an observation."""
+    endpoint = _resolved_bare_body_handler(tmp_path)
+    assert json.loads(endpoint["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderRequest#"
+    )
+
+
+def test_two_bare_parameters_mean_no_body_at_all(tmp_path):
+    """'Sole' is load-bearing: with two candidates, picking either is a coin
+    flip recorded as fact."""
+    endpoint = _resolved_two_bare_handler(tmp_path)
+    assert endpoint["request_shape"] is None
 
 
 def test_the_derivation_names_no_language():

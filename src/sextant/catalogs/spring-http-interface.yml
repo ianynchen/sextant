@@ -1,0 +1,58 @@
+id: spring-http-interface
+displayName: Spring HTTP Interface
+style: annotation_driven
+protocol: http
+direction: outbound
+
+# spring-web ships the annotation package, so this coordinate matches every
+# Spring module — a weak discriminator, moot while catalog-module matching is
+# unimplemented; the annotation match below is what actually gates.
+detect:
+  coordinates: ["org.springframework:spring-web"]
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # No type gate: @HttpExchange at type level is optional — methods alone may
+  # carry the exchange annotations.
+  request_body: { annotation: org/springframework/web/bind/annotation/RequestBody#,
+                  fallback: none }
+  mapping:
+    path_from: [value, url]
+    method_from: method
+    all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
+    prefix_annotation: org/springframework/web/service/annotation/HttpExchange#
+    prefix_from: [value, url]
+    annotations:
+      - { fqn: org/springframework/web/service/annotation/HttpExchange# }
+      - { fqn: org/springframework/web/service/annotation/GetExchange#,    method: [GET] }
+      - { fqn: org/springframework/web/service/annotation/PostExchange#,   method: [POST] }
+      - { fqn: org/springframework/web/service/annotation/PutExchange#,    method: [PUT] }
+      - { fqn: org/springframework/web/service/annotation/DeleteExchange#, method: [DELETE] }
+      - { fqn: org/springframework/web/service/annotation/PatchExchange#,  method: [PATCH] }
+
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: reactor.core.publisher.Mono,             payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.time.LocalDate,  wire: string, format: date }
+  - { type: java.math.BigDecimal, wire: number }
+  - { type: java.util.UUID,       wire: string, format: uuid }

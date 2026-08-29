@@ -1,4 +1,6 @@
+import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import cast
@@ -11,6 +13,7 @@ from sextant.application.resolve.pipeline import ResolveReport
 from sextant.application.stages.analyze import analyze
 from sextant.cli.progress import RichProgress
 from sextant.cli.resources import catalogs_dir, extractor_jar
+from sextant.egress.export.manifest import write_manifest
 from sextant.egress.render.document import render_module_document
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
@@ -30,6 +33,34 @@ def _commit_of(path: Path) -> str:
         check=False,
     )
     return result.stdout.strip() or "unknown"
+
+
+def _remote_of(path: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(path), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() or "unknown"
+
+
+def _module_commit_of(path: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(path), "log", "-1", "--format=%H", "--", "."],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() or "unknown"
+
+
+def _catalog_hash(catalogs: Path) -> str:
+    digest = hashlib.sha256()
+    for catalog in sorted(catalogs.glob("*.yml")):
+        digest.update(catalog.name.encode("utf-8"))
+        digest.update(catalog.read_bytes())
+    return "sha256:" + digest.hexdigest()
 
 
 def _workspace_dir_of(path: Path, workspace_dir: Path | None) -> Path:
@@ -132,6 +163,7 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             report,
             _commit_of(path),
             tuple(metadata.get("uncovered", [])),
+            shape_fields=workspace.query("shape_fields"),
         )
         target = workspace_dir / "render" / "architecture.md"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -139,3 +171,42 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
     finally:
         workspace.close()
     click.echo(str(target))
+
+
+@module.command("export")
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option("--workspace", "workspace_dir", type=click.Path(path_type=Path), default=None)
+@click.option("--out", "out_dir", type=click.Path(path_type=Path), default=None)
+def module_export(path: Path, workspace_dir: Path | None, out_dir: Path | None) -> None:
+    """Writes the analysis out as a D06 bundle: Parquet plus a manifest. Reads
+    what `analyze` left — it never re-analyzes (M08). Publishing the directory
+    anywhere is the caller's business; Sextant does not talk to artifact
+    stores."""
+    workspace_dir = _workspace_dir_of(path, workspace_dir)
+    metadata_path = workspace_dir / "metadata.json"
+    db_path = workspace_dir / "workspace.duckdb"
+    if not metadata_path.is_file() or not db_path.is_file():
+        raise click.ClickException(
+            f"no analysis found at {workspace_dir} — run `sextant module analyze {path}` first."
+        )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    commit = str(metadata["provenance"]["commit"])
+    bundle_name = re.sub(r"[^A-Za-z0-9._-]", "-", str(metadata["module"]["id"])) + "@" + commit
+    bundle = (out_dir or workspace_dir / "bundles") / bundle_name
+
+    workspace = DuckDbWorkspace(db_path)
+    try:
+        tables = workspace.export_tables(bundle)
+        facts_files = workspace.export_facts(bundle)
+    finally:
+        workspace.close()
+    write_manifest(
+        bundle / "manifest.json",
+        metadata,
+        source={"repo": _remote_of(path), "commit": commit},
+        catalog_hash=_catalog_hash(catalogs_dir()),
+        module_commit=_module_commit_of(path),
+        tables=tables,
+        facts_files=facts_files,
+    )
+    click.echo(str(bundle))

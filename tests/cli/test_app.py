@@ -53,6 +53,24 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     assert metadata["endpoints"]["inbound"]["http"] == 18
 
 
+def test_export_writes_a_bundle_with_manifest_graph_and_facts(tmp_path: Path):
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    bundle = Path(result.output.strip())
+    assert (bundle / "manifest.json").is_file()
+    assert (bundle / "graph" / "endpoints.parquet").is_file()
+    facts_files = list((bundle / "facts").rglob("*.parquet"))
+    assert facts_files, "facts/ must not be empty"
+
+
 def test_render_writes_the_document_after_analyze(tmp_path: Path):
     runner = CliRunner()
     runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])

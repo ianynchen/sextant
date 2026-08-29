@@ -4,7 +4,7 @@ from pathlib import Path
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.egress.render.document import _GAPS, render_module_document
-from sextant.egress.render.metadata import PHASE_1_GAPS, write_metadata
+from sextant.egress.render.metadata import KNOWN_GAPS, write_metadata
 
 MODULE = ModuleModel(
     module_id="com.acme:orders-service",
@@ -73,4 +73,163 @@ def test_every_machine_readable_gap_has_a_sentence_a_person_can_read():
     the two are kept in correspondence by a comment alone. A key with no
     sentence is a gap the machine reports and the reader never sees — which is
     a document that reads as complete when it is not (M07)."""
-    assert len(PHASE_1_GAPS) == len(_GAPS)
+    assert len(KNOWN_GAPS) == len(_GAPS)
+
+
+def test_metadata_buckets_outbound_and_both_endpoints_into_both_sums(tmp_path: Path):
+    """Task 7 ruling: a `both` row (a wire identity this module both exposes
+    and calls) counts in both the inbound and outbound sums, so the two sums
+    can exceed the row count by the number of merged rows. No test asserted
+    the outbound bucket before this task, which is also why metadata could
+    report outbound endpoints beside the (now-retired) gap that denied they
+    existed."""
+    report = ResolveReport(
+        facts_loaded=3,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "GET",
+                "path": "/v1/orders/{id}",
+                "handler": "s maven c 1 com/acme/C#get().",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "POST",
+                "path": "/billing/invoices",
+                "caller": "s maven c 1 com/acme/BillingClient#create().",
+                "peer": "billing",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+            {
+                "protocol": "http",
+                "direction": "both",
+                "method": "POST",
+                "path": "/v1/orders",
+                "handler": "s maven c 1 com/acme/C#create().",
+                "caller": "s maven c 1 com/acme/OrdersClient#create().",
+                "peer": "orders-loop",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    write_metadata(tmp_path / "metadata.json", MODULE, report, "asm", "9.7", "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+    # 3 rows, but the merged `both` row counts on both sides: 2 inbound
+    # (GET + the merged POST), 2 outbound (billing + the merged POST) — the
+    # sums (4) exceed the row count (3) by exactly the one merged row.
+    assert written["endpoints"]["inbound"] == {"http": 2}
+    assert written["endpoints"]["outbound"] == {"http": 2}
+
+
+def test_document_draws_the_contract_class_diagram_and_lists_outbound_calls():
+    """Task 8, the first real use of M07's projection -> view model -> emitter
+    split: shapes/shape_fields become a Mermaid class diagram, and each
+    endpoint's descriptor becomes either a contract table (an object payload)
+    or an inline label (a scalar, or a collection of one)."""
+    report = ResolveReport(
+        facts_loaded=5,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "POST",
+                "path": "/v1/orders",
+                "handler": "s maven c 1 com/acme/C#create().",
+                "resolution": "resolved",
+                "evidence": "compiler",
+                "request_shape": json.dumps(
+                    {
+                        "wire_type": "object",
+                        "wire_format": "",
+                        "nullable": False,
+                        "shape_id": "com/acme/orders/contracts/OrderRequest#",
+                    }
+                ),
+                "response_shape": json.dumps(
+                    {
+                        "wire_type": "array",
+                        "wire_format": "",
+                        "nullable": False,
+                        "item": {
+                            "wire_type": "object",
+                            "wire_format": "",
+                            "nullable": False,
+                            "shape_id": "com/acme/orders/contracts/OrderView#",
+                        },
+                    }
+                ),
+            },
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "POST",
+                "path": "/billing/invoices",
+                "caller": "s maven c 1 com/acme/BillingClient#create().",
+                "peer": "billing",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": "/v1/inventory/levels",
+                "caller": "s maven c 1 com/acme/InventoryClient#levels().",
+                "peer": None,
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 2, "partial_documents": 0},
+        shapes=[
+            {
+                "shape_id": "com/acme/orders/contracts/OrderRequest#",
+                "content_hash": "md5:1",
+                "open": False,
+            },
+        ],
+    )
+    shape_fields = [
+        {
+            "shape_id": "com/acme/orders/contracts/OrderRequest#",
+            "ordinal": 0,
+            "wire_name": "customer_id",
+            "wire_type": "string",
+            "wire_format": "",
+            "required": True,
+            "nullable": False,
+            "resolution": "resolved",
+            "evidence": "declared",
+            "tags": "[]",
+            "item": None,
+        },
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", shape_fields=shape_fields)
+    assert "## Structure" in text
+    assert "classDiagram" in text
+    assert "class OrderRequest" in text
+    assert "customer_id: string" in text
+    assert "| customer_id | string | yes | no |" in text
+    assert "array of object OrderView" in text
+    assert "## Outbound endpoints" in text
+    assert "/billing/invoices" in text
+    assert "unresolved" in text  # the inventory base address is builder code
+
+
+def test_structure_and_outbound_sections_state_looked_and_found_nothing():
+    """NFR-7: a section whose machinery exists but found nothing is empty and
+    present, never absent — distinct from a gap, which says the machinery
+    itself is missing."""
+    empty_report = ResolveReport(facts_loaded=0, endpoints=[], coverage={})
+    text = render_module_document(MODULE, empty_report, "a3f91c")
+    assert "## Structure" in text
+    assert "None derived." in text
+    assert "## Outbound endpoints" in text
+    assert "None found." in text

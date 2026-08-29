@@ -40,9 +40,14 @@ right. The formats differ because the access patterns differ.
 **Facts travel as well as the graph.** They are what makes a bundle re-derivable: when the
 stitching logic improves, a system can be rebuilt from bundles without re-analysing twelve
 repositories. Without facts, every improvement downstream costs a full re-extraction of the
-estate.
+estate. A 2B export always writes both; a `--what graph` mode that omits facts when size
+matters more than re-derivability is deferred (§8).
 
-`--what graph` omits them when size matters more than that.
+**The facts-Parquet schema is pinned for this phase**: raw-fact rows — *(kind, document_id,
+payload as a JSON string column)* — one file per source document, named by its document id (a
+content-derived hex digest), flat under `facts/`. The per-file partitioning survives from the
+JSONL tree; the directory nesting does not. Honest and barely columnar, sufficient until a
+columnar need per fact kind is stated.
 
 ---
 
@@ -57,12 +62,15 @@ estate.
                 "fact_schema_version": "1.0.0",
                 "graph_schema_version": "1.0.0",
                 "scanners": [{ "id": "asm", "version": "9.7" }],
-                "catalog_hash": "…", "redaction_set_hash": "…" },
+                "catalog_hash": "…" },
   "environments": ["dev", "staging", "prod"],
-  "coverage": { "sources": 1283, "covered": 1283, "partial": false },
+  "coverage": { "documents": 1283, "partial_documents": 0, "partial": false },
   "contents": { "facts": true, "graph": true, "tables": ["symbols", "edges", "endpoints",
-                                                          "shapes", "shape_fields", "dispatch", "trace_summary"] },
-  "gaps": ["soap_contracts_not_read"]
+                                                          "shapes", "shape_fields", "dispatch", "trace_summary"],
+                "facts_files": 1283 },
+  "gaps": ["soap_contracts_not_read"],
+  "uncovered": ["src/main/java/…/LegacyController.java"],
+  "skipped_catalogs": [{ "catalog_id": "spring-webclient", "missing_capabilities": ["string_constants"] }]
 }
 ```
 
@@ -73,6 +81,10 @@ system graph becomes an error instead of a silent result.
 invalidate different things at very different cost, and `sextant_version` changes results
 without either of them moving — a fixed bug in dispatch resolution produces a different graph
 from identical facts. See [D01](D01-graph-schema.md) §7.
+
+**`redaction_set_hash` does not appear in a produced manifest today.** `analyze` records no
+redaction set, so the field is omitted rather than written empty or invented; it joins
+`producer` the day redaction ships.
 
 **`module_commit`** is the last commit touching this module's own path, computed locally at
 scan time where a clone already exists. It is what lets the system tier judge staleness in a
@@ -149,8 +161,12 @@ registry is the caller's business; Sextant does not talk to artifact stores.
 
 ## 8. Open decisions
 
-| Decision | Blocks |
-|---|---|
-| Whether the full-text index travels or is rebuilt on import | M05 and M09 |
-| Whether a bundle is a directory or a single archive | M08 and how it is published |
-| Whether `--what graph` is worth having, given facts are what make a bundle re-derivable | M08 |
+All three resolved for 2B:
+
+- A bundle is a **directory**, never a single archive. Publishing is the caller's business;
+  the archive question waits until publishing exists.
+- `--what graph` is **deferred**. Facts are what make a bundle re-derivable, so a 2B export
+  always carries both (§2).
+- The full-text index does not travel, because none exists yet to travel.
+
+None remain open for this phase.

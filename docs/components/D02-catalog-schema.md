@@ -62,7 +62,7 @@ The declaration is an annotation and its arguments.
 style: annotation_driven
 matches:
   type_annotation: org.springframework.web.bind.annotation.RestController
-  request_body_annotation: "…annotation.RequestBody"
+  request_body: { annotation: "…annotation.RequestBody", fallback: none }
   mapping:
     path_from: [value, path]
     method_from: method
@@ -104,7 +104,55 @@ temporary duplication. A `meta_annotations` capability would derive it instead, 
 annotation's own class file and following the composition — which would also cover a project's
 own composed annotations, such as an `@ApiGet` built from `@GetMapping`. Recorded in §7.
 
-Covers Spring Web, JAX-RS, Spring Kafka, JMS listeners, and JAX-WS.
+**Outbound annotation clients generalise the same vocabulary rather than needing a new
+style.** Three parts of the shape above, previously assumed constant, become catalog data:
+
+```yaml
+matches:
+  # Optional: a catalog may declare no type-level gate. Any type containing a
+  # matching mapping annotation then participates (a Retrofit interface has no
+  # type-level marker at all).
+  type_annotation: org/springframework/cloud/openfeign/FeignClient#
+  # The body rule is catalog data: which annotation marks the payload
+  # parameter, and whether the sole unannotated parameter is the fallback.
+  request_body: { annotation: org/springframework/web/bind/annotation/RequestBody#,
+                  fallback: sole_unannotated }   # or: none
+  mapping:
+    prefix_annotation: org/springframework/cloud/openfeign/FeignClient#
+    # Type-level and method-level annotations are different roles. On
+    # @RequestMapping, value/path are aliases meaning *path*; on @FeignClient,
+    # value aliases *name* — the service id — and only path means prefix. One
+    # shared alias list conflated the two roles by the luck of @RequestMapping's
+    # aliasing; prefix_from and peer_from name them separately.
+    prefix_from: [path]
+    peer_from: [name, value]
+    path_from: [value, path]
+    ...
+```
+
+- **`type_annotation` is optional.** A Retrofit interface carries no type-level marker at
+  all; it is recognised by its `retrofit2.http` method annotations alone. Where the catalog
+  declares none, any type containing a matching mapping annotation participates, and the
+  controller join — `type_annotation: …RestController` in the opening example — simply
+  disappears for that catalog.
+- **`request_body` is catalog data**, not an engine assumption: which annotation marks the
+  payload parameter, and whether the sole unannotated parameter is the fallback when none is
+  marked. Spring inbound and `@HttpExchange` require `@RequestBody` with no fallback;
+  Retrofit requires `@Body` with no fallback; Feign's Spring-flavoured contract accepts
+  `@RequestBody` but falls back to the sole unannotated parameter when it is absent.
+- **`prefix_from` and `peer_from` replace the single `path_from` alias list at the type
+  level**, because the type-level and method-level annotations play different roles.
+  `path_from` still serves method mappings, where it is correct: `@RequestMapping`'s
+  `value`/`path` are `@AliasFor` each other, both meaning *path*. But `@FeignClient`'s
+  `value` aliases `name` — the service id, sourced through `peer_from` — and only `path`
+  means prefix; reading it through the shared list would turn the service name into a URL
+  prefix on every Feign endpoint. `prefix_from` and `peer_from` name the two roles
+  separately, so `@RequestMapping` declares `prefix_from: [value, path]`, `@FeignClient`
+  declares `prefix_from: [path]` and `peer_from: [name, value]`, and `@HttpExchange`
+  declares `prefix_from: [value, url]`.
+
+Covers Spring Web, JAX-RS, Spring Kafka, JMS listeners, and JAX-WS — inbound; Spring Cloud
+OpenFeign, Spring 6 `@HttpExchange`, and Retrofit — outbound.
 
 ### `single_call`
 
@@ -210,8 +258,11 @@ wrappers:
 ```
 
 [M04](M04-resolver.md) unwraps recursively at shape-rooting time —
-`Mono<ResponseEntity<OrderResult>>` roots the shape at `OrderResult` — and records the
-unwrapping chain on the endpoint. `semantics` is a closed set, and it earns its keep twice
+`Mono<ResponseEntity<OrderResult>>` roots the shape at `OrderResult` — and the chain is
+consumed where it is produced, never stored on the endpoint: `optional` semantics feed
+`required`, `async` and `streaming` feed the flags below, and nothing records the chain
+itself on the endpoint row — a second copy could only ever disagree with the columns that
+already hold what it decided. `semantics` is a closed set, and it earns its keep twice
 over: `streaming` is evidence for `protocol_hint` reclassification, and `async` marks the
 endpoint's path for the blocking-call-on-async-path finding (FR-14). An unfamiliar generic
 wrapper with no declaration is **not unwrapped** — the shape roots at the wrapper and the
@@ -506,3 +557,4 @@ were skipped, and why.
 | Whether the manifest reader pins framework versions, given the files are undocumented internals that may shift | §2's `filesystem` style |
 | Whether a globally configured naming strategy is read from configuration, or only declared per catalog | §2f, and any module that sets one in `application.yml` |
 | **How much expressiveness `address_from_config` needs before it stops being data.** Spring Cloud Stream's binding suffix depends on the functional interface, gains an index for multiple inputs, and can be overridden wholesale by `spring.cloud.function.definition` | §2d, and the Spring Cloud Stream catalog |
+| Precedence between a `known_types` entry's own `nullable` and an enclosing `not_null_by_default` scope — unspecified; as implemented the scope wins. Unreachable with shipped catalogs. | §2e, §2g |

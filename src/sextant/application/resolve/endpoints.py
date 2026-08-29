@@ -33,13 +33,23 @@ def derive_endpoints(
     # in which every catalog is skipped still leaves an empty table rather
     # than the previous run's rows.
     workspace.derive("endpoints_reset")
+    # D02 §3: the merge runs once, after every engine, so this ordering does
+    # not affect which rows it finds — it exists for determinism only (NFR-1):
+    # inbound before outbound, filename breaking the tie within a direction,
+    # which is the loader's own order.
+    ordered = sorted(
+        engines, key=lambda pair: (pair[0].direction != "inbound", str(pair[0].source))
+    )
     skipped = []
-    for catalog, engine in engines:
+    for catalog, engine in ordered:
         missing = missing_capabilities(catalog, capabilities)
         if missing:
             skipped.append(SkippedCatalog(catalog.id, missing))
             continue
         engine(workspace, catalog)
+    # Once per resolve, after every catalog: a wire identity present in both
+    # directions collapses to one row, direction `both` (D02 §3).
+    workspace.derive("endpoints_merge")
     return skipped
 
 
@@ -84,7 +94,8 @@ def _run_annotation_driven(workspace: Workspace, catalog: Catalog) -> None:
         "endpoints",
         protocol=catalog.protocol,
         direction=catalog.direction,
-        type_annotation=catalog.matches["type_annotation"],
+        # Optional (D02 §2, amended): absence means "no type-level gate".
+        type_annotation=catalog.matches.get("type_annotation"),
         prefix_annotation=mapping["prefix_annotation"],
         # `method` is absent for an annotation that pre-sets none, and the
         # derivation reads that absence as "every method in all_methods".
@@ -92,6 +103,8 @@ def _run_annotation_driven(workspace: Workspace, catalog: Catalog) -> None:
             {"fqn": m["fqn"], "methods": m.get("method")} for m in mapping["annotations"]
         ],
         path_from=list(mapping["path_from"]),
+        prefix_from=list(mapping["prefix_from"]),
+        peer_from=list(mapping.get("peer_from", [])),
         method_from=mapping["method_from"],
         all_methods=list(mapping["all_methods"]),
     )

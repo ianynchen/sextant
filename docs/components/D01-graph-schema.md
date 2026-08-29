@@ -96,8 +96,21 @@ call, and does not rank candidates against one another.
 |---|---|
 | `shapes` | `shape_id`, content hash, whether open |
 | `shape_fields` | Shape, ordinal, **wire name**, wire type and format, required, nullable, trust fields, tags, item descriptor |
-| `endpoints` | Direction, protocol, wire identity, handler or caller, request and response shapes, trust fields |
+| `endpoints` | Direction, protocol, wire identity, handler and/or caller, peer, request and response payload descriptors, trust fields |
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
+
+**A `both` row keeps both `handler` and `caller`.** A wire identity a module both exposes and
+calls merges into one endpoint row rather than two — `handler` names the server method,
+`caller` names the client method, and both are populated. An outbound-only row carries
+`caller` with `handler` NULL, mirroring an inbound-only row's NULL `caller`. `peer` is the
+outbound target hint — a declared service name or a literal authority — that the system tier
+later resolves against `participants`; it carries no meaning on an inbound-only row.
+
+**The merge keeps only the handler's request and response payload descriptors.** Where the
+module both exposes a path and calls it through a client with its own declared contract, the
+two declarations can differ — the handler's survives on the `both` row and the client's is
+discarded. This is a named gap (`merged_endpoints_keep_only_the_handlers_contract`), not a
+silent loss.
 
 **Declared shapes land in these same two tables**, loaded from `declared_shape` facts with
 `evidence: declared`, their field types already in the wire-type vocabulary
@@ -121,26 +134,38 @@ unchanged from the original column list; dropping it silently would be the same 
 adding columns without saying so.
 
 **`item` is JSON, holding the same recursive descriptor a fact-level type reference already
-uses: `{wire_type, wire_format, nullable, shape_id?, item?}`.** A single `wire_type` cannot
-describe a collection — `List<String>` and `List<CustomerRef>` are both `array` — and without
-an element descriptor, DR-5 would match a caller sending an array of strings against a callee
-expecting an array of records: a fabricated link, which is exactly what DR-5's payload
-comparison exists to prevent. `item` is `NULL` for a scalar field, the element descriptor for
-an `array`, and the **value** descriptor for a `map` — a JSON object's keys are always
-strings, so a key descriptor would carry no information. Nesting recurses through `item`, so
-`Map<String, List<String>>` needs no special case beyond this one column.
+uses: `{wire_type, wire_format, nullable, shape_id?, item?}`.** `shape_id` is the payload
+type's symbol — a local join key into `shapes`, never compared across services; DR-5 matches
+field structure, not identifiers. A single `wire_type` cannot describe a collection —
+`List<String>` and `List<CustomerRef>` are both `array` — and without an element descriptor,
+DR-5 would match a caller sending an array of strings against a callee expecting an array of
+records: a fabricated link, which is exactly what DR-5's payload comparison exists to
+prevent. `item` is `NULL` for a scalar field, the element descriptor for an `array`, the
+**value** descriptor for a `map` — a JSON object's keys are always strings, so a key
+descriptor would carry no information — and the full descriptor of the referenced shape for
+an `object` field — one grammar, so a consumer never detects which variant it holds. Nesting
+recurses through `item`, so `Map<String, List<String>>` needs no special case beyond this one
+column.
 
 **`shape_fields.wire_name` is the identity, never the source field name.** After a naming
 strategy or an explicit serialisation annotation, `customerId` and `customer_id` may be the
 same field. For formats where a number is the identity, the number is stored and the name
 is decoration.
 
+**`endpoints.request_shape` and `endpoints.response_shape` hold the same recursive
+descriptor** (`{wire_type, wire_format, nullable, shape_id?, item?}`) rather than a bare
+shape id — the grammar `shape_fields.item` uses above, reused rather than duplicated. A
+`List<OrderView>` response is
+`{"wire_type":"array","item":{"wire_type":"object","shape_id":…}}`; a scalar response is
+recorded rather than dropped (`{"wire_type":"string"}`); and `NULL` means exactly *no
+payload* — a `void` return, or no body parameter — the one meaning it has always had.
+
 **Inbound and outbound share one `endpoints` table** with a `direction` column taking
 `inbound`, `outbound` or `both`. Two near-identical tables were the alternative, and were
 measured as a mistake.
 
 **Endpoint identity is minted from the wire contract**:
-`hash(module id, protocol, direction, wire identity template)` — the path template with
+`hash(module id, protocol, wire identity template)` — the path template with
 placeholders normalised, the topic expression, the fully-qualified remote method, or **the
 operation name where one address carries many operations**. Never
 from the handler symbol: a refactor that moves the handler must not orphan the curations,
@@ -149,6 +174,14 @@ did not change. Editing the path *is* a new endpoint, correctly. Two handlers de
 the same wire contract collide into one identity — and that collision is a routing-ambiguity
 finding, which per-handler identity would have hidden. Environment expressions hash as
 expressions: `${orders.topic}` is the same endpoint in every environment.
+
+**Direction is not a hash input.** An earlier draft hashed *(module, protocol, direction,
+wire identity)*, but [D02](D02-catalog-schema.md) §3's inbound/outbound merge makes direction
+mutable: a path a module only exposed can gain a client and become `both` without its wire
+contract changing at all. Mutable state does not belong in identity, by the same argument
+this paragraph already makes for the handler symbol — a refactor, or here a new call site,
+must not orphan the curations, proposals and links built against the endpoint, because the
+wire contract they were about did not change.
 
 **Where one address carries many operations, the operation is the endpoint.** GraphQL puts
 every operation behind a single `POST /graphql`; SOAP puts them behind one path with the name

@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 
@@ -94,12 +95,31 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
             (verb, "/v1/legacy/orders/any")
             for verb in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE")
         ),
+        # Outbound (Phase 2B): the client interfaces' declared calls.
+        ("POST", "/billing/invoices"),
+        ("GET", "/billing/invoices"),
+        ("GET", "/v1/inventory/levels"),
+        ("POST", "/v1/inventory/reserve"),
+        ("GET", "legacy/invoices/{id}"),
+        ("POST", "legacy/invoices"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
     # disambiguate them (D00 §1) makes this join multiply instead of match.
-    assert len(report.endpoints) == 18
+    # POST /v1/orders is both a handler and a caller (OrdersLoopClient's
+    # self-call): the outbound engine derives its own row for it, and the
+    # D02 §3 merge folds that into the existing inbound row (direction
+    # `both`) rather than keeping both, so the count is 18 inbound + 7
+    # outbound rows derived, minus the 1 that merges away.
+    assert len(report.endpoints) == 24
     assert report.skipped_catalogs == []
+
+    directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
+    assert directions[("POST", "/billing/invoices")] == "outbound"
+    assert directions[("POST", "/v1/orders")] == "both"  # the self-call merged
+    peers = {e["path"]: e["peer"] for e in report.endpoints if e["direction"] != "inbound"}
+    assert peers["/billing/invoices"] == "billing"
+    assert peers["/v1/inventory/levels"] is None  # base URL is builder code
 
 
 def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_path: Path):
@@ -108,31 +128,74 @@ def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_pat
         e for e in report.endpoints if e["method"] == "POST" and e["path"] == "/v1/orders/detailed"
     )
 
-    assert endpoint["request_shape"] == "com/acme/orders/contracts/OrderRequest#"
-    fields = shape_fields_of(workspace, endpoint["request_shape"])
+    assert json.loads(endpoint["request_shape"]) == {
+        "nullable": True,
+        "shape_id": "com/acme/orders/contracts/OrderRequest#",
+        "wire_format": "",
+        "wire_type": "object",
+    }
+    fields = shape_fields_of(workspace, json.loads(endpoint["request_shape"])["shape_id"])
     assert "customer_id" in [f["wire_name"] for f in fields]
     # The response is a declared envelope around the payload; the shape must
     # root at what the envelope holds, or the wrapper declarations did nothing.
-    assert endpoint["response_shape"] == "com/acme/orders/contracts/OrderView#"
+    assert json.loads(endpoint["response_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderView#"
+    )
     workspace.close()
 
 
-def test_an_endpoint_whose_response_is_not_a_payload_carries_no_shape(tmp_path: Path):
-    """A scalar response has no field list to compare, and a shape row invented
-    for it would be noise presented as fact (D01 §5). A collection has one, but
-    the column holds a single shape identity with nowhere to say what a list
-    holds — the gap `collection_payloads_carry_no_shape` names."""
+def test_an_endpoint_whose_response_is_a_collection_records_its_element_shape(tmp_path: Path):
+    """List<OrderResult> was 2A's parked gap: the endpoint said nothing at
+    all. The descriptor keeps the array-ness — it IS the wire contract — and
+    points at the element's shape, all the way through on real bytecode."""
     workspace, report = _resolved_fixture(tmp_path)
     workspace.close()
-    rendered = next(e for e in report.endpoints if e["path"] == "/orders" and e["method"] == "GET")
     listing = next(
         e for e in report.endpoints if e["path"] == "/v1/orders" and e["method"] == "GET"
     )
 
-    assert rendered["response_shape"] is None
+    descriptor = json.loads(listing["response_shape"])
+    assert descriptor["wire_type"] == "array"
+    assert descriptor["item"]["shape_id"] == "com/acme/orders/OrderResult#"
+
+
+def test_an_outbound_endpoints_collection_response_resolves_to_the_real_client_interface(
+    tmp_path: Path,
+):
+    """BillingClient's `List<OrderView> ...` is Phase 2B's outbound payoff:
+    the Feign catalog derives the *route* — on real bytecode, no other
+    catalog's annotations match `@FeignClient`/`@GetMapping` here. Which
+    outbound catalog's rules go on to compute the *descriptor* is not
+    pinned down by this route (Task 7 review, Finding 1: ownership is
+    direction-scoped, not catalog-scoped, so any outbound catalog may
+    answer any outbound row) — moot for this one, since a bare `List` needs
+    no wrapper any of the three outbound catalogs declares differently. What
+    this test actually exercises end to end is the collection-descriptor
+    path itself, on an outbound row, on real bytecode — the same path that
+    already serves inbound endpoints, now proven to reach one the module
+    calls rather than exposes."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    invoices = next(
+        e for e in report.endpoints if e["method"] == "GET" and e["path"] == "/billing/invoices"
+    )
+
+    descriptor = json.loads(invoices["response_shape"])
+    assert descriptor["wire_type"] == "array"
+    assert descriptor["item"]["shape_id"] == "com/acme/orders/contracts/OrderView#"
+
+
+def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path: Path):
+    """A server-rendered view name has no field list to compare, but NULL is
+    reserved for exactly one meaning — no payload — so a scalar response is a
+    real contract, recorded rather than silently dropped (D01 §5)."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    rendered = next(e for e in report.endpoints if e["path"] == "/orders" and e["method"] == "GET")
+
+    assert json.loads(rendered["response_shape"])["wire_type"] == "string"
     # Nothing annotated the request body either, so there is no root at all.
     assert rendered["request_shape"] is None
-    assert listing["response_shape"] is None
 
 
 def test_only_the_fixtures_payload_fields_reach_the_request_contract(tmp_path: Path):
@@ -215,7 +278,7 @@ def test_a_catalog_skipped_by_capability_gating_contributes_no_shapes(tmp_path: 
     assert "internalTrace" not in names
 
 
-def test_a_catalog_that_names_no_request_body_annotation_claims_no_request_shape(
+def test_a_catalog_that_names_no_request_body_rule_claims_no_request_shape(
     tmp_path: Path,
 ):
     """Which annotation marks the request payload is framework knowledge, so a
@@ -225,9 +288,7 @@ def test_a_catalog_that_names_no_request_body_annotation_claims_no_request_shape
         **{
             **vars(_spring_web()),
             "matches": {
-                key: value
-                for key, value in _spring_web().matches.items()
-                if key != "request_body_annotation"
+                key: value for key, value in _spring_web().matches.items() if key != "request_body"
             },
         }
     )
@@ -238,7 +299,9 @@ def test_a_catalog_that_names_no_request_body_annotation_claims_no_request_shape
     assert endpoint["request_shape"] is None
     # The response is rooted from the return type, which no catalog field
     # names, so it is unaffected.
-    assert endpoint["response_shape"] == "com/acme/orders/contracts/OrderView#"
+    assert json.loads(endpoint["response_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderView#"
+    )
 
 
 def test_two_runs_agree_on_every_shape_and_every_field(tmp_path: Path):

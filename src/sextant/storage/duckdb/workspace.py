@@ -62,9 +62,29 @@ _NAMED_QUERIES = {
     "facts": "SELECT count(*) AS facts FROM raw_facts",
 }
 
+# The tables a bundle carries (D06 §5). `documents`, `endpoints`, `shapes`
+# and `shape_fields` export through their named query, so the row order is
+# the one NFR-1 already fixed; `symbols` and `annotations` have no named
+# query and export through their own ordered SELECT below, for the same
+# reason. Sorted by name so the manifest's contents list is deterministic too.
+_EXPORTED_TABLES = ("annotations", "documents", "endpoints", "shape_fields", "shapes", "symbols")
+
+_EXPORT_QUERIES = {
+    "documents": _NAMED_QUERIES["documents"],
+    "endpoints": _NAMED_QUERIES["endpoints"],
+    "shapes": _NAMED_QUERIES["shapes"],
+    "shape_fields": _NAMED_QUERIES["shape_fields"],
+    "symbols": "SELECT * FROM symbols ORDER BY symbol",
+    "annotations": (
+        "SELECT target, annotation, args, type_path, retention "
+        "FROM annotations ORDER BY target, annotation, type_path"
+    ),
+}
+
 _NAMED_DERIVATIONS = {
     "endpoints": "derive_endpoints.sql",
     "endpoints_reset": "reset_endpoints.sql",
+    "endpoints_merge": "merge_endpoints.sql",
     "endpoint_contracts": "derive_endpoint_contracts.sql",
     "shapes": "derive_shapes.sql",
     "shape_fields": "derive_shape_fields.sql",
@@ -107,6 +127,37 @@ class DuckDbWorkspace:
         cursor = self._connection.execute(sql, list(params.values()) or None)
         columns = [column[0] for column in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def export_tables(self, destination: Path) -> list[str]:
+        graph = destination / "graph"
+        graph.mkdir(parents=True, exist_ok=True)
+        for name in _EXPORTED_TABLES:
+            sql = _EXPORT_QUERIES[name]
+            self._connection.execute(
+                f"COPY ({sql}) TO ? (FORMAT parquet, COMPRESSION zstd)",
+                [str(graph / f"{name}.parquet")],
+            )
+        return list(_EXPORTED_TABLES)
+
+    def export_facts(self, destination: Path) -> int:
+        rows = self._connection.execute(
+            "SELECT DISTINCT document_id FROM raw_facts ORDER BY document_id"
+        ).fetchall()
+        for (document_id,) in rows:
+            target = destination / "facts" / f"{document_id}.parquet"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Two bound values, not one: DuckDB's `?` positional binding does
+            # not carry through a COPY statement's TO clause when the query
+            # it wraps also binds a `?` (reproduced against duckdb 1.5.5) —
+            # `$1`/`$2` does. `?` still covers the single-parameter case in
+            # export_tables above.
+            self._connection.execute(
+                "COPY (SELECT kind, document_id, payload FROM raw_facts "
+                "WHERE document_id = $1 ORDER BY rowid) "
+                "TO $2 (FORMAT parquet, COMPRESSION zstd)",
+                [document_id, str(target)],
+            )
+        return len(rows)
 
     def close(self) -> None:
         self._connection.close()

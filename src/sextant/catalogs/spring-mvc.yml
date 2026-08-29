@@ -11,11 +11,12 @@ requires: [annotation_args, type_annotations]
 
 matches:
   type_annotation: org/springframework/stereotype/Controller#
-  request_body_annotation: org/springframework/web/bind/annotation/RequestBody#
+  request_body: { annotation: org/springframework/web/bind/annotation/RequestBody#, fallback: none }
   mapping:
     # `value` and `path` are @AliasFor each other, so only the one the author
     # typed reaches the bytecode. First present wins, in this order.
     path_from: [value, path]
+    prefix_from: [value, path]
     method_from: method
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
     prefix_annotation: org/springframework/web/bind/annotation/RequestMapping#
