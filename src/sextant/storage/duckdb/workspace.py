@@ -27,7 +27,14 @@ _NAMED_QUERIES = {
     # them is read the same way twice; which one wins is the caller's rule,
     # never this ordering.
     "annotations_of": """
-        SELECT annotation, args FROM annotations WHERE target = ? ORDER BY annotation
+        SELECT annotation, args, type_path FROM annotations WHERE target = ? ORDER BY annotation
+    """,
+    # Every annotation in the workspace, regardless of target — what a scope
+    # rule (D02 §2e) needs: the class or package it was declared on is not the
+    # field it claims, so `annotations_of`'s per-field lookup cannot find it.
+    # Ordered so two fields under the same scope read its claim the same way.
+    "annotations": """
+        SELECT target, annotation, type_path FROM annotations ORDER BY target, annotation
     """,
     "coverage": """
         SELECT count(*) AS documents,

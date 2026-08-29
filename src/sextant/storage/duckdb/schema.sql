@@ -87,5 +87,10 @@ CREATE OR REPLACE VIEW annotations AS
 SELECT document_id,
        payload ->> 'target'              AS target,
        payload -> 'use' ->> 'annotation' AS annotation,
-       payload -> 'use' ->  'args'       AS args
+       payload -> 'use' ->  'args'       AS args,
+       -- Only a type-use annotation carries this at all: NULL for a
+       -- declaration annotation, '' for the outermost type, and a deeper path
+       -- for an annotation on a type argument (D00 §5a).
+       payload ->> 'type_path'           AS type_path,
+       payload ->> 'retention'           AS retention
 FROM raw_facts WHERE kind = 'annotation';

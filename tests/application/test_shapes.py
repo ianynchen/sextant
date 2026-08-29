@@ -1,9 +1,12 @@
 import json
+import re
 from pathlib import Path
 
 from shape_helpers import (
+    KOTLIN_ORDER,
     ORDER_REQUEST,
     ORDER_VIEW,
+    SCOPED_REQUEST,
     SPRING_WRAPPERS,
     field_of,
     mono_of,
@@ -51,6 +54,8 @@ def test_a_bare_payload_type_is_not_flagged_as_an_unmatched_wrapper():
 # shape_id are keyed on.
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 
+SQL_DIR = Path(__file__).parents[2] / "src" / "sextant" / "storage" / "duckdb"
+
 CUSTOMER_REF = "com/acme/orders/contracts/CustomerRef#"
 ORDER_VIEW_SHAPE = "com/acme/orders/contracts/OrderView#"
 
@@ -66,6 +71,13 @@ _CATALOG = Catalog(
     matches={},
     source=Path("tests/invented.yml"),
     wrappers=SPRING_WRAPPERS,
+    nullability={
+        "nullable": ["org.jspecify.annotations.Nullable"],
+        "not_null": ["org.jspecify.annotations.NonNull"],
+        "scope": [
+            {"annotation": "org.jspecify.annotations.NullMarked", "means": "not_null_by_default"}
+        ],
+    },
     serialization={
         "name_from": [
             {"annotation": "com.fasterxml.jackson.annotation.JsonProperty", "arg": "value"}
@@ -259,6 +271,44 @@ def _contract_facts(root: Path) -> None:
                 ORDER_VIEW_SHAPE,
                 "headers",
                 _ref("org/springframework/http/HttpHeaders#", "object"),
+            ),
+        ],
+    )
+
+    # A type whose fields arrive already resolved by the language's own type
+    # system (Task 5's projection onto the shared field) rather than Java's
+    # permissive default — no annotation involved either way.
+    kotlin_order = _document("doc_kotlin_order", "com/acme/orders/contracts/KotlinOrder.kt")
+    _write(
+        root / "KotlinOrder.jsonl",
+        kotlin_order,
+        [
+            _type("doc_kotlin_order", KOTLIN_ORDER),
+            _field("doc_kotlin_order", KOTLIN_ORDER, "note", _string()),
+            _field(
+                "doc_kotlin_order",
+                KOTLIN_ORDER,
+                "id",
+                _ref("java/lang/String#", "string", nullable=False),
+            ),
+        ],
+    )
+
+    # `code` carries no annotation of its own; the package it lives in does —
+    # the scope declaration a `@NullMarked` package-info compiles onto a
+    # synthetic file-class symbol for (D02 §2e).
+    scoped_request = _document("doc_scoped", "com/acme/orders/scoped/ScopedRequest.java")
+    _write(
+        root / "ScopedRequest.jsonl",
+        scoped_request,
+        [
+            _type("doc_scoped", SCOPED_REQUEST),
+            _field("doc_scoped", SCOPED_REQUEST, "code", _string()),
+            _annotation(
+                "doc_scoped",
+                _MODULE + "com/acme/orders/scoped/package-info#",
+                "org/jspecify/annotations/NullMarked#",
+                {},
             ),
         ],
     )
@@ -491,3 +541,70 @@ def test_a_type_that_refers_to_itself_terminates(tmp_path):
 
     assert [s["shape_id"] for s in workspace.query("shapes")] == [node]
     assert json.loads(field_of(workspace, node, "parent")["item"])["shape_id"] == node
+
+
+# --- Nullability and presence (Task 11) --------------------------------------
+
+
+def test_the_language_answer_survives_when_no_catalog_annotation_applies(tmp_path):
+    """The extractor already decided. The derivation must not re-derive it, or
+    the same rule ends up in two places and they will diverge."""
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    field = field_of(ws, ORDER_REQUEST, "reference")
+    assert field["nullable"] is True
+    assert field["resolution"] == "resolved"  # ruling B: Java answers outright
+
+
+def test_a_not_null_annotation_overrides_javas_permissive_default(tmp_path):
+    # Looked up by WIRE name: the field is `customerId` in Java and
+    # `customer_id` on the wire, and D01 §5 makes the wire name the identity.
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    field = field_of(ws, ORDER_REQUEST, "customer_id")
+    assert field["nullable"] is False
+    assert field["resolution"] == "resolved"
+
+
+def test_a_declared_nullable_annotation_agrees_with_the_language_default(tmp_path):
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    field = field_of(ws, ORDER_REQUEST, "note")
+    assert field["nullable"] is True
+    assert field["resolution"] == "resolved"
+
+
+def test_kotlin_arrives_already_resolved_and_is_not_downgraded(tmp_path):
+    ws = _expanded_workspace(tmp_path, roots=[KOTLIN_ORDER])
+    assert field_of(ws, KOTLIN_ORDER, "note")["nullable"] is True
+    assert field_of(ws, KOTLIN_ORDER, "id")["nullable"] is False
+
+
+def test_a_null_marked_scope_inverts_the_default_for_everything_inside_it(tmp_path):
+    """The scope is itself a declaration, so absence carries meaning."""
+    ws = _expanded_workspace(tmp_path, roots=[SCOPED_REQUEST])
+    field = field_of(ws, SCOPED_REQUEST, "code")
+    assert field["nullable"] is False
+    assert field["resolution"] == "resolved"
+
+
+def test_presence_is_never_read_from_a_nullability_annotation(tmp_path):
+    """`required` and `nullable` answer different questions (D00 §5a). Bean
+    Validation's @NotNull is the trap: it constrains a value at validation time
+    and says nothing about whether the field may be omitted."""
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    assert field_of(ws, ORDER_REQUEST, "note")["required"] is True
+
+
+def test_an_optional_wrapper_makes_a_field_not_required(tmp_path):
+    ws = _expanded_workspace(tmp_path, roots=[ORDER_REQUEST])
+    assert field_of(ws, ORDER_REQUEST, "note2")["required"] is False
+
+
+def test_the_derivation_names_no_language():
+    """Language-blind by test, not by intention. The per-language rules live in
+    the extractors; this file must contain none of them. (The pass itself lives
+    in shapes.py, which the architecture tests already scan.) DuckDB binds
+    parameters only on a script's last statement, so the shape pass is split
+    across two files — both are read here."""
+    words: set[str] = set()
+    for name in ("derive_shapes.sql", "derive_shape_fields.sql"):
+        words |= set(re.findall(r"[a-z]+", (SQL_DIR / name).read_text().lower()))
+    assert not {"java", "kotlin", "jvm"} & words

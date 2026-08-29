@@ -16,6 +16,15 @@ ORDER_VIEW = type_ref("com/acme/orders/contracts/OrderView#")
 # the row key every shape query uses.
 ORDER_REQUEST = "com/acme/orders/contracts/OrderRequest#"
 
+# A type whose fields already arrive with a settled type-system answer
+# (Task 11): the derivation must pass that answer through, never re-derive or
+# downgrade it.
+KOTLIN_ORDER = "com/acme/orders/contracts/KotlinOrder#"
+
+# Declared under a package-level scope annotation (Task 11, D02 §2e), in its
+# own package so the scope claims only this type.
+SCOPED_REQUEST = "com/acme/orders/scoped/ScopedRequest#"
+
 
 def mono_of(inner: dict) -> dict:
     return type_ref("reactor/core/publisher/Mono#", inner)

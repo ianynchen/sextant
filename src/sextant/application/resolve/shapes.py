@@ -103,6 +103,7 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     counter — only the discipline that each shape is expanded once.
     """
     rules = _rules_of(catalog)
+    scope_prefixes = _scope_prefixes(workspace, rules)
     declared = _declared_fields(workspace)
     shapes: list[dict[str, object]] = []
     fields: list[dict[str, object]] = []
@@ -118,7 +119,7 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
             continue
         expanded.add(shape_id)
         referenced: list[str] = []
-        rows = _rows_of(workspace, rules, declared.get(shape_id, []), referenced)
+        rows = _rows_of(workspace, rules, scope_prefixes, declared.get(shape_id, []), referenced)
         pending.extend(referenced)
         # Expansion needs field facts, and only scanned types have them, so a
         # type without them stops here whoever wrote it (ruling F4). Its
@@ -157,10 +158,18 @@ class _Rules:
     name_from: list[dict[str, str]]
     ignore: tuple[str, ...]
     default_strategy: str
+    # D02 §2e's three ways a catalog declares nullability, each already
+    # converted at the binding seam like every other block here.
+    nullable_annotations: tuple[str, ...]
+    not_null_annotations: tuple[str, ...]
+    # Scope annotation symbol -> the `nullable` value it implies for
+    # everything the symbol it was found on claims (`_scope_prefixes`).
+    scope_annotations: dict[str, bool]
 
 
 def _rules_of(catalog: Catalog) -> _Rules:
     serialization = catalog.serialization
+    nullability = catalog.nullability
     return _Rules(
         # Wrappers stay dotted: `root_type` crosses the same seam itself.
         wrappers=catalog.wrappers,
@@ -173,7 +182,23 @@ def _rules_of(catalog: Catalog) -> _Rules:
         # A catalog that declares no strategy renames nothing. Absence is not a
         # licence to invent one.
         default_strategy=serialization.get("default_strategy", "as_declared"),
+        nullable_annotations=tuple(
+            _catalog_symbol(name) for name in nullability.get("nullable", [])
+        ),
+        not_null_annotations=tuple(
+            _catalog_symbol(name) for name in nullability.get("not_null", [])
+        ),
+        scope_annotations={
+            _catalog_symbol(entry["annotation"]): _SCOPE_MEANINGS[entry["means"]]
+            for entry in nullability.get("scope", [])
+        },
     )
+
+
+# D02 §2e's one scope meaning. A catalog naming one that is not here is a
+# broken file, and the KeyError above names it — the same discipline
+# `_STRATEGIES` uses for serialisation strategies.
+_SCOPE_MEANINGS: dict[str, bool] = {"not_null_by_default": False}
 
 
 def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
@@ -196,9 +221,101 @@ def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
     return owners
 
 
+# The reserved file-class name the JVM compiles a package-level annotation
+# onto — the only spelling `_scope_prefix` strips, so a scope declared on an
+# actual type named that (impossible on the JVM) is not a concern.
+_PACKAGE_FILE_CLASS = "package-info#"
+
+
+def _scope_prefixes(workspace: Workspace, rules: _Rules) -> list[tuple[str, bool]]:
+    """Where each declared scope (D02 §2e) reaches, as the symbol prefix it
+    claims and the `nullable` value it implies. Read once per pass, not once
+    per field: a scope's target is a class or a package, never the field
+    itself, so `annotations_of`'s per-field lookup cannot find it."""
+    if not rules.scope_annotations:
+        return []
+    prefixes = []
+    for row in workspace.query("annotations"):
+        means = rules.scope_annotations.get(str(row["annotation"]))
+        if means is None:
+            continue
+        prefixes.append((_scope_prefix(str(row["target"])), means))
+    return prefixes
+
+
+def _scope_prefix(target: str) -> str:
+    """The symbol prefix one scope declaration claims (pre-flight ruling, Task
+    11 brief). A type-level target is already a prefix of its own members
+    (`…X#` prefixes `…X#code.`); a package-level one compiles onto a
+    synthetic file-class, so that trailing segment is stripped to recover the
+    package it was actually declared on."""
+    if target.endswith(_PACKAGE_FILE_CLASS):
+        return target[: -len(_PACKAGE_FILE_CLASS)]
+    return target
+
+
+def _scope_nullable(prefixes: list[tuple[str, bool]], field_symbol: str) -> bool | None:
+    """`None` when no declared scope encloses this field. When more than one
+    does — a package scope and a class scope inside it — the longer, more
+    specific prefix wins, the same way a nearer declaration always overrides
+    one further out."""
+    claiming = [claim for claim in prefixes if field_symbol.startswith(claim[0])]
+    if not claiming:
+        return None
+    return max(claiming, key=lambda claim: len(claim[0]))[1]
+
+
+def _explicit_nullable(rules: _Rules, annotations: list[dict[str, object]]) -> bool | None:
+    """`None` when no annotation on the field's own type says anything.
+    `type_path` NULL or `''` is what makes this the field's own type rather
+    than a type argument's (D00 §5a): `List<@Nullable String>` must not flip
+    the field's `nullable`, only its element's."""
+    result: bool | None = None
+    for use in annotations:
+        if use["type_path"] not in (None, ""):
+            continue
+        if use["annotation"] in rules.not_null_annotations:
+            result = False
+        elif use["annotation"] in rules.nullable_annotations:
+            result = True
+    return result
+
+
+def _nullability_of(
+    rules: _Rules,
+    reference: dict[str, Any],
+    described_nullable: bool,
+    annotations: list[dict[str, object]],
+    scope_prefixes: list[tuple[str, bool]],
+    field_symbol: str,
+) -> tuple[bool, str]:
+    """`nullable` and its `resolution`, layered extractor -> scope -> explicit
+    annotation (D02 §2e), last wins. `described_nullable` already carries a
+    known type's own override where one applies (`_described`); that is
+    catalog data too; so it resolves the same way as every later layer."""
+    known = rules.known_types.get(reference["symbol"])
+    nullable = described_nullable
+    resolution = (
+        "resolved"
+        if known is not None and "nullable" in known
+        else str(reference["nullable_resolution"])
+    )
+
+    scoped = _scope_nullable(scope_prefixes, field_symbol)
+    if scoped is not None:
+        nullable, resolution = scoped, "resolved"
+
+    explicit = _explicit_nullable(rules, annotations)
+    if explicit is not None:
+        nullable, resolution = explicit, "resolved"
+
+    return nullable, resolution
+
+
 def _rows_of(
     workspace: Workspace,
     rules: _Rules,
+    scope_prefixes: list[tuple[str, bool]],
     declared: list[dict[str, Any]],
     referenced: list[str],
 ) -> list[dict[str, object]]:
@@ -216,16 +333,26 @@ def _rows_of(
         # the envelope holds, not by the envelope (D02 §2a).
         rooted = root_type(field["returns"], rules.wrappers)
         described = _described(rules, rooted.reference, referenced)
+        nullable, resolution = _nullability_of(
+            rules,
+            rooted.reference,
+            described["nullable"],
+            annotations,
+            scope_prefixes,
+            field["symbol"],
+        )
         rows.append(
             {
                 "wire_name": wire_name,
                 "wire_type": described["wire_type"],
                 "wire_format": described["wire_format"],
-                # Presence is Task 11's, and it is decided by presence
-                # machinery alone — never read off what nullability says.
-                "required": None,
-                "nullable": described["nullable"],
-                "resolution": rooted.reference["nullable_resolution"],
+                # Presence machinery only, never nullability (D00 §5b): the
+                # one source this phase has is the wrapper chain rooting
+                # already recorded — an `optional` wrapper is what makes a
+                # field omittable.
+                "required": "optional" not in rooted.chain,
+                "nullable": nullable,
+                "resolution": resolution,
                 "evidence": evidence,
                 "item": _item_of(described),
             }
@@ -272,11 +399,14 @@ def _described(rules: _Rules, reference: dict[str, Any], referenced: list[str]) 
     if known is not None:
         # Mapped and never expanded: a type the serialiser turns into a scalar
         # has no field list on the wire, and expanding it would invent one
-        # (D02 §2g).
+        # (D02 §2g). A known type may also declare its own `nullable` (D02
+        # §2g) — a wrapper type such as protobuf's, whose wire behaviour the
+        # reference's own flag does not describe — which then overrides the
+        # reference's answer for this field or element.
         return {
             "wire_type": known["wire"],
             "wire_format": known.get("format", ""),
-            "nullable": reference["nullable"],
+            "nullable": known.get("nullable", reference["nullable"]),
         }
     described = {
         "wire_type": reference["wire_type"],
