@@ -35,7 +35,7 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
         workspace,
         facts,
         YamlCatalogSource(catalogs_dir()),
-        {"annotation_args", "typed_signatures"},
+        {"annotation_args", "typed_signatures", "type_annotations"},
     )
     workspace.close()
 
@@ -98,4 +98,7 @@ def test_resolve_reports_the_skip_instead_of_crashing_when_no_catalog_is_satisfi
     workspace.close()
 
     assert report.endpoints == []
-    assert SkippedCatalog("spring-web", ("annotation_args",)) in report.skipped_catalogs
+    assert (
+        SkippedCatalog("spring-web", ("annotation_args", "type_annotations"))
+        in report.skipped_catalogs
+    )

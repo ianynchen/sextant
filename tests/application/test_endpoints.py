@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
@@ -44,6 +45,61 @@ def test_catalog_declares_its_style_and_required_capabilities_when_loaded():
     assert spring.protocol == "http"
     assert spring.direction == "inbound"
     assert "annotation_args" in spring.requires
+
+
+def test_catalog_declares_wrappers_nullability_serialization_and_known_types():
+    """D02 §2a, §2e, §2f, §2g: `spring-web` and `spring-mvc` both need these
+    four blocks before payload shapes can be derived (Tasks 9-11 read them).
+    The loader does not parse them into `Catalog` — they ride along in the
+    raw file — so this reads the file directly, the same way the catalog
+    itself is the source of truth for `matches`."""
+    for name in ("spring-web", "spring-mvc"):
+        raw = yaml.safe_load((CATALOGS / f"{name}.yml").read_text(encoding="utf-8"))
+
+        wrapper_types = {w["type"] for w in raw["wrappers"]}
+        assert wrapper_types == {
+            "org.springframework.http.ResponseEntity",
+            "reactor.core.publisher.Mono",
+            "reactor.core.publisher.Flux",
+            "java.util.concurrent.CompletableFuture",
+            "java.util.Optional",
+        }
+
+        # The JetBrains entries are not redundant with JSpecify/Spring: the
+        # Kotlin compiler emits them directly onto fields as CLASS-retention
+        # annotations, so they are what makes Kotlin nullability work through
+        # the ordinary annotation path.
+        assert "org.jetbrains.annotations.Nullable" in raw["nullability"]["nullable"]
+        assert "org.jetbrains.annotations.NotNull" in raw["nullability"]["not_null"]
+        assert raw["nullability"]["scope"] == [
+            {"annotation": "org.jspecify.annotations.NullMarked", "means": "not_null_by_default"}
+        ]
+
+        assert raw["serialization"]["name_from"] == [
+            {"annotation": "com.fasterxml.jackson.annotation.JsonProperty", "arg": "value"}
+        ]
+        assert raw["serialization"]["ignore"] == ["com.fasterxml.jackson.annotation.JsonIgnore"]
+        assert raw["serialization"]["default_strategy"] == "as_declared"
+
+        known_types = {t["type"] for t in raw["known_types"]}
+        assert known_types == {
+            "java.time.Instant",
+            "java.time.LocalDate",
+            "java.math.BigDecimal",
+            "java.util.UUID",
+        }
+
+
+def test_catalog_requires_type_annotations_for_nullability():
+    """Nullability comes off `type_annotations`; a catalog that declares
+    `nullability` without raising `requires` would run against a scanner
+    lacking that capability and silently produce no nullability at all —
+    the exact bypass capability gating exists to prevent (FR-17)."""
+    catalogs = YamlCatalogSource(CATALOGS).load()
+    for catalog_id in ("spring-web", "spring-mvc"):
+        catalog = next(c for c in catalogs if c.id == catalog_id)
+        assert "annotation_args" in catalog.requires
+        assert "type_annotations" in catalog.requires
 
 
 def test_catalog_maps_post_mapping_to_the_post_method():
@@ -170,7 +226,9 @@ def test_derive_endpoints_finds_the_three_annotated_routes_when_the_catalog_is_a
     workspace.load_facts(tmp_path / "facts")
     spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
 
-    skipped = derive_endpoints(workspace, [spring], capabilities={"annotation_args"})
+    skipped = derive_endpoints(
+        workspace, [spring], capabilities={"annotation_args", "type_annotations"}
+    )
     routes = {(e["method"], e["path"]) for e in workspace.query("endpoints")}
     workspace.close()
 
@@ -275,7 +333,9 @@ def test_derive_endpoints_keeps_both_catalogs_results_when_two_catalogs_match(
     spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
 
     skipped = derive_endpoints(
-        workspace, [spring, _INVENTED_LISTENER], capabilities={"annotation_args"}
+        workspace,
+        [spring, _INVENTED_LISTENER],
+        capabilities={"annotation_args", "type_annotations"},
     )
     rows = workspace.query("endpoints")
     workspace.close()
@@ -302,7 +362,9 @@ def test_derive_endpoints_merges_on_wire_identity_when_two_catalogs_match_the_sa
     spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
     twin = Catalog(**{**vars(spring), "id": "spring-web-twin"})
 
-    derive_endpoints(workspace, [spring, twin], capabilities={"annotation_args"})
+    derive_endpoints(
+        workspace, [spring, twin], capabilities={"annotation_args", "type_annotations"}
+    )
     rows = workspace.query("endpoints")
     workspace.close()
 
