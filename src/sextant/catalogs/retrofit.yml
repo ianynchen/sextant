@@ -1,0 +1,43 @@
+id: retrofit
+displayName: Retrofit
+style: annotation_driven
+protocol: http
+direction: outbound
+
+detect:
+  coordinates: ["com.squareup.retrofit2:retrofit"]
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # No type gate and no prefix: a Retrofit interface is its method
+  # annotations, and the base URL lives in builder code (call-site phase).
+  request_body: { annotation: retrofit2/http/Body#, fallback: none }
+  mapping:
+    path_from: [value]
+    method_from: method
+    all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS]
+    prefix_annotation: null
+    prefix_from: []
+    annotations:
+      - { fqn: retrofit2/http/GET#,    method: [GET] }
+      - { fqn: retrofit2/http/POST#,   method: [POST] }
+      - { fqn: retrofit2/http/PUT#,    method: [PUT] }
+      - { fqn: retrofit2/http/DELETE#, method: [DELETE] }
+      - { fqn: retrofit2/http/PATCH#,  method: [PATCH] }
+      - { fqn: retrofit2/http/HEAD#,   method: [HEAD] }
+
+# Shipped Jackson-converter-shaped (the common Spring Boot configuration);
+# Gson/Moshi naming annotations are a later catalog addition.
+wrappers:
+  - { type: retrofit2.Call, payload_arg: 0, semantics: async }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }

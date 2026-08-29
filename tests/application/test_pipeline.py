@@ -95,12 +95,31 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
             (verb, "/v1/legacy/orders/any")
             for verb in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE")
         ),
+        # Outbound (Phase 2B): the client interfaces' declared calls.
+        ("POST", "/billing/invoices"),
+        ("GET", "/billing/invoices"),
+        ("GET", "/v1/inventory/levels"),
+        ("POST", "/v1/inventory/reserve"),
+        ("GET", "legacy/invoices/{id}"),
+        ("POST", "legacy/invoices"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
     # disambiguate them (D00 §1) makes this join multiply instead of match.
-    assert len(report.endpoints) == 18
+    # POST /v1/orders is both a handler and a caller (OrdersLoopClient's
+    # self-call): the outbound engine derives its own row for it, and the
+    # D02 §3 merge folds that into the existing inbound row (direction
+    # `both`) rather than keeping both, so the count is 18 inbound + 7
+    # outbound rows derived, minus the 1 that merges away.
+    assert len(report.endpoints) == 24
     assert report.skipped_catalogs == []
+
+    directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
+    assert directions[("POST", "/billing/invoices")] == "outbound"
+    assert directions[("POST", "/v1/orders")] == "both"  # the self-call merged
+    peers = {e["path"]: e["peer"] for e in report.endpoints if e["direction"] != "inbound"}
+    assert peers["/billing/invoices"] == "billing"
+    assert peers["/v1/inventory/levels"] is None  # base URL is builder code
 
 
 def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_path: Path):
@@ -138,6 +157,23 @@ def test_an_endpoint_whose_response_is_a_collection_records_its_element_shape(tm
     descriptor = json.loads(listing["response_shape"])
     assert descriptor["wire_type"] == "array"
     assert descriptor["item"]["shape_id"] == "com/acme/orders/OrderResult#"
+
+
+def test_an_outbound_endpoints_collection_response_resolves_to_the_real_client_interface(
+    tmp_path: Path,
+):
+    """BillingClient's `List<OrderView> ...` is Phase 2B's outbound payoff:
+    the Feign catalog derives the call, and the same collection-descriptor
+    path that serves inbound endpoints roots it at the real element shape."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    invoices = next(
+        e for e in report.endpoints if e["method"] == "GET" and e["path"] == "/billing/invoices"
+    )
+
+    descriptor = json.loads(invoices["response_shape"])
+    assert descriptor["wire_type"] == "array"
+    assert descriptor["item"]["shape_id"] == "com/acme/orders/contracts/OrderView#"
 
 
 def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path: Path):
