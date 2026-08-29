@@ -5,7 +5,7 @@ from pathlib import Path
 from sextant.application.ports.scanner import ScanReport, ScanRequest
 
 _LANGUAGES = {"java", "kotlin"}
-_CAPABILITIES = {"annotation_args", "typed_signatures"}
+_CAPABILITIES = {"annotation_args", "typed_signatures", "type_annotations", "kotlin_metadata"}
 
 
 class AsmScanner:

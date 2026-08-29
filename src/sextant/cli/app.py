@@ -119,6 +119,13 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             endpoints=workspace.query("endpoints"),
             coverage=workspace.query("coverage")[0],
             skipped_catalogs=skipped_catalogs,
+            shapes=workspace.query("shapes"),
+            # Not recoverable from the workspace: a type nothing could expand
+            # gets an open, zero-field shape row, which is indistinguishable
+            # from a class that genuinely has no fields. So it rides
+            # metadata.json the same way a skipped catalog does, rather than
+            # being re-derived here from rows that cannot answer.
+            unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
         )
         text = render_module_document(
             reconstructed,

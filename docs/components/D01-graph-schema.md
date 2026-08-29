@@ -94,8 +94,8 @@ call, and does not rank candidates against one another.
 
 | Table | Holds |
 |---|---|
-| `shapes` | Shape identifier, content hash, whether open |
-| `shape_fields` | Shape, ordinal, **wire name**, type, required, tags |
+| `shapes` | `shape_id`, content hash, whether open |
+| `shape_fields` | Shape, ordinal, **wire name**, wire type and format, required, nullable, trust fields, tags, item descriptor |
 | `endpoints` | Direction, protocol, wire identity, handler or caller, request and response shapes, trust fields |
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
 
@@ -104,6 +104,31 @@ call, and does not rank candidates against one another.
 ([D00](D00-fact-schema.md) §5b). Code-derived shapes project into that vocabulary during
 expansion. One representation downstream means the drift report and the stitcher compare
 field lists without caring which side came from code.
+
+**`shape_fields`'s columns are `shape_id`, `ordinal`, `wire_name`, `wire_type`, `wire_format`,
+`required`, `nullable`, `resolution`, `evidence`, `tags`, `item`.** An earlier draft of this
+table said "type" where the vocabulary ([D00](D00-fact-schema.md) §5b) actually carries two
+parts — a base type plus an optional qualifier, `integer` and `int64` answering different
+questions — so `wire_type` and `wire_format` are separate columns rather than one string a
+consumer would have to re-split (decision D1 of the shapes-and-nullability plan). `nullable`
+sits beside `required` because [D00](D00-fact-schema.md) §5a makes them independent
+two-valued flags: a field may be required-and-nullable or optional-and-not-null, and one
+column cannot hold two answers. `resolution` and `evidence` accompany it per decision D3 of
+that plan and the general trust-field rule ([D00](D00-fact-schema.md) §3) — a `nullable` read
+off a language default and one confirmed by an explicit annotation are different claims, and
+DR-5's comparison must be able to tell them apart rather than trusting both equally. `tags` is
+unchanged from the original column list; dropping it silently would be the same defect as
+adding columns without saying so.
+
+**`item` is JSON, holding the same recursive descriptor a fact-level type reference already
+uses: `{wire_type, wire_format, nullable, shape_id?, item?}`.** A single `wire_type` cannot
+describe a collection — `List<String>` and `List<CustomerRef>` are both `array` — and without
+an element descriptor, DR-5 would match a caller sending an array of strings against a callee
+expecting an array of records: a fabricated link, which is exactly what DR-5's payload
+comparison exists to prevent. `item` is `NULL` for a scalar field, the element descriptor for
+an `array`, and the **value** descriptor for a `map` — a JSON object's keys are always
+strings, so a key descriptor would carry no information. Nesting recurses through `item`, so
+`Map<String, List<String>>` needs no special case beyond this one column.
 
 **`shape_fields.wire_name` is the identity, never the source field name.** After a naming
 strategy or an explicit serialisation annotation, `customerId` and `customer_id` may be the

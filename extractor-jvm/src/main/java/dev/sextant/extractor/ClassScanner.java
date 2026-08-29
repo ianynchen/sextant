@@ -5,8 +5,10 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
+import java.util.function.Consumer;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.FieldVisitor;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
@@ -22,8 +24,21 @@ public final class ClassScanner {
     }
 
     public List<String> scan(byte[] classBytes, String documentId) {
+        return scan(classBytes, documentId, reason -> {});
+    }
+
+    /** {@code onKotlinMetadataUnsupported} fires when this class's own {@code @Metadata}
+     *  named a compiler version {@code kotlin-metadata-jvm} does not understand — the
+     *  library's supported version always trails the compiler's, so this is the ordinary
+     *  path for a module built on a newer Kotlin, not a corrupt class file. The class is
+     *  still scanned in full; only its Kotlin-declared nullability is unavailable, and
+     *  the caller decides what "unavailable" means for coverage reporting (Main does, at
+     *  the class-file level M03/FR-17 requires). */
+    public List<String> scan(byte[] classBytes, String documentId,
+                              Consumer<String> onKotlinMetadataUnsupported) {
         List<String> lines = new ArrayList<>();
-        new ClassReader(classBytes).accept(new Visitor(lines, documentId), ClassReader.SKIP_FRAMES);
+        new ClassReader(classBytes)
+            .accept(new Visitor(lines, documentId, onKotlinMetadataUnsupported), ClassReader.SKIP_FRAMES);
         return lines;
     }
 
@@ -61,19 +76,41 @@ public final class ClassScanner {
     private final class Visitor extends ClassVisitor {
         private final List<String> lines;
         private final String documentId;
+        private final Consumer<String> onKotlinMetadataUnsupported;
         private String typeSymbol;
+        // Populated from @Metadata before any field is visited (ASM visits class-level
+        // annotations before fields — see visitAnnotation below); empty for every
+        // non-Kotlin class, which leaves Java's rule as the only source.
+        private java.util.Map<String, Boolean> kotlinNullability = KotlinNullability.NONE;
 
-        Visitor(List<String> lines, String documentId) {
+        Visitor(List<String> lines, String documentId, Consumer<String> onKotlinMetadataUnsupported) {
             super(Opcodes.ASM9);
             this.lines = lines;
             this.documentId = documentId;
+            this.onKotlinMetadataUnsupported = onKotlinMetadataUnsupported;
         }
 
         @Override
         public void visit(int v, int access, String name, String sig, String superName, String[] ifaces) {
             typeSymbol = symbolOf(name + "#");
-            boolean isInterface = (access & Opcodes.ACC_INTERFACE) != 0;
-            emit(typeSymbol, isInterface ? "interface" : "class", null, null, access);
+            emit(typeSymbol, constructKindOf(access), null, null, access);
+        }
+
+        /** D00 §4's construct kinds carry `enum` beside `class` and `interface`, and
+         *  the type's own fact is the only place the distinction survives: a type
+         *  reference to an enumeration is indistinguishable from a reference to a
+         *  record. Called `class`, a closed set of constants is expanded structurally
+         *  by a consumer that has no way to know better, and each constant becomes a
+         *  field of a payload nobody sends — where D00 §5b's `enum` wire type says the
+         *  whole thing in one value.
+         *
+         *  <p>The interface test comes first because an annotation type is both, and
+         *  the enum test before the fallback because an enum is a class in the JVM's
+         *  own model. */
+        private String constructKindOf(int access) {
+            if ((access & Opcodes.ACC_INTERFACE) != 0) return "interface";
+            if ((access & Opcodes.ACC_ENUM) != 0) return "enum";
+            return "class";
         }
 
         @Override
@@ -84,7 +121,12 @@ public final class ClassScanner {
             int parameterCount = Type.getArgumentTypes(descriptor).length;
             String[] parameterNames = new String[parameterCount];
             List<List<String>> parameterAnnotations = new ArrayList<>();
-            for (int i = 0; i < parameterCount; i++) parameterAnnotations.add(new ArrayList<>());
+            List<List<String>> parameterTypeAnnotations = new ArrayList<>();
+            for (int i = 0; i < parameterCount; i++) {
+                parameterAnnotations.add(new ArrayList<>());
+                parameterTypeAnnotations.add(new ArrayList<>());
+            }
+            List<String> returnTypeAnnotations = new ArrayList<>();
 
             // Parameter names (visitParameter) and parameter annotations
             // (visitParameterAnnotation) arrive as callbacks during the visit, so the
@@ -112,15 +154,87 @@ public final class ClassScanner {
                 }
 
                 @Override
+                public org.objectweb.asm.AnnotationVisitor visitTypeAnnotation(
+                        int typeRef, org.objectweb.asm.TypePath typePath, String d, boolean visible) {
+                    // A method has more than one type reference — the return type,
+                    // and each parameter — so unlike a field's single reference,
+                    // the annotation itself does not say which one it belongs to.
+                    // TypeReference's sort does: attach to the matching slot in the
+                    // signature (D00 §5a) rather than a flat fact a consumer would
+                    // have to match back to "which parameter, or the return type".
+                    org.objectweb.asm.TypeReference reference = new org.objectweb.asm.TypeReference(typeRef);
+                    return switch (reference.getSort()) {
+                        case org.objectweb.asm.TypeReference.METHOD_RETURN ->
+                            typeAnnotationEntryVisitor(typePath, d, visible, returnTypeAnnotations);
+                        case org.objectweb.asm.TypeReference.METHOD_FORMAL_PARAMETER -> {
+                            int index = reference.getFormalParameterIndex();
+                            yield (index >= 0 && index < parameterTypeAnnotations.size())
+                                ? typeAnnotationEntryVisitor(
+                                    typePath, d, visible, parameterTypeAnnotations.get(index))
+                                : null;
+                        }
+                        // Type-parameter bounds, the receiver type, and throws
+                        // clauses have no slot in today's signature (D00 §5a covers
+                        // parameters and the return type only) — out of scope here,
+                        // not silently misattributed to one of those two.
+                        default -> null;
+                    };
+                }
+
+                @Override
                 public void visitEnd() {
                     emit(methodSymbol, constructKind, typeSymbol,
-                         signatureJson(descriptor, sig, parameterNames, parameterAnnotations), access);
+                         signatureJson(descriptor, sig, parameterNames, parameterAnnotations,
+                                       parameterTypeAnnotations, returnTypeAnnotations), access);
+                }
+            };
+        }
+
+        @Override
+        public FieldVisitor visitField(int access, String name, String descriptor, String sig, Object value) {
+            // Compiler machinery — an enumeration's constant array, a captured
+            // outer instance — is not a declaration: nobody wrote it, so there is
+            // no fact to make about it. A modifier would be the wrong answer,
+            // because that says "somebody declared this, and it stays off the
+            // wire"; this is a member no source file contains, and a symbol graph
+            // carrying it answers questions about code that does not exist.
+            if ((access & Opcodes.ACC_SYNTHETIC) != 0) return null;
+            String owner = typeSymbol.substring(typeSymbol.lastIndexOf(' ') + 1);
+            String fieldSymbol = symbolOf(owner + name + ".");
+            Type type = Type.getType(descriptor);
+            // null when this field is not a Kotlin property (every Java field, and any
+            // Kotlin field @Metadata did not name) — Java's rule still applies to those.
+            Boolean kotlinNullable = kotlinNullability.get(name);
+
+            return new FieldVisitor(Opcodes.ASM9) {
+                @Override
+                public org.objectweb.asm.AnnotationVisitor visitAnnotation(String d, boolean visible) {
+                    return annotationVisitor(fieldSymbol, d, visible);
+                }
+
+                @Override
+                public org.objectweb.asm.AnnotationVisitor visitTypeAnnotation(
+                        int typeRef, org.objectweb.asm.TypePath typePath, String d, boolean visible) {
+                    return typeAnnotationVisitor(fieldSymbol, typePath, d, visible);
+                }
+
+                @Override
+                public void visitEnd() {
+                    emit(fieldSymbol, "field", typeSymbol, fieldSignatureJson(type, sig, kotlinNullable), access,
+                         kotlinNullable == null ? null : kotlinExt(kotlinNullable), modifiersJson(access));
                 }
             };
         }
 
         @Override
         public org.objectweb.asm.AnnotationVisitor visitAnnotation(String descriptor, boolean visible) {
+            // The compiler's own bookkeeping, not a fact of its own (D00 §5a is about
+            // annotations someone wrote) — decode it into the property lookup instead
+            // of letting its protobuf blob out through the normal annotation stream.
+            if (KotlinNullability.DESCRIPTOR.equals(descriptor)) {
+                return KotlinNullability.collector(
+                    decoded -> kotlinNullability = decoded, onKotlinMetadataUnsupported);
+            }
             return annotationVisitor(typeSymbol, descriptor, visible);
         }
 
@@ -138,12 +252,61 @@ public final class ClassScanner {
             });
         }
 
+        /** A type-use annotation (JSR 308) is the same `annotation` fact as
+         *  {@link #annotationVisitor}, plus the `type_path` ASM hands back through
+         *  {@code TypePath}. That path is the only thing that tells
+         *  {@code @Nullable List<String>} apart from {@code List<@Nullable String>}
+         *  (D00 §5a) — dropping it collapses both to "a Nullable sits somewhere on
+         *  this field", which a later task cannot attach to the right reference.
+         *
+         *  <p>Read from **both** retention tables: the caller passes {@code visible}
+         *  from whichever of {@code RuntimeVisibleTypeAnnotations} or
+         *  {@code RuntimeInvisibleTypeAnnotations} ASM is currently walking.
+         *  JSpecify's annotations are {@code RUNTIME}; {@code javax.annotation.Nullable}
+         *  and the JetBrains spellings are mostly {@code CLASS} — a module compiled
+         *  over a decade carries several spellings at different retentions, and
+         *  reading only one table silently misses the others. */
+        private org.objectweb.asm.AnnotationVisitor typeAnnotationVisitor(
+                String target, org.objectweb.asm.TypePath typePath, String descriptor, boolean visible) {
+            // null renders as "the outer type" per the TypePath contract, not as
+            // the four-character string "null".
+            String typePathString = typePath == null ? "" : String.valueOf(typePath);
+            return useCollectingVisitor(descriptor, use -> {
+                TreeMap<String, String> fact = new TreeMap<>();
+                fact.put("kind", JsonOut.string("annotation"));
+                fact.put("document_id", JsonOut.string(documentId));
+                fact.put("target", JsonOut.string(target));
+                fact.put("use", use);
+                fact.put("retention", JsonOut.string(visible ? "runtime" : "class"));
+                fact.put("type_path", JsonOut.string(typePathString));
+                lines.add(JsonOut.object(fact));
+            });
+        }
+
         /** A parameter-level annotation is not a fact: it attaches inline on the
          *  parameter's entry in the signature (D00 §5a — "annotations attach without
          *  the parameter needing a symbol of its own"). */
         private org.objectweb.asm.AnnotationVisitor parameterAnnotationVisitor(
                 String descriptor, List<String> sink) {
             return useCollectingVisitor(descriptor, sink::add);
+        }
+
+        /** A method's type-use annotation attaches the same way — inline on the
+         *  return type or the matching parameter's entry, never a flat fact —
+         *  but unlike a declaration-level parameter annotation it also carries
+         *  `retention` and `type_path`: D00 §5a's per-reference value is what
+         *  tells `@Nullable List<String>` apart from `List<@Nullable String>`,
+         *  and both retention tables land here (see {@link #typeAnnotationVisitor}). */
+        private org.objectweb.asm.AnnotationVisitor typeAnnotationEntryVisitor(
+                org.objectweb.asm.TypePath typePath, String descriptor, boolean visible, List<String> sink) {
+            String typePathString = typePath == null ? "" : String.valueOf(typePath);
+            return useCollectingVisitor(descriptor, use -> {
+                TreeMap<String, String> entry = new TreeMap<>();
+                entry.put("use", use);
+                entry.put("retention", JsonOut.string(visible ? "runtime" : "class"));
+                entry.put("type_path", JsonOut.string(typePathString));
+                sink.add(JsonOut.object(entry));
+            });
         }
 
         /** Collects one annotation's argument values and hands the finished
@@ -202,7 +365,9 @@ public final class ClassScanner {
         }
 
         private String signatureJson(String descriptor, String genericSignature,
-                                      String[] parameterNames, List<List<String>> parameterAnnotations) {
+                                      String[] parameterNames, List<List<String>> parameterAnnotations,
+                                      List<List<String>> parameterTypeAnnotations,
+                                      List<String> returnTypeAnnotations) {
             Type[] argumentTypes = Type.getArgumentTypes(descriptor);
             List<String> parameters = new ArrayList<>();
             for (int i = 0; i < argumentTypes.length; i++) {
@@ -210,6 +375,9 @@ public final class ClassScanner {
                 parameter.put("annotations", JsonOut.array(parameterAnnotations.get(i)));
                 parameter.put("name", parameterNames[i] == null ? "null" : JsonOut.string(parameterNames[i]));
                 parameter.put("type", TypeRefs.fromType(argumentTypes[i]));
+                // Type-use annotations on this parameter's type — distinct from
+                // "annotations" above, which are declaration-level (D00 §5a).
+                parameter.put("type_annotations", JsonOut.array(parameterTypeAnnotations.get(i)));
                 parameters.add(JsonOut.object(parameter));
             }
             String generic = TypeRefs.returnFromSignature(genericSignature);
@@ -217,10 +385,63 @@ public final class ClassScanner {
             TreeMap<String, String> signature = new TreeMap<>();
             signature.put("parameters", JsonOut.array(parameters));
             signature.put("returns", returns);
+            signature.put("return_type_annotations", JsonOut.array(returnTypeAnnotations));
             return JsonOut.object(signature);
         }
 
+        /** A field has no parameter list, only the type reference D00 §5a says it
+         *  carries "the same way" a return type does. {@code TypeRefs.fieldRef} reads
+         *  the field's generic {@code Signature} when present, so `List<CustomerRef>`
+         *  keeps `CustomerRef` rather than erasing to plain `List` (D00 §5a) — the
+         *  erased {@code type} is still passed as the fallback for a field whose
+         *  descriptor carries no type argument to lose, and never gets one.
+         *
+         *  <p>{@code kotlinNullable} overrides only the top-level nullability, never a
+         *  nested type argument: Kotlin's `@Metadata` resolves a property's own
+         *  nullability, not its generic arguments' (out of this task's scope either
+         *  way, same as it is for an unannotated Java field's arguments). */
+        private String fieldSignatureJson(Type type, String genericSignature, Boolean kotlinNullable) {
+            TreeMap<String, String> signature = new TreeMap<>();
+            signature.put("returns", TypeRefs.fieldRef(type, genericSignature, kotlinNullable));
+            return JsonOut.object(signature);
+        }
+
+        /** D00 §6: the raw @Metadata read stays recoverable behind the extension
+         *  namespace even once it has been projected onto the shared field above —
+         *  the projection must not be the only place the answer survives. */
+        private String kotlinExt(boolean nullable) {
+            TreeMap<String, String> kotlin = new TreeMap<>();
+            kotlin.put("nullable", String.valueOf(nullable));
+            TreeMap<String, String> ext = new TreeMap<>();
+            ext.put("kotlin", JsonOut.object(kotlin));
+            return JsonOut.object(ext);
+        }
+
+        /** The declaration modifiers that decide whether a field reaches a payload at
+         *  all, beside `visibility` and in the same language-blind spelling: `static`
+         *  is a value bound to the type rather than to an instance, `transient` a
+         *  declaration the language marks as not serialized. Neither is nullability
+         *  and neither is visibility — a public constant is as public as any field
+         *  and still on no payload — so a consumer filtering on what it already had
+         *  would have to guess.
+         *
+         *  <p>Both keys are always written, never only the true one: an absent key
+         *  cannot be told apart from a scanner that does not report the modifier.
+         *  Emitted for fields only, because a field is the only construct whose
+         *  answer anything reads today (D00 §5). */
+        private String modifiersJson(int access) {
+            TreeMap<String, String> modifiers = new TreeMap<>();
+            modifiers.put("static", String.valueOf((access & Opcodes.ACC_STATIC) != 0));
+            modifiers.put("transient", String.valueOf((access & Opcodes.ACC_TRANSIENT) != 0));
+            return JsonOut.object(modifiers);
+        }
+
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access) {
+            emit(symbol, constructKind, enclosing, signature, access, null, null);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext, String modifiers) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -231,6 +452,8 @@ public final class ClassScanner {
             fact.put("visibility", JsonOut.string((access & Opcodes.ACC_PUBLIC) != 0 ? "public" : "other"));
             fact.put("line_start", "0");
             fact.put("line_end", "0");
+            if (ext != null) fact.put("ext", ext);
+            if (modifiers != null) fact.put("modifiers", modifiers);
             lines.add(JsonOut.object(fact));
         }
     }

@@ -7,7 +7,7 @@ direction: inbound
 detect:
   coordinates: ["org.springframework:spring-webmvc"]
 
-requires: [annotation_args]
+requires: [annotation_args, type_annotations]
 
 matches:
   type_annotation: org/springframework/stereotype/Controller#
@@ -28,3 +28,31 @@ matches:
       - { fqn: org/springframework/web/bind/annotation/PutMapping#,    method: [PUT] }
       - { fqn: org/springframework/web/bind/annotation/DeleteMapping#, method: [DELETE] }
       - { fqn: org/springframework/web/bind/annotation/PatchMapping#,  method: [PATCH] }
+
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: reactor.core.publisher.Mono,             payload_arg: 0, semantics: async }
+  - { type: reactor.core.publisher.Flux,             payload_arg: 0, semantics: streaming }
+  - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.time.LocalDate,  wire: string, format: date }
+  - { type: java.math.BigDecimal, wire: number }
+  - { type: java.util.UUID,       wire: string, format: uuid }

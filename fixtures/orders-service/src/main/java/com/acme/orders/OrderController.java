@@ -1,6 +1,9 @@
 package com.acme.orders;
 
+import com.acme.orders.contracts.OrderRequest;
+import com.acme.orders.contracts.OrderView;
 import java.util.List;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -35,5 +38,13 @@ public class OrderController {
     @GetMapping
     public List<OrderResult> list() {
         return service.list();
+    }
+
+    // The one endpoint that exercises the whole chain: a request payload
+    // covering every nullability and naming case, and a response wrapped in a
+    // declared envelope, so rooting has something real to unwrap.
+    @PostMapping("/detailed")
+    public ResponseEntity<OrderView> createDetailed(@RequestBody OrderRequest request) {
+        return ResponseEntity.ok(new OrderView());
     }
 }

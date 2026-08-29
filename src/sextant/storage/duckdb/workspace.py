@@ -10,6 +10,48 @@ _NAMED_QUERIES = {
     # a wire identity, and an ordering with ties is an ordering that can change
     # between runs (NFR-1).
     "endpoints": "SELECT * FROM endpoints ORDER BY protocol, method, path, handler",
+    "shapes": "SELECT * FROM shapes ORDER BY shape_id",
+    # `ordinal` alone would tie across shapes; `shape_id` first is what makes
+    # the ordering total rather than merely stable within one shape (NFR-1).
+    "shape_fields": "SELECT * FROM shape_fields ORDER BY shape_id, ordinal",
+    # The field facts the shape pass expands, in declaration order within each
+    # defining document — `seq` is what `ordinal` is derived from, so the
+    # ordering is part of the answer rather than a convenience (NFR-1).
+    #
+    # The two modifiers come through because nothing else can say whether a
+    # declared field reaches a payload: a constant bound to the type and a
+    # field declared not serialized are as public and as typed as any other,
+    # and a pass with nothing to filter on turns both into contract terms
+    # nobody wrote. False where a scanner reports no modifiers at all — an
+    # absent answer is not a claim that the field is off the wire.
+    "fields": """
+        SELECT symbol, document_id, seq, signature -> 'returns' AS returns,
+               coalesce((modifiers ->> 'static')::BOOLEAN, false) AS "static",
+               coalesce((modifiers ->> 'transient')::BOOLEAN, false) AS "transient"
+        FROM symbols
+        WHERE construct_kind = 'field'
+        ORDER BY document_id, seq
+    """,
+    # The declared types the facts call enumerations. A reference to an
+    # enumeration is indistinguishable from a reference to a record — only the
+    # referenced type's own fact carries the construct kind — so the pass reads
+    # them all once rather than looking one up per field.
+    "enum_types": """
+        SELECT symbol FROM symbols WHERE construct_kind = 'enum' ORDER BY symbol
+    """,
+    # Annotations on one target. Ordered by name so a target carrying two of
+    # them is read the same way twice; which one wins is the caller's rule,
+    # never this ordering.
+    "annotations_of": """
+        SELECT annotation, args, type_path FROM annotations WHERE target = ? ORDER BY annotation
+    """,
+    # Every annotation in the workspace, regardless of target — what a scope
+    # rule (D02 §2e) needs: the class or package it was declared on is not the
+    # field it claims, so `annotations_of`'s per-field lookup cannot find it.
+    # Ordered so two fields under the same scope read its claim the same way.
+    "annotations": """
+        SELECT target, annotation, type_path FROM annotations ORDER BY target, annotation
+    """,
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
@@ -23,6 +65,10 @@ _NAMED_QUERIES = {
 _NAMED_DERIVATIONS = {
     "endpoints": "derive_endpoints.sql",
     "endpoints_reset": "reset_endpoints.sql",
+    "endpoint_contracts": "derive_endpoint_contracts.sql",
+    "shapes": "derive_shapes.sql",
+    "shape_fields": "derive_shape_fields.sql",
+    "shapes_reset": "reset_shapes.sql",
 }
 
 

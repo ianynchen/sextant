@@ -14,7 +14,7 @@ from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SE
 # matching human-readable sentence in document.py's _GAPS, so a catalog that
 # cannot be complete never reads as complete (M07 "Honesty obligations").
 PHASE_1_GAPS = [
-    "shape_expansion_not_implemented",
+    "collection_payloads_carry_no_shape",
     "outbound_endpoints_not_implemented",
     "call_graph_not_implemented",
     "maven_parent_and_profile_resolution_not_implemented",
@@ -59,6 +59,15 @@ def write_metadata(
         # in full rather than counted: a count cannot be acted on.
         "uncovered": list(uncovered),
         "endpoints": {"inbound": inbound, "outbound": {}},
+        # The count says how much was expanded; the list says what was not, by
+        # name. Both, because a reader who only knows how many shapes exist
+        # cannot tell a module whose payloads are fully described from one
+        # whose every payload stopped at a third-party type — and only the
+        # names can be acted on (FR-17, the same rule as `uncovered`).
+        "shapes": {
+            "count": len(report.shapes),
+            "unexpanded_types": list(report.unexpanded_types),
+        },
         "skipped_catalogs": [
             {
                 "catalog_id": skipped.catalog_id,

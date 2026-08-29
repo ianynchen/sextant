@@ -338,7 +338,7 @@ written.
 
 > **Approved 2026-08-27.** Dependency choices per `GUIDELINES.md` §7 — the core stack below
 > was signed off wholesale; the tool rows added by the capability audit (`click`, `rich`,
-> `jsonref`, `asm-analysis`, `kotlinx-metadata-jvm`, `protobuf`, the Gradle init script)
+> `jsonref`, `asm-analysis`, `kotlin-metadata-jvm`, `protobuf`, the Gradle init script)
 > were each decided individually in review.
 
 | Concern | Proposed | Why |
@@ -347,7 +347,7 @@ written.
 | Storage and query | DuckDB | Columnar, embedded, reads JSONL directly, recursive queries for reachability. Keeps graph work out of Python loops. |
 | Bytecode reading | ASM | See [DR-1](#dr-1--asm-over-class-files-rather-than-a-source-indexer). |
 | Extractor packaging | Shipped inside the Python distribution. Gradle builds the shaded jar straight into `src/sextant/extractor-jvm/`, git-ignored, and hatchling's `artifacts` carries it into the wheel | Version drift between extractor and loader is a silent correctness fault, so the two travel as one artifact. One location, checkout and wheel alike. It is a build output, not a committed file, so a fresh clone has none until `./gradlew build` runs — reported by name where it is needed rather than at install time. `force-include` was tried and is mandatory in hatchling: a missing jar became a `pip install` failure, which is an install-time hard error for a file only `module analyze` needs. |
-| JVM extractor build | Gradle, shaded jar | |
+| JVM extractor build | Gradle, shaded jar | Kotlin compiler and `kotlin-metadata-jvm` versions must move together — the metadata library's supported version trails the compiler's, so a class compiled by a newer Kotlin carries metadata the reader cannot parse |
 | Python packaging | `pyproject.toml`, hatchling backend | Named by `GUIDELINES.md` §11. Catalogs live at `src/sextant/catalogs/` so they travel with the code that interprets them, and are resolved through the installed package rather than from a file's position on disk. |
 | Test framework | pytest | |
 | Assertions | Plain `assert`, pytest introspection | No assertion library. |
@@ -361,7 +361,7 @@ written.
 | Console status | rich | Live in-place task display on **stderr**; auto plain-line fallback when not a terminal |
 | OpenAPI `$ref` resolution | jsonref | Mechanics only — splice, pointers, laziness; **policy lives in our loader** (D04) |
 | Bytecode dataflow substrate | asm-analysis | The `Analyzer`/`Interpreter` skeleton under constant propagation and chain reconstruction |
-| Kotlin metadata | kotlinx-metadata-jvm | Nullability and data-class shapes; rides inside the extractor jar |
+| Kotlin metadata | `org.jetbrains.kotlin:kotlin-metadata-jvm` | Nullability and data-class shapes; rides inside the extractor jar. Kotlin 2.0 renamed both the artifact and its package from `kotlinx-metadata-jvm` / `kotlinx.metadata`, so anything written against the old name is describing a library this project does not ship |
 | Descriptor parsing | protobuf (Python) | Parses `FileDescriptorProto` bytes extracted from generated classes |
 
 ### 9a. Tool capability matrix
@@ -377,7 +377,7 @@ is Sextant's in every row.
 | Detect, Gradle | The evaluated project model — but only from inside a build | **The init script**: run via the project's own wrapper (`gradlew --offline -I …`), registers a task printing modules, source sets, classpaths and output dirs as JSON. No client library, no version matrix; conformance fixtures pinned per Gradle major. |
 | Scan, structure | ASM: annotations with arguments, type annotations, constants, generic signatures, parameter names, lambdas' bootstrap handles, source and line attribution, throw sites | Fact mapping |
 | Scan, hard parts | asm-analysis: the dataflow skeleton | **String-constant propagation** (incl. Java 9+ concat recipes), **chain reconstruction**, **control-flow structuring** (CFG, back-edge loops, dominator regions) |
-| Scan, Kotlin | kotlinx-metadata-jvm | Mapping to `ext.kotlin` |
+| Scan, Kotlin | kotlin-metadata-jvm | Mapping to `ext.kotlin` |
 | Read, contracts | PyYAML; jsonref; protobuf; `helm template` | Profile layering; the `$ref` policy loader; **embedded-descriptor extraction** (M03); wire-type projection |
 | Resolve, query | DuckDB: bulk JSONL load, recursive CTEs, FTS, Parquet federation | All semantics: CHA and RTA, matching, named derivations and queries — cycle detection in recursive walks is manual (path-column technique) |
 | Sync | git: `ls-remote`, blobless partial clone | Two-phase staleness, refusals |

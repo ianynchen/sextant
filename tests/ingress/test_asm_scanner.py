@@ -28,14 +28,21 @@ def test_scan_writes_one_fact_file_per_source_file_when_run_on_the_fixture(tmp_p
     )
     written = sorted(p.name for p in tmp_path.rglob("*.jsonl"))
     assert written == [
+        "CustomerRef.jsonl",
+        "KotlinOrder.jsonl",
         "LegacyOrderController.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
         "OrderPageController.jsonl",
+        "OrderRequest.jsonl",
         "OrderResult.jsonl",
         "OrderService.jsonl",
+        "OrderStatus.jsonl",
+        "OrderView.jsonl",
+        "ScopedRequest.jsonl",
+        "package-info.jsonl",
     ]
-    assert report.documents == 6
+    assert report.documents == 13
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -56,13 +63,39 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         )
     )
     assert sorted(p.name for p in out.rglob("*.jsonl")) == [
+        "CustomerRef.jsonl",
+        "KotlinOrder.jsonl",
         "LegacyOrderController.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
         "OrderPageController.jsonl",
+        "OrderRequest.jsonl",
         "OrderResult.jsonl",
         "OrderService.jsonl",
+        "OrderStatus.jsonl",
+        "OrderView.jsonl",
+        "ScopedRequest.jsonl",
+        "package-info.jsonl",
     ]
+
+
+def test_no_fact_is_written_for_a_compiler_synthesized_field(tmp_path: Path):
+    """`$VALUES` is the array javac writes behind an enumeration's constants —
+    the fixture's `OrderStatus` has one. Nobody declared it, so there is
+    nothing to record: a fact for it puts a member no source file contains into
+    the symbol graph, and the shape pass downstream turns that into a field of
+    a payload nobody sends."""
+    AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=CLASSES,
+            out_dir=tmp_path,
+        )
+    )
+    written = "".join(p.read_text(encoding="utf-8") for p in tmp_path.rglob("*.jsonl"))
+    assert "VALUES" not in written
 
 
 def test_scan_names_the_class_files_it_skipped_when_the_fixture_has_a_nested_class(
@@ -81,3 +114,7 @@ def test_scan_names_the_class_files_it_skipped_when_the_fixture_has_a_nested_cla
         )
     )
     assert report.uncovered == ("com/acme/orders/OrderResult$Detail.class",)
+
+
+def test_scanner_declares_the_capabilities_phase_2a_implements():
+    assert {"type_annotations", "kotlin_metadata"} <= AsmScanner(JAR).capabilities()

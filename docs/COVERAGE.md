@@ -119,11 +119,16 @@ eleven-column table is unreadable.
 
 ### What ships today
 
-**One cell of one row.** Java and Kotlin, REST inbound, read from compiled bytecode, via two
-catalogs — `spring-web` (`@RestController`) and `spring-mvc` (`@Controller`) — each matching
-five verb annotations and reading the `value` attribute only. Two of eight designed scanner
-capabilities are implemented: `annotation_args` and `typed_signatures`. Verified end-to-end
-on spring-petclinic: 17 endpoints, byte-identical across runs.
+**One cell of one row — now with contracts.** Java and Kotlin, REST inbound, read from
+compiled bytecode, via two catalogs — `spring-web` (`@RestController`) and `spring-mvc`
+(`@Controller`) — each matching `@RequestMapping` plus the five verb shortcuts and reading
+the `value`/`path` aliases. Since Phase 2A an endpoint also carries its request and response
+contract field by field — wire name, wire type and format, `required`, `nullable`, each with
+its trust fields — rooted through declared wrappers, with known types mapped to their wire
+form and expansion stopping visibly at unknown ones. Four of the designed scanner
+capabilities are implemented: `annotation_args`, `typed_signatures`, `type_annotations` and
+`kotlin_metadata`. Verified end-to-end on spring-petclinic: 17 endpoints, byte-identical
+across runs.
 
 **Everything else in both matrices is a gap.** In particular, per Q1 a tier in a row whose
 **Scanner** reads `none` is a *marginal* cost — what the cell would take once a scanner for
@@ -133,7 +138,7 @@ that language exists. It is not a cost you can pay today. Only ✅ and ◐ mean 
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ 6A 8B 5C | 2A 3B | 2A | 4A | 2A 1B | 1A 2B |
+| **Java / Kotlin** | ✅ ASM | ◐ 6A 7B 5C | 2A 3B | 2A | 4A | 2A 1B | 1A 2B |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -398,7 +403,7 @@ is, what it costs.
 | Java | `@RequestMapping` on an **interface or superclass** | Spring inherits mappings | `annotation` + hierarchy | B |
 | Java | **Meta-annotations** — custom `@ApiGet` composed from `@GetMapping` | Spring resolves transitively | `annotation` (recursive) | B |
 | Java | Nested / inner classes | currently skipped **and reported** | — | B |
-| Java | WebFlux `Mono`/`Flux` return types | endpoint found, response type is the wrapper | — | B (unwrapping, [D02](components/D02-catalog-schema.md) §2a) |
+| Java | WebFlux `Mono`/`Flux` return types | response shape roots through the declared wrapper ([D02](components/D02-catalog-schema.md) §2a) | — | ✅ shipped |
 | Java | **Vert.x** `router.get("/x").handler(this::h)` | receiver + verb + first arg | `fluent_chain` | **B — the cleanest first exercise for chain reconstruction** |
 | Java | WebFlux functional `RouterFunctions.route().GET(…)`, `coRouter { }` | — | `combinator` | B |
 | Java | **Akka HTTP** `path("users" / IntNumber) { get { complete(…) } }` | nested closures, route is a *value* | `combinator` | **C-ish — the hardest inbound form surveyed** |
@@ -768,14 +773,16 @@ the endpoint carries `evidence: llm` and every link built on it inherits that pr
 `PyCG`, `Jelly`, `TypeEvalPy` and `SWARM-CG` also give us **published benchmarks to measure
 our own output against**, rather than asserting quality.
 
-### JSpecify lands in an attribute we do not read
+### JSpecify lands in an attribute we now read
 
 Spring 7 adopts JSpecify (`org.jspecify.annotations.*`), which is `TYPE_USE` with
-`RUNTIME` retention — so it lands in `RuntimeVisibleTypeAnnotations`.
-[M03](components/M03-scanner.md) names the **Invisible** attribute, and the scanner does not
-override `visitTypeAnnotation` at all, so neither is read. Nullability sets `required` on
-contract fields, so this gates honest shape comparison. `org.springframework.lang.Nullable`
-is deprecated but still present in compiled code — **match both FQNs**.
+`RUNTIME` retention — so it lands in `RuntimeVisibleTypeAnnotations`. **Shipped in Phase
+2A**: the scanner reads both retention tables, and `visitTypeAnnotation` carries `type_path`
+so `@Nullable List<String>` and `List<@Nullable String>` stay apart. Nullability feeds
+`nullable` per reference — never `required`, which comes from presence machinery
+([D00](components/D00-fact-schema.md) §5b) — and gates honest shape comparison.
+`org.springframework.lang.Nullable` is deprecated but still present in compiled code — the
+catalogs match both FQNs, alongside the `javax`/`jakarta`/JetBrains spellings.
 
 ---
 

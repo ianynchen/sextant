@@ -171,10 +171,10 @@ Thirteen. Every one exists because a stated requirement consumes it (NFR-6).
 | Kind | Carries | Consumed by |
 |---|---|---|
 | `module` | Identifier, kind, languages, source sets, output directories, **classpath tiering**, active catalogs | Dispatch tiering, noise filtering, coverage |
-| `symbol` | Identifier, construct kind, enclosing symbol, **typed signature** (§5a), visibility, range | Symbol graph, shapes, endpoints, class diagrams |
+| `symbol` | Identifier, construct kind, enclosing symbol, **typed signature** (§5a), visibility, **declaration modifiers** (§5a), range | Symbol graph, shapes, endpoints, class diagrams |
 | `relationship` | Subject, object, relationship kind | Hierarchy, dispatch, class diagrams |
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
-| `annotation` | Target symbol, annotation symbol, **argument values**, retention | Every endpoint engine |
+| `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
 | `call_site` | Caller, target owner, name, descriptor, invoke kind, **control-flow position**, literal arguments | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
 | `constant` | Symbol, value | Topic and URL resolution |
@@ -195,6 +195,27 @@ of the parameter annotated `@RequestBody`" becomes a field read rather than a po
 join, and where a parameter's annotations attach without the parameter needing a symbol of
 its own. (The SCIP parameter descriptor exists for the rare case of naming one from
 outside — a curation, say — and is deferred until something needs it.)
+
+**A field symbol also carries the declaration modifiers that decide whether it reaches a
+payload at all**, as `modifiers.static` and `modifiers.transient` — a value bound to the type
+rather than to an instance, and a declaration the language marks as not serialized. Neither
+is visibility and neither is nullability: a public constant is as public as any field and is
+on no payload, so a shape pass filtering on what it already had would have to guess. Both
+flags are always written on a field fact, because an absent one cannot be told apart from a
+scanner that does not report the modifier. **A compiler-synthesized field is not a
+declaration and produces no fact at all** — a modifier would say "somebody wrote this and it
+stays off the wire", where the truth is that no source file contains it.
+
+**A type-use annotation attaches to the type reference it annotates, not to a flat fact.**
+A method has more than one type reference — the return type, and each parameter — so the
+annotation alone does not say which one it belongs to the way a field's single reference
+does; only the position it was read from does. A parameter's entry therefore carries a
+`type_annotations` list alongside its declaration-level `annotations`, and the signature
+carries a `return_type_annotations` list alongside `returns`, each entry holding the
+annotation `use`, `retention`, and `type_path` — the same three things a flat `annotation`
+fact carries for a type-use annotation on a field, minus the target it would otherwise need
+to name. Collapsing "the return type is nullable" and "the parameter is nullable" into one
+undifferentiated fact is the ambiguity this placement exists to remove.
 
 **A type reference is a symbol reference plus optional type arguments, recursively.**
 `List<OrderLine>` keeps `OrderLine`; `Mono<ResponseEntity<OrderResult>>` keeps the whole
@@ -238,10 +259,19 @@ the ecosystem uses annotations to say "actually not" — and the same concept is
 is framework knowledge, so it is catalog data ([D02](D02-catalog-schema.md) §2e), never a list
 in the scanner.
 
-**Where the language decides and nothing narrows it, the fact records the language's answer at
-`resolution: partial`.** An unannotated Java reference field is `nullable` — that is what the
-language permits — but partially resolved, because no one declared it. That is a weaker claim
-than an annotated field, and the trust fields say so without a third enum value.
+**Where the language's type system decides, the fact records that answer at `resolution:
+resolved`.** Java's type system settles nullability outright: every reference type permits
+null and every primitive forbids it. An unannotated Java reference field is `nullable: true`
+at `resolution: resolved`, exactly as a primitive is `nullable: false` at `resolution:
+resolved` — a consumer must handle null whether or not anyone wrote `@Nullable`, so the fact
+is certain, not a weaker claim awaiting confirmation. `resolution` is not a stand-in for "was
+this declared": [CONTEXT.md](../../CONTEXT.md) defines it as how certain a fact's *target* is,
+with candidate-set semantics (`narrowed` — several targets, set complete; `partial` — several
+targets, set incomplete) that a boolean has no analogue for, and `unresolved` is reserved for
+a language where no type exists to answer the question at all — it does not arise on the JVM.
+Whether anyone *declared* intent is a real, separate question, answered by counting annotated
+fields against unannotated ones — it does not need its own per-fact flag, and one would make
+every unannotated Java field look uncertain and downgrade every link built on it.
 
 **Kotlin's nullability is in its type system, not an annotation**, so it arrives through
 `ext.kotlin.nullable` (§6) — but the adapter **projects it into the shared field** rather than
@@ -264,6 +294,13 @@ declared shapes arrive in it already, because it is what schema formats natively
 Java `long` and an OpenAPI `integer/int64` meet in the middle as `integer/int64`. This
 vocabulary is a closed set, and it is the comparison level of DR-5's structural matching
 and FR-11's drift report — never Java types against spec types directly.
+
+**An enumeration reaches the wire as `enum`, never as a record.** A type reference cannot say
+which of the two it points at, so the answer comes from the referenced type's own
+`construct_kind` (§4) — generic fact data, which is why the language-blind half may read it.
+Expanded structurally the constants backing it become fields of a payload nobody sends; left
+as the `object` its reference calls it, it marks its owner open and is reported as a gap in a
+catalog that is missing nothing.
 
 **A code shape's `required` is derived from presence rules, not from nullability.**
 `declared_shape` fields carry it because schema formats state it outright — OpenAPI's

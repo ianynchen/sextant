@@ -1,7 +1,7 @@
 """The module architecture document (M07). Adds no information: every row
-comes from `report`, and every omission — unimplemented shape expansion,
-outbound endpoints, the call graph, a Maven POM the detector could not read
-correctly, or a catalog skipped by capability gating — is named rather than
+comes from `report`, and every omission — outbound endpoints, the call graph,
+a Maven POM the detector could not read correctly, a payload type nothing
+could expand, or a catalog skipped by capability gating — is named rather than
 silently absent (NFR-7)."""
 
 from sextant.application.ports.detector import ModuleModel
@@ -9,8 +9,10 @@ from sextant.application.resolve.pipeline import ResolveReport
 
 _GAPS = [
     (
-        "Shape expansion is not implemented: request and response types are named, "
-        "not expanded into fields."
+        "A payload that is a collection carries no shape: an endpoint holds one shape "
+        "identity for its request and one for its response, with nowhere to say what a "
+        "list holds, so those endpoints are reported with no contract at all rather "
+        "than with their element's."
     ),
     "Outbound endpoints are not implemented: this catalog is inbound only.",
     "The call graph is not implemented: there are no traces or sequence diagrams.",
@@ -79,6 +81,14 @@ def render_module_document(
     # a reader can act on: it says which part of the module this document is
     # silent about (FR-17, M03).
     lines += [f"- Not read, so nothing above accounts for it: `{source}`." for source in uncovered]
+    # Named one by one for the same reason: a payload type nothing could open
+    # is the gap between "this shape is the contract" and "this shape is as
+    # much of the contract as anyone could see", and only the name says which
+    # catalog entry would close it (FR-17).
+    lines += [
+        f"- Not expanded, so the shapes referring to it are open: `{symbol}`."
+        for symbol in report.unexpanded_types
+    ]
     if report.skipped_catalogs:
         lines += ["", "## Catalogs skipped", ""]
         for skipped in report.skipped_catalogs:
