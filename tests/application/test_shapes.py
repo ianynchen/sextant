@@ -22,6 +22,9 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.shapes import (
     ExpandedShapes,
+    _contracts_of,
+    _owns,
+    _rules_of,
     _scope_nullable,
     derive_endpoint_shapes,
     derive_shapes,
@@ -1130,6 +1133,192 @@ def test_an_outbound_row_with_no_handler_still_receives_contracts(tmp_path):
         "wire_type": "object",
     }
     workspace.close()
+
+
+# Task 7 review, Finding 1: direction ownership. `_owns` restricts a catalog
+# to the rows its own direction produced, because ordering alone cannot: an
+# outbound catalog's own wrapper vocabulary (Retrofit's `Call`, say) is no
+# more able to describe an inbound `ResponseEntity` row than an inbound
+# catalog's is able to describe an outbound `Call` row, and *some* catalog
+# always sorts first. `_OUTBOUND_CATALOG` below carries its own unrelated
+# annotation vocabulary (`@Client`/`@Get`, not `@Resource`/`@Post`) so its row
+# is a genuinely separate path from `_ENDPOINT_CATALOG`'s — the two never
+# merge (D02 §3 only merges one shared wire identity), which is what makes
+# each row's ownership unambiguous to assert against.
+_OUTBOUND_CALL = "com/acme/client/Call#"
+_OUTBOUND_OWNER = "com/acme/orders/clients/EdgeClient#"
+_OUTBOUND_CALLER = _OUTBOUND_OWNER + "call(sig_00000001)."
+
+_OUTBOUND_CATALOG = Catalog(
+    **{
+        **vars(_CATALOG),
+        "id": "invented-outbound-call",
+        "direction": "outbound",
+        # Retrofit's own shape: a `Call`-style wrapper and nothing else — no
+        # `ResponseEntity` entry, so this catalog has no idea how to open one.
+        "wrappers": [{"type": "com.acme.client.Call", "payload_arg": 0, "semantics": "async"}],
+        "matches": {
+            "type_annotation": "com/acme/client/Client#",
+            "request_body": {"annotation": "com/acme/client/Body#", "fallback": "none"},
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": ["value"],
+                "method_from": "method",
+                "all_methods": ["GET"],
+                "prefix_annotation": "com/acme/client/Path#",
+                "annotations": [{"fqn": "com/acme/client/Get#", "method": ["GET"]}],
+            },
+        },
+    }
+)
+
+
+def _outbound_caller_facts(root: Path, signature: dict) -> None:
+    """One hand-built outbound client method, on its own annotation
+    vocabulary so `_ENDPOINT_CATALOG`'s `@Resource`/`@Post` gate never sees
+    it (and `_OUTBOUND_CATALOG`'s `@Client`/`@Get` gate never sees
+    `_HANDLER`) — the fact the extractor would write for a Retrofit-style
+    interface method."""
+    caller = {
+        "kind": "symbol",
+        "document_id": "doc_client",
+        "symbol": _MODULE + _OUTBOUND_CALLER,
+        "construct_kind": "method",
+        "enclosing": _MODULE + _OUTBOUND_OWNER,
+        "visibility": "public",
+        "line_start": 0,
+        "line_end": 0,
+        "signature": signature,
+    }
+    _write(
+        root / "EdgeClient.jsonl",
+        _document("doc_client", "com/acme/orders/clients/EdgeClient.java"),
+        [
+            _type("doc_client", _OUTBOUND_OWNER),
+            caller,
+            _annotation("doc_client", _MODULE + _OUTBOUND_OWNER, "com/acme/client/Client#", {}),
+            _annotation(
+                "doc_client",
+                _MODULE + _OUTBOUND_CALLER,
+                "com/acme/client/Get#",
+                {"value": ["/edge-call"]},
+            ),
+        ],
+    )
+
+
+def _paired_direction_workspace(tmp_path: Path) -> DuckDbWorkspace:
+    """One inbound row (`ResponseEntity<OrderView>`, `_ENDPOINT_CATALOG`'s own
+    wrapper) beside one outbound row (`Call<OrderView>`, `_OUTBOUND_CATALOG`'s
+    own wrapper), resolved together — the shape both Finding 1(a) and 1(b)
+    need, from opposite ends."""
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(
+        root,
+        _signature(
+            returns=_ref(_RAW_ENVELOPE, "object", arguments=[_ref(ORDER_VIEW_SHAPE, "object")])
+        ),
+    )
+    _outbound_caller_facts(
+        root,
+        _signature(
+            returns=_ref(_OUTBOUND_CALL, "object", arguments=[_ref(ORDER_VIEW_SHAPE, "object")])
+        ),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [_ENDPOINT_CATALOG, _OUTBOUND_CATALOG], capabilities=set())
+    derive_endpoint_shapes(workspace, [_ENDPOINT_CATALOG, _OUTBOUND_CATALOG], capabilities=set())
+    return workspace
+
+
+def test_an_outbound_catalogs_own_wrapper_reaches_its_own_row(tmp_path):
+    """Finding 1(a): retrofit's wrappers were unreachable dead code under
+    ordering-as-correctness — an inbound catalog sorted first always answered
+    first, no matter what it could actually open. With direction ownership,
+    `_OUTBOUND_CATALOG`'s own `Call` wrapper is what describes its row, and
+    the response roots at the real payload, not the raw `Call` envelope."""
+    workspace = _paired_direction_workspace(tmp_path)
+    outbound_row = next(e for e in workspace.query("endpoints") if e["direction"] == "outbound")
+    descriptor = json.loads(outbound_row["response_shape"])
+    workspace.close()
+
+    assert descriptor["shape_id"] == ORDER_VIEW_SHAPE
+
+
+def test_an_inbound_catalogs_own_wrapper_still_reaches_its_own_row(tmp_path):
+    """Finding 1(b): the original bug's shape, kept green under the fix —
+    sharing a run with an outbound catalog whose wrapper list has never heard
+    of `ResponseEntity` must not leave the inbound row's own envelope
+    unopened."""
+    workspace = _paired_direction_workspace(tmp_path)
+    inbound_row = next(e for e in workspace.query("endpoints") if e["direction"] == "inbound")
+    descriptor = json.loads(inbound_row["response_shape"])
+    workspace.close()
+
+    assert descriptor["shape_id"] == ORDER_VIEW_SHAPE
+
+
+def test_an_outbound_catalog_cannot_claim_an_inbound_row_even_processed_first(tmp_path):
+    """Finding 1(c), made structural: the original bug's exact shape — an
+    outbound catalog with a narrower wrapper list running before the inbound
+    catalog that actually owns the row — called directly against
+    `_contracts_of` so no sort order is in play at all. `derive_endpoint_shapes`
+    always tries inbound catalogs first (readability, not correctness now);
+    this test proves the guarantee holds even when an outbound catalog goes
+    first, which is what `_owns` — not order — is responsible for."""
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(
+        root,
+        _signature(
+            returns=_ref(_RAW_ENVELOPE, "object", arguments=[_ref(ORDER_VIEW_SHAPE, "object")])
+        ),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [_ENDPOINT_CATALOG], capabilities=set())
+    endpoints = workspace.query("endpoints")
+
+    settled: dict[str, dict[str, str]] = {}
+    # The outbound catalog goes first — the original bug's ordering, and the
+    # opposite of what `derive_endpoint_shapes` now sorts to.
+    outbound_found = _contracts_of(
+        endpoints, _OUTBOUND_CATALOG, settled, _rules_of(_OUTBOUND_CATALOG), set(), []
+    )
+    assert outbound_found == {}
+    for owner, columns in outbound_found.items():
+        settled.setdefault(owner, {}).update(columns)
+
+    inbound_found = _contracts_of(
+        endpoints, _ENDPOINT_CATALOG, settled, _rules_of(_ENDPOINT_CATALOG), set(), []
+    )
+    for owner, columns in inbound_found.items():
+        settled.setdefault(owner, {}).update(columns)
+    workspace.close()
+
+    owner = _MODULE + _HANDLER
+    descriptor = json.loads(settled[owner]["response_shape"])
+    assert descriptor["shape_id"] == ORDER_VIEW_SHAPE
+
+
+def test_owns_matches_only_a_catalogs_own_direction_and_both_reads_as_inbound():
+    """`_owns` in isolation, every combination the closed set (D00) allows —
+    the predicate Finding 1's fix is built on, and the fastest thing to
+    mutate-check: reverting its body to `return True` fails exactly the three
+    assertions below that read `is False`."""
+    inbound = Catalog(**{**vars(_CATALOG), "direction": "inbound"})
+    outbound = Catalog(**{**vars(_CATALOG), "direction": "outbound"})
+
+    assert _owns(inbound, {"direction": "inbound"}) is True
+    assert _owns(outbound, {"direction": "outbound"}) is True
+    # A `both` row's surviving `handler_signature` is the handler's own
+    # (merge_endpoints.sql), so it is inbound-owned, never outbound-owned.
+    assert _owns(inbound, {"direction": "both"}) is True
+    assert _owns(outbound, {"direction": "both"}) is False
+    assert _owns(outbound, {"direction": "inbound"}) is False
+    assert _owns(inbound, {"direction": "outbound"}) is False
 
 
 def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path):

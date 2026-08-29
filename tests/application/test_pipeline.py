@@ -163,8 +163,17 @@ def test_an_outbound_endpoints_collection_response_resolves_to_the_real_client_i
     tmp_path: Path,
 ):
     """BillingClient's `List<OrderView> ...` is Phase 2B's outbound payoff:
-    the Feign catalog derives the call, and the same collection-descriptor
-    path that serves inbound endpoints roots it at the real element shape."""
+    the Feign catalog derives the *route* — on real bytecode, no other
+    catalog's annotations match `@FeignClient`/`@GetMapping` here. Which
+    outbound catalog's rules go on to compute the *descriptor* is not
+    pinned down by this route (Task 7 review, Finding 1: ownership is
+    direction-scoped, not catalog-scoped, so any outbound catalog may
+    answer any outbound row) — moot for this one, since a bare `List` needs
+    no wrapper any of the three outbound catalogs declares differently. What
+    this test actually exercises end to end is the collection-descriptor
+    path itself, on an outbound row, on real bytecode — the same path that
+    already serves inbound endpoints, now proven to reach one the module
+    calls rather than exposes."""
     workspace, report = _resolved_fixture(tmp_path)
     workspace.close()
     invoices = next(

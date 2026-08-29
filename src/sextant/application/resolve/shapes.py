@@ -187,12 +187,14 @@ def derive_endpoint_shapes(
     endpoints = workspace.query("endpoints")
     settled: dict[str, dict[str, str]] = {}
     unexpanded: list[str] = []
-    # Inbound catalogs first, same tie-break as derive_endpoints (D02 §3): an
-    # owner's signature is claimed by the first catalog that answers it
-    # (below), and an outbound catalog's own wrapper rules do not describe an
-    # inbound handler's envelope types — so an inbound owner must reach an
-    # inbound catalog before an outbound one gets a turn at it, or it settles
-    # for whatever an unrelated catalog's narrower wrapper list left unopened.
+    # Correctness comes from `_owns` below, not from this order: a catalog
+    # only ever describes the rows its own direction produced (a `both` row
+    # reads as inbound, since the signature surviving on it is the handler's
+    # — there is no merge here, `merge_endpoints.sql` already ran, over in
+    # `derive_endpoints`, before this pass starts). What this order still
+    # decides is which *same-direction* catalog wins when two of them reach
+    # the same owner — inbound before outbound only for a stable, named tie-
+    # break (filename), same as `derive_endpoints` uses for its own ordering.
     ordered = sorted(
         catalogs, key=lambda catalog: (catalog.direction != "inbound", str(catalog.source))
     )
@@ -255,7 +257,9 @@ def _contracts_of(
     referenced: list[str],
 ) -> dict[str, dict[str, str]]:
     """The descriptors one catalog can name for each endpoint's owner, leaving
-    out every column an earlier catalog already answered.
+    out every column an earlier catalog already answered — restricted, first,
+    to the rows this catalog actually owns (`_owns`), so a catalog is never
+    asked to interpret a signature its own rules never governed.
 
     Keyed on the owner rather than on the endpoint's wire identity because the
     signature is what the shapes come from: one handler mapped to every
@@ -270,6 +274,18 @@ def _contracts_of(
     """
     found: dict[str, dict[str, str]] = {}
     for endpoint in endpoints:
+        # Direction ownership (Task 7 review, Finding 1): a catalog's
+        # wrapper/serialization rules describe only the rows its own
+        # direction produced. Ordering alone is not this — two catalogs on
+        # opposite directions each have rows the other never derived, and an
+        # outbound catalog's narrower wrapper list (say, Retrofit's `Call`
+        # instead of `ResponseEntity`) is exactly as wrong describing an
+        # inbound row as an inbound catalog's is describing an outbound one.
+        # A `both` row is inbound-owned: `merge_endpoints.sql` keeps the
+        # handler's own `handler_signature` on it, so only the inbound side's
+        # rules ever ran against that signature.
+        if not _owns(catalog, endpoint):
+            continue
         owner = str(endpoint["handler"] or endpoint["caller"] or "")
         if not owner or owner in found:
             continue
@@ -297,6 +313,24 @@ def _contracts_of(
         if kept:
             found[owner] = kept
     return found
+
+
+def _owns(catalog: Catalog, endpoint: dict[str, object]) -> bool:
+    """Whether `catalog`'s rules are the ones that produced `endpoint`.
+
+    A catalog derives rows of exactly its own declared direction
+    (`derive_endpoints.sql` binds `$direction` straight from the catalog), so
+    a same-direction row is this catalog's to describe. A `both` row is the
+    one exception: `merge_endpoints.sql` folds the outbound duplicate into
+    the inbound row and keeps the *inbound* side's `handler_signature`, so
+    only an inbound catalog's wrapper and body rules were ever run against
+    it — an outbound catalog never touched that signature and must not
+    describe it now.
+    """
+    direction = str(endpoint["direction"])
+    return direction == catalog.direction or (
+        direction == "both" and catalog.direction == "inbound"
+    )
 
 
 def _body_type(signature: dict[str, Any], catalog: Catalog) -> dict[str, Any] | None:
