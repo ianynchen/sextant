@@ -136,13 +136,20 @@ catalog.
 
 **5b. Expand the shapes**, rooted at exactly those type references — after **unwrapping
 envelopes by catalog rule** ([D02](D02-catalog-schema.md) §2a): `Mono<ResponseEntity<T>>`
-roots at `T`, the unwrapping chain is recorded on the endpoint, and its `semantics`
-(`async`, `streaming`) feed protocol reclassification and the FR-14 findings. An
-undeclared wrapper is left unwrapped and reported, never guessed at. Fields resolved to
-**wire identity** — the serialised name after any naming strategy or explicit annotation, or
-the field number where the format makes a number the identity. Required-ness comes from
-nullability, validation annotations and Kotlin metadata. Expansion follows nested types
-transitively, and stops at platform types.
+roots at `T`, and the `semantics` peeled on the way there (`async`, `optional`,
+`http_envelope`) are what settle presence, protocol reclassification and the FR-14 findings.
+That chain is consumed where it is produced rather than stored on the endpoint: it describes
+the route to the payload, not the contract, and everything it decides already has a column of
+its own — a second copy could only ever disagree with them. An undeclared wrapper is left
+unwrapped and reported, never guessed at. Fields resolved to **wire identity** — the
+serialised name after any naming strategy or explicit annotation, or the field number where
+the format makes a number the identity. **Required-ness comes from presence machinery and
+from nothing else** ([D00](D00-fact-schema.md) §5b): a wrapper the catalog declares
+`optional` is what makes a field omittable. A nullability annotation answers the other
+question — Bean Validation's `@NotNull` constrains the value at validation time and says
+nothing about whether the field may be absent — so reading one as a presence rule publishes a
+`required` nobody declared. Expansion follows nested types transitively, and stops at
+platform types.
 
 Where a format publishes compatibility rules, those rules are applied rather than
 reimplemented. A hand-rolled approximation would disagree with what the runtime actually

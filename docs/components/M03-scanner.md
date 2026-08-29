@@ -48,7 +48,7 @@ finding fewer endpoints.
 | Capability | Gates |
 |---|---|
 | `annotation_args` | Every annotation-driven framework |
-| `type_annotations` | Nullability, and therefore `required` on contract fields |
+| `type_annotations` | `nullable` on contract fields, per reference — never `required`, which comes from presence machinery ([D00](D00-fact-schema.md) §5b) |
 | `string_constants` | Topic and URL literals |
 | `invokedynamic` | Lambdas, and therefore functional routing |
 | `constant_propagation` | A URL assembled from a constant and a literal |
