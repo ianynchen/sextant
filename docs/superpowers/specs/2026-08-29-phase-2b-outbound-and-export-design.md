@@ -45,6 +45,17 @@ framework name enters the engine:
    `request_body: {annotation: <fqn>, fallback: sole_unannotated | none}`.
    Spring inbound and `@HttpExchange`: `@RequestBody`, no fallback. Retrofit: `@Body`, no
    fallback. Feign (Spring contract): `@RequestBody` with `sole_unannotated` fallback.
+4. **The type-level annotation declares its own attribute lists** — `prefix_from` (which
+   attributes mean URL prefix, in alias order) and `peer_from` (which mean the peer).
+   The engine today reads type-level prefixes through the same `path_from` alias list that
+   serves method mappings; that works for `@RequestMapping` (where `value`/`path` are
+   aliases meaning *path*) and is silently wrong for `@FeignClient` (where `value` aliases
+   **`name`** — the service id — and only `path` means prefix): the service name would
+   become a path prefix on every Feign endpoint. Catalogs declare:
+   `@RequestMapping` → `prefix_from: [value, path]`; `@FeignClient` →
+   `prefix_from: [path]`, `peer_from: [name, value]`; `@HttpExchange` →
+   `prefix_from: [value, url]`. Type-level and method-level annotations are different
+   roles; the shared alias list conflated them by the luck of `@RequestMapping`'s aliasing.
 
 **Three new catalogs:** `spring-cloud-openfeign.yml`, `spring-http-interface.yml`,
 `retrofit.yml` — each `direction: outbound`, `style: annotation_driven`, with its own
@@ -60,9 +71,22 @@ Detect coordinates: `org.springframework.cloud:spring-cloud-openfeign-core`,
   or the authority when `url=` is a literal. Retrofit and `@HttpExchange` leave it NULL
   (base URLs live in builder code — the call-site phase); the named gap
   `client_base_addresses_not_resolved` covers those NULLs.
+- **Endpoint identity is minted WITHOUT direction** (D01 amendment, decided after
+  adversarial review): D01 §3 currently hashes *(module, protocol, direction, wire
+  identity)*, but D02 §3's merge makes direction **mutable** — an exposed path gains a
+  client and becomes `both` — and mutable state does not belong in identity, by D01's own
+  argument for excluding the handler ("a refactor that moves the handler must not orphan
+  the curations… the wire contract did not change"). Identity becomes
+  *(module, protocol, wire identity)*. The rule is spec'd-but-unimplemented and nothing
+  references endpoint identities yet, so this is the cheapest moment it will ever be.
+- **`caller`** (nullable TEXT): the client-side method symbol. A merged `both` row keeps
+  `handler` (server side) **and** `caller` (client side) — D01's "handler or caller"
+  becomes "handler and/or caller". An outbound-only row carries `caller` with `handler`
+  NULL. The shape columns of a `both` row serve both directions at once: what the client
+  sends is what the server receives.
 - **D02 §3 inbound/outbound merge**: a wire identity a module both exposes and calls
-  becomes one endpoint with `direction: both`. 2B implements it inside the existing dedup
-  discipline; the fixture exercises it end-to-end.
+  becomes one endpoint with `direction: both`, handler and caller both retained. The
+  fixture exercises it end-to-end.
 
 ## 2. Endpoint payload descriptors and shape reuse
 
@@ -127,8 +151,9 @@ plain data (the `metadata.py` pattern — egress never touches the Workspace por
 - `module`, `source.repo` (git remote), `commit`, `module_commit` (last commit touching the
   module's own path, computed locally).
 - `producer`: the three version fields **as they are** (0.1.0 / 1.0.0 / 1.0.0 until the
-  user's functional-gate bump), scanner id/version, `catalog_hash` (sha256 over the sorted
-  loaded catalog files — computed for the first time), `redaction_set_hash` from documents.
+  user's functional-gate bump), scanner id/version, `catalog_hash` — pinned as sha256 over
+  the sorted *(relative filename, bytes)* pairs of the loaded catalog files, computed for
+  the first time — and `redaction_set_hash` from documents.
 - `environments: []` (nothing resolves profiles yet); `coverage` incl. `partial`; `gaps`
   carried verbatim from metadata.
 - `contents.tables` lists only what travelled. The sequence-diagram tables of D06 §5
@@ -136,8 +161,20 @@ plain data (the `metadata.py` pattern — egress never touches the Workspace por
   named by the existing gap entries. A 2B bundle supports a contract map, not sequences,
   and says so.
 
+**Facts-as-Parquet schema (pinned):** the raw-fact rows *(kind, document_id, payload as a
+JSON string column)*, partitioned per source file per D06 §2 — honest, barely columnar,
+sufficient until M05 states a columnar need per fact kind.
+
 **Determinism (NFR-1 at the boundary):** fixed row order, pinned compression, no
-timestamps; a test exports twice and byte-compares bundles.
+timestamps; a test exports twice and byte-compares bundles. Risk note: byte-identity
+additionally depends on DuckDB's Parquet writer being stable within one installed version
+(it embeds a `created_by` string) — a failure of this test on one machine reads as
+environment drift, and its assertion message says so.
+
+**Detect-coordinate note:** `spring-http-interface.yml`'s coordinate (`spring-web`)
+matches every Spring module — a weak discriminator, moot today because catalog-module
+matching is not enforced (`catalog_module_matching_not_implemented`); the annotation match
+is what actually gates. Recorded so nobody later treats the coordinate as the filter.
 
 **D06 open decisions resolved for 2B:** bundle is a **directory** (publishing is the
 caller's business; the archive question waits); `--what` deferred (always export facts and
@@ -167,10 +204,21 @@ analyze → outbound endpoints with descriptors and peer → export → bundle e
 fields correct, a table read back from Parquet equals the workspace query, two exports
 byte-identical.
 
-**Gap ledger rotation:** `outbound_endpoints_not_implemented` retires (no longer true),
-replaced by `call_site_clients_not_read` and `http_exchange_inbound_use_not_detected`,
-plus `client_base_addresses_not_resolved`. Each paired in `document.py`'s `_GAPS` lockstep.
-`metadata.json`'s `endpoints.outbound` counts populate.
+**Gap ledger rotation (exhaustive — a broad label must never narrow silently):**
+`outbound_endpoints_not_implemented` retires (it would now be false, and a false gap
+misleads as badly as a missing one). Its coverage is replaced label-for-label so every
+remaining not-yet stays named, each with a scheduled death:
+
+- `call_site_clients_not_read` — RestTemplate/WebClient/OkHttp; dies in the call-site phase.
+- `messaging_endpoints_not_read` — listeners **and** producers (Kafka/JMS/SQS, both
+  directions); dies in 2C. This also fixes a pre-existing hole: messaging *inbound* was
+  never named in any phase.
+- `http_exchange_inbound_use_not_detected` and `client_base_addresses_not_resolved` —
+  2B-specific.
+
+Boundary: gaps name the roadmap's known not-yets a Spring Boot reader would expect —
+recorded scope *decisions* (e.g. SOAP, per COVERAGE) are not gaps. Each entry paired in
+`document.py`'s `_GAPS` lockstep. `metadata.json`'s `endpoints.outbound` counts populate.
 
 ## 5. The module document blueprint (M07 amendment)
 
@@ -220,11 +268,20 @@ constraints recorded at decision time:
 4. First network + credential dependency: API keys, model choice, an approved dependency
    (ARCHITECTURE §9) — each needs its own decision when the phase is planned.
 
-## Self-review
+## Self-review and adversarial round
 
-Checked for placeholders (none), internal consistency (descriptor grammar identical across
-§2 and §5; gap names identical across §4 and §5), scope (single plan; the exporter and the
-outbound engine are independent workstreams inside it), and ambiguity (the body-parameter
-rule and NULL-descriptor meaning are stated exactly; the merge is defined by wire
-identity). One deliberate openness: exact Mermaid layout of the contract class diagram is
-the implementer's, bounded by the emitter-testing rule in §5.
+An initial self-review passed too kindly; a second, adversarial pass against the engine
+code and upstream specs found three real issues, resolved with the user one by one:
+
+- **I1** — D01's direction-in-identity contradicted D02 §3's merge, and a merged row had
+  nowhere to keep both handler and caller. Resolved (option A): identity without
+  direction; nullable `caller` column. §1 carries the full reasoning.
+- **I2** — the shared `path_from` alias list would have read `@FeignClient`'s service
+  name as a URL prefix. Resolved (option A): `prefix_from`/`peer_from` split, §1 item 4.
+- **I3** — retiring the broad outbound gap label would have left messaging unnamed.
+  Resolved (option A): exhaustive rotation, §4.
+
+Also pinned: the facts-Parquet schema (I4) and the `catalog_hash` definition (I5); risk
+notes recorded for Parquet writer stability (I6) and the weak `spring-web` detect
+coordinate (I7). Remaining deliberate openness: exact Mermaid layout of the contract class
+diagram is the implementer's, bounded by the emitter-testing rule in §5.
