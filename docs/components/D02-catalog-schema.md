@@ -158,24 +158,78 @@ OpenFeign, Spring 6 `@HttpExchange`, and Retrofit — outbound.
 
 One call carries the whole declaration. Arguments are addressed by position or name.
 
+```yaml
+style: single_call
+matches:
+  owner: org.springframework.web.client.RestTemplate
+  methods:
+    - { name: postForObject, http_method: POST, url_arg: 0, body_arg: 1, response_arg: 2 }
+    - { name: getForObject,  http_method: GET,  url_arg: 0, response_arg: 1 }
+    - { name: exchange,      method_arg: 1,     url_arg: 0, body_arg: 2, response_arg: 3 }
+```
+
+Each `methods` row is `{name, http_method | method_arg, url_arg, body_arg?, response_arg?}`.
+**`http_method` is a literal when the catalog already knows the verb** — `postForObject` is
+always a POST, so the catalog states it once. **`method_arg` is a position when the call
+site carries it instead** — `exchange`'s verb is its own `HttpMethod` argument, an
+`enum`-kind entry ([D00](D00-fact-schema.md) §5), so the catalog names the slot and the
+engine reads the resolved value per call rather than assuming one. `body_arg` and
+`response_arg` are optional: `getForObject` has no request body, and a `void`-returning
+call has no response to root.
+
+Per matching call site: `path` is the url argument's string literal — the template
+verbatim, placeholders and all, because the template is the wire identity — and
+**`resolution` is `resolved` when it did and `unresolved` when it did not; the row still
+derives either way**, because "this method calls something over HTTP" is true and useful
+on its own. `caller` is the calling method symbol; `peer` is NULL (§2d); `direction` is
+`outbound`; `evidence` is `compiler`. Rows enter the same `endpoints` table as every other
+style, merging and counting the same way.
+
 ### `fluent`
 
 The request is assembled across several calls, so one value must be followed through a
-method body.
+method body — a join in the derivation over each `result → receiver` link a `call_site`
+fact carries ([D00](D00-fact-schema.md) §5), read within one method.
 
 ```yaml
 style: fluent
 matches:
-  root: { owner: okhttp3.Request$Builder, method: "<init>" }
+  roots:
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: get,  captures: { http_method: GET } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: post, captures: { http_method: POST } }
   steps:
-    - { method: url,  captures: { url: arg0 } }
-    - { method: post, captures: { http_method: POST, body: arg0 } }
-  terminal: build
-  execute: { owner: okhttp3.OkHttpClient, method: newCall }
+    - { method: uri,        captures: { url: arg0 } }
+    - { method: bodyValue,  captures: { body: arg0 } }
+    - { method: body,       captures: { body: arg0 } }
+    - { method: bodyToMono, captures: { response: arg0 } }
+    - { method: bodyToFlux, captures: { response: arg0, response_is: array } }
+  terminal: [retrieve, exchange]
 ```
 
+**`roots` replaces the single `root`** — a builder library commonly has several
+verb-carrying entry points, each seeding its own `captures`, so this is a list rather than
+one fixed starting point. **`steps` are owner-free**: a step matches by method name alone,
+because the same builder-shaped call sequence appears on more than one concrete type across
+a library's surface and an owner gate would just make the catalog repeat itself. **`terminal`
+is a list**, for the same reason `roots` is — WebClient reaches its response two ways
+(`retrieve` and `exchange`), and both end the chain.
+
+Per chain reaching a terminal: fold captures in order, last wins, and derive one endpoint —
+verb from the root, path from the url capture (or `unresolved`, exactly as `single_call`'s
+rule above), response from a class literal, a `type_carrier` instance, or `response_is:
+array` (§2h), request via §2h's rooting. Unmatched steps pass through uncaptured, and
+**a builder that never reaches a terminal derives nothing** — the true answer, not a gap:
+a `Request.Builder` built and thrown away made no call. Two chains sharing a prefix each
+derive on their own; value ids ([D00](D00-fact-schema.md) §5) keep interleaved builders
+apart where adjacency heuristics would fabricate a link between two unrelated calls that
+happen to run close together.
+
 **This style requires `chain_reconstruction`** and therefore gates every builder-based
-client library. It is the reason that capability matters.
+client library. It is the reason that capability matters. Catalogs on this engine:
+`spring-webclient.yml`, `spring-restclient.yml` (the synchronous twin), `okhttp.yml`
+(`Request$Builder` root, `url`/`post` steps, a `build` terminal joined to `newCall` through
+the argument `source` id — [D00](D00-fact-schema.md) §5's `arguments[].source`, not a
+separate catalog field).
 
 ### `interface_implementation`
 
@@ -493,6 +547,40 @@ extractor converts what the **language** leaves no choice about — primitives, 
 marked open, the type reference is kept, and [M04](M04-resolver.md) reports the type that
 stopped it — so the catalog grows from observation rather than from a structural guess about
 what looks "simple".
+
+---
+
+## 2h. Type carriers and call wrappers
+
+Two more argument-resolution declarations, both read through the `instance` argument kind
+([D00](D00-fact-schema.md) §5) — the concrete type a `NEW` or constructor call produced at
+the call site, never the declared parameter type:
+
+```yaml
+type_carriers: [org.springframework.core.ParameterizedTypeReference]
+
+call_wrappers:
+  - { type: org.springframework.http.HttpEntity, payload_ctor_arg: 0 }
+```
+
+**`type_carriers` names a supertype whose own generic argument is the payload** — a
+different shape from §2a's `wrappers`, which name an envelope a payload sits *inside*.
+`new ParameterizedTypeReference<List<OrderView>>() {}` is an anonymous subclass, and the
+generic supertype reference [D00](D00-fact-schema.md) §5a's class symbol fact carries is
+exactly what names `List<OrderView>` back out. When a response or request `instance`
+argument's type subtypes a declared `type_carrier`, the engine resolves the payload through
+that supertype reference instead of through the declared parameter type — the same
+array-of-shape descriptor already built for a directly-typed response, reached one hop
+later. "PTR" is named here, in the catalog, and never in the engine.
+
+**`call_wrappers` names a constructor argument that holds the real payload.**
+`new HttpEntity<>(orderRequest)` is itself a `call_site` fact — a constructor invoke — and
+the outer call's `instance` argument that names `HttpEntity` carries a `source` id pointing
+at that constructor's `result` ([D00](D00-fact-schema.md) §5). `payload_ctor_arg: 0` tells
+the engine which of the constructor's own `arguments` is the payload; the engine follows
+exactly that one hop and stops. Beyond one hop, or where no `call_wrappers` entry matches
+the `instance` type, the body stays `unresolved` — an envelope Sextant does not know is not
+one worth guessing through.
 
 ---
 

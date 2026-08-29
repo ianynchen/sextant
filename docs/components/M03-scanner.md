@@ -48,6 +48,7 @@ finding fewer endpoints.
 | Capability | Gates |
 |---|---|
 | `annotation_args` | Every annotation-driven framework |
+| `typed_signatures` | Structured parameter and return types — the field a body-parameter or `response_arg` join reads instead of a positional guess ([D00](D00-fact-schema.md) §5a) |
 | `type_annotations` | `nullable` on contract fields, per reference — never `required`, which comes from presence machinery ([D00](D00-fact-schema.md) §5b) |
 | `string_constants` | Topic and URL literals |
 | `invokedynamic` | Lambdas, and therefore functional routing |
@@ -55,6 +56,20 @@ finding fewer endpoints.
 | `chain_reconstruction` | The whole `fluent` style |
 | `control_flow` | Honest sequence diagrams |
 | `kotlin_metadata` | Nullability and data-class shapes |
+| `call_site` | Every call-site-driven engine — [D02](D02-catalog-schema.md)'s `single_call` and `fluent` both |
+
+**Seven of the scanner's ten designed capabilities are now shipped.** `annotation_args`,
+`typed_signatures`, `type_annotations` and `kotlin_metadata` since Phase 2A/2B; `call_site`,
+`string_constants` and `chain_reconstruction` from Phase 2C's dataflow pass (below).
+**`chain_reconstruction` means exactly this: receiver and result value ids are present on
+`call_site` facts** ([D00](D00-fact-schema.md) §5) — a `fluent` catalog's steps are a join
+over those links, nothing more. `invokedynamic` stays undeclared: an indy call site is
+still recorded — a `call_site` fact exists for it — but its arguments are honestly
+`unresolved` rather than decompiled (Java 9+ string concatenation compiles to indy, and
+refusing to guess it is the point); a lambda's own bootstrap handle is captured separately,
+through the `lambda` argument kind ([D00](D00-fact-schema.md) §5), wherever a lambda or
+method reference is passed as an argument. `constant_propagation` and `control_flow` remain
+unshipped, each for the reason recorded below.
 
 ## Inputs
 
@@ -70,7 +85,7 @@ Facts as JSONL, one file per **source file**, plus the uncovered-source list.
 ### The JVM scanner
 
 ASM over class files. See [ARCHITECTURE.md](../ARCHITECTURE.md) DR-1 for why this rather
-than a source indexer. Two of its eight capabilities are hard, and the rest are
+than a source indexer. Two of its ten capabilities are hard, and the rest are
 straightforward.
 
 ### The hard part: control flow
