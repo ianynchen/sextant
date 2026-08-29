@@ -780,8 +780,10 @@ wrappers:
 
 nullability:
   nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull]
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
   scope:
     - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
 
@@ -797,6 +799,19 @@ known_types:
   - { type: java.math.BigDecimal, wire: number }
   - { type: java.util.UUID,       wire: string, format: uuid }
 ```
+
+**The JetBrains entries are not only for JetBrains-annotated Java.** Verified with `javap`
+against the compiled fixture: the Kotlin compiler emits
+`org.jetbrains.annotations.NotNull` / `@Nullable` directly onto fields as **CLASS-retention**
+annotations, for Java interop — `val id: String` gets `@NotNull`, `val note: String?` gets
+`@Nullable`. Task 4 already reads the invisible retention table where those land.
+
+So **Kotlin nullability arrives through the ordinary annotation path**, and `@Metadata`
+stops being the only source for it. That matters operationally: `kotlin-metadata-jvm`'s
+supported version always trails the compiler's, and a module built with a newer Kotlin makes
+the metadata read fail. With these two entries present, such a module still gets correct
+nullability from the annotations — the metadata read becomes a cross-check rather than a
+single point of failure.
 
 - [ ] **Step 2: Raise `requires` to match what the catalog now depends on**
 
