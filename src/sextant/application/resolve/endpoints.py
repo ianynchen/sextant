@@ -35,12 +35,26 @@ def derive_endpoints(
     workspace.derive("endpoints_reset")
     skipped = []
     for catalog, engine in engines:
-        missing = tuple(sorted(set(catalog.requires) - capabilities))
+        missing = missing_capabilities(catalog, capabilities)
         if missing:
             skipped.append(SkippedCatalog(catalog.id, missing))
             continue
         engine(workspace, catalog)
     return skipped
+
+
+def missing_capabilities(catalog: Catalog, capabilities: set[str]) -> tuple[str, ...]:
+    """What a catalog requires and this scan does not provide, in a stable
+    order.
+
+    Shared rather than restated, because every pass that reads a catalog must
+    gate on exactly the same answer. A pass that gated differently would run
+    against facts the scanner never produced and quietly report nothing — the
+    silent degradation capability gating exists to prevent (M04, FR-17) — and
+    a catalog already reported as skipped must not be reported a second time
+    for the same reason.
+    """
+    return tuple(sorted(set(catalog.requires) - capabilities))
 
 
 def _engine_for(catalog: Catalog) -> "Callable[[Workspace, Catalog], None]":

@@ -49,8 +49,10 @@ _NAMED_QUERIES = {
 _NAMED_DERIVATIONS = {
     "endpoints": "derive_endpoints.sql",
     "endpoints_reset": "reset_endpoints.sql",
+    "endpoint_contracts": "derive_endpoint_contracts.sql",
     "shapes": "derive_shapes.sql",
     "shape_fields": "derive_shape_fields.sql",
+    "shapes_reset": "reset_shapes.sql",
 }
 
 

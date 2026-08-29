@@ -1,9 +1,12 @@
 import subprocess
 from pathlib import Path
 
+from shape_helpers import ORDER_REQUEST, shape_fields_of
+
+from sextant.application.ports.catalogs import Catalog, CatalogSource
 from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve.endpoints import SkippedCatalog
-from sextant.application.resolve.pipeline import resolve
+from sextant.application.resolve.pipeline import ResolveReport, resolve
 from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -18,7 +21,24 @@ FIXTURE = REPO / "fixtures" / "orders-service"
 CATALOGS = catalogs_dir()
 
 
-def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(tmp_path: Path):
+class _Catalogs:
+    """A CatalogSource over catalogs a test built by hand — the seam D02 §6
+    exists for, used here so a test can put an invented catalog beside a
+    shipped one without writing a YAML file."""
+
+    def __init__(self, catalogs: list[Catalog]) -> None:
+        self._catalogs = catalogs
+
+    def load(self) -> list[Catalog]:
+        return self._catalogs
+
+
+def _resolved_fixture(
+    tmp_path: Path, catalogs: CatalogSource | None = None
+) -> tuple[DuckDbWorkspace, ResolveReport]:
+    """Compile, scan and resolve the fixture — the whole path, on real
+    bytecode. The workspace is handed back open: the rows the report points at
+    are read from it, and closing it here would take them with it."""
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     facts = tmp_path / "facts"
     AsmScanner(JAR).scan(
@@ -34,9 +54,18 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
     report = resolve(
         workspace,
         facts,
-        YamlCatalogSource(catalogs_dir()),
+        catalogs or YamlCatalogSource(CATALOGS),
         {"annotation_args", "typed_signatures", "type_annotations"},
     )
+    return workspace, report
+
+
+def _spring_web() -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+
+
+def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(tmp_path: Path):
+    workspace, report = _resolved_fixture(tmp_path)
     workspace.close()
 
     routes = {(e["method"], e["path"]) for e in report.endpoints}
@@ -45,6 +74,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
         ("GET", "/v1/orders/{id}"),
         ("GET", "/v1/orders/{id}/{view}"),
         ("GET", "/v1/orders"),
+        # The one endpoint whose request and response are both real payloads:
+        # `OrderRequest` in, `ResponseEntity<OrderView>` out.
+        ("POST", "/v1/orders/detailed"),
         # OrderPageController: a `@Controller`, not `@RestController` — the
         # spring-mvc catalog's own two routes, prefixed by its class-level
         # `@RequestMapping`.
@@ -66,8 +98,115 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
     # disambiguate them (D00 §1) makes this join multiply instead of match.
-    assert len(report.endpoints) == 17
+    assert len(report.endpoints) == 18
     assert report.skipped_catalogs == []
+
+
+def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_path: Path):
+    workspace, report = _resolved_fixture(tmp_path)
+    endpoint = next(
+        e for e in report.endpoints if e["method"] == "POST" and e["path"] == "/v1/orders/detailed"
+    )
+
+    assert endpoint["request_shape"] == "com/acme/orders/contracts/OrderRequest#"
+    fields = shape_fields_of(workspace, endpoint["request_shape"])
+    assert "customer_id" in [f["wire_name"] for f in fields]
+    # The response is a declared envelope around the payload; the shape must
+    # root at what the envelope holds, or the wrapper declarations did nothing.
+    assert endpoint["response_shape"] == "com/acme/orders/contracts/OrderView#"
+    workspace.close()
+
+
+def test_an_endpoint_whose_response_is_not_a_payload_carries_no_shape(tmp_path: Path):
+    """A scalar response has no field list to compare, and a shape row invented
+    for it would be noise presented as fact (D01 §5). A collection has one, but
+    the column holds a single shape identity with nowhere to say what a list
+    holds — the gap `collection_payloads_carry_no_shape` names."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    rendered = next(e for e in report.endpoints if e["path"] == "/orders" and e["method"] == "GET")
+    listing = next(
+        e for e in report.endpoints if e["path"] == "/v1/orders" and e["method"] == "GET"
+    )
+
+    assert rendered["response_shape"] is None
+    # Nothing annotated the request body either, so there is no root at all.
+    assert rendered["request_shape"] is None
+    assert listing["response_shape"] is None
+
+
+def test_the_report_names_the_types_expansion_could_not_open(tmp_path: Path):
+    """A catalog grows from observation, so a type nothing could expand is
+    reported by name (FR-17) — a count cannot be acted on."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+
+    assert "org/springframework/http/HttpHeaders#" in report.unexpanded_types
+    assert [s["shape_id"] for s in report.shapes]
+
+
+def test_a_catalog_skipped_by_capability_gating_contributes_no_shapes(tmp_path: Path):
+    """The shape pass gates on exactly what the endpoint pass gates on. This
+    catalog runs first and would rename nothing and ignore nothing, so if it
+    reached the payload at all it would settle `OrderRequest` with its source
+    field names — a shape produced by a catalog the run already reported as
+    skipped."""
+    ungated = Catalog(
+        **{
+            **vars(_spring_web()),
+            "id": "invented-demanding",
+            "requires": ("constant_propagation",),
+            "serialization": {},
+        }
+    )
+    workspace, report = _resolved_fixture(tmp_path, _Catalogs([ungated, _spring_web()]))
+    names = [f["wire_name"] for f in shape_fields_of(workspace, ORDER_REQUEST)]
+    workspace.close()
+
+    assert SkippedCatalog("invented-demanding", ("constant_propagation",)) in (
+        report.skipped_catalogs
+    )
+    assert "customer_id" in names
+    assert "internalTrace" not in names
+
+
+def test_a_catalog_that_names_no_request_body_annotation_claims_no_request_shape(
+    tmp_path: Path,
+):
+    """Which annotation marks the request payload is framework knowledge, so a
+    catalog that declares none contributes no request shapes — inferring one
+    from a parameter's position would be a guess presented as an observation."""
+    silent = Catalog(
+        **{
+            **vars(_spring_web()),
+            "matches": {
+                key: value
+                for key, value in _spring_web().matches.items()
+                if key != "request_body_annotation"
+            },
+        }
+    )
+    workspace, report = _resolved_fixture(tmp_path, _Catalogs([silent]))
+    workspace.close()
+    endpoint = next(e for e in report.endpoints if e["path"] == "/v1/orders/detailed")
+
+    assert endpoint["request_shape"] is None
+    # The response is rooted from the return type, which no catalog field
+    # names, so it is unaffected.
+    assert endpoint["response_shape"] == "com/acme/orders/contracts/OrderView#"
+
+
+def test_two_runs_agree_on_every_shape_and_every_field(tmp_path: Path):
+    """`content_hash` is derived from the ordered field list, so two runs that
+    disagree on field order are two different answers about the same type
+    (NFR-1) — and DR-5 compares the answer, not the type."""
+    first, second = _resolved_fixture(tmp_path / "one"), _resolved_fixture(tmp_path / "two")
+
+    assert first[0].query("shapes") == second[0].query("shapes")
+    assert first[0].query("shape_fields") == second[0].query("shape_fields")
+    assert first[1].unexpanded_types == second[1].unexpanded_types
+    first[0].close()
+    second[0].close()
 
 
 def test_resolve_reports_the_skip_instead_of_crashing_when_no_catalog_is_satisfied(

@@ -30,6 +30,8 @@ REPORT = ResolveReport(
         }
     ],
     coverage={"documents": 4, "partial_documents": 0},
+    shapes=[{"shape_id": "com/acme/C#", "content_hash": "md5:0", "open": True}],
+    unexpanded_types=("org/example/Opaque#",),
 )
 
 
@@ -40,11 +42,24 @@ def test_metadata_records_the_commit_so_staleness_is_visible(tmp_path: Path):
     assert written["coverage"]["documents"] == 4
 
 
+def test_metadata_names_every_type_expansion_could_not_open(tmp_path: Path):
+    """The count says how much was expanded; only the names say what was not,
+    and a count cannot be acted on (FR-17, the same rule as `uncovered`)."""
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+    assert written["shapes"]["count"] == 1
+    assert written["shapes"]["unexpanded_types"] == ["org/example/Opaque#"]
+
+
 def test_document_lists_every_endpoint_and_names_its_gaps():
     text = render_module_document(MODULE, REPORT, "a3f91c")
     assert "GET /v1/orders" in text
     assert "a3f91c" in text
-    assert "shape expansion" in text.lower()
+    assert "call graph" in text.lower()
+    # Expansion is implemented, so the blanket gap is gone; what remains is
+    # the one thing a reader can act on — the type that stopped it.
+    assert "shape expansion is not implemented" not in text.lower()
+    assert "org/example/Opaque#" in text.split("## Known gaps", 1)[1]
 
 
 def test_document_is_identical_when_rendered_twice_from_the_same_report():

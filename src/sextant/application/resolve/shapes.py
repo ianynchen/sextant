@@ -1,5 +1,6 @@
-"""Roots a shape by unwrapping declared envelope wrappers (D02 §2a), then
-expands the rooted type into wire fields (D2).
+"""Roots a shape by unwrapping declared envelope wrappers (D02 §2a), expands
+the rooted type into wire fields (D2), and points each endpoint at the shapes
+its handler declares (D01 §3 Contracts).
 
 A return or parameter type reference is often not the wire payload itself —
 it is an envelope around it. Which types are envelopes, and where the payload
@@ -22,6 +23,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.endpoints import missing_capabilities
 
 
 @dataclass(frozen=True)
@@ -145,6 +147,137 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     workspace.derive("shape_fields", fields=fields)
     workspace.derive("shapes", shapes=shapes)
     return ExpandedShapes(unexpanded_types=tuple(unexpanded))
+
+
+def derive_endpoint_shapes(
+    workspace: Workspace, catalogs: list[Catalog], capabilities: set[str]
+) -> ExpandedShapes:
+    """Expands the payloads every derived endpoint declares, and points each
+    endpoint at the shapes it got (D01 §3 Contracts).
+
+    Runs over the rows `derive_endpoints` wrote, because that is where the
+    handler's signature is: which parameter carries the request payload and
+    what the return type unwraps to are read from it here, in the pass, rather
+    than re-derived in SQL — the same reason expansion itself is computed
+    here.
+    """
+    # Emptied once, here, for the reason derive_endpoints empties its own
+    # table: both halves of the shape derivation are insert-if-absent, so that
+    # a type two catalogs reach is one shape rather than two, which makes the
+    # whole-table rebuild a once-per-resolve act. Unconditional, so a resolve
+    # in which every catalog is skipped leaves empty tables rather than the
+    # previous run's answers.
+    workspace.derive("shapes_reset")
+    endpoints = workspace.query("endpoints")
+    settled: dict[str, dict[str, str]] = {}
+    unexpanded: list[str] = []
+    for catalog in catalogs:
+        # Gated exactly as derive_endpoints gates it: a catalog skipped there
+        # produced no endpoints and must contribute no shapes either. The skip
+        # is already reported once, as a SkippedCatalog; a second channel here
+        # would be the same gap said twice.
+        if missing_capabilities(catalog, capabilities):
+            continue
+        found = _contracts_of(endpoints, catalog, settled)
+        # Deduped in the order the endpoints reached them, which is the order
+        # the shape rows are written and the report names gaps (NFR-1).
+        roots = list(dict.fromkeys(root for columns in found.values() for root in columns.values()))
+        unexpanded.extend(derive_shapes(workspace, catalog, roots).unexpanded_types)
+        for handler, columns in found.items():
+            settled.setdefault(handler, {}).update(columns)
+
+    workspace.derive(
+        "endpoint_contracts",
+        contracts=[
+            {
+                "handler": handler,
+                "request_shape": columns.get(_REQUEST),
+                "response_shape": columns.get(_RESPONSE),
+            }
+            for handler, columns in settled.items()
+        ],
+    )
+    # Two catalogs reaching one type report it once: the gap is in the type,
+    # not in how many catalogs walked into it.
+    return ExpandedShapes(unexpanded_types=tuple(dict.fromkeys(unexpanded)))
+
+
+# The two endpoint columns this pass fills. Named rather than spelled out at
+# each use, because the same two strings key the per-handler answer, the bound
+# rows, and the column they land in.
+_REQUEST = "request_shape"
+_RESPONSE = "response_shape"
+
+
+def _contracts_of(
+    endpoints: list[dict[str, object]], catalog: Catalog, settled: dict[str, dict[str, str]]
+) -> dict[str, dict[str, str]]:
+    """The shape ids one catalog can name for each handler, leaving out every
+    column an earlier catalog already answered.
+
+    Keyed on the handler rather than on the endpoint's wire identity because
+    the signature is what the shapes come from: one handler mapped to every
+    method (an annotation that names none) is several rows sharing one
+    signature, and they all carry the same contract.
+    """
+    found: dict[str, dict[str, str]] = {}
+    for endpoint in endpoints:
+        handler = str(endpoint["handler"])
+        if handler in found:
+            continue
+        signature = json.loads(str(endpoint["handler_signature"]))
+        # A handler with no recorded signature declares no payload. A scanner
+        # too weak to type its signatures degrades to "no shapes", never to a
+        # crash, exactly as capability gating does one level up.
+        if not isinstance(signature, dict):
+            continue
+        already = settled.get(handler, {})
+        columns = {
+            _REQUEST: _payload_root(_body_type(signature, catalog), catalog.wrappers),
+            _RESPONSE: _payload_root(signature.get("returns"), catalog.wrappers),
+        }
+        kept = {
+            column: root
+            for column, root in columns.items()
+            if root is not None and column not in already
+        }
+        if kept:
+            found[handler] = kept
+    return found
+
+
+def _body_type(signature: dict[str, Any], catalog: Catalog) -> dict[str, Any] | None:
+    """The type of the parameter the catalog's request-body annotation marks
+    (D00 §5a: "the request body is the type of the parameter annotated
+    `@RequestBody`" becomes a field read, not a positional join).
+
+    Which annotation that is, is framework knowledge, so a catalog that
+    declares none contributes no request shapes — inferring one from position
+    would be a guess presented as an observation.
+    """
+    marker = catalog.matches.get("request_body_annotation")
+    if marker is None:
+        return None
+    for parameter in signature.get("parameters", []):
+        if any(use["annotation"] == marker for use in parameter.get("annotations", [])):
+            return dict(parameter["type"])
+    return None
+
+
+def _payload_root(reference: dict[str, Any] | None, wrappers: list[dict[str, Any]]) -> str | None:
+    """The shape id a signature-level reference roots at, or `None` when it
+    roots at something that is not a payload.
+
+    Only an `object` has a field list to expand. A scalar, a collection, or a
+    handler that answers with nothing at all would produce an open, zero-field
+    shape row and be reported as a type nobody could expand — noise that
+    buries the gaps a reader can act on. Rooting first is what makes the test
+    a single one: the envelope is not the payload (D02 §2a).
+    """
+    if reference is None:
+        return None
+    rooted = root_type(reference, wrappers)
+    return rooted.symbol if rooted.reference.get("wire_type") == "object" else None
 
 
 @dataclass(frozen=True)

@@ -20,6 +20,7 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.shapes import (
     ExpandedShapes,
     _scope_nullable,
+    derive_endpoint_shapes,
     derive_shapes,
     root_type,
 )
@@ -762,6 +763,25 @@ def test_a_more_specific_scope_prefix_wins_over_a_broader_one():
 
     assert _scope_nullable([broad, specific], field_symbol) is True
     assert _scope_nullable([specific, broad], field_symbol) is True
+
+
+# --- Endpoints carrying their contract (Task 12) -----------------------------
+
+
+def test_a_second_resolve_does_not_inherit_the_first_ones_shapes(tmp_path):
+    """Both halves of the derivation are insert-if-absent, so that a type two
+    catalogs reach is one shape rather than two — which means nothing in them
+    clears anything. Without a reset per resolve, a reused workspace answers
+    with a field list nothing in the current run produced. Unconditional, so
+    it still holds for a resolve that reaches no endpoint at all."""
+    workspace = _loaded_workspace(tmp_path)
+    derive_shapes(workspace, _CATALOG, [ORDER_REQUEST])
+    assert shape_fields_of(workspace, ORDER_REQUEST)
+
+    derive_endpoint_shapes(workspace, [_CATALOG], capabilities=set())
+
+    assert workspace.query("shapes") == []
+    assert workspace.query("shape_fields") == []
 
 
 def test_the_derivation_names_no_language():
