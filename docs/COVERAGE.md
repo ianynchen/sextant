@@ -166,8 +166,8 @@ than silently absent:
 
 | You do not get | Because | Arrives with |
 |---|---|---|
-| Calls made through `RestTemplate`, `WebClient`, `RestClient`, OkHttp | the URL and verb live in method calls the scanner does not yet record (`call_site_clients_not_read`) | Phase 2C |
 | Kafka/JMS/SQS listeners **or** producers | no messaging catalog and no non-HTTP wire identity yet (`messaging_endpoints_not_read`) | Phase 2D |
+| Sequencing between reactive/lambda calls (`flatMap`, `map`) | calls inside them derive endpoints, but the sequence between those calls awaits the call graph (`reactive_flow_not_traced`) | call-graph phases |
 | Sequence diagrams, traces, a call graph | no `call_site`/control-flow facts (`sequence_diagrams_pending_call_graph`, `call_graph_not_implemented`) | call-graph phases |
 | A full class diagram (inheritance) | only contract types are drawn (`structure_diagram_limited_to_contracts`) | with the `edges` table |
 | Outbound base addresses for `@HttpExchange`/Retrofit | they live in builder code (`client_base_addresses_not_resolved`); `peer` is NULL there | Phase 2C |

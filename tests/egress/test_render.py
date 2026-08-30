@@ -236,6 +236,35 @@ def test_document_draws_the_contract_class_diagram_and_lists_outbound_calls():
     assert "unresolved" in text  # the inventory base address is builder code
 
 
+def test_outbound_row_with_no_path_renders_unresolved_in_the_endpoint_column():
+    """A `uri(uriBuilder -> …)` call — InventoryWebClient#search in the
+    fixture — is real HTTP with no readable path (Task 13, spec §5): the
+    fluent engine records the call honestly rather than guessing at the
+    literal inside the lambda, so `path` is NULL. The Endpoint column must
+    say so rather than rendering the method beside a literal `None`."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": None,
+                "caller": "s maven c 1 com/acme/orders/clients/InventoryWebClient#search(String).",
+                "peer": None,
+                "resolution": "unresolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert (
+        "| `GET (unresolved)` | unresolved | "
+        "`com/acme/orders/clients/InventoryWebClient#search(String).` | unresolved |"
+    ) in text
+
+
 def test_structure_and_outbound_sections_state_looked_and_found_nothing():
     """NFR-7: a section whose machinery exists but found nothing is empty and
     present, never absent — distinct from a gap, which says the machinery

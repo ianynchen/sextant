@@ -14,11 +14,6 @@ from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
 
 _GAPS = [
     (
-        "HTTP calls made through RestTemplate, WebClient or OkHttp are not "
-        "read: the URL and verb live in method calls, which the scanner does "
-        "not yet record."
-    ),
-    (
         "Messaging endpoints — listeners and producers alike — are not read: "
         "Kafka, JMS and SQS annotations have no catalog yet."
     ),
@@ -42,11 +37,6 @@ _GAPS = [
         "module whether or not the module depends on that framework."
     ),
     (
-        "Nested and anonymous classes are not read: they are named below as "
-        "uncovered, but their endpoints and annotations are absent from "
-        "everything above. A non-empty uncovered list does not yet stop the run."
-    ),
-    (
         "Module classification reads only a container file and a declared main "
         "class: a module showing neither is reported `undetermined` rather than "
         "weighed against the rest of the evidence."
@@ -61,6 +51,11 @@ _GAPS = [
         "first catalog's serialisation and nullability rules, not necessarily "
         "the one that produced its endpoint; the shipped catalogs declare "
         "compatible rules, so no answer differs today."
+    ),
+    (
+        "Reactive and lambda flow is recorded but not traced: calls inside "
+        "flatMap and map derive endpoints, but the sequence between them "
+        "awaits the call graph."
     ),
 ]
 
@@ -129,9 +124,15 @@ def render_module_document(
         lines += ["| Endpoint | Peer | Caller | Resolution |", "|---|---|---|---|"]
         for endpoint in outbound:
             peer = endpoint.get("peer")
+            path = endpoint["path"]
             caller = str(endpoint["caller"]).rsplit(" ", 1)[-1]
+            route = (
+                f"{endpoint['method']} (unresolved)"
+                if path is None
+                else f"{endpoint['method']} {path}"
+            )
             lines.append(
-                f"| `{endpoint['method']} {endpoint['path']}` | "
+                f"| `{route}` | "
                 f"{'unresolved' if peer is None else peer} | "
                 f"`{caller}` | {endpoint['resolution']} |"
             )

@@ -45,6 +45,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     assert "Known gaps" in document
     assert "## Outbound endpoints" in document
     assert "/billing/invoices" in document
+    assert "/billing/settlements" in document
+    # InventoryWebClient#search builds its URL from a uriBuilder lambda: the
+    # fluent engine follows only one hop, so path stays honestly NULL rather
+    # than guessed, and the endpoint column says so instead of `GET None`.
+    assert "GET (unresolved)" in document
     assert "classDiagram" in document
 
 
@@ -57,7 +62,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     bundle = Path(result.output.strip())
     manifest = json.loads((bundle / "manifest.json").read_text())
     assert manifest["producer"]["catalog_hash"].startswith("sha256:")
-    assert "call_site_clients_not_read" in manifest["gaps"]
+    assert "reactive_flow_not_traced" in manifest["gaps"]
     assert "endpoints" in manifest["contents"]["tables"]
     rows = duckdb.sql(
         f"SELECT direction, count(*) AS n FROM read_parquet('{bundle / 'graph' / 'endpoints.parquet'}') "
