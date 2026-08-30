@@ -1324,7 +1324,7 @@ def test_owns_never_crosses_a_protocol_it_was_not_declared_for():
     assert _owns(inbound_http, {}) is False
 
 
-def test_a_catalogs_row_level_direction_override_is_still_owned_with_no_other_catalog_present():
+def test_owns_is_the_id_comparison_even_for_a_row_level_direction_override():
     """Task 11 review round 1, finding 2, restated post-collapse: a
     `single_call` row's own `direction` override (D02 §2/§3, Task 6 —
     `spring-pubsub.yml`'s `subscribeAndConvert` row) used to need `_owns` to
