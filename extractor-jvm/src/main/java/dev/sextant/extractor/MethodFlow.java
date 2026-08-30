@@ -112,21 +112,45 @@ public final class MethodFlow {
                     : argument("int", String.valueOf(number), null, null);
             }
             if (literal instanceof Long number) return argument("long", String.valueOf(number), null, null);
-            if (literal instanceof Type type) {
+            // An LDC of a Type is a class constant *only* for the two sorts a
+            // class constant can have. ASM models a MethodType constant — legal
+            // in any class file since Java 7, and what a method-handle-shaped
+            // call site loads — as a Type of sort METHOD, on which
+            // `descriptorName`'s fallback calls `getClassName()` and ASM throws
+            // an AssertionError. That is an Error, not an Exception, so it
+            // escapes Main's catch and takes the whole extraction down: no fact
+            // files, no "extractor failed:" line, one class file's constant pool
+            // silently costing every other class its facts.
+            if (literal instanceof Type type
+                    && (type.getSort() == Type.OBJECT || type.getSort() == Type.ARRAY)) {
                 return argument("class", null, JsonOut.string(TypeRefs.descriptorName(type)), null);
             }
-            // A float, a double, a method handle, a condy: no kind in D00 §5's
-            // table, and inventing one is worse than saying so.
+            // A float, a double, a method type, a method handle, a condy: no kind
+            // in D00 §5's table, and inventing one is worse than saying so.
             return argument("unresolved", null, null, null);
         }
         if (producer instanceof IntInsnNode push
                 && (push.getOpcode() == Opcodes.BIPUSH || push.getOpcode() == Opcodes.SIPUSH)) {
             return argument("int", String.valueOf(push.operand), null, null);
         }
-        // GETSTATIC on a field whose type is its own owner: the shape every enum
-        // constant takes, and nothing else does. Read structurally rather than
-        // from an ACC_ENUM flag, which lives on the owning class this pass has
-        // not read and may never see.
+        // GETSTATIC of a field whose type is its own owner: a **named constant of
+        // its own type** — an enum, or something shaped exactly like one. That,
+        // not "an enum", is the rule this implements, and the breadth is
+        // deliberate rather than a tolerated imprecision. A closed set of named
+        // constants declared as plain static finals instead of as a language
+        // enum is the same fact to every consumer, libraries migrate between the
+        // two spellings without changing what they mean, and an ACC_ENUM test
+        // would silently drop half of them. The flag is not available here
+        // anyway: it lives on the owning class, which this pass has not read and
+        // may never see.
+        //
+        // The cost is named rather than hidden. A Kotlin `object`'s INSTANCE,
+        // `BigDecimal.ZERO`, `Duration.ZERO` — all take this shape, all land
+        // here. None of that is a defect to filter at emission: the referenced
+        // type's own `construct_kind` settles true enum-ness (D00 §5b) and is
+        // already a fact on disk, so the consumer that needs the distinction can
+        // join for it. Guessing here, in the one place that cannot know, would
+        // only make the answer unavailable to everyone.
         if (producer instanceof FieldInsnNode field && field.getOpcode() == Opcodes.GETSTATIC
                 && Type.getType(field.desc).getSort() == Type.OBJECT
                 && Type.getType(field.desc).getInternalName().equals(field.owner)) {

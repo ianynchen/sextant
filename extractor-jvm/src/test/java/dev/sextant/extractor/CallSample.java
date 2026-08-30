@@ -51,6 +51,22 @@ public final class CallSample {
         sink(source());
     }
 
+    /** Two literals, one slot: after the branch merges there are two producing
+     *  instructions and no single answer, which is the case the whole choice of
+     *  {@code SourceInterpreter} rests on. Naming either literal here would be a
+     *  fact about a path that may never run.
+     *
+     *  <p>Passed straight into the call on purpose. Assigning it to a local
+     *  first — {@code String path = fast ? "/a" : "/b"; sink(path);} — does
+     *  <em>not</em> test this: javac merges at the store, and the reload is a
+     *  fresh single-sourced value, so the slot reaches the invoke with one
+     *  producing instruction (the ALOAD) and lands in the ordinary
+     *  variable-argument case instead. That version passes whether or not the
+     *  merge rule works. */
+    public void conditionalArgument(boolean fast) {
+        sink(fast ? "/a" : "/b");
+    }
+
     public void staticCall() {
         helper("static");
     }

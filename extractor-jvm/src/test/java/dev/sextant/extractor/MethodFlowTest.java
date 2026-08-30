@@ -124,6 +124,19 @@ class MethodFlowTest {
         assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
     }
 
+    /** The rule the whole choice of {@code SourceInterpreter} rests on: after a
+     *  branch merges, the slot has two producing instructions and no single
+     *  answer. Both are string literals, so a pass that took "the first one" or
+     *  "any one" would emit a confident, wrong URL — and would look right in
+     *  every test that only ever sees straight-line code. */
+    @Test
+    void reports_a_branch_merged_argument_as_unresolved_with_no_source() throws Exception {
+        String line = callSites("conditionalArgument").get(0);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        // Neither branch's literal leaked into the fact.
+        assertTrue(!line.contains("/a") && !line.contains("/b"), line);
+    }
+
     /** The join that makes a split builder chain reconstructable: the argument
      *  is unresolved as a value, and still names the call that produced it. */
     @Test
@@ -187,6 +200,36 @@ class MethodFlowTest {
                 && line.contains("#stringLiteral(")
                 && line.contains("\"value\":\"/billing/invoices\"")), String.join("\n", lines));
         }
+    }
+
+    /** An LDC of a {@code MethodType} constant — legal in any class file since
+     *  Java 7 — is a {@code Type} whose sort is neither OBJECT nor ARRAY, and
+     *  reading it as a class constant reaches ASM's {@code getClassName()},
+     *  which throws an {@code AssertionError}. An Error escapes {@code Main}'s
+     *  {@code catch (Exception)}, so one such constant anywhere on the classpath
+     *  would end the whole extraction with no fact files and no failure message.
+     *  Every other class's facts, lost to one constant pool entry.
+     *
+     *  <p>Built by hand rather than compiled: no Java source javac accepts puts
+     *  a bare MethodType in an argument slot, which is exactly why the crash
+     *  survived a fixture-driven suite. */
+    @Test
+    void reports_a_method_type_constant_as_unresolved_rather_than_dying_on_it() {
+        MethodNode method = new MethodNode(
+            org.objectweb.asm.Opcodes.ASM9, org.objectweb.asm.Opcodes.ACC_STATIC,
+            "loads", "()V", null, null);
+        method.visitCode();
+        method.visitLdcInsn(org.objectweb.asm.Type.getMethodType("()V"));
+        method.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESTATIC, "o/P", "consume",
+            "(Ljava/lang/Object;)V", false);
+        method.visitInsn(org.objectweb.asm.Opcodes.RETURN);
+        method.visitMaxs(1, 0);
+        method.visitEnd();
+
+        List<String> lines =
+            MethodFlow.callSites("doc", "sextant-jvm maven c v o/P#loads().", method);
+        assertEquals(1, lines.size());
+        assertTrue(lines.get(0).contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), lines.get(0));
     }
 
     /** A method with no body — an interface method, an abstract one — has no
