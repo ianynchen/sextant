@@ -61,8 +61,10 @@ declared AS (
         a.target AS target,
         coalesce(list_extract(list_filter(list_transform(
             $path_from::VARCHAR[],
-            n -> coalesce(a.args -> n ->> 0, a.args ->> n)
-        ), v -> v IS NOT NULL), 1), '') AS path,
+            n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
+                      THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
+                                    [a.args ->> n]) END
+        ), v -> v IS NOT NULL), 1), ['']) AS paths,
         coalesce(
             CASE WHEN len(coalesce(
                 TRY_CAST(a.args -> $method_from AS VARCHAR[]),
@@ -101,11 +103,22 @@ prefixes AS (
     FROM annotations a
     WHERE a.annotation = $prefix_annotation
 ),
-mappings AS (
-    SELECT d.target AS method_symbol,
-           UNNEST(d.methods) AS wire_method,
-           d.path AS path_suffix
+-- Cross product of methods and paths (a two-topic, two-method mapping is
+-- four identities): DuckDB zips rather than cross-joins when two UNNESTs sit
+-- in the same SELECT (verified empirically), so methods are unnested in
+-- their own CTE first, and mapped_methods.paths is unnested from that.
+mapped_methods AS (
+    SELECT d.target AS target,
+           UNNEST(CASE WHEN len(d.methods) = 0
+                       THEN [CAST(NULL AS VARCHAR)] ELSE d.methods END) AS wire_method,
+           d.paths AS paths
     FROM declared d
+),
+mappings AS (
+    SELECT mm.target AS method_symbol,
+           mm.wire_method AS wire_method,
+           UNNEST(mm.paths) AS path_suffix
+    FROM mapped_methods mm
 ),
 derived AS (
     SELECT
@@ -138,6 +151,6 @@ WHERE NOT EXISTS (
     SELECT 1 FROM endpoints existing
     WHERE existing.protocol  = d.protocol
       AND existing.direction = d.direction
-      AND existing.method    = d.method
+      AND existing.method IS NOT DISTINCT FROM d.method
       AND existing.path      = d.path
 );

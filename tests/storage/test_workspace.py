@@ -161,6 +161,163 @@ def _workspace_with_a_call_site(tmp_path: Path) -> DuckDbWorkspace:
     return workspace
 
 
+def _topic_annotation_facts(root: Path, args: dict) -> None:
+    """A synthetic messaging annotation on a single method — no type-level
+    gate, deliberately not Spring — so `path_from`/`all_methods` can be
+    exercised directly against `derive_endpoints.sql` without the mapping
+    catalog's other machinery (mirrors test_endpoints.py's invented-listener
+    fixtures, trimmed to what Task 3's NULL-verb/multi-valued-path tests
+    need)."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/notify/OrderListener.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    listener = "com/acme/notify/OrderListener#"
+    handle = "com/acme/notify/OrderListener#onOrderCreated(sig_3d92af60)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=listener, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handle,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=listener,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handle,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/messaging/annotation/OnMessage#",
+                args=args,
+            ),
+        ),
+    ]
+    write_fact_file(root / "OrderListener.jsonl", document, facts)
+
+
+# Shared across the derivation, unaffected by which path attribute is used —
+# no annotation in these fixtures carries $prefix_annotation, so `prefixes`
+# always resolves empty and $prefix_from/$peer_from's exact contents do not
+# matter.
+_TOPIC_ENDPOINT_KWARGS = {
+    "protocol": "kafka",
+    "direction": "inbound",
+    "type_annotation": None,
+    "prefix_annotation": "com/acme/messaging/annotation/Topic#",
+    "mapping_annotations": [{"fqn": "com/acme/messaging/annotation/OnMessage#", "methods": None}],
+    "prefix_from": [],
+    "peer_from": [],
+    "method_from": "method",
+}
+
+
+def test_a_multi_valued_path_attribute_derives_one_row_per_value(tmp_path: Path):
+    """D02D Task 3: a list-valued path attribute (a Kafka listener's
+    `topics = {"order-events", "order-audit"}`) must derive one endpoint row
+    per element. Before the fix, `declared.path` took only the first element
+    (`list_extract(..., 1)` on the raw value), so a two-topic listener
+    silently lost the second topic."""
+    _topic_annotation_facts(tmp_path / "facts", {"topics": ["order-events", "order-audit"]})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    workspace.derive(
+        "endpoints",
+        **_TOPIC_ENDPOINT_KWARGS,
+        path_from=["topics"],
+        all_methods=[],
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["path"]) for r in rows] == [
+        (None, "order-audit"),
+        (None, "order-events"),
+    ]
+
+
+def test_an_empty_all_methods_derives_one_null_method_row(tmp_path: Path):
+    """D02D Task 3: `all_methods=[]` (a mapping annotation that presets no
+    method, on a catalog with no per-call method attribute) must derive
+    exactly one row with `method` NULL, not zero. Before the fix,
+    `UNNEST(d.methods)` over the empty list produced no row at all — the
+    method was silently dropped along with the whole endpoint."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    workspace.derive(
+        "endpoints",
+        **_TOPIC_ENDPOINT_KWARGS,
+        path_from=["topic"],
+        all_methods=[],
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["path"]) for r in rows] == [(None, "order-events")]
+
+
+def test_null_method_rows_dedup_and_merge_on_the_same_identity(tmp_path: Path):
+    """D02D Task 3's core invariant: a NULL-verb wire identity must dedup and
+    merge exactly like every HTTP identity does. Plain SQL equality treats
+    `NULL = NULL` as unknown, so before the fix: re-deriving the same
+    NULL-method inbound row twice would double it, deriving the same
+    NULL-method outbound row twice via `call_endpoints` would double it too,
+    and `merge_endpoints.sql`'s join from outbound back to inbound would
+    never find its NULL-method twin to fold into `both`."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    # Derived twice — D02 §5's "two catalogs may both match" case, or simply
+    # a second resolve — must still leave one inbound row.
+    for _ in range(2):
+        workspace.derive(
+            "endpoints",
+            **_TOPIC_ENDPOINT_KWARGS,
+            path_from=["topic"],
+            all_methods=[],
+        )
+
+    outbound_row = {
+        "protocol": "kafka",
+        "direction": "outbound",
+        "method": None,
+        "path": "order-events",
+        "handler": None,
+        "caller": "com/acme/notify/OrderPublisher#publish(sig_1a2b3c4d).",
+        "peer": None,
+        "handler_signature": None,
+        "resolution": "resolved",
+        "evidence": "compiler",
+        "request_shape": None,
+        "response_shape": None,
+    }
+    # Same discipline on the call-site side: two separate derivations of the
+    # same identity must still leave one outbound row.
+    for _ in range(2):
+        workspace.derive("call_endpoints", rows=[outbound_row])
+
+    workspace.derive("endpoints_merge")
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["direction"], r["method"], r["path"]) for r in rows] == [
+        ("both", None, "order-events"),
+    ]
+
+
 def test_load_facts_reports_the_row_count_when_a_fact_tree_is_ingested(tmp_path: Path):
     _fixture_facts(tmp_path / "facts")
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")

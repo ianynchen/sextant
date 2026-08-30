@@ -43,6 +43,6 @@ WHERE NOT EXISTS (
     SELECT 1 FROM endpoints existing
     WHERE existing.protocol  = r.protocol
       AND existing.direction = r.direction
-      AND existing.method    = r.method
+      AND existing.method IS NOT DISTINCT FROM r.method
       AND existing.path      = r.path
 );
