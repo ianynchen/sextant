@@ -21,7 +21,7 @@ checkpoint ruling CP-3), every other row's key is its own `result`. A chain
 that never reaches a terminal derives nothing (D02 §4's "the true answer").
 
 Shares `argument_descriptor`, `url_of` and `supertypes_of` verbatim with
-`single_call` (`shapes.contracts`) — the same D00 §5 argument grammar,
+`single_call` (`shapes.arguments`) — the same D00 §5 argument grammar,
 resolved here off a captured step argument rather than a `methods` row's
 positional slot.
 """
@@ -33,7 +33,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.shapes.contracts import (
+from sextant.application.resolve.shapes.arguments import (
     CallFacts,
     CarrierRules,
     _arg_at,

@@ -16,7 +16,7 @@ matches:
   # compile-time-typed payload this catalog's rules can pull a real
   # contract out of — leaving it eligible for `sole_unannotated` would
   # describe the opaque envelope itself as if it were the payload.
-  request_body: { annotation: org/springframework/messaging/handler/annotation/Payload#,
+  request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
                   fallback: sole_unannotated,
                   excludes: [jakarta.jms.Session, jakarta.jms.Message] }
   mapping:
@@ -31,7 +31,7 @@ matches:
     all_methods: []
     prefix_annotation: null
     annotations:
-      - { fqn: org/springframework/jms/annotation/JmsListener# }
+      - { fqn: org.springframework.jms.annotation.JmsListener }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility: an
 # inbound catalog's own wrapper/serialization/known_types rules can describe

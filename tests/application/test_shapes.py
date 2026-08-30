@@ -916,15 +916,15 @@ _ENDPOINT_CATALOG = Catalog(
         **vars(_CATALOG),
         "id": "invented-endpoints",
         "matches": {
-            "type_annotation": "com/acme/rest/Resource#",
-            "request_body": {"annotation": "com/acme/rest/Body#", "fallback": "none"},
+            "type_annotation": "com.acme.rest.Resource",
+            "request_body": {"annotation": "com.acme.rest.Body", "fallback": "none"},
             "mapping": {
                 "path_from": ["value"],
                 "prefix_from": ["value"],
                 "method_from": "method",
                 "all_methods": ["POST"],
-                "prefix_annotation": "com/acme/rest/Path#",
-                "annotations": [{"fqn": "com/acme/rest/Post#", "method": ["POST"]}],
+                "prefix_annotation": "com.acme.rest.Path",
+                "annotations": [{"fqn": "com.acme.rest.Post", "method": ["POST"]}],
             },
         },
     }
@@ -1159,15 +1159,15 @@ _OUTBOUND_CATALOG = Catalog(
         # `ResponseEntity` entry, so this catalog has no idea how to open one.
         "wrappers": [{"type": "com.acme.client.Call", "payload_arg": 0, "semantics": "async"}],
         "matches": {
-            "type_annotation": "com/acme/client/Client#",
-            "request_body": {"annotation": "com/acme/client/Body#", "fallback": "none"},
+            "type_annotation": "com.acme.client.Client",
+            "request_body": {"annotation": "com.acme.client.Body", "fallback": "none"},
             "mapping": {
                 "path_from": ["value"],
                 "prefix_from": ["value"],
                 "method_from": "method",
                 "all_methods": ["GET"],
-                "prefix_annotation": "com/acme/client/Path#",
-                "annotations": [{"fqn": "com/acme/client/Get#", "method": ["GET"]}],
+                "prefix_annotation": "com.acme.client.Path",
+                "annotations": [{"fqn": "com.acme.client.Get", "method": ["GET"]}],
             },
         },
     }
@@ -1640,7 +1640,7 @@ _SOLE_UNANNOTATED_CATALOG = Catalog(
         "matches": {
             **_ENDPOINT_CATALOG.matches,
             "request_body": {
-                "annotation": "com/acme/rest/Body#",
+                "annotation": "com.acme.rest.Body",
                 "fallback": "sole_unannotated",
             },
         },
@@ -1710,7 +1710,7 @@ def test_excluded_infrastructure_types_do_not_defeat_the_sole_unannotated_fallba
             "matches": {
                 **_SOLE_UNANNOTATED_CATALOG.matches,
                 "request_body": {
-                    "annotation": "com/acme/rest/Body#",
+                    "annotation": "com.acme.rest.Body",
                     "fallback": "sole_unannotated",
                     "excludes": ["org.springframework.kafka.support.Acknowledgment"],
                 },
@@ -1755,7 +1755,7 @@ def test_two_non_excluded_bare_parameters_still_yield_no_body(tmp_path):
             "matches": {
                 **_SOLE_UNANNOTATED_CATALOG.matches,
                 "request_body": {
-                    "annotation": "com/acme/rest/Body#",
+                    "annotation": "com.acme.rest.Body",
                     "fallback": "sole_unannotated",
                     "excludes": ["org.springframework.kafka.support.Acknowledgment"],
                 },

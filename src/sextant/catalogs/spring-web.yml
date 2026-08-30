@@ -10,8 +10,8 @@ detect:
 requires: [annotation_args, type_annotations]
 
 matches:
-  type_annotation: org/springframework/web/bind/annotation/RestController#
-  request_body: { annotation: org/springframework/web/bind/annotation/RequestBody#, fallback: none }
+  type_annotation: org.springframework.web.bind.annotation.RestController
+  request_body: { annotation: org.springframework.web.bind.annotation.RequestBody, fallback: none }
   mapping:
     # `value` and `path` are @AliasFor each other, so only the one the author
     # typed reaches the bytecode. First present wins, in this order.
@@ -19,16 +19,16 @@ matches:
     prefix_from: [value, path]
     method_from: method
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
-    prefix_annotation: org/springframework/web/bind/annotation/RequestMapping#
+    prefix_annotation: org.springframework.web.bind.annotation.RequestMapping
     annotations:
       # @RequestMapping carries no pre-set method: it takes one from its own
       # `method` attribute, and means every method when that is absent.
-      - { fqn: org/springframework/web/bind/annotation/RequestMapping# }
-      - { fqn: org/springframework/web/bind/annotation/GetMapping#,    method: [GET] }
-      - { fqn: org/springframework/web/bind/annotation/PostMapping#,   method: [POST] }
-      - { fqn: org/springframework/web/bind/annotation/PutMapping#,    method: [PUT] }
-      - { fqn: org/springframework/web/bind/annotation/DeleteMapping#, method: [DELETE] }
-      - { fqn: org/springframework/web/bind/annotation/PatchMapping#,  method: [PATCH] }
+      - { fqn: org.springframework.web.bind.annotation.RequestMapping }
+      - { fqn: org.springframework.web.bind.annotation.GetMapping,    method: [GET] }
+      - { fqn: org.springframework.web.bind.annotation.PostMapping,   method: [POST] }
+      - { fqn: org.springframework.web.bind.annotation.PutMapping,    method: [PUT] }
+      - { fqn: org.springframework.web.bind.annotation.DeleteMapping, method: [DELETE] }
+      - { fqn: org.springframework.web.bind.annotation.PatchMapping,  method: [PATCH] }
 
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }

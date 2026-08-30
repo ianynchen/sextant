@@ -12,7 +12,7 @@ requires: [annotation_args, typed_signatures]
 matches:
   # No type gate and no prefix: a Retrofit interface is its method
   # annotations, and the base URL lives in builder code (call-site phase).
-  request_body: { annotation: retrofit2/http/Body#, fallback: none }
+  request_body: { annotation: retrofit2.http.Body, fallback: none }
   mapping:
     path_from: [value]
     method_from: method
@@ -20,12 +20,12 @@ matches:
     prefix_annotation: null
     prefix_from: []
     annotations:
-      - { fqn: retrofit2/http/GET#,    method: [GET] }
-      - { fqn: retrofit2/http/POST#,   method: [POST] }
-      - { fqn: retrofit2/http/PUT#,    method: [PUT] }
-      - { fqn: retrofit2/http/DELETE#, method: [DELETE] }
-      - { fqn: retrofit2/http/PATCH#,  method: [PATCH] }
-      - { fqn: retrofit2/http/HEAD#,   method: [HEAD] }
+      - { fqn: retrofit2.http.GET,    method: [GET] }
+      - { fqn: retrofit2.http.POST,   method: [POST] }
+      - { fqn: retrofit2.http.PUT,    method: [PUT] }
+      - { fqn: retrofit2.http.DELETE, method: [DELETE] }
+      - { fqn: retrofit2.http.PATCH,  method: [PATCH] }
+      - { fqn: retrofit2.http.HEAD,   method: [HEAD] }
 
 # Shipped Jackson-converter-shaped (the common Spring Boot configuration);
 # Gson/Moshi naming annotations are a later catalog addition.

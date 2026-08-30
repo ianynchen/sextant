@@ -11,7 +11,7 @@ requires: [annotation_args, typed_signatures]
 
 matches:
   # No type-level gate: `@SqsListener` sits on the method directly.
-  request_body: { annotation: org/springframework/messaging/handler/annotation/Payload#,
+  request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
                   fallback: sole_unannotated,
                   excludes: [io.awspring.cloud.sqs.listener.acknowledgement.Acknowledgement] }
   mapping:
@@ -25,7 +25,7 @@ matches:
     all_methods: []
     prefix_annotation: null
     annotations:
-      - { fqn: io/awspring/cloud/sqs/annotation/SqsListener# }
+      - { fqn: io.awspring.cloud.sqs.annotation.SqsListener }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility: an
 # inbound catalog's own wrapper/serialization/known_types rules can describe

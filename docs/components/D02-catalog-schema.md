@@ -112,13 +112,13 @@ matches:
   # Optional: a catalog may declare no type-level gate. Any type containing a
   # matching mapping annotation then participates (a Retrofit interface has no
   # type-level marker at all).
-  type_annotation: org/springframework/cloud/openfeign/FeignClient#
+  type_annotation: org.springframework.cloud.openfeign.FeignClient
   # The body rule is catalog data: which annotation marks the payload
   # parameter, and whether the sole unannotated parameter is the fallback.
-  request_body: { annotation: org/springframework/web/bind/annotation/RequestBody#,
+  request_body: { annotation: org.springframework.web.bind.annotation.RequestBody,
                   fallback: sole_unannotated }   # or: none
   mapping:
-    prefix_annotation: org/springframework/cloud/openfeign/FeignClient#
+    prefix_annotation: org.springframework.cloud.openfeign.FeignClient
     # Type-level and method-level annotations are different roles. On
     # @RequestMapping, value/path are aliases meaning *path*; on @FeignClient,
     # value aliases *name* — the service id — and only path means prefix. One

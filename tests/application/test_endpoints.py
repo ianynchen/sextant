@@ -31,15 +31,15 @@ _INVENTED_LISTENER = Catalog(
     requires=("annotation_args",),
     source=Path("tests/invented.yml"),
     matches={
-        "type_annotation": "com/acme/messaging/annotation/Listener#",
+        "type_annotation": "com.acme.messaging.annotation.Listener",
         "mapping": {
             "path_from": ["value"],
             "prefix_from": ["value"],
             "method_from": "method",
             "all_methods": ["PUBLISH"],
-            "prefix_annotation": "com/acme/messaging/annotation/Topic#",
+            "prefix_annotation": "com.acme.messaging.annotation.Topic",
             "annotations": [
-                {"fqn": "com/acme/messaging/annotation/OnMessage#", "method": ["PUBLISH"]},
+                {"fqn": "com.acme.messaging.annotation.OnMessage", "method": ["PUBLISH"]},
             ],
         },
     },
@@ -114,7 +114,7 @@ def test_catalog_maps_post_mapping_to_the_post_method():
     spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
     annotations = spring.matches["mapping"]["annotations"]
     methods = {m["fqn"]: m.get("method") for m in annotations}
-    assert methods["org/springframework/web/bind/annotation/PostMapping#"] == ["POST"]
+    assert methods["org.springframework.web.bind.annotation.PostMapping"] == ["POST"]
 
 
 def test_catalog_leaves_request_mapping_without_a_preset_method():
@@ -126,7 +126,7 @@ def test_catalog_leaves_request_mapping_without_a_preset_method():
     request_mapping = next(
         m
         for m in annotations
-        if m["fqn"] == "org/springframework/web/bind/annotation/RequestMapping#"
+        if m["fqn"] == "org.springframework.web.bind.annotation.RequestMapping"
     )
     assert "method" not in request_mapping
 
@@ -479,7 +479,7 @@ _SCALAR_PATH_CATALOG = Catalog(
     requires=("annotation_args",),
     source=Path("tests/invented.yml"),
     matches={
-        "type_annotation": "com/acme/rest/Resource#",
+        "type_annotation": "com.acme.rest.Resource",
         "mapping": {
             "path_from": ["value"],
             "prefix_from": ["value"],
@@ -487,8 +487,8 @@ _SCALAR_PATH_CATALOG = Catalog(
             "all_methods": ["GET"],
             # Not a mapping annotation: this catalog is the JAX-RS shape, where
             # the type carries the path and the method carries the verb.
-            "prefix_annotation": "com/acme/rest/Path#",
-            "annotations": [{"fqn": "com/acme/rest/Get#", "method": ["GET"]}],
+            "prefix_annotation": "com.acme.rest.Path",
+            "annotations": [{"fqn": "com.acme.rest.Get", "method": ["GET"]}],
         },
     },
 )
@@ -526,11 +526,11 @@ _MULTI_PATH_CATALOG = Catalog(
             "prefix_from": ["value"],
             "method_from": "method",
             "all_methods": ["GET", "POST", "PUT", "DELETE"],
-            "prefix_annotation": "com/acme/rest/Mapping#",
+            "prefix_annotation": "com.acme.rest.Mapping",
             # No `method` key: the annotation pre-sets no verb, so the
             # derivation reads that absence as "every method in all_methods"
             # — and the row below hands it two of them explicitly instead.
-            "annotations": [{"fqn": "com/acme/rest/Mapping#", "method": ["GET", "POST"]}],
+            "annotations": [{"fqn": "com.acme.rest.Mapping", "method": ["GET", "POST"]}],
         },
     },
 )
@@ -660,8 +660,8 @@ _OUTBOUND_CATALOG = Catalog(
     requires=("annotation_args",),
     source=Path("tests/invented.yml"),
     matches={
-        "type_annotation": "com/acme/billing/annotation/ServiceClient#",
-        "request_body": {"annotation": "com/acme/billing/annotation/Body#", "fallback": "none"},
+        "type_annotation": "com.acme.billing.annotation.ServiceClient",
+        "request_body": {"annotation": "com.acme.billing.annotation.Body", "fallback": "none"},
         "mapping": {
             "path_from": ["value"],
             # `path` carries the prefix; `name` (read by peer_from below)
@@ -670,9 +670,9 @@ _OUTBOUND_CATALOG = Catalog(
             "peer_from": ["name", "value"],
             "method_from": "method",
             "all_methods": ["GET"],
-            "prefix_annotation": "com/acme/billing/annotation/ServiceClient#",
+            "prefix_annotation": "com.acme.billing.annotation.ServiceClient",
             "annotations": [
-                {"fqn": "com/acme/billing/annotation/PostExchange#", "method": ["POST"]},
+                {"fqn": "com.acme.billing.annotation.PostExchange", "method": ["POST"]},
             ],
         },
     },
@@ -897,9 +897,9 @@ _UNGATED_CATALOG = Catalog(
             "peer_from": [],
             "method_from": "method",
             "all_methods": ["GET"],
-            "prefix_annotation": "com/acme/legacy/annotation/Prefix#",
+            "prefix_annotation": "com.acme.legacy.annotation.Prefix",
             "annotations": [
-                {"fqn": "com/acme/legacy/annotation/GET#", "method": ["GET"]},
+                {"fqn": "com.acme.legacy.annotation.GET", "method": ["GET"]},
             ],
         },
     },
@@ -1002,10 +1002,10 @@ _UNGATED_PREFIXED_CATALOG = Catalog(
             "peer_from": [],
             "method_from": "method",
             "all_methods": ["GET"],
-            "prefix_annotation": "com/acme/inventory/annotation/Exchange#",
+            "prefix_annotation": "com.acme.inventory.annotation.Exchange",
             "annotations": [
-                {"fqn": "com/acme/inventory/annotation/Exchange#"},
-                {"fqn": "com/acme/inventory/annotation/GetExchange#", "method": ["GET"]},
+                {"fqn": "com.acme.inventory.annotation.Exchange"},
+                {"fqn": "com.acme.inventory.annotation.GetExchange", "method": ["GET"]},
             ],
         },
     },

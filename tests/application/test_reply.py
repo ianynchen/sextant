@@ -36,8 +36,8 @@ _MATCHES = {
         "method_from": "method",
         # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
         "all_methods": [],
-        "prefix_annotation": "com/acme/messaging/annotation/Topic#",
-        "annotations": [{"fqn": KAFKA_LISTENER}],
+        "prefix_annotation": "com.acme.messaging.annotation.Topic",
+        "annotations": [{"fqn": "com.acme.messaging.annotation.KafkaListener"}],
     },
     # D02 §2's `reply` block, frozen (Task 1): {annotation, destination_from,
     # payload: return}. `payload` is documentation only here — this engine
@@ -432,8 +432,8 @@ def _other_catalog() -> Catalog:
                 "prefix_from": [],
                 "method_from": "method",
                 "all_methods": [],
-                "prefix_annotation": "com/acme/messaging/annotation/OtherTopic#",
-                "annotations": [{"fqn": OTHER_LISTENER}],
+                "prefix_annotation": "com.acme.messaging.annotation.OtherTopic",
+                "annotations": [{"fqn": "com.acme.messaging.annotation.SqsListener"}],
             },
         },
     )

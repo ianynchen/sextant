@@ -10,25 +10,25 @@ detect:
 requires: [annotation_args, typed_signatures]
 
 matches:
-  type_annotation: org/springframework/cloud/openfeign/FeignClient#
-  request_body: { annotation: org/springframework/web/bind/annotation/RequestBody#,
+  type_annotation: org.springframework.cloud.openfeign.FeignClient
+  request_body: { annotation: org.springframework.web.bind.annotation.RequestBody,
                   fallback: sole_unannotated }
   mapping:
     path_from: [value, path]
     method_from: method
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
-    prefix_annotation: org/springframework/cloud/openfeign/FeignClient#
+    prefix_annotation: org.springframework.cloud.openfeign.FeignClient
     # value aliases *name* on @FeignClient — the service id — so the prefix
     # reads only `path` and the peer reads the name (spec ruling I2).
     prefix_from: [path]
     peer_from: [name, value]
     annotations:
-      - { fqn: org/springframework/web/bind/annotation/RequestMapping# }
-      - { fqn: org/springframework/web/bind/annotation/GetMapping#,    method: [GET] }
-      - { fqn: org/springframework/web/bind/annotation/PostMapping#,   method: [POST] }
-      - { fqn: org/springframework/web/bind/annotation/PutMapping#,    method: [PUT] }
-      - { fqn: org/springframework/web/bind/annotation/DeleteMapping#, method: [DELETE] }
-      - { fqn: org/springframework/web/bind/annotation/PatchMapping#,  method: [PATCH] }
+      - { fqn: org.springframework.web.bind.annotation.RequestMapping }
+      - { fqn: org.springframework.web.bind.annotation.GetMapping,    method: [GET] }
+      - { fqn: org.springframework.web.bind.annotation.PostMapping,   method: [POST] }
+      - { fqn: org.springframework.web.bind.annotation.PutMapping,    method: [PUT] }
+      - { fqn: org.springframework.web.bind.annotation.DeleteMapping, method: [DELETE] }
+      - { fqn: org.springframework.web.bind.annotation.PatchMapping,  method: [PATCH] }
 
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }

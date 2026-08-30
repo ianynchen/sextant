@@ -22,17 +22,23 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     engine here is generic: it never names a framework or a protocol, only
     forwards what the catalog declares."""
     mapping = catalog.matches["mapping"]
+    type_annotation = catalog.matches.get("type_annotation")
+    prefix_annotation = mapping["prefix_annotation"]
     workspace.derive(
         "endpoints",
         protocol=catalog.protocol,
         direction=catalog.direction,
         # Optional (D02 §2, amended): absence means "no type-level gate".
-        type_annotation=catalog.matches.get("type_annotation"),
-        prefix_annotation=mapping["prefix_annotation"],
+        type_annotation=None if type_annotation is None else _catalog_symbol(type_annotation),
+        # Optional too (Retrofit, spring-jms): no class-level prefix shape.
+        prefix_annotation=(
+            None if prefix_annotation is None else _catalog_symbol(prefix_annotation)
+        ),
         # `method` is absent for an annotation that pre-sets none, and the
         # derivation reads that absence as "every method in all_methods".
         mapping_annotations=[
-            {"fqn": m["fqn"], "methods": m.get("method")} for m in mapping["annotations"]
+            {"fqn": _catalog_symbol(m["fqn"]), "methods": m.get("method")}
+            for m in mapping["annotations"]
         ],
         path_from=list(mapping["path_from"]),
         prefix_from=list(mapping["prefix_from"]),

@@ -14,7 +14,7 @@ import pytest
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.shapes import derive_endpoint_shapes
-from sextant.application.resolve.shapes.contracts import split_url
+from sextant.application.resolve.shapes.arguments import split_url
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (

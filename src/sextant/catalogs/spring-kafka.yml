@@ -13,7 +13,7 @@ matches:
   # No type-level gate: a listener method carries its own `@KafkaListener`
   # (or, on a class-level, polymorphic listener, `@KafkaHandler`) directly —
   # there is no marker interface or class annotation every listener shares.
-  request_body: { annotation: org/springframework/messaging/handler/annotation/Payload#,
+  request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
                   fallback: sole_unannotated,
                   excludes: [org.springframework.kafka.support.Acknowledgment] }
   mapping:
@@ -32,14 +32,14 @@ matches:
     method_from: method
     # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
     all_methods: []
-    prefix_annotation: org/springframework/kafka/annotation/KafkaListener#
+    prefix_annotation: org.springframework.kafka.annotation.KafkaListener
     annotations:
       # A plain, method-level `@KafkaListener` — the ordinary listener shape.
-      - { fqn: org/springframework/kafka/annotation/KafkaListener# }
+      - { fqn: org.springframework.kafka.annotation.KafkaListener }
       # `@KafkaHandler` carries no path attribute of its own (path suffix
       # ''), and reaches a path only through the class-level prefix above —
       # the polymorphic, class-level `@KafkaListener` + `@KafkaHandler` shape.
-      - { fqn: org/springframework/kafka/annotation/KafkaHandler# }
+      - { fqn: org.springframework.kafka.annotation.KafkaHandler }
   # D02 §2's `reply` block: `@SendTo` derives a second, OUTBOUND row per
   # listener whose handler carries it, and one path-NULL `unresolved` row for
   # a value-returning handler that declares no `@SendTo` at all (the reply

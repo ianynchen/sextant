@@ -7,7 +7,7 @@ annotation facts: it matches each site against the catalog's declared
 symbol), splits the url argument into peer and path (CP-2) — or, for a
 `channel_arg` destination, keeps it whole and peerless — and resolves the
 request/response descriptors from the call's own arguments through
-`shapes.contracts.argument_descriptor` (D02 §2h). Framework knowledge — the
+`shapes.arguments.argument_descriptor` (D02 §2h). Framework knowledge — the
 owner type, which argument is which, the PTR/call-wrapper rules — arrives as
 catalog data; this module never names a framework.
 """
@@ -17,7 +17,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.shapes.contracts import (
+from sextant.application.resolve.shapes.arguments import (
     CallFacts,
     CarrierRules,
     _arg_at,
