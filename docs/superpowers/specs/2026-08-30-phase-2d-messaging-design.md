@@ -94,7 +94,18 @@ The bare-string form keeps meaning position 0, so the four shipped 2C catalogs p
 unchanged.
 
 **Batch listeners** (`List<Foo>`) come out as `wire_type: array` of the item through
-the existing collection expansion. **A raw `jakarta.jms.Message` / `TextMessage`
+the existing collection expansion.
+
+**Amendment (final review, granted).** The item never arrives. The scanner captures a
+*return* type's generic arguments but not a *parameter*'s, so a batch listener's
+`List<Foo>` parameter derives `wire_type: array` with **no `item` at all** — `Foo` is
+simply not a fact anyone recorded. This is the frozen honest answer, not a gap entry:
+a gap names a type the engine met and could not expand, and here there is no type to
+name. The same absence covers a `ConsumerRecord<K, V>` parameter, for the same one
+reason ([COVERAGE](../../COVERAGE.md) §5.8). Revisited when parameter-generics capture
+lands, at which point the original sentence becomes true as written.
+
+**A raw `jakarta.jms.Message` / `TextMessage`
 parameter has no derivable shape**: the row derives with the payload descriptor
 honestly absent — never a fabricated `object`.
 

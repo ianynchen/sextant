@@ -637,7 +637,7 @@ complete answer.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
-| Java | Spring `@KafkaListener` (`topics`, `topicPattern`, `topicPartitions`, `groupId`), class-level `@KafkaListener` + `@KafkaHandler` included | — | `annotation` | ✅ shipped |
+| Java | Spring `@KafkaListener` (`topics`, `topicPattern`, `groupId`), class-level `@KafkaListener` + `@KafkaHandler` included | — | `annotation` | ✅ shipped |
 | Java | Micronaut `@KafkaListener`/`@KafkaClient` + `@Topic` | — | `annotation` | A |
 | Java | `ReplyingKafkaTemplate.sendAndReceive(ProducerRecord)`, and a `@KafkaListener` method returning a value annotated `@SendTo` | the reply derives as its own outbound row | `registration_call` + `annotation` | ✅ shipped |
 | Java | `KafkaTemplate.send(topic, …)`, `.sendDefault(…)` | — | `registration_call` | ✅ shipped |

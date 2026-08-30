@@ -7,8 +7,8 @@ the linking tier that turns per-service analyses into a system. Each phase is it
 plan, ships one *capability* and the frameworks that ride it, and ends with the same
 review discipline.
 
-**Where we actually are.** Six of the seventy-two Java rows in
-[COVERAGE.md](../../COVERAGE.md) §5 are shipped — about 8%. An endpoint carries request and
+**Where we actually are.** Seventeen of the seventy-six Java rows in
+[COVERAGE.md](../../COVERAGE.md) §5 are shipped — about 22%. An endpoint carries request and
 response contracts field by field, in both directions, with `required` and `nullable`
 resolved; Feign, Retrofit and `@HttpExchange` outbound clients are read (a path a module
 both exposes and calls merges into one endpoint), and a module's analysis exports as a D06
