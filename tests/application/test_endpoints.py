@@ -253,7 +253,7 @@ def _invented_listener_facts(root: Path) -> None:
     used only to prove that `protocol` and `direction` on the derived rows
     come from the catalog's own declared fields rather than from a literal
     baked into the SQL. D02 groups Spring Kafka and JMS listeners under this
-    same style with `protocol: message`; a catalog like this one is exactly
+    same style with `protocol: kafka`; a catalog like this one is exactly
     what would have silently come out labelled http/inbound before this fix."""
     document = Document(
         document_id="doc_1",
@@ -511,6 +511,92 @@ def test_derive_endpoints_reads_a_scalar_annotation_argument_when_it_is_not_an_a
     workspace.close()
 
     assert [(r["method"], r["path"]) for r in rows] == [("GET", "/rest/orders/{id}")]
+
+
+_MULTI_PATH_CATALOG = Catalog(
+    id="invented-multi-path",
+    style="annotation_driven",
+    protocol="http",
+    direction="inbound",
+    requires=("annotation_args",),
+    source=Path("tests/invented.yml"),
+    matches={
+        "mapping": {
+            "path_from": ["value"],
+            "prefix_from": ["value"],
+            "method_from": "method",
+            "all_methods": ["GET", "POST", "PUT", "DELETE"],
+            "prefix_annotation": "com/acme/rest/Mapping#",
+            # No `method` key: the annotation pre-sets no verb, so the
+            # derivation reads that absence as "every method in all_methods"
+            # — and the row below hands it two of them explicitly instead.
+            "annotations": [{"fqn": "com/acme/rest/Mapping#", "method": ["GET", "POST"]}],
+        },
+    },
+)
+
+
+def test_a_mapping_naming_two_paths_and_two_methods_derives_all_four_identities(
+    tmp_path: Path,
+):
+    """`derive_endpoints.sql` claims it in a comment — "a two-topic,
+    two-method mapping is four identities" — and until now nothing pinned it.
+    The claim is load-bearing and fragile: DuckDB ZIPS two `UNNEST`s that sit
+    in the same SELECT rather than cross-joining them, so the naive spelling
+    of this derivation would silently yield TWO rows (`GET /a`, `POST /b`),
+    dropping `GET /b` and `POST /a` — two real routes gone, with the two that
+    survived reported at full `resolved`/`compiler` confidence. The separate
+    `mapped_methods` CTE is what makes it a cross product, and this is the
+    test that fails if anyone folds it back into one SELECT.
+
+    `@RequestMapping(value = {"/a", "/b"}, method = {GET, POST})` is the real
+    Spring shape; the annotation here is invented so the pin holds on the
+    generic engine rather than on one framework's catalog file."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rest/OrderResource.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    resource = "com/acme/rest/OrderResource#"
+    handle = "com/acme/rest/OrderResource#handle(sig_5ea17c38)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=resource, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handle,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=resource,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handle,
+            retention="runtime",
+            use=AnnotationUse(annotation="com/acme/rest/Mapping#", args={"value": ["/a", "/b"]}),
+        ),
+    ]
+    write_fact_file(tmp_path / "facts" / "OrderResource.jsonl", document, facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    derive_endpoints(workspace, [_MULTI_PATH_CATALOG], capabilities={"annotation_args"})
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["path"]) for r in rows] == [
+        ("GET", "/a"),
+        ("GET", "/b"),
+        ("POST", "/a"),
+        ("POST", "/b"),
+    ]
 
 
 def _client_facts(root: Path, type_args: dict[str, object]) -> None:
@@ -1017,20 +1103,21 @@ def test_load_catalogs_accepts_a_catalog_whose_values_are_all_in_the_closed_sets
 
 
 def test_broker_family_protocols_load_and_message_is_retired(tmp_path):
-    """New broker family protocols (kafka, jms, sqs, pubsub) load correctly.
-
-    MESSAGE protocol has been retired and replaced with the four specific
-    broker family protocols. This test verifies all four new protocols load
-    and are sorted by filename when returned.
-    """
+    """D00's protocol set names four broker families — `kafka`, `jms`, `sqs`,
+    `pubsub` — in place of the single `message` value they retired, and a
+    catalog declaring any of them loads. The single value could not have said
+    which broker a row addressed, and D01's wire identity is protocol-scoped,
+    so the four are the answer, not a convenience. Loading order is by
+    filename (NFR-1), which is why the assertion is a list rather than a
+    set."""
     _minimal_catalog = """id: {id}
 style: annotation_driven
 protocol: {protocol}
 direction: inbound
 matches: {{}}
 """
+    tmp_path.mkdir(parents=True, exist_ok=True)
     for protocol in ("kafka", "jms", "sqs", "pubsub"):
-        tmp_path.mkdir(parents=True, exist_ok=True)
         filename = f"x-{protocol}.yml"
         content = _minimal_catalog.format(id=filename.replace(".yml", ""), protocol=protocol)
         (tmp_path / filename).write_text(content, encoding="utf-8")
