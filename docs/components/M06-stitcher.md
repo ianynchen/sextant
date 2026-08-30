@@ -39,7 +39,7 @@ Each outbound endpoint runs through four steps. Survivors at the end decide the 
 
 ```
 0. environment   select each participant's resolved values for THE system's environment
-1. protocol      http | soap | grpc | message
+1. protocol      http | soap | grpc | kafka | jms | sqs | pubsub
 2. wire identity path template │ topic name │ fully-qualified service and method
 3. structure     directional payload compatibility
 4. count         the number of survivors decides the resolution
