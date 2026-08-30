@@ -1343,6 +1343,62 @@ def test_an_unlinked_record_argument_derives_unresolved_with_a_null_path(tmp_pat
     assert endpoint["request_shape"] is None
 
 
+def test_a_one_arg_producer_record_never_reports_the_topic_as_the_payload(tmp_path: Path):
+    """Review round 1, MAJOR: a linked constructor whose only argument IS the
+    channel slot (`channel_ctor_arg: 0` on a 1-arg ctor) must not also let
+    `payload_ctor_arg: "last"` resolve to that same slot — doing so would
+    report the topic string back as the payload (`{"wire_type": "string",
+    ...}`), a confidently wrong body for a message with none. The payload
+    capture fails instead, honestly (I1): `request_shape` is None and the
+    row's own `resolution` drops to `unresolved`, exactly as a `body_arg`
+    row's failed capture would — but `path` is untouched, because the
+    channel argument itself read fine; a resolved url already survives a
+    failed body capture the same way."""
+    caller = "com/acme/orders/messaging/EventProducers#publishTombstone()."
+    facts = [
+        _record_ctor(caller, 0, 12, [CallArgument(kind="string", value="order-audit")]),
+        _send_call(caller, 1, [CallArgument(kind="instance", source=12, symbol=PRODUCER_RECORD)]),
+    ]
+    workspace = _resolve(tmp_path, facts, _record_wrappers_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "order-audit"
+    assert endpoint["request_shape"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_record_whose_payload_slot_is_unresolved_still_carries_the_channel(tmp_path: Path):
+    """Review round 1, MINOR (coverage gap the implementer's own report
+    flagged): the channel resolves cleanly off the linked constructor, but
+    the ctor's own payload-position argument is the compiler's `unresolved`
+    (a value passed through as a parameter). Per I1 the declared payload
+    capture still fails and drops the row's `resolution`, but `path` again
+    survives untouched — this is the "capture found something unreadable"
+    half of the guard, distinct from the MAJOR fix's "capture found the
+    wrong thing" half above."""
+    caller = "com/acme/orders/messaging/EventProducers#publishUnknownPayload()."
+    facts = [
+        _record_ctor(
+            caller,
+            0,
+            13,
+            [
+                CallArgument(kind="string", value="order-audit"),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+        _send_call(caller, 1, [CallArgument(kind="instance", source=13, symbol=PRODUCER_RECORD)]),
+    ]
+    workspace = _resolve(tmp_path, facts, _record_wrappers_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "order-audit"
+    assert endpoint["request_shape"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
 def test_a_row_declaring_record_arg_with_body_arg_is_refused_at_run_start(tmp_path: Path):
     """`record_arg` IS the channel+payload source (D02 §2) — a row also
     declaring `body_arg` (or `url_arg`/`channel_arg`/`response_arg`) is

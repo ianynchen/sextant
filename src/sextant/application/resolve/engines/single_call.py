@@ -326,7 +326,16 @@ def _record_arguments(
     `record_wrappers` entry, or no `<init>` call site in this same caller
     links to it. Each of these is I1's declared-capture failure, not a
     crash — the caller derives the row regardless, `resolution:
-    unresolved`."""
+    unresolved`.
+
+    The payload position is also None whenever it resolves to the SAME ctor
+    slot `channel_ctor_arg` already claims — a 1-arg linked constructor with
+    `channel_ctor_arg: 0` and `payload_ctor_arg: "last"` is exactly this
+    collision (Task 7 review, MAJOR). Reporting the topic string back as
+    the payload would be silently wrong rather than an honest capture
+    failure; the channel argument itself is untouched by this guard, so
+    `path` still carries whatever it read (I1: only the declared payload
+    capture failed)."""
     if record is None or record.get("kind") != "instance" or record.get("symbol") is None:
         return None, None
     symbol = str(record["symbol"])
@@ -340,9 +349,13 @@ def _record_arguments(
     ctor_arguments = constructor.get("arguments") or []
     channel_argument = _arg_at(ctor_arguments, channel_ctor_arg)
     if isinstance(payload_ctor_arg, int):
-        payload_argument = _arg_at(ctor_arguments, payload_ctor_arg)
+        payload_index: int | None = payload_ctor_arg
     else:
-        payload_argument = ctor_arguments[-1] if ctor_arguments else None
+        payload_index = len(ctor_arguments) - 1 if ctor_arguments else None
+    if payload_index is None or payload_index == channel_ctor_arg:
+        payload_argument = None
+    else:
+        payload_argument = _arg_at(ctor_arguments, payload_index)
     return channel_argument, payload_argument
 
 
