@@ -1,4 +1,4 @@
-"""`interface_implementation` engine for endpoint derivation (D02 §3b's
+"""`interface_implementation` engine for endpoint derivation (D02 §2's
 `interface_implementation` style).
 
 Unlike `single_call`/`fluent`, the boundary here is not one call's own
@@ -42,7 +42,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     declared no-shape envelope, the `jakarta.jms.Message` precedent): the
     registration names an identity and, where readable, a handler, nothing
     more. `caller`/`peer` are always NULL — the row's own method is a
-    `handler` (inbound only, D02 §3b's example) and a destination is never
+    `handler` (inbound only, D02 §2's `interface_implementation` example) and a destination is never
     split into a peer (§2d)."""
     _validate_matches(catalog)
     matches = catalog.matches
@@ -69,8 +69,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     rows: list[dict[str, Any]] = []
     # Only a resolved wire identity dedups (D02 §2's unresolved-is-an-answer):
     # two unresolved registrations carry no path to compare, so each stays
-    # its own row.
-    seen: set[tuple[str, str, str]] = set()
+    # its own row. `handler` is PART of that identity, not decoration: two
+    # registrations of the SAME channel by two DIFFERENT receivers — two
+    # `@KafkaHandler`-shaped methods sharing one subscription is the real
+    # precedent (`test_pipeline.py`) — are two distinct facts, and a key that
+    # dropped `handler` would silently discard the second one. Duplicate
+    # registrations of the SAME handler on the SAME channel still collapse,
+    # exactly as every other style's own wire-identity dedup does.
+    seen: set[tuple[str, str, str, str]] = set()
     # `call_sites` is already ordered `caller, ordinal` (NFR-1); filtering it
     # in place, rather than grouping by owner first, keeps that order.
     for site in call_sites:
@@ -85,16 +91,23 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # them filled.
         facts = CallFacts(supertypes={}, caller_call_sites=by_caller.get(caller, []), referenced=[])
         channel_argument = _arg_at(arguments, channel_arg)
-        destinations = (
-            linked_channels(channel_argument, facts, forms)
-            if "channel_via" in registration
-            else [channel_of(channel_argument)]
-        )
+        # The capture ladder is a LADDER, not an either/or (D02 §2's
+        # `channel_via` precedent, `single_call`'s own non-exclusive reading
+        # of the two): a `channel_via`-declared row still tries the literal
+        # read FIRST — `Subscriber.newBuilder(String, MessageReceiver)`
+        # really exists alongside the `ProjectSubscriptionName` overload — and
+        # only falls back to the linked call when the argument itself is not
+        # a resolved string literal.
+        literal = channel_of(channel_argument)
+        if literal[2] != "resolved" and "channel_via" in registration:
+            destinations = linked_channels(channel_argument, facts, forms)
+        else:
+            destinations = [literal]
         receiver_argument = _arg_at(arguments, receiver_arg)
         handler = _handler_of(receiver_argument, handler_method, interface_symbol, implemented)
         for peer, path, resolution in destinations:
             if path is not None:
-                key = (catalog.protocol, catalog.direction, path)
+                key = (catalog.protocol, catalog.direction, path, handler or "")
                 if key in seen:
                     continue
                 seen.add(key)
@@ -125,7 +138,7 @@ def _handler_of(
     interface_symbol: str,
     implemented: dict[str, list[str]],
 ) -> str | None:
-    """D02 §3b's handler rule: a `lambda`-kind receiver resolves to its own
+    """D02 §2's `interface_implementation` handler rule: a `lambda`-kind receiver resolves to its own
     synthetic body method symbol (D00 §5a), verbatim — the lambda IS the
     handler, whatever the declared interface's own method is named. An
     `instance`-kind receiver (a `NEW`-produced named class) resolves to
@@ -191,7 +204,7 @@ def _validate_matches(catalog: Catalog) -> None:
         raise CatalogError(
             f"loading catalog {catalog.source}: `matches` is missing "
             f"{', '.join(missing)} — `interface_implementation` needs `interface`, "
-            f"`handler_method` and `registration` (D02 §3b)"
+            f"`handler_method` and `registration` (D02 §2's `interface_implementation` style)"
         )
     registration = matches["registration"]
     missing_registration = [key for key in _REQUIRED_REGISTRATION if key not in registration]
@@ -199,7 +212,7 @@ def _validate_matches(catalog: Catalog) -> None:
         raise CatalogError(
             f"loading catalog {catalog.source}: `registration` is missing "
             f"{', '.join(missing_registration)} — `registration` needs `owner`, `method`, "
-            f"`channel_arg` and `receiver_arg` (D02 §3b)"
+            f"`channel_arg` and `receiver_arg` (D02 §2's `interface_implementation` style)"
         )
     for entry in _channel_via_entries(registration):
         valid = (

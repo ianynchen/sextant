@@ -333,10 +333,14 @@ matches:
 
 `registration` is `{owner, method, channel_arg, receiver_arg, channel_via?}` — the one
 call site that binds a receiver to a channel. **`channel_arg` reads through the same
-capture ladder §2h's `channel_via` already defines**: a string literal at that position
-resolves directly; declared `channel_via` forms follow the linked call's own argument
-instead (`ProjectSubscriptionName.of`'s own `name` argument, not `newBuilder`'s); anything
-else is `path` NULL, `unresolved` — the registration was made, only its channel is unread.
+capture ladder §2h's `channel_via` already defines, tried in that order**: a string
+literal at that position resolves directly first — `Subscriber.newBuilder(String,
+MessageReceiver)` is a real overload alongside the `ProjectSubscriptionName` one, and a
+`channel_via`-declared row must still catch it — and only when the argument is not a
+resolved string literal does a declared `channel_via` form follow the linked call's own
+argument instead (`ProjectSubscriptionName.of`'s own `name` argument, not `newBuilder`'s);
+anything else is `path` NULL, `unresolved` — the registration was made, only its channel
+is unread.
 
 **`receiver_arg` is the argument that names the handler**, read one of two ways depending
 on what the compiler resolved it to: a `lambda`-kind argument resolves to its own
@@ -366,7 +370,12 @@ with no further join to prove the subscription actually ran.
 Per registration call site: one row per resolved channel tuple, `direction`/`protocol` the
 catalog's own declared fields, `method` always NULL (the style is verbless — a subscription
 has no verb), `caller`/`peer` always NULL (the deriving method is a `handler`, never a
-`caller`, and a channel is never split into a peer, §2d). **`request_shape`/`response_shape`
+`caller`, and a channel is never split into a peer, §2d). **A resolved row's wire identity
+includes `handler`**: two registrations of the *same* channel by the *same* handler
+collapse to one row (the usual duplicate-registration merge every style keeps), but two
+*different* handlers registered on the same channel — two `@KafkaHandler`-shaped consumers
+sharing one subscription, say — each keep their own row; dropping `handler` from the key
+would silently discard the second registration's own evidence. **`request_shape`/`response_shape`
 are always NULL** — `PubsubMessage` is a declared no-shape envelope: the registration names
 an identity and, where readable, a handler, never a payload. This is the same
 honest-absence precedent a future messaging catalog whose payload is likewise opaque

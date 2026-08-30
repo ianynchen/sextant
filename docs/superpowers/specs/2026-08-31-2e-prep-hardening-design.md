@@ -171,7 +171,7 @@ matches:
     channel_arg: 0
     receiver_arg: 1
     channel_via:
-      - { owner: com.google.cloud.pubsub.v1.ProjectSubscriptionName, method: of, arg: 1 }
+      - { owner: com.google.pubsub.v1.ProjectSubscriptionName, method: of, arg: 1 }
 ```
 
 The derivation joins two facts per registration call site:

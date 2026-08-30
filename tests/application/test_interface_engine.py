@@ -1,4 +1,4 @@
-"""Tests for the `interface_implementation` engine (D02 §3b's
+"""Tests for the `interface_implementation` engine (D02 §2's
 `interface_implementation` style) — the registration/receiver join over a
 class's own declared `interfaces` (D00 §5a's `implemented_interfaces`
 capability).
@@ -104,13 +104,17 @@ def _linked_of_site(caller: str, value: str | None, *, result: int = 7) -> CallS
     )
 
 
-def _receiver_symbol_fact(interfaces: list[str] | None = None) -> SymbolFact:
+def _symbol_fact(type_symbol: str, interfaces: list[str] | None = None) -> SymbolFact:
     return SymbolFact(
         document_id="doc_1",
-        symbol=_MODULE + RECEIVER_TYPE,
+        symbol=_MODULE + type_symbol,
         construct_kind=ConstructKind.CLASS,
         interfaces=[] if interfaces is None else interfaces,
     )
+
+
+def _receiver_symbol_fact(interfaces: list[str] | None = None) -> SymbolFact:
+    return _symbol_fact(RECEIVER_TYPE, interfaces)
 
 
 def _catalog(
@@ -280,7 +284,7 @@ def test_an_implementing_class_never_registered_derives_nothing(tmp_path: Path):
     facts = [
         # The class implements the interface, but no `newBuilder` call site
         # ever hands it to a registration — implementing an interface is not
-        # an endpoint (D02 §3b).
+        # an endpoint (D02 §2's `interface_implementation` style).
         _receiver_symbol_fact([_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
     ]
     workspace = _resolve(tmp_path, facts)
@@ -291,10 +295,28 @@ def test_an_implementing_class_never_registered_derives_nothing(tmp_path: Path):
 
 
 # --- (f) a registered instance whose type does NOT implement the interface -
+# Two ways a type fails to qualify: never scanned as implementing anything
+# at all, or scanned and found to implement a DIFFERENT interface entirely
+# — both are the same honest "not this one" answer, never a fabricated
+# handler.
 
 
+@pytest.mark.parametrize(
+    "extra_facts",
+    [
+        pytest.param([], id="never-scanned-as-implementing-anything"),
+        pytest.param(
+            [
+                _symbol_fact(
+                    OTHER_TYPE, [_MODULE + "com/acme/messaging/raw/SomeUnrelatedInterface#"]
+                )
+            ],
+            id="scanned-but-implements-a-different-interface",
+        ),
+    ],
+)
 def test_a_registered_instance_whose_type_does_not_implement_the_interface_has_a_null_handler(
-    tmp_path: Path,
+    tmp_path: Path, extra_facts: list
 ):
     facts = [
         _linked_of_site(CALLER, "raw-notify"),
@@ -303,9 +325,7 @@ def test_a_registered_instance_whose_type_does_not_implement_the_interface_has_a
             CallArgument(kind="unresolved", source=7),
             CallArgument(kind="instance", source=8, symbol=OTHER_TYPE),
         ),
-        # `OTHER_TYPE` carries no symbol fact at all (never scanned as
-        # implementing anything) — the same honest answer as a symbol fact
-        # whose own `interfaces` names a different interface entirely.
+        *extra_facts,
     ]
     workspace = _resolve(tmp_path, facts)
     [endpoint] = workspace.query("endpoints")
@@ -314,6 +334,75 @@ def test_a_registered_instance_whose_type_does_not_implement_the_interface_has_a
     assert endpoint["path"] == "raw-notify"
     assert endpoint["resolution"] == "resolved"
     assert endpoint["handler"] is None
+
+
+# --- Fix round 1, item 1: `handler` is part of the dedup key ---------------
+# Two DIFFERENT receivers registered on the SAME channel — the
+# `@KafkaHandler`-shaped precedent of two consumer methods sharing one
+# subscription (`test_pipeline.py`) — must both survive, each with its own
+# `handler`. A key that dropped `handler` would silently discard the second
+# registration's own row.
+
+
+def test_two_receivers_registered_on_the_same_channel_both_derive_their_own_row(
+    tmp_path: Path,
+):
+    other_caller = "com/acme/messaging/raw/RawPubSubSubscribers#withAnotherNamedReceiver()."
+    interfaces = [_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]
+    facts = [
+        _linked_of_site(CALLER, "raw-notify"),
+        _registration_site(
+            CALLER,
+            CallArgument(kind="unresolved", source=7),
+            CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
+        ),
+        _receiver_symbol_fact(interfaces),
+        _linked_of_site(other_caller, "raw-notify"),
+        _registration_site(
+            other_caller,
+            CallArgument(kind="unresolved", source=7),
+            CallArgument(kind="instance", source=8, symbol=OTHER_TYPE),
+        ),
+        _symbol_fact(OTHER_TYPE, interfaces),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    endpoints = {e["handler"]: e for e in workspace.query("endpoints")}
+    workspace.close()
+
+    assert set(endpoints) == {
+        RECEIVER_TYPE + "receiveMessage",
+        OTHER_TYPE + "receiveMessage",
+    }
+    for endpoint in endpoints.values():
+        assert endpoint["path"] == "raw-notify"
+        assert endpoint["resolution"] == "resolved"
+
+
+# --- Fix round 1, item 2: the channel ladder tries the literal read first --
+# `channel_via` is declared alongside a genuine literal overload
+# (`Subscriber.newBuilder(String, MessageReceiver)`) — a catalog naming
+# `channel_via` must still resolve a plain string argument directly, never
+# fall through to (and fail) the linked-call follow.
+
+
+def test_a_channel_via_registration_still_resolves_a_plain_string_literal(tmp_path: Path):
+    facts = [
+        # No linked `of` call site at all — the ladder must not need one.
+        _registration_site(
+            CALLER,
+            CallArgument(kind="string", value="raw-notify-literal"),
+            CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
+        ),
+        _receiver_symbol_fact([_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
+    ]
+    # The default catalog (`_catalog()`) declares `channel_via`.
+    workspace = _resolve(tmp_path, facts)
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["path"] == "raw-notify-literal"
+    assert endpoint["resolution"] == "resolved"
+    assert endpoint["handler"] == RECEIVER_TYPE + "receiveMessage"
 
 
 # --- (g) malformed matches: CatalogError, naming the file -------------------
@@ -426,8 +515,8 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
                 "receiver_arg": 1,
                 "channel_via": [
                     # CHECKPOINT FACT: the real package is `com.google.pubsub.v1`,
-                    # never `com.google.cloud.pubsub.v1` — the design doc's own
-                    # §3b example names the wrong package for this one form.
+                    # never `com.google.cloud.pubsub.v1` — pinned against the real
+                    # fixture, not assumed from the design doc's own example.
                     {
                         "owner": "com.google.pubsub.v1.ProjectSubscriptionName",
                         "method": "of",
