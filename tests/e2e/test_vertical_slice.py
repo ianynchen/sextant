@@ -57,6 +57,15 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # producer catalogs' own `KafkaTemplate.send`), so it appears once in
     # each of the inbound and outbound sections.
     assert "kafka order-events" in document
+    # Phase 2D (Task 12): the @SendTo reply row keeps its own identity —
+    # `order-return-receipts` never merges into `order-returns`, since the
+    # reply topic is a distinct destination — and carries its own contract
+    # (`onReturn`'s return type, ReceiptView) rather than the handler's.
+    assert "kafka order-return-receipts" in document
+    # A NULL-path outbound messaging row (no literal destination resolved —
+    # here `sendDefault`) renders `{protocol} (unresolved)`, the same
+    # honesty rule as the HTTP `GET (unresolved)` row above.
+    assert "kafka (unresolved)" in document
 
 
 def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_path: Path):
@@ -91,6 +100,26 @@ def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_
 def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     _run(tmp_path)  # analyze + render + export
+    # Phase 2D (Task 12): metadata.json's own direction/protocol buckets
+    # (written by analyze, D05 §3) count every messaging protocol too, a
+    # `both` row counting on both sides (metadata.py's own rule) — the same
+    # 55-endpoint fixture as the endpoints.parquet check below, viewed
+    # through the other artifact.
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert metadata["endpoints"]["inbound"] == {
+        "http": 18,
+        "jms": 2,
+        "kafka": 8,
+        "pubsub": 1,
+        "sqs": 1,
+    }
+    assert metadata["endpoints"]["outbound"] == {
+        "http": 19,
+        "jms": 2,
+        "kafka": 7,
+        "pubsub": 1,
+        "sqs": 2,
+    }
     runner = CliRunner()
     result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
     assert result.exit_code == 0, result.output
