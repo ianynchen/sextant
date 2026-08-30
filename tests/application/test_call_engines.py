@@ -9,7 +9,9 @@ bytecode, so each behaviour is isolated and fast."""
 import json
 from pathlib import Path
 
-from sextant.application.ports.catalogs import Catalog
+import pytest
+
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.contracts import split_url
@@ -1189,3 +1191,285 @@ def test_okhttp_build_joins_newcall_through_the_argument_source(tmp_path: Path):
     )
     assert endpoint["resolution"] == "resolved"
     assert abandoned_endpoints == []
+
+
+# --- Fix round 1: owner-gated steps, the terminal_via_argument mapping, and
+# the void-mid-chain guard's own covering test. -----------------------------
+
+REQUEST_BODY_SPEC = "com/acme/http/RestClient$RequestBodySpec#"
+RESTCLIENT_RESPONSE_SPEC = "com/acme/http/RestClient$ResponseSpec#"
+RESTCLIENT = "com/acme/http/RestClient#"
+
+# RestClient's own `body` reused for two different roles on two different
+# types — a request-setter on `RequestBodySpec`, a response-extractor on
+# `ResponseSpec` — distinguishable only by `owner`, never by method name
+# alone (D02 §4, amended).
+_RESTCLIENT_MATCHES = {
+    "roots": [
+        {"owner": "com.acme.http.RestClient", "method": "post", "captures": {"http_method": "POST"}}
+    ],
+    "steps": [
+        {"method": "uri", "captures": {"url": "arg0"}},
+        {
+            "method": "body",
+            "owner": "com.acme.http.RestClient$RequestBodySpec",
+            "captures": {"body": "arg0"},
+        },
+        {
+            "method": "body",
+            "owner": "com.acme.http.RestClient$ResponseSpec",
+            "captures": {"response": "arg0"},
+        },
+    ],
+    "terminal": ["retrieve"],
+}
+
+
+def test_an_owner_scoped_step_disambiguates_a_reused_method_name(tmp_path: Path):
+    """Two `body` steps, same method name, correctly captured into two
+    different fields — `body` (the request) and `response` — purely because
+    each declares a different `owner` and the walk matches each row's own
+    owner against it, not the method name alone."""
+    caller = "com/acme/http/Client#createOrder()."
+    facts = [
+        _call(caller, RESTCLIENT, "post", 0, receiver=3, result=4),
+        _call(
+            caller,
+            REQUEST_BODY_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+        _call(
+            caller,
+            REQUEST_BODY_SPEC,
+            "body",
+            2,
+            receiver=10,
+            result=13,
+            arguments=[CallArgument(kind="instance", symbol=ORDER_REQUEST)],
+        ),
+        _call(caller, REQUEST_BODY_SPEC, "retrieve", 3, receiver=13, result=16),
+        _call(
+            caller,
+            RESTCLIENT_RESPONSE_SPEC,
+            "body",
+            4,
+            receiver=16,
+            result=19,
+            arguments=[CallArgument(kind="class", symbol=ORDER_VIEW)],
+        ),
+    ]
+    workspace = _resolve_fluent(
+        tmp_path, facts, _fluent_catalog(_RESTCLIENT_MATCHES, "invented-restclient")
+    )
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["method"], endpoint["path"]) == ("POST", "/orders")
+    assert json.loads(endpoint["request_shape"]) == {
+        "wire_type": "object",
+        "wire_format": "",
+        "nullable": True,
+        "shape_id": ORDER_REQUEST,
+    }
+    assert json.loads(endpoint["response_shape"]) == {
+        "wire_type": "object",
+        "wire_format": "",
+        "nullable": True,
+        "shape_id": ORDER_VIEW,
+    }
+
+
+def test_two_same_named_steps_with_no_distinguishing_owner_is_refused(tmp_path: Path):
+    """Silent last-wins on two `body` steps that never declare — or share —
+    an `owner` would hide the exact catalog bug §4's owner filter exists to
+    surface. Refused loudly, naming the file, per `ports/catalogs.py`'s own
+    discipline: an unchecked value never stays in the file."""
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.http.RestClient",
+                "method": "post",
+                "captures": {"http_method": "POST"},
+            }
+        ],
+        "steps": [
+            {"method": "body", "captures": {"body": "arg0"}},
+            {"method": "body", "captures": {"response": "arg0"}},
+        ],
+        "terminal": ["retrieve"],
+    }
+    catalog = _fluent_catalog(matches, "invented-ambiguous")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-ambiguous.yml" in str(raised.value)
+    assert "body" in str(raised.value)
+
+
+LOGGER = "com/acme/http/Logger#"
+
+_OKHTTP_FILTERED_MATCHES = {
+    "roots": [
+        {
+            "owner": "com.acme.http.Request$Builder",
+            "method": "<init>",
+            "captures": {"http_method": "GET"},
+        }
+    ],
+    "steps": [{"method": "url", "captures": {"url": "arg0"}}],
+    "terminal": [
+        {
+            "method": "build",
+            "terminal_via_argument": {"owner": "com.acme.http.OkHttpClient", "method": "newCall"},
+        }
+    ],
+}
+
+
+def test_terminal_via_argument_mapping_excludes_a_non_executing_use(tmp_path: Path):
+    """The reviewer's fabrication channel: a bare `terminal_via_argument:
+    true` completes the chain for ANY row consuming the built value, so a
+    `log.debug("…", request)` alongside a genuine, never-called
+    `client.newCall(request)` would derive an endpoint for a request that
+    was built and logged but never sent. An `{owner, method}` mapping closes
+    it — narrowing the join to the one declared executing call — proved here
+    both ways: `logged_only` (debug, no `newCall`) derives nothing;
+    `logged_then_sent` (debug AND the real `newCall`) derives correctly, so
+    the mapping discriminates rather than simply disabling the join."""
+    catalog = _fluent_catalog(_OKHTTP_FILTERED_MATCHES, "invented-okhttp-filtered")
+    logged_only = "com/acme/http/Client#loggedButNeverSent()."
+    logged_then_sent = "com/acme/http/Client#loggedThenSent()."
+
+    def _builder_chain(caller: str) -> list:
+        return [
+            _call(caller, BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+            _call(
+                caller,
+                BUILDER,
+                "url",
+                1,
+                receiver=2,
+                result=8,
+                arguments=[
+                    CallArgument(kind="string", value="https://legacy.acme.internal/legacy/exports")
+                ],
+            ),
+            _call(caller, BUILDER, "build", 2, receiver=8, result=14),
+        ]
+
+    def _debug_log(caller: str) -> CallSiteFact:
+        return _call(
+            caller,
+            LOGGER,
+            "debug",
+            3,
+            receiver=None,
+            result=None,
+            arguments=[CallArgument(kind="instance", source=14, symbol=REQUEST)],
+        )
+
+    facts = [
+        *_builder_chain(logged_only),
+        _debug_log(logged_only),
+        *_builder_chain(logged_then_sent),
+        _debug_log(logged_then_sent),
+        _call(
+            logged_then_sent,
+            OKHTTP_CLIENT,
+            "newCall",
+            4,
+            receiver=99,
+            result=20,
+            arguments=[CallArgument(kind="instance", source=14, symbol=REQUEST)],
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    logged_only_endpoints = [e for e in workspace.query("endpoints") if e["caller"] == logged_only]
+    sent_endpoints = [e for e in workspace.query("endpoints") if e["caller"] == logged_then_sent]
+    workspace.close()
+
+    assert logged_only_endpoints == []
+    [endpoint] = sent_endpoints
+    assert (endpoint["method"], endpoint["peer"], endpoint["path"]) == (
+        "GET",
+        "legacy.acme.internal",
+        "/legacy/exports",
+    )
+
+
+def test_a_void_step_past_the_terminal_never_chains_into_an_unrelated_static_call(
+    tmp_path: Path,
+):
+    """A void, non-constructor row's own chain key is `None` (D00 §5: no
+    `result` for a `void` method) — the identical bucket a static call's own
+    `receiver` sits in. Without the guard, `subscribe()`'s own dead end would
+    fan out into every unrelated static call sharing that bucket in this
+    caller (here, an unrelated logging call), each a spurious extra
+    continuation of the SAME chain. Exactly one endpoint must derive."""
+    caller = "com/acme/http/Client#getOrderAndLog()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders/{id}")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 2, receiver=10, result=13),
+        _call(
+            caller,
+            RESPONSE_SPEC,
+            "bodyToMono",
+            3,
+            receiver=13,
+            result=16,
+            arguments=[CallArgument(kind="class", symbol=ORDER_VIEW)],
+        ),
+        # A void step chained off the post-terminal `bodyToMono` — its own
+        # chain key is None.
+        _call(caller, "reactor/core/publisher/Mono#", "subscribe", 4, receiver=16, result=None),
+        # Two unrelated, void static calls elsewhere in this same caller —
+        # `receiver` is None for both (D00 §5: null for statics), the same
+        # bucket `subscribe`'s own chain key falls into. Two of them, not
+        # one: without the guard, each would also look itself up by that
+        # same `None` key and find the other, so the fabricated detour does
+        # not merely revisit `subscribe` (whose own `receiver` is 16, not
+        # None, so it is not even a member of that bucket) — it cycles
+        # between the two statics forever, which is what actually makes this
+        # case a *regression* test rather than one dedup alone would mask.
+        _call(
+            caller,
+            LOGGER,
+            "info",
+            5,
+            receiver=None,
+            result=None,
+            arguments=[CallArgument(kind="string", value="done")],
+        ),
+        _call(
+            caller,
+            LOGGER,
+            "flush",
+            6,
+            receiver=None,
+            result=None,
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_WEBCLIENT_MATCHES))
+    endpoints = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert len(endpoints) == 1
+    assert (endpoints[0]["method"], endpoints[0]["path"]) == ("GET", "/orders/{id}")

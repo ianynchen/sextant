@@ -1031,7 +1031,7 @@ def test_catalog_naming_a_style_with_no_engine_is_refused_by_file(tmp_path: Path
     with pytest.raises(CatalogError) as raised:
         derive_endpoints(_UnusedWorkspace(), catalogs, capabilities=set())
 
-    assert "fluent" in str(raised.value)
+    assert "interface_implementation" in str(raised.value)
     assert "annotation_driven" in str(raised.value)
     assert "invented.yml" in str(raised.value)
 

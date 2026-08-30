@@ -208,11 +208,17 @@ matches:
 
 **`roots` replaces the single `root`** — a builder library commonly has several
 verb-carrying entry points, each seeding its own `captures`, so this is a list rather than
-one fixed starting point. **`steps` are owner-free**: a step matches by method name alone,
-because the same builder-shaped call sequence appears on more than one concrete type across
-a library's surface and an owner gate would just make the catalog repeat itself. **`terminal`
-is a list**, for the same reason `roots` is — WebClient reaches its response two ways
-(`retrieve` and `exchange`), and both end the chain.
+one fixed starting point. **`steps` are owner-free by default**: a step matches by method
+name alone, because the same builder-shaped call sequence appears on more than one concrete
+type across a library's surface and an owner gate would just make the catalog repeat itself.
+A step may still declare an `owner` where the library itself reuses one method name for two
+different roles on two different types — RestClient's `body(Object)` (a request-setter on
+its `RequestBodySpec`) and `body(Class)` (a response-extractor on its `ResponseSpec`) are
+otherwise indistinguishable by name alone. Two step entries sharing a method name with no
+`owner` telling them apart — or the same `owner` — is a broken catalog, refused by name at
+load: silent last-wins would hide exactly that bug. **`terminal` is a list**, for the same
+reason `roots` is — WebClient reaches its response two ways (`retrieve` and `exchange`), and
+both end the chain.
 
 Per chain reaching a terminal: fold captures in order, last wins, and derive one endpoint —
 verb from the root, path from the url capture (or `unresolved`, exactly as `single_call`'s
@@ -228,8 +234,13 @@ happen to run close together.
 client library. It is the reason that capability matters. Catalogs on this engine:
 `spring-webclient.yml`, `spring-restclient.yml` (the synchronous twin), `okhttp.yml`
 (`Request$Builder` root, `url`/`post` steps, a `build` terminal joined to `newCall` through
-the argument `source` id — [D00](D00-fact-schema.md) §5's `arguments[].source`, not a
-separate catalog field).
+the argument `source` id — [D00](D00-fact-schema.md) §5's `arguments[].source`). A terminal
+entry's `terminal_via_argument` is ordinarily the bare flag `true`: any row carrying that
+argument link completes the chain. Where a builder's own value could reach more than one
+consumer — `Request r = builder.build(); log.debug("…", r);` alongside the real
+`client.newCall(r)` — a catalog instead writes `terminal_via_argument: {owner, method}`, and
+the join narrows to that one declared call; every other consumer of the same value no longer
+counts.
 
 ### `interface_implementation`
 

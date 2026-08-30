@@ -4,10 +4,13 @@ No single call carries the declaration here — the request is assembled
 across several calls on a builder, so the derivation is a walk over one
 caller's own `call_sites`, following each `result → receiver` link (D00 §5).
 `matches` names `roots` (an owner+method pair that starts a chain, seeding
-literal captures such as the verb), owner-free `steps` (a method name whose
-captures fold into the running chain wherever it is reached, last wins), and
-`terminal` (the method names — or, for the OkHttp join, a `{method,
-terminal_via_argument}` entry — that make a chain executable).
+literal captures such as the verb), `steps` (a method name, owner-free by
+default, whose captures fold into the running chain wherever it is reached,
+last wins — an optional `owner` narrows a step to one type, needed only
+where a library reuses a method name for two different roles on two
+different types), and `terminal` (the method names — or, for the OkHttp
+join, a `{method, terminal_via_argument}` entry, `true` or an `{owner,
+method}` mapping that narrows the join — that make a chain executable).
 
 `terminal` marks *executability*, not the walk's end: captures keep folding
 past it, exactly as a real WebClient chain's `bodyToMono` follows `retrieve`.
@@ -27,7 +30,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from sextant.application.ports.catalogs import Catalog
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.contracts import (
     CallFacts,
@@ -62,7 +65,20 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         }
         for root in matches.get("roots", [])
     ]
-    step_captures = {step["method"]: step.get("captures", {}) for step in matches.get("steps", [])}
+    steps = [
+        {
+            "method": step["method"],
+            # Steps stay owner-free by default (D02 §4) — `owner` is an
+            # optional filter, needed only where a library reuses one method
+            # name for two different roles on two different types (a
+            # RestClient's `body(Object)` request-setter and its
+            # `body(Class)` response-extractor).
+            "owner": _catalog_symbol(step["owner"]) if "owner" in step else None,
+            "captures": step.get("captures", {}),
+        }
+        for step in matches.get("steps", [])
+    ]
+    _validate_steps(steps, catalog)
     terminal_names, via_argument_names = _terminal_index(matches.get("terminal", []))
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
@@ -108,7 +124,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             caller=caller,
             sites=sites,
             by_receiver=by_receiver,
-            step_captures=step_captures,
+            steps=steps,
             terminal_names=terminal_names,
             via_argument_names=via_argument_names,
             catalog=catalog,
@@ -140,9 +156,9 @@ class _ChainContext:
     caller: str
     sites: list[dict[str, Any]]
     by_receiver: dict[Any, list[dict[str, Any]]]
-    step_captures: dict[str, dict[str, Any]]
+    steps: list[dict[str, Any]]
     terminal_names: set[str]
-    via_argument_names: set[str]
+    via_argument_names: dict[str, dict[str, str] | None]
     catalog: Catalog
     facts: CallFacts
     carrier_rules: CarrierRules
@@ -164,7 +180,8 @@ def _walk(
     still fold past it."""
     name = str(site["name"])
     if name in context.terminal_names or (
-        name in context.via_argument_names and _has_execute_join(site, context.sites)
+        name in context.via_argument_names
+        and _has_execute_join(site, context.sites, context.via_argument_names[name])
     ):
         reached_terminal = True
     chain_key = _chain_key(site)
@@ -188,7 +205,7 @@ def _walk(
         return
     for next_site in nexts:
         next_captures = dict(captures)
-        declared = context.step_captures.get(str(next_site["name"]))
+        declared = _matching_step(next_site, context.steps)
         if declared:
             # Last wins (D02 §4): a repeated step overwrites its own earlier
             # capture here, in visitation order, with no extra bookkeeping.
@@ -279,38 +296,98 @@ def _matching_root(site: dict[str, Any], roots: list[dict[str, Any]]) -> dict[st
     )
 
 
-def _terminal_index(entries: list[Any]) -> tuple[set[str], set[str]]:
+def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The one declared step matching `site`, or None where nothing does —
+    "unmatched steps pass through uncaptured" (D02 §4). An owner-less step
+    matches any owner; `_validate_steps` already refused any catalog where
+    more than one entry could match the same row, so at most one candidate
+    here ever applies."""
+    name = str(site["name"])
+    return next(
+        (
+            step["captures"]
+            for step in steps
+            if step["method"] == name and step["owner"] in (None, site["owner"])
+        ),
+        None,
+    )
+
+
+def _validate_steps(steps: list[dict[str, Any]], catalog: Catalog) -> None:
+    """Refuses a catalog where two step entries share a method name with no
+    `owner` telling them apart — silent last-wins would hide exactly the bug
+    it is meant to catch (`ports/catalogs.py`'s own discipline: an unchecked
+    value does not stay in the file). Two entries are distinguishable only
+    when BOTH declare an `owner` and the owners differ; an owner-less entry
+    matches every owner, so it collides with any sibling regardless of what
+    that sibling declares."""
+    by_method: dict[str, list[dict[str, Any]]] = {}
+    for step in steps:
+        by_method.setdefault(step["method"], []).append(step)
+    for method, group in by_method.items():
+        if len(group) < 2:
+            continue
+        owners = [step["owner"] for step in group]
+        if any(owner is None for owner in owners) or len(set(owners)) != len(owners):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: steps named `{method}` need distinct "
+                f"`owner`s to tell them apart (D02 §4's fluent style)"
+            )
+
+
+def _terminal_index(
+    entries: list[Any],
+) -> tuple[set[str], dict[str, dict[str, str] | None]]:
     """Splits `matches.terminal` into method names that end a chain on their
     own, and ones that only do so through the execute-join (checkpoint
     ruling: the catalog marks it `terminal_via_argument: true` on the
     terminal entry) — the OkHttp shape, where `build`'s own row carries no
-    link to `newCall` except through a *different* row's argument `source`."""
+    link to `newCall` except through a *different* row's argument `source`.
+    A bare `true` joins to any row carrying the argument link; an
+    `{owner, method}` mapping instead narrows the join to that one declared
+    call, closing the fabrication a bare join leaves open — `Request r =
+    builder.build(); log.debug("…", r)` consumes `build`'s own result too,
+    and without a filter that non-executing use would complete the chain."""
     plain: set[str] = set()
-    via_argument: set[str] = set()
+    via_argument: dict[str, dict[str, str] | None] = {}
     for entry in entries:
         if isinstance(entry, str):
             plain.add(entry)
-        elif entry.get("terminal_via_argument"):
-            via_argument.add(entry["method"])
-        else:
+            continue
+        marker = entry.get("terminal_via_argument")
+        if not marker:
             plain.add(entry["method"])
+            continue
+        via_argument[entry["method"]] = (
+            {"owner": _catalog_symbol(marker["owner"]), "method": marker["method"]}
+            if isinstance(marker, dict)
+            else None
+        )
     return plain, via_argument
 
 
-def _has_execute_join(site: dict[str, Any], sites: list[dict[str, Any]]) -> bool:
+def _has_execute_join(
+    site: dict[str, Any], sites: list[dict[str, Any]], join_filter: dict[str, str] | None
+) -> bool:
     """Whether some row in this same caller carries an argument whose
     `source` names `site`'s own `result` — the OkHttp `build()` → `newCall()`
     split, joined through D00 §5's `arguments[].source` rather than through
     `receiver`/`result` chaining, because `newCall`'s own receiver is the
-    client, not the request builder."""
+    client, not the request builder. `join_filter`, when the catalog
+    declared one, additionally requires the joining row itself to be that
+    exact owner+method — otherwise any consumer of the built value (a log
+    statement, an equality check) would count as executing it."""
     result = site["result"]
     if result is None:
         return False
-    return any(
-        argument.get("source") == result
-        for candidate in sites
-        for argument in candidate["arguments"]
-    )
+    for candidate in sites:
+        if join_filter is not None and (
+            candidate["owner"] != join_filter["owner"] or candidate["name"] != join_filter["method"]
+        ):
+            continue
+        if any(argument.get("source") == result for argument in candidate["arguments"]):
+            return True
+    return False
 
 
 def _chain_key(site: dict[str, Any]) -> Any:
