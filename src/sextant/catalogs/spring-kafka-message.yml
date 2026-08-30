@@ -1,0 +1,113 @@
+id: spring-kafka-message
+displayName: Spring Kafka (MessageBuilder-assembled send)
+style: fluent
+protocol: kafka
+direction: outbound
+
+detect:
+  coordinates: ["org.springframework.kafka:spring-kafka"]
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  # `MessageBuilder.withPayload(event)` is a static factory root — the same
+  # non-`<init>` static-root chain-key shape `aws-sqs-sdk.yml`/
+  # `google-pubsub-publisher.yml` already use (CP-3). Verbless (D02 §2's
+  # verbless row, Task 11 precondition): a message send has no HTTP-style
+  # verb.
+  roots:
+    - { owner: org.springframework.messaging.support.MessageBuilder, method: withPayload,
+        captures: { body: arg0 } }
+  # DIVERGENCE FROM THE PLAN'S OWN CHECKPOINT SHORTHAND (found and verified
+  # live at this task's checkpoint, real `javap` disassembly, the same
+  # `aws-sqs-sdk.yml` "declared capture reached but unreadable" precedent):
+  # `RawKafkaMessageSender#send(OrderEvent event)` passes `event` — its own
+  # bare method parameter, `aload_1` straight into `withPayload` — never a
+  # `NEW`-constructed instance, so the scanner reads it as D00 §5's
+  # `unresolved` kind, not `instance`. Ruling I1: a DECLARED capture that
+  # reached but could not be read drops the whole row's own `resolution`,
+  # even though the topic identity below resolves perfectly fine — so this
+  # catalog's own row derives `path: raw-messages`, `resolution:
+  # unresolved`, standing beside (not instead of) the pre-existing
+  # `spring-kafka-template.yml` `record_arg` sibling (`path: NULL`) the
+  # spec §4 ruling already names — two honestly different unresolved facts
+  # about the same one call, never a guessed resolved answer.
+  # `setHeader(KafkaHeaders.TOPIC, "raw-messages")` — D02 §2b's value-guarded
+  # step. CHECKPOINT FACT (Task 6): `KafkaHeaders.TOPIC` inlines to the
+  # literal string constant `"kafka_topic"` at the call site, so the
+  # `when` guard's own literal comparison is sound without ever reading the
+  # constant's own symbol — any OTHER `setHeader` call on the same chain
+  # still matches this step (D02 §2b: "the step matches the chain either
+  # way"), only its own capture does not apply.
+  steps:
+    - { method: setHeader, when: { arg: 0, equals: "kafka_topic" }, captures: { url: arg1 } }
+  # `build`'s own result reaches `KafkaTemplate#send`'s own argument
+  # `source` — the same `terminal_via_argument` join every other
+  # builder-shaped catalog in this file uses (`aws-sqs-sdk.yml`,
+  # `google-pubsub-publisher.yml`).
+  terminal:
+    - { method: build, terminal_via_argument: { owner: org.springframework.kafka.core.KafkaTemplate, method: send } }
+
+# **Ruling — duplicate rows are accepted, documented, and deliberate (spec
+# §4).** A `KafkaTemplate.send(Message)` call is matched both by THIS
+# catalog (deriving the resolved topic row, above) and by
+# `spring-kafka-template.yml`'s own arity-1 `record_arg` row, which degrades
+# to a path-NULL unresolved row: a `Message` argument's own symbol names no
+# `record_wrappers` entry, so `_record_arguments` reads `(None, None)`
+# rather than crashing or guessing — exactly as 2D shipped and
+# unit-tested, zero behavior change there. Both rows stand for that one
+# call: "unresolved is an answer, never an omission" outranks tidiness,
+# suppressing the degraded row would make a grammar mismatch read as
+# silence, and cross-catalog suppression is deliberately not either
+# catalog's own concern (D02 §4). The co-located Pub/Sub `Publisher` case
+# (`google-pubsub-client.yml`) mirrors this same pairing.
+
+# Copied verbatim from spring-resttemplate.yml (harvest compatibility: an
+# outbound catalog's own wrapper/serialization/known_types rules can
+# describe a row a *different*, same-direction-and-protocol catalog
+# produced — D02 §2, Task 10 fix round 1; `_owns`/`shapes/contracts.py`
+# scope that sharing to same-protocol catalogs). `nullability` is
+# harvested from spring-mvc.yml. No broker-specific wrapper is added: the
+# `MessageBuilder`-assembled payload is read directly off `withPayload`'s
+# own argument, never through an envelope type a `wrappers` rule would
+# need to unwrap.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

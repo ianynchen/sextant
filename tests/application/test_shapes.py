@@ -1502,6 +1502,12 @@ _MESSAGING_CATALOG_IDS = (
     "aws-sqs-sdk",
     "jakarta-jms",
     "kafka-consumer",
+    # 2E-prep Task 12 (driver catalogs B): the pubsub trio +
+    # spring-kafka-message copy the same harvested `known_types` baseline.
+    "google-pubsub-publisher",
+    "google-pubsub-client",
+    "google-pubsub-subscriber",
+    "spring-kafka-message",
 )
 
 
@@ -1601,6 +1607,12 @@ def test_the_producer_catalogs_wrappers_are_the_harvested_baseline_verbatim():
         "aws-sqs-sdk",
         "jakarta-jms",
         "kafka-consumer",
+        # 2E-prep Task 12 (driver catalogs B): the pubsub trio +
+        # spring-kafka-message — none adds a broker-specific wrapper either.
+        "google-pubsub-publisher",
+        "google-pubsub-client",
+        "google-pubsub-subscriber",
+        "spring-kafka-message",
     ):
         assert catalogs[catalog_id].wrappers == baseline, catalog_id
 

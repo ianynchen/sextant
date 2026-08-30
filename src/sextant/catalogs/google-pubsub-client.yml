@@ -1,0 +1,84 @@
+id: google-pubsub-client
+displayName: Google Cloud Pub/Sub (field-held Publisher)
+style: single_call
+protocol: pubsub
+direction: outbound
+
+detect:
+  coordinates: ["com.google.cloud:google-cloud-pubsub"]
+
+requires: [call_site, string_constants]
+
+matches:
+  owner: com.google.cloud.pubsub.v1.Publisher
+  # CHECKPOINT FACT / spec §4 ruling: NO channel is declared here — a
+  # field-held `Publisher` was already bound to its topic wherever it was
+  # constructed (config, a `@Bean`, or the co-located
+  # `google-pubsub-publisher.yml` chain resolves that case), and `publish`'s
+  # own call site here carries no destination argument at all. Declaring
+  # this row anyway — rather than leaving `publish` unmatched — derives an
+  # honest path-NULL unresolved row instead of silence: without it, a
+  # config-built `Publisher` field would never appear as an endpoint at
+  # all (a fluent chain that never reaches its own terminal derives
+  # nothing, D02 §4's "the true answer", and a field-held `Publisher`'s own
+  # construction is never itself a chain this catalog's fluent sibling
+  # could ever walk).
+  #
+  # EXPECTED DUPLICATE (spec §4's duplicate-row ruling — asserted
+  # deliberately at freeze time, not a bug found later): the SAME
+  # co-located `Publisher.newBuilder(...).build().publish(message)` call
+  # `google-pubsub-publisher.yml` resolves ALSO matches this row by
+  # name+arity alone — a `single_call` catalog has no chain-reconstruction
+  # capability and cannot know which specific call produced its own
+  # receiver. One resolved fluent row plus one unresolved single_call row
+  # stand side by side for that one call, exactly the pairing
+  # `spring-kafka-message.yml`/`spring-kafka-template.yml`'s own
+  # `record_arg` row keeps for `KafkaTemplate.send(Message)` — "unresolved
+  # is an answer, never an omission" outranks tidiness, and cross-catalog
+  # suppression is deliberately not this catalog's concern (D02 §4).
+  methods:
+    - { name: publish, arity: 1, body_arg: 0 }
+
+# Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
+# discipline as spring-kafka-template.yml — see its own comment for the full
+# rationale). `nullability` is harvested from spring-mvc.yml.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

@@ -58,9 +58,12 @@ def _resolved_fixture(
         catalogs or YamlCatalogSource(CATALOGS),
         # Phase 2C: `call_site` and `string_constants` gate the RestTemplate
         # catalog (D02 §1's `single_call`); `chain_reconstruction` gates the
-        # three `fluent` catalogs (WebClient/RestClient/OkHttp) — a real
-        # subset of what `AsmScanner.capabilities()` actually declares, the
-        # same way the other four capabilities here already are.
+        # `fluent` catalogs (WebClient/RestClient/OkHttp/aws-sqs-sdk/
+        # google-pubsub-publisher/spring-kafka-message); `implemented_interfaces`
+        # (2E-prep Task 12) gates `google-pubsub-subscriber.yml`'s own
+        # `interface_implementation` style — a real subset of what
+        # `AsmScanner.capabilities()` actually declares, the same way the
+        # other capabilities here already are.
         {
             "annotation_args",
             "typed_signatures",
@@ -68,6 +71,7 @@ def _resolved_fixture(
             "call_site",
             "string_constants",
             "chain_reconstruction",
+            "implemented_interfaces",
         },
     )
     return workspace, report
@@ -242,6 +246,29 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # an HTTP-style URL by AWS's own builder API design, never an opaque
         # destination expression to keep verbatim).
         (None, "/123456789012/raw-queue"),
+        # 2E-prep Task 12 (driver catalogs B): the pubsub trio +
+        # spring-kafka-message. `google-pubsub-publisher.yml`'s co-located
+        # `Publisher.newBuilder(TopicName.of(project, "raw-events")).build()
+        # .publish(message)` — resolved via the fluent engine's new
+        # `channel`/`channel_via` ladder (this task's own precondition
+        # commit), the literal read failing and falling back to the linked
+        # `TopicName.of` call.
+        (None, "raw-events"),
+        # `google-pubsub-subscriber.yml`'s two `Subscriber.newBuilder`
+        # registrations — a named `MessageReceiver` implementation and a
+        # lambda, sharing no path with each other (asserted below).
+        (None, "raw-notify"),
+        (None, "raw-notify-lambda"),
+        # `spring-kafka-message.yml`'s `MessageBuilder.withPayload(event)
+        # .setHeader(KafkaHeaders.TOPIC, "raw-messages").build()` chain: the
+        # topic identity resolves cleanly (this row), but the row's own
+        # `resolution` reads `unresolved` (asserted below, a divergence from
+        # the plan's own checkpoint shorthand, verified live). Its
+        # DUPLICATE sibling — spec §4's ruling, already frozen from Task 6
+        # on — is `spring-kafka-template.yml`'s own pre-existing
+        # `record_arg` row for this SAME call, which shares the existing
+        # `(None, None)` tuple, so the SET gains only this one new entry.
+        (None, "raw-messages"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -309,7 +336,24 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # `subscribe(List.of(...))` call) and `raw-.*` (the pattern overload),
     # and `aws-sqs-sdk.yml`'s own verbless fluent row (the queue URL's own
     # path, after CP-2 splits off the peer). 56 + 6 = 62.
-    assert len(report.endpoints) == 62
+    #
+    # 2E-prep Task 12 (driver catalogs B: the pubsub trio +
+    # spring-kafka-message) adds 6 more, none merging with anything already
+    # in the fixture: `google-pubsub-publisher.yml`'s own resolved
+    # `raw-events` (outbound, the fluent engine's new `channel`/
+    # `channel_via` ladder, this task's own precondition commit);
+    # `google-pubsub-client.yml`'s two unresolved rows (outbound, spec §4's
+    # deliberate duplicate — the SAME co-located call `raw-events` above
+    # also resolves, plus the genuinely field-held `publish` call, both
+    # `path` NULL); `google-pubsub-subscriber.yml`'s two resolved rows
+    # (inbound, `raw-notify` + `raw-notify-lambda` — a named
+    # `MessageReceiver` and a lambda receiver, the `interface_implementation`
+    # style's own first shipped catalog); and `spring-kafka-message.yml`'s
+    # one row (outbound, `raw-messages` — resolved identity, unresolved
+    # overall resolution, standing beside `spring-kafka-template.yml`'s
+    # pre-existing `record_arg` sibling, spec §4's ruling again). 62 + 6 =
+    # 68.
+    assert len(report.endpoints) == 68
     assert report.skipped_catalogs == []
 
     directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
@@ -1030,6 +1074,173 @@ def test_the_raw_sqs_sdk_builder_chain_splits_its_absolute_queue_url_but_reads_u
     assert row["peer"] == "sqs.us-east-1.amazonaws.com"
     assert row["resolution"] == "unresolved"
     assert row["request_shape"] is None
+
+
+# --- 2E-prep Task 12: driver catalogs B — the pubsub trio +
+# spring-kafka-message, end to end on real bytecode ---
+
+
+def test_the_co_located_pubsub_publisher_chain_resolves_via_the_channel_ladder(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`RawPubSubPublishers#publishToNewTopic`'s `Publisher.newBuilder(
+    TopicName.of(project, "raw-events")).build().publish(message)`:
+    `newBuilder`'s own arg0 is the compiler's `unresolved` kind (a linked
+    call, not a literal), so `google-pubsub-publisher.yml`'s `channel`
+    ladder (this task's own fluent precondition commit) falls back to its
+    declared `channel_via` form, following `source` to `TopicName.of`'s own
+    call site and reading its `arg: 1`.
+
+    CHECKPOINT CORRECTION (live `javap`, this task's own checkpoint): the
+    plan's own shorthand named `terminal_via_argument` for `build` →
+    `publish`, modelled on `aws-sqs-sdk.yml`'s erased-builder join — but
+    `Publisher.Builder#build()` returns the CONCRETE `Publisher` type, no
+    `CHECKCAST`, and `publish` is called directly on that SAME stack value
+    (`build().publish(message)`, one straight chain) — a plain
+    receiver-linked terminal, the WebClient shape, not OkHttp's. The
+    catalog ships with a bare `terminal: [publish]` instead, verified live.
+
+    No `body` capture is declared at all (`publish`'s own argument is a
+    bare method parameter, and `PubsubMessage` is a declared no-shape
+    envelope), so — unlike `spring-kafka-message.yml`'s own row below — an
+    undeclared capture never narrows this row's own resolution (I1): the
+    channel alone decides it."""
+    _, report = resolved_fixture
+    [row] = _messaging_rows(report, "pubsub", "raw-events")
+
+    assert row["direction"] == "outbound"
+    assert row["method"] is None
+    assert row["handler"] is None
+    assert row["caller"].endswith("RawPubSubPublishers#publishToNewTopic(sig_4e598209).")
+    assert row["peer"] is None
+    assert row["resolution"] == "resolved"
+    assert row["request_shape"] is None
+
+
+def test_the_field_held_publisher_derives_two_honest_unresolved_duplicate_rows(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`google-pubsub-client.yml` declares NO channel at all for `publish` —
+    spec §4's ruling: without this row, a config-built `Publisher` field
+    (`publishToFieldPublisher`) would be silent, since a fluent chain that
+    never reaches its own terminal derives nothing. Two rows derive here,
+    BOTH `path` NULL and `resolution: unresolved`, never merged (an
+    unresolved wire identity never dedups, D02 §2/§5):
+
+    - `publishToFieldPublisher` — the genuinely field-held case this row
+      exists for.
+    - `publishToNewTopic` — the SAME co-located call
+      `google-pubsub-publisher.yml` already resolves as `raw-events`
+      (asserted above). EXPECTED DUPLICATE (spec §4, asserted deliberately,
+      not a bug): a `single_call` catalog matches by name+arity alone and
+      cannot know which specific fluent chain produced its own receiver, so
+      it matches this call too, degrading honestly rather than silently
+      skipping it. One resolved fluent row plus one unresolved single_call
+      row stand side by side for that one call."""
+    _, report = resolved_fixture
+    rows = [
+        e
+        for e in report.endpoints
+        if e["catalog_id"] == "google-pubsub-client" and e["protocol"] == "pubsub"
+    ]
+    callers = {row["caller"].rpartition(" ")[2] for row in rows}
+
+    assert len(rows) == 2
+    assert callers == {
+        "com/acme/orders/messaging/raw/RawPubSubPublishers#publishToFieldPublisher(sig_4e598209).",
+        "com/acme/orders/messaging/raw/RawPubSubPublishers#publishToNewTopic(sig_4e598209).",
+    }
+    for row in rows:
+        assert row["direction"] == "outbound"
+        assert row["path"] is None
+        assert row["peer"] is None
+        assert row["resolution"] == "unresolved"
+        assert row["request_shape"] is None
+
+
+def test_a_named_messagereceiver_and_a_lambda_receiver_each_derive_their_own_handler(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`google-pubsub-subscriber.yml`, D02 §3b's own worked example against
+    the real fixture: `RawPubSubSubscribers#withNamedReceiver`'s
+    `Subscriber.newBuilder(ProjectSubscriptionName.of(project,
+    "raw-notify"), new RawPubSubReceiver())` resolves the `instance`
+    receiver to `RawPubSubReceiver#receiveMessage` (its class's own
+    declared `interfaces` includes `MessageReceiver`, D00 §5a's
+    `implemented_interfaces` capability — direct implementers only);
+    `withLambdaReceiver`'s own `Subscriber.newBuilder(...,
+    (MessageReceiver) (m, c) -> c.ack())` resolves the `lambda` receiver to
+    its own synthetic method symbol verbatim. Both channels read through
+    the SAME `channel_via` form (`ProjectSubscriptionName.of`'s own
+    `arg: 1`) that reaches every registration in this one caller class."""
+    _, report = resolved_fixture
+    [named] = _messaging_rows(report, "pubsub", "raw-notify")
+    [lambda_row] = _messaging_rows(report, "pubsub", "raw-notify-lambda")
+
+    assert named["direction"] == "inbound"
+    assert named["caller"] is None
+    assert named["handler"] == "com/acme/orders/messaging/raw/RawPubSubReceiver#receiveMessage"
+    assert named["resolution"] == "resolved"
+    assert named["request_shape"] is None
+
+    assert lambda_row["direction"] == "inbound"
+    assert lambda_row["caller"] is None
+    assert "lambda$withLambdaReceiver$" in lambda_row["handler"]
+    assert lambda_row["resolution"] == "resolved"
+    assert lambda_row["request_shape"] is None
+
+
+def test_the_messagebuilder_kafka_chain_resolves_its_topic_but_not_its_bare_payload(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`spring-kafka-message.yml`: `RawKafkaMessageSender#send`'s
+    `kafkaTemplate.send(MessageBuilder.withPayload(event).setHeader(
+    KafkaHeaders.TOPIC, "raw-messages").build())`. The `when`-guarded
+    `setHeader` step resolves the topic cleanly (`path: raw-messages`), and
+    `build`'s own result reaches `KafkaTemplate#send`'s own argument
+    `source` through `terminal_via_argument` exactly as the checkpoint
+    described (real `javap`-verified: `build()` returns the `Message`
+    INTERFACE type here, consumed as `send`'s own ARGUMENT, unlike the
+    co-located Pub/Sub chain above, which chains `build()`'s result
+    straight into `publish` as a RECEIVER — two different real shapes, each
+    catalog matching its own).
+
+    DIVERGENCE FROM THE PLAN'S OWN CHECKPOINT SHORTHAND (live `javap`,
+    investigated before freezing): `event` — `send(OrderEvent event)`'s own
+    bare method parameter — is `aload`ed straight into `withPayload`, never
+    `NEW`-constructed, so the scanner reads it as D00 §5's `unresolved`
+    kind, not `instance` (the exact same parameter-passthrough shape
+    `aws-sqs-sdk.yml`'s own SQS row and `order-raw`/`shipments-outbound`
+    already hit in Task 11). Ruling I1: a DECLARED capture that reached but
+    could not be read drops the whole row's own `resolution`, even though
+    the topic identity resolves perfectly — so this row reads `path:
+    raw-messages`, `resolution: unresolved`, NOT the `resolved` row the
+    checkpoint's shorthand assumed. It stands beside (never merges with,
+    since it carries a real `path` while the sibling's is NULL)
+    `spring-kafka-template.yml`'s own pre-existing `record_arg` row for
+    this SAME call (spec §4's duplicate-row ruling, already frozen from
+    Task 6 on) — asserted here as two separate real rows."""
+    _, report = resolved_fixture
+    [message_row] = _messaging_rows(report, "kafka", "raw-messages")
+    template_siblings = [
+        e
+        for e in report.endpoints
+        if e["catalog_id"] == "spring-kafka-template"
+        and e["caller"]
+        and e["caller"].endswith("RawKafkaMessageSender#send(sig_b2a754d9).")
+    ]
+
+    assert message_row["direction"] == "outbound"
+    assert message_row["method"] is None
+    assert message_row["caller"].endswith("RawKafkaMessageSender#send(sig_b2a754d9).")
+    assert message_row["catalog_id"] == "spring-kafka-message"
+    assert message_row["resolution"] == "unresolved"
+    assert message_row["request_shape"] is None
+
+    assert len(template_siblings) == 1
+    [template_row] = template_siblings
+    assert template_row["path"] is None
+    assert template_row["resolution"] == "unresolved"
 
 
 def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(

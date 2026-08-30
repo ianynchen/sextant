@@ -47,9 +47,12 @@ def resolved_fixture(
         YamlCatalogSource(CATALOGS),
         # Phase 2C: `call_site` and `string_constants` gate the RestTemplate
         # catalog (D02 §1's `single_call`); `chain_reconstruction` gates the
-        # three `fluent` catalogs (WebClient/RestClient/OkHttp) — a real
-        # subset of what `AsmScanner.capabilities()` actually declares, the
-        # same way the other four capabilities here already are.
+        # `fluent` catalogs (WebClient/RestClient/OkHttp/aws-sqs-sdk/
+        # google-pubsub-publisher/spring-kafka-message); `implemented_interfaces`
+        # (2E-prep Task 12) gates `google-pubsub-subscriber.yml`'s own
+        # `interface_implementation` style — a real subset of what
+        # `AsmScanner.capabilities()` actually declares, the same way the
+        # other capabilities here already are.
         {
             "annotation_args",
             "typed_signatures",
@@ -57,6 +60,7 @@ def resolved_fixture(
             "call_site",
             "string_constants",
             "chain_reconstruction",
+            "implemented_interfaces",
         },
     )
     yield workspace, report

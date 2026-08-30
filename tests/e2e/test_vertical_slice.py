@@ -118,19 +118,32 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # `raw-t2`, `raw-.*`), sqs +1 outbound (the queue URL's own path). See
     # `test_pipeline.py`'s own dedicated row-level tests for the full
     # per-row breakdown.
+    #
+    # 2E-prep Task 12 (driver catalogs B): the pubsub trio +
+    # spring-kafka-message add 6 more rows, none merging with anything else
+    # — pubsub inbound +2 (`raw-notify`, `raw-notify-lambda`,
+    # `google-pubsub-subscriber.yml`'s own `interface_implementation` rows),
+    # pubsub outbound +3 (`google-pubsub-publisher.yml`'s resolved
+    # `raw-events` plus `google-pubsub-client.yml`'s two deliberate
+    # unresolved duplicates, spec §4's ruling), kafka outbound +1
+    # (`spring-kafka-message.yml`'s own `raw-messages` row, resolved
+    # identity but unresolved overall — a divergence from this task's own
+    # checkpoint shorthand, verified live, see `test_pipeline.py`). See
+    # `test_pipeline.py`'s own dedicated row-level tests for the full
+    # per-row breakdown.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "http": 18,
         "jms": 3,
         "kafka": 11,
-        "pubsub": 1,
+        "pubsub": 3,
         "sqs": 1,
     }
     assert metadata["endpoints"]["outbound"] == {
         "http": 19,
         "jms": 3,
-        "kafka": 8,
-        "pubsub": 1,
+        "kafka": 9,
+        "pubsub": 4,
         "sqs": 3,
     }
     runner = CliRunner()
@@ -172,4 +185,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # anything else — inbound +4 (jms `raw-intake`, kafka `raw-t1`/`raw-t2`/
     # `raw-.*`), outbound +2 (jms `raw-audit`, sqs the queue URL's own
     # path), `both` unchanged: 24 + 4 = 28, 26 + 2 = 28.
-    assert rows == [("both", 6), ("inbound", 28), ("outbound", 28)]
+    # 2E-prep Task 12 (driver catalogs B): 6 more rows, none merging with
+    # anything else — inbound +2 (pubsub `raw-notify`, `raw-notify-lambda`),
+    # outbound +4 (pubsub `raw-events` resolved + the two deliberate
+    # `google-pubsub-client.yml` duplicates, kafka `raw-messages`), `both`
+    # unchanged: 28 + 2 = 30, 28 + 4 = 32.
+    assert rows == [("both", 6), ("inbound", 30), ("outbound", 32)]

@@ -3245,12 +3245,15 @@ _PUBSUB_MATCHES = {
         }
     ],
     "steps": [],
-    "terminal": [
-        {
-            "method": "build",
-            "terminal_via_argument": {"owner": "com.acme.pubsub.Publisher", "method": "publish"},
-        }
-    ],
+    # `build()` returns the concrete `Publisher` type — no erasure, no
+    # `CHECKCAST` — and `publish` is called directly on that same stack
+    # value (`build().publish(message)`, real `javap` verified at this
+    # task's checkpoint): `build`'s own result IS `publish`'s own receiver,
+    # a plain receiver-linked continuation, never the OkHttp/SQS
+    # `terminal_via_argument` "built value passed as a DIFFERENT call's
+    # argument" shape. `publish` alone is the terminal; `build` needs no
+    # entry, D02 §4's "unmatched steps pass through uncaptured".
+    "terminal": ["publish"],
 }
 
 
@@ -3278,9 +3281,9 @@ def _build_and_publish_calls(caller: str, ordinal: int, builder_result: int) -> 
             PUBLISHER,
             "publish",
             ordinal + 1,
-            receiver=999,
+            receiver=build_result,
             result=None,
-            arguments=[CallArgument(kind="instance", source=build_result, symbol=PUBLISHER)],
+            arguments=[CallArgument(kind="unresolved")],
         ),
     ]
 
