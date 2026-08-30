@@ -13,10 +13,6 @@ from sextant.egress.render.diagrams import class_diagram
 from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
 
 _GAPS = [
-    (
-        "Messaging endpoints — listeners and producers alike — are not read: "
-        "Kafka, JMS and SQS annotations have no catalog yet."
-    ),
     "An @HttpExchange interface implemented server-side is still reported outbound.",
     (
         "Outbound base addresses configured in builder code are not resolved: "
@@ -62,6 +58,26 @@ _GAPS = [
     ),
 ]
 
+# D00 §4 closed-set protocol names whose wire identity has no verb: a Kafka
+# topic, a JMS destination, an SQS queue or a Pub/Sub topic is addressed, not
+# called, so there is no method to render beside the path.
+_VERBLESS_PROTOCOLS = frozenset({"kafka", "jms", "sqs", "pubsub"})
+
+
+def _wire_identity(endpoint: dict[str, object]) -> str:
+    """A row's wire identity as one string. A protocol in `_VERBLESS_PROTOCOLS`
+    defines no verb, so it renders `protocol path` with no method at all;
+    every other protocol renders `method path` as before. Either half of
+    either shape may be NULL, and `(unresolved)` stays the marker for an
+    identity the analysis could not read — never a bare `None`."""
+    path = endpoint["path"]
+    rendered_path = "(unresolved)" if path is None else str(path)
+    if str(endpoint["protocol"]) in _VERBLESS_PROTOCOLS:
+        return f"{endpoint['protocol']} {rendered_path}"
+    method = endpoint["method"]
+    rendered_method = "(unresolved)" if method is None else str(method)
+    return f"{rendered_method} {rendered_path}"
+
 
 def render_module_document(
     module: ModuleModel,
@@ -104,8 +120,7 @@ def render_module_document(
         for endpoint in inbound:
             handler = str(endpoint["handler"]).rsplit(" ", 1)[-1]
             lines.append(
-                f"| `{endpoint['method']} {endpoint['path']}` | "
-                f"`{handler}` | {endpoint['resolution']} |"
+                f"| `{_wire_identity(endpoint)}` | `{handler}` | {endpoint['resolution']} |"
             )
         for endpoint in inbound:
             request = _descriptor_lines("Request", endpoint.get("request_shape"), fields_by_shape)
@@ -113,7 +128,7 @@ def render_module_document(
                 "Response", endpoint.get("response_shape"), fields_by_shape
             )
             if request or response:
-                lines += ["", f"- `{endpoint['method']} {endpoint['path']}`"]
+                lines += ["", f"- `{_wire_identity(endpoint)}`"]
                 lines += request
                 lines += response
     else:
@@ -127,21 +142,9 @@ def render_module_document(
         lines += ["| Endpoint | Peer | Caller | Resolution |", "|---|---|---|---|"]
         for endpoint in outbound:
             peer = endpoint.get("peer")
-            path = endpoint["path"]
             caller = str(endpoint["caller"]).rsplit(" ", 1)[-1]
-            # Either half of the route may be NULL, and each says the same
-            # thing about its own column: the call is real and that part of
-            # its identity could not be read (a url built in builder code, a
-            # verb arriving as a parameter). Rendered the same way, so the
-            # column never shows a bare `None` — and never silently omits a
-            # row either.
-            method = endpoint["method"]
-            route = (
-                f"{'(unresolved)' if method is None else method} "
-                f"{'(unresolved)' if path is None else path}"
-            )
             lines.append(
-                f"| `{route}` | "
+                f"| `{_wire_identity(endpoint)}` | "
                 f"{'unresolved' if peer is None else peer} | "
                 f"`{caller}` | {endpoint['resolution']} |"
             )

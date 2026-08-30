@@ -16,7 +16,6 @@ from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SE
 # _GAPS in the same order, so a catalog that cannot be complete never reads
 # as complete (M07 "Honesty obligations").
 KNOWN_GAPS = [
-    "messaging_endpoints_not_read",
     "http_exchange_inbound_use_not_detected",
     "client_base_addresses_not_resolved",
     "sequence_diagrams_pending_call_graph",

@@ -295,6 +295,71 @@ def test_outbound_row_with_no_method_renders_unresolved_in_the_endpoint_column()
     ) in text
 
 
+def test_kafka_inbound_row_renders_verbless_with_no_unresolved_marker():
+    """A protocol in the verbless set (Task 9) defines no verb, so its wire
+    identity is `protocol path` — never a bare `None` standing in for a verb
+    that was never there to begin with."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "kafka",
+                "direction": "inbound",
+                "method": None,
+                "path": "order-events",
+                "handler": "s maven c 1 com/acme/orders/listeners/OrderEventsListener#onMessage(String).",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert (
+        "| `kafka order-events` | "
+        "`com/acme/orders/listeners/OrderEventsListener#onMessage(String).` | resolved |"
+    ) in text
+    assert "(unresolved)" not in text
+
+
+def test_kafka_row_with_null_path_renders_unresolved_identity():
+    """The path half of a verbless identity is unresolved the same way an
+    HTTP row's method or path is: named, never a bare `None`."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "kafka",
+                "direction": "outbound",
+                "method": None,
+                "path": None,
+                "caller": "s maven c 1 com/acme/orders/OrderEventsProducer#send(Order).",
+                "peer": None,
+                "resolution": "unresolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert (
+        "| `kafka (unresolved)` | unresolved | "
+        "`com/acme/orders/OrderEventsProducer#send(Order).` | unresolved |"
+    ) in text
+
+
+def test_messaging_gap_retires_and_both_lists_rotate_to_eleven():
+    """The messaging-not-read gap closes now that annotation_driven reads
+    Kafka/JMS/SQS/pub-sub catalogs: it drops from both lists at the same
+    position (spec ruling I3), so the equal-length pairing in
+    `test_every_machine_readable_gap_has_a_sentence_a_person_can_read` never
+    masks a key that lost its sentence."""
+    assert "messaging_endpoints_not_read" not in KNOWN_GAPS
+    assert len(KNOWN_GAPS) == 11
+    assert len(_GAPS) == 11
+    assert not any("Messaging endpoints" in gap for gap in _GAPS)
+
+
 def test_structure_and_outbound_sections_state_looked_and_found_nothing():
     """NFR-7: a section whose machinery exists but found nothing is empty and
     present, never absent — distinct from a gap, which says the machinery
