@@ -29,6 +29,7 @@ positional slot.
 import json
 import re
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -61,7 +62,10 @@ _WHEN_KEYS = {"arg", "equals"}
 # kind as an honest read failure, never an omission: `url_of` falls through
 # to its own unresolved answer, and `_capture_resolved` (Task 4's unified
 # helper) reads a `kind != "unresolved"` argument as failed to resolve.
-_UNRESOLVED_ARGUMENT = {"kind": "unresolved"}
+# Immutable (GUIDELINES §8): every downstream reader only ever reads it —
+# never a template a caller mutates in place — so a plain `dict` invites a
+# shared-mutable-state bug this constant should not have to defend against.
+_UNRESOLVED_ARGUMENT = MappingProxyType({"kind": "unresolved"})
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
@@ -77,6 +81,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             "owner": _catalog_symbol(root["owner"]),
             "method": root["method"],
             "captures": root.get("captures", {}),
+            # Carried forward (never a root's own field, D02 §2b) purely so
+            # `_validate_captures` can see and refuse it, exactly as an
+            # unchecked value must not silently survive the file.
+            "when": root.get("when"),
         }
         for root in matches.get("roots", [])
     ]
@@ -98,7 +106,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         for step in matches.get("steps", [])
     ]
     _validate_steps(steps, catalog)
-    _validate_captures(roots + steps, catalog)
+    _validate_captures(roots, catalog, allow_when=False)
+    _validate_captures(steps, catalog, allow_when=True)
     terminal_names, via_argument_names = _terminal_index(matches.get("terminal", []))
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
@@ -365,7 +374,9 @@ def _validate_steps(steps: list[dict[str, Any]], catalog: Catalog) -> None:
             )
 
 
-def _validate_captures(entries: list[dict[str, Any]], catalog: Catalog) -> None:
+def _validate_captures(
+    entries: list[dict[str, Any]], catalog: Catalog, *, allow_when: bool
+) -> None:
     """Refuses a catalog whose `url`/`body`/`response` capture does not name
     a call-site position (`ports/catalogs.py`'s own discipline again: an
     unchecked value does not stay in the file).
@@ -379,9 +390,13 @@ def _validate_captures(entries: list[dict[str, Any]], catalog: Catalog) -> None:
     site rather than to the catalog; ruling I1 already covers it at derive
     time, where the site is known.
 
-    A step's own `when` guard (D02 §2b) must be `{arg: int, equals: str}`
-    exactly — checked here too, at the same load-time pass, rather than
-    only discovered the first time a call site reaches a malformed guard."""
+    `when` (D02 §2b) is a STEP's own guard — a root starts the chain, with
+    no prior capture a guard could ever condition, so `allow_when=False`
+    (roots) refuses ANY declared `when` outright, well-formed or not;
+    `allow_when=True` (steps) instead checks the guard is exactly `{arg:
+    int, equals: str}`. Both checked here, at the same load-time pass,
+    rather than only discovered the first time a call site reaches a
+    misplaced or malformed guard."""
     for entry in entries:
         for field, value in entry["captures"].items():
             if field in _ARGUMENT_FIELDS and not _ARG_REFERENCE.match(str(value)):
@@ -391,7 +406,15 @@ def _validate_captures(entries: list[dict[str, Any]], catalog: Catalog) -> None:
                     f"capture reads `argN` (D02 §4's fluent style)"
                 )
         when = entry.get("when")
-        if when is not None and not _valid_when(when):
+        if when is None:
+            continue
+        if not allow_when:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: root `{entry['method']}` declares "
+                f"`when` — `when` guards steps only; a root has no prior chain to guard "
+                f"(D02 §2b)"
+            )
+        if not _valid_when(when):
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{entry['method']}` declares "
                 f"`when: {when!r}`, which must be `{{arg: int, equals: str}}` exactly "

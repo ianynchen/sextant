@@ -2961,6 +2961,56 @@ def test_a_guarded_step_whose_key_is_unresolved_poisons_the_capture_it_declares(
     assert endpoint["resolution"] == "unresolved"
 
 
+def test_a_later_guarded_write_supersedes_an_earlier_poison(tmp_path: Path):
+    """Last-wins (D02 §4) applies across a poison too: an unresolved guard
+    key poisons `url`, but a LATER `setHeader` reached with a matching,
+    resolved guard key overwrites the poison exactly like any other
+    repeated step's capture — the poison is not sticky once a confident
+    answer follows it, and the row derives fully resolved off the later
+    write."""
+    caller = "com/acme/http/Client#sendUnpoisoned()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders/1")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "setHeader",
+            2,
+            receiver=10,
+            result=11,
+            arguments=[CallArgument(kind="unresolved"), CallArgument(kind="string", value="x")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "setHeader",
+            3,
+            receiver=11,
+            result=12,
+            arguments=[
+                CallArgument(kind="string", value="kafka_topic"),
+                CallArgument(kind="string", value="t"),
+            ],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 4, receiver=12, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_GUARDED_STEP_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "t"
+    assert endpoint["resolution"] == "resolved"
+
+
 @pytest.mark.parametrize(
     "when",
     [
@@ -3000,3 +3050,39 @@ def test_a_malformed_when_guard_is_refused_at_run_start(tmp_path: Path, when: ob
 
     assert "invented-bad-when.yml" in str(raised.value)
     assert "setHeader" in str(raised.value)
+
+
+def test_a_when_guard_on_a_root_is_refused_at_run_start(tmp_path: Path):
+    """`when` (D02 §2b) is a STEP's own guard — a root starts the chain,
+    with no prior capture a guard could ever condition. Fix round 1
+    (reviewer MAJOR): the root's own list construction used to carry only
+    `owner`/`method`/`captures` forward, so a `when` on a root entry was
+    silently stripped before validation ever saw it — exactly the "an
+    unchecked value does not stay in the file" failure mode every other
+    catalog-shape check in this file refuses instead. Refused here even
+    though the guard itself is otherwise well-formed: placement, not
+    shape, is what is wrong."""
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.http.WebClient",
+                "method": "get",
+                "when": {"arg": 0, "equals": "kafka_topic"},
+                "captures": {"http_method": "GET"},
+            }
+        ],
+        "steps": [{"method": "uri", "captures": {"url": "arg0"}}],
+        "terminal": ["retrieve"],
+    }
+    catalog = _fluent_catalog(matches, "invented-when-on-root")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-when-on-root.yml" in str(raised.value)
+    assert "when" in str(raised.value)
+    assert "get" in str(raised.value)
