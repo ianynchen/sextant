@@ -173,7 +173,10 @@ Each `methods` row is `{name, http_method | method_arg, url_arg, body_arg?, resp
 always a POST, so the catalog states it once. **`method_arg` is a position when the call
 site carries it instead** — `exchange`'s verb is its own `HttpMethod` argument, an
 `enum`-kind entry ([D00](D00-fact-schema.md) §5), so the catalog names the slot and the
-engine reads the resolved value per call rather than assuming one. `body_arg` and
+engine reads the resolved value per call rather than assuming one. When a `method_arg`
+slot cannot be resolved — the verb arrives in a parameter — the row still derives, with
+`method` NULL and `resolution` `unresolved`: the call was made, only its verb is unread.
+`body_arg` and
 `response_arg` are optional: `getForObject` has no request body, and a `void`-returning
 call has no response to root.
 
