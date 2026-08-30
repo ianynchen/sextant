@@ -75,6 +75,35 @@ public final class CallSample {
         first().second().third();
     }
 
+    /** A lambda reaches the callee as the result of an {@code invokedynamic}
+     *  bootstrapped by {@code LambdaMetafactory}; the body javac lifted out is
+     *  the second bootstrap argument, and it is the only place the lambda's
+     *  code survives. */
+    public void lambdaArgument(java.util.List<String> values) {
+        values.forEach(value -> sink(value));
+    }
+
+    /** A method reference compiles to the same bootstrap with the referenced
+     *  method — no synthetic body — in the same bootstrap-argument slot. */
+    public void methodReferenceArgument(java.util.List<String> values) {
+        values.forEach(this::sink);
+    }
+
+    /** {@code NEW Holder; DUP; INVOKESPECIAL <init>}: the constructor returns
+     *  void, so the value that reaches the argument slot is the one the
+     *  {@code NEW} pushed. */
+    public void instanceArgument() {
+        hold(new Holder());
+    }
+
+    /** String concatenation is an {@code invokedynamic} too — bootstrapped by
+     *  {@code StringConcatFactory}, and the producer of the value {@code sink}
+     *  then consumes. Without a fact for the indy, that argument names a call
+     *  site nothing emitted and the chain join dead-ends. */
+    public void concatenated(String name) {
+        sink("order-" + name);
+    }
+
     void sink(String value) {
         record(value);
     }
@@ -95,6 +124,10 @@ public final class CallSample {
         return BASE;
     }
 
+    void hold(Holder held) {
+        record(held.note());
+    }
+
     Link first() {
         return new Link();
     }
@@ -106,6 +139,14 @@ public final class CallSample {
     static void record(String value) {
         if (value == null) {
             return;
+        }
+    }
+
+    /** A constructed argument: the concrete type is what a payload root and
+     *  D02's one-hop body follow both read, and only the {@code NEW} names it. */
+    static final class Holder {
+        String note() {
+            return "held";
         }
     }
 

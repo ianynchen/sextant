@@ -93,7 +93,13 @@ public final class ClassScanner {
         @Override
         public void visit(int v, int access, String name, String sig, String superName, String[] ifaces) {
             typeSymbol = symbolOf(name + "#");
-            emit(typeSymbol, constructKindOf(access), null, null, access);
+            // D00 §5a's PTR carrier. `superName` says only "extends
+            // ParameterizedTypeReference"; the Signature attribute is the only
+            // place its argument is written down, and for an anonymous subclass
+            // — which is the shape a real one takes — the class declares
+            // nothing else that names the payload at all.
+            emit(typeSymbol, constructKindOf(access), null, null, access, null, null,
+                 TypeRefs.genericSuperclassFromSignature(sig));
         }
 
         /** D00 §4's construct kinds carry `enum` beside `class` and `interface`, and
@@ -456,11 +462,16 @@ public final class ClassScanner {
         }
 
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access) {
-            emit(symbol, constructKind, enclosing, signature, access, null, null);
+            emit(symbol, constructKind, enclosing, signature, access, null, null, null);
         }
 
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
                            String ext, String modifiers) {
+            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, null);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext, String modifiers, String supertype) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -473,6 +484,7 @@ public final class ClassScanner {
             fact.put("line_end", "0");
             if (ext != null) fact.put("ext", ext);
             if (modifiers != null) fact.put("modifiers", modifiers);
+            if (supertype != null) fact.put("supertype", supertype);
             lines.add(JsonOut.object(fact));
         }
     }

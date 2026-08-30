@@ -28,17 +28,16 @@ public final class Main {
                     .toList();
                 for (Path classFile : classFiles) {
                     String classRelative = posix(classes.relativize(classFile));
-                    // Nested and anonymous classes are not read yet. That is a
-                    // gap, not a non-event: a compiled source the facts do not
-                    // account for is exactly what FR-17 requires be reported,
-                    // and M03 makes the uncovered list an honesty obligation.
-                    if (classFile.getFileName().toString().contains("$")) {
-                        uncovered.add(classRelative);
-                        continue;
-                    }
                     byte[] bytes = Files.readAllBytes(classFile);
-                    String relative = replaceSuffix(classRelative, ".class", ".java");
-                    String documentId = sha256(relative);
+                    // D00 §2: one class file is one document, a nested or
+                    // anonymous class's own file included. The id is the sha256
+                    // of the **class**-relative path, so `OrderResult` and its
+                    // nested `Detail` never collide on one id; `relative_path`
+                    // instead names the outer **source** file, because that is
+                    // the file a human edited. The two fields answer different
+                    // questions on purpose.
+                    String relative = sourcePathOf(classRelative);
+                    String documentId = sha256(classRelative);
                     // A Kotlin class compiled by a newer compiler than
                     // kotlin-metadata-jvm supports is not a corrupt class file —
                     // its nullability just cannot be read. The class is still
@@ -47,7 +46,11 @@ public final class Main {
                     // honesty obligation the same as a nested class's (FR-17).
                     List<String> lines = scanner.scan(bytes, documentId, reason ->
                         uncovered.add(classRelative + ": kotlin metadata unreadable (" + reason + ")"));
-                    writeFactFile(out.resolve(replaceSuffix(relative, ".java", ".jsonl")),
+                    // Named after the class file, not after `relative`: a
+                    // nested class and its outer share a source path, and two
+                    // documents writing to one file would leave only the
+                    // last one on disk.
+                    writeFactFile(out.resolve(replaceSuffix(classRelative, ".class", ".jsonl")),
                                   relative, documentId, options, sha256Bytes(bytes), lines);
                     documents++;
                     facts += lines.size();
@@ -107,6 +110,21 @@ public final class Main {
             throw new IllegalArgumentException("expected " + value + " to end with " + from);
         }
         return value.substring(0, value.length() - from.length()) + to;
+    }
+
+    /** The source file a class file was compiled from (D00 §2): everything from
+     *  the class name's first {@code $} onwards is the compiler's nesting
+     *  notation, not part of any file name — {@code OrderResult$Detail.class}
+     *  and the anonymous {@code OrderController$1.class} were both edited as
+     *  their outer class's {@code .java}.
+     *
+     *  <p>Searched from the last separator rather than across the whole path,
+     *  because a directory is free to hold a {@code $} of its own and cutting
+     *  there would name a source file in a package that does not exist. */
+    private static String sourcePathOf(String classRelative) {
+        String withoutSuffix = replaceSuffix(classRelative, ".class", "");
+        int nested = withoutSuffix.indexOf('$', withoutSuffix.lastIndexOf('/') + 1);
+        return (nested < 0 ? withoutSuffix : withoutSuffix.substring(0, nested)) + ".java";
     }
 
     private static String report(int documents, int facts, List<String> uncovered) {

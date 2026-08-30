@@ -35,6 +35,10 @@ class MethodFlowTest {
         return MethodFlow.callSites("doc-call-sample", caller, method);
     }
 
+    private static String last(List<String> lines) {
+        return lines.get(lines.size() - 1);
+    }
+
     /** The one field this test reads back rather than hardcoding: a value id is
      *  an instruction index, and pinning it would make the assertion about
      *  javac's label placement instead of about the join it is testing. */
@@ -148,6 +152,76 @@ class MethodFlowTest {
         assertTrue(producer.contains("\"name\":\"source\""), producer);
         assertTrue(consumer.contains("\"arguments\":[{\"kind\":\"unresolved\",\"source\":"
             + field(producer, "result") + "}]"), consumer);
+    }
+
+    /** A lambda's code is not at the call site: javac lifts the body into a
+     *  synthetic method and the call site only names it, through the second
+     *  bootstrap argument of a {@code LambdaMetafactory} invokedynamic. The
+     *  symbol is the impl method's full symbol in this module's grammar —
+     *  anything less cannot be joined against the method fact for it. */
+    @Test
+    void captures_a_lambda_argument_as_the_symbol_of_the_body_javac_lifted_out() throws Exception {
+        String line = last(callSites("lambdaArgument"));
+        assertTrue(line.contains("\"name\":\"forEach\""), line);
+        assertTrue(line.contains("\"kind\":\"lambda\",\"source\":"), line);
+        assertTrue(line.contains("\"symbol\":\"sextant-jvm maven com.acme/orders 1.0.0 "
+            + OWNER + "#lambda$lambdaArgument$0(sig_"), line);
+    }
+
+    /** A method reference bootstraps identically and names the referenced
+     *  method itself — there is no synthetic body to lift. */
+    @Test
+    void captures_a_method_reference_argument_as_the_referenced_method() throws Exception {
+        String line = last(callSites("methodReferenceArgument"));
+        assertTrue(line.contains("\"kind\":\"lambda\",\"source\":"), line);
+        assertTrue(line.contains("\"symbol\":\"sextant-jvm maven com.acme/orders 1.0.0 "
+            + OWNER + "#sink(sig_"), line);
+    }
+
+    /** The value an argument slot holds after {@code NEW; DUP; <init>} is the
+     *  one the {@code NEW} pushed — the constructor returns void and produces
+     *  no value at all — so the {@code NEW} is the instruction that names the
+     *  concrete type. That type is what D00 §5a's PTR carrier and D02's
+     *  one-hop body follow both read. */
+    @Test
+    void captures_a_constructed_argument_as_the_type_the_new_named() throws Exception {
+        // The constructor is a call site of its own and comes first; the call
+        // that *takes* the constructed value is the one under test.
+        List<String> lines = callSites("instanceArgument");
+        assertEquals(2, lines.size());
+        assertTrue(lines.get(0).contains("\"name\":\"<init>\""), lines.get(0));
+        String line = lines.get(1);
+        assertTrue(line.contains("\"name\":\"hold\""), line);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"instance\","
+            + "\"symbol\":\"" + OWNER + "$Holder#\"}]"), line);
+    }
+
+    /** An invokedynamic is a call site (D00 §5's {@code dynamic} dispatch
+     *  form). It has no receiver to own it, so `target.owner` names the
+     *  **bootstrap method's** owner — the thing that says what the site means,
+     *  {@code StringConcatFactory} here. */
+    @Test
+    void states_the_whole_fact_for_an_invokedynamic() throws Exception {
+        String line = callSites("concatenated").get(0);
+        assertTrue(line.contains("\"invoke_kind\":\"dynamic\""), line);
+        assertTrue(line.contains("\"target\":{\"descriptor\":"), line);
+        assertTrue(line.contains("\"name\":\"makeConcatWithConstants\","
+            + "\"owner\":\"java/lang/invoke/StringConcatFactory#\"}"), line);
+        assertTrue(line.contains("\"ordinal\":0"), line);
+        assertTrue(line.contains("\"receiver\":null"), line);
+        assertTrue(Integer.parseInt(field(line, "result")) >= 0, line);
+    }
+
+    /** The chain join across an indy: the concatenated string is unresolved as
+     *  a value and still names the site that produced it. Before the indy
+     *  itself was a fact, that source id pointed at nothing. */
+    @Test
+    void names_the_producing_invokedynamic_when_an_argument_is_its_result() throws Exception {
+        List<String> lines = callSites("concatenated");
+        assertEquals(2, lines.size());
+        assertTrue(lines.get(1).contains("\"name\":\"sink\""), lines.get(1));
+        assertTrue(lines.get(1).contains("\"arguments\":[{\"kind\":\"unresolved\",\"source\":"
+            + field(lines.get(0), "result") + "}]"), lines.get(1));
     }
 
     @Test

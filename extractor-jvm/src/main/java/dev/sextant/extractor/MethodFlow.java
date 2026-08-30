@@ -3,15 +3,18 @@ package dev.sextant.extractor;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
+import org.objectweb.asm.Handle;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.IntInsnNode;
+import org.objectweb.asm.tree.InvokeDynamicInsnNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.AnalyzerException;
 import org.objectweb.asm.tree.analysis.Frame;
@@ -36,7 +39,9 @@ import org.objectweb.asm.tree.analysis.SourceValue;
 public final class MethodFlow {
     private MethodFlow() {}
 
-    /** One JSON line per invoke instruction, in instruction order. */
+    /** One JSON line per invoke instruction — {@code invokedynamic} included,
+     *  which is why an {@code ordinal} counts positions a reader of the source
+     *  cannot always see: a string concatenation is an invoke to the JVM. */
     public static List<String> callSites(String documentId, String callerSymbol, MethodNode method) {
         Frame<SourceValue>[] frames;
         try {
@@ -49,10 +54,12 @@ public final class MethodFlow {
         }
         InsnList instructions = method.instructions;
         AbstractInsnNode[] insns = instructions.toArray();
+        String symbolPrefix = callerSymbol.substring(0, callerSymbol.lastIndexOf(' ') + 1);
         List<String> lines = new ArrayList<>();
         int ordinal = 0;
         for (int i = 0; i < insns.length; i++) {
-            if (!(insns[i] instanceof MethodInsnNode invoke)) continue;
+            Target target = targetOf(insns[i]);
+            if (target == null) continue;
             Frame<SourceValue> frame = frames[i];
             // Unreachable code: no frame ever reached this invoke. It keeps its
             // ordinal — the position is a property of the instruction list, not
@@ -61,24 +68,58 @@ public final class MethodFlow {
                 ordinal++;
                 continue;
             }
-            Type[] argumentTypes = Type.getArgumentTypes(invoke.desc);
+            Type[] argumentTypes = Type.getArgumentTypes(target.descriptor());
             // Stack layout at an invoke: ... receiver? arg0 .. argN-1. ASM's
             // frame keeps one stack entry per value, long and double included,
             // so a slot index is an argument index.
             int base = frame.getStackSize() - argumentTypes.length;
             List<String> arguments = new ArrayList<>();
             for (int a = 0; a < argumentTypes.length; a++) {
-                arguments.add(argumentJson(frame.getStack(base + a), argumentTypes[a], instructions));
+                arguments.add(
+                    argumentJson(frame.getStack(base + a), argumentTypes[a], instructions, symbolPrefix));
             }
-            Integer receiver = invoke.getOpcode() == Opcodes.INVOKESTATIC
-                ? null
-                : sourceId(frame.getStack(base - 1), instructions);
-            Integer result = Type.getReturnType(invoke.desc).getSort() == Type.VOID ? null : i;
-            lines.add(callSiteJson(documentId, callerSymbol, invoke, ordinal++, receiver, result,
+            Integer receiver = target.hasReceiver()
+                ? sourceId(frame.getStack(base - 1), instructions)
+                : null;
+            Integer result = Type.getReturnType(target.descriptor()).getSort() == Type.VOID ? null : i;
+            lines.add(callSiteJson(documentId, callerSymbol, target, ordinal++, receiver, result,
                                    arguments));
         }
         return lines;
     }
+
+    /** What a call site needs to know about its callee, read from whichever of
+     *  the JVM's two invoke shapes this instruction is — or null when it is not
+     *  an invoke at all.
+     *
+     *  <p>An {@code invokedynamic} is a call site (D00 §5's {@code dynamic}
+     *  dispatch form) and skipping it would be silent: the value it produces is
+     *  already reachable as another argument's {@code source}, so an unemitted
+     *  indy leaves that join pointing at nothing — a string concatenation, a
+     *  lambda, a record's {@code toString} all dead-end there. */
+    private static Target targetOf(AbstractInsnNode insn) {
+        if (insn instanceof MethodInsnNode invoke) {
+            return new Target(invoke.owner, invoke.name, invoke.desc,
+                              invokeKind(invoke.getOpcode()),
+                              invoke.getOpcode() != Opcodes.INVOKESTATIC);
+        }
+        if (insn instanceof InvokeDynamicInsnNode indy) {
+            // An indy has no receiver, and therefore no owner in the sense every
+            // other call site means it: the name and descriptor on the
+            // instruction describe the *call site's* signature, not a method on
+            // some type. What does say what the site means is the bootstrap
+            // method's owner — `LambdaMetafactory`, `StringConcatFactory`,
+            // `ObjectMethods` — so that is what `owner` records, and a consumer
+            // reading the target triple learns which of them it is looking at
+            // rather than "a method called `apply` on nothing in particular".
+            return new Target(indy.bsm.getOwner(), indy.name, indy.desc, "dynamic", false);
+        }
+        return null;
+    }
+
+    /** One invoke's callee, in the two spellings the JVM has for it. */
+    private record Target(String owner, String name, String descriptor, String invokeKind,
+                          boolean hasReceiver) {}
 
     /** The owner's internal name, which is what {@code Analyzer.analyze} wants,
      *  read back out of the caller's symbol: the method symbol already carries
@@ -99,7 +140,8 @@ public final class MethodFlow {
      *  load-bearing: a boolean and an int both arrive as {@code ICONST_*}, and
      *  only the descriptor tells them apart. Reporting a flag as {@code 1}
      *  throws away the distinction the flag exists for. */
-    private static String argumentJson(SourceValue value, Type declaredType, InsnList instructions) {
+    private static String argumentJson(SourceValue value, Type declaredType, InsnList instructions,
+                                       String symbolPrefix) {
         AbstractInsnNode producer = singleSource(value);
         if (producer == null) return argument("unresolved", null, null, null);
 
@@ -156,6 +198,30 @@ public final class MethodFlow {
                 && Type.getType(field.desc).getInternalName().equals(field.owner)) {
             return argument("enum", null, JsonOut.string(field.owner + "#" + field.name + "."), null);
         }
+        // `NEW Type; DUP; INVOKESPECIAL <init>` — and the value that reaches an
+        // argument slot is the one the NEW pushed, never the constructor's:
+        // `<init>` returns void and produces no value at all, and the DUP the
+        // constructor consumed is a copy the interpreter attributes to the DUP
+        // itself. So the NEW is the *only* instruction that names the concrete
+        // type here, and the concrete type is what D00 §5a's PTR carrier and
+        // D02's one-hop body follow both read.
+        if (producer instanceof TypeInsnNode created && created.getOpcode() == Opcodes.NEW) {
+            return argument("instance", null,
+                            JsonOut.string(TypeRefs.descriptorName(Type.getObjectType(created.desc))),
+                            null);
+        }
+        if (producer instanceof InvokeDynamicInsnNode indy) {
+            // A lambda's code is not here: javac lifted the body into a
+            // synthetic method and the call site only names it, in the
+            // bootstrap's second argument. A method reference bootstraps
+            // identically and names the referenced method itself.
+            String implementation = lambdaSymbol(indy, symbolPrefix);
+            // Now that an indy is a call site of its own, the value it produced
+            // has a `result` id — so the same join a plain call's result gets
+            // applies, whether or not the kind resolved to `lambda`.
+            return argument(implementation == null ? "unresolved" : "lambda", null, implementation,
+                            String.valueOf(instructions.indexOf(producer)));
+        }
         if (producer instanceof MethodInsnNode) {
             // The value itself is out of reach, and the call that produced it is
             // not: this is the join that makes a chain split across two
@@ -175,6 +241,29 @@ public final class MethodFlow {
                 argument("long", String.valueOf(producer.getOpcode() - Opcodes.LCONST_0), null, null);
             default -> argument("unresolved", null, null, null);
         };
+    }
+
+    /** The symbol of the method a {@code LambdaMetafactory} call site will
+     *  invoke, or null when this indy is bootstrapped by something else — a
+     *  string concatenation, a record's generated {@code equals}, a framework's
+     *  own bootstrap. Those are honest {@code unresolved}s: there is no
+     *  implementation method to name.
+     *
+     *  <p>Both {@code metafactory} and {@code altMetafactory} put the
+     *  implementation handle in the same slot, behind the SAM method type.
+     *
+     *  <p>Minted with the caller's own coordinates prefix, through the same
+     *  grammar {@code ClassScanner} uses for a method: a symbol that is not the
+     *  one the method fact carries cannot be joined to it, and half a symbol is
+     *  no better than none. A method reference into the JDK — {@code String::trim}
+     *  — therefore produces a symbol for a class this module does not contain,
+     *  which is correct: a symbol is a reference, and the fact that names it is
+     *  not a claim that the module declares it. */
+    private static String lambdaSymbol(InvokeDynamicInsnNode indy, String symbolPrefix) {
+        if (!"java/lang/invoke/LambdaMetafactory".equals(indy.bsm.getOwner())) return null;
+        if (indy.bsmArgs.length < 2 || !(indy.bsmArgs[1] instanceof Handle implementation)) return null;
+        return JsonOut.string(symbolPrefix + implementation.getOwner() + "#" + implementation.getName()
+            + "(" + ClassScanner.disambiguatorOf(implementation.getDesc()) + ").");
     }
 
     private static String argument(String kind, String value, String symbol, String source) {
@@ -204,25 +293,25 @@ public final class MethodFlow {
         return value.insns.iterator().next();
     }
 
-    private static String callSiteJson(String documentId, String callerSymbol, MethodInsnNode invoke,
+    private static String callSiteJson(String documentId, String callerSymbol, Target invoke,
                                        int ordinal, Integer receiver, Integer result,
                                        List<String> arguments) {
         TreeMap<String, String> target = new TreeMap<>();
         // The owner goes through the same symbol grammar every type reference
         // uses, so an array receiver reads as `java/lang/String#[]` here too
         // rather than as the raw descriptor ASM hands back.
-        target.put("owner", JsonOut.string(TypeRefs.descriptorName(Type.getObjectType(invoke.owner))));
-        target.put("name", JsonOut.string(invoke.name));
+        target.put("owner", JsonOut.string(TypeRefs.descriptorName(Type.getObjectType(invoke.owner()))));
+        target.put("name", JsonOut.string(invoke.name()));
         // D00 §5: the descriptor is what makes the target unambiguous — two
         // methods named `execute` are not the same method.
-        target.put("descriptor", JsonOut.string(invoke.desc));
+        target.put("descriptor", JsonOut.string(invoke.descriptor()));
 
         TreeMap<String, String> fact = new TreeMap<>();
         fact.put("kind", JsonOut.string("call_site"));
         fact.put("document_id", JsonOut.string(documentId));
         fact.put("caller", JsonOut.string(callerSymbol));
         fact.put("target", JsonOut.object(target));
-        fact.put("invoke_kind", JsonOut.string(invokeKind(invoke.getOpcode())));
+        fact.put("invoke_kind", JsonOut.string(invoke.invokeKind()));
         fact.put("ordinal", String.valueOf(ordinal));
         fact.put("receiver", receiver == null ? "null" : String.valueOf(receiver));
         fact.put("result", result == null ? "null" : String.valueOf(result));
@@ -230,7 +319,9 @@ public final class MethodFlow {
         return JsonOut.object(fact);
     }
 
-    /** D00 §5's dispatch forms, named after the JVM's own five. */
+    /** D00 §5's dispatch forms, named after the JVM's own five —
+     *  {@code dynamic} is settled at {@link #targetOf}, where the instruction
+     *  shape rather than an opcode decides it. */
     private static String invokeKind(int opcode) {
         return switch (opcode) {
             case Opcodes.INVOKESTATIC -> "static";

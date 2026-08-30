@@ -62,6 +62,19 @@ def test_document_lists_every_endpoint_and_names_its_gaps():
     assert "org/example/Opaque#" in text.split("## Known gaps", 1)[1]
 
 
+def test_an_unread_source_reaches_both_the_metadata_and_the_gap_list(tmp_path: Path):
+    """FR-17's channel, tested where it can be driven directly. The fixture no
+    longer has anything uncovered — its nested class is scanned now — but a
+    Kotlin class whose `@Metadata` a newer compiler wrote still travels this
+    path, and a channel nothing exercises is a channel that rots."""
+    unread = ("com/acme/orders/Newer.class: kotlin metadata unreadable (2.9)",)
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c", unread)
+    assert json.loads((tmp_path / "metadata.json").read_text())["uncovered"] == list(unread)
+
+    text = render_module_document(MODULE, REPORT, "a3f91c", unread)
+    assert unread[0] in text.split("## Known gaps", 1)[1]
+
+
 def test_document_is_identical_when_rendered_twice_from_the_same_report():
     assert render_module_document(MODULE, REPORT, "a3f91c") == render_module_document(
         MODULE, REPORT, "a3f91c"

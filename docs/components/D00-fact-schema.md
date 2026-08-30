@@ -372,6 +372,12 @@ The full shape, verbatim:
 **`target.descriptor`** makes the target unambiguous. `owner.name` alone collides; two
 methods named `execute` are not the same method.
 
+**An `invokedynamic` has no receiver, so its `target.owner` names the bootstrap method's
+owner** — `LambdaMetafactory`, `StringConcatFactory` — because that is the thing that says
+what the site means, where the instruction's own name and descriptor describe only the call
+site's signature. A `dynamic` site is recorded like any other: skipping it would leave every
+`source` pointing at it dangling, and a string concatenation is a real producer.
+
 **`invoke_kind`** is one of `virtual`, `static`, `interface`, `special`, `dynamic` — the
 five JVM dispatch forms — plus `throw`, which the row above already names: a throw site is
 a call-site-shaped observation whose target is the thrown exception type, and it is what

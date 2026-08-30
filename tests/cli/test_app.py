@@ -126,11 +126,14 @@ def test_render_names_the_catalog_and_capability_analyze_skipped(tmp_path: Path)
     assert "annotation_args" in document
 
 
-def test_analyze_and_render_name_the_uncovered_source_when_one_was_skipped(tmp_path: Path):
-    """The scanner skips the fixture's nested class. `analyze` must carry that
-    out of the scan and into `metadata.json`, and `render` must put it in the
-    gap list — a source nothing read, reported nowhere, is the silent hole
-    FR-17 exists to close."""
+def test_analyze_reports_nothing_uncovered_now_that_the_nested_class_is_read(tmp_path: Path):
+    """The fixture's nested class was this module's one compiled source the
+    facts did not account for, and `uncovered` existed to say so. It is scanned
+    now (D00 §2 — one class file is one document), so the honest answer is an
+    empty list and a gap section that names no unread source. The channel is
+    still load-bearing — a Kotlin class whose metadata cannot be decoded still
+    travels it — which is why the assertion is that it is empty here, not that
+    it is gone."""
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     runner = CliRunner()
     assert (
@@ -140,7 +143,7 @@ def test_analyze_and_render_name_the_uncovered_source_when_one_was_skipped(tmp_p
         == 0
     )
     metadata = json.loads((tmp_path / "metadata.json").read_text())
-    assert metadata["uncovered"] == ["com/acme/orders/OrderResult$Detail.class"]
+    assert metadata["uncovered"] == []
 
     assert (
         runner.invoke(
@@ -149,4 +152,4 @@ def test_analyze_and_render_name_the_uncovered_source_when_one_was_skipped(tmp_p
         == 0
     )
     document = (tmp_path / "render" / "architecture.md").read_text()
-    assert "OrderResult$Detail.class" in document.split("## Known gaps", 1)[1]
+    assert "Not read" not in document.split("## Known gaps", 1)[1]
