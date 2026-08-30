@@ -1064,6 +1064,36 @@ def test_channel_arg_fills_path_exactly_as_url_arg_would(tmp_path: Path):
     assert endpoint["resolution"] == "resolved"
 
 
+def test_a_channel_arg_holding_a_queue_url_keeps_the_whole_url_as_the_destination(
+    tmp_path: Path,
+):
+    """Final review, IMPORTANT: `channel_arg` is an *alias* of `url_arg` in
+    the catalog grammar, but the two are not the same READER. A queue URL is
+    the canonical SQS destination — `SqsTemplate.send` takes exactly this —
+    and it is a destination expression, not a URL to be parsed: routing it
+    through `url_of` split it into a fabricated `peer`
+    (`sqs.us-east-1.amazonaws.com`) plus a truncated `path`
+    (`/123456789012/my-queue`), so the destination nobody could send to was
+    the one recorded, and a peer no messaging fact ever asserted appeared
+    from nowhere. Both halves of the discipline are pinned here: destination
+    expressions verbatim, never evaluated, and messaging peers stay NULL."""
+    queue_url = "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue"
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [{"name": "send", "channel_arg": 0}],
+    }
+    caller = "com/acme/messaging/Producer#publishToQueue()."
+    facts = [_send_call(caller, 0, [CallArgument(kind="string", value=queue_url)])]
+    catalog = _single_call_catalog(matches, "invented-queue-url")
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == queue_url
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "resolved"
+
+
 def test_a_row_declaring_both_url_arg_and_channel_arg_is_refused_at_run_start(
     tmp_path: Path,
 ):

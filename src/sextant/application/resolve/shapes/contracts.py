@@ -373,6 +373,31 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
     return None, None, "unresolved"
 
 
+def channel_of(argument: dict[str, Any] | None) -> tuple[None, str | None, str]:
+    """`url_of`'s counterpart for a DESTINATION capture (D02 §2's
+    `channel_arg`) — a topic, a queue, a subscription. The grammar makes
+    `channel_arg` an alias of `url_arg`, but the reader must not be shared:
+    a destination is an opaque expression the broker resolves, not a URL
+    with an authority to split off. SQS's canonical destination is a full
+    queue URL (`https://sqs.us-east-1.amazonaws.com/123456789012/my-queue`),
+    and `url_of` would split it into a fabricated `peer` plus a truncated
+    `path` — recording a destination that could never be sent to, and
+    asserting a peer no messaging fact ever carried. So the whole literal is
+    the `path`, verbatim, and `peer` is unconditionally None (D02 §3:
+    messaging peers stay NULL).
+
+    Anything the scanner could not read as a string literal is the same
+    honest answer `url_of` gives: path NULL, `unresolved` — the call was
+    made, only its destination is unread."""
+    if (
+        argument is not None
+        and argument.get("kind") == "string"
+        and isinstance(argument.get("value"), str)
+    ):
+        return None, str(argument["value"]), "resolved"
+    return None, None, "unresolved"
+
+
 @dataclass(frozen=True)
 class CarrierRules:
     """The catalog data `argument_descriptor` needs beyond the shared

@@ -215,7 +215,13 @@ per arity instead.
 **`channel_arg` is an alias of `url_arg` for protocols whose identity is a destination
 rather than a URL** — a topic or queue name in place of a path. Declaring both `url_arg`
 and `channel_arg` on one row is a `CatalogError`: the two name the same capture, and a row
-naming it twice is a broken catalog, not two different pieces of evidence.
+naming it twice is a broken catalog, not two different pieces of evidence. The two are an
+alias in the *grammar* only, never in how the capture is read: a `channel_arg` value is a
+destination expression, recorded verbatim as `path` with `peer` always NULL, while
+`url_arg` still splits an absolute URL into peer and path (CP-2). SQS's canonical
+destination is a whole queue URL
+(`https://sqs.us-east-1.amazonaws.com/123456789012/my-queue`), and splitting it would
+record a destination nothing could send to plus a peer no messaging fact ever carried.
 
 **A row declaring neither `http_method` nor `method_arg` is verbless by declaration** — a
 topic has no verb. The row derives `method` NULL without penalising `resolution`, exactly

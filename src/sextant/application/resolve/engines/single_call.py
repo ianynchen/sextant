@@ -4,7 +4,8 @@ One call carries the whole outbound declaration — a `RestTemplate.postForObjec
 a `.exchange` — so this pass reads `call_sites` directly rather than joining
 annotation facts: it matches each site against the catalog's declared
 `methods` by name, resolves the verb (a literal or an `enum` argument's own
-symbol), splits the url argument into peer and path (CP-2), and resolves the
+symbol), splits the url argument into peer and path (CP-2) — or, for a
+`channel_arg` destination, keeps it whole and peerless — and resolves the
 request/response descriptors from the call's own arguments through
 `shapes.contracts.argument_descriptor` (D02 §2h). Framework knowledge — the
 owner type, which argument is which, the PTR/call-wrapper rules — arrives as
@@ -21,6 +22,7 @@ from sextant.application.resolve.shapes.contracts import (
     CarrierRules,
     _linked_constructor,
     argument_descriptor,
+    channel_of,
     supertypes_of,
     url_of,
 )
@@ -36,8 +38,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     — a parameterised insert-if-absent on the same wire identity every other
     style uses (D02 §5). `caller` is the calling method symbol, unless the
     matched row's own `direction` is `inbound`, in which case it lands in
-    `handler` instead (D02 §2); `peer` is NULL unless the url argument is
-    itself an absolute URL (CP-2); `method` is NULL where the verb itself
+    `handler` instead (D02 §2); `peer` is NULL unless the row declares
+    `url_arg` and that argument is itself an absolute URL (CP-2) — a
+    `channel_arg` destination is never split, so its `peer` is always NULL;
+    `method` is NULL where the verb itself
     could not be read (I2) or the row is verbless by declaration; `protocol`
     is the catalog's own declared field, exactly as `annotation_driven`
     forwards it, and `direction` is the catalog's own declared field unless
@@ -139,7 +143,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             url_argument = _arg_at(arguments, method.get("url_arg", method.get("channel_arg")))
             body_argument = _arg_at(arguments, method.get("body_arg"))
             body_declared = method.get("body_arg")
-        peer, path, url_resolution = url_of(url_argument)
+        # `channel_arg` aliases `url_arg` in the grammar but not in the
+        # READER (final review, IMPORTANT): a destination is an opaque
+        # expression, never a URL to split. SQS's canonical destination is a
+        # whole queue URL, and `url_of` would turn it into a fabricated peer
+        # plus a truncated path. `_validate_methods` already refused a row
+        # naming both, so this test is unambiguous.
+        read_destination = channel_of if "channel_arg" in method else url_of
+        peer, path, url_resolution = read_destination(url_argument)
         response_argument = _arg_at(arguments, method.get("response_arg"))
         # Checkpoint ruling I1: any DECLARED capture that failed to resolve
         # drops the *row's* resolution, even when the url itself read fine —
