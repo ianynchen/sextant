@@ -24,7 +24,7 @@ direction: outbound
 detect:
   coordinates: ["org.springframework:spring-web"]
 
-requires: [annotation_args, string_constants]
+requires: [annotation_args, string_constants, call_site]
 
 matches:
   owner: org.springframework.web.client.RestTemplate

@@ -198,7 +198,9 @@ fact-volume delta recorded in the plan's close-out.
 **Rendering and export:** unresolved-path rows render honestly; gap rotation —
 `call_site_clients_not_read` and `nested_and_anonymous_classes_not_read` retire,
 `reactive_flow_not_traced` arrives; the `call_sites` view joins the exported graph tables;
-scanner capabilities go 4 → 7 of 9.
+scanner capabilities go 4 → 7 of 10 (the tenth row is `typed_signatures` — shipped since
+Phase 2A/2B, but never given its own row in M03's capability table until Task 1 corrected
+that).
 
 ## 6. Architecture remediations (approved to ride this phase)
 

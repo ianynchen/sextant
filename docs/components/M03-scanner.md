@@ -228,6 +228,14 @@ derived from it says so.
 
 | Decision | Blocks |
 |---|---|
-| Whether chain reconstruction is inside the ASM extractor or a pass over its output | Module size |
 | How far constant propagation follows a value across method boundaries | Endpoint URL resolution |
 | Whether a partially-structured method is a fact-level or document-level `partial` | [D00](D00-fact-schema.md) |
+
+One decision formerly here was closed by Phase 2C's approved design (2026-08-29):
+
+- **Chain reconstruction is split, not sited in one place.** The extractor emits the
+  linked value ids — `receiver`/`result` on every `call_site` fact
+  ([D00](D00-fact-schema.md) §5) — and stops there; walking those links into a chain is
+  the derivation's job, a join the `fluent` engine performs over facts already on disk.
+  Module size stays bounded on the extractor side because there is nothing left to grow
+  there: one dataflow pass, not a graph walk.
