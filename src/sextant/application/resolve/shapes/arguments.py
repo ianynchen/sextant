@@ -158,6 +158,86 @@ class CallFacts:
     referenced: list[str]
 
 
+def linked_channels(
+    argument: dict[str, Any] | None,
+    facts: CallFacts,
+    forms: list[dict[str, Any]],
+) -> list[tuple[None, str | None, str]]:
+    """D02 §2h's `channel_via` (Task 7): some destinations are never a
+    literal at the consuming call's own argument position at all —
+    `session.createProducer(session.createQueue("raw-audit"))`'s `Queue`
+    argument is itself another call's return value, and the topic lives on
+    THAT call's own argument. Checkpoint-verified against the real fixture:
+    the scanner's `unresolved` kind — never `instance` — is what a
+    static/interface factory's return value reaches its consumer as (only a
+    `NEW` names a concrete type; `MethodInsnNode` producers never do), so
+    this follows `source` alone, regardless of the argument's own `kind`.
+
+    `forms` are the catalog's declared `channel_via` entries — `{owner,
+    method, arg}`, tried in turn; the first whose `owner`+`method` reach the
+    argument's actual linked call site (`_linked_constructor`'s generalised
+    join, by owner symbol and method name rather than always `<init>`) wins
+    — "matches at most one form", since a linked call is exactly one method
+    and at most one form's owner+method can ever join it.
+
+    `peer` is always None (`channel_of`'s own rule: a destination is opaque,
+    never split into peer/path). `arg` an int reads that one position off
+    the linked call's own arguments, verbatim, through `channel_of`. `arg`
+    `"all_strings"` reads EVERY positional argument of the linked call as
+    its own channel tuple — `List.of(a, b)` with <=10 elements binds
+    FIXED-ARITY overloads (checkpoint ruling), so each element is its own
+    literal argument, never an array to enumerate — one resolved tuple per
+    string-kind element, plus one trailing `(None, None, "unresolved")`
+    tuple if any element failed to resolve as a string. That is also what a
+    genuinely varargs call collapses to: the scanner never unpacks an array
+    argument into its elements, so a varargs factory's own single
+    unresolved argument reads as zero resolved elements plus this one
+    trailing tuple — never a guess at how many elements it held.
+
+    An unlinked argument (no `source` at all), one whose source names no
+    real call site, or a linked call none of the declared forms' owner+name
+    reaches, all give the same one-tuple honest answer `channel_of` gives an
+    unreadable destination: peer/path both None, `unresolved`."""
+    source = argument.get("source") if argument is not None else None
+    if source is None:
+        return [(None, None, "unresolved")]
+    for form in forms:
+        site = _linked_constructor(form["owner"], source, facts, form["method"])
+        if site is not None:
+            return _read_channels(site, form["arg"])
+    return [(None, None, "unresolved")]
+
+
+def _read_channels(site: dict[str, Any], arg: int | str) -> list[tuple[None, str | None, str]]:
+    """The channel-shaped tuples a linked call site's own arguments read as
+    (`channel_via`): a declared int position, verbatim through `channel_of`,
+    or every string-kind positional argument at once (`"all_strings"`)."""
+    site_arguments = site.get("arguments") or []
+    if isinstance(arg, int):
+        return [channel_of(_arg_at(site_arguments, arg))]
+    return _all_string_channels(site_arguments)
+
+
+def _all_string_channels(
+    arguments: list[dict[str, Any]],
+) -> list[tuple[None, str | None, str]]:
+    """`all_strings`: one resolved tuple per string-kind positional
+    argument, in call order, plus one trailing unresolved tuple if any
+    positional argument failed to resolve as a string — never one unresolved
+    tuple per failed element (D02 §2's unresolved-is-an-answer stays one
+    honest fact, not a guess at how many elements were behind it) — and
+    never zero rows for a call with no arguments at all, the same
+    never-silently-drop-the-row discipline every other capture here keeps."""
+    resolved: list[tuple[None, str | None, str]] = [
+        (None, str(entry["value"]), "resolved")
+        for entry in arguments
+        if entry.get("kind") == "string" and isinstance(entry.get("value"), str)
+    ]
+    if resolved and len(resolved) == len(arguments):
+        return resolved
+    return [*resolved, (None, None, "unresolved")]
+
+
 def supertypes_of(workspace: Workspace) -> dict[str, dict[str, Any]]:
     """Every declared type's own generic supertype reference (D00 §5a's PTR
     carrier), keyed by the type's bare descriptor — the form an `instance`
@@ -340,21 +420,26 @@ def _bare_reference(symbol: str) -> dict[str, Any]:
 
 
 def _linked_constructor(
-    owner_symbol: str, source: int | None, workspace_types: CallFacts
+    owner_symbol: str, source: int | None, workspace_types: CallFacts, name: str = "<init>"
 ) -> dict[str, Any] | None:
-    """D02 §2h's join: the `<init>` call site, within this same caller, whose
-    `receiver` is the constructed value's own id — the argument's `source`.
-    Never a search by proximity: the id is what keeps two constructors in one
+    """D02 §2h's join: the call site — an `<init>` by default, or (Task 7's
+    `channel_via`) any other named method — within this same caller, whose
+    own produced value is the argument's `source`. An `<init>` has no
+    `result` (D00 §5: "result is null for a void one"), so its own
+    `receiver` — the constructed value's id — carries the join instead;
+    every other named method's own `result` id is that produced value's id.
+    Never a search by proximity: the id is what keeps two calls in one
     method apart."""
     if source is None:
         return None
+    key = "receiver" if name == "<init>" else "result"
     return next(
         (
             site
             for site in workspace_types.caller_call_sites
-            if site.get("name") == "<init>"
+            if site.get("name") == name
             and site.get("owner") == owner_symbol
-            and site.get("receiver") == source
+            and site.get(key) == source
         ),
         None,
     )

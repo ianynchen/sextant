@@ -974,12 +974,15 @@ CONSUMER = "com/acme/messaging/Consumer#"
 
 
 def _single_call_catalog(
-    matches: dict, catalog_id: str = "invented-single-call", direction: str = "outbound"
+    matches: dict,
+    catalog_id: str = "invented-single-call",
+    direction: str = "outbound",
+    protocol: str = "kafka",
 ) -> Catalog:
     return Catalog(
         id=catalog_id,
         style="single_call",
-        protocol="kafka",
+        protocol=protocol,
         direction=direction,
         requires=("call_site", "string_constants"),
         matches=matches,
@@ -1493,6 +1496,314 @@ def test_a_malformed_record_wrappers_entry_is_refused_at_run_start(tmp_path: Pat
     workspace.close()
 
     assert "invented-bad-record-wrapper.yml" in str(raised.value)
+
+
+# --- Task 7 (2E-prep): `channel_via` — the linked-call follow (D02 §2h,
+# amended). An instance argument's own channel is not the literal captured
+# at its position but read off the call that PRODUCED it —
+# `session.createProducer(session.createQueue("raw-audit"))` reads the topic
+# off `createQueue`'s own argument, never `createProducer`'s. Real fixture
+# shapes (`com/acme/orders/messaging/raw/RawJmsBridge`,
+# `RawKafkaConsumers`, checkpoint-verified at BASE): `session.createQueue
+# ("raw-audit")` (`(String)Queue`, `invokeinterface`) and
+# `KafkaConsumer#subscribe(List.of("raw-t1", "raw-t2"))`
+# (`List.of(Object,Object)`, `invokestatic`). The checkpoint's own probe
+# against the real scanner (not assumed): the linked call's return value
+# reaches its consumer as the compiler's `unresolved` kind, never
+# `instance` — only a `NEW` names a concrete type, and `createQueue`/
+# `List.of` are a method result, not a constructor — but it still carries
+# `source`, which is all `linked_channels` ever reads.
+
+SESSION = "jakarta/jms/Session#"
+JAVA_LIST = "java/util/List#"
+KAFKA_CONSUMER = "org/apache/kafka/clients/consumer/KafkaConsumer#"
+
+
+def _channel_via_catalog(matches: dict, catalog_id: str, protocol: str) -> Catalog:
+    return _single_call_catalog(matches, catalog_id, protocol=protocol)
+
+
+def _create_queue_form(arg: int | str = 0) -> dict:
+    return {"owner": "jakarta.jms.Session", "method": "createQueue", "arg": arg}
+
+
+def _list_of_form(arg: int | str = "all_strings") -> dict:
+    return {"owner": "java.util.List", "method": "of", "arg": arg}
+
+
+def _create_queue_call(caller: str, ordinal: int, result: int, topic: str) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=SESSION, name="createQueue", descriptor="(Ljava/lang/String;)Ljakarta/jms/Queue;"
+        ),
+        invoke_kind="interface",
+        ordinal=ordinal,
+        receiver=5,
+        result=result,
+        arguments=[CallArgument(kind="string", value=topic)],
+    )
+
+
+def _create_producer_call(caller: str, ordinal: int, source: int | None) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=SESSION,
+            name="createProducer",
+            descriptor="(Ljakarta/jms/Destination;)Ljakarta/jms/MessageProducer;",
+        ),
+        invoke_kind="interface",
+        ordinal=ordinal,
+        receiver=3,
+        result=8,
+        arguments=[CallArgument(kind="unresolved", source=source)],
+    )
+
+
+def _list_of_call(caller: str, ordinal: int, result: int, values: list) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=JAVA_LIST,
+            name="of",
+            descriptor="(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;",
+        ),
+        invoke_kind="static",
+        ordinal=ordinal,
+        receiver=None,
+        result=result,
+        arguments=values,
+    )
+
+
+def _subscribe_call(caller: str, ordinal: int, source: int | None) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=KAFKA_CONSUMER, name="subscribe", descriptor="(Ljava/util/Collection;)V"
+        ),
+        invoke_kind="virtual",
+        ordinal=ordinal,
+        receiver=3,
+        result=None,
+        arguments=[CallArgument(kind="unresolved", source=source)],
+    )
+
+
+_CREATE_PRODUCER_MATCHES = {
+    "owner": "jakarta.jms.Session",
+    "methods": [
+        {"name": "createProducer", "channel_arg": 0, "channel_via": _create_queue_form()},
+    ],
+}
+
+_SUBSCRIBE_LIST_MATCHES = {
+    "owner": "org.apache.kafka.clients.consumer.KafkaConsumer",
+    "methods": [
+        {"name": "subscribe", "channel_arg": 0, "channel_via": _list_of_form()},
+    ],
+}
+
+
+def test_a_linked_createqueue_call_derives_the_topic_off_its_own_argument(tmp_path: Path):
+    """`createProducer(instance -> createQueue("raw-audit"))`: `arg: 0` reads
+    `createQueue`'s own single argument, never `createProducer`'s (which the
+    scanner never resolved beyond `unresolved` + `source` in the first
+    place) — one row, `path` the topic, `resolution: resolved`, `peer`
+    always None (a destination is opaque, D02 §3)."""
+    caller = "com/acme/orders/messaging/raw/RawJmsBridge#createAuditProducer()."
+    facts = [
+        _create_queue_call(caller, 0, 7, "raw-audit"),
+        _create_producer_call(caller, 1, 7),
+    ]
+    catalog = _channel_via_catalog(
+        _CREATE_PRODUCER_MATCHES, "invented-channel-via-createqueue", "jms"
+    )
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["protocol"], endpoint["direction"]) == ("jms", "outbound")
+    assert endpoint["peer"] is None
+    assert endpoint["path"] == "raw-audit"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_all_strings_derives_one_row_per_element_of_a_linked_list_of_call(tmp_path: Path):
+    """`subscribe(instance -> List.of("raw-t1", "raw-t2"))` with
+    `arg: "all_strings"`: `List.of` with <=2 elements binds the FIXED-ARITY
+    overload (checkpoint ruling), so both elements are their own positional
+    string literals — `linked_channels` reads each as its own tuple, and the
+    engine derives ONE ROW PER TUPLE (the same multi-topic precedent
+    `annotation_driven._derive_replies` keeps for a listener's declared
+    reply destinations)."""
+    caller = "com/acme/orders/messaging/raw/RawKafkaConsumers#subscribeToTopics()."
+    facts = [
+        _list_of_call(
+            caller,
+            0,
+            6,
+            [
+                CallArgument(kind="string", value="raw-t1"),
+                CallArgument(kind="string", value="raw-t2"),
+            ],
+        ),
+        _subscribe_call(caller, 1, 6),
+    ]
+    catalog = _channel_via_catalog(_SUBSCRIBE_LIST_MATCHES, "invented-channel-via-list-of", "kafka")
+    workspace = _resolve(tmp_path, facts, catalog)
+    endpoints = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert sorted(e["path"] for e in endpoints) == ["raw-t1", "raw-t2"]
+    assert all(e["resolution"] == "resolved" for e in endpoints)
+    assert all(e["peer"] is None for e in endpoints)
+
+
+def test_a_partially_resolved_list_derives_its_resolved_elements_plus_one_unresolved_row(
+    tmp_path: Path,
+):
+    """One element of the linked `List.of` call reads as a literal, the
+    other as the compiler's own `unresolved` (a variable, not a constant):
+    the resolved element still derives its own row, and the one that failed
+    derives a SINGLE trailing `(None, None, unresolved)` row rather than
+    being silently dropped — D02 §2's unresolved-is-an-answer, applied per
+    element."""
+    caller = "com/acme/orders/messaging/raw/RawKafkaConsumers#subscribeToPartial()."
+    facts = [
+        _list_of_call(
+            caller,
+            0,
+            6,
+            [CallArgument(kind="string", value="raw-t1"), CallArgument(kind="unresolved")],
+        ),
+        _subscribe_call(caller, 1, 6),
+    ]
+    catalog = _channel_via_catalog(
+        _SUBSCRIBE_LIST_MATCHES, "invented-channel-via-list-partial", "kafka"
+    )
+    workspace = _resolve(tmp_path, facts, catalog)
+    endpoints = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    rows = sorted((e["path"] or "", e["resolution"]) for e in endpoints)
+    assert rows == [("", "unresolved"), ("raw-t1", "resolved")]
+
+
+def test_an_unlinked_argument_derives_one_null_path_unresolved_row(tmp_path: Path):
+    """The `createProducer` argument never resolved to a call at all — the
+    scanner's `unresolved` kind with no `source` (a `Queue` built elsewhere
+    and passed in as a parameter). There is nothing to follow, so
+    `linked_channels` gives the same honest answer an unreadable url would:
+    one row, `path` NULL, `resolution: unresolved` — never a dropped row."""
+    caller = "com/acme/orders/messaging/raw/RawJmsBridge#createDynamicProducer()."
+    facts = [_create_producer_call(caller, 0, None)]
+    catalog = _channel_via_catalog(_CREATE_PRODUCER_MATCHES, "invented-channel-via-unlinked", "jms")
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_linked_call_matching_no_declared_form_derives_one_null_path_unresolved_row(
+    tmp_path: Path,
+):
+    """The argument IS linked to a real call site — `Session#
+    createTemporaryQueue()` — but the catalog's only declared `channel_via`
+    form names `createQueue`, a different method. "Matches at most one
+    form" (D02 §2h) means none of them ever reach this site, so the row
+    derives exactly as an unlinked argument would: `path` NULL,
+    `resolution: unresolved` — never a guess at the wrong method's own
+    identity."""
+    caller = "com/acme/orders/messaging/raw/RawJmsBridge#createTempProducer()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=SESSION,
+                name="createTemporaryQueue",
+                descriptor="()Ljakarta/jms/TemporaryQueue;",
+            ),
+            invoke_kind="interface",
+            ordinal=0,
+            receiver=5,
+            result=7,
+            arguments=[],
+        ),
+        _create_producer_call(caller, 1, 7),
+    ]
+    catalog = _channel_via_catalog(
+        _CREATE_PRODUCER_MATCHES, "invented-channel-via-no-form-match", "jms"
+    )
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_row_declaring_channel_via_without_channel_arg_or_url_arg_is_refused_at_run_start(
+    tmp_path: Path,
+):
+    """`channel_via` says HOW to read an instance already named by
+    `channel_arg`/`url_arg` — it is not itself a position. A row declaring
+    it alone is missing the position it describes, refused before any call
+    site is matched, the same `_validate_methods` discipline as the
+    `url_arg`+`channel_arg` conflict."""
+    matches = {
+        "owner": "jakarta.jms.Session",
+        "methods": [{"name": "createProducer", "channel_via": _create_queue_form()}],
+    }
+    catalog = _channel_via_catalog(matches, "invented-channel-via-no-position", "jms")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "invented-channel-via-no-position.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"method": "createQueue", "arg": 0},  # missing owner
+        {"owner": "jakarta.jms.Session", "arg": 0},  # missing method
+        {"owner": "jakarta.jms.Session", "method": "createQueue", "arg": "first"},  # bad arg
+        "jakarta.jms.Session",  # not even a dict
+    ],
+)
+def test_a_malformed_channel_via_entry_is_refused_at_run_start(tmp_path: Path, entry):
+    """Each declared `channel_via` entry must be `{owner, method, arg:
+    int|"all_strings"}` — the same shape discipline `record_wrappers`
+    entries keep, checked once at `run` start rather than a crash the first
+    time a call site reaches it."""
+    matches = {
+        "owner": "jakarta.jms.Session",
+        "methods": [{"name": "createProducer", "channel_arg": 0, "channel_via": entry}],
+    }
+    catalog = _channel_via_catalog(matches, "invented-bad-channel-via", "jms")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "invented-bad-channel-via.yml" in str(raised.value)
 
 
 # --- The `fluent` engine (Task 11): chains reassembled from value links ----
