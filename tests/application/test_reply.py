@@ -325,3 +325,113 @@ def test_e_a_handler_never_matched_by_this_catalogs_inbound_mapping_derives_no_r
 
     assert any(e["handler"] == matched_handler for e in rows)
     assert unmatched_rows == []
+
+
+# --- Fix round 1, BLOCKER: `endpoints` carries no catalog-identity column,
+# so two same-protocol `annotation_driven` catalogs must not let one
+# catalog's reply pass reach the other's handlers. ---------------------------
+
+OTHER_LISTENER = "com/acme/messaging/annotation/SqsListener#"
+
+
+def _other_catalog() -> Catalog:
+    """A second, invented `annotation_driven` catalog — same protocol
+    (`kafka`) as `_catalog()`, a different mapping annotation, no `reply`
+    block of its own, and a `source` that sorts before `_catalog()`'s own
+    (`derive_endpoints`'s own ordering runs inbound-before-outbound then by
+    filename, and both catalogs here are inbound, so this is what puts this
+    one's inbound row down first)."""
+    return Catalog(
+        id="invented-other-listener",
+        style="annotation_driven",
+        protocol="kafka",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/aaa-other-listener.yml"),
+        matches={
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": [],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": "com/acme/messaging/annotation/OtherTopic#",
+                "annotations": [{"fqn": OTHER_LISTENER}],
+            },
+        },
+    )
+
+
+def test_a_second_same_protocol_catalog_without_reply_never_gets_phantom_reply_rows(
+    tmp_path: Path,
+):
+    """Reviewer-reproduced gap (Task 8 review round 1, BLOCKER): filtering
+    `_derive_replies`'s handler set on `protocol`/`direction` alone cannot
+    tell catalog A's own inbound rows apart from catalog B's — both are
+    `kafka`/`inbound` rows in the very same shared `endpoints` table — so A's
+    reply pass would pick up B's value-returning, `@SendTo`-less handler and
+    derive a phantom `unresolved` reply row for it, even though B declares no
+    `reply` block at all and A's own mapping never matched that method.
+
+    `_other_catalog()` sorts before `_catalog()` (`derive_endpoints`'s own
+    filename tie-break), so its inbound row is the one already sitting in
+    `endpoints` by the time A's `run` — and therefore A's `_derive_replies`
+    — executes: the scenario the reviewer reproduced exactly, not a
+    reordering this fix happens to dodge."""
+    listener = "com/acme/notify/OrderListener#"
+    a_handler = "com/acme/notify/OrderListener#onReturn()."
+    b_handler = "com/acme/notify/OrderListener#onSqsMessage()."
+    catalog_a = _catalog()
+    catalog_b = _other_catalog()
+    assert str(catalog_b.source) < str(catalog_a.source)
+
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=listener, construct_kind=ConstructKind.CLASS),
+        # B's own handler: value-returning, matched only by B's own mapping
+        # annotation — never A's, and B declares no `reply` block at all.
+        SymbolFact(
+            document_id="doc_1",
+            symbol=b_handler,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=listener,
+            signature=Signature(returns=_receipt_returns()),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=b_handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=OTHER_LISTENER, args={"value": ["b-topic"]}),
+        ),
+        # A's own handler, no @SendTo — the (c)-style unresolved case, kept
+        # here so A's own derivation is proven correct alongside the
+        # isolation proof, not merely "A derives nothing at all".
+        SymbolFact(
+            document_id="doc_1",
+            symbol=a_handler,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=listener,
+            signature=Signature(returns=_receipt_returns()),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=a_handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=KAFKA_LISTENER, args={"topics": ["order-returns"]}),
+        ),
+    ]
+    write_fact_file(tmp_path / "facts" / "OrderListener.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [catalog_a, catalog_b], capabilities={"annotation_args"})
+    rows = workspace.query("endpoints")
+    b_rows = [e for e in rows if b_handler in (e["handler"], e["caller"])]
+    a_replies = _replies_for(workspace, a_handler)
+    workspace.close()
+
+    assert skipped == []
+    # B's handler carries no reply row at all — only its own inbound row.
+    assert len(b_rows) == 1
+    assert b_rows[0]["direction"] == "inbound"
+    # A's own handler still gets its own (unresolved, no @SendTo) reply row
+    # — the fix narrows scope without breaking A's own derivation.
+    assert len(a_replies) == 1
+    assert a_replies[0]["resolution"] == "unresolved"
