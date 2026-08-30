@@ -21,13 +21,24 @@ matches:
   # `subscribe(Collection<String>)` and `subscribe(Pattern)` are BOTH arity
   # 1, indistinguishable by name+arity alone — one declared row covers both,
   # `channel_via` (D02 §2h) trying each declared form in turn until one
-  # reaches the argument's own linked call. `List.of`/`Arrays.asList` read
-  # every element (`all_strings`, one row per topic — the fixture's own
-  # two-topic call derives two rows off the one `subscribe`); `singletonList`
-  # and `Pattern.compile` each take exactly one string argument, so `arg: 0`
-  # alone reads it — a topic pattern lands on `path` verbatim, never expanded
-  # into real topic names, the same rule `spring-kafka.yml`'s own
-  # `topicPattern` listener row already keeps.
+  # reaches the argument's own linked call.
+  #
+  # `List.of` binds a FIXED-ARITY overload for up to 10 elements (checkpoint
+  # ruling, also `linked_channels`'s own docstring): each element is its own
+  # positional literal argument, never an array to unpack, so `all_strings`
+  # reads one resolved row per topic — exactly what the fixture's own
+  # two-topic call derives. `Arrays.asList` is declared here too, but review
+  # round 1 disassembled a real probe: it is a genuine varargs call, one
+  # single `anewarray` argument in bytecode, never several positional ones —
+  # the scanner never unpacks an array argument into its elements, so
+  # `all_strings` can NEVER yield a per-topic row for it. It still derives
+  # honestly rather than silently matching nothing: `linked_channels`'s own
+  # documented varargs answer is the one trailing unresolved tuple, exactly
+  # what this form degrades to. `singletonList` and `Pattern.compile` each
+  # take exactly one string argument, so `arg: 0` alone reads it — a topic
+  # pattern lands on `path` verbatim, never expanded into real topic names,
+  # the same rule `spring-kafka.yml`'s own `topicPattern` listener row
+  # already keeps.
   methods:
     - name: subscribe
       arity: 1

@@ -1493,6 +1493,15 @@ _MESSAGING_CATALOG_IDS = (
     "spring-jms-template",
     "spring-sqs-template",
     "spring-pubsub",
+    # 2E-prep Task 11 (driver catalogs A): the three raw-client catalogs
+    # copy the same harvested `known_types` baseline. `aws-sqs-sdk.yml`
+    # matters most here — it sorts FIRST among every shipped catalog file
+    # (its own comment states why: it cannot rely on any other catalog
+    # loading before it), so a fork here would go undetected by every other
+    # pin in this file.
+    "aws-sqs-sdk",
+    "jakarta-jms",
+    "kafka-consumer",
 )
 
 
@@ -1571,12 +1580,13 @@ def test_the_producer_catalogs_wrappers_are_the_harvested_baseline_verbatim():
     """Unlike the three Task 10 listener catalogs (`spring-kafka.yml` adds a
     `ConsumerRecord` envelope entry on top of the baseline, for the one
     listener parameter shape that needs unwrapping), none of the six Task 11
-    producer catalogs add a broker-specific `wrappers` entry: a `single_call`
-    row's payload comes from its own declared position (`body_arg`) or a
-    `record_wrappers` constructor hop, never through an envelope type a
-    `wrappers` rule would need to unwrap. So each producer catalog's own
-    `wrappers` list must be exactly `spring-resttemplate.yml`'s, not merely a
-    superset of it."""
+    producer catalogs, nor 2E-prep Task 11's three raw-client catalogs, add a
+    broker-specific `wrappers` entry: a `single_call`/`fluent` row's payload
+    comes from its own declared position (`body_arg`/a step's own `body`
+    capture) or a `record_wrappers` constructor hop, never through an
+    envelope type a `wrappers` rule would need to unwrap. So each of these
+    catalogs' own `wrappers` list must be exactly `spring-resttemplate.yml`'s,
+    not merely a superset of it."""
     catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
     baseline = catalogs["spring-resttemplate"].wrappers
 
@@ -1587,6 +1597,10 @@ def test_the_producer_catalogs_wrappers_are_the_harvested_baseline_verbatim():
         "spring-jms-template",
         "spring-sqs-template",
         "spring-pubsub",
+        # 2E-prep Task 11 (driver catalogs A).
+        "aws-sqs-sdk",
+        "jakarta-jms",
+        "kafka-consumer",
     ):
         assert catalogs[catalog_id].wrappers == baseline, catalog_id
 

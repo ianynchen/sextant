@@ -20,10 +20,23 @@ matches:
   # Task 11 precondition).
   roots:
     - { owner: software.amazon.awssdk.services.sqs.model.SendMessageRequest, method: builder, captures: {} }
-  # Both steps live on the builder's own inner class (checkpoint fact,
-  # `$`-dotted exactly as OkHttp's `Request$Builder` already established) —
-  # no `owner` filter needed here, since neither method name collides with
-  # anything else this catalog declares.
+  # CHECKPOINT FACT: both steps genuinely live on the builder's own inner
+  # class in real bytecode — `SendMessageRequest$Builder`, `$`-dotted
+  # exactly as OkHttp's own `Request$Builder` already established.
+  #
+  # This file deliberately declares neither step with an `owner` filter,
+  # though: fluent steps are owner-free by default (D02 §4) — the same
+  # `spring-webclient.yml` precedent already ships `uri`/`bodyValue`/
+  # `bodyToMono` undeclared — and `_validate_steps` only demands one where
+  # two entries share a method NAME, which neither `queueUrl` nor
+  # `messageBody` does anywhere in this file. Leaving them undeclared is
+  # bounded, not open-ended: a step can only ever fold into a chain this
+  # catalog's own root already matched (D02 §4's walk is chain-rooted, never
+  # a bare method-name scan of the whole caller), so the worst an
+  # owner-free `queueUrl`/`messageBody` could ever do is fold in a
+  # same-named method reached later in THIS SAME already-rooted chain —
+  # never one reached from a caller that never invoked
+  # `SendMessageRequest.builder()` at all.
   steps:
     - { method: queueUrl,    captures: { url: arg0 } }
     - { method: messageBody, captures: { body: arg0 } }
