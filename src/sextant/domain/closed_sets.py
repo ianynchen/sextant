@@ -42,7 +42,10 @@ class Protocol(StrEnum):
     HTTP = "http"
     SOAP = "soap"
     GRPC = "grpc"
-    MESSAGE = "message"
+    KAFKA = "kafka"
+    JMS = "jms"
+    SQS = "sqs"
+    PUBSUB = "pubsub"
 
 
 class Direction(StrEnum):

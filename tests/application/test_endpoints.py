@@ -26,7 +26,7 @@ CATALOGS = catalogs_dir()
 _INVENTED_LISTENER = Catalog(
     id="invented-listener",
     style="annotation_driven",
-    protocol="message",
+    protocol="kafka",
     direction="outbound",
     requires=("annotation_args",),
     source=Path("tests/invented.yml"),
@@ -320,7 +320,7 @@ def test_derive_endpoints_carries_the_catalogs_own_protocol_and_direction_when_n
 
     assert skipped == []
     assert len(rows) == 1
-    assert rows[0]["protocol"] == "message"
+    assert rows[0]["protocol"] == "kafka"
     assert rows[0]["direction"] == "outbound"
     assert rows[0]["protocol"] != "http"
     assert rows[0]["direction"] != "inbound"
@@ -353,7 +353,7 @@ def test_derive_endpoints_keeps_both_catalogs_results_when_two_catalogs_match(
         ("http", "POST", "/v1/orders"),
         ("http", "GET", "/v1/orders/{id}"),
         ("http", "GET", "/v1/orders"),
-        ("message", "PUBLISH", "orders.created"),
+        ("kafka", "PUBLISH", "orders.created"),
     }
 
 
