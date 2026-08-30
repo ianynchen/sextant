@@ -1,0 +1,38 @@
+id: spring-resttemplate
+displayName: Spring RestTemplate
+style: single_call
+protocol: http
+direction: outbound
+
+detect:
+  coordinates: ["org.springframework:spring-web"]
+
+requires: [call_site, string_constants]
+
+matches:
+  owner: org.springframework.web.client.RestTemplate
+  type_carriers: [org.springframework.core.ParameterizedTypeReference]
+  call_wrappers:
+    - { type: org.springframework.http.HttpEntity, payload_ctor_arg: 0 }
+  methods:
+    - { name: getForObject,  http_method: GET,  url_arg: 0, response_arg: 1 }
+    - { name: postForObject, http_method: POST, url_arg: 0, body_arg: 1, response_arg: 2 }
+    - { name: put,           http_method: PUT,  url_arg: 0, body_arg: 1 }
+    - { name: delete,        http_method: DELETE, url_arg: 0 }
+    - { name: getForEntity,  http_method: GET,  url_arg: 0, response_arg: 1 }
+    - { name: postForEntity, http_method: POST, url_arg: 0, body_arg: 1, response_arg: 2 }
+    - { name: exchange, method_arg: 1, url_arg: 0, body_arg: 2, response_arg: 3 }
+
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }

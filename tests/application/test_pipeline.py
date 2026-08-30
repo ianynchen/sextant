@@ -56,7 +56,17 @@ def _resolved_fixture(
         workspace,
         facts,
         catalogs or YamlCatalogSource(CATALOGS),
-        {"annotation_args", "typed_signatures", "type_annotations"},
+        # Phase 2C: `call_site` and `string_constants` gate the RestTemplate
+        # catalog on (D02 §1's `single_call`) — a real subset of what
+        # `AsmScanner.capabilities()` actually declares, the same way the
+        # other four capabilities here already are.
+        {
+            "annotation_args",
+            "typed_signatures",
+            "type_annotations",
+            "call_site",
+            "string_constants",
+        },
     )
     return workspace, report
 
@@ -102,6 +112,13 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
         ("POST", "/v1/inventory/reserve"),
         ("GET", "legacy/invoices/{id}"),
         ("POST", "legacy/invoices"),
+        # Outbound (Phase 2C): BillingRestTemplate's `single_call` surface —
+        # one route per verb shape the spring-resttemplate catalog's
+        # `methods` rows match on its own.
+        ("GET", "/billing/balances/{id}"),
+        ("POST", "/billing/settlements"),
+        ("PUT", "/billing/settlements/{id}"),
+        ("POST", "/billing/batch"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -110,8 +127,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
     # self-call): the outbound engine derives its own row for it, and the
     # D02 §3 merge folds that into the existing inbound row (direction
     # `both`) rather than keeping both, so the count is 18 inbound + 7
-    # outbound rows derived, minus the 1 that merges away.
-    assert len(report.endpoints) == 24
+    # annotation-driven outbound + 4 single_call outbound rows derived,
+    # minus the 1 that merges away — 28.
+    assert len(report.endpoints) == 28
     assert report.skipped_catalogs == []
 
     directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
@@ -183,6 +201,33 @@ def test_an_outbound_endpoints_collection_response_resolves_to_the_real_client_i
     descriptor = json.loads(invoices["response_shape"])
     assert descriptor["wire_type"] == "array"
     assert descriptor["item"]["shape_id"] == "com/acme/orders/contracts/OrderView#"
+
+
+def test_the_resttemplate_exchange_row_carries_the_http_entity_and_ptr_descriptors(
+    tmp_path: Path,
+):
+    """`single_call` (Task 9), on real bytecode: `exchange`'s verb is an
+    `enum` argument, never a string (D00 §5), its body is built inline as
+    `new HttpEntity<>(new OrderRequest())` — D02 §2h's one-hop follow — and
+    its response is a `ParameterizedTypeReference<List<OrderView>>` anonymous
+    subclass — D02 §2h's PTR follow through the type's own declared
+    supertype. All three resolve off the call site's own arguments; nothing
+    here comes from a handler signature, because this row has none."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    batch = next(
+        e for e in report.endpoints if e["method"] == "POST" and e["path"] == "/billing/batch"
+    )
+
+    assert batch["direction"] == "outbound"
+    assert batch["handler"] is None
+    assert batch["resolution"] == "resolved"
+    assert json.loads(batch["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderRequest#"
+    )
+    response = json.loads(batch["response_shape"])
+    assert response["wire_type"] == "array"
+    assert response["item"]["shape_id"] == "com/acme/orders/contracts/OrderView#"
 
 
 def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path: Path):

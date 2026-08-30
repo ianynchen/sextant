@@ -8,7 +8,8 @@ from dataclasses import dataclass
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.engines import annotation_driven
+from sextant.application.resolve.capabilities import missing_capabilities
+from sextant.application.resolve.engines import annotation_driven, single_call
 
 
 @dataclass(frozen=True)
@@ -52,20 +53,6 @@ def derive_endpoints(
     return skipped
 
 
-def missing_capabilities(catalog: Catalog, capabilities: set[str]) -> tuple[str, ...]:
-    """What a catalog requires and this scan does not provide, in a stable
-    order.
-
-    Shared rather than restated, because every pass that reads a catalog must
-    gate on exactly the same answer. A pass that gated differently would run
-    against facts the scanner never produced and quietly report nothing — the
-    silent degradation capability gating exists to prevent (M04, FR-17) — and
-    a catalog already reported as skipped must not be reported a second time
-    for the same reason.
-    """
-    return tuple(sorted(set(catalog.requires) - capabilities))
-
-
 def _engine_for(catalog: Catalog) -> "Callable[[Workspace, Catalog], None]":
     """Resolves the engine for a catalog's declared style, or refuses it.
 
@@ -86,4 +73,5 @@ def _engine_for(catalog: Catalog) -> "Callable[[Workspace, Catalog], None]":
 # One entry per engine style D02 §2 declares and this codebase implements.
 _ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
     "annotation_driven": annotation_driven.run,
+    "single_call": single_call.run,
 }

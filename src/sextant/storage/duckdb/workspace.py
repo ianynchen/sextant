@@ -56,6 +56,22 @@ _NAMED_QUERIES = {
     # the ordering total, the same reason `shape_fields` orders by
     # `shape_id, ordinal` rather than `ordinal` alone (NFR-1).
     "call_sites": "SELECT * FROM call_sites ORDER BY caller, ordinal",
+    # D00 §5a's PTR carrier: every declared type's own generic supertype
+    # reference, keyed by the type's own (module-prefixed) symbol — the
+    # `single_call` engine strips the prefix itself, the same way
+    # `_enum_symbols` does, so this stays a plain projection like every other
+    # named query. `json_type(...) NOT IN ('NULL')` is deliberate, not
+    # `IS NOT NULL`: DuckDB's `->` returns the JSON scalar `'null'` (a string,
+    # not SQL NULL) for a fact that explicitly recorded no supertype, and only
+    # a genuinely absent key evaluates to SQL NULL — `IS NOT NULL` alone would
+    # keep the explicit-null rows too and hand the engine a supertype to
+    # follow that no fact ever carried.
+    "supertypes": """
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'supertype' AS supertype
+        FROM raw_facts
+        WHERE kind = 'symbol' AND json_type(payload -> 'supertype') NOT IN ('NULL')
+        ORDER BY symbol
+    """,
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
@@ -97,6 +113,7 @@ _EXPORT_QUERIES = {
 
 _NAMED_DERIVATIONS = {
     "endpoints": "derive_endpoints.sql",
+    "call_endpoints": "derive_call_endpoints.sql",
     "endpoints_reset": "reset_endpoints.sql",
     "endpoints_merge": "merge_endpoints.sql",
     "endpoint_contracts": "derive_endpoint_contracts.sql",

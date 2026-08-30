@@ -63,4 +63,6 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         f"SELECT direction, count(*) AS n FROM read_parquet('{bundle / 'graph' / 'endpoints.parquet'}') "
         "GROUP BY direction ORDER BY direction"
     ).fetchall()
-    assert rows == [("both", 1), ("inbound", 17), ("outbound", 6)]
+    # Phase 2C: the spring-resttemplate catalog's four `single_call` routes
+    # (BillingRestTemplate) join the outbound side, real end to end.
+    assert rows == [("both", 1), ("inbound", 17), ("outbound", 10)]
