@@ -52,6 +52,10 @@ _NAMED_QUERIES = {
     "annotations": """
         SELECT target, annotation, type_path FROM annotations ORDER BY target, annotation
     """,
+    # `ordinal` alone would tie across callers; `caller` first is what makes
+    # the ordering total, the same reason `shape_fields` orders by
+    # `shape_id, ordinal` rather than `ordinal` alone (NFR-1).
+    "call_sites": "SELECT * FROM call_sites ORDER BY caller, ordinal",
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
@@ -62,18 +66,28 @@ _NAMED_QUERIES = {
     "facts": "SELECT count(*) AS facts FROM raw_facts",
 }
 
-# The tables a bundle carries (D06 §5). `documents`, `endpoints`, `shapes`
-# and `shape_fields` export through their named query, so the row order is
-# the one NFR-1 already fixed; `symbols` and `annotations` have no named
-# query and export through their own ordered SELECT below, for the same
-# reason. Sorted by name so the manifest's contents list is deterministic too.
-_EXPORTED_TABLES = ("annotations", "documents", "endpoints", "shape_fields", "shapes", "symbols")
+# The tables a bundle carries (D06 §5). `documents`, `endpoints`, `shapes`,
+# `shape_fields` and `call_sites` export through their named query, so the
+# row order is the one NFR-1 already fixed; `symbols` and `annotations` have
+# no named query and export through their own ordered SELECT below, for the
+# same reason. Sorted by name so the manifest's contents list is
+# deterministic too.
+_EXPORTED_TABLES = (
+    "annotations",
+    "call_sites",
+    "documents",
+    "endpoints",
+    "shape_fields",
+    "shapes",
+    "symbols",
+)
 
 _EXPORT_QUERIES = {
     "documents": _NAMED_QUERIES["documents"],
     "endpoints": _NAMED_QUERIES["endpoints"],
     "shapes": _NAMED_QUERIES["shapes"],
     "shape_fields": _NAMED_QUERIES["shape_fields"],
+    "call_sites": _NAMED_QUERIES["call_sites"],
     "symbols": "SELECT * FROM symbols ORDER BY symbol",
     "annotations": (
         "SELECT target, annotation, args, type_path, retention "
