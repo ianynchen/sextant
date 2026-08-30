@@ -950,7 +950,7 @@ def test_a_type_level_mapping_annotation_mints_no_endpoint_of_its_own(tmp_path):
 
 
 _UNKNOWN_STYLE_CATALOG = """id: invented
-style: fluent
+style: interface_implementation
 protocol: http
 direction: inbound
 matches: {}
@@ -1019,7 +1019,8 @@ def test_load_catalogs_accepts_a_catalog_whose_values_are_all_in_the_closed_sets
 def test_catalog_naming_a_style_with_no_engine_is_refused_by_file(tmp_path: Path):
     """A style with no engine matches nothing, so it would yield no endpoints
     and no skip — indistinguishable from a framework that exposes none. D02 §2
-    declares six styles and this codebase implements one, so the gap is real.
+    declares six styles and this codebase implements three, so the gap is
+    real.
 
     The reader cannot check it: which engines exist is knowledge of
     `application/resolve`, which `ingress` must not import. So the catalog

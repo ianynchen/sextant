@@ -748,3 +748,444 @@ def test_split_url_leaves_a_relative_url_path_only_with_no_peer():
 
 def test_split_url_reads_an_absolute_url_with_no_path_as_an_empty_path():
     assert split_url("https://billing.internal") == ("billing.internal", "")
+
+
+# --- The `fluent` engine (Task 11): chains reassembled from value links ----
+#
+# No catalog ships with this task (Task 12 writes the real spring-webclient/
+# spring-restclient/okhttp files) — these are the "invented catalogs tests
+# construct by hand" `Catalog` itself already documents (`ports/catalogs.py`).
+# Facts mirror the real emitted grammar the checkpoint verified live: a
+# WebClient chain links result -> receiver directly; an OkHttp constructor
+# root chains by its own receiver (CP-3, its result is void); OkHttp's
+# `build()` -> `newCall()` split joins through an argument `source`, never
+# through receiver/result (`terminal_via_argument`).
+
+FLUENT_CAPABILITIES = {"call_site", "string_constants", "chain_reconstruction"}
+
+WEBCLIENT = "com/acme/http/WebClient#"
+URI_SPEC = "com/acme/http/WebClient$UriSpec#"
+RESPONSE_SPEC = "com/acme/http/WebClient$ResponseSpec#"
+
+_WEBCLIENT_MATCHES = {
+    "roots": [
+        {"owner": "com.acme.http.WebClient", "method": "get", "captures": {"http_method": "GET"}},
+        {
+            "owner": "com.acme.http.WebClient",
+            "method": "post",
+            "captures": {"http_method": "POST"},
+        },
+    ],
+    "steps": [
+        {"method": "uri", "captures": {"url": "arg0"}},
+        {"method": "bodyValue", "captures": {"body": "arg0"}},
+        {"method": "bodyToMono", "captures": {"response": "arg0"}},
+        {"method": "bodyToFlux", "captures": {"response": "arg0", "response_is": "array"}},
+    ],
+    "terminal": ["retrieve", "exchange"],
+}
+
+BUILDER = "com/acme/http/Request$Builder#"
+OKHTTP_CLIENT = "com/acme/http/OkHttpClient#"
+REQUEST = "com/acme/http/Request#"
+
+_OKHTTP_MATCHES = {
+    "roots": [
+        {
+            "owner": "com.acme.http.Request$Builder",
+            "method": "<init>",
+            "captures": {"http_method": "GET"},
+        }
+    ],
+    "steps": [
+        {"method": "url", "captures": {"url": "arg0"}},
+        {"method": "post", "captures": {"http_method": "POST", "body": "arg0"}},
+    ],
+    "terminal": [{"method": "build", "terminal_via_argument": True}],
+}
+
+
+def _fluent_catalog(matches: dict, catalog_id: str = "invented-fluent") -> Catalog:
+    return Catalog(
+        id=catalog_id,
+        style="fluent",
+        protocol="http",
+        direction="outbound",
+        requires=("call_site", "string_constants", "chain_reconstruction"),
+        matches=matches,
+        source=Path(f"tests/{catalog_id}.yml"),
+    )
+
+
+def _resolve_fluent(tmp_path: Path, facts: list, catalog: Catalog):
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    assert skipped == []
+    return workspace
+
+
+def _call(
+    caller: str,
+    owner: str,
+    name: str,
+    ordinal: int,
+    receiver: int | None,
+    result: int | None,
+    arguments: list | None = None,
+    invoke_kind: str = "virtual",
+) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(owner=owner, name=name, descriptor="()V"),
+        invoke_kind=invoke_kind,
+        ordinal=ordinal,
+        receiver=receiver,
+        result=result,
+        arguments=arguments or [],
+    )
+
+
+def test_a_webclient_shaped_chain_derives_get_with_url_and_bodytomono_response(
+    tmp_path: Path,
+):
+    """The plain case: root seeds the verb, `uri` captures the url, the
+    chain runs past `retrieve` (executability, not the walk's end) to
+    `bodyToMono`, which captures the response — exactly D02 §4's example."""
+    caller = "com/acme/http/Client#getOrder()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders/{id}")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 2, receiver=10, result=13),
+        _call(
+            caller,
+            RESPONSE_SPEC,
+            "bodyToMono",
+            3,
+            receiver=13,
+            result=16,
+            arguments=[CallArgument(kind="class", symbol=ORDER_VIEW)],
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_WEBCLIENT_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["method"], endpoint["path"]) == ("GET", "/orders/{id}")
+    assert endpoint["direction"] == "outbound"
+    assert endpoint["resolution"] == "resolved"
+    assert endpoint["handler"] is None
+    assert endpoint["peer"] is None
+    assert json.loads(endpoint["response_shape"]) == {
+        "wire_type": "object",
+        "wire_format": "",
+        "nullable": True,
+        "shape_id": ORDER_VIEW,
+    }
+    assert endpoint["request_shape"] is None
+
+
+def test_a_repeated_step_captures_last_wins(tmp_path: Path):
+    """Two `uri` calls chained one after the other — the second overwrites
+    the first's own `url` capture, in visitation order, with no special
+    bookkeeping beyond folding captures as the walk reaches each row."""
+    caller = "com/acme/http/Client#getOrderTwice()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/first")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            2,
+            receiver=10,
+            result=11,
+            arguments=[CallArgument(kind="string", value="/second")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 3, receiver=11, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_WEBCLIENT_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "/second"
+
+
+def test_two_interleaved_chains_in_one_caller_derive_two_correct_endpoints(
+    tmp_path: Path,
+):
+    """Value ids, not adjacency, keep two builders apart even when their own
+    call sites are interleaved ordinal by ordinal within one caller — the
+    exact case adjacency heuristics would fabricate a link across."""
+    caller = "com/acme/http/Client#getBoth()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(caller, WEBCLIENT, "post", 1, receiver=5, result=6),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            2,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/a")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            3,
+            receiver=6,
+            result=11,
+            arguments=[CallArgument(kind="string", value="/b")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 4, receiver=10, result=13),
+        _call(caller, URI_SPEC, "retrieve", 5, receiver=11, result=14),
+        _call(
+            caller,
+            RESPONSE_SPEC,
+            "bodyToMono",
+            6,
+            receiver=13,
+            result=16,
+            arguments=[CallArgument(kind="class", symbol=ORDER_VIEW)],
+        ),
+        _call(
+            caller,
+            RESPONSE_SPEC,
+            "bodyToMono",
+            7,
+            receiver=14,
+            result=17,
+            arguments=[CallArgument(kind="class", symbol=ORDER_REQUEST)],
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_WEBCLIENT_MATCHES))
+    endpoints = {e["path"]: e for e in workspace.query("endpoints") if e["caller"] == caller}
+    workspace.close()
+
+    assert set(endpoints) == {"/a", "/b"}
+    assert endpoints["/a"]["method"] == "GET"
+    assert json.loads(endpoints["/a"]["response_shape"])["shape_id"] == ORDER_VIEW
+    assert endpoints["/b"]["method"] == "POST"
+    assert json.loads(endpoints["/b"]["response_shape"])["shape_id"] == ORDER_REQUEST
+
+
+def test_a_rootless_fragment_derives_nothing(tmp_path: Path):
+    """`uri`/`retrieve`/`bodyToMono` calls with no `get`/`post` root anywhere
+    in the caller: nothing ever starts a walk, so nothing derives — a
+    builder fragment reached by nothing this catalog calls a root is not a
+    chain at all."""
+    caller = "com/acme/http/Client#orphanSteps()."
+    facts = [
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            0,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/x")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 1, receiver=10, result=13),
+        _call(
+            caller,
+            RESPONSE_SPEC,
+            "bodyToMono",
+            2,
+            receiver=13,
+            result=16,
+            arguments=[CallArgument(kind="class", symbol=ORDER_VIEW)],
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_WEBCLIENT_MATCHES))
+    endpoints = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoints == []
+
+
+def test_a_root_without_a_terminal_derives_nothing(tmp_path: Path):
+    """A `Request.Builder` built and never executed made no call (D02 §4):
+    the root and its `uri` step are real rows, but the chain never reaches
+    `retrieve`/`exchange`, so nothing derives."""
+    caller = "com/acme/http/Client#abandonedBuilder()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/y")],
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_WEBCLIENT_MATCHES))
+    endpoints = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoints == []
+
+
+def test_bodytoflux_wraps_the_response_in_an_array_descriptor(tmp_path: Path):
+    caller = "com/acme/http/Client#listOrders()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 2, receiver=10, result=13),
+        _call(
+            caller,
+            RESPONSE_SPEC,
+            "bodyToFlux",
+            3,
+            receiver=13,
+            result=16,
+            arguments=[CallArgument(kind="class", symbol=ORDER_VIEW)],
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_WEBCLIENT_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert json.loads(endpoint["response_shape"]) == {
+        "wire_type": "array",
+        "wire_format": "",
+        "nullable": True,
+        "item": {
+            "wire_type": "object",
+            "wire_format": "",
+            "nullable": True,
+            "shape_id": ORDER_VIEW,
+        },
+    }
+
+
+def test_a_uri_lambda_argument_derives_the_row_unresolved(tmp_path: Path):
+    """`uri(uriBuilder -> …)` records a real `lambda`-kind argument (D00 §5),
+    never a `string` — the url capture fails honestly, and per I1 that drops
+    the row's own `resolution`, even though `bodyToMono`'s own response
+    capture, a completely different step, still resolves fine on the same
+    row."""
+    caller = "com/acme/http/Client#getWithBuilder()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="lambda", symbol="com/acme/http/Client$$Lambda$1#")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 2, receiver=10, result=13),
+        _call(
+            caller,
+            RESPONSE_SPEC,
+            "bodyToMono",
+            3,
+            receiver=13,
+            result=16,
+            arguments=[CallArgument(kind="class", symbol=ORDER_VIEW)],
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_WEBCLIENT_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["resolution"] == "unresolved"
+    assert endpoint["path"] is None
+    assert json.loads(endpoint["response_shape"]) == {
+        "wire_type": "object",
+        "wire_format": "",
+        "nullable": True,
+        "shape_id": ORDER_VIEW,
+    }
+
+
+def test_okhttp_build_joins_newcall_through_the_argument_source(tmp_path: Path):
+    """OkHttp's split: the builder chain's own last row is `build` — nothing
+    in this caller has a `receiver` matching `build`'s own `result`, so the
+    walk would otherwise end right there, unresolved. `terminal_via_argument`
+    is the second, argument-`source` join the checkpoint verified live
+    (`build`'s `result` == `newCall`'s own argument `source`) — found among
+    ALL of this caller's call sites, never through receiver/result chaining,
+    because `newCall`'s own receiver is the client, not the builder. Also
+    proves the negative: the same builder chain with no `newCall` row at all
+    derives nothing, so `build` alone — reached but never joined — is not
+    itself enough."""
+    catalog = _fluent_catalog(_OKHTTP_MATCHES, catalog_id="invented-okhttp")
+    executed = "com/acme/http/Client#legacyExport()."
+    abandoned = "com/acme/http/Client#unusedBuilder()."
+
+    def _builder_chain(caller: str) -> list:
+        return [
+            _call(caller, BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+            _call(
+                caller,
+                BUILDER,
+                "url",
+                1,
+                receiver=2,
+                result=8,
+                arguments=[
+                    CallArgument(kind="string", value="https://legacy.acme.internal/legacy/exports")
+                ],
+            ),
+            _call(caller, BUILDER, "build", 2, receiver=8, result=14),
+        ]
+
+    facts = [
+        *_builder_chain(executed),
+        _call(
+            executed,
+            OKHTTP_CLIENT,
+            "newCall",
+            3,
+            receiver=99,
+            result=20,
+            arguments=[CallArgument(kind="instance", source=14, symbol=REQUEST)],
+        ),
+        *_builder_chain(abandoned),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    endpoints = [e for e in workspace.query("endpoints") if e["caller"] == executed]
+    abandoned_endpoints = [e for e in workspace.query("endpoints") if e["caller"] == abandoned]
+    workspace.close()
+
+    [endpoint] = endpoints
+    assert (endpoint["method"], endpoint["peer"], endpoint["path"]) == (
+        "GET",
+        "legacy.acme.internal",
+        "/legacy/exports",
+    )
+    assert endpoint["resolution"] == "resolved"
+    assert abandoned_endpoints == []

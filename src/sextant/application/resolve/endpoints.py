@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.capabilities import missing_capabilities
-from sextant.application.resolve.engines import annotation_driven, single_call
+from sextant.application.resolve.engines import annotation_driven, fluent, single_call
 
 
 @dataclass(frozen=True)
@@ -74,4 +74,5 @@ def _engine_for(catalog: Catalog) -> "Callable[[Workspace, Catalog], None]":
 _ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
     "annotation_driven": annotation_driven.run,
     "single_call": single_call.run,
+    "fluent": fluent.run,
 }
