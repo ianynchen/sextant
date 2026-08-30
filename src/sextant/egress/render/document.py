@@ -48,9 +48,12 @@ _GAPS = [
     ),
     (
         "A payload type reachable from several catalogs is expanded under the "
-        "first catalog's serialisation and nullability rules, not necessarily "
-        "the one that produced its endpoint; the shipped catalogs declare "
-        "compatible rules, so no answer differs today."
+        "first catalog's serialisation, wrapper and nullability rules, not "
+        "necessarily the ones that produced its endpoint: the first outbound "
+        "catalog's rules describe every outbound row. The shipped catalogs do "
+        "not declare identical rules, so a wrapper type one of them unwraps "
+        "and another does not can be named below as unexpanded even where the "
+        "shape behind it was expanded correctly."
     ),
     (
         "Reactive and lambda flow is recorded but not traced: calls inside "
@@ -126,10 +129,16 @@ def render_module_document(
             peer = endpoint.get("peer")
             path = endpoint["path"]
             caller = str(endpoint["caller"]).rsplit(" ", 1)[-1]
+            # Either half of the route may be NULL, and each says the same
+            # thing about its own column: the call is real and that part of
+            # its identity could not be read (a url built in builder code, a
+            # verb arriving as a parameter). Rendered the same way, so the
+            # column never shows a bare `None` — and never silently omits a
+            # row either.
+            method = endpoint["method"]
             route = (
-                f"{endpoint['method']} (unresolved)"
-                if path is None
-                else f"{endpoint['method']} {path}"
+                f"{'(unresolved)' if method is None else method} "
+                f"{'(unresolved)' if path is None else path}"
             )
             lines.append(
                 f"| `{route}` | "

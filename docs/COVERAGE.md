@@ -183,8 +183,10 @@ than silently absent:
 Two honesty caveats also ride every output: a merged `both` endpoint keeps only the
 handler's declared contract (`merged_endpoints_keep_only_the_handlers_contract`), and a
 payload type reachable from several catalogs is expanded under the first catalog's rules
-(`shape_rules_unscoped_to_the_producing_catalog`) — the shipped catalogs declare
-compatible rules, so no answer differs today.
+(`shape_rules_unscoped_to_the_producing_catalog`) — the first outbound catalog's rules
+describe every outbound row. The shipped catalogs do not declare identical rules, so a
+wrapper type one of them unwraps and another does not can be reported as an unexpanded
+type even where the shape behind it was expanded correctly.
 
 ### 2a. Application protocols over HTTP
 

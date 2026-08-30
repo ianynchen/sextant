@@ -265,6 +265,36 @@ def test_outbound_row_with_no_path_renders_unresolved_in_the_endpoint_column():
     ) in text
 
 
+def test_outbound_row_with_no_method_renders_unresolved_in_the_endpoint_column():
+    """The verb's own half of the same rule (final review, I2): a call whose
+    `HttpMethod` argument arrives as a parameter derives with `method` NULL,
+    and the column must say so in the same words the path already uses. A
+    bare `None` beside a real path would read as a verb literally named
+    None, and dropping the row would hide a call the module demonstrably
+    makes."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": None,
+                "path": "/billing/passed-verb",
+                "caller": "s maven c 1 com/acme/orders/clients/BillingRestTemplate#relay(String).",
+                "peer": None,
+                "resolution": "unresolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert (
+        "| `(unresolved) /billing/passed-verb` | unresolved | "
+        "`com/acme/orders/clients/BillingRestTemplate#relay(String).` | unresolved |"
+    ) in text
+
+
 def test_structure_and_outbound_sections_state_looked_and_found_nothing():
     """NFR-7: a section whose machinery exists but found nothing is empty and
     present, never absent — distinct from a gap, which says the machinery
