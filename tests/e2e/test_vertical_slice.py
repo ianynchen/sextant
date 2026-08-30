@@ -6,6 +6,7 @@ import duckdb
 from click.testing import CliRunner
 
 from sextant.cli.app import cli
+from sextant.domain.factfile import read_fact_file
 
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
@@ -51,6 +52,35 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # than guessed, and the endpoint column says so instead of `GET None`.
     assert "GET (unresolved)" in document
     assert "classDiagram" in document
+
+
+def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_path: Path):
+    """The contract between the two halves of the fact stream (final review,
+    M5). `load_facts` reads the JSONL straight into DuckDB — deliberately,
+    for the bulk-load reason NFR-11 states — so nothing in the running
+    pipeline ever puts the extractor's own output through the pydantic models
+    that define D00 §5. A field the extractor renamed, a `kind` outside the
+    closed set, an argument shape the model does not describe: all of it
+    would flow through the pipeline and only surface as a column that reads
+    NULL for no visible reason.
+
+    So the whole fact tree the fixture produces is validated here, line by
+    line, through the project's own reader — the document header as
+    `Document`, every following line through `TypeAdapter(Fact)`, which
+    raises on the first one the model refuses. The kind check keeps the test
+    from passing vacuously on an empty or truncated tree; `module` is absent
+    on purpose, being the detector's fact rather than the scanner's."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)
+
+    files = sorted((tmp_path / "facts").rglob("*.jsonl"))
+    validated = [read_fact_file(path) for path in files]
+    kinds = {fact.kind for _, facts in validated for fact in facts}
+    total = sum(len(facts) for _, facts in validated)
+
+    assert files != []
+    assert {"annotation", "call_site", "symbol"} <= kinds
+    assert total >= len(files)
 
 
 def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
