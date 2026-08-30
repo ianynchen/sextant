@@ -22,14 +22,13 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.shapes import (
     ExpandedShapes,
-    _contracts_of,
-    _owns,
-    _rules_of,
-    _scope_nullable,
     derive_endpoint_shapes,
     derive_shapes,
     root_type,
 )
+from sextant.application.resolve.shapes.contracts import _contracts_of, _owns
+from sextant.application.resolve.shapes.expansion import _rules_of
+from sextant.application.resolve.shapes.nullability import _scope_nullable
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.facts import Document
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
