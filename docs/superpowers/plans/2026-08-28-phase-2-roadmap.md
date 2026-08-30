@@ -29,7 +29,7 @@ messaging) both exist.
 |---|---|---|---|---|
 | **2A** | Shapes and nullability | delivered | field-by-field contracts with `required`/`nullable` | field symbols, type annotations, Kotlin nullability |
 | **2B** | Outbound annotation clients + export | delivered (PR #3) | Feign, `@HttpExchange`, Retrofit; the D06 bundle exporter | generalized `annotation_driven`; payload descriptors |
-| **2C** | Call-site HTTP clients | **designed** — [spec](../specs/2026-08-29-phase-2c-call-site-clients-design.md) | RestTemplate, WebClient, RestClient, OkHttp; PTR payloads; lambda-body calls | linked `call_site` facts (the dataflow pass); `single_call` + `fluent` engines |
+| **2C** | Call-site HTTP clients | delivered — [spec](../specs/2026-08-29-phase-2c-call-site-clients-design.md) | RestTemplate, WebClient, RestClient, OkHttp; PTR payloads; lambda-body calls | linked `call_site` facts (the dataflow pass); `single_call` + `fluent` engines |
 | **2D** | Messaging | planned | `@KafkaListener`, `@JmsListener`, `@SqsListener`, Pub/Sub subscribers; `KafkaTemplate`/`JmsTemplate`/`SqsTemplate`/`Publisher` producers riding 2C's engines unchanged | non-HTTP **wire identity** (topic/queue, no method) |
 | **2E** | Spring inbound completeness | planned | WebFlux functional routing (`RouterFunctions`, `coRouter`), meta-annotations, inherited `@RequestMapping`, `produces`/`consumes` | the `combinator` engine, on 2C's indy groundwork |
 | **2F** | Configuration resolution | planned | `application.yml`/properties into `resolved_config`; environment expressions; **base URLs become real peers**; Spring Cloud Stream and spring-cloud-aws bindings | the `config_join` engine; D02 §2d made real |
@@ -45,12 +45,12 @@ priority; the version-bump gate opens after **2J**.
 
 ## What each phase is really blocked on
 
-**2C** is the largest single piece of in-house work in
+**2C** was the largest single piece of in-house work in
 [M03](../../components/M03-scanner.md): `call_site` is
 [D00](../../components/D00-fact-schema.md)'s *"load-bearing one"*, and
 `chain_reconstruction` *"gates every builder-based client library"*
-([D02](../../components/D02-catalog-schema.md)). The design resolves it as a per-method
-dataflow pass emitting linked call sites; the engines stay catalog-driven joins.
+([D02](../../components/D02-catalog-schema.md)). It shipped as a per-method dataflow pass
+emitting linked call sites, with the engines staying catalog-driven joins.
 
 **2D** is blocked on something structural rather than large: the `endpoints` table has a
 `method` column because it was built for HTTP; a Kafka topic has no method, and

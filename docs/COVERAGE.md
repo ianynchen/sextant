@@ -127,10 +127,14 @@ and response contract field by field — wire name, wire type and format, `requi
 `nullable`, each with its trust fields — rooted through declared wrappers, with known types
 mapped to their wire form and expansion stopping visibly at unknown ones. Since Phase 2B the
 same `annotation_driven` engine also reads REST outbound — Feign `@FeignClient`, Spring
-`@HttpExchange` and Retrofit `@GET` — carrying the same payload contract, and a module's full
-analysis exports as a self-describing D06 bundle. Four of the designed scanner capabilities
-are implemented: `annotation_args`, `typed_signatures`, `type_annotations` and
-`kotlin_metadata`. Verified end-to-end on spring-petclinic: 17 endpoints, byte-identical
+`@HttpExchange` and Retrofit `@GET` — carrying the same payload contract. Since Phase 2C two
+more engines read REST outbound from method calls rather than annotations, both fed by the
+same linked `call_site` facts: `single_call` reads `RestTemplate`, and `fluent` reconstructs
+builder chains for `RestClient`, `WebClient` and OkHttp, calls made inside lambdas included.
+A module's full analysis exports as a self-describing D06 bundle. Seven of the ten designed
+scanner capabilities are implemented: `annotation_args`, `typed_signatures`,
+`type_annotations`, `kotlin_metadata`, `call_site`, `string_constants` and
+`chain_reconstruction`. Verified end-to-end on spring-petclinic: 17 endpoints, byte-identical
 across runs.
 
 **Everything else in both matrices is a gap.** In particular, per Q1 a tier in a row whose
@@ -148,8 +152,9 @@ module today produces:
   wire types and nullability, Kotlin nullability projected from `@Metadata` and the
   interop annotations.
 - **A graph workspace** — `endpoints` in both directions (inbound `@RestController`/
-  `@Controller`; outbound Feign, `@HttpExchange`, Retrofit), each with its wire identity,
-  handler and/or caller, `peer` where the code declares one, and its request and response
+  `@Controller`; outbound Feign, `@HttpExchange`, Retrofit, `RestTemplate`, `RestClient`,
+  `WebClient`, OkHttp), each with its wire identity, handler and/or caller, `peer` where the
+  code declares one, and its request and response
   payload descriptors; `shapes`/`shape_fields` holding every reachable payload field by
   field — wire name, wire type and format, `required`, `nullable`, trust fields — with
   known types mapped and expansion stopping visibly at unknown ones. A path the module
@@ -170,9 +175,9 @@ than silently absent:
 | Sequencing between reactive/lambda calls (`flatMap`, `map`) | calls inside them derive endpoints, but the sequence between those calls awaits the call graph (`reactive_flow_not_traced`) | call-graph phases |
 | Sequence diagrams, traces, a call graph | no `call_site`/control-flow facts (`sequence_diagrams_pending_call_graph`, `call_graph_not_implemented`) | call-graph phases |
 | A full class diagram (inheritance) | only contract types are drawn (`structure_diagram_limited_to_contracts`) | with the `edges` table |
-| Outbound base addresses for `@HttpExchange`/Retrofit | they live in builder code (`client_base_addresses_not_resolved`); `peer` is NULL there | Phase 2C |
+| Outbound base addresses for `@HttpExchange`/Retrofit/`RestTemplate`/`RestClient`/`WebClient`/OkHttp | they live in builder or config code (`client_base_addresses_not_resolved`); `peer` is NULL there | Phase 2F |
 | Cross-service links or a system document | linking is a system-scope pass over bundles; no `participants`/`links` exist yet | linking phase |
-| WebFlux functional routes, meta-annotations, inherited mappings, nested classes | unimplemented forms, each listed in §5 | per their tiers |
+| WebFlux functional routes, meta-annotations, inherited mappings | unimplemented forms, each listed in §5 | per their tiers |
 | Trustworthy analysis of a POM using parents/profiles/interpolation | the detector reads `pom.xml` raw (`maven_parent_and_profile_resolution_not_implemented`) | undecided |
 
 Two honesty caveats also ride every output: a merged `both` endpoint keeps only the
@@ -185,7 +190,7 @@ compatible rules, so no answer differs today.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ 6A 7B 5C | ◐ 2A 3B | 2A | 4A | 2A 1B | 1A 2B |
+| **Java / Kotlin** | ✅ ASM | ◐ 6A 6B 5C | ◐ 2A 2B | 2A | 4A | 2A 1B | 1A 2B |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -449,7 +454,7 @@ is, what it costs.
 | Java | Actuator `@Endpoint` / `@ReadOperation` | — | `annotation` | A |
 | Java | `@RequestMapping` on an **interface or superclass** | Spring inherits mappings | `annotation` + hierarchy | B |
 | Java | **Meta-annotations** — custom `@ApiGet` composed from `@GetMapping` | Spring resolves transitively | `annotation` (recursive) | B |
-| Java | Nested / inner classes | currently skipped **and reported** | — | B |
+| Java | Nested / inner classes | the phase-1 skip lifted in Phase 2C — read as ordinary class files, so `@RestController`/`@Controller` resolve the same nested or not | `annotation` | ✅ shipped |
 | Java | WebFlux `Mono`/`Flux` return types | response shape roots through the declared wrapper ([D02](components/D02-catalog-schema.md) §2a) | — | ✅ shipped |
 | Java | **Vert.x** `router.get("/x").handler(this::h)` | receiver + verb + first arg | `fluent_chain` | **B — the cleanest first exercise for chain reconstruction** |
 | Java | WebFlux functional `RouterFunctions.route().GET(…)`, `coRouter { }` | — | `combinator` | B |
@@ -484,17 +489,23 @@ is, what it costs.
 
 ### 5.2 REST outbound
 
-**Phase 2B shipped the first three.** Feign, Retrofit and Spring `@HttpExchange` are read as
-outbound annotation clients — the first linkable endpoints. Everything else in this table
-remains unimplemented; the system tier still has nothing to match against them.
+**Phase 2B shipped the first three; Phase 2C shipped the next four.** Feign, Retrofit and
+Spring `@HttpExchange` are read as outbound annotation clients; `RestTemplate` is read by the
+`single_call` engine and `RestClient`, `WebClient` and OkHttp by the `fluent` engine
+reconstructing their builder chains — all from the same linked `call_site` facts, calls made
+inside lambdas included. OkHttp's generic `Request.Builder.method(String, RequestBody)` verb
+call is not readable — only the named verb methods (`get`/`post`/`put`/`patch`/`delete`/
+`head`) derive. Everything else in this table remains unimplemented; the system tier still
+has nothing to match against them.
 
 | Language | Library | Shape | Tier |
 |---|---|---|---|
 | Java | Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange` | `annotation` | ✅ shipped |
 | Java | Micronaut `@Client`, MicroProfile `@RegisterRestClient` | `annotation` | A |
 | Java | Spring 7 `ImportHttpServices` registration | `annotation` | A |
-| Java | `RestTemplate` | `registration_call` | B |
-| Java | `RestClient`, `WebClient`, OkHttp, JDK `HttpClient`, Apache HttpClient, `URL.openConnection()` | `fluent_chain` | **B — gates every client written in the last five years** |
+| Java | `RestTemplate` | `registration_call` | ✅ shipped |
+| Java | `RestClient`, `WebClient`, OkHttp | `fluent_chain` | ✅ shipped |
+| Java | JDK `HttpClient`, Apache HttpClient, `URL.openConnection()` | `fluent_chain` | B |
 | Java | **Apache Camel** `from("kafka:orders").to("http://svc/api")` | `fluent_chain` over **URI strings** | **B — largest single payoff: protocol, direction and destination in one literal** |
 | Go | `http.Get(url)`, `http.NewRequest(m, url, b)` + `client.Do` | `registration_call` / `fluent_chain` | A |
 | TS | `fetch(url, {method})`, `axios.get(url)` (+ instance `baseURL`) | `registration_call` | A |
