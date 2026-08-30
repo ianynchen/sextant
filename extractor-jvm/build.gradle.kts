@@ -12,6 +12,11 @@ repositories { mavenCentral() }
 dependencies {
     implementation("org.ow2.asm:asm:9.7")
     implementation("org.ow2.asm:asm-tree:9.7")
+    // The dataflow half of ASM: Analyzer/SourceInterpreter, which is how a call
+    // site learns which instruction produced each value it consumes (D00 §5).
+    // Pinned to the same 9.7 as the rest — a split ASM version is a
+    // NoSuchMethodError at scan time, not a compile error here.
+    implementation("org.ow2.asm:asm-analysis:9.7")
     // The extractor's first non-ASM runtime dependency (ARCHITECTURE §9): Kotlin's
     // nullability lives only in the opaque protobuf blob the compiler writes to
     // @Metadata, and this is the library that decodes it.

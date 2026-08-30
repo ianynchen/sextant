@@ -127,12 +127,27 @@ public final class ClassScanner {
                 parameterTypeAnnotations.add(new ArrayList<>());
             }
             List<String> returnTypeAnnotations = new ArrayList<>();
+            // Read back through a local rather than through the visitor below, whose
+            // own `access` field (a MethodNode's) shadows this parameter with the
+            // same value. Same answer either way; naming which one is meant keeps it
+            // that way if either ever stops being true.
+            int methodAccess = access;
 
             // Parameter names (visitParameter) and parameter annotations
             // (visitParameterAnnotation) arrive as callbacks during the visit, so the
             // symbol fact — whose signature embeds both — is only emitted at visitEnd,
             // once every callback for this method has fired.
-            return new MethodVisitor(Opcodes.ASM9) {
+            //
+            // A MethodNode rather than a bare MethodVisitor, because the call-site
+            // pass needs the whole instruction list and ASM's Analyzer reads it from
+            // exactly this type. MethodNode *is* a MethodVisitor, so the annotation
+            // and signature collection below is unchanged; the instruction stream it
+            // does not override is what the node records. Deliberately no super call
+            // in the annotation overrides: each returns a visitor of its own, and
+            // delegating as well would have MethodNode build annotation nodes nobody
+            // reads from values it never receives.
+            return new org.objectweb.asm.tree.MethodNode(
+                    Opcodes.ASM9, access, name, descriptor, sig, ex) {
                 private int parameterIndex = 0;
 
                 @Override
@@ -183,9 +198,13 @@ public final class ClassScanner {
 
                 @Override
                 public void visitEnd() {
+                    super.visitEnd();
                     emit(methodSymbol, constructKind, typeSymbol,
                          signatureJson(descriptor, sig, parameterNames, parameterAnnotations,
-                                       parameterTypeAnnotations, returnTypeAnnotations), access);
+                                       parameterTypeAnnotations, returnTypeAnnotations), methodAccess);
+                    // After the method's own symbol, never before: a call site
+                    // names its caller, and a fact file reads top-down.
+                    lines.addAll(MethodFlow.callSites(documentId, methodSymbol, this));
                 }
             };
         }
