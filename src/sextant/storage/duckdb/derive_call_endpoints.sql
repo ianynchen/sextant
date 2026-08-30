@@ -1,6 +1,7 @@
--- The single_call engine (D02 §2): one call carries the whole declaration,
--- so — unlike derive_endpoints.sql's SQL-side joins over annotation facts —
--- every decision (which call sites match the catalog's `owner`/`methods`,
+-- The call-site engines (D02 §2's single_call and §4's fluent) — one call
+-- carries the whole declaration, or several chained calls do, so — unlike
+-- derive_endpoints.sql's SQL-side joins over annotation facts —
+-- every decision (which call sites the catalog's own `matches` block claims,
 -- the verb, the url/peer split, the one-hop payload follow through a
 -- `call_wrappers` constructor or a `type_carriers` supertype) is made in the
 -- pass itself, in Python, where the argument-resolution grammar lives. This

@@ -734,6 +734,214 @@ def test_a_call_only_payload_type_still_reaches_shape_expansion(tmp_path: Path):
     assert unexpandable in expanded.unexpanded_types
 
 
+# --- I2: a verb nobody could read is a NULL column, never a dropped row ----
+
+
+def test_an_unreadable_verb_derives_the_row_with_a_null_method(tmp_path: Path):
+    """Reviewer-proved gap (final review, I2): `exchange` states its verb in
+    an argument, and a caller that passes its own `HttpMethod` parameter
+    through gives the scanner nothing to read — the compiler's honest
+    `unresolved`. The row was silently dropped, so a method that demonstrably
+    calls something over HTTP disappeared from the answer on the strength of
+    the one column nobody could fill.
+
+    Everything else here is readable — the url, the body's own instance, the
+    class-literal response — so `resolution: unresolved` can only be the
+    verb's doing, and `method` NULL is where that failure is recorded. The
+    same discipline the url already had (D02 §2, and CP-2's NULL path):
+    unresolved is an answer, never an omission."""
+    caller = "com/acme/http/Client#callWithPassedVerb()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=RESTTEMPLATE,
+                name="exchange",
+                descriptor=(
+                    "(Ljava/lang/String;Lorg/springframework/http/HttpMethod;"
+                    "Lorg/springframework/http/HttpEntity;"
+                    "Ljava/lang/Class;[Ljava/lang/Object;)"
+                    "Lorg/springframework/http/ResponseEntity;"
+                ),
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=12,
+            arguments=[
+                CallArgument(kind="string", value="/billing/passed-verb"),
+                # The verb, arriving as this method's own parameter.
+                CallArgument(kind="unresolved"),
+                CallArgument(kind="instance", source=6, symbol=ORDER_REQUEST),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["method"] is None
+    assert endpoint["path"] == "/billing/passed-verb"
+    assert endpoint["resolution"] == "unresolved"
+    assert endpoint["direction"] == "outbound"
+    # The payloads were readable and are still recorded: a NULL verb is one
+    # column's answer, not a reason to discard the rest of the row.
+    assert json.loads(str(endpoint["request_shape"]))["shape_id"] == ORDER_REQUEST
+    assert json.loads(str(endpoint["response_shape"]))["shape_id"] == ORDER_VIEW
+
+
+# --- C1 + I5: what a bare call argument projects to ------------------------
+#
+# A `class` literal and a constructed `instance` reach payload rooting as a
+# bare symbol, because the extractor's wire projection rides on a type
+# reference (D00 §5a) and a call argument carries none. Before the fix every
+# one of them was described as `wire_type: object` — a shape claim about
+# `String`, about `Void`, and about an array — and a literal argument was
+# described as no payload at all. Both halves must now answer exactly what a
+# scanned field of the same type answers.
+
+_URL_ARGUMENT = CallArgument(kind="string", value="/billing/payload-case")
+_STRING_SCALAR = {"wire_type": "string", "wire_format": "", "nullable": True}
+_ORDER_VIEW_OBJECT = {
+    "wire_type": "object",
+    "wire_format": "",
+    "nullable": True,
+    "shape_id": ORDER_VIEW,
+}
+
+# (case, catalog method, the arguments after the url, request, response).
+_PAYLOAD_CASES = [
+    (
+        "a String class literal is the string it names, never an object shape",
+        "getForObject",
+        [CallArgument(kind="class", symbol="java/lang/String#")],
+        None,
+        _STRING_SCALAR,
+    ),
+    (
+        "a boxed primitive keeps the width the wire cares about",
+        "getForObject",
+        [CallArgument(kind="class", symbol="java/lang/Integer#")],
+        None,
+        {"wire_type": "integer", "wire_format": "int32", "nullable": True},
+    ),
+    (
+        "a Void response is no payload, not a type nobody can expand",
+        "getForObject",
+        [CallArgument(kind="class", symbol="java/lang/Void#")],
+        None,
+        None,
+    ),
+    (
+        "an array literal is an array of what it holds",
+        "getForObject",
+        [CallArgument(kind="class", symbol="java/lang/String#[]")],
+        None,
+        {"wire_type": "array", "wire_format": "", "nullable": True, "item": _STRING_SCALAR},
+    ),
+    (
+        "an array of a payload type still roots the shape it holds",
+        "getForObject",
+        [CallArgument(kind="class", symbol=ORDER_VIEW + "[]")],
+        None,
+        {
+            "wire_type": "array",
+            "wire_format": "",
+            "nullable": True,
+            "item": _ORDER_VIEW_OBJECT,
+        },
+    ),
+    (
+        "a known type still resolves through the catalog's own entry",
+        "getForObject",
+        [CallArgument(kind="class", symbol="java/time/Instant#")],
+        None,
+        {"wire_type": "string", "wire_format": "date-time", "nullable": True},
+    ),
+    (
+        "a bare String body is a string on a resolved row, never NULL",
+        "postForObject",
+        [
+            CallArgument(kind="string", value="{}"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        # `nullable: False`, unlike the class literal above: a literal is a
+        # value the call site passes, and an absent one is D00 §5's own
+        # `null` kind instead.
+        {"wire_type": "string", "wire_format": "", "nullable": False},
+        _ORDER_VIEW_OBJECT,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("case", "name", "arguments", "request_shape", "response_shape"),
+    _PAYLOAD_CASES,
+    ids=[case[0] for case in _PAYLOAD_CASES],
+)
+def test_a_bare_call_argument_projects_to_what_a_scanned_field_of_that_type_would(
+    tmp_path: Path,
+    case: str,
+    name: str,
+    arguments: list,
+    request_shape: dict | None,
+    response_shape: dict | None,
+):
+    """Reviewer-proved gap (final review, C1 and I5). Every row here is a
+    payload a real call site states outright, and each was answered wrongly
+    before: `String.class` and `Integer.class` claimed an object shape (and
+    were then reported as types nobody could expand); `Void.class` claimed a
+    payload for a call that returns none; `String[].class` claimed an object
+    rather than an array, losing the element entirely; and a literal body
+    resolved to no payload at all, which made NULL mean two things at once
+    on a `resolved` row.
+
+    The answers come from the two places that already own them: the
+    catalog's own `known_types`, which is where the serialiser's scalar
+    knowledge lives (D02 §2g) and which now declares the same wire types and
+    formats the extractor's projection emits, and D00 §5's argument kinds,
+    which name a literal's type on their own. `Instant` is in the table to
+    prove the pre-existing `known_types` path is untouched by either."""
+    caller = f"com/acme/http/Client#case{abs(hash(case))}()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=RESTTEMPLATE,
+                name=name,
+                descriptor="(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;",
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=12,
+            arguments=[_URL_ARGUMENT, *arguments, CallArgument(kind="unresolved")],
+        ),
+    ]
+    catalog = _catalog()
+    workspace = _resolve(tmp_path, facts, catalog)
+    expanded = derive_endpoint_shapes(workspace, [catalog], capabilities=CAPABILITIES)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["resolution"] == "resolved"
+    assert _descriptor(endpoint["request_shape"]) == request_shape
+    assert _descriptor(endpoint["response_shape"]) == response_shape
+    # The other half of C1: a type that is a scalar on the wire is never
+    # rooted as a shape, so the report stops naming it as a payload type
+    # nobody could expand. (`OrderView` itself has no field facts here and is
+    # reported, correctly, exactly as it always was.)
+    assert [name for name in expanded.unexpanded_types if str(name).startswith("java/")] == []
+
+
+def _descriptor(column: object) -> dict | None:
+    return None if column is None else json.loads(str(column))
+
+
 # --- The shared url split (CP-2), unit-tested directly ---------------------
 
 
@@ -929,6 +1137,56 @@ def test_a_repeated_step_captures_last_wins(tmp_path: Path):
     workspace.close()
 
     assert endpoint["path"] == "/second"
+
+
+def test_a_later_empty_capture_overwrites_the_good_one_and_drops_the_resolution(
+    tmp_path: Path,
+):
+    """Reviewer-proved gap (final review, I4): last-wins is what a repeated
+    step is *for* (the test above), but a later step that carries nothing at
+    the position it declares used to overwrite a good capture with `None` and
+    leave the row reading `resolved` — the exact NULL-means-two-things
+    failure D01 §3 forbids. Reading the row, the body was absent; reading
+    the chain, the body was there and then lost.
+
+    Probed here with the shape that produces it in real code: a zero-argument
+    `bodyValue()` overload reached after `bodyValue(request)`. The capture
+    was declared by a step this chain genuinely reached, so it is a declared
+    capture that failed to read — single_call's `_capture_resolved` has said
+    exactly that about a declared positional slot since ruling I1, and this
+    is the same answer for a declared step capture."""
+    caller = "com/acme/http/Client#reserveTwice()."
+    facts = [
+        _call(caller, WEBCLIENT, "post", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/v2/inventory/reserve")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "bodyValue",
+            2,
+            receiver=10,
+            result=11,
+            arguments=[CallArgument(kind="instance", source=8, symbol=ORDER_REQUEST)],
+        ),
+        # The same step name again, this time with nothing at arg0.
+        _call(caller, URI_SPEC, "bodyValue", 3, receiver=11, result=12, arguments=[]),
+        _call(caller, URI_SPEC, "retrieve", 4, receiver=12, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_WEBCLIENT_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["method"], endpoint["path"]) == ("POST", "/v2/inventory/reserve")
+    assert endpoint["request_shape"] is None
+    assert endpoint["resolution"] == "unresolved"
 
 
 def test_two_interleaved_chains_in_one_caller_derive_two_correct_endpoints(
@@ -1315,6 +1573,79 @@ def test_two_same_named_steps_with_no_distinguishing_owner_is_refused(tmp_path: 
     assert "body" in str(raised.value)
 
 
+@pytest.mark.parametrize(
+    ("case", "captures"),
+    [
+        ("a misspelled position", {"url": "argX"}),
+        ("a bare number, not a position", {"url": 0}),
+        ("a field name where a position belongs", {"body": "request"}),
+    ],
+    ids=["argX", "a bare number", "a field name"],
+)
+def test_a_capture_that_does_not_name_a_call_site_position_is_refused(
+    tmp_path: Path, case: str, captures: dict
+):
+    """Reviewer-proved gap (final review, I6). `url`, `body` and `response`
+    address an argument by position, and anything that is not `argN`
+    captured nothing at all — silently. The row still derived, with the url
+    unresolved and the payload NULL, which reads exactly like a call site
+    that genuinely carries neither: a catalog typo disguised as an
+    observation, which is the one thing `ports/catalogs.py`'s discipline
+    exists to prevent.
+
+    Refused loudly instead, naming the file, the entry and the value. A
+    capture that is well-formed but out of *range* is a different question —
+    the range belongs to the matched call site, not to the catalog — and
+    ruling I1 already answers it at derive time by dropping the row's
+    resolution."""
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.http.WebClient",
+                "method": "get",
+                "captures": {"http_method": "GET"},
+            }
+        ],
+        "steps": [{"method": "uri", "captures": captures}],
+        "terminal": ["retrieve"],
+    }
+    catalog = _fluent_catalog(matches, "invented-bad-capture")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-bad-capture.yml" in str(raised.value)
+    assert "uri" in str(raised.value)
+    assert str(next(iter(captures.values()))) in str(raised.value)
+
+
+def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
+    """The other half of the check above: the refusal must be a rule the
+    shipped files already keep, not a rule that breaks them. Every catalog
+    Sextant ships is run against a workspace with no facts at all, so what is
+    being proved is loading and validation — including `_validate_steps` and
+    the capture check — rather than any derivation. Every capability any
+    catalog declares is granted, because a catalog gated out never reaches
+    its engine and so would never be validated at all."""
+    catalogs = YamlCatalogSource(CATALOGS_DIR).load()
+    granted = {capability for catalog in catalogs for capability in catalog.requires}
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    skipped = derive_endpoints(workspace, catalogs, capabilities=granted)
+    endpoints = workspace.query("endpoints")
+    workspace.close()
+
+    assert [catalog.id for catalog in catalogs] != []
+    assert skipped == []
+    assert endpoints == []
+
+
 LOGGER = "com/acme/http/Logger#"
 
 _OKHTTP_FILTERED_MATCHES = {
@@ -1473,6 +1804,88 @@ def test_a_void_step_past_the_terminal_never_chains_into_an_unrelated_static_cal
 
     assert len(endpoints) == 1
     assert (endpoints[0]["method"], endpoints[0]["path"]) == ("GET", "/orders/{id}")
+
+
+SELF_RETURNING = "com/acme/http/SelfBuilder#"
+
+
+def test_a_self_returning_step_roots_its_own_type_and_the_walk_still_ends(
+    tmp_path: Path,
+):
+    """The self-reference the walk and the payload rooting each have to
+    survive, pinned (final review, residual 6) because nothing else covers
+    it and both halves fail silently if it breaks.
+
+    The chain: a builder step called on the very type it returns, so each
+    row's own `result` feeds the next row's `receiver` between two sites of
+    one type — the shape a `by_receiver` walk would loop on if a row could
+    ever match itself. It ends exactly where the facts end, deriving one row.
+
+    The payload: the captured argument is an `instance` whose declared
+    supertype is generic and names the argument's own type
+    (`SelfBuilder extends AbstractBuilder<SelfBuilder>`) — the D02 §2h PTR
+    follow is offered a carrier and declines, because this catalog declares
+    no `type_carriers` matching it. Falling through to the type's own bare
+    reference is the right answer, and it is the reason the fall-through must
+    not read the supertype's argument: that argument is the type itself, and
+    following it would describe a payload the code never states."""
+    caller = "com/acme/http/Client#selfBuilt()."
+    facts = [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + SELF_RETURNING,
+            construct_kind="class",
+            supertype=TypeRef(
+                symbol="com/acme/http/AbstractBuilder#",
+                wire_type="object",
+                wire_format="",
+                nullable=True,
+                nullable_resolution="resolved",
+                arguments=[
+                    TypeRef(
+                        symbol=SELF_RETURNING,
+                        wire_type="object",
+                        wire_format="",
+                        nullable=True,
+                        nullable_resolution="resolved",
+                    )
+                ],
+            ),
+        ),
+        _call(caller, WEBCLIENT, "post", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/v2/self")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "bodyValue",
+            2,
+            receiver=10,
+            result=11,
+            arguments=[CallArgument(kind="instance", source=8, symbol=SELF_RETURNING)],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 3, receiver=11, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_WEBCLIENT_MATCHES))
+    endpoints = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert len(endpoints) == 1
+    assert (endpoints[0]["method"], endpoints[0]["path"]) == ("POST", "/v2/self")
+    assert endpoints[0]["resolution"] == "resolved"
+    assert json.loads(str(endpoints[0]["request_shape"])) == {
+        "wire_type": "object",
+        "wire_format": "",
+        "nullable": True,
+        "shape_id": SELF_RETURNING,
+    }
 
 
 # --- Task 12 fix round 1 (coordinator review): okhttp's own verb steps -----

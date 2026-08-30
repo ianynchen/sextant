@@ -269,6 +269,13 @@ def _payload_descriptor(
     if rooted.reference.get("wire_type") in (None, ""):
         return None
     described = _described(rules, rooted.reference, enums, referenced)
+    # The same answer once more, now that the catalog has had its say: a
+    # `known_types` entry declaring no wire type at all (D02 §2g, the empty
+    # `wire_type` a `void` return already carries) is the type that reaches
+    # no wire — a `Void` response argument. Describing it would claim a
+    # payload for a call that returns nothing.
+    if described["wire_type"] in (None, ""):
+        return None
     return json.dumps(described, sort_keys=True, separators=(",", ":"))
 
 
@@ -276,11 +283,12 @@ def _payload_descriptor(
 #
 # `single_call` (Task 9) and `fluent` (Task 11) both derive an endpoint from
 # a captured call-site argument rather than from a handler's declared
-# signature, and both need the very same three answers: how a captured url
-# splits into peer and path, how one D00 §5 argument roots at a payload
-# descriptor, and the one-hop D02 §2h follow through a `call_wrappers`
-# constructor or a `type_carriers` supertype. Shared here rather than
-# duplicated per style.
+# signature, and both need the very same answers: how a captured url splits
+# into peer and path and what that says about the row's own resolution, how
+# one D00 §5 argument roots at a payload descriptor, the one-hop D02 §2h
+# follow through a `call_wrappers` constructor or a `type_carriers`
+# supertype, and which declared type carries a PTR supertype. Shared here
+# rather than duplicated per style.
 
 _ABSOLUTE_URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://(?P<authority>[^/]*)(?P<path>/.*)?$")
 
@@ -295,6 +303,25 @@ def split_url(url: str) -> tuple[str | None, str]:
     if match is None:
         return None, url
     return match.group("authority"), match.group("path") or ""
+
+
+def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str]:
+    """One row's `peer`, `path` and `resolution` from its url argument: a
+    `string` argument's value is the template verbatim — placeholders and
+    all, because the template is the wire identity — split into peer/path by
+    CP-2's rule; anything else (never captured at all, or captured but the
+    wrong kind — a `uri` step whose argument is a `lambda`, the uriBuilder
+    form — or a positional slot the call site never filled) still derives
+    the row, path NULL, resolution `unresolved`: D02 §2's "this method calls
+    something over HTTP" is true and useful on its own."""
+    if (
+        argument is not None
+        and argument.get("kind") == "string"
+        and isinstance(argument.get("value"), str)
+    ):
+        peer, path = split_url(str(argument["value"]))
+        return peer, path, "resolved"
+    return None, None, "unresolved"
 
 
 @dataclass(frozen=True)
@@ -335,6 +362,20 @@ class CallFacts:
     referenced: list[str]
 
 
+def supertypes_of(workspace: Workspace) -> dict[str, dict[str, Any]]:
+    """Every declared type's own generic supertype reference (D00 §5a's PTR
+    carrier), keyed by the type's bare descriptor — the form an `instance`
+    argument's own `symbol` carries, never the module-prefixed identity a
+    symbol fact's own `symbol` column holds (the same stripping
+    `_enum_symbols` applies to its own rows, for the same reason: a symbol is
+    module coordinates then a descriptor, D00 §5a, and only the descriptor is
+    ever compared)."""
+    return {
+        str(row["symbol"]).rpartition(" ")[2]: json.loads(str(row["supertype"]))
+        for row in workspace.query("supertypes")
+    }
+
+
 def argument_descriptor(
     argument: dict[str, Any] | None,
     workspace_types: CallFacts,
@@ -349,6 +390,9 @@ def argument_descriptor(
 
     - a `class` argument roots at the object (or known-type) descriptor for
       its symbol — a class literal such as `OrderView.class`;
+    - a literal argument (`string`, `int`, `long`, `boolean`) roots at the
+      scalar its own kind names: a bare `String` body is a real contract,
+      and NULL keeps exactly one meaning (D01 §3, amended);
     - an `instance` argument whose type's own declared supertype names a
       `type_carriers` entry roots at that supertype's own payload argument
       (D02 §2h's PTR follow) — a full D00 §5a type reference, fed to
@@ -383,9 +427,11 @@ def _reference_of(
     if kind == "class":
         symbol = argument.get("symbol")
         return None if symbol is None else _bare_reference(str(symbol))
+    if kind in _LITERAL_WIRE_TYPES:
+        return _literal_reference(str(kind))
     if kind != "instance":
-        # `unresolved`, `null`, `lambda`, a scalar literal: none of these
-        # names a payload type at all.
+        # `unresolved`, `null`, `lambda`: none of these names a payload type
+        # at all.
         return None
     symbol = argument.get("symbol")
     if symbol is None:
@@ -426,6 +472,44 @@ def _terminal_reference(argument: dict[str, Any] | None) -> dict[str, Any] | Non
     return None if symbol is None else _bare_reference(str(symbol))
 
 
+# D00 §5's literal argument kinds, each projected into the one D00 §5b wire
+# type it can be. The kind *is* the answer: a literal carries its own type,
+# so this is the one payload projection needing neither a symbol nor a
+# catalog's knowledge of one — `int` and `long` are the fact grammar's own
+# names for the two integer widths, and `wire_format` is what keeps them
+# apart on the wire.
+_LITERAL_WIRE_TYPES: dict[str, tuple[str, str]] = {
+    "string": ("string", ""),
+    "int": ("integer", "int32"),
+    "long": ("integer", "int64"),
+    "boolean": ("boolean", ""),
+}
+
+# Descriptor grammar, not language knowledge (D00 §5a): an array symbol is
+# its element's symbol with this suffix. Parsed here — and only here —
+# because a `class`/`instance` argument carries a bare symbol and nothing
+# else, so the element reference a scanned field already arrives with has to
+# be rebuilt from the one thing the argument does carry.
+_ARRAY_SUFFIX = "[]"
+
+
+def _literal_reference(kind: str) -> dict[str, Any]:
+    """A D00 §5a type reference synthesised from a literal argument's own
+    kind. `symbol` is empty because a literal names no type — nothing keys a
+    `known_types` entry or an enum on it, and nothing may root a shape at
+    it. `nullable: False` for the same reason a primitive's own reference is
+    not nullable: a literal is a value, and an absent one is D00 §5's `null`
+    kind instead."""
+    wire_type, wire_format = _LITERAL_WIRE_TYPES[kind]
+    return {
+        "symbol": "",
+        "arguments": [],
+        "wire_type": wire_type,
+        "wire_format": wire_format,
+        "nullable": False,
+    }
+
+
 def _bare_reference(symbol: str) -> dict[str, Any]:
     """A D00 §5a type reference synthesised from a bare symbol — a `class`
     literal or a constructed `instance` carries only its type, never the
@@ -434,7 +518,22 @@ def _bare_reference(symbol: str) -> dict[str, Any]:
     reference type. `nullable: True` is the same default a language whose
     every reference type permits null gives a `resolved` field absent any
     narrower answer (D00 §5a) — `_described` still overrides both from
-    `known_types` or the enum set where the catalog names one."""
+    `known_types` or the enum set where the catalog names one, which is how
+    a scalar type the serialiser flattens (and the `Void` that reaches no
+    wire at all) stops being described as an object here.
+
+    An array symbol keeps its element as its single type argument, exactly
+    as a scanned `String[]` field's own reference does (D00 §5a): without
+    it, `OrderView[].class` and `String[].class` are the same `array`
+    holding nothing, which is the one thing `item` exists to prevent."""
+    if symbol.endswith(_ARRAY_SUFFIX):
+        return {
+            "symbol": symbol,
+            "arguments": [_bare_reference(symbol[: -len(_ARRAY_SUFFIX)])],
+            "wire_type": "array",
+            "wire_format": "",
+            "nullable": True,
+        }
     return {
         "symbol": symbol,
         "arguments": [],

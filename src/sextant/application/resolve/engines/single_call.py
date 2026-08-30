@@ -20,7 +20,8 @@ from sextant.application.resolve.shapes.contracts import (
     CallFacts,
     CarrierRules,
     argument_descriptor,
-    split_url,
+    supertypes_of,
+    url_of,
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
@@ -31,6 +32,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     — a parameterised insert-if-absent on the same wire identity every other
     style uses (D02 §5). `caller` is the calling method symbol; `handler` and
     `peer` are NULL unless the url argument is itself an absolute URL (CP-2);
+    `method` is NULL where the verb itself could not be read (I2);
     `direction` and `protocol` are the catalog's own declared fields, exactly
     as `annotation_driven` forwards them."""
     matches = catalog.matches
@@ -45,7 +47,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             for wrapper in matches.get("call_wrappers", [])
         },
     )
-    supertypes = _supertypes_of(workspace)
+    supertypes = supertypes_of(workspace)
     # `arguments` is parsed once, here, rather than once per reader: the
     # `call_sites` query returns it as raw JSON text, and both the matching
     # loop below and the `call_wrappers` one-hop (over a *different* call
@@ -75,11 +77,17 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         if method is None:
             continue
         arguments = site["arguments"]
+        # NULL rather than dropped (I2): a call site matching the catalog's
+        # own `owner` and `methods` IS an outbound call, and a verb the
+        # scanner could not read — an `HttpMethod` arriving as a parameter
+        # rather than as an enum constant — is one capture failing, exactly
+        # like an unreadable url. Dropping the row would make "this method
+        # calls something over HTTP" disappear on the strength of the one
+        # column nobody could fill; `method` NULL on an `unresolved` row
+        # says it instead (D02 §2's unresolved-is-an-answer).
         verb = _verb_of(method, arguments)
-        if verb is None:
-            continue
         url_argument = _arg_at(arguments, method["url_arg"])
-        peer, path, url_resolution = _url_of(url_argument)
+        peer, path, url_resolution = url_of(url_argument)
         body_argument = _arg_at(arguments, method.get("body_arg"))
         response_argument = _arg_at(arguments, method.get("response_arg"))
         # Checkpoint ruling I1: any DECLARED capture that failed to resolve
@@ -92,13 +100,19 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # other way.
         resolution = (
             "resolved"
-            if url_resolution == "resolved"
+            if verb is not None
+            and url_resolution == "resolved"
             and _capture_resolved(method.get("body_arg"), body_argument)
             and _capture_resolved(method.get("response_arg"), response_argument)
             else "unresolved"
         )
         caller = str(site["caller"])
-        if path is not None:
+        # Only a *whole* resolved wire identity dedups, so an unreadable verb
+        # keeps each row its own for the same reason an unreadable url does:
+        # `NULL = NULL` is unknown in the table this batch is inserted into,
+        # and two calls whose verbs nobody could read are not known to be the
+        # same call.
+        if path is not None and verb is not None:
             key = (catalog.protocol, catalog.direction, verb, path)
             if key in seen:
                 continue
@@ -167,7 +181,11 @@ def _verb_of(method: dict[str, Any], arguments: list[dict[str, Any]]) -> str | N
     carries instead (`exchange`'s verb is its own `HttpMethod` argument, an
     `enum`-kind entry) — the tail of the constant's symbol, after `#` and its
     trailing `.` (checkpoint-verified against the real emitted grammar:
-    `org/springframework/http/HttpMethod#POST.` reads as `POST`)."""
+    `org/springframework/http/HttpMethod#POST.` reads as `POST`).
+
+    None where the declared `method_arg` slot holds anything else — a verb
+    passed in as a parameter, the compiler's `unresolved`. The caller keeps
+    the row with `method` NULL and `resolution: unresolved` (I2)."""
     literal = method.get("http_method")
     if literal is not None:
         return str(literal)
@@ -175,30 +193,3 @@ def _verb_of(method: dict[str, Any], arguments: list[dict[str, Any]]) -> str | N
     if arg is None or arg.get("kind") != "enum" or not arg.get("symbol"):
         return None
     return str(arg["symbol"]).rpartition("#")[2].removesuffix(".")
-
-
-def _url_of(arg: dict[str, Any] | None) -> tuple[str | None, str | None, str]:
-    """The row's `peer`, `path` and `resolution` from the url argument: a
-    `string` argument's value is the template verbatim — placeholders and
-    all, because the template is the wire identity — split into peer/path by
-    CP-2's rule; anything else still derives the row, path NULL, resolution
-    `unresolved` (D02 §2: "this method calls something over HTTP" is true
-    and useful on its own)."""
-    if arg is not None and arg.get("kind") == "string" and isinstance(arg.get("value"), str):
-        peer, path = split_url(str(arg["value"]))
-        return peer, path, "resolved"
-    return None, None, "unresolved"
-
-
-def _supertypes_of(workspace: Workspace) -> dict[str, dict[str, Any]]:
-    """Every declared type's own generic supertype reference (D00 §5a's PTR
-    carrier), keyed by the type's bare descriptor — the form an `instance`
-    argument's own `symbol` carries, never the module-prefixed identity a
-    symbol fact's own `symbol` column holds (the same stripping
-    `_enum_symbols` applies to its own rows, for the same reason: a symbol is
-    module coordinates then a descriptor, D00 §5a, and only the descriptor is
-    ever compared)."""
-    return {
-        str(row["symbol"]).rpartition(" ")[2]: json.loads(str(row["supertype"]))
-        for row in workspace.query("supertypes")
-    }

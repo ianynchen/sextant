@@ -20,9 +20,10 @@ chain key — a constructor row's key is its `receiver` (its `result` is void,
 checkpoint ruling CP-3), every other row's key is its own `result`. A chain
 that never reaches a terminal derives nothing (D02 §4's "the true answer").
 
-Shares `argument_descriptor` and `split_url` verbatim with `single_call`
-(`shapes.contracts`) — the same D00 §5 argument grammar, resolved here off a
-captured step argument rather than a `methods` row's positional slot.
+Shares `argument_descriptor`, `url_of` and `supertypes_of` verbatim with
+`single_call` (`shapes.contracts`) — the same D00 §5 argument grammar,
+resolved here off a captured step argument rather than a `methods` row's
+positional slot.
 """
 
 import json
@@ -36,7 +37,8 @@ from sextant.application.resolve.shapes.contracts import (
     CallFacts,
     CarrierRules,
     argument_descriptor,
-    split_url,
+    supertypes_of,
+    url_of,
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
@@ -79,6 +81,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         for step in matches.get("steps", [])
     ]
     _validate_steps(steps, catalog)
+    _validate_captures(roots + steps, catalog)
     terminal_names, via_argument_names = _terminal_index(matches.get("terminal", []))
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
@@ -89,7 +92,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             for wrapper in matches.get("call_wrappers", [])
         },
     )
-    supertypes = _supertypes_of(workspace)
+    supertypes = supertypes_of(workspace)
     # Parsed once, as single_call does, for the same reason: both the root
     # scan below and the shared `argument_descriptor`'s `call_wrappers`
     # one-hop need the parsed list, never the raw JSON text.
@@ -218,18 +221,21 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     if verb is None:
         # No root ever seeded a verb — not a shape this catalog declares.
         return
-    peer, path, url_resolution = _url_of(captures.get("url"))
+    peer, path, url_resolution = url_of(captures.get("url"))
     body_argument = captures.get("body")
     response_argument = captures.get("response")
     # Checkpoint ruling I1, folded in from single_call: a capture that WAS
-    # reached but whose argument kind is the compiler's own `unresolved`
-    # drops the row's resolution; a capture never reached at all is simply
-    # not part of this chain's declaration and cannot fail it.
+    # reached but which the scanner could not read drops the row's
+    # resolution; a capture never reached at all is simply not part of this
+    # chain's declaration and cannot fail it. Presence of the key is what
+    # separates the two — a reached step always writes its declared field,
+    # even when the slot it addresses is empty (I4), so `None` under a key
+    # that exists is a read failure while an absent key is no claim at all.
     resolution = (
         "resolved"
         if url_resolution == "resolved"
-        and _capture_resolved(body_argument)
-        and _capture_resolved(response_argument)
+        and _capture_resolved("body" in captures, body_argument)
+        and _capture_resolved("response" in captures, response_argument)
         else "unresolved"
     )
     if path is not None:
@@ -335,6 +341,29 @@ def _validate_steps(steps: list[dict[str, Any]], catalog: Catalog) -> None:
             )
 
 
+def _validate_captures(entries: list[dict[str, Any]], catalog: Catalog) -> None:
+    """Refuses a catalog whose `url`/`body`/`response` capture does not name
+    a call-site position (`ports/catalogs.py`'s own discipline again: an
+    unchecked value does not stay in the file).
+
+    These three fields address an argument by position, and anything that is
+    not `argN` — a typo, a bare number, a field name — silently captures
+    nothing: the row still derives, with the payload column NULL and the url
+    unresolved, which is indistinguishable from a call site that genuinely
+    carries neither. A capture out of *range* is a different answer and
+    cannot be checked here, because the range belongs to each matched call
+    site rather than to the catalog; ruling I1 already covers it at derive
+    time, where the site is known."""
+    for entry in entries:
+        for field, value in entry["captures"].items():
+            if field in _ARGUMENT_FIELDS and not _ARG_REFERENCE.match(str(value)):
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{entry['method']}` captures "
+                    f"`{field}: {value}`, which is not a call-site position — an argument "
+                    f"capture reads `argN` (D02 §4's fluent style)"
+                )
+
+
 def _terminal_index(
     entries: list[Any],
 ) -> tuple[set[str], dict[str, dict[str, str] | None]]:
@@ -426,35 +455,21 @@ def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any
     return arguments[index]
 
 
-def _url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str]:
-    """Identical to single_call's own `_url_of`: a `string`-kind argument's
-    value is the template verbatim, split into peer/path by CP-2; anything
-    else — never captured at all, or captured but the wrong kind (a `uri`
-    step whose argument is a `lambda`, the uriBuilder form) — still derives
-    the row, path NULL, resolution `unresolved`."""
-    if (
-        argument is not None
-        and argument.get("kind") == "string"
-        and isinstance(argument.get("value"), str)
-    ):
-        peer, path = split_url(str(argument["value"]))
-        return peer, path, "resolved"
-    return None, None, "unresolved"
+def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
+    """Checkpoint ruling I1, with exactly single_call's own
+    `_capture_resolved(declared_index, argument)` semantics — `declared` is
+    this engine's form of the same question, since a chain declares a
+    capture by *reaching* a step that names it rather than by a `methods`
+    row's positional slot.
 
-
-def _capture_resolved(argument: dict[str, Any] | None) -> bool:
-    """Checkpoint ruling I1, as single_call applies it: a capture never
-    reached along this chain (`argument is None`) declares nothing and so
-    cannot fail; one that WAS reached fails only when its own kind is the
-    compiler's honest `unresolved` answer."""
-    return argument is None or argument.get("kind") != "unresolved"
-
-
-def _supertypes_of(workspace: Workspace) -> dict[str, dict[str, Any]]:
-    """Identical to single_call's own helper. Only `CallFacts`/
-    `CarrierRules`/`argument_descriptor`/`split_url` are the shared surface
-    (contracts.py); each engine still builds its own supertypes lookup."""
-    return {
-        str(row["symbol"]).rpartition(" ")[2]: json.loads(str(row["supertype"]))
-        for row in workspace.query("supertypes")
-    }
+    A capture no step along this chain ever declared cannot fail: it never
+    claimed a payload. A declared one fails both ways it can — its own kind
+    is the compiler's honest `unresolved`, or the step that declared it
+    carries nothing at that position at all (I4: a zero-argument
+    `bodyValue()` overload reached after a good `bodyValue(request)`, whose
+    empty capture wins under last-wins and must therefore drop the row's
+    resolution rather than leave it reading `resolved` beside a NULL
+    payload)."""
+    if not declared:
+        return True
+    return argument is not None and argument.get("kind") != "unresolved"
