@@ -9,6 +9,7 @@ from collections.abc import Sequence
 
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.pipeline import ResolveReport
+from sextant.domain.closed_sets import Protocol
 from sextant.egress.render.diagrams import class_diagram
 from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
 
@@ -61,7 +62,18 @@ _GAPS = [
 # D00 §4 closed-set protocol names whose wire identity has no verb: a Kafka
 # topic, a JMS destination, an SQS queue or a Pub/Sub topic is addressed, not
 # called, so there is no method to render beside the path.
-_VERBLESS_PROTOCOLS = frozenset({"kafka", "jms", "sqs", "pubsub"})
+#
+# Derived from D00's closed set by SUBTRACTING the verbed protocols, rather
+# than hand-listing the verbless ones. Two sets naming halves of one closed
+# set drift; one set and a subtraction cannot. Which half to hand-list is
+# then the question of what an UNLISTED new protocol should default to, and
+# verbless is the honest default: it renders `protocol path`, while the other
+# way round renders `(unresolved) path` — a verb reported as unread when the
+# protocol was never going to have one. The verbed half is also the stable
+# half: growth in D00's set is broker families, not new request-response
+# verbs.
+_VERBED_PROTOCOLS = frozenset({"http", "soap", "grpc"})
+_VERBLESS_PROTOCOLS = frozenset(p.value for p in Protocol) - _VERBED_PROTOCOLS
 
 
 def _wire_identity(endpoint: dict[str, object]) -> str:
