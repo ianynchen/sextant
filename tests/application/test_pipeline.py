@@ -182,17 +182,19 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
     assert search_row["resolution"] == "unresolved"
 
     # The flatMap lambda's own chain derives `POST /v2/inventory/reserve` in
-    # its own synthetic method — the dataflow pass has to scan
-    # `lambda$reserveAfterLevels$0`, not just the enclosing method, to find
-    # it. Wire-identity dedup collapses it with `reserve()`'s own identical
-    # row (D02 §5's `derive_call_endpoints.sql` contract); the row that
-    # survives is whichever caller sorts first (`call_sites`' own
+    # its own synthetic method — the dataflow pass has to scan the
+    # `lambda$reserveAfterLevels$N` method, not just the enclosing method, to
+    # find it. Wire-identity dedup collapses it with `reserve()`'s own
+    # identical row (D02 §5's `derive_call_endpoints.sql` contract); the row
+    # that survives is whichever caller sorts first (`call_sites`' own
     # `caller, ordinal` order), which is the lambda's — asserted here rather
-    # than assumed, so a resort silently changing this is caught.
+    # than assumed, so a resort silently changing this is caught. The numeric
+    # suffix is javac's per-class lambda counter, which different compiler
+    # versions assign in different orders, so only the stable stem is pinned.
     [reserve_row] = [
         e for e in report.endpoints if (e["method"], e["path"]) == ("POST", "/v2/inventory/reserve")
     ]
-    assert "lambda$reserveAfterLevels$0" in reserve_row["caller"]
+    assert "lambda$reserveAfterLevels$" in reserve_row["caller"]
 
 
 def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_path: Path):
