@@ -198,3 +198,10 @@ def test_scanner_declares_the_call_site_capabilities_phase_2c_implements():
         "string_constants",
         "chain_reconstruction",
     } <= AsmScanner(JAR).capabilities()
+
+
+def test_scanner_declares_the_implemented_interfaces_capability():
+    """A class symbol fact's `interfaces` field is only trustworthy for a
+    catalog to key off of once the scanner that wrote it says it produces
+    them."""
+    assert "implemented_interfaces" in AsmScanner(JAR).capabilities()

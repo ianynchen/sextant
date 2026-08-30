@@ -450,6 +450,51 @@ def test_query_rejects_a_name_that_is_not_a_named_query(tmp_path: Path):
         workspace.close()
 
 
+def test_implementations_query_lists_a_classs_declared_interfaces(tmp_path: Path):
+    """`implementations` (D00 §5a's `implemented_interfaces` capability, the
+    counterpart to `supertypes` above): a class implementing something is
+    returned with its interfaces as a JSON list; a class implementing none
+    (`Plain` below, whose `SymbolFact.interfaces` default is `[]`, not the
+    `None` `supertype` defaults to) is excluded rather than returned with an
+    empty list — proving the query's `json_array_length(...) > 0` guard
+    handles the empty-array case `supertypes`' null guard does not have to."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/A.java",
+        module_id="com.acme:orders",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    receiver = SymbolFact(
+        document_id="doc_1",
+        symbol="sextant-jvm maven com.acme/orders 1.0 com/acme/Receiver#",
+        construct_kind=ConstructKind.CLASS,
+        interfaces=["com/google/cloud/pubsub/v1/MessageReceiver#"],
+    )
+    plain = SymbolFact(
+        document_id="doc_1",
+        symbol="sextant-jvm maven com.acme/orders 1.0 com/acme/Plain#",
+        construct_kind=ConstructKind.CLASS,
+    )
+    write_fact_file(tmp_path / "facts" / "A.jsonl", document, [receiver, plain])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    rows = workspace.query("implementations")
+    workspace.close()
+
+    assert [row["symbol"] for row in rows] == [
+        "sextant-jvm maven com.acme/orders 1.0 com/acme/Receiver#"
+    ]
+    assert json.loads(rows[0]["interfaces"]) == ["com/google/cloud/pubsub/v1/MessageReceiver#"]
+
+
 def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tmp_path: Path):
     workspace = _workspace_with_a_call_site(tmp_path)
     rows = workspace.query("call_sites")

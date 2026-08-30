@@ -120,4 +120,27 @@ class ClassScannerTest {
             line.contains("\"supertype\"")),
             String.join("\n", scan("SupertypeSample$PlainBase")));
     }
+
+    /** Two interfaces, named in the order the source declares them — the class
+     *  symbol's own record of what it implements (`implemented_interfaces`,
+     *  D00 §5a): a caller with only the supertype chain cannot ask "does this
+     *  fulfil that contract" without walking every interface's own hierarchy. */
+    @Test
+    void lists_implemented_interfaces_in_declaration_order() throws Exception {
+        assertTrue(scan("InterfaceSample").stream().anyMatch(line ->
+            line.contains("\"construct_kind\":\"class\"")
+                && line.contains("\"interfaces\":[\"sextant-jvm maven com.acme/orders 1.0.0 "
+                    + "java/lang/AutoCloseable#\",\"sextant-jvm maven com.acme/orders 1.0.0 "
+                    + "java/lang/Runnable#\"]")),
+            String.join("\n", scan("InterfaceSample")));
+    }
+
+    /** A class implementing nothing omits the key entirely — an absent key means
+     *  "none", not an empty array every consumer has to special-case identically. */
+    @Test
+    void omits_interfaces_when_a_class_implements_none() throws Exception {
+        assertFalse(scanSelf().stream().anyMatch(line ->
+            line.contains("\"construct_kind\":\"class\"") && line.contains("\"interfaces\"")),
+            String.join("\n", scanSelf()));
+    }
 }
