@@ -307,9 +307,72 @@ counts.
 
 ### `interface_implementation`
 
-The boundary is declared by implementing a framework interface — a JMS `MessageListener`,
-a generated gRPC base class. Matching is on the hierarchy, and for gRPC it joins to the
-protobuf descriptor so that one endpoint is produced per remote method.
+The boundary is declared by implementing a framework interface — Pub/Sub's
+`MessageReceiver`, JMS's `MessageListener`. Unlike every style above, one call's own
+declaration is not the evidence: two facts are joined instead, a *registration* call
+site and, where its receiver is a named instance rather than a lambda, that instance's
+own declared `interfaces` ([D00](D00-fact-schema.md) §5a's `implemented_interfaces`
+capability).
+
+```yaml
+style: interface_implementation
+protocol: pubsub
+direction: inbound
+requires: [call_site, string_constants, implemented_interfaces]
+matches:
+  interface: com.google.cloud.pubsub.v1.MessageReceiver
+  handler_method: receiveMessage
+  registration:
+    owner: com.google.cloud.pubsub.v1.Subscriber
+    method: newBuilder
+    channel_arg: 0
+    receiver_arg: 1
+    channel_via:
+      - { owner: com.google.pubsub.v1.ProjectSubscriptionName, method: of, arg: 1 }
+```
+
+`registration` is `{owner, method, channel_arg, receiver_arg, channel_via?}` — the one
+call site that binds a receiver to a channel. **`channel_arg` reads through the same
+capture ladder §2h's `channel_via` already defines**: a string literal at that position
+resolves directly; declared `channel_via` forms follow the linked call's own argument
+instead (`ProjectSubscriptionName.of`'s own `name` argument, not `newBuilder`'s); anything
+else is `path` NULL, `unresolved` — the registration was made, only its channel is unread.
+
+**`receiver_arg` is the argument that names the handler**, read one of two ways depending
+on what the compiler resolved it to: a `lambda`-kind argument resolves to its own
+synthetic body method symbol ([D00](D00-fact-schema.md) §5a), verbatim — the lambda IS the
+handler, whatever the declared interface's method is named. An `instance`-kind argument
+(a `NEW`-produced named class) resolves to `<type>#<handler_method>` only when that type's
+own declared `interfaces` include the declared `interface` — **direct implementers only**:
+the fact carries a class's own interface table, never a superclass's, so a subclass of an
+implementing class is a stated one-hop limitation, not a gap to close later. Anything
+else — the receiver uncaptured, an `unresolved` kind, a registered instance whose type does
+not implement the declared interface — resolves `handler` to NULL: the subscription is
+still consumed, only who handles it is unread, never fabricated.
+
+**The registration is the evidence.** A class implementing the declared interface but
+never handed to a matching registration call site derives nothing at all — implementing an
+interface is not, on its own, an endpoint. This is the failure mode this style exists to
+prevent: a phantom endpoint conjured from a class's shape alone, with no call anywhere in
+the scanned code that ever wires it to a channel.
+
+**This style needs no execute-terminal.** `fluent`'s `terminal`/`terminal_via_argument`
+(§2, above) exists because a *built* HTTP request is not yet a *sent* one — a
+`Request.Builder` built and logged, never executed, made no call. Binding a receiver to a
+subscription has no such gap: the registration call itself IS the intent, in a way a built
+request is not, so `interface_implementation` derives directly off the registration site
+with no further join to prove the subscription actually ran.
+
+Per registration call site: one row per resolved channel tuple, `direction`/`protocol` the
+catalog's own declared fields, `method` always NULL (the style is verbless — a subscription
+has no verb), `caller`/`peer` always NULL (the deriving method is a `handler`, never a
+`caller`, and a channel is never split into a peer, §2d). **`request_shape`/`response_shape`
+are always NULL** — `PubsubMessage` is a declared no-shape envelope: the registration names
+an identity and, where readable, a handler, never a payload. This is the same
+honest-absence precedent a future messaging catalog whose payload is likewise opaque
+(`jakarta.jms.Message`) is expected to keep: NULL means "no shape to root", not "unread".
+`evidence` is `compiler`; rows enter the same `endpoints` table as every other style,
+merging and counting the same way.
 
 ### `protocol_hint`
 

@@ -1036,7 +1036,7 @@ def test_a_type_level_mapping_annotation_mints_no_endpoint_of_its_own(tmp_path):
 
 
 _UNKNOWN_STYLE_CATALOG = """id: invented
-style: interface_implementation
+style: protocol_hint
 protocol: http
 direction: inbound
 matches: {}
@@ -1143,7 +1143,8 @@ def test_message_is_no_longer_a_protocol(tmp_path):
 def test_catalog_naming_a_style_with_no_engine_is_refused_by_file(tmp_path: Path):
     """A style with no engine matches nothing, so it would yield no endpoints
     and no skip — indistinguishable from a framework that exposes none. D02 §2
-    declares six styles and this codebase implements three, so the gap is
+    declares six styles and this codebase implements four (2E-prep's
+    `interface_implementation` joins the original three), so the gap is
     real.
 
     The reader cannot check it: which engines exist is knowledge of
@@ -1155,7 +1156,7 @@ def test_catalog_naming_a_style_with_no_engine_is_refused_by_file(tmp_path: Path
     with pytest.raises(CatalogError) as raised:
         derive_endpoints(_UnusedWorkspace(), catalogs, capabilities=set())
 
-    assert "interface_implementation" in str(raised.value)
+    assert "protocol_hint" in str(raised.value)
     assert "annotation_driven" in str(raised.value)
     assert "invented.yml" in str(raised.value)
 
