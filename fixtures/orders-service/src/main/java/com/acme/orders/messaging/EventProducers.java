@@ -75,9 +75,11 @@ public class EventProducers {
 
     // The consumer-builder overload (Task 11 checkpoint ruling): the queue
     // name is set inside the lambda, not at the call site's own arg 0, so
-    // the catalog's `send arity 1 {channel_arg: 0}` row matches the call but
-    // reads a lambda argument at that position — an honest unresolved
-    // capture, not a fabricated "shipments-lambda" path.
+    // the catalog's `send arity 1` row (review round 1, finding 3: no
+    // `channel_arg` at all, since arg 0 is the payload on the OTHER arity-1
+    // overload, `send(T)`) matches this call but captures nothing at that
+    // position — an honest unresolved row, not a fabricated
+    // "shipments-lambda" path.
     public void sendShipmentViaBuilder(OrderEvent event) {
         sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event));
     }

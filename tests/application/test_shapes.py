@@ -1339,6 +1339,53 @@ def test_owns_never_crosses_a_protocol_it_was_not_declared_for():
     assert _owns(inbound_kafka, {"protocol": "http", "direction": "both"}) is False
 
 
+def test_owns_recognises_a_single_calls_own_row_level_direction_override():
+    """Task 11 review round 1, finding 2: `_owns` only ever checked
+    `catalog.direction`, never a `single_call` `methods` row's own
+    `direction` override (D02 §2/§3, Task 6) — so a catalog whose
+    catalog-level `direction` is `outbound` (`spring-pubsub.yml`'s own
+    shape) never owned the inbound/`both` rows ITS OWN override-carrying row
+    produces, and harvested zero shape roots for them. Mirrors
+    `spring-pubsub.yml`'s exact matches shape (one plain row, one row
+    declaring `direction: inbound`) at the unit level, no workspace
+    involved. Mutation-tested against the pre-fix body (`catalog.direction`
+    alone, ignoring `matches["methods"]` entirely): every assertion below
+    that reads `is True` for the `outbound`-declared catalog fails."""
+    pubsub_shaped = Catalog(
+        **{
+            **vars(_CATALOG),
+            "direction": "outbound",
+            "matches": {
+                "owner": "com.example.PubSubTemplate",
+                "methods": [
+                    {"name": "publish", "arity": 2, "channel_arg": 0, "body_arg": 1},
+                    {
+                        "name": "subscribeAndConvert",
+                        "arity": 3,
+                        "channel_arg": 0,
+                        "body_arg": 2,
+                        "direction": "inbound",
+                    },
+                ],
+            },
+        }
+    )
+
+    # The plain row's own direction — unchanged, still owned directly.
+    assert _owns(pubsub_shaped, {"protocol": "http", "direction": "outbound"}) is True
+    # The override row's own direction — the fix's whole point.
+    assert _owns(pubsub_shaped, {"protocol": "http", "direction": "inbound"}) is True
+    # The merge of the two — inbound-producing via the override, so `both`
+    # is owned too, exactly like a genuinely `direction: inbound` catalog.
+    assert _owns(pubsub_shaped, {"protocol": "http", "direction": "both"}) is True
+
+    # A catalog with no row-level override anywhere is untouched: still
+    # exactly its own declared direction, nothing more.
+    outbound_only = Catalog(**{**vars(_CATALOG), "direction": "outbound"})
+    assert _owns(outbound_only, {"protocol": "http", "direction": "inbound"}) is False
+    assert _owns(outbound_only, {"protocol": "http", "direction": "both"}) is False
+
+
 # --- Task 12 fix round 1 (coordinator review): wrapper vocabulary must be
 # shared across *every* outbound catalog, not just serialization/known_types.
 # `_owns` scopes by direction and protocol (protocol added in Task 10 fix

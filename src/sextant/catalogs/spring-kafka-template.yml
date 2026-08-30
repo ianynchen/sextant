@@ -16,7 +16,17 @@ matches:
   # moves from arg 1 to arg 2 once the key joins the call, so `arity` tells
   # the two overloads apart (Task 6). `send(ProducerRecord<K, V>)` carries
   # both identity and payload in the record's own constructor — Task 7's
-  # `record_arg` / `record_wrappers` below. `sendDefault(V)` targets the
+  # `record_arg` / `record_wrappers` below. `send(Message<?>)` is ALSO
+  # arity 1 (a third `send` overload, alongside `send(ProducerRecord<K,V>)`)
+  # — not exercised by the fixture, and NOT given a second `send arity: 1`
+  # row: `_matching_method`'s first match wins by name+arity alone, never by
+  # argument type, so a second row at the same arity would simply never be
+  # reached (dead catalog data), never a second answer. It shares this SAME
+  # `record_arg` row instead: a `Message` argument's own symbol names no
+  # `record_wrappers` entry, so `_record_arguments` degrades honestly to
+  # `(None, None)` — `path` NULL, `resolution: unresolved` — rather than
+  # crashing or mis-reading the record wrapper's own ctor rule against a
+  # type it was never declared for. `sendDefault(V)` targets the
   # config-borne default topic: no channel argument at the call site at all,
   # so no `channel_arg` is declared for it — `path` NULL, `resolution:
   # unresolved` (I1), verified live. `sendDefault` has three further

@@ -445,7 +445,10 @@ def test_a_value_returning_listener_with_no_sendto_derives_an_unresolved_reply_r
         and e["caller"].endswith("OrderEventsListener#escalate(sig_160f6bce).")
     ]
 
-    assert reply["caller"].endswith("OrderEventsListener#escalate(sig_160f6bce).")
+    # `caller` is not re-asserted here: the filter above already selects on
+    # it, which would make a repeated assertion tautological (review round
+    # 1, minor 9) — `resolution`/`request_shape`/`response_shape` below are
+    # this test's own, non-guaranteed claims.
     assert reply["resolution"] == "unresolved"
     assert json.loads(reply["request_shape"])["shape_id"] == (
         "com/acme/orders/contracts/ReceiptView#"
@@ -696,14 +699,19 @@ def test_the_sqs_builder_lambda_derives_an_honest_unresolved_row_not_a_fabricate
     """`sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))`:
     `SqsTemplate.send` has two arity-1 overloads (the destination-less
     `send(T)` and this builder-consumer `send(Consumer<SqsSendOptions<T>>)`)
-    indistinguishable by name+arity alone, so the catalog declares
-    `channel_arg: 0` for arity 1 so the call still MATCHES rather than
-    vanishing silently. The call site's own arg 0 carries `kind: lambda`
-    (verified directly against the real `call_sites` fact, not assumed) —
-    `url_of` only accepts a `string`-kind argument, so this reads as `path:
-    NULL, resolution: unresolved`, never the literal `"shipments-lambda"`
-    string sitting inside the lambda body. Honest capture failure, not a
-    fabricated path."""
+    indistinguishable by name+arity alone, so the catalog declares NO
+    `channel_arg` at all for arity 1 (review round 1, finding 3: declaring
+    `channel_arg: 0` would be safe for THIS call — its arg 0 is a lambda —
+    but would fabricate a resolved queue name for `send(T)`'s own
+    destination-less form the moment some other caller passes a plain
+    string payload, since arg 0 there genuinely IS the payload). The row
+    still MATCHES (name+arity) and still derives — `_arg_at(arguments,
+    None)` is `None` regardless of what kind arg 0 actually carries — `path:
+    NULL, resolution: unresolved` unconditionally, for either overload.
+    Verified directly against the real `call_sites` fact that THIS call
+    site's own arg 0 carries `kind: lambda` (not assumed) — confirming the
+    row derives the same honest answer either way, never the literal
+    `"shipments-lambda"` string sitting inside the lambda body."""
     workspace, report = _resolved_fixture(tmp_path)
     workspace.close()
     [row] = [
@@ -729,9 +737,13 @@ def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(tmp_pa
     merge where BOTH sides are new in this same task (every other merge
     target already existed as a Task 10 inbound row). The typed subscribe's
     own payload capture is its trailing `OrderEvent.class` literal, read at
-    `response_arg` (this row declares no `body_arg`) — so it lands in
-    `response_shape`, never `request_shape`, on the surviving inbound-owned
-    row."""
+    `body_arg` (review round 1, finding 1: an earlier draft read it into
+    `response_arg` instead, which put the SUBSCRIBER'S received payload in
+    `response_shape` — backwards, since a subscriber RECEIVES a request, the
+    same D01 §3 column every other inbound messaging row's own payload
+    lands in) — so it lands in `request_shape`, matching
+    `spring-kafka.yml`/`spring-jms.yml`/`spring-sqs.yml`'s own inbound rows,
+    never `response_shape`, on the surviving inbound-owned row."""
     workspace, report = _resolved_fixture(tmp_path)
     workspace.close()
     [row] = _messaging_rows(report, "pubsub", "order-notifications")
@@ -740,10 +752,39 @@ def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(tmp_pa
     assert row["handler"].endswith("NotificationsSubscriber#subscribe(sig_da8c82d5).")
     assert row["caller"].endswith("EventProducers#publishNotification(sig_b2a754d9).")
     assert row["resolution"] == "resolved"
-    assert row["request_shape"] is None
-    assert json.loads(row["response_shape"])["shape_id"] == (
-        "com/acme/orders/contracts/OrderEvent#"
-    )
+    assert row["response_shape"] is None
+    assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
+
+
+def test_a_catalogs_row_level_direction_override_is_still_owned_with_no_other_catalog_present(
+    tmp_path: Path,
+):
+    """Review round 1, finding 2: `_owns` (shapes/contracts.py) only ever
+    checked `catalog.direction`, never a `single_call` row's own `direction`
+    override — so `spring-pubsub.yml` (catalog-level `outbound`) never owned
+    its OWN `order-notifications` `both` row, and harvested zero shape roots
+    for it. In the real, full-catalog fixture run this bug produces no
+    visible symptom: `OrderEvent` is already expanded by the time
+    `spring-pubsub.yml`'s own turn comes, because Kafka/JMS/SQS's listener
+    catalogs (sorted earlier among inbound catalogs) already reached it —
+    masked by luck, exactly the review's own finding. Loading `spring-pubsub.yml`
+    as the ONLY catalog removes that luck: `OrderEvent` has nowhere else to
+    be expanded from, so if `_owns` still fails to recognise the row's own
+    `direction: inbound` override, `request_shape` on the merged row points
+    at a shape id with no `shapes` row behind it at all — a dangling
+    reference (Task 9 review, Finding C1). Mutation-tested: reverting `_owns`
+    to check `catalog.direction` alone (dropping `_owned_directions`)
+    reproduces exactly this — `shape_id not in shapes` — so this test fails
+    without the fix."""
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-pubsub")
+    workspace, report = _resolved_fixture(tmp_path, catalogs=_Catalogs([catalog]))
+    [row] = [e for e in report.endpoints if e["path"] == "order-notifications"]
+    shape_id = json.loads(row["request_shape"])["shape_id"]
+    shapes = {s["shape_id"] for s in workspace.query("shapes")}
+    workspace.close()
+
+    assert row["direction"] == "both"
+    assert shape_id in shapes
 
 
 def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_path: Path):

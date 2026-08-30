@@ -14,16 +14,25 @@ matches:
   # CHECKPOINT FACT (real javap descriptors, spring-cloud-aws-sqs 3.1.1):
   # `send(String, T)` arity 2 is the covered form. `send(T)` (destination-
   # less) and `send(Consumer<SqsSendOptions<T>>)` (the queue-in-lambda
-  # builder form) are BOTH arity 1, indistinguishable by name+arity alone;
-  # the fixture only exercises the builder form
-  # (`sendShipmentViaBuilder`), so `channel_arg: 0` is declared for arity 1
-  # so the call still MATCHES and derives an honest row rather than
-  # vanishing — the lambda at that position carries no `string`-kind
-  # argument, so `url_of` reads it as `path: NULL, resolution: unresolved`
-  # (verified live), never a fabricated "shipments-lambda" path.
+  # builder form) are BOTH arity 1, indistinguishable by name+arity alone —
+  # the fixture only exercises the builder form (`sendShipmentViaBuilder`),
+  # but this row still has to be correct for BOTH: declaring `channel_arg: 0`
+  # (review round 1, finding 3, reproduced) would be safe for the builder
+  # form (its arg 0 is a lambda, `url_of` reads it as `unresolved`) but
+  # would FABRICATE a resolved queue name for `send(T)`'s own destination-
+  # less form the moment a caller anywhere passes a plain STRING payload —
+  # `url_of` cannot tell "the channel, resolved" from "the payload, which
+  # happens to be a string" apart by kind alone, and arg 0 there is genuinely
+  # the payload, not a destination. So this row declares NO `channel_arg` at
+  # all — `_arg_at(arguments, None)` is `None` for both overloads, `path`
+  # NULL, `resolution: unresolved` unconditionally — the call still MATCHES
+  # (name+arity) and derives an honest row rather than vanishing, but never
+  # a channel captured from the wrong argument. Verified live: the fixture's
+  # own builder-lambda row still derives identically (`path: NULL,
+  # resolution: unresolved`) with no `channel_arg` declared at all.
   methods:
     - { name: send, arity: 2, channel_arg: 0, body_arg: 1 }
-    - { name: send, arity: 1, channel_arg: 0 }
+    - { name: send, arity: 1 }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full

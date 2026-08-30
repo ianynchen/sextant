@@ -204,17 +204,49 @@ def _shape_roots_of(descriptor_json: object) -> list[str]:
     return roots
 
 
+def _owned_directions(catalog: Catalog) -> frozenset[str]:
+    """Every direction a catalog's own rules can actually produce: its own
+    declared `direction`, plus any row-level `direction` override a
+    `single_call` `methods` row declares (D02 §2/§3, Task 6's row-direction
+    feature) — Pub/Sub's `subscribeAndConvert` row, `direction: inbound`
+    inside `spring-pubsub.yml`'s otherwise-`outbound` catalog, is exactly
+    this case. `_owns` (below) needs this SET, not the single catalog-level
+    `direction`, or a catalog with a row-level override silently never owns
+    the very rows that override produces (Task 11 review round 1, finding
+    2): `_contracts_of` skips an unowned row entirely, so its payload types
+    never reach `referenced`, and `derive_shapes` — driven purely by what
+    `referenced` collected — expands nothing for it. Reading straight off
+    `catalog.matches["methods"]` (absent for every non-`single_call` style,
+    which is why `.get(..., [])` degrades those to just `{catalog.direction}`,
+    unchanged) rather than off any derived endpoint row keeps this a pure
+    function of the catalog's own declaration."""
+    directions = {catalog.direction}
+    for method in catalog.matches.get("methods", []) or []:
+        row_direction = method.get("direction")
+        if row_direction is not None:
+            directions.add(row_direction)
+    return frozenset(directions)
+
+
 def _owns(catalog: Catalog, endpoint: dict[str, object]) -> bool:
     """Whether `catalog`'s rules are the ones that produced `endpoint`.
 
-    A catalog derives rows of exactly its own declared direction
-    (`derive_endpoints.sql` binds `$direction` straight from the catalog), so
-    a same-direction row is this catalog's to describe. A `both` row is the
-    one exception: `merge_endpoints.sql` folds the outbound duplicate into
-    the inbound row and keeps the *inbound* side's `handler_signature`, so
-    only an inbound catalog's wrapper and body rules were ever run against
-    it — an outbound catalog never touched that signature and must not
-    describe it now.
+    A catalog derives rows of exactly the direction(s) it can produce
+    (`_owned_directions` above) — `derive_endpoints.sql` binds `$direction`
+    straight from the catalog for every `annotation_driven` row, and
+    `single_call`'s own per-row `direction` override (Task 6) is the one
+    case a row's direction can differ from its catalog's — so a row whose
+    direction is IN that set is this catalog's to describe. A `both` row is
+    the one exception: `merge_endpoints.sql` folds the outbound duplicate
+    into the inbound row and keeps the *inbound* side's `handler_signature`,
+    so only an inbound-producing catalog's wrapper and body rules were ever
+    run against it — a catalog that only ever produces outbound rows never
+    touched that signature and must not describe it now. "Inbound-
+    producing" is `"inbound" in _owned_directions(catalog)`, not
+    `catalog.direction == "inbound"` — `spring-pubsub.yml`'s own merged
+    `order-notifications` row needs exactly this generalisation, since its
+    catalog-level `direction` is `outbound` and only its `subscribeAndConvert`
+    row's own override makes it inbound-producing at all.
 
     Also scoped by `protocol` (Task 10, messaging catalogs): direction alone
     let an `http` row and a `kafka` row sit in the same same-direction pool,
@@ -230,9 +262,8 @@ def _owns(catalog: Catalog, endpoint: dict[str, object]) -> bool:
     if str(endpoint["protocol"]) != catalog.protocol:
         return False
     direction = str(endpoint["direction"])
-    return direction == catalog.direction or (
-        direction == "both" and catalog.direction == "inbound"
-    )
+    owned = _owned_directions(catalog)
+    return direction in owned or (direction == "both" and "inbound" in owned)
 
 
 def _body_type(signature: dict[str, Any], catalog: Catalog) -> dict[str, Any] | None:

@@ -18,7 +18,20 @@ matches:
   owner: org.springframework.kafka.requestreply.ReplyingKafkaTemplate
   # CHECKPOINT FACT: `sendAndReceive(ProducerRecord<K, V>)` is arity 1, the
   # record wrapper the only source for its channel and payload — exactly
-  # like `KafkaTemplate.send(ProducerRecord)`. No overload exposes the reply
+  # like `KafkaTemplate.send(ProducerRecord)`. `sendAndReceive(Message<?>)`
+  # is ALSO arity 1 — not exercised by the fixture, and not given a second
+  # `sendAndReceive arity: 1` row for the same reason `spring-kafka-
+  # template.yml`'s own `send(Message<?>)` sibling isn't: `_matching_method`
+  # matches by name+arity alone, first row wins, so a second row at the same
+  # arity is unreachable dead data, never a second answer. It shares this
+  # SAME `record_arg` row, degrading honestly to `path` NULL, `resolution:
+  # unresolved` (a `Message` symbol names no `record_wrappers` entry).
+  # `sendAndReceive(ProducerRecord, Duration)`, `(Message, Duration)`,
+  # `(Message, ParameterizedTypeReference<P>)` and `(Message, Duration,
+  # ParameterizedTypeReference<P>)` are the further, arity-2/3 overloads;
+  # none is exercised, so none is declared — undeclared arity simply never
+  # matches at all, the same shape `sendDefault`'s three unused overloads
+  # take. No overload exposes the reply
   # type at the call site (it lives in the template field's own generics,
   # never a method argument), so this row declares no `response_arg` at
   # all — `response_shape` is NULL by design, not a capture failure (D02
