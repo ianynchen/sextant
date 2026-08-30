@@ -20,6 +20,8 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.contracts import (
     CallFacts,
     CarrierRules,
+    _arg_at,
+    _capture_resolved,
     _linked_constructor,
     argument_descriptor,
     channel_of,
@@ -134,7 +136,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # for both.
             record = _arg_at(arguments, method["record_arg"])
             url_argument, body_argument = _record_arguments(record, record_wrapper_args, facts)
-            body_declared: int | None = method["record_arg"]
+            # `record_arg` is always a declared position (the row is only
+            # reached here because it has one) — always True, the same
+            # sentinel a `body_arg` row's own presence check collapses to.
+            body_declared = True
         else:
             # `channel_arg` is `url_arg`'s alias for a destination-shaped
             # identity (D02 §2) — `_validate_methods` already refused a row
@@ -142,7 +147,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # here.
             url_argument = _arg_at(arguments, method.get("url_arg", method.get("channel_arg")))
             body_argument = _arg_at(arguments, method.get("body_arg"))
-            body_declared = method.get("body_arg")
+            body_declared = method.get("body_arg") is not None
         # `channel_arg` aliases `url_arg` in the grammar but not in the
         # READER (final review, IMPORTANT): a destination is an opaque
         # expression, never a URL to split. SQS's canonical destination is a
@@ -168,7 +173,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             if (verb is not None or verbless)
             and url_resolution == "resolved"
             and _capture_resolved(body_declared, body_argument)
-            and _capture_resolved(method.get("response_arg"), response_argument)
+            and _capture_resolved(method.get("response_arg") is not None, response_argument)
             else "unresolved"
         )
         # `direction` on a row overrides the catalog's own declared
@@ -306,18 +311,6 @@ def _validate_record_wrappers(rows: list[dict[str, Any]], catalog: Catalog) -> N
             )
 
 
-def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any] | None:
-    """The argument at a `methods` row's declared position, or None where the
-    row names no position at all (`body_arg`/`response_arg` are optional) or
-    the real call site carries fewer arguments than the catalog expects — the
-    varargs slot on `getForObject`/`exchange` is exactly this case (Task 7
-    checkpoint): declared positions still read correctly, and the excess
-    trailing argument is simply never addressed."""
-    if index is None or index >= len(arguments):
-        return None
-    return arguments[index]
-
-
 def _record_arguments(
     record: dict[str, Any] | None,
     record_wrapper_args: dict[str, tuple[int, int | str]],
@@ -369,26 +362,6 @@ def _record_arguments(
     else:
         payload_argument = _arg_at(ctor_arguments, payload_index)
     return channel_argument, payload_argument
-
-
-def _capture_resolved(declared_index: int | None, argument: dict[str, Any] | None) -> bool:
-    """Whether a DECLARED capture (checkpoint ruling I1) read something the
-    scanner could resolve.
-
-    A capture the `methods` row never declares at all — `put` names no
-    `response_arg` — never fails: it never claimed a payload, so its
-    absence is a genuine no-body/no-response, not a read failure. A
-    declared capture with nothing at that position, or whose own kind is
-    the compiler's `unresolved` (D00 §5: "anything else... a first-class
-    honest answer, never an omission" — the exact shape a passed-through
-    method parameter takes, verified against the real fixture), fails —
-    and per I1, that drops the *row's* own `resolution`, even though the
-    payload *column* itself stays NULL either way: NULL alone cannot say
-    which case it was, so the row is what disambiguates "no payload" from
-    "could not read it" (D01 §3, amended)."""
-    if declared_index is None:
-        return True
-    return argument is not None and argument.get("kind") != "unresolved"
 
 
 def _verb_of(method: dict[str, Any], arguments: list[dict[str, Any]]) -> str | None:

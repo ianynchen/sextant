@@ -36,6 +36,8 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.contracts import (
     CallFacts,
     CarrierRules,
+    _arg_at,
+    _capture_resolved,
     argument_descriptor,
     supertypes_of,
     url_of,
@@ -448,29 +450,3 @@ def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[st
 def _arg_index(value: Any) -> int | None:
     match = _ARG_REFERENCE.match(str(value))
     return int(match.group(1)) if match else None
-
-
-def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any] | None:
-    if index is None or index >= len(arguments):
-        return None
-    return arguments[index]
-
-
-def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
-    """Checkpoint ruling I1, with exactly single_call's own
-    `_capture_resolved(declared_index, argument)` semantics — `declared` is
-    this engine's form of the same question, since a chain declares a
-    capture by *reaching* a step that names it rather than by a `methods`
-    row's positional slot.
-
-    A capture no step along this chain ever declared cannot fail: it never
-    claimed a payload. A declared one fails both ways it can — its own kind
-    is the compiler's honest `unresolved`, or the step that declared it
-    carries nothing at that position at all (I4: a zero-argument
-    `bodyValue()` overload reached after a good `bodyValue(request)`, whose
-    empty capture wins under last-wins and must therefore drop the row's
-    resolution rather than leave it reading `resolved` beside a NULL
-    payload)."""
-    if not declared:
-        return True
-    return argument is not None and argument.get("kind") != "unresolved"

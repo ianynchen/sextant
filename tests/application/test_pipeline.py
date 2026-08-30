@@ -1064,11 +1064,15 @@ def test_a_catalog_that_names_no_request_body_rule_claims_no_request_shape(
 def test_two_runs_agree_on_every_shape_and_every_field(tmp_path: Path):
     """`content_hash` is derived from the ordered field list, so two runs that
     disagree on field order are two different answers about the same type
-    (NFR-1) — and DR-5 compares the answer, not the type."""
+    (NFR-1) — and DR-5 compares the answer, not the type. `endpoints` carries
+    the same requirement: the `endpoints` query's own ORDER BY (2D's `caller`
+    tiebreak) is what makes two ties-full runs agree on row order, not
+    happenstance insert order."""
     first, second = _resolved_fixture(tmp_path / "one"), _resolved_fixture(tmp_path / "two")
 
     assert first[0].query("shapes") == second[0].query("shapes")
     assert first[0].query("shape_fields") == second[0].query("shape_fields")
+    assert first[0].query("endpoints") == second[0].query("endpoints")
     assert first[1].unexpanded_types == second[1].unexpanded_types
     first[0].close()
     second[0].close()

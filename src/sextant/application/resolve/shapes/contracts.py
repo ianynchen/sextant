@@ -317,6 +317,46 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
     return None, None, "unresolved"
 
 
+def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any] | None:
+    """The argument at a call site's declared position, or None where the
+    caller names no position at all (`body_arg`/`response_arg` are optional)
+    or the real call site carries fewer arguments than the catalog expects —
+    the varargs slot on `getForObject`/`exchange` is exactly this case (Task
+    7 checkpoint): declared positions still read correctly, and the excess
+    trailing argument is simply never addressed. Shared verbatim between
+    `single_call` (a `methods` row's positional slot) and `fluent` (a step's
+    own `argN` capture) — both read the same D00 §5 argument list the same
+    way."""
+    if index is None or index >= len(arguments):
+        return None
+    return arguments[index]
+
+
+def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
+    """Whether a DECLARED capture (checkpoint ruling I1) read something the
+    scanner could resolve.
+
+    A capture nothing ever declares — `put` names no `response_arg`, a chain
+    that never reaches a step naming `response` — never fails: it never
+    claimed a payload, so its absence is a genuine no-body/no-response, not a
+    read failure. A declared capture with nothing at that position, or whose
+    own kind is the compiler's `unresolved` (D00 §5: "anything else... a
+    first-class honest answer, never an omission"), fails — and per I1, that
+    drops the *row's* own `resolution`, even though the payload *column*
+    itself stays NULL either way: NULL alone cannot say which case it was, so
+    the row is what disambiguates "no payload" from "could not read it" (D01
+    §3, amended).
+
+    `declared` is each engine's own form of the same question: `single_call`
+    asks whether its `methods` row named a position at all (`body_arg` is
+    optional); `fluent` asks whether the chain ever reached a step naming
+    the capture (a chain declares one by *reaching* it, not by a positional
+    slot) — both collapse to this one bool before reaching here."""
+    if not declared:
+        return True
+    return argument is not None and argument.get("kind") != "unresolved"
+
+
 def channel_of(argument: dict[str, Any] | None) -> tuple[None, str | None, str]:
     """`url_of`'s counterpart for a DESTINATION capture (D02 §2's
     `channel_arg`) — a topic, a queue, a subscription. The grammar makes
