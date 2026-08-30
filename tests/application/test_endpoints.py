@@ -1016,6 +1016,43 @@ def test_load_catalogs_accepts_a_catalog_whose_values_are_all_in_the_closed_sets
     assert (catalog.protocol, catalog.direction) == ("http", "inbound")
 
 
+def test_broker_family_protocols_load_and_message_is_retired(tmp_path):
+    """New broker family protocols (kafka, jms, sqs, pubsub) load correctly.
+
+    MESSAGE protocol has been retired and replaced with the four specific
+    broker family protocols. This test verifies all four new protocols load
+    and are sorted by filename when returned.
+    """
+    _minimal_catalog = """id: {id}
+style: annotation_driven
+protocol: {protocol}
+direction: inbound
+matches: {{}}
+"""
+    for protocol in ("kafka", "jms", "sqs", "pubsub"):
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        filename = f"x-{protocol}.yml"
+        content = _minimal_catalog.format(id=filename.replace(".yml", ""), protocol=protocol)
+        (tmp_path / filename).write_text(content, encoding="utf-8")
+
+    loaded = YamlCatalogSource(tmp_path).load()
+    assert [c.protocol for c in loaded] == ["jms", "kafka", "pubsub", "sqs"]
+
+
+def test_message_is_no_longer_a_protocol(tmp_path):
+    """The 'message' protocol value is rejected as a closed-set violation.
+
+    MESSAGE was removed from the Protocol closed set in favor of specific
+    broker family protocols. Any catalog declaring protocol: message should
+    raise CatalogError with a message about closed sets.
+    """
+    catalog_text = _VALID_CATALOG.replace("http", "message")
+    directory = _catalog_dir(tmp_path, catalog_text)
+
+    with pytest.raises(CatalogError, match="closed"):
+        YamlCatalogSource(directory).load()
+
+
 def test_catalog_naming_a_style_with_no_engine_is_refused_by_file(tmp_path: Path):
     """A style with no engine matches nothing, so it would yield no endpoints
     and no skip — indistinguishable from a framework that exposes none. D02 §2
