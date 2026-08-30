@@ -657,14 +657,15 @@ complete answer.
 
 `KafkaTemplate.send` returns `ListenableFuture` before Spring Kafka 3.0 and `CompletableFuture` from 3.0 on; 2.9 added a `usingCompletableFuture()` bridge that 3.0 removed.
 
-Two class-level `@KafkaListener` cases are unread territory rather than measured behaviour: a
-`topics` array on the class-level annotation itself contributes only its first element to any
-topic identity, and a method-level `@KafkaListener` nested inside a class already carrying one
-would need concatenating the two prefixes into a name the engine has no rule for — neither case
-is exercised by the fixture, so nothing derives for them today, right or wrong. Where a class-level
-`@KafkaListener` does derive, every `@KafkaHandler` method on it derives its own row against the
-shared topic identity — several payload contracts riding one topic is the deliberate outcome, not
-a deduplication the engine owes anyone.
+A class-level `@KafkaListener`'s `topics` array contributes only its first element to any topic
+identity. A method-level `@KafkaListener` nested inside a class already carrying one is not
+unread territory — the engine's generic prefix-join rule (`coalesce(p.prefix,'') ||
+m.path_suffix`) concatenates the class-level topic onto the method's own topic and derives a
+confidently `resolved` row under a topic name nobody wrote: a known fabrication boundary, not
+exercised by the fixture, slated for tightening alongside the empty-path wart below. Where a
+class-level `@KafkaListener` does derive, every `@KafkaHandler` method on it derives its own row
+against the shared topic identity — several payload contracts riding one topic is the deliberate
+outcome, not a deduplication the engine owes anyone.
 
 `KafkaTemplate.sendDefault`, `JmsTemplate.convertAndSend(Object)` with no destination and
 `SqsTemplate`'s builder-lambda `send(Consumer<SqsSendOptions<T>>)` all put the destination
