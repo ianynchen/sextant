@@ -1,0 +1,327 @@
+"""Tests for the `reply` block (D02 §2's `annotation_driven` amendment, Task
+8): a listener's declared reply (`@SendTo` and its like) derives a second,
+OUTBOUND endpoint row per listed destination, carrying the handler's own
+return type as its payload.
+
+Facts are hand-built, mirroring the exact grammar `annotation_driven`'s own
+tests use (`tests/application/test_endpoints.py`) — an invented, deliberately
+non-Spring annotation set, so the engine's own genericity (no framework name
+appears in it) is exercised rather than assumed."""
+
+import json
+from pathlib import Path
+
+from sextant.application.ports.catalogs import Catalog
+from sextant.application.resolve.endpoints import derive_endpoints
+from sextant.domain.closed_sets import ConstructKind, OriginTier
+from sextant.domain.factfile import write_fact_file
+from sextant.domain.facts import (
+    AnnotationFact,
+    AnnotationUse,
+    Document,
+    Signature,
+    SymbolFact,
+    TypeRef,
+)
+from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+KAFKA_LISTENER = "com/acme/messaging/annotation/KafkaListener#"
+SEND_TO = "com/acme/messaging/annotation/SendTo#"
+RECEIPT_VIEW = "com/acme/orders/contracts/ReceiptView#"
+
+_MATCHES = {
+    "mapping": {
+        "path_from": ["topics"],
+        "prefix_from": [],
+        "method_from": "method",
+        # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
+        "all_methods": [],
+        "prefix_annotation": "com/acme/messaging/annotation/Topic#",
+        "annotations": [{"fqn": KAFKA_LISTENER}],
+    },
+    # D02 §2's `reply` block, frozen (Task 1): {annotation, destination_from,
+    # payload: return}. `payload` is documentation only here — this engine
+    # always roots the reply payload at the handler's own return type.
+    "reply": {
+        "annotation": "com.acme.messaging.annotation.SendTo",
+        "destination_from": "value",
+        "payload": "return",
+    },
+}
+
+
+def _catalog() -> Catalog:
+    return Catalog(
+        id="invented-reply-listener",
+        style="annotation_driven",
+        protocol="kafka",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-reply.yml"),
+        matches=_MATCHES,
+    )
+
+
+def _document(document_id: str = "doc_1") -> Document:
+    return Document(
+        document_id=document_id,
+        relative_path="com/acme/notify/OrderListener.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+
+
+def _receipt_returns() -> TypeRef:
+    return TypeRef(
+        symbol=RECEIPT_VIEW,
+        wire_type="object",
+        wire_format="",
+        nullable=True,
+        nullable_resolution="resolved",
+    )
+
+
+def _void_returns() -> TypeRef:
+    # The real emitted shape of a `void` return (checkpoint-verified,
+    # `tests/application/test_shapes.py`'s own `_resolved_void_handler`):
+    # `wire_type` empty, never absent.
+    return TypeRef(
+        symbol="void#",
+        wire_type="",
+        wire_format="",
+        nullable=False,
+        nullable_resolution="resolved",
+    )
+
+
+def _resolve(tmp_path: Path, facts: list) -> DuckDbWorkspace:
+    write_fact_file(tmp_path / "facts" / "OrderListener.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [_catalog()], capabilities={"annotation_args"})
+    assert skipped == []
+    return workspace
+
+
+def _replies_for(workspace: DuckDbWorkspace, handler: str) -> list[dict]:
+    return [
+        e
+        for e in workspace.query("endpoints")
+        if e["direction"] == "outbound" and e["caller"] == handler
+    ]
+
+
+# --- (a) a single-destination @SendTo derives one resolved outbound row ---
+
+
+def test_a_single_destination_send_to_derives_one_resolved_outbound_reply_row(
+    tmp_path: Path,
+):
+    listener = "com/acme/notify/OrderListener#"
+    handler = "com/acme/notify/OrderListener#onReturn()."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=listener, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handler,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=listener,
+            signature=Signature(returns=_receipt_returns()),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=KAFKA_LISTENER, args={"topics": ["order-returns"]}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=SEND_TO, args={"value": ["order-return-receipts"]}),
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    replies = _replies_for(workspace, handler)
+    workspace.close()
+
+    assert len(replies) == 1
+    [reply] = replies
+    assert reply["path"] == "order-return-receipts"
+    assert reply["resolution"] == "resolved"
+    assert reply["method"] is None
+    assert reply["handler"] is None
+    assert reply["peer"] is None
+    assert reply["handler_signature"] is None
+    assert reply["evidence"] == "compiler"
+    assert reply["response_shape"] is None
+    assert json.loads(reply["request_shape"]) == {
+        "wire_type": "object",
+        "wire_format": "",
+        "nullable": True,
+        "shape_id": RECEIPT_VIEW,
+    }
+
+
+# --- (b) a two-destination @SendTo derives two rows ------------------------
+
+
+def test_b_a_two_destination_send_to_derives_two_resolved_rows(tmp_path: Path):
+    listener = "com/acme/notify/OrderListener#"
+    handler = "com/acme/notify/OrderListener#onMultiReturn()."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=listener, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handler,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=listener,
+            signature=Signature(returns=_receipt_returns()),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=KAFKA_LISTENER, args={"topics": ["order-multi"]}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=SEND_TO, args={"value": ["dest-a", "dest-b"]}),
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    replies = _replies_for(workspace, handler)
+    workspace.close()
+
+    assert len(replies) == 2
+    assert {r["path"] for r in replies} == {"dest-a", "dest-b"}
+    assert all(r["resolution"] == "resolved" for r in replies)
+    assert all(json.loads(r["request_shape"])["shape_id"] == RECEIPT_VIEW for r in replies)
+
+
+# --- (c) a value-returning handler without @SendTo derives one unresolved,
+# path-NULL row --------------------------------------------------------------
+
+
+def test_c_a_value_returning_handler_without_send_to_derives_one_unresolved_row(
+    tmp_path: Path,
+):
+    listener = "com/acme/notify/OrderListener#"
+    handler = "com/acme/notify/OrderListener#escalate()."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=listener, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handler,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=listener,
+            signature=Signature(returns=_receipt_returns()),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=KAFKA_LISTENER, args={"topics": ["order-escalations"]}),
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    replies = _replies_for(workspace, handler)
+    workspace.close()
+
+    assert len(replies) == 1
+    [reply] = replies
+    assert reply["path"] is None
+    assert reply["resolution"] == "unresolved"
+    assert json.loads(reply["request_shape"])["shape_id"] == RECEIPT_VIEW
+
+
+# --- (d) a void handler derives no reply row --------------------------------
+
+
+def test_d_a_void_handler_derives_no_reply_row(tmp_path: Path):
+    listener = "com/acme/notify/OrderListener#"
+    handler = "com/acme/notify/OrderListener#onEvent()."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=listener, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handler,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=listener,
+            signature=Signature(returns=_void_returns()),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=KAFKA_LISTENER, args={"topics": ["order-events"]}),
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    replies = _replies_for(workspace, handler)
+    workspace.close()
+
+    assert replies == []
+
+
+# --- (e) a handler never matched by this catalog's own inbound mapping
+# derives nothing, even when annotated with the reply annotation ------------
+
+
+def test_e_a_handler_never_matched_by_this_catalogs_inbound_mapping_derives_no_reply_row(
+    tmp_path: Path,
+):
+    listener = "com/acme/notify/OrderListener#"
+    matched_handler = "com/acme/notify/OrderListener#onAudit()."
+    unmatched_handler = "com/acme/notify/OrderListener#neverListened()."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=listener, construct_kind=ConstructKind.CLASS),
+        # A genuinely listened handler, so `endpoints` is not trivially empty
+        # — proving the exclusion below is real, not incidental.
+        SymbolFact(
+            document_id="doc_1",
+            symbol=matched_handler,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=listener,
+            signature=Signature(returns=_void_returns()),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=matched_handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=KAFKA_LISTENER, args={"topics": ["order-audit"]}),
+        ),
+        # Carries the reply annotation and a value-returning signature, but
+        # no listener annotation at all — this catalog's own inbound mapping
+        # never produces an endpoint row for it.
+        SymbolFact(
+            document_id="doc_1",
+            symbol=unmatched_handler,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=listener,
+            signature=Signature(returns=_receipt_returns()),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=unmatched_handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=SEND_TO, args={"value": ["dest-never"]}),
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = workspace.query("endpoints")
+    unmatched_rows = [e for e in rows if unmatched_handler in (e["handler"], e["caller"])]
+    workspace.close()
+
+    assert any(e["handler"] == matched_handler for e in rows)
+    assert unmatched_rows == []
