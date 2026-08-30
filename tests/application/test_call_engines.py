@@ -44,10 +44,12 @@ def _catalog() -> Catalog:
     return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-resttemplate")
 
 
-def _document(document_id: str = "doc_1") -> Document:
+def _document(
+    document_id: str = "doc_1", relative_path: str = "com/acme/http/Client.java"
+) -> Document:
     return Document(
         document_id=document_id,
-        relative_path="com/acme/http/Client.java",
+        relative_path=relative_path,
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
@@ -192,11 +194,11 @@ def _batch_facts(caller: str) -> list:
     ]
 
 
-def _ptr_symbol_fact() -> SymbolFact:
+def _ptr_symbol_fact(document_id: str = "doc_1") -> SymbolFact:
     """The anonymous PTR subclass's own symbol fact: its declared generic
     supertype names the payload (D00 §5a; D02 §2h)."""
     return SymbolFact(
-        document_id="doc_1",
+        document_id=document_id,
         symbol="com/acme/http/Client$1#",
         construct_kind="class",
         supertype=TypeRef(
@@ -249,6 +251,246 @@ def test_exchange_resolves_the_enum_verb_the_http_entity_hop_and_the_ptr_respons
     # The PTR follow: the anonymous subclass's own declared supertype names
     # List<OrderView>, fed to expansion._described exactly as a field
     # reference — the array-ness survives, and the item roots OrderView.
+    assert json.loads(endpoint["response_shape"]) == {
+        "wire_type": "array",
+        "wire_format": "",
+        "nullable": True,
+        "item": {
+            "wire_type": "object",
+            "wire_format": "",
+            "nullable": True,
+            "shape_id": ORDER_VIEW,
+        },
+    }
+
+
+# --- Task 10 hardening: PTR/supertype resolution -------------------------
+#
+# Task 9 delivered the `supertypes` named query and the carrier walk inside
+# `argument_descriptor`'s `type_carrier` path (`contracts.py`). These three
+# tests gate that delivery from a reviewer's seat rather than the
+# implementer's: a bare (non-collection) carrier payload, the honest-`None`
+# answer for an `instance` this catalog's carrier/wrapper rules cannot open,
+# and the workspace-wide reach of the `supertypes` join across documents.
+
+
+def test_a_bare_ptr_carrier_resolves_an_object_descriptor_and_the_shape_expands(
+    tmp_path: Path,
+):
+    """D02 §2h's PTR follow for the non-collection case: `new
+    ParameterizedTypeReference<OrderView>() {}` — no `List` around the
+    payload — must still root at `OrderView` itself as an object descriptor.
+    `test_exchange_resolves_...` above already proves the carrier walk for a
+    `List<OrderView>` supertype; this proves `_reference_of`'s `carried[0]`
+    feeds `_described` a bare (non-array) reference just as directly, since
+    nothing about the one-hop follow is collection-specific. `OrderView`
+    carries a real field fact here, unlike the class-literal tests above, so
+    the shape assertions also prove this call-only root genuinely expands —
+    `shapes`/`shape_fields` rows behind the `shape_id`, not a dangling
+    reference (Task 9 review, Finding C1, mutation-caught again here: a
+    broken `carried[0]` index, or a carrier walk that forgot to feed
+    `_described`, would either raise, describe the wrong symbol, or leave
+    `OrderView` absent from `shapes` entirely — any of which fails this
+    test)."""
+    caller = "com/acme/http/Client#getSingleObject()."
+    anonymous = "com/acme/http/Client$2#"
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + ORDER_VIEW, construct_kind="class"),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + ORDER_VIEW + "id.",
+            construct_kind="field",
+            enclosing=_MODULE + ORDER_VIEW,
+            signature=Signature(
+                returns=TypeRef(
+                    symbol="java/lang/String#",
+                    wire_type="string",
+                    wire_format="",
+                    nullable=True,
+                    nullable_resolution="resolved",
+                )
+            ),
+        ),
+        # new ParameterizedTypeReference<OrderView>() {}
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=anonymous, name="<init>", descriptor="(Lcom/acme/http/Client;)V"
+            ),
+            invoke_kind="special",
+            ordinal=0,
+            receiver=12,
+            result=None,
+            arguments=[CallArgument(kind="unresolved")],
+        ),
+        # restTemplate.postForEntity(url, orderRequest.class, ptr)
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=RESTTEMPLATE,
+                name="postForEntity",
+                descriptor=(
+                    "(Ljava/lang/String;Ljava/lang/Object;"
+                    "Ljava/lang/Class;[Ljava/lang/Object;)"
+                    "Lorg/springframework/http/ResponseEntity;"
+                ),
+            ),
+            invoke_kind="virtual",
+            ordinal=1,
+            receiver=3,
+            result=18,
+            arguments=[
+                CallArgument(kind="string", value="/billing/single-object"),
+                CallArgument(kind="class", symbol=ORDER_REQUEST),
+                CallArgument(kind="instance", source=12, symbol=anonymous),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=anonymous,
+            construct_kind="class",
+            supertype=TypeRef(
+                symbol="org/springframework/core/ParameterizedTypeReference#",
+                nullable=True,
+                nullable_resolution="resolved",
+                wire_type="object",
+                wire_format="",
+                arguments=[
+                    TypeRef(
+                        symbol=ORDER_VIEW,
+                        nullable=True,
+                        nullable_resolution="resolved",
+                        wire_type="object",
+                        wire_format="",
+                    )
+                ],
+            ),
+        ),
+    ]
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalog = _catalog()
+    skipped = derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    assert skipped == []
+    expanded = derive_endpoint_shapes(workspace, [catalog], capabilities=CAPABILITIES)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    shape_ids = {s["shape_id"] for s in workspace.query("shapes")}
+    order_view_fields = {
+        f["wire_name"] for f in workspace.query("shape_fields") if f["shape_id"] == ORDER_VIEW
+    }
+    workspace.close()
+
+    assert endpoint["resolution"] == "resolved"
+    assert json.loads(endpoint["response_shape"]) == {
+        "wire_type": "object",
+        "wire_format": "",
+        "nullable": True,
+        "shape_id": ORDER_VIEW,
+    }
+    assert ORDER_VIEW in shape_ids
+    assert order_view_fields == {"id"}
+    assert ORDER_VIEW not in expanded.unexpanded_types
+
+
+def test_an_instance_of_a_type_with_no_supertype_fact_honestly_resolves_no_payload(
+    tmp_path: Path,
+):
+    """`argument_descriptor` must stay honest, never guess, when an
+    `instance` argument's own type carries no `supertype` fact at all — the
+    ordinary case for a JDK/framework type this catalog never scanned, such
+    as a `ResponseEntity` built inline and passed on rather than returned.
+    `workspace_types.supertypes.get(symbol)` misses; the type is not a
+    declared `call_wrappers` entry either; `_reference_of` falls to
+    `_bare_reference`, which `root_type` then finds *is* one of the
+    catalog's own declared `wrappers` (`ResponseEntity`) with nothing
+    visible at its payload position — the same "declared envelope, nothing
+    inside it" answer `_payload_descriptor` already gives an erased
+    `ResponseEntity` return type (D02 §2a). `None`, not a crash and not a
+    shape describing `ResponseEntity` itself.
+
+    This capture succeeds as a *capture* (`kind` is `instance`, never
+    `unresolved`) — I1 governs a capture the scanner could not read, not one
+    that was read and honestly names no payload — so it alone would not
+    drop the row. To also exercise I1's row-level drop on the very same
+    row, `body_arg` is a genuinely unresolved capture here (a passed-through
+    parameter, mirroring `test_an_unresolved_body_capture_drops_...` above);
+    the two assertions below are independent proofs on the same row: the
+    `response_shape` column reads `None` because of the wrapper-envelope
+    rule, while `resolution` reads `unresolved` because of `body_arg`'s
+    separate failure — proving `argument_descriptor`'s honest-`None` answer
+    for this instance neither masks nor depends on a different capture's
+    own failure on the same call site."""
+    caller = "com/acme/http/Client#submitWrapped()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=RESTTEMPLATE,
+                name="postForObject",
+                descriptor=(
+                    "(Ljava/lang/String;Ljava/lang/Object;"
+                    "Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;"
+                ),
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=9,
+            arguments=[
+                CallArgument(kind="string", value="/billing/wrapped-response"),
+                CallArgument(kind="unresolved"),
+                CallArgument(
+                    kind="instance",
+                    source=9,
+                    symbol="org/springframework/http/ResponseEntity#",
+                ),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["method"], endpoint["path"]) == ("POST", "/billing/wrapped-response")
+    assert endpoint["resolution"] == "unresolved"
+    assert endpoint["response_shape"] is None
+
+
+def test_a_carrier_subtype_declared_in_a_different_document_still_resolves(
+    tmp_path: Path,
+):
+    """The `supertypes` named query (`storage/duckdb/workspace.py`) reads
+    `raw_facts` across the whole workspace, never scoped to one document —
+    proved by moving the anonymous PTR subclass's own symbol fact (which
+    `_batch_facts`' `exchange` call references by symbol alone) into a
+    SEPARATE document from the call site itself. A query accidentally
+    scoped to the call site's own `document_id` — a plausible mistake a
+    per-document join invites, and one `test_exchange_resolves_...` above
+    cannot catch, since its symbol fact and call site already share
+    `doc_1` — would silently miss this join and describe the same
+    `List<OrderView>` payload as unresolved instead; this test is the one
+    that would fail if that regressed."""
+    caller = "com/acme/http/Client#batchSettlementsAcrossDocuments()."
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document("doc_1"), _batch_facts(caller))
+    write_fact_file(
+        tmp_path / "facts" / "Types.jsonl",
+        _document("doc_2", relative_path="com/acme/http/Types.java"),
+        [_ptr_symbol_fact(document_id="doc_2")],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [_catalog()], capabilities=CAPABILITIES)
+    assert skipped == []
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["resolution"] == "resolved"
     assert json.loads(endpoint["response_shape"]) == {
         "wire_type": "array",
         "wire_format": "",
