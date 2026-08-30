@@ -247,9 +247,16 @@ def _walk(
 
 def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     verb = captures.get("http_method")
-    if verb is None:
-        # No root ever seeded a verb — not a shape this catalog declares.
-        return
+    # A chain whose root (and every step it folded through) never captured
+    # `http_method` is verbless by declaration — mirroring single_call's D02
+    # §2 `verbless` row (a topic has no verb, precondition commit, 2E-prep
+    # Task 11): SQS's `SendMessageRequest.builder()` chain never seeds one.
+    # `"http_method" not in captures` is what tells "no root ever declared
+    # one" apart from a read failure — every fluent `http_method` is the
+    # catalog's own literal (never an `argN` read, D02 §4), so it can never
+    # itself fail to resolve; the only way `verb` reads None here is that the
+    # key was never folded in at all.
+    verbless = "http_method" not in captures
     peer, path, url_resolution = url_of(captures.get("url"))
     body_argument = captures.get("body")
     response_argument = captures.get("response")
@@ -260,15 +267,33 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     # separates the two — a reached step always writes its declared field,
     # even when the slot it addresses is empty (I4), so `None` under a key
     # that exists is a read failure while an absent key is no claim at all.
+    # `verb is not None or verbless` is single_call's own rule (`_verb_of`
+    # callers): the missing verb narrows a verbless row's resolution only
+    # when a verb was declared but unreadable, never when none was ever
+    # declared at all — "this method calls something over a channel" stays
+    # true and useful on its own.
     resolution = (
         "resolved"
-        if url_resolution == "resolved"
+        if (verb is not None or verbless)
+        and url_resolution == "resolved"
         and _capture_resolved("body" in captures, body_argument)
         and _capture_resolved("response" in captures, response_argument)
         else "unresolved"
     )
-    if path is not None:
-        key = (context.catalog.protocol, context.catalog.direction, str(verb), path)
+    if path is not None and (verb is not None or verbless):
+        # `verb or ""` — single_call's own dedup key (`_matching_method`'s
+        # caller): a verbless row has no method to distinguish it by, so
+        # every verbless resolved identity collapses to `(protocol,
+        # direction, "", path)`, deduping on `(protocol, direction, path)`
+        # alone exactly as the brief requires; a verbed row's own `verb` is
+        # always a non-empty string, so this is unchanged for every shipped
+        # fluent catalog (okhttp/webclient/restclient), none of which is
+        # verbless. `caller` never enters the key — fluent rows carry
+        # `caller`, but outbound producer rows collapse across callers on
+        # wire identity alone, single_call's own established convention
+        # (the interface engine's handler-in-key ruling is for inbound
+        # handler rows and does not apply to an outbound fluent chain).
+        key = (context.catalog.protocol, context.catalog.direction, verb or "", path)
         if key in context.seen:
             return
         context.seen.add(key)
@@ -276,7 +301,12 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
         {
             "protocol": context.catalog.protocol,
             "direction": context.catalog.direction,
-            "method": str(verb),
+            # Not `str(verb)`: a verbless chain's `verb` is genuinely None
+            # (no root ever declared `http_method`), and `str(None)` would
+            # write the literal text "None" into a column NULL is supposed
+            # to mean "no verb" — single_call's own `method: verb` (never
+            # stringified) is the same answer for the same reason.
+            "method": verb,
             "path": path,
             "handler": None,
             "caller": context.caller,

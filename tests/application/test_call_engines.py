@@ -3086,3 +3086,134 @@ def test_a_when_guard_on_a_root_is_refused_at_run_start(tmp_path: Path):
     assert "invented-when-on-root.yml" in str(raised.value)
     assert "when" in str(raised.value)
     assert "get" in str(raised.value)
+
+
+# --- Task 11 precondition (2E-prep, controller plan-amendment ruling):
+# verbless fluent chains — a root declaring NO `http_method` capture derives
+# `method` NULL, resolution not penalised for the missing verb, mirroring
+# single_call's own D02 §2 `verbless` row (a topic has no verb). The invented
+# catalog below shapes its root as a static factory ("builder", never
+# `<init>`) and its terminal through `terminal_via_argument`, deliberately
+# mirroring `aws-sqs-sdk.yml`'s real
+# `SendMessageRequest.builder()...queueUrl(...)...build()` chain — proving
+# the static-root chain-key (`_chain_key`: a non-`<init>` root's own
+# `result`, not its `receiver`) already carries a verbless walk end to end.
+
+ENVELOPE = "com/acme/messaging/Envelope#"
+ENVELOPE_PRODUCER = "com/acme/messaging/Producer#"
+
+_VERBLESS_MATCHES = {
+    "roots": [
+        # No `http_method` in this root's own captures at all — verbless by
+        # declaration, not by a read that came back empty.
+        {"owner": "com.acme.messaging.Envelope", "method": "builder", "captures": {}},
+    ],
+    "steps": [
+        {"method": "destination", "captures": {"url": "arg0"}},
+    ],
+    "terminal": [
+        {
+            "method": "build",
+            "terminal_via_argument": {
+                "owner": "com.acme.messaging.Producer",
+                "method": "send",
+            },
+        }
+    ],
+}
+
+
+def _verbless_chain(caller: str, ordinal: int, destination) -> list:
+    """One full builder→destination→build→send chain, `ordinal` offsetting
+    every call site so two chains in the same caller never collide on their
+    own `receiver`/`result` value ids."""
+    base = ordinal * 10
+    return [
+        _call(
+            caller,
+            ENVELOPE,
+            "builder",
+            base,
+            receiver=None,
+            result=base + 1,
+            invoke_kind="static",
+        ),
+        _call(
+            caller,
+            ENVELOPE,
+            "destination",
+            base + 1,
+            receiver=base + 1,
+            result=base + 2,
+            arguments=[destination],
+        ),
+        _call(caller, ENVELOPE, "build", base + 2, receiver=base + 2, result=base + 3),
+        _call(
+            caller,
+            ENVELOPE_PRODUCER,
+            "send",
+            base + 3,
+            receiver=999,
+            result=None,
+            arguments=[CallArgument(kind="instance", source=base + 3, symbol=ENVELOPE)],
+        ),
+    ]
+
+
+def test_a_verbless_chain_derives_a_null_method_resolved_row(tmp_path: Path):
+    """The plain case: the root seeds no verb at all, so `method` reads NULL
+    — never a dropped row, and never penalised in `resolution`, exactly as
+    single_call's own verbless row (D02 §2, amended)."""
+    caller = "com/acme/messaging/Client#publishOnce()."
+    facts = _verbless_chain(caller, 0, CallArgument(kind="string", value="orders.created"))
+    catalog = _fluent_catalog(_VERBLESS_MATCHES, "invented-verbless-fluent")
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["method"] is None
+    assert endpoint["path"] == "orders.created"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_two_identical_resolved_verbless_chains_dedup_to_one_row(tmp_path: Path):
+    """Two separate chains — different callers, same wire identity — collapse
+    to one row: a verbless resolved identity dedups on `(protocol,
+    direction, path)` alone, there being no method to tell them apart by
+    (mirroring single_call's own verbless dedup rule)."""
+    first_caller = "com/acme/messaging/Client#publishFirst()."
+    second_caller = "com/acme/messaging/Client#publishSecond()."
+    facts = [
+        *_verbless_chain(first_caller, 0, CallArgument(kind="string", value="orders.deleted")),
+        *_verbless_chain(second_caller, 1, CallArgument(kind="string", value="orders.deleted")),
+    ]
+    catalog = _fluent_catalog(_VERBLESS_MATCHES, "invented-verbless-fluent-dedup")
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    rows = [e for e in workspace.query("endpoints") if e["path"] == "orders.deleted"]
+    workspace.close()
+
+    assert len(rows) == 1
+    assert rows[0]["method"] is None
+    assert rows[0]["resolution"] == "resolved"
+
+
+def test_a_verbless_unresolved_row_never_dedups_with_its_twin(tmp_path: Path):
+    """The other half: a destination the scanner could not read still
+    derives the row (`path` NULL, `resolution: unresolved`), and two such
+    calls never collapse into one — SQL's `NULL = NULL` is unknown, not
+    true, so `path is not None` never gates the dedup key at all here, and
+    each stays its own real 'this method calls something' fact."""
+    first_caller = "com/acme/messaging/Client#publishDynamicFirst()."
+    second_caller = "com/acme/messaging/Client#publishDynamicSecond()."
+    facts = [
+        *_verbless_chain(first_caller, 0, CallArgument(kind="unresolved")),
+        *_verbless_chain(second_caller, 1, CallArgument(kind="unresolved")),
+    ]
+    catalog = _fluent_catalog(_VERBLESS_MATCHES, "invented-verbless-fluent-unresolved")
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    rows = [e for e in workspace.query("endpoints") if e["caller"] in (first_caller, second_caller)]
+    workspace.close()
+
+    assert len(rows) == 2
+    assert all(row["path"] is None and row["resolution"] == "unresolved" for row in rows)
+    assert all(row["method"] is None for row in rows)
