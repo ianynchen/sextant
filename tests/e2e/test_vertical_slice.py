@@ -64,5 +64,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "GROUP BY direction ORDER BY direction"
     ).fetchall()
     # Phase 2C: the spring-resttemplate catalog's four `single_call` routes
-    # (BillingRestTemplate) join the outbound side, real end to end.
-    assert rows == [("both", 1), ("inbound", 17), ("outbound", 10)]
+    # (BillingRestTemplate), plus the three `fluent` catalogs' eight
+    # reconstructed-chain routes (WebClient/RestClient/OkHttp), join the
+    # outbound side, real end to end.
+    assert rows == [("both", 1), ("inbound", 17), ("outbound", 18)]

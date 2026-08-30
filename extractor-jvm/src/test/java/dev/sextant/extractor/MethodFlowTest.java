@@ -326,6 +326,27 @@ class MethodFlowTest {
         assertEquals(field(lines.get(1), "result"), field(lines.get(2), "receiver"));
     }
 
+    /** WebClient's and RestClient's own real bytecode: a mid-chain hop
+     *  inherited from a generic self-type interface returns the erased bound,
+     *  not the caller's own narrower static type, so javac bridges the gap
+     *  with a {@code CHECKCAST} — {@code CallSample.checkcastBridgedChain}
+     *  reproduces the exact shape (confirmed by {@code javap} against
+     *  {@code RestClient.RequestBodyUriSpec.uri} / {@code .body}: the same
+     *  cast, the same one-hop gap). A cast does not build a new object, only
+     *  a new static type for the same reference, so the join must survive it
+     *  exactly as {@link #links_each_hop_of_a_chain_to_the_previous_hops_result}
+     *  proves it survives a load/store/dup — without this, every fluent
+     *  chain whose middle sets a request body (WebClient's {@code bodyValue},
+     *  RestClient's {@code body}) would silently stop deriving one hop early. */
+    @Test
+    void links_a_checkcast_bridged_hop_to_the_previous_hops_result() throws Exception {
+        List<String> lines = callSites("checkcastBridgedChain");
+        assertEquals(2, lines.size());
+        assertTrue(lines.get(0).contains("\"name\":\"uri\""), lines.get(0));
+        assertTrue(lines.get(1).contains("\"name\":\"body\""), lines.get(1));
+        assertEquals(field(lines.get(0), "result"), field(lines.get(1), "receiver"));
+    }
+
     /** The v1 control-flow position: assigned in instruction order, so two
      *  calls in one method are never the same call site. */
     @Test

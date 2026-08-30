@@ -87,19 +87,27 @@ public final class MethodFlow {
         return lines;
     }
 
-    /** {@code SourceInterpreter}, except that **moving a value is not producing
-     *  it**. ASM's own {@code copyOperation} mints a fresh {@code SourceValue}
-     *  attributed to the copying instruction; this one hands back the value it
-     *  was given, so a value's source stays the instruction that computed it.
+    /** {@code SourceInterpreter}, except that **moving or re-typing a value is
+     *  not producing it**. ASM's own {@code copyOperation} mints a fresh
+     *  {@code SourceValue} attributed to the copying instruction; this one
+     *  hands back the value it was given, so a value's source stays the
+     *  instruction that computed it.
      *
      *  <p>{@code copyOperation} is called for exactly seventeen opcodes — the
      *  five loads, the five stores, the six DUPs and {@code SWAP} — and every
      *  one of them only relocates a value between the stack and a local. None
      *  computes anything, so none is an origin, and the rule needs no exception
-     *  list. ({@code CHECKCAST} does *not* arrive here; ASM routes it through
-     *  {@code unaryOperation}, and a cast keeps producing its own value.)
+     *  list.
      *
-     *  <p>Two joins depend on this, and neither is exotic:
+     *  <p>{@code CHECKCAST} does not arrive at {@code copyOperation} — ASM
+     *  routes it through {@code unaryOperation} instead — but it earns the
+     *  same treatment for the same reason: a successful cast is still the
+     *  identical reference, only re-labelled with a narrower static type, so
+     *  {@link #unaryOperation} special-cases it below rather than falling
+     *  through to {@code SourceInterpreter}'s default (which would mint a new
+     *  value, same as any other unary op that actually computes one).
+     *
+     *  <p>Three joins depend on this, and none is exotic:
      *
      *  <ul>
      *  <li>{@code NEW T; DUP; INVOKESPECIAL T.<init>} — without transparency the
@@ -111,6 +119,16 @@ public final class MethodFlow {
      *  the reload sit between the two halves, {@code newCall}'s argument is an
      *  {@code unresolved} with no {@code source} at all, and a split builder
      *  chain cannot be reconstructed on honest code.</li>
+     *  <li>{@code webClient.post().uri(...).bodyValue(...)} — a mid-chain hop
+     *  inherited from a generic self-type interface ({@code UriSpec<S extends
+     *  RequestHeadersSpec<S>>}) whose erased return type is the bound, not the
+     *  caller's own narrower static type, so javac inserts a {@code CHECKCAST}
+     *  between {@code uri(...)}'s result and {@code bodyValue(...)}'s receiver.
+     *  Without transparency here, every WebClient/RestClient chain that sets a
+     *  request body mid-chain stops one hop short of its terminal and derives
+     *  nothing — proven live against the Phase 2C fixture's compiled
+     *  {@code InventoryWebClient#reserve}/{@code OrdersRestClient#submitMirror}
+     *  before this fix, both silently missing.</li>
      *  </ul>
      *
      *  <p>The cost, stated rather than discovered later: a receiver or argument
@@ -129,6 +147,16 @@ public final class MethodFlow {
         @Override
         public SourceValue copyOperation(AbstractInsnNode insn, SourceValue value) {
             return value;
+        }
+
+        /** {@code CHECKCAST} is the one unary op that re-labels a value's
+         *  static type without computing a new one; every other unary op
+         *  (`INSTANCEOF`, `ARRAYLENGTH`, `NEWARRAY`/`ANEWARRAY`, the numeric
+         *  conversions, `GETFIELD`, …) genuinely produces a fresh value and
+         *  keeps {@code SourceInterpreter}'s default behaviour. */
+        @Override
+        public SourceValue unaryOperation(AbstractInsnNode insn, SourceValue value) {
+            return insn.getOpcode() == Opcodes.CHECKCAST ? value : super.unaryOperation(insn, value);
         }
     }
 

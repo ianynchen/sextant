@@ -57,15 +57,17 @@ def _resolved_fixture(
         facts,
         catalogs or YamlCatalogSource(CATALOGS),
         # Phase 2C: `call_site` and `string_constants` gate the RestTemplate
-        # catalog on (D02 §1's `single_call`) — a real subset of what
-        # `AsmScanner.capabilities()` actually declares, the same way the
-        # other four capabilities here already are.
+        # catalog (D02 §1's `single_call`); `chain_reconstruction` gates the
+        # three `fluent` catalogs (WebClient/RestClient/OkHttp) — a real
+        # subset of what `AsmScanner.capabilities()` actually declares, the
+        # same way the other four capabilities here already are.
         {
             "annotation_args",
             "typed_signatures",
             "type_annotations",
             "call_site",
             "string_constants",
+            "chain_reconstruction",
         },
     )
     return workspace, report
@@ -119,6 +121,29 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
         ("POST", "/billing/settlements"),
         ("PUT", "/billing/settlements/{id}"),
         ("POST", "/billing/batch"),
+        # Outbound (Phase 2C): the three `fluent` catalogs' reconstructed
+        # chains. InventoryWebClient's `getLevels`/`history`/`search` each
+        # derive their own row; `reserve` and `reserveAfterLevels`'s own
+        # flatMap-lambda chain both derive `POST /v2/inventory/reserve` — the
+        # same wire identity, so wire-identity dedup collapses them into one
+        # row (asserted below); `reserveAfterLevels`'s own outer chain
+        # reaches `bodyToMono` too, so it dedups into `getLevels`'s own
+        # `GET /v2/inventory/levels` row rather than adding a tenth route.
+        ("GET", "/v2/inventory/levels"),
+        ("POST", "/v2/inventory/reserve"),
+        ("GET", "/v2/inventory/history"),
+        # `uri(uriBuilder -> …)`: the engine follows one hop from the lambda
+        # argument and stops honestly rather than guessing the literal
+        # inside the builder — `resolution`/`path` asserted below.
+        ("GET", None),
+        # OrdersRestClient — RestClient's synchronous twin.
+        ("GET", "/v2/orders/mirror"),
+        ("POST", "/v2/orders/mirror"),
+        # LegacyOkHttp — `Request.Builder` split from `OkHttpClient.newCall`,
+        # joined only through `terminal_via_argument`; both URLs are
+        # absolute, so CP-2 splits them into `peer`+`path` (asserted below).
+        ("GET", "/legacy/exports"),
+        ("POST", "/legacy/exports"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -127,9 +152,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
     # self-call): the outbound engine derives its own row for it, and the
     # D02 §3 merge folds that into the existing inbound row (direction
     # `both`) rather than keeping both, so the count is 18 inbound + 7
-    # annotation-driven outbound + 4 single_call outbound rows derived,
-    # minus the 1 that merges away — 28.
-    assert len(report.endpoints) == 28
+    # annotation-driven outbound + 4 single_call outbound rows + 8 fluent
+    # outbound rows derived, minus the 1 that merges away — 36.
+    assert len(report.endpoints) == 36
     assert report.skipped_catalogs == []
 
     directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
@@ -138,6 +163,36 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
     peers = {e["path"]: e["peer"] for e in report.endpoints if e["direction"] != "inbound"}
     assert peers["/billing/invoices"] == "billing"
     assert peers["/v1/inventory/levels"] is None  # base URL is builder code
+    # CP-2: OkHttp's `url()` API forces an absolute URL, so its fixture rows
+    # split into peer (the authority) and path (asserted in the route set
+    # above), unlike every other outbound catalog's builder-code base URL.
+    assert peers["/legacy/exports"] == "legacy.acme.internal"
+
+    # The `uri(uriBuilder -> …)` chain: the engine only follows one hop off
+    # the lambda argument, so the row still derives (a call was made) but
+    # honestly as unresolved, path NULL — never a guess at the literal
+    # inside the builder lambda.
+    [search_row] = [
+        e
+        for e in report.endpoints
+        if e["caller"] and e["caller"].endswith("InventoryWebClient#search(sig_e02a4703).")
+    ]
+    assert search_row["method"] == "GET"
+    assert search_row["path"] is None
+    assert search_row["resolution"] == "unresolved"
+
+    # The flatMap lambda's own chain derives `POST /v2/inventory/reserve` in
+    # its own synthetic method — the dataflow pass has to scan
+    # `lambda$reserveAfterLevels$0`, not just the enclosing method, to find
+    # it. Wire-identity dedup collapses it with `reserve()`'s own identical
+    # row (D02 §5's `derive_call_endpoints.sql` contract); the row that
+    # survives is whichever caller sorts first (`call_sites`' own
+    # `caller, ordinal` order), which is the lambda's — asserted here rather
+    # than assumed, so a resort silently changing this is caught.
+    [reserve_row] = [
+        e for e in report.endpoints if (e["method"], e["path"]) == ("POST", "/v2/inventory/reserve")
+    ]
+    assert "lambda$reserveAfterLevels$0" in reserve_row["caller"]
 
 
 def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_path: Path):

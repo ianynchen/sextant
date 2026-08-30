@@ -1,0 +1,44 @@
+id: spring-restclient
+displayName: Spring RestClient
+style: fluent
+protocol: http
+direction: outbound
+
+detect:
+  coordinates: ["org.springframework:spring-web"]
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  roots:
+    - { owner: org.springframework.web.client.RestClient, method: get,    captures: { http_method: GET } }
+    - { owner: org.springframework.web.client.RestClient, method: post,   captures: { http_method: POST } }
+    - { owner: org.springframework.web.client.RestClient, method: put,    captures: { http_method: PUT } }
+    - { owner: org.springframework.web.client.RestClient, method: delete, captures: { http_method: DELETE } }
+    - { owner: org.springframework.web.client.RestClient, method: patch,  captures: { http_method: PATCH } }
+  # RestClient is WebClient's synchronous twin: same `uri` step, but `body`
+  # is reused for two different roles on two different types — a
+  # request-setter on `RequestBodySpec` and a response-extractor on
+  # `ResponseSpec` — indistinguishable by method name alone, so both declare
+  # `owner` (D02 §4's amendment). `retrieve` alone is the terminal: no
+  # `exchange` on this synchronous surface.
+  steps:
+    - { method: uri, captures: { url: arg0 } }
+    - { method: body, owner: org.springframework.web.client.RestClient$RequestBodySpec, captures: { body: arg0 } }
+    - { method: body, owner: org.springframework.web.client.RestClient$ResponseSpec,     captures: { response: arg0 } }
+  terminal: [retrieve]
+  type_carriers: [org.springframework.core.ParameterizedTypeReference]
+
+# Shared verbatim across every outbound catalog on purpose: the first catalog
+# in sort order harvests+expands shape roots from every outbound row under
+# its own serialization/known_types rules, so all four must describe wire
+# shapes identically or the loser's routes get silently mis-described.
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }

@@ -88,6 +88,17 @@ public final class CallSample {
         first().second().third();
     }
 
+    /** The fluent-builder shape WebClient/RestClient actually compile to: a
+     *  mid-chain hop inherited from a generic self-type interface ({@code
+     *  UriStep<S>}) returns {@code S}'s erased bound, not the narrower type
+     *  the next call in the chain needs, so javac bridges the gap with a
+     *  {@code CHECKCAST}. The cast does not build a new object — only a new
+     *  static type for the same reference — so a chain join must survive it
+     *  exactly as it survives a load/store/dup. */
+    public void checkcastBridgedChain(BodyUriStep spec, Object payload) {
+        spec.uri("/x").body(payload);
+    }
+
     /** The OkHttp shape, and the ordinary way people write a builder: the built
      *  value goes into a local and a *separate* call consumes it. The store and
      *  the reload are the only things between the two halves, and if they count
@@ -203,4 +214,29 @@ public final class CallSample {
             return this;
         }
     }
+
+    /** The erased bound {@code UriStep.uri} actually returns — the exact shape
+     *  {@code WebClient.RequestHeadersUriSpec}/{@code RestClient}'s own
+     *  {@code UriSpec<S extends RequestHeadersSpec<S>>} takes. */
+    interface Wide {}
+
+    /** A generic self-type hop: {@code S}'s bound is {@link Wide}, so the
+     *  erased bytecode return type is {@code Wide} even where the caller's own
+     *  static type substitutes something narrower. */
+    interface UriStep<S extends Wide> {
+        S uri(String value);
+    }
+
+    /** The narrower type the next hop in a real request-body chain needs
+     *  (WebClient/RestClient's own {@code RequestBodySpec}) — a supertype of
+     *  {@link Wide}'s bound, never returned directly by {@link UriStep#uri}. */
+    interface Narrow extends Wide {
+        Narrow body(Object value);
+    }
+
+    /** {@code WebClient.RequestBodyUriSpec}'s own shape: narrows {@code S} to
+     *  {@link Narrow}, so {@code uri(...)}'s compile-time type is {@link
+     *  Narrow} while its erased bytecode return type stays {@link Wide} —
+     *  the gap javac bridges with a {@code CHECKCAST}. */
+    interface BodyUriStep extends Narrow, UriStep<Narrow> {}
 }

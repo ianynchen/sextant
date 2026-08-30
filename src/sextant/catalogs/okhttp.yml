@@ -1,0 +1,40 @@
+id: okhttp
+displayName: OkHttp
+style: fluent
+protocol: http
+direction: outbound
+
+detect:
+  coordinates: ["com.squareup.okhttp3:okhttp"]
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  # OkHttp has no fluent client object to root a chain on: a `Request.Builder`
+  # is built and thrown to a *separate* `OkHttpClient.newCall(request)` call,
+  # joined only through the argument `source` id (D00 §5) — never through
+  # receiver/result chaining, which is what `terminal_via_argument` is for.
+  roots:
+    - { owner: okhttp3.Request$Builder, method: <init>, captures: { http_method: GET } }  # GET is OkHttp's own default
+  steps:
+    - { method: url,  captures: { url: arg0 } }
+    - { method: get,  captures: { http_method: GET } }
+    - { method: post, captures: { http_method: POST, body: arg0 } }
+  # A mapping, not the bare flag: without it, any consumer of `build`'s
+  # result (a log statement) would count as executing the request.
+  terminal:
+    - { method: build, terminal_via_argument: { owner: okhttp3.OkHttpClient, method: newCall } }
+
+# Shared verbatim across every outbound catalog on purpose: the first catalog
+# in sort order harvests+expands shape roots from every outbound row under
+# its own serialization/known_types rules, so all four must describe wire
+# shapes identically or the loser's routes get silently mis-described.
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
