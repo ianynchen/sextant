@@ -34,10 +34,14 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     written = sorted(p.name for p in tmp_path.rglob("*.jsonl"))
     assert written == [
         "BillingClient.jsonl",
+        "BillingRestTemplate$1.jsonl",
+        "BillingRestTemplate.jsonl",
         "CustomerRef.jsonl",
         "InventoryExchange.jsonl",
+        "InventoryWebClient.jsonl",
         "KotlinOrder.jsonl",
         "LegacyBillingApi.jsonl",
+        "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
@@ -49,10 +53,11 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderStatus.jsonl",
         "OrderView.jsonl",
         "OrdersLoopClient.jsonl",
+        "OrdersRestClient.jsonl",
         "ScopedRequest.jsonl",
         "package-info.jsonl",
     ]
-    assert report.documents == 18
+    assert report.documents == 23
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -74,10 +79,14 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
     )
     assert sorted(p.name for p in out.rglob("*.jsonl")) == [
         "BillingClient.jsonl",
+        "BillingRestTemplate$1.jsonl",
+        "BillingRestTemplate.jsonl",
         "CustomerRef.jsonl",
         "InventoryExchange.jsonl",
+        "InventoryWebClient.jsonl",
         "KotlinOrder.jsonl",
         "LegacyBillingApi.jsonl",
+        "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
@@ -89,6 +98,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderStatus.jsonl",
         "OrderView.jsonl",
         "OrdersLoopClient.jsonl",
+        "OrdersRestClient.jsonl",
         "ScopedRequest.jsonl",
         "package-info.jsonl",
     ]
