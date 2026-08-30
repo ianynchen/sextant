@@ -1507,7 +1507,9 @@ def test_an_unrelated_outbound_catalogs_wrapper_list_still_unwraps_another_catal
 # `spring-pubsub` all copy the FULL compatible block set verbatim
 # (`wrappers`/`serialization`/`known_types` from `spring-resttemplate.yml`,
 # `nullability` from `spring-mvc.yml`), not only the three Task 10 listener
-# catalogs.
+# catalogs. Only `known_types` still reads this list: `serialization` and
+# `nullability` generalised to every loaded catalog (final review), and
+# `wrappers` has its own producers-only list below.
 _MESSAGING_CATALOG_IDS = (
     "spring-kafka",
     "spring-jms",
@@ -1521,38 +1523,75 @@ _MESSAGING_CATALOG_IDS = (
 )
 
 
-def test_the_messaging_catalogs_serialization_and_known_types_are_harvested_verbatim():
-    """`serialization` and `known_types` on every messaging catalog must be
-    byte-for-byte `spring-resttemplate.yml`'s own blocks — the harvest the
-    checkpoint calls for, mechanically pinned rather than eyeballed."""
+def test_the_messaging_catalogs_known_types_are_harvested_verbatim():
+    """`known_types` on every messaging catalog must be byte-for-byte
+    `spring-resttemplate.yml`'s own block — the harvest the checkpoint calls
+    for, mechanically pinned rather than eyeballed.
+
+    This one keeps its explicit list where `serialization` below does not:
+    `known_types` genuinely DIFFERS across the shipped catalogs (`retrofit`,
+    `spring-mvc`, `spring-web`, `spring-cloud-openfeign` and
+    `spring-http-interface` each carry their own), so "every catalog that
+    declares one declares the same one" is simply not true of it — the
+    harvest baseline is what these nine were told to copy, not a repo-wide
+    invariant."""
     catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
     resttemplate = catalogs["spring-resttemplate"]
 
     for catalog_id in _MESSAGING_CATALOG_IDS:
-        catalog = catalogs[catalog_id]
-        assert catalog.serialization == resttemplate.serialization, catalog_id
-        assert catalog.known_types == resttemplate.known_types, catalog_id
+        assert catalogs[catalog_id].known_types == resttemplate.known_types, catalog_id
 
 
-def test_the_messaging_catalogs_nullability_is_harvested_from_spring_mvc_verbatim():
-    """Task 10 fix round 1, finding 1: pins the fix for the reviewer's
-    reproduced regression directly — each messaging catalog's `nullability`
-    block must be byte-for-byte `spring-mvc.yml`'s own (non-empty, so a
-    future edit that quietly empties one file's block instead of the
-    other's still fails loud rather than passing two empty dicts as equal).
-    Task 11 extends this from the three Task 10 listener catalogs to all
-    six producer catalogs too — `derive_shapes`' global, insert-if-absent
-    expansion is keyed on the type symbol alone, entirely outside
-    direction/protocol scoping, so ANY catalog reaching a shared payload
-    type first without its own nullability rules degrades that type's
-    fields for every other catalog, regardless of which side of the wire it
-    describes."""
+def test_every_catalog_declaring_serialization_declares_the_harvested_block_verbatim():
+    """`serialization` is the one harvested block every shipped catalog
+    agrees on, so it is pinned across ALL of them rather than a hand-listed
+    subset — the same generalisation the `nullability` pin below makes, and
+    for the same reason: field-name and enum-value reading, like nullability,
+    feeds `derive_shapes`' global, symbol-keyed expansion, so a catalog that
+    quietly forks its own rules changes how a SHARED payload type reads for
+    every other catalog. A hand-maintained id list cannot notice a catalog
+    added later; iterating what the loader actually returns can."""
+    catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
+    baseline = catalogs["spring-resttemplate"].serialization
+    assert baseline != {}
+
+    declaring = [c for c in catalogs.values() if c.serialization]
+    # Not vacuous, and not one lonely catalog agreeing with itself.
+    assert len(declaring) > 1
+    for catalog in declaring:
+        assert catalog.serialization == baseline, catalog.id
+
+
+def test_every_catalog_declaring_nullability_declares_spring_mvcs_verbatim():
+    """Task 10 fix round 1, finding 1: a catalog's `nullability` block must
+    be byte-for-byte `spring-mvc.yml`'s own — `derive_shapes`' expansion is
+    global and insert-if-absent, keyed on the type symbol alone and entirely
+    outside `_owns`'s direction/protocol scoping, so ANY catalog reaching a
+    shared payload type first with rules of its own degrades that type's
+    fields for every other catalog, whichever side of the wire it describes.
+
+    Generalised from the hand-listed messaging ids (final review): the
+    invariant is not "the nine messaging catalogs agree", it is "nobody
+    forks these rules", and an id list can only pin catalogs that already
+    existed when it was written. Iterating the loader's own output means a
+    catalog added tomorrow is covered the day it lands.
+
+    Catalogs declaring NO block at all are tolerated, not asserted about:
+    five outbound HTTP catalogs (`okhttp`, `retrofit`, `spring-restclient`,
+    `spring-resttemplate`, `spring-webclient`) still carry none, and giving
+    them one is a behaviour change owed its own change — every field
+    nullability answer on a type they reach first would move. `mvc` being
+    non-empty is asserted first so a future edit that quietly empties
+    spring-mvc's own block fails loud here rather than passing by making
+    every comparison an empty-dict tautology."""
     catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
     mvc = catalogs["spring-mvc"]
     assert mvc.nullability != {}
 
-    for catalog_id in _MESSAGING_CATALOG_IDS:
-        assert catalogs[catalog_id].nullability == mvc.nullability, catalog_id
+    declaring = [c for c in catalogs.values() if c.nullability]
+    assert len(declaring) > 1
+    for catalog in declaring:
+        assert catalog.nullability == mvc.nullability, catalog.id
 
 
 def test_the_producer_catalogs_wrappers_are_the_harvested_baseline_verbatim():
@@ -1730,8 +1769,12 @@ def test_excluded_infrastructure_types_do_not_defeat_the_sole_unannotated_fallba
 
 
 def test_two_non_excluded_bare_parameters_still_yield_no_body(tmp_path):
-    """When there are two non-excluded bare parameters, the fallback stays
-    honest and yields None, even if one of them is in the excludes list."""
+    """The `sole_unannotated` fallback needs exactly ONE bare parameter to
+    survive exclusion, and here two do: the catalog declares an `excludes`
+    list, but neither parameter's type is on it, so both remain candidates
+    and the fallback has no sole one to pick. It yields None rather than
+    guessing which of the two is the body — the excludes list narrows the
+    candidates, it never breaks a tie among what it does not name."""
     catalog = Catalog(
         **{
             **vars(_SOLE_UNANNOTATED_CATALOG),
