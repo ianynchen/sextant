@@ -30,7 +30,7 @@ messaging) both exist.
 | **2A** | Shapes and nullability | delivered | field-by-field contracts with `required`/`nullable` | field symbols, type annotations, Kotlin nullability |
 | **2B** | Outbound annotation clients + export | delivered (PR #3) | Feign, `@HttpExchange`, Retrofit; the D06 bundle exporter | generalized `annotation_driven`; payload descriptors |
 | **2C** | Call-site HTTP clients | delivered — [spec](../specs/2026-08-29-phase-2c-call-site-clients-design.md) | RestTemplate, WebClient, RestClient, OkHttp; PTR payloads; lambda-body calls | linked `call_site` facts (the dataflow pass); `single_call` + `fluent` engines |
-| **2D** | Messaging | planned | `@KafkaListener`, `@JmsListener`, `@SqsListener`, Pub/Sub subscribers; `KafkaTemplate`/`JmsTemplate`/`SqsTemplate`/`Publisher` producers riding 2C's engines unchanged | non-HTTP **wire identity** (topic/queue, no method) |
+| **2D** | Messaging | delivered | `@KafkaListener` (class-level + `@KafkaHandler` included), `@JmsListener`, `@SqsListener`, Pub/Sub `subscribeAndConvert`; `KafkaTemplate`/`ReplyingKafkaTemplate`/raw `KafkaProducer`/`JmsTemplate`/`SqsTemplate`/`PubSubTemplate` producers riding 2C's `single_call` engine unchanged; `@SendTo` replies | non-HTTP **wire identity**: NULL method + the path column carrying the destination, no new `endpoints` column |
 | **2E** | Spring inbound completeness | planned | WebFlux functional routing (`RouterFunctions`, `coRouter`), meta-annotations, inherited `@RequestMapping`, `produces`/`consumes` | the `combinator` engine, on 2C's indy groundwork |
 | **2F** | Configuration resolution | planned | `application.yml`/properties into `resolved_config`; environment expressions; **base URLs become real peers**; Spring Cloud Stream and spring-cloud-aws bindings | the `config_join` engine; D02 §2d made real |
 | **L** | Linking and system scope | planned | `participants`, `links`, DR-5 over bundles; the system document; shape provenance fixed structurally | M05/M06 over federated Parquet |
@@ -52,12 +52,15 @@ priority; the version-bump gate opens after **2J**.
 ([D02](../../components/D02-catalog-schema.md)). It shipped as a per-method dataflow pass
 emitting linked call sites, with the engines staying catalog-driven joins.
 
-**2D** is blocked on something structural rather than large: the `endpoints` table has a
+**2D** was blocked on something structural rather than large: the `endpoints` table has a
 `method` column because it was built for HTTP; a Kafka topic has no method, and
-[D01](../../components/D01-graph-schema.md) already defines wire identity as *"the path
+[D01](../../components/D01-graph-schema.md) already defined wire identity as *"the path
 template, the topic expression, the fully-qualified remote method, or the operation
-name"*. The catalogs are trivial; the identity is not. 2D's producers are 2C's
-`single_call` engine pointed at `send`-shaped methods.
+name"*. The catalogs were trivial; the identity was not — and the bet held without a schema
+change: `method` reads NULL on a messaging row and the rendered identity drops the verb
+(`kafka order-events`, not `kafka NULL order-events`), so `path` alone carries the
+destination. 2D's producers rode 2C's `single_call` engine pointed at `send`-shaped methods,
+unmodified.
 
 **2F** is the phase that unlocks three stuck things at once: outbound peers
 (`client_base_addresses_not_resolved` retires), Spring Cloud Stream and the

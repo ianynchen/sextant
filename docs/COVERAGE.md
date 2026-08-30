@@ -137,7 +137,17 @@ scanner capabilities are implemented: `annotation_args`, `typed_signatures`,
 `chain_reconstruction`. Verified end-to-end on spring-petclinic: 17 endpoints, byte-identical
 across runs.
 
-**Everything else in both matrices is a gap.** In particular, per Q1 a tier in a row whose
+**Phase 2D gave §2b the same texture.** `@KafkaListener` (class-level `@KafkaListener` +
+`@KafkaHandler` included), `@JmsListener` and `@SqsListener` are read as inbound catalogs;
+`KafkaTemplate`, `ReplyingKafkaTemplate`, the raw `KafkaProducer`, `JmsTemplate`, `SqsTemplate`
+and `PubSubTemplate` (publish, and typed `subscribeAndConvert` inbound) are read outbound by the
+same `single_call` engine 2C shipped, pointed at `send`-shaped methods; a `@KafkaListener` method
+returning a value under `@SendTo` derives its reply as a second, outbound row. None of these carry
+a method in their wire identity — D01's verbless case, rendered as `protocol path` alone.
+
+**Everything else in both matrices remains a gap** — including, inside the cells Phase 2D
+touched, raw JMS/SQS/Pub-Sub driver clients, Spring Integration, Spring Cloud Stream, and every
+messaging peer address. In particular, per Q1 a tier in a row whose
 **Scanner** reads `none` is a *marginal* cost — what the cell would take once a scanner for
 that language exists. It is not a cost you can pay today. Only ✅ and ◐ mean working code.
 
@@ -153,8 +163,11 @@ module today produces:
   interop annotations.
 - **A graph workspace** — `endpoints` in both directions (inbound `@RestController`/
   `@Controller`; outbound Feign, `@HttpExchange`, Retrofit, `RestTemplate`, `RestClient`,
-  `WebClient`, OkHttp), each with its wire identity, handler and/or caller, `peer` where the
-  code declares one, and its request and response
+  `WebClient`, OkHttp — plus, since Phase 2D, `@KafkaListener`, `@JmsListener` and
+  `@SqsListener` inbound, and `KafkaTemplate`, `ReplyingKafkaTemplate`, `KafkaProducer`,
+  `JmsTemplate`, `SqsTemplate` and `PubSubTemplate` outbound), each with its wire identity,
+  handler and/or caller, `peer` where the code declares one (NULL on every messaging row —
+  broker addresses are configuration), and its request and response
   payload descriptors; `shapes`/`shape_fields` holding every reachable payload field by
   field — wire name, wire type and format, `required`, `nullable`, trust fields — with
   known types mapped and expansion stopping visibly at unknown ones. A path the module
@@ -171,11 +184,11 @@ than silently absent:
 
 | You do not get | Because | Arrives with |
 |---|---|---|
-| Kafka/JMS/SQS listeners **or** producers | no messaging catalog and no non-HTTP wire identity yet (`messaging_endpoints_not_read`) | Phase 2D |
+| Raw JMS/SQS/Pub-Sub driver clients, Spring Integration adapters, Spring Cloud Stream and spring-cloud-aws bindings | driver clients need only an uncommitted catalog file; the rest names a destination in configuration, not code (`config_join`, D02 §2d) | 2F for the config-driven forms; driver clients uncommitted |
 | Sequencing between reactive/lambda calls (`flatMap`, `map`) | calls inside them derive endpoints, but the sequence between those calls awaits the call graph (`reactive_flow_not_traced`) | call-graph phases |
 | Sequence diagrams, traces, a call graph | no `call_site`/control-flow facts (`sequence_diagrams_pending_call_graph`, `call_graph_not_implemented`) | call-graph phases |
 | A full class diagram (inheritance) | only contract types are drawn (`structure_diagram_limited_to_contracts`) | with the `edges` table |
-| Outbound base addresses for `@HttpExchange`/Retrofit/`RestTemplate`/`RestClient`/`WebClient`/OkHttp | they live in builder or config code (`client_base_addresses_not_resolved`); `peer` is NULL there | Phase 2F |
+| Outbound base addresses for `@HttpExchange`/Retrofit/`RestTemplate`/`RestClient`/`WebClient`/OkHttp; every messaging peer (broker, queue or topic address) | they live in builder or config code (`client_base_addresses_not_resolved`); `peer` is NULL there | Phase 2F |
 | Cross-service links or a system document | linking is a system-scope pass over bundles; no `participants`/`links` exist yet | linking phase |
 | WebFlux functional routes, meta-annotations, inherited mappings | unimplemented forms, each listed in §5 | per their tiers |
 | Trustworthy analysis of a POM using parents/profiles/interpolation | the detector reads `pom.xml` raw (`maven_parent_and_profile_resolution_not_implemented`) | undecided |
@@ -206,7 +219,7 @@ SNS and Redis are **out of scope by decision**, not oversight — each would be 
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | 3A 1B | 2A 7B | 3A 2B | 3A 2B | 1A 3B | 2A 2B 1C |
+| **Java / Kotlin** | 3A 1B | ◐ 1A 5B | ◐ 2A 1B | ◐ 2A 2B | ◐ 1A 3B | 2A 2B 1C |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -624,14 +637,15 @@ complete answer.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
-| Java | Spring `@KafkaListener` (`topics`, `topicPattern`, `topicPartitions`, `groupId`) | — | `annotation` | A |
+| Java | Spring `@KafkaListener` (`topics`, `topicPattern`, `topicPartitions`, `groupId`), class-level `@KafkaListener` + `@KafkaHandler` included | — | `annotation` | ✅ shipped |
 | Java | Micronaut `@KafkaListener`/`@KafkaClient` + `@Topic` | — | `annotation` | A |
-| Java | `KafkaTemplate.send(topic, …)` | — | `registration_call` | B |
+| Java | `ReplyingKafkaTemplate.sendAndReceive(ProducerRecord)`, and a `@KafkaListener` method returning a value annotated `@SendTo` | the reply derives as its own outbound row | `registration_call` + `annotation` | ✅ shipped |
+| Java | `KafkaTemplate.send(topic, …)`, `.sendDefault(…)` | — | `registration_call` | ✅ shipped |
 | Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)` | — | `registration_call` | B |
-| Java | **`KafkaProducer.send(ProducerRecord)`** | **topic is a constructor argument of `ProducerRecord`**, not of `send` | `fluent_chain` | B |
+| Java | **`KafkaProducer.send(ProducerRecord)`** | **topic is a constructor argument of `ProducerRecord`**, not of `send` | `fluent_chain` | ✅ shipped |
 | Java | `KafkaTemplate.send(Message)` with topic in a header | — | `fluent_chain` | B |
-| Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination` | `config_join` | **B** — [D02](components/D02-catalog-schema.md) §2d |
-| Java | **SmallRye** `@Incoming("orders")` / `@Outgoing` | channel in code, topic in `application.properties` | `config_join` | **B** — [D02](components/D02-catalog-schema.md) §2d |
+| Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination` | `config_join` | **B** — [D02](components/D02-catalog-schema.md) §2d, Phase 2F |
+| Java | **SmallRye** `@Incoming("orders")` / `@Outgoing` | channel in code, topic in `application.properties` | `config_join` | **B** — [D02](components/D02-catalog-schema.md) §2d, Phase 2F |
 | Java | Alpakka / Pekko Connectors `Consumer.plainSource(s, Subscriptions.topics("t"))` | — | `registration_call` | B |
 | Go | `segmentio/kafka-go` `kafka.NewReader(kafka.ReaderConfig{Topic: "t"})` | **topic is a struct-literal field** — easier than positional | `registration_call` | A |
 | Go | `IBM/sarama` (was `Shopify/sarama`), `confluent-kafka-go` | **both import paths are live in the wild** — the module declared the Shopify path for a period after the move, so neither can be dropped | `registration_call` | A |
@@ -643,6 +657,30 @@ complete answer.
 
 `KafkaTemplate.send` returns `ListenableFuture` before Spring Kafka 3.0 and `CompletableFuture` from 3.0 on; 2.9 added a `usingCompletableFuture()` bridge that 3.0 removed.
 
+Two class-level `@KafkaListener` cases are unread territory rather than measured behaviour: a
+`topics` array on the class-level annotation itself contributes only its first element to any
+topic identity, and a method-level `@KafkaListener` nested inside a class already carrying one
+would need concatenating the two prefixes into a name the engine has no rule for — neither case
+is exercised by the fixture, so nothing derives for them today, right or wrong. Where a class-level
+`@KafkaListener` does derive, every `@KafkaHandler` method on it derives its own row against the
+shared topic identity — several payload contracts riding one topic is the deliberate outcome, not
+a deduplication the engine owes anyone.
+
+`KafkaTemplate.sendDefault`, `JmsTemplate.convertAndSend(Object)` with no destination and
+`SqsTemplate`'s builder-lambda `send(Consumer<SqsSendOptions<T>>)` all put the destination
+somewhere the engine cannot read a literal from, so each derives a real row with `path: NULL,
+resolution: unresolved` — the same honesty rule OkHttp's un-named verb call established in §5.2,
+never a fabricated name.
+
+A listener annotation that puts its destination in an attribute the catalog does not list —
+`@KafkaListener(topicPartitions = …)` here, `@SqsListener(queueNames = …)` in §5.10 beside the
+shipped `value` alias — derives a resolved row with an **empty** path today rather than an
+unresolved one; a known wart, slated for tightening rather than shipped as designed.
+
+The scanner does not capture a parameter's own generic type arguments — only a return type's —
+so a `ConsumerRecord<K, V>` payload parameter reads as honestly absent rather than resolving to
+`V`, the same reason a `List<T>` parameter's element type never reaches `request_shape.item`.
+
 ### 5.9 JMS and AMQP
 
 JMS is a **Java specification**. The other languages have no equivalent — the `—` in §2 is
@@ -650,9 +688,9 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
-| Java | Spring `@JmsListener` (`destination`, `selector`, `subscription`, `concurrency`) | — | `annotation` | A |
+| Java | Spring `@JmsListener` (`destination`, `selector`, `subscription`, `concurrency`) | — | `annotation` | ✅ shipped |
 | Java | Micronaut `@JMSListener` + `@Queue`/`@Topic` | — | `annotation` | A |
-| Java | `JmsTemplate.send` / `convertAndSend` | — | `registration_call` | B |
+| Java | `JmsTemplate.send` / `convertAndSend` | — | `registration_call` | ✅ shipped |
 | Java | Direct `jakarta.jms.{Session, MessageProducer, MessageConsumer}` | — | `fluent_chain` | B |
 | Java | `@RabbitListener`, `@PulsarListener` | — | `annotation` | A |
 | Go | `rabbitmq/amqp091-go` (was `streadway/amqp`) `ch.Publish(exchange, key, …)` | — | `registration_call` | A |
@@ -664,11 +702,19 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 **Package change:** `javax.jms` (Spring ≤5 / Boot ≤2) → `jakarta.jms` (Spring 6 / Boot 3+).
 Both must be matched.
 
+**Queue versus topic is invisible here by construction.** Kind is configured on the container
+factory, not written beside the destination expression the code actually carries, so identity is
+the destination expression alone — a `@JmsListener(destination = …)` row derives with no way to
+say whether it names a queue or a topic, which is a fact about where JMS puts that decision, not
+a gap in the catalog. Direct `jakarta.jms.{Session, MessageProducer, MessageConsumer}` stays
+unshipped for an unrelated reason: no engine work is missing — the same `fluent_chain` machinery
+already reads it — only a catalog file is, uncommitted to any phase.
+
 ### 5.10 AWS SQS
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
-| Java | Spring Cloud AWS 3.x `io.awspring.cloud.sqs.annotation.SqsListener`, `SqsTemplate` | — | `annotation` | A |
+| Java | Spring Cloud AWS 3.x `io.awspring.cloud.sqs.annotation.SqsListener`, `SqsTemplate` | — | `annotation` | ✅ shipped |
 | Java | Spring Cloud AWS 2.x `io.awspring.cloud.messaging.listener.annotation.SqsListener` | **different package** | `annotation` | A |
 | Java | Spring Cloud AWS 1.x/2.2 `org.springframework.cloud.aws.messaging.listener.annotation.SqsListener` | **a third generation**, under the old `org.springframework.cloud` group | `annotation` | A |
 | Java | AWS SDK v2 `SqsClient.sendMessage(SendMessageRequest)`, `…builder().queueUrl(u)` | — | `fluent_chain` | B |
@@ -679,17 +725,22 @@ Both must be matched.
 | Swift | `Soto`, the community AWS SDK for Swift — actively maintained, Linux/macOS/iOS | `sqs.sendMessage(.init(queueUrl: …))` | `registration_call` | B |
 | Java | Micronaut | **no first-party annotations** — raw SDK or `micronaut-jms-sqs` | — | B |
 
+Raw AWS SDK v2 `SqsClient` stays unshipped for the same reason `jakarta.jms`'s raw types do
+(§5.9): no engine work is missing, only an uncommitted catalog file.
+
 ### 5.11 Google Cloud Pub/Sub
 
 The hardest protocol in the table: **B in every language**, because only Micronaut ships a
-first-party annotation.
+first-party annotation — Java's own `PubSubTemplate.publish`/`subscribeAndConvert` calls are now
+the exception, read directly with no annotation at all.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
 | Java | **Micronaut `@PubSubClient` / `@PubSubListener` + `@Subscription`** | the only first-party annotation surveyed | `annotation` | A |
+| Java | Spring Cloud GCP `PubSubTemplate.publish(…)`, `.subscribeAndConvert(…, Class<T>)` | typed direct calls, not the channel-adapter indirection below | `registration_call` | ✅ shipped |
 | Java | `Publisher.newBuilder(TopicName.of(p, t)).build()`, `.publish(…)` | — | `fluent_chain` | B |
 | Java | `Subscriber` + `MessageReceiver`, `.startAsync()` | — | `interface_implementation` | B |
-| Java | Spring Cloud GCP `PubSubTemplate.subscribe(…)`, or `PubSubInboundChannelAdapter` + `@ServiceActivator` | channel indirection | `config_join` | B — [D02](components/D02-catalog-schema.md) §2d |
+| Java | Spring Cloud GCP `PubSubTemplate.subscribe(…)`, or `PubSubInboundChannelAdapter` + `@ServiceActivator` | channel indirection | `config_join` | B — [D02](components/D02-catalog-schema.md) §2d, Phase 2F |
 | Go | `client.Topic("n").Publish(ctx, m)`, `client.Subscription("s").Receive(ctx, fn)` | — | `fluent_chain` | B |
 | TS | `pubsub.topic("n").publishMessage(…)`, `subscription.on("message", cb)` | — | `fluent_chain` | B |
 | Python | `publisher.publish(topic_path, data)`, path built by `publisher.topic_path(proj, t)` | topic assembled from a helper call | `fluent_chain` | B |
@@ -697,6 +748,14 @@ first-party annotation.
 | Swift | — | **no first-party or mature community Swift client** | — | — |
 
 Spring Cloud GCP moved to Google's own repository **at version 2.0**, renaming packages `org.springframework.cloud.gcp.*` → `com.google.cloud.spring.*` and the Maven group `org.springframework.cloud` → `com.google.cloud`. Both generations are in the wild.
+
+The raw `Publisher`/`Subscriber` client stays unshipped for the same reason as §5.9 and §5.10's
+raw drivers: no engine work is missing, only an uncommitted catalog file.
+
+**Every messaging peer is NULL, across all four protocols.** A broker address, a queue URL or a
+GCP project/topic pair is configuration, not code — `peer` is NULL on every Kafka, JMS, SQS and
+Pub/Sub row this phase derives, the same way outbound HTTP peers are NULL until builder or config
+code is read. It arrives with Phase 2F, alongside the outbound HTTP case.
 
 ### 5.12 Async and internal boundaries
 
@@ -707,7 +766,7 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 | Java | `@Scheduled`, Quartz | `annotation` | A |
 | Java | Temporal / Cadence `@WorkflowInterface`, `@ActivityInterface` | `annotation` | A |
 | Java | **Vert.x event bus** `vertx.eventBus().send("addr", m)` / `.consumer("addr", h)` | in-process pub/sub with **string addresses**, matchable like topics | `registration_call` | B |
-| Java | Spring Integration `@ServiceActivator`, `@InboundChannelAdapter` | channels, not destinations | `config_join` | B — [D02](components/D02-catalog-schema.md) §2d |
+| Java | Spring Integration `@ServiceActivator`, `@InboundChannelAdapter` | channels, not destinations | `config_join` | B — [D02](components/D02-catalog-schema.md) §2d, Phase 2F |
 | Java | **Akka / Pekko actor messaging** `ref ! msg`, `ref.tell(msg)` | receiver comes from an `ActorRef` created elsewhere | — | **C, possibly permanent — see §7** |
 | Python | **Celery** `@app.task`, `task.delay(…)`, `.apply_async(queue=…)` | a real async boundary, easy to miss | `annotation` | A |
 | TS | `bullmq` `new Queue("n")`, `new Worker("n", fn)` | string names, matchable like topics | `registration_call` | A |
