@@ -14,7 +14,7 @@ from sextant.application.resolve.shapes.expansion import (
     _rules_of,
     derive_shapes,
 )
-from sextant.application.resolve.shapes.rooting import _matching_wrapper, root_type
+from sextant.application.resolve.shapes.rooting import _catalog_symbol, _matching_wrapper, root_type
 
 
 def derive_endpoint_shapes(
@@ -237,7 +237,12 @@ def _body_type(signature: dict[str, Any], catalog: Catalog) -> dict[str, Any] | 
         ):
             return dict(parameter["type"])
     if declared.get("fallback") == "sole_unannotated":
-        bare = [p for p in parameters if not p.get("annotations")]
+        excluded = {_catalog_symbol(t) for t in declared.get("excludes", [])}
+        bare = [
+            p
+            for p in parameters
+            if not p.get("annotations") and p["type"].get("symbol") not in excluded
+        ]
         if len(bare) == 1:
             return dict(bare[0]["type"])
     return None

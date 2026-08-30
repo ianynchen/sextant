@@ -1494,6 +1494,87 @@ def test_two_bare_parameters_mean_no_body_at_all(tmp_path):
     assert endpoint["request_shape"] is None
 
 
+def test_excluded_infrastructure_types_do_not_defeat_the_sole_unannotated_fallback(tmp_path):
+    """Excluded types are never considered as the sole unannotated fallback,
+    allowing infrastructure parameters to be hidden so the message payload
+    becomes the sole unannotated parameter."""
+    catalog = Catalog(
+        **{
+            **vars(_SOLE_UNANNOTATED_CATALOG),
+            "id": "invented-endpoints-excludes",
+            "matches": {
+                **_SOLE_UNANNOTATED_CATALOG.matches,
+                "request_body": {
+                    "annotation": "com/acme/rest/Body#",
+                    "fallback": "sole_unannotated",
+                    "excludes": ["org.springframework.kafka.support.Acknowledgment"],
+                },
+            },
+        }
+    )
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(
+        root,
+        _signature(
+            returns=_ref(ORDER_VIEW_SHAPE, "object"),
+            parameters=(
+                _bare_parameter(_ref(ORDER_REQUEST, "object"), name="payload"),
+                _bare_parameter(
+                    _ref("org/springframework/kafka/support/Acknowledgment#", "object"), name="ack"
+                ),
+            ),
+        ),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [catalog], capabilities=set())
+    derive_endpoint_shapes(workspace, [catalog], capabilities=set())
+    endpoint = workspace.query("endpoints")[0]
+    workspace.close()
+
+    assert json.loads(endpoint["request_shape"])["shape_id"] == ORDER_REQUEST
+
+
+def test_two_non_excluded_bare_parameters_still_yield_no_body(tmp_path):
+    """When there are two non-excluded bare parameters, the fallback stays
+    honest and yields None, even if one of them is in the excludes list."""
+    catalog = Catalog(
+        **{
+            **vars(_SOLE_UNANNOTATED_CATALOG),
+            "id": "invented-endpoints-excludes-multi",
+            "matches": {
+                **_SOLE_UNANNOTATED_CATALOG.matches,
+                "request_body": {
+                    "annotation": "com/acme/rest/Body#",
+                    "fallback": "sole_unannotated",
+                    "excludes": ["org.springframework.kafka.support.Acknowledgment"],
+                },
+            },
+        }
+    )
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(
+        root,
+        _signature(
+            returns=_ref(ORDER_VIEW_SHAPE, "object"),
+            parameters=(
+                _bare_parameter(_ref(ORDER_REQUEST, "object"), name="payload"),
+                _bare_parameter(_ref(CUSTOMER_REF, "object"), name="customer"),
+            ),
+        ),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [catalog], capabilities=set())
+    derive_endpoint_shapes(workspace, [catalog], capabilities=set())
+    endpoint = workspace.query("endpoints")[0]
+    workspace.close()
+
+    assert endpoint["request_shape"] is None
+
+
 def test_the_derivation_names_no_language():
     """Language-blind by test, not by intention. The per-language rules live in
     the extractors; this file must contain none of them. (The pass itself lives
