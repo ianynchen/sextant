@@ -28,6 +28,7 @@ positional slot.
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
@@ -40,16 +41,23 @@ from sextant.application.resolve.shapes.arguments import (
     _arg_at,
     _capture_resolved,
     argument_descriptor,
+    channel_of,
+    linked_channels,
     supertypes_of,
     url_of,
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 
-# The three capture fields whose declared value is an `argN` reference into
+# The four capture fields whose declared value is an `argN` reference into
 # the matched call site's own arguments, rather than a literal already known
-# from the catalog (`http_method`, `response_is`).
-_ARGUMENT_FIELDS = ("url", "body", "response")
+# from the catalog (`http_method`, `response_is`). `channel` (Task 12,
+# 2E-prep) is `url`'s destination-shaped counterpart, exactly as
+# `single_call`'s own `channel_arg` is `url_arg`'s — never split into a peer
+# (D02 §2d), and resolved through the SAME literal-first,
+# `channel_via`-fallback ladder `single_call`/`interface_implementation`
+# already use, rather than `url_of`'s CP-2 split.
+_ARGUMENT_FIELDS = ("url", "body", "response", "channel")
 
 _ARG_REFERENCE = re.compile(r"^arg(\d+)$")
 
@@ -76,11 +84,18 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     (CP-2) — and `direction`/`protocol` are the catalog's own declared
     fields."""
     matches = catalog.matches
+    # Validated on the RAW (pre-`_catalog_symbol`) entries, before
+    # `_channel_via_forms` ever dereferences an `owner` — the same two-phase
+    # discipline `single_call._validate_methods` keeps for its own
+    # `channel_via` (shape first, symbol conversion only once shape is
+    # known-good).
+    _validate_channel_via_entries(matches.get("roots", []), catalog)
+    _validate_channel_via_entries(matches.get("steps", []), catalog)
     roots = [
         {
             "owner": _catalog_symbol(root["owner"]),
             "method": root["method"],
-            "captures": root.get("captures", {}),
+            "captures": _merged_captures(root),
             # Carried forward (never a root's own field, D02 §2b) purely so
             # `_validate_captures` can see and refuse it, exactly as an
             # unchecked value must not silently survive the file.
@@ -97,7 +112,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # RestClient's `body(Object)` request-setter and its
             # `body(Class)` response-extractor).
             "owner": _catalog_symbol(step["owner"]) if "owner" in step else None,
-            "captures": step.get("captures", {}),
+            "captures": _merged_captures(step),
             # D02 §2b: a step may declare a value guard on another argument
             # — None for the (default) unguarded step, read by `_walk`
             # (`_step_captures`) where `_matching_step` finds this row.
@@ -257,75 +272,104 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     # itself fail to resolve; the only way `verb` reads None here is that the
     # key was never folded in at all.
     verbless = "http_method" not in captures
-    peer, path, url_resolution = url_of(captures.get("url"))
     body_argument = captures.get("body")
     response_argument = captures.get("response")
-    # Checkpoint ruling I1, folded in from single_call: a capture that WAS
-    # reached but which the scanner could not read drops the row's
-    # resolution; a capture never reached at all is simply not part of this
-    # chain's declaration and cannot fail it. Presence of the key is what
-    # separates the two — a reached step always writes its declared field,
-    # even when the slot it addresses is empty (I4), so `None` under a key
-    # that exists is a read failure while an absent key is no claim at all.
-    # `verb is not None or verbless` is single_call's own rule (`_verb_of`
-    # callers): the missing verb narrows a verbless row's resolution only
-    # when a verb was declared but unreadable, never when none was ever
-    # declared at all — "this method calls something over a channel" stays
-    # true and useful on its own.
-    resolution = (
-        "resolved"
-        if (verb is not None or verbless)
-        and url_resolution == "resolved"
-        and _capture_resolved("body" in captures, body_argument)
-        and _capture_resolved("response" in captures, response_argument)
-        else "unresolved"
+    # A chain's own identity comes from EITHER a `url` capture (CP-2's
+    # peer/path split, `aws-sqs-sdk.yml`'s absolute queue URL) OR a
+    # `channel` capture (Task 12: an opaque destination, never split into a
+    # peer — D02 §2d, the same rule `single_call`'s own `channel_arg`
+    # keeps) — `_validate_captures` refuses a chain declaring both, so at
+    # most one is ever folded in. `channel`'s own ladder mirrors
+    # `single_call`/`interface_implementation`'s: try the literal argument
+    # first (`channel_of`), and only fall back to the declared
+    # `channel_via` linked call when the literal itself did not resolve —
+    # `Publisher.newBuilder(String, ...)` genuinely has a same-arity
+    # `TopicName` overload, so the literal read is tried even where
+    # `channel_via` is declared. `linked_channels` may answer several
+    # destinations (`all_strings`); a bare `url`/no-`channel` chain always
+    # collapses to the same one-tuple list `single_call`'s own non-ladder
+    # case builds by hand.
+    destinations: Sequence[tuple[str | None, str | None, str]]
+    if "channel" in captures:
+        channel_argument = captures.get("channel")
+        literal = channel_of(channel_argument)
+        channel_via_forms = captures.get("channel_via") or []
+        if literal[2] != "resolved" and channel_via_forms:
+            destinations = linked_channels(channel_argument, context.facts, channel_via_forms)
+        else:
+            destinations = [literal]
+    else:
+        destinations = [url_of(captures.get("url"))]
+    # Computed once, outside the destinations loop — the same
+    # `single_call` reasoning: neither depends on peer/path/resolution, and
+    # `argument_descriptor` appends to the shared `referenced` accumulator,
+    # so calling it once per row rather than once per destination keeps
+    # that list from carrying the same shape root once per channel.
+    request_shape = argument_descriptor(body_argument, context.facts, context.carrier_rules)
+    response_shape = _response_descriptor(
+        response_argument, captures.get("response_is"), context.facts, context.carrier_rules
     )
-    if path is not None and (verb is not None or verbless):
-        # `verb or ""` — single_call's own dedup key (`_matching_method`'s
-        # caller): a verbless row has no method to distinguish it by, so
-        # every verbless resolved identity collapses to `(protocol,
-        # direction, "", path)`, deduping on `(protocol, direction, path)`
-        # alone exactly as the brief requires; a verbed row's own `verb` is
-        # always a non-empty string, so this is unchanged for every shipped
-        # fluent catalog (okhttp/webclient/restclient), none of which is
-        # verbless. `caller` never enters the key — fluent rows carry
-        # `caller`, but outbound producer rows collapse across callers on
-        # wire identity alone, single_call's own established convention
-        # (the interface engine's handler-in-key ruling is for inbound
-        # handler rows and does not apply to an outbound fluent chain).
-        key = (context.catalog.protocol, context.catalog.direction, verb or "", path)
-        if key in context.seen:
-            return
-        context.seen.add(key)
-    context.rows.append(
-        {
-            "protocol": context.catalog.protocol,
-            "direction": context.catalog.direction,
-            # Not `str(verb)`: a verbless chain's `verb` is genuinely None
-            # (no root ever declared `http_method`), and `str(None)` would
-            # write the literal text "None" into a column NULL is supposed
-            # to mean "no verb" — single_call's own `method: verb` (never
-            # stringified) is the same answer for the same reason.
-            "method": verb,
-            "path": path,
-            "handler": None,
-            "caller": context.caller,
-            "peer": peer,
-            "handler_signature": None,
-            "resolution": resolution,
-            "evidence": "compiler",
-            "catalog_id": context.catalog.id,
-            "request_shape": argument_descriptor(
-                body_argument, context.facts, context.carrier_rules
-            ),
-            "response_shape": _response_descriptor(
-                response_argument,
-                captures.get("response_is"),
-                context.facts,
-                context.carrier_rules,
-            ),
-        }
-    )
+    for peer, path, url_resolution in destinations:
+        # Checkpoint ruling I1, folded in from single_call: a capture that
+        # WAS reached but which the scanner could not read drops the row's
+        # resolution; a capture never reached at all is simply not part of
+        # this chain's declaration and cannot fail it. Presence of the key
+        # is what separates the two — a reached step always writes its
+        # declared field, even when the slot it addresses is empty (I4), so
+        # `None` under a key that exists is a read failure while an absent
+        # key is no claim at all. `verb is not None or verbless` is
+        # single_call's own rule (`_verb_of` callers): the missing verb
+        # narrows a verbless row's resolution only when a verb was declared
+        # but unreadable, never when none was ever declared at all — "this
+        # method calls something over a channel" stays true and useful on
+        # its own.
+        resolution = (
+            "resolved"
+            if (verb is not None or verbless)
+            and url_resolution == "resolved"
+            and _capture_resolved("body" in captures, body_argument)
+            and _capture_resolved("response" in captures, response_argument)
+            else "unresolved"
+        )
+        if path is not None and (verb is not None or verbless):
+            # `verb or ""` — single_call's own dedup key (`_matching_method`'s
+            # caller): a verbless row has no method to distinguish it by, so
+            # every verbless resolved identity collapses to `(protocol,
+            # direction, "", path)`, deduping on `(protocol, direction, path)`
+            # alone exactly as the brief requires; a verbed row's own `verb` is
+            # always a non-empty string, so this is unchanged for every shipped
+            # fluent catalog (okhttp/webclient/restclient), none of which is
+            # verbless. `caller` never enters the key — fluent rows carry
+            # `caller`, but outbound producer rows collapse across callers on
+            # wire identity alone, single_call's own established convention
+            # (the interface engine's handler-in-key ruling is for inbound
+            # handler rows and does not apply to an outbound fluent chain).
+            key = (context.catalog.protocol, context.catalog.direction, verb or "", path)
+            if key in context.seen:
+                continue
+            context.seen.add(key)
+        context.rows.append(
+            {
+                "protocol": context.catalog.protocol,
+                "direction": context.catalog.direction,
+                # Not `str(verb)`: a verbless chain's `verb` is genuinely None
+                # (no root ever declared `http_method`), and `str(None)` would
+                # write the literal text "None" into a column NULL is supposed
+                # to mean "no verb" — single_call's own `method: verb` (never
+                # stringified) is the same answer for the same reason.
+                "method": verb,
+                "path": path,
+                "handler": None,
+                "caller": context.caller,
+                "peer": peer,
+                "handler_signature": None,
+                "resolution": resolution,
+                "evidence": "compiler",
+                "catalog_id": context.catalog.id,
+                "request_shape": request_shape,
+                "response_shape": response_shape,
+            }
+        )
 
 
 def _response_descriptor(
@@ -435,6 +479,13 @@ def _validate_captures(
                     f"`{field}: {value}`, which is not a call-site position — an argument "
                     f"capture reads `argN` (D02 §4's fluent style)"
                 )
+        if "url" in entry["captures"] and "channel" in entry["captures"]:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{entry['method']}` captures both `url` "
+                f"and `channel` — they are two different readings of the same identity "
+                f"position (D02 §2h, mirroring single_call's own `url_arg`/`channel_arg` "
+                f"exclusivity)"
+            )
         when = entry.get("when")
         if when is None:
             continue
@@ -461,6 +512,76 @@ def _valid_when(when: Any) -> bool:
         and isinstance(when.get("arg"), int)
         and isinstance(when.get("equals"), str)
     )
+
+
+def _merged_captures(entry: dict[str, Any]) -> dict[str, Any]:
+    """An entry's own `captures` plus its `channel_via` ladder (Task 12),
+    when declared — folded into the SAME dict `_resolve_captures`/
+    `_step_captures` already fold forward chain-wide, so a root's own
+    `channel_via` forms travel alongside its `channel` capture through
+    every later step exactly like `http_method`/`response_is` already do
+    (neither is an `argN` position, so both take the same literal
+    pass-through branch in `_resolve_captures`). Only ever called on an
+    entry `_validate_channel_via_entries` already checked, at `run` start —
+    `_channel_via_forms`'s own `_catalog_symbol` conversion is safe here."""
+    captures = dict(entry.get("captures", {}))
+    if "channel_via" in entry:
+        captures["channel_via"] = _channel_via_forms(entry)
+    return captures
+
+
+def _validate_channel_via_entries(entries: list[dict[str, Any]], catalog: Catalog) -> None:
+    """Refuses a broken `channel_via` ladder before any call site is
+    matched, on the RAW (pre-`_catalog_symbol`) `roots`/`steps` entries —
+    the same two-phase discipline `single_call._validate_methods` keeps for
+    its own `channel_via` (shape checked here; `_channel_via_forms`'s
+    symbol conversion only ever runs on an entry this already passed).
+    `channel_via` without a `channel` capture is missing the position it
+    describes — the same `single_call` rule, `_merged_captures` never
+    reaches it because this raises first."""
+    for entry in entries:
+        for form in _channel_via_entries(entry):
+            valid = (
+                isinstance(form, dict)
+                and isinstance(form.get("owner"), str)
+                and isinstance(form.get("method"), str)
+                and (form.get("arg") == "all_strings" or isinstance(form.get("arg"), int))
+            )
+            if not valid:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{entry.get('method')}` declares a "
+                    f"`channel_via` entry that must be `{{owner, method, "
+                    f'arg: int|"all_strings"}}`, got {form!r}'
+                )
+        if "channel_via" in entry and "channel" not in entry.get("captures", {}):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{entry.get('method')}` declares "
+                f"`channel_via` without a `channel` capture — `channel_via` says how to "
+                f"read an instance already named by `channel`, never a destination on its "
+                f"own (D02 §2h, mirroring single_call's own rule)"
+            )
+
+
+def _channel_via_entries(entry: dict[str, Any]) -> list[Any]:
+    """`channel_via`'s `{owner, method, arg}` | `[{...}, ...]` grammar,
+    normalized to a list without touching the entries themselves — the
+    `single_call`/`interface_implementation` precedent, shared in spirit
+    rather than in code (this module owns its own root/step shape, never a
+    `methods`/`registration` row)."""
+    via = entry.get("channel_via")
+    if via is None:
+        return []
+    return via if isinstance(via, list) else [via]
+
+
+def _channel_via_forms(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """`channel_via` entries, each declared `owner` converted to the SCIP
+    symbol form once — only ever called on an entry
+    `_validate_channel_via_entries` already passed, at `run` start."""
+    return [
+        {"owner": _catalog_symbol(form["owner"]), "method": form["method"], "arg": form["arg"]}
+        for form in _channel_via_entries(entry)
+    ]
 
 
 def _terminal_index(

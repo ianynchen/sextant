@@ -3217,3 +3217,205 @@ def test_a_verbless_unresolved_row_never_dedups_with_its_twin(tmp_path: Path):
     assert len(rows) == 2
     assert all(row["path"] is None and row["resolution"] == "unresolved" for row in rows)
     assert all(row["method"] is None for row in rows)
+
+
+# --- Task 12 precondition (2E-prep, checkpoint ruling): fluent gains a
+# `channel` capture field, resolved through the SAME literal-first,
+# `channel_via`-fallback ladder `single_call`/`interface_implementation`
+# already use (`shapes.arguments.channel_of`/`linked_channels`) — never
+# `url`'s own CP-2 peer/path split, D02 §2d's "a destination is never split
+# into a peer". `google-pubsub-publisher.yml`'s real chain is the shape
+# this mirrors: `Publisher.newBuilder(...)` is a static-factory root (no
+# `<init>`, chain-keyed on its own `result`, Task 11's precondition already
+# proved this) whose own arg0 is either a literal topic string (an overload
+# that genuinely exists) or a `TopicName.of(project, topic)` linked call —
+# read via `channel_via`'s own `{owner, method, arg}` ladder, exactly
+# `kafka-consumer.yml`'s `subscribe` row already reads off `List.of`.
+
+PUBLISHER = "com/acme/pubsub/Publisher#"
+TOPIC_NAME = "com/acme/pubsub/TopicName#"
+
+_PUBSUB_MATCHES = {
+    "roots": [
+        {
+            "owner": "com.acme.pubsub.Publisher",
+            "method": "newBuilder",
+            "captures": {"channel": "arg0"},
+            "channel_via": [{"owner": "com.acme.pubsub.TopicName", "method": "of", "arg": 1}],
+        }
+    ],
+    "steps": [],
+    "terminal": [
+        {
+            "method": "build",
+            "terminal_via_argument": {"owner": "com.acme.pubsub.Publisher", "method": "publish"},
+        }
+    ],
+}
+
+
+def _newbuilder_call(
+    caller: str, ordinal: int, result: int, channel_arg: CallArgument
+) -> CallSiteFact:
+    return _call(
+        caller,
+        PUBLISHER,
+        "newBuilder",
+        ordinal,
+        receiver=None,
+        result=result,
+        arguments=[channel_arg],
+        invoke_kind="static",
+    )
+
+
+def _build_and_publish_calls(caller: str, ordinal: int, builder_result: int) -> list:
+    build_result = builder_result + 1
+    return [
+        _call(caller, PUBLISHER, "build", ordinal, receiver=builder_result, result=build_result),
+        _call(
+            caller,
+            PUBLISHER,
+            "publish",
+            ordinal + 1,
+            receiver=999,
+            result=None,
+            arguments=[CallArgument(kind="instance", source=build_result, symbol=PUBLISHER)],
+        ),
+    ]
+
+
+def test_a_fluent_root_channel_resolves_the_literal_argument_first(tmp_path: Path):
+    """The ladder tries the literal read FIRST — `Publisher.newBuilder`
+    genuinely has a same-arity `String` overload alongside the `TopicName`
+    one — so a plain string argument resolves without ever consulting
+    `channel_via`, exactly `interface_implementation`'s own ladder order."""
+    caller = "com/acme/pubsub/Client#publishDirect()."
+    facts = [
+        _newbuilder_call(
+            caller, 0, 1, CallArgument(kind="string", value="projects/p/topics/orders")
+        ),
+        *_build_and_publish_calls(caller, 1, 1),
+    ]
+    catalog = _fluent_catalog(_PUBSUB_MATCHES, "invented-pubsub-literal")
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["method"] is None
+    assert endpoint["path"] == "projects/p/topics/orders"
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_a_fluent_root_channel_falls_back_to_the_linked_topicname_call(tmp_path: Path):
+    """The literal read fails (`newBuilder`'s own arg0 is the compiler's
+    `unresolved`, carrying only `source`) — the ladder falls back to the
+    declared `channel_via` form, following `source` to `TopicName.of`'s own
+    call site and reading its `arg: 1` (the topic id, project at arg 0),
+    exactly the checkpoint's real-fixture shape."""
+    caller = "com/acme/pubsub/Client#publishViaTopicName()."
+    facts = [
+        _call(
+            caller,
+            TOPIC_NAME,
+            "of",
+            0,
+            receiver=None,
+            result=5,
+            arguments=[
+                CallArgument(kind="string", value="p"),
+                CallArgument(kind="string", value="orders"),
+            ],
+            invoke_kind="static",
+        ),
+        _newbuilder_call(caller, 1, 1, CallArgument(kind="unresolved", source=5)),
+        *_build_and_publish_calls(caller, 2, 1),
+    ]
+    catalog = _fluent_catalog(_PUBSUB_MATCHES, "invented-pubsub-channel-via")
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "orders"
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_a_fluent_root_channel_neither_literal_nor_linked_derives_unresolved(tmp_path: Path):
+    """Neither the literal nor the linked-call follow reaches an answer (a
+    field-held `TopicName` passed straight in, `source: None`) — the row
+    still derives, `path` NULL, `resolution: unresolved`, D02 §2's
+    unresolved-is-an-answer, never a dropped row."""
+    caller = "com/acme/pubsub/Client#publishDynamic()."
+    facts = [
+        _newbuilder_call(caller, 0, 1, CallArgument(kind="unresolved")),
+        *_build_and_publish_calls(caller, 1, 1),
+    ]
+    catalog = _fluent_catalog(_PUBSUB_MATCHES, "invented-pubsub-unresolved")
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_fluent_root_declaring_channel_via_without_a_channel_capture_is_refused_at_run_start(
+    tmp_path: Path,
+):
+    """`channel_via` says HOW to read an instance already named by
+    `channel` — it is not itself a position, mirroring `single_call`'s own
+    `channel_via`-without-`channel_arg` refusal (D02 §2h)."""
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.pubsub.Publisher",
+                "method": "newBuilder",
+                "captures": {},
+                "channel_via": [{"owner": "com.acme.pubsub.TopicName", "method": "of", "arg": 1}],
+            }
+        ],
+        "steps": [],
+        "terminal": [{"method": "build", "terminal_via_argument": True}],
+    }
+    catalog = _fluent_catalog(matches, "invented-pubsub-channel-via-no-position")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-pubsub-channel-via-no-position.yml" in str(raised.value)
+
+
+def test_a_malformed_channel_via_entry_on_a_fluent_root_is_refused_at_run_start(tmp_path: Path):
+    """Each declared `channel_via` entry must be `{owner, method, arg:
+    int|"all_strings"}` — the same shape discipline
+    `single_call`/`interface_implementation` already keep, checked once at
+    `run` start rather than a crash the first time a call site reaches it."""
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.pubsub.Publisher",
+                "method": "newBuilder",
+                "captures": {"channel": "arg0"},
+                "channel_via": [{"method": "of", "arg": 1}],  # missing owner
+            }
+        ],
+        "steps": [],
+        "terminal": [{"method": "build", "terminal_via_argument": True}],
+    }
+    catalog = _fluent_catalog(matches, "invented-pubsub-bad-channel-via")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-pubsub-bad-channel-via.yml" in str(raised.value)
