@@ -759,23 +759,27 @@ def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(tmp_pa
 def test_a_catalogs_row_level_direction_override_is_still_owned_with_no_other_catalog_present(
     tmp_path: Path,
 ):
-    """Review round 1, finding 2: `_owns` (shapes/contracts.py) only ever
-    checked `catalog.direction`, never a `single_call` row's own `direction`
-    override — so `spring-pubsub.yml` (catalog-level `outbound`) never owned
-    its OWN `order-notifications` `both` row, and harvested zero shape roots
-    for it. In the real, full-catalog fixture run this bug produces no
-    visible symptom: `OrderEvent` is already expanded by the time
-    `spring-pubsub.yml`'s own turn comes, because Kafka/JMS/SQS's listener
-    catalogs (sorted earlier among inbound catalogs) already reached it —
-    masked by luck, exactly the review's own finding. Loading `spring-pubsub.yml`
-    as the ONLY catalog removes that luck: `OrderEvent` has nowhere else to
-    be expanded from, so if `_owns` still fails to recognise the row's own
-    `direction: inbound` override, `request_shape` on the merged row points
-    at a shape id with no `shapes` row behind it at all — a dangling
-    reference (Task 9 review, Finding C1). Mutation-tested: reverting `_owns`
-    to check `catalog.direction` alone (dropping `_owned_directions`)
-    reproduces exactly this — `shape_id not in shapes` — so this test fails
-    without the fix."""
+    """Review round 1, finding 2 (historical): `_owns` (shapes/contracts.py)
+    used to check only `catalog.direction`, never a `single_call` row's own
+    `direction` override — so `spring-pubsub.yml` (catalog-level `outbound`)
+    never owned its OWN `order-notifications` `both` row, and harvested zero
+    shape roots for it. In the real, full-catalog fixture run this bug
+    produced no visible symptom: `OrderEvent` is already expanded by the
+    time `spring-pubsub.yml`'s own turn comes, because Kafka/JMS/SQS's
+    listener catalogs (sorted earlier among inbound catalogs) already
+    reached it — masked by luck, exactly the review's own finding. Loading
+    `spring-pubsub.yml` as the ONLY catalog removes that luck: `OrderEvent`
+    has nowhere else to be expanded from, so a regression in ownership shows
+    up as a dangling `request_shape` reference (Task 9 review, Finding C1)
+    rather than staying hidden.
+
+    Kept as a pin after 2E-prep's `catalog_id` collapse (`_owns` now reads
+    `endpoint["catalog_id"] == catalog.id`, no direction reasoning at all,
+    `_owned_directions` deleted): the merged `both` row keeps the inbound
+    side's `catalog_id`, which with only `spring-pubsub.yml` loaded is this
+    same catalog, so ownership stays trivially true and `OrderEvent` keeps a
+    real `shapes` row behind it — proving the collapse didn't quietly
+    reintroduce the masked-by-luck gap."""
     catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-pubsub")
     workspace, report = _resolved_fixture(tmp_path, catalogs=_Catalogs([catalog]))
     [row] = [e for e in report.endpoints if e["path"] == "order-notifications"]

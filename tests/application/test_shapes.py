@@ -1304,100 +1304,67 @@ def test_an_outbound_catalog_cannot_claim_an_inbound_row_even_processed_first(tm
     assert descriptor["shape_id"] == ORDER_VIEW_SHAPE
 
 
-def test_owns_matches_only_a_catalogs_own_direction_and_both_reads_as_inbound():
-    """`_owns` in isolation, every combination the closed set (D00) allows —
-    the predicate Finding 1's fix is built on, and the fastest thing to
-    mutate-check: reverting its body to `return True` fails exactly the three
-    assertions below that read `is False`."""
-    inbound = Catalog(**{**vars(_CATALOG), "direction": "inbound"})
-    outbound = Catalog(**{**vars(_CATALOG), "direction": "outbound"})
-
-    assert _owns(inbound, {"protocol": "http", "direction": "inbound"}) is True
-    assert _owns(outbound, {"protocol": "http", "direction": "outbound"}) is True
-    # A `both` row's surviving `handler_signature` is the handler's own
-    # (merge_endpoints.sql), so it is inbound-owned, never outbound-owned.
-    assert _owns(inbound, {"protocol": "http", "direction": "both"}) is True
-    assert _owns(outbound, {"protocol": "http", "direction": "both"}) is False
-    assert _owns(outbound, {"protocol": "http", "direction": "inbound"}) is False
-    assert _owns(inbound, {"protocol": "http", "direction": "outbound"}) is False
-
-
 def test_owns_never_crosses_a_protocol_it_was_not_declared_for():
-    """Task 10 fix: `_owns` scoped by direction alone let `spring-jms`
-    (`protocol: jms`, `sole_unannotated` body fallback, sorted before
-    `spring-mvc` among inbound catalogs) settle a request shape for a bare,
-    unannotated HTTP parameter — an `http` row `spring-jms.yml`'s own
-    mapping never matched. Mutation-tested against the pre-fix body
-    (direction check alone): a same-direction, different-protocol row reads
-    as owned, and this assertion fails."""
-    inbound_http = Catalog(**{**vars(_CATALOG), "direction": "inbound", "protocol": "http"})
-    inbound_kafka = Catalog(**{**vars(_CATALOG), "direction": "inbound", "protocol": "kafka"})
+    """2E-prep collapse: `_owns` now reads a single fact off the row — the
+    `catalog_id` Task 1 stamps on every endpoint — rather than reasoning
+    about direction and protocol at all. A row naming one catalog's id must
+    never read as owned by a different catalog, same-protocol or not: this
+    is what used to require `_owns`'s direction/protocol scoping (Task 10's
+    `spring-jms`-crosses-into-`spring-mvc` bug), and is now just the id
+    comparison. Mutation-tested against `return True`: every assertion below
+    that reads `is False` fails."""
+    inbound_http = Catalog(**{**vars(_CATALOG), "id": "catalog-a", "protocol": "http"})
+    inbound_kafka = Catalog(**{**vars(_CATALOG), "id": "catalog-b", "protocol": "kafka"})
 
-    assert _owns(inbound_kafka, {"protocol": "http", "direction": "inbound"}) is False
-    assert _owns(inbound_http, {"protocol": "kafka", "direction": "inbound"}) is False
-    # A `both` row still only reaches a same-protocol inbound catalog.
-    assert _owns(inbound_kafka, {"protocol": "http", "direction": "both"}) is False
+    assert _owns(inbound_http, {"catalog_id": "catalog-a"}) is True
+    assert _owns(inbound_kafka, {"catalog_id": "catalog-a"}) is False
+    assert _owns(inbound_http, {"catalog_id": "catalog-b"}) is False
+    # A row naming no catalog at all (impossible after Task 1) is owned by
+    # nobody.
+    assert _owns(inbound_http, {}) is False
 
 
-def test_owns_recognises_a_single_calls_own_row_level_direction_override():
-    """Task 11 review round 1, finding 2: `_owns` only ever checked
-    `catalog.direction`, never a `single_call` `methods` row's own
-    `direction` override (D02 §2/§3, Task 6) — so a catalog whose
-    catalog-level `direction` is `outbound` (`spring-pubsub.yml`'s own
-    shape) never owned the inbound/`both` rows ITS OWN override-carrying row
-    produces, and harvested zero shape roots for them. Mirrors
-    `spring-pubsub.yml`'s exact matches shape (one plain row, one row
-    declaring `direction: inbound`) at the unit level, no workspace
-    involved. Mutation-tested against the pre-fix body (`catalog.direction`
-    alone, ignoring `matches["methods"]` entirely): every assertion below
-    that reads `is True` for the `outbound`-declared catalog fails."""
-    pubsub_shaped = Catalog(
-        **{
-            **vars(_CATALOG),
-            "direction": "outbound",
-            "matches": {
-                "owner": "com.example.PubSubTemplate",
-                "methods": [
-                    {"name": "publish", "arity": 2, "channel_arg": 0, "body_arg": 1},
-                    {
-                        "name": "subscribeAndConvert",
-                        "arity": 3,
-                        "channel_arg": 0,
-                        "body_arg": 2,
-                        "direction": "inbound",
-                    },
-                ],
-            },
-        }
-    )
+def test_a_catalogs_row_level_direction_override_is_still_owned_with_no_other_catalog_present():
+    """Task 11 review round 1, finding 2, restated post-collapse: a
+    `single_call` row's own `direction` override (D02 §2/§3, Task 6 —
+    `spring-pubsub.yml`'s `subscribeAndConvert` row) used to need `_owns` to
+    reason about `catalog.matches["methods"]`, or a catalog whose
+    catalog-level `direction` is `outbound` never owned the inbound/`both`
+    rows its OWN override-carrying row produces. With ownership read off
+    `catalog_id` alone, the override needs no special-casing at all: every
+    row a catalog's own derivation writes — override or not — carries that
+    SAME catalog's id, so it stays owned regardless of the row's own
+    `direction`. Proven here with only one catalog's id in play, and a
+    second catalog's id alongside it to show ownership still never crosses,
+    override or not."""
+    pubsub = Catalog(**{**vars(_CATALOG), "id": "spring-pubsub", "direction": "outbound"})
 
-    # The plain row's own direction — unchanged, still owned directly.
-    assert _owns(pubsub_shaped, {"protocol": "http", "direction": "outbound"}) is True
-    # The override row's own direction — the fix's whole point.
-    assert _owns(pubsub_shaped, {"protocol": "http", "direction": "inbound"}) is True
-    # The merge of the two — inbound-producing via the override, so `both`
-    # is owned too, exactly like a genuinely `direction: inbound` catalog.
-    assert _owns(pubsub_shaped, {"protocol": "http", "direction": "both"}) is True
+    # The plain row and the row-level override both carry the producing
+    # catalog's own id — both owned, direction plays no part in the answer.
+    assert _owns(pubsub, {"catalog_id": "spring-pubsub", "direction": "outbound"}) is True
+    assert _owns(pubsub, {"catalog_id": "spring-pubsub", "direction": "inbound"}) is True
+    assert _owns(pubsub, {"catalog_id": "spring-pubsub", "direction": "both"}) is True
 
-    # A catalog with no row-level override anywhere is untouched: still
-    # exactly its own declared direction, nothing more.
-    outbound_only = Catalog(**{**vars(_CATALOG), "direction": "outbound"})
-    assert _owns(outbound_only, {"protocol": "http", "direction": "inbound"}) is False
-    assert _owns(outbound_only, {"protocol": "http", "direction": "both"}) is False
+    # A different catalog's id is never owned, override or not.
+    other = Catalog(**{**vars(_CATALOG), "id": "other-catalog"})
+    assert _owns(other, {"catalog_id": "spring-pubsub", "direction": "inbound"}) is False
 
 
 # --- Task 12 fix round 1 (coordinator review): wrapper vocabulary must be
 # shared across *every* outbound catalog, not just serialization/known_types.
-# `_owns` scopes by direction and protocol (protocol added in Task 10 fix
-# round 1), so within one same-protocol group whichever catalog sorts first
-# still describes every outbound row's shapes under its own `wrappers`
-# list — even a row a *different* catalog produced. Reviewer's repro:
-# `okhttp` sorts before `retrofit` alphabetically (both `protocol: http`),
-# and before this fix declared no `wrappers` at all, so a Retrofit
-# `Call<OrderView>` response settled (first) as the raw `Call` envelope
-# rather than unwrapping to `OrderView` — and once settled, `retrofit`'s own
-# correct answer never gets a second chance (`_contracts_of`'s `column not
-# in already` guard). ------
+# Historical: before 2E-prep's `catalog_id` collapse, `_owns` scoped by
+# direction and protocol alone (protocol added in Task 10 fix round 1), so
+# within one same-protocol group whichever catalog sorted first described
+# every outbound row's shapes under its own `wrappers` list — even a row a
+# *different* catalog produced. Reviewer's repro: `okhttp` sorts before
+# `retrofit` alphabetically (both `protocol: http`), and before that fix
+# declared no `wrappers` at all, so a Retrofit `Call<OrderView>` response
+# settled (first) as the raw `Call` envelope rather than unwrapping to
+# `OrderView`. The harvested `wrappers` union this section pins for
+# (`okhttp.yml` carrying `retrofit2.Call` among them) was that fix's answer,
+# and stays shipped — harmless now that `_owns` reads `catalog_id`, since
+# ownership can no longer cross catalogs at all regardless of sort order or
+# wrapper vocabulary. ------
 
 _RETROFIT_CALLER_OWNER = "com/acme/orders/clients/PricingClient#"
 _RETROFIT_CALLER = _RETROFIT_CALLER_OWNER + "price(sig_00000002)."
@@ -1442,13 +1409,15 @@ def test_an_unrelated_outbound_catalogs_wrapper_list_still_unwraps_another_catal
     tmp_path,
 ):
     """The real `okhttp` and `retrofit` catalogs, resolved together: `okhttp`
-    sorts first (asserted below — that ordering is what the bug depends on)
-    and never itself produces this row (no OkHttp call site exists in these
-    facts), yet its own `wrappers` list is what `retrofit`'s `Call<OrderView>`
-    response settles under first. With the union wrappers now shipped on
-    `okhttp.yml`, the response still correctly roots at `OrderView`, not at
-    the raw `retrofit2/Call#` envelope — the reviewer's exact repro, pinned
-    against the shipped files rather than an invented stand-in."""
+    sorts first (asserted below) and never itself produces this row (no
+    OkHttp call site exists in these facts). Post-collapse, `_owns` reading
+    `catalog_id` means `okhttp` cannot touch this row at all, sort order or
+    not — it is `retrofit`'s own `wrappers` list (which independently
+    declares `retrofit2.Call`) that resolves it. The response still
+    correctly roots at `OrderView`, not at the raw `retrofit2/Call#`
+    envelope, proving the historical cross-catalog bug this section
+    documents cannot recur under the new ownership rule, pinned against the
+    shipped files rather than an invented stand-in."""
     catalogs = YamlCatalogSource(catalogs_dir()).load()
     okhttp = next(c for c in catalogs if c.id == "okhttp")
     retrofit = next(c for c in catalogs if c.id == "retrofit")
@@ -1480,24 +1449,28 @@ def test_an_unrelated_outbound_catalogs_wrapper_list_still_unwraps_another_catal
 # instruction: copy `wrappers`/`serialization`/`known_types` VERBATIM, then
 # add broker-specific entries on top) — extending this module's own
 # cross-catalog compatibility pinning discipline (Task 12 fix round 1, above)
-# to the three new files. `_owns` is now also scoped by `protocol` (Task 10
-# fix round 1, `test_owns_never_crosses_a_protocol_it_was_not_declared_for`
-# above), so a same-protocol union is the only compatibility surface these
-# three still share with each other for `wrappers`/`serialization`/
-# `known_types`; there is exactly one catalog per new protocol, so this pins
-# the harvested baseline itself rather than a multi-catalog resolve.
+# to the three new files. This compatibility is no longer load-bearing for
+# `_owns` (2E-prep's `catalog_id` collapse means ownership never crosses
+# catalogs at all, regardless of protocol) — it remains load-bearing for
+# *shape expansion* (`derive_shapes`, below), which stays global and
+# first-reached-wins (`shape_rules_unscoped_to_the_producing_catalog`, the
+# still-open half of that gap). `root_type` reads `rules.wrappers` there too
+# (`expansion.py`), so a field type expanded under a different catalog's
+# rules than the one whose endpoint reaches it needs the same wrapper
+# vocabulary or it opens differently depending on which catalog got there
+# first — which is exactly what verbatim harvesting keeps safe.
 #
 # `nullability` pins separately, against `spring-mvc.yml` rather than
 # `spring-resttemplate.yml` (Task 10 fix round 1, finding 1): shape (type)
 # expansion — unlike endpoint/contract description — is a *global*,
 # insert-if-absent pass keyed on the type symbol alone (`derive_shapes`),
-# entirely outside `_owns`'s direction-and-protocol scoping, so a payload
-# type an HTTP catalog and a messaging catalog both happen to reference gets
-# whichever catalog's nullability rules reach it first, regardless of
-# protocol. The reviewer's repro: `spring-jms.yml` sorts first among ALL
-# inbound catalogs (not just same-protocol ones), and — before this fix —
-# declared no `nullability` block at all, so a `@NonNull` HTTP field shared
-# with a JMS listener's payload type silently read as nullable once JMS's
+# entirely outside `_owns`'s `catalog_id` scoping, so a payload type an HTTP
+# catalog and a messaging catalog both happen to reference gets whichever
+# catalog's nullability rules reach it first, regardless of protocol. The
+# reviewer's repro: `spring-jms.yml` sorts first among ALL inbound catalogs
+# (not just same-protocol ones), and — before this fix — declared no
+# `nullability` block at all, so a `@NonNull` HTTP field shared with a JMS
+# listener's payload type silently read as nullable once JMS's
 # own (empty) rules answered for it first.
 
 

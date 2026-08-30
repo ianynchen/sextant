@@ -58,19 +58,10 @@ def _derive_replies(workspace: Workspace, catalog: Catalog) -> None:
     destination. A `void` handler (its return type's own `_payload_descriptor` is
     `None`) derives no reply row at all: there is nothing to reply with.
 
-    Restricted to the handlers THIS catalog's own mapping actually matched —
-    never merely every same-`protocol` inbound row in the (shared, cross-
-    catalog) `endpoints` table. `endpoints` carries no catalog-identity
-    column, so two same-protocol `annotation_driven` catalogs (a spring-kafka
-    listener catalog and, say, an invented one, both `protocol: kafka`) each
-    contribute inbound rows that are indistinguishable by protocol and
-    direction alone — filtering on those two columns would let catalog A's
-    reply pass reach catalog B's handlers too, deriving phantom `unresolved`
-    reply rows for methods A's own mapping never matched (review round 1,
-    BLOCKER). The real scope is: a handler symbol carrying one of THIS
-    catalog's own `mapping.annotations` fqns (`workspace.query("annotations")`,
-    intersected with the endpoints-derived handler set below, which still
-    supplies each handler's `handler_signature`).
+    Restricted to the handlers THIS catalog's own rows produced: `catalog_id`
+    (2E-prep design §1a) names the derivation that produced each row, so
+    filtering `endpoints` on `catalog_id == catalog.id` is already exactly
+    this catalog's own handler set — no annotations re-scan needed.
 
     The return type comes off `handler_signature` on the matching endpoint
     row — the same signature `derive_endpoints.sql` already read for it
@@ -101,38 +92,11 @@ def _derive_replies(workspace: Workspace, catalog: Catalog) -> None:
     # which is the same value every row for one handler carries regardless.
     signatures: dict[str, object] = {}
     for endpoint in workspace.query("endpoints"):
-        handler = endpoint["handler"]
-        if (
-            endpoint["protocol"] == catalog.protocol
-            # `both` cannot actually occur here: `endpoints_merge` (D02 §3),
-            # which is what ever produces a `both` row, runs once, after
-            # every catalog's engine — including this one — so no row has
-            # been merged yet at this point in `run`. Kept anyway for
-            # robustness against a future reordering of that merge, and
-            # because "an inbound-bearing direction" is the honest rule
-            # regardless of whether `both` is reachable today.
-            and endpoint["direction"] in ("inbound", "both")
-            and handler
-        ):
-            signatures.setdefault(str(handler), endpoint["handler_signature"])
-
-    # This catalog's own mapping annotation fqns — already SCIP symbol form
-    # in a loaded catalog (`derive_endpoints.sql` compares them to `a.annotation`
-    # unconverted), unlike `reply.annotation`, which is the spec's dotted
-    # notation and needs `_catalog_symbol` above. The method symbols they
-    # target are this catalog's real handler set; intersected with
-    # `signatures` (built from the shared `endpoints` table) rather than used
-    # alone, so a handler is only reached here when BOTH this catalog mapped
-    # it to an inbound row AND it still carries that same mapping annotation.
-    mapping_fqns = {entry["fqn"] for entry in catalog.matches["mapping"]["annotations"]}
-    matched_handlers = {
-        str(row["target"])
-        for row in workspace.query("annotations")
-        if row["annotation"] in mapping_fqns
-    }
+        if endpoint.get("catalog_id") == catalog.id and endpoint.get("handler"):
+            signatures.setdefault(str(endpoint["handler"]), endpoint["handler_signature"])
 
     rows: list[dict[str, Any]] = []
-    for handler in sorted(signatures.keys() & matched_handlers):
+    for handler in sorted(signatures):
         declared = signatures[handler]
         if declared is None:
             continue

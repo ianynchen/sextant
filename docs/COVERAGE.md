@@ -194,12 +194,14 @@ than silently absent:
 | Trustworthy analysis of a POM using parents/profiles/interpolation | the detector reads `pom.xml` raw (`maven_parent_and_profile_resolution_not_implemented`) | undecided |
 
 Two honesty caveats also ride every output: a merged `both` endpoint keeps only the
-handler's declared contract (`merged_endpoints_keep_only_the_handlers_contract`), and a
-payload type reachable from several catalogs is expanded under the first catalog's rules
-(`shape_rules_unscoped_to_the_producing_catalog`) — the first outbound catalog's rules
-describe every outbound row. The shipped catalogs do not declare identical rules, so a
-wrapper type one of them unwraps and another does not can be reported as an unexpanded
-type even where the shape behind it was expanded correctly.
+handler's declared contract (`merged_endpoints_keep_only_the_handlers_contract`), and —
+even though endpoint request/response contracts are scoped to the catalog that produced
+them — a payload type reachable from several catalogs is still expanded once, under
+whichever catalog's rules reach it first, not necessarily the ones that produced the
+endpoint referencing it (`shape_rules_unscoped_to_the_producing_catalog`). The shipped
+catalogs do not declare identical rules, so a wrapper type one of them unwraps and
+another does not can be reported as an unexpanded type even where the shape behind it
+was expanded correctly.
 
 ### 2a. Application protocols over HTTP
 

@@ -44,10 +44,11 @@ _GAPS = [
         "difference is not recorded."
     ),
     (
-        "A payload type reachable from several catalogs is expanded under the "
-        "first catalog's serialisation, wrapper and nullability rules, not "
-        "necessarily the ones that produced its endpoint: the first outbound "
-        "catalog's rules describe every outbound row. The shipped catalogs do "
+        "Endpoint request and response contracts are scoped to the catalog "
+        "that produced them. Shape expansion itself is not: a payload type "
+        "reachable from several catalogs is still expanded once, under "
+        "whichever catalog's rules reach it first, not necessarily the ones "
+        "that produced the endpoint referencing it. The shipped catalogs do "
         "not declare identical rules, so a wrapper type one of them unwraps "
         "and another does not can be named below as unexpanded even where the "
         "shape behind it was expanded correctly."

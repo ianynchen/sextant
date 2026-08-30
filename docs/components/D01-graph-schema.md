@@ -106,6 +106,14 @@ calls merges into one endpoint row rather than two — `handler` names the serve
 outbound target hint — a declared service name or a literal authority — that the system tier
 later resolves against `participants`; it carries no meaning on an inbound-only row.
 
+**`endpoints.catalog_id` is provenance, not identity.** It names the catalog whose rules
+produced the row, so a catalog describing an endpoint's request/response contract can
+scope itself to exactly the rows its own derivation wrote rather than reasoning about
+direction, protocol or row-level overrides. It plays no part in endpoint identity — the
+hash below never includes it, and a refactor of the catalog files themselves must not
+orphan an endpoint — and it is never compared across services: it is a local fact about
+which catalog derived this graph's own row, not a cross-service correlation key.
+
 **The merge keeps only the handler's request and response payload descriptors.** Where the
 module both exposes a path and calls it through a client with its own declared contract, the
 two declarations can differ — the handler's survives on the `both` row and the client's is
