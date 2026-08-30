@@ -188,6 +188,16 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # builder-lambda `send` — every path-NULL messaging row renders the
         # same `(None, None)` tuple, so the SET gains no new entry for any
         # of them even though `len(report.endpoints)` does (asserted below).
+        # 2E-prep Task 6 adds one more to this same tuple:
+        # `RawKafkaMessageSender#send`'s `kafkaTemplate.send(Message<?>)` —
+        # `spring-kafka-template.yml`'s pre-existing `send, arity: 1,
+        # record_arg: 0` row matches it by name+arity alone (never argument
+        # type) and degrades honestly to `(None, None)` since `Message`
+        # carries no `record_wrappers` entry — checkpoint ruling after Task
+        # 6 (spec §4, `docs/superpowers/plans/2026-08-31-2e-prep-hardening.md`:
+        # "unresolved is an answer, never an omission"; duplicate
+        # fluent-resolved + single_call-degraded rows for one call are
+        # accepted and documented). Asserted on its own, by caller, below.
         (None, None),
         # Outbound (Phase 2D, Task 11): `kafka-clients.yml`'s raw
         # `KafkaProducer#send(ProducerRecord)` — `order-raw` has no inbound
@@ -242,7 +252,25 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # every one of those five, so the net gain is 11 - 5 = 6 rows: 49 + 6 =
     # 55. Verified live against real bytecode, not computed from the brief
     # alone.
-    assert len(report.endpoints) == 55
+    #
+    # 2E-prep Task 6 (checkpoint ruling, 2026-08-30) adds a 56th: the fixture
+    # gained `RawKafkaMessageSender#send`, whose `kafkaTemplate.send(
+    # MessageBuilder.withPayload(event).setHeader(KafkaHeaders.TOPIC,
+    # "raw-messages").build())` call is arity-1 `KafkaTemplate.send` — the
+    # SAME shape `spring-kafka-template.yml`'s `send, arity: 1, record_arg:
+    # 0` row already declared (predating this task) for
+    # `send(ProducerRecord<K,V>)`. That row's own comment already
+    # anticipated a `send(Message<?>)` caller landing here one day: matched
+    # by name+arity alone, degraded to `(None, None)` since `Message` has no
+    # `record_wrappers` entry. This is a NEW, distinct unresolved row (own
+    # `caller`, doesn't merge with `sendDefault`'s) — spec §4's ruling is
+    # that a call deriving more than one honest row (here: this
+    # single_call-degraded one now, and Task 12's fluent-resolved
+    # `"raw-messages"` sibling later) is accepted and documented, never
+    # collapsed or suppressed. 55 + 1 = 56 is the TRUE frozen baseline for
+    # this fixture from Task 6 on — the dispatch's original "count must stay
+    # 55" was the controller's own error, corrected at the Task 6 checkpoint.
+    assert len(report.endpoints) == 56
     assert report.skipped_catalogs == []
 
     directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
@@ -639,6 +667,47 @@ def test_kafka_templates_send_default_derives_an_unresolved_null_path_row(
         and e["path"] is None
         and e["caller"] is not None
         and e["caller"].endswith("EventProducers#sendDefault(sig_b2a754d9).")
+    ]
+
+    assert row["resolution"] == "unresolved"
+    assert row["request_shape"] is None
+
+
+def test_a_kafka_templates_message_send_derives_a_second_distinct_unresolved_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`RawKafkaMessageSender#send`'s `kafkaTemplate.send(MessageBuilder
+    .withPayload(event).setHeader(KafkaHeaders.TOPIC, "raw-messages")
+    .build())` (2E-prep Task 6): `send(Message<?>)` is a THIRD arity-1
+    `KafkaTemplate.send` overload, alongside `send(ProducerRecord<K,V>)` —
+    `spring-kafka-template.yml`'s existing `send, arity: 1, record_arg: 0`
+    row matches it by name+arity alone (never argument type), and
+    `_record_arguments` degrades honestly to `(None, None)` since `Message`
+    carries no `record_wrappers` entry of its own — `path` NULL,
+    `resolution: unresolved` (I1), exactly as that row's own comment
+    anticipated before this call existed anywhere in the fixture.
+
+    This is a DIFFERENT row from `sendDefault`'s (test above): same wire
+    identity (kafka, outbound, NULL path) but a different `caller`, so
+    `derive_endpoints.sql`'s insert-if-absent guard does not fold them —
+    both survive (checkpoint ruling after Task 6: 55 + 1 = 56 total
+    endpoints). Spec §4's duplicate-row ruling
+    (`docs/superpowers/plans/2026-08-31-2e-prep-hardening.md`: "unresolved
+    is an answer, never an omission"; fluent-resolved + single_call-degraded
+    rows for one call are accepted and documented) is why this is correct
+    rather than a bug to paper over — Task 12's fluent catalog will later
+    derive this SAME call's RESOLVED sibling row, reading `"raw-messages"`
+    directly off the `MessageBuilder.setHeader(KafkaHeaders.TOPIC, ...)`
+    chain; that row does not exist yet, only this degraded one does."""
+    _, report = resolved_fixture
+    [row] = [
+        e
+        for e in report.endpoints
+        if e["protocol"] == "kafka"
+        and e["direction"] == "outbound"
+        and e["path"] is None
+        and e["caller"] is not None
+        and e["caller"].endswith("RawKafkaMessageSender#send(sig_b2a754d9).")
     ]
 
     assert row["resolution"] == "unresolved"

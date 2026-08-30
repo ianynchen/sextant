@@ -60,12 +60,19 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderView.jsonl",
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
+        "RawJmsBridge.jsonl",
+        "RawKafkaConsumers.jsonl",
+        "RawKafkaMessageSender.jsonl",
+        "RawPubSubPublishers.jsonl",
+        "RawPubSubReceiver.jsonl",
+        "RawPubSubSubscribers.jsonl",
+        "RawSqsClientSender.jsonl",
         "ReceiptView.jsonl",
         "ScopedRequest.jsonl",
         "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]
-    assert report.documents == 31
+    assert report.documents == 38
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -113,6 +120,13 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderView.jsonl",
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
+        "RawJmsBridge.jsonl",
+        "RawKafkaConsumers.jsonl",
+        "RawKafkaMessageSender.jsonl",
+        "RawPubSubPublishers.jsonl",
+        "RawPubSubReceiver.jsonl",
+        "RawPubSubSubscribers.jsonl",
+        "RawSqsClientSender.jsonl",
         "ReceiptView.jsonl",
         "ScopedRequest.jsonl",
         "ShipmentsSqsListener.jsonl",

@@ -103,8 +103,13 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # Phase 2D (Task 12): metadata.json's own direction/protocol buckets
     # (written by analyze, D05 §3) count every messaging protocol too, a
     # `both` row counting on both sides (metadata.py's own rule) — the same
-    # 55-endpoint fixture as the endpoints.parquet check below, viewed
-    # through the other artifact.
+    # 56-endpoint fixture as the endpoints.parquet check below, viewed
+    # through the other artifact. (2E-prep Task 6, checkpoint ruling
+    # 2026-08-30: kafka outbound is 8, not 7 — `RawKafkaMessageSender#send`'s
+    # `kafkaTemplate.send(Message<?>)` derives its own unresolved NULL-path
+    # row off `spring-kafka-template.yml`'s pre-existing arity-1 `record_arg`
+    # rule; see `test_pipeline.py`'s dedicated row-level test for the full
+    # explanation.)
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "http": 18,
@@ -116,7 +121,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     assert metadata["endpoints"]["outbound"] == {
         "http": 19,
         "jms": 2,
-        "kafka": 7,
+        "kafka": 8,
         "pubsub": 1,
         "sqs": 2,
     }
@@ -149,4 +154,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # converts one inbound + one outbound row into one `both` row, so five
     # merges: inbound 28+1-5=24, outbound 20+10-5=25, both 1+5=6 — see
     # test_pipeline.py for the full row-by-row breakdown.
-    assert rows == [("both", 6), ("inbound", 24), ("outbound", 25)]
+    # 2E-prep Task 6 (checkpoint ruling, 2026-08-30) adds one more outbound
+    # row: `RawKafkaMessageSender#send`'s `kafkaTemplate.send(Message<?>)`
+    # matches `spring-kafka-template.yml`'s existing arity-1 `record_arg`
+    # rule (predating this task) and derives its own unresolved NULL-path
+    # row, distinct from `sendDefault`'s (different caller, no merge target)
+    # — spec §4's duplicate-row ruling: 25 + 1 = 26.
+    assert rows == [("both", 6), ("inbound", 24), ("outbound", 26)]

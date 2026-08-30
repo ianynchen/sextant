@@ -89,6 +89,16 @@
       <artifactId>spring-cloud-gcp-pubsub</artifactId>
       <version>5.1.2</version>
     </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>sqs</artifactId>
+      <version>2.25.31</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.cloud</groupId>
+      <artifactId>google-cloud-pubsub</artifactId>
+      <version>1.129.3</version>
+    </dependency>
   </dependencies>
   <build>
     <plugins>
