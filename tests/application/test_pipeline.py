@@ -181,8 +181,27 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
         # `onReturn`'s static `@SendTo("order-return-receipts")`.
         (None, "order-return-receipts"),
         # `escalate`'s dynamic reply: value-returning, no `@SendTo` at all —
-        # `path` NULL, `unresolved` (asserted below).
+        # `path` NULL, `unresolved` (asserted below). Also shared, from Task
+        # 11 on, by `sendDefault`'s own NULL-path row, JmsTemplate's
+        # destination-less `convertAndSend(event)`, and SqsTemplate's
+        # builder-lambda `send` — every path-NULL messaging row renders the
+        # same `(None, None)` tuple, so the SET gains no new entry for any
+        # of them even though `len(report.endpoints)` does (asserted below).
         (None, None),
+        # Outbound (Phase 2D, Task 11): `kafka-clients.yml`'s raw
+        # `KafkaProducer#send(ProducerRecord)` — `order-raw` has no inbound
+        # counterpart, so it stays its own outbound row rather than merging.
+        (None, "order-raw"),
+        # Outbound (Phase 2D, Task 11): `SqsTemplate#send(queue, payload)` —
+        # `shipments-outbound` is a different topic from the inbound
+        # listener's own `shipments-inbound`, so no merge here either.
+        (None, "shipments-outbound"),
+        # Both (Phase 2D, Task 11): Pub/Sub's `publish`/`subscribeAndConvert`
+        # share this identity — the ONLY messaging path Task 11 introduces on
+        # both sides of the merge in the same task (every other Task 11
+        # merge target — `order-events`/`order-audit`/`order-returns`/
+        # `audit.queue` — already existed as an inbound row from Task 10).
+        (None, "order-notifications"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -206,7 +225,23 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
     # pass — so both handlers' rows survive (asserted below). This is a real
     # divergence from an original expectation that they would dedup to one;
     # verified live against real bytecode rather than assumed.
-    assert len(report.endpoints) == 49
+    #
+    # Task 11 adds 11 raw derived rows (5 kafka outbound — the two `send`
+    # arities deduped to one `order-events` row, `order-audit` via the record
+    # wrapper, `order-raw` via `kafka-clients.yml`'s own owner,
+    # `order-returns` via `ReplyingKafkaTemplate`, and `sendDefault`'s
+    # NULL-path row; 2 jms outbound — `audit.queue` and the destination-less
+    # NULL-path row; 2 sqs outbound — `shipments-outbound` and the
+    # builder-lambda NULL-path row; 1 pubsub outbound `publish` +
+    # 1 pubsub inbound `subscribeAndConvert`), of which 5 immediately merge
+    # into an ALREADY-EXISTING Task 10 inbound row (`order-events`,
+    # `order-audit`, `order-returns`, `audit.queue`) or into a row derived in
+    # this SAME pass (`order-notifications`, the one merge where both sides
+    # are new) — `merge_endpoints.sql` deletes the outbound duplicate on
+    # every one of those five, so the net gain is 11 - 5 = 6 rows: 49 + 6 =
+    # 55. Verified live against real bytecode, not computed from the brief
+    # alone.
+    assert len(report.endpoints) == 55
     assert report.skipped_catalogs == []
 
     directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
@@ -396,10 +431,18 @@ def test_a_value_returning_listener_with_no_sendto_derives_an_unresolved_reply_r
     destination cannot be named."""
     workspace, report = _resolved_fixture(tmp_path)
     workspace.close()
+    # Task 11 adds a second kafka outbound, path-NULL row (`sendDefault`'s
+    # own unresolved-channel row) — both share `(kafka, outbound, NULL)`,
+    # so `caller` alone (never wire identity, which is identical) tells this
+    # reply row apart from that one.
     [reply] = [
         e
         for e in report.endpoints
-        if e["protocol"] == "kafka" and e["direction"] == "outbound" and e["path"] is None
+        if e["protocol"] == "kafka"
+        and e["direction"] == "outbound"
+        and e["path"] is None
+        and e["caller"] is not None
+        and e["caller"].endswith("OrderEventsListener#escalate(sig_160f6bce).")
     ]
 
     assert reply["caller"].endswith("OrderEventsListener#escalate(sig_160f6bce).")
@@ -474,6 +517,233 @@ def test_a_bare_unannotated_http_parameter_is_never_claimed_by_a_messaging_catal
 
     assert len(amend_rows) == 2
     assert all(row["request_shape"] is None for row in amend_rows)
+
+
+# --- Task 11: the producer catalogs, end to end, on real bytecode ---
+
+
+def test_kafka_templates_two_send_arities_dedup_and_merge_into_the_listeners_row(
+    tmp_path: Path,
+):
+    """`kafkaTemplate.send("order-events", event)` (arity 2) and
+    `kafkaTemplate.sendKeyed("order-events", key, event)` (arity 3) both
+    target the same topic: the two `methods` rows' own dedup key
+    (`protocol, direction, verb or "", path`) collapses them to one derived
+    outbound row before merging ever runs. That one row then merges with
+    Task 10's own `order-events` INBOUND row (`OrderEventsListener#onEvent`)
+    into `direction: both` — `merge_endpoints.sql` keeps the handler's own
+    request shape (`OrderEvent`, from `onEvent`'s signature), not whatever
+    the single_call engine derived off `event`'s own pass-through capture,
+    and gains the caller from whichever of the two send calls sorts first."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [row] = _messaging_rows(report, "kafka", "order-events")
+
+    assert row["direction"] == "both"
+    assert row["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
+    assert row["caller"].endswith("EventProducers#send(sig_b2a754d9).")
+    assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
+
+
+def test_the_producer_records_channel_and_payload_come_from_its_own_constructor(
+    tmp_path: Path,
+):
+    """`kafkaTemplate.send(new ProducerRecord<>("order-audit", event))`: the
+    `record_wrappers` one-hop reads the topic and payload off the
+    `ProducerRecord`'s own constructor call, not off `send`'s single
+    argument (the record itself). `order-audit` also merges with Task 10's
+    `onEvent` row (the SAME handler, its second `@KafkaListener` topic) —
+    both, handler + caller, on the merged row."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [row] = _messaging_rows(report, "kafka", "order-audit")
+
+    assert row["direction"] == "both"
+    assert row["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
+    assert row["caller"].endswith("EventProducers#sendAudit(sig_b2a754d9).")
+
+
+def test_the_raw_kafka_producer_derives_its_own_unmerged_outbound_row(tmp_path: Path):
+    """`rawProducer.send(new ProducerRecord<>("order-raw", key, event))`
+    (`kafka-clients.yml`, owner `KafkaProducer` — a different owner type and
+    a different detect coordinate from `KafkaTemplate`): `order-raw` has no
+    inbound counterpart anywhere in the fixture, so it stays a genuine,
+    standalone outbound row rather than merging. Both the record
+    constructor's `key` and `event` arguments are themselves bare,
+    pass-through parameters of `sendRaw(String key, OrderEvent event)` —
+    D00 §5's `unresolved` kind, the same "passed straight through" capture
+    failure `test_every_resttemplate_route_carries_its_own_resolution_and_descriptors`
+    already pins for `BillingRestTemplate#submitSettlement` — so the
+    row's own `resolution` is `unresolved` (I1: the declared payload capture
+    failed) even though the topic itself, a literal in the constructor call,
+    resolves the `path` cleanly. This is a genuine divergence from the
+    brief's own shorthand ("resolved"), verified live rather than assumed —
+    the SAME parameter-passthrough rule Phase 2C already established, not a
+    new one."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [row] = _messaging_rows(report, "kafka", "order-raw")
+
+    assert row["direction"] == "outbound"
+    assert row["handler"] is None
+    assert row["caller"].endswith("EventProducers#sendRaw(sig_086ab63d).")
+    assert row["resolution"] == "unresolved"
+    assert row["request_shape"] is None
+
+
+def test_the_replying_kafka_templates_send_and_receive_merges_with_its_listener(
+    tmp_path: Path,
+):
+    """`replyingTemplate.sendAndReceive(new ProducerRecord<>("order-returns",
+    event))` — `ReplyingKafkaTemplate` gets its own catalog file
+    (`spring-kafka-replying.yml`), `matches.owner` being single-valued and
+    `ReplyingKafkaTemplate` a different owner type from `KafkaTemplate`. No
+    overload exposes the reply type at the call site, so this catalog
+    declares no `response_arg` at all; merged with Task 10's own
+    `order-returns` inbound row (`onReturn`), the surviving row keeps the
+    handler's own contract (`OrderEvent` request, `ReceiptView` response —
+    `onReturn`'s RETURN type, never the reply the `@SendTo` row already
+    covers), plus the new caller from this task."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [row] = _messaging_rows(report, "kafka", "order-returns")
+
+    assert row["direction"] == "both"
+    assert row["handler"].endswith("OrderEventsListener#onReturn(sig_160f6bce).")
+    assert row["caller"].endswith("EventProducers#sendReturn(sig_b2a754d9).")
+    assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
+    assert json.loads(row["response_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/ReceiptView#"
+    )
+
+
+def test_kafka_templates_send_default_derives_an_unresolved_null_path_row(tmp_path: Path):
+    """`kafkaTemplate.sendDefault(event)`: no channel argument at the call
+    site at all — the topic is the template's own config-borne default,
+    2F's territory — so `sendDefault`'s `methods` row declares no
+    `channel_arg`, and `url_of` reads the missing capture as `path: NULL,
+    resolution: unresolved` (I1). The row still derives: "this method
+    produces a message" is true and useful on its own."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [row] = [
+        e
+        for e in report.endpoints
+        if e["protocol"] == "kafka"
+        and e["direction"] == "outbound"
+        and e["path"] is None
+        and e["caller"] is not None
+        and e["caller"].endswith("EventProducers#sendDefault(sig_b2a754d9).")
+    ]
+
+    assert row["resolution"] == "unresolved"
+    assert row["request_shape"] is None
+
+
+def test_a_jms_templates_destination_derives_and_merges_with_its_listener(tmp_path: Path):
+    """`jmsTemplate.convertAndSend("audit.queue", event)` merges with Task
+    10's own `AuditJmsListener#onAudit` inbound row into `direction: both`,
+    keeping the handler's own converted-payload contract."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [row] = _messaging_rows(report, "jms", "audit.queue")
+
+    assert row["direction"] == "both"
+    assert row["handler"].endswith("AuditJmsListener#onAudit(sig_b2a754d9).")
+    assert row["caller"].endswith("EventProducers#sendAuditMessage(sig_b2a754d9).")
+    assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
+
+
+def test_a_destination_less_jms_send_derives_an_unresolved_null_path_row(tmp_path: Path):
+    """`jmsTemplate.convertAndSend(event)`: the destination-less overload
+    targets the template's own configured default destination — no
+    `channel_arg` declared for its `methods` row, same NULL-path shape as
+    Kafka's `sendDefault`."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [row] = [
+        e
+        for e in report.endpoints
+        if e["protocol"] == "jms" and e["direction"] == "outbound" and e["path"] is None
+    ]
+
+    assert row["caller"].endswith("EventProducers#sendToDefaultDestination(sig_b2a754d9).")
+    assert row["resolution"] == "unresolved"
+
+
+def test_an_sqs_templates_send_derives_its_own_unmerged_outbound_row(tmp_path: Path):
+    """`sqsTemplate.send("shipments-outbound", event)`: no inbound listener
+    targets this topic (`ShipmentsSqsListener` listens on the different
+    `shipments-inbound` queue), so the row stays outbound, unmerged. `event`
+    is again a bare, pass-through parameter — the same `unresolved`-kind
+    capture failure `order-raw` hits above — so the row's own `resolution`
+    is `unresolved` (I1) even though the literal queue name resolves `path`
+    cleanly. A genuine, live-verified divergence from the brief's own
+    shorthand ("resolved"), frozen as observed."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [row] = _messaging_rows(report, "sqs", "shipments-outbound")
+
+    assert row["direction"] == "outbound"
+    assert row["caller"].endswith("EventProducers#sendShipment(sig_b2a754d9).")
+    assert row["resolution"] == "unresolved"
+    assert row["request_shape"] is None
+
+
+def test_the_sqs_builder_lambda_derives_an_honest_unresolved_row_not_a_fabricated_path(
+    tmp_path: Path,
+):
+    """`sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))`:
+    `SqsTemplate.send` has two arity-1 overloads (the destination-less
+    `send(T)` and this builder-consumer `send(Consumer<SqsSendOptions<T>>)`)
+    indistinguishable by name+arity alone, so the catalog declares
+    `channel_arg: 0` for arity 1 so the call still MATCHES rather than
+    vanishing silently. The call site's own arg 0 carries `kind: lambda`
+    (verified directly against the real `call_sites` fact, not assumed) —
+    `url_of` only accepts a `string`-kind argument, so this reads as `path:
+    NULL, resolution: unresolved`, never the literal `"shipments-lambda"`
+    string sitting inside the lambda body. Honest capture failure, not a
+    fabricated path."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [row] = [
+        e
+        for e in report.endpoints
+        if e["protocol"] == "sqs" and e["direction"] == "outbound" and e["path"] is None
+    ]
+
+    assert row["caller"].endswith("EventProducers#sendShipmentViaBuilder(sig_b2a754d9).")
+    assert row["resolution"] == "unresolved"
+    assert row["request_shape"] is None
+
+
+def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(tmp_path: Path):
+    """Pub/Sub's inbound and outbound rows ride the SAME `single_call` file
+    (`spring-pubsub.yml`), unlike Kafka/JMS/SQS's separate listener/template
+    catalogs — there is no standard Pub/Sub listener annotation, so the
+    typed `subscribeAndConvert` row carries a per-row `direction: inbound`
+    override inside an otherwise-outbound catalog. Both
+    `pubSubTemplate.publish("order-notifications", event)` and
+    `NotificationsSubscriber#subscribe`'s `subscribeAndConvert(...)` target
+    the same topic, so they merge into ONE `both` row — the only Task 11
+    merge where BOTH sides are new in this same task (every other merge
+    target already existed as a Task 10 inbound row). The typed subscribe's
+    own payload capture is its trailing `OrderEvent.class` literal, read at
+    `response_arg` (this row declares no `body_arg`) — so it lands in
+    `response_shape`, never `request_shape`, on the surviving inbound-owned
+    row."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [row] = _messaging_rows(report, "pubsub", "order-notifications")
+
+    assert row["direction"] == "both"
+    assert row["handler"].endswith("NotificationsSubscriber#subscribe(sig_da8c82d5).")
+    assert row["caller"].endswith("EventProducers#publishNotification(sig_b2a754d9).")
+    assert row["resolution"] == "resolved"
+    assert row["request_shape"] is None
+    assert json.loads(row["response_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderEvent#"
+    )
 
 
 def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_path: Path):

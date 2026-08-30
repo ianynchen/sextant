@@ -1454,14 +1454,34 @@ def test_an_unrelated_outbound_catalogs_wrapper_list_still_unwraps_another_catal
 # own (empty) rules answered for it first.
 
 
+# Task 11: the six producer catalogs join the same harvest-compatibility
+# pinning — `spring-kafka-template`, `spring-kafka-replying`,
+# `kafka-clients`, `spring-jms-template`, `spring-sqs-template` and
+# `spring-pubsub` all copy the FULL compatible block set verbatim
+# (`wrappers`/`serialization`/`known_types` from `spring-resttemplate.yml`,
+# `nullability` from `spring-mvc.yml`), not only the three Task 10 listener
+# catalogs.
+_MESSAGING_CATALOG_IDS = (
+    "spring-kafka",
+    "spring-jms",
+    "spring-sqs",
+    "spring-kafka-template",
+    "spring-kafka-replying",
+    "kafka-clients",
+    "spring-jms-template",
+    "spring-sqs-template",
+    "spring-pubsub",
+)
+
+
 def test_the_messaging_catalogs_serialization_and_known_types_are_harvested_verbatim():
-    """`serialization` and `known_types` on all three new files must be
+    """`serialization` and `known_types` on every messaging catalog must be
     byte-for-byte `spring-resttemplate.yml`'s own blocks — the harvest the
     checkpoint calls for, mechanically pinned rather than eyeballed."""
     catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
     resttemplate = catalogs["spring-resttemplate"]
 
-    for catalog_id in ("spring-kafka", "spring-jms", "spring-sqs"):
+    for catalog_id in _MESSAGING_CATALOG_IDS:
         catalog = catalogs[catalog_id]
         assert catalog.serialization == resttemplate.serialization, catalog_id
         assert catalog.known_types == resttemplate.known_types, catalog_id
@@ -1469,16 +1489,47 @@ def test_the_messaging_catalogs_serialization_and_known_types_are_harvested_verb
 
 def test_the_messaging_catalogs_nullability_is_harvested_from_spring_mvc_verbatim():
     """Task 10 fix round 1, finding 1: pins the fix for the reviewer's
-    reproduced regression directly — each new file's `nullability` block
-    must be byte-for-byte `spring-mvc.yml`'s own (non-empty, so a future
-    edit that quietly empties one file's block instead of the other's still
-    fails loud rather than passing two empty dicts as equal)."""
+    reproduced regression directly — each messaging catalog's `nullability`
+    block must be byte-for-byte `spring-mvc.yml`'s own (non-empty, so a
+    future edit that quietly empties one file's block instead of the
+    other's still fails loud rather than passing two empty dicts as equal).
+    Task 11 extends this from the three Task 10 listener catalogs to all
+    six producer catalogs too — `derive_shapes`' global, insert-if-absent
+    expansion is keyed on the type symbol alone, entirely outside
+    direction/protocol scoping, so ANY catalog reaching a shared payload
+    type first without its own nullability rules degrades that type's
+    fields for every other catalog, regardless of which side of the wire it
+    describes."""
     catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
     mvc = catalogs["spring-mvc"]
     assert mvc.nullability != {}
 
-    for catalog_id in ("spring-kafka", "spring-jms", "spring-sqs"):
+    for catalog_id in _MESSAGING_CATALOG_IDS:
         assert catalogs[catalog_id].nullability == mvc.nullability, catalog_id
+
+
+def test_the_producer_catalogs_wrappers_are_the_harvested_baseline_verbatim():
+    """Unlike the three Task 10 listener catalogs (`spring-kafka.yml` adds a
+    `ConsumerRecord` envelope entry on top of the baseline, for the one
+    listener parameter shape that needs unwrapping), none of the six Task 11
+    producer catalogs add a broker-specific `wrappers` entry: a `single_call`
+    row's payload comes from its own declared position (`body_arg`) or a
+    `record_wrappers` constructor hop, never through an envelope type a
+    `wrappers` rule would need to unwrap. So each producer catalog's own
+    `wrappers` list must be exactly `spring-resttemplate.yml`'s, not merely a
+    superset of it."""
+    catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
+    baseline = catalogs["spring-resttemplate"].wrappers
+
+    for catalog_id in (
+        "spring-kafka-template",
+        "spring-kafka-replying",
+        "kafka-clients",
+        "spring-jms-template",
+        "spring-sqs-template",
+        "spring-pubsub",
+    ):
+        assert catalogs[catalog_id].wrappers == baseline, catalog_id
 
 
 def test_the_messaging_catalogs_wrappers_include_the_harvested_baseline_plus_broker_entries():

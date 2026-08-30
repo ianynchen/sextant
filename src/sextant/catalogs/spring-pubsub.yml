@@ -1,0 +1,79 @@
+id: spring-pubsub
+displayName: Spring Cloud GCP Pub/Sub (PubSubTemplate)
+style: single_call
+protocol: pubsub
+direction: outbound
+
+detect:
+  coordinates: ["com.google.cloud:spring-cloud-gcp-pubsub"]
+
+requires: [call_site, string_constants]
+
+matches:
+  owner: com.google.cloud.spring.pubsub.core.PubSubTemplate
+  # CHECKPOINT FACT (real javap descriptors, spring-cloud-gcp-pubsub 5.1.2):
+  # `publish(String, T)` is arity 2, the outbound row. Pub/Sub has no
+  # standard listener annotation — subscribers are programmatic — so its
+  # inbound row rides this SAME `single_call` file rather than a separate
+  # annotation-driven catalog (D02 §3): `subscribeAndConvert(String,
+  # Consumer<...>, Class<T>)` is arity 3, with a per-row `direction:
+  # inbound` override (every other row here is implicitly this catalog's
+  # own `outbound`). The subscription name sits at arg 0, same as
+  # `publish`'s; the typed payload capture sits at the trailing `Class<T>`
+  # literal, arg 2 — read into `response_arg` (this row declares no
+  # `body_arg`), so the deriving call's own class-literal payload lands in
+  # `response_shape`, not `request_shape` — the `single_call` engine has no
+  # separate "typed capture" column, only the two it always has, and this is
+  # the one an inbound row's own third argument reaches (verified live).
+  # `direction: inbound` also means this row's deriving method lands in
+  # `handler`, not `caller` (`single_call.py`'s own inbound/outbound split,
+  # applied per row rather than per catalog). The untyped `subscribe(String,
+  # Consumer<BasicAcknowledgeablePubsubMessage>)` overload is not declared:
+  # no fixture call reaches it, and it carries no payload capture at all.
+  methods:
+    - { name: publish, arity: 2, channel_arg: 0, body_arg: 1 }
+    - { name: subscribeAndConvert, arity: 3, channel_arg: 0, response_arg: 2, direction: inbound }
+
+# Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
+# discipline as spring-kafka-template.yml — see its own comment for the full
+# rationale). `nullability` is harvested from spring-mvc.yml.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

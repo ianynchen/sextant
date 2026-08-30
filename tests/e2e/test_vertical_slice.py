@@ -52,6 +52,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # than guessed, and the endpoint column says so instead of `GET None`.
     assert "GET (unresolved)" in document
     assert "classDiagram" in document
+    # Phase 2D (Task 11): a verbless messaging row renders `protocol path`,
+    # no method — `order-events` is now `direction: both` (merged with the
+    # producer catalogs' own `KafkaTemplate.send`), so it appears once in
+    # each of the inbound and outbound sections.
+    assert "kafka order-events" in document
 
 
 def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_path: Path):
@@ -105,4 +110,14 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # Phase 2D (Task 10): the three listener catalogs add 11 inbound rows
     # (kafka 8, jms 2, sqs 1 — see test_pipeline.py for the full breakdown)
     # and 2 kafka outbound `@SendTo` reply rows.
-    assert rows == [("both", 1), ("inbound", 28), ("outbound", 20)]
+    # Phase 2D (Task 11): the five producer catalogs (six files —
+    # `ReplyingKafkaTemplate` gets its own, `matches.owner` being
+    # single-valued) add 11 raw derived rows, five of which immediately
+    # merge into an inbound row — four already existing from Task 10
+    # (`order-events`, `order-audit`, `order-returns`, `audit.queue`) plus
+    # one new on both sides in this same task (pubsub `order-notifications`,
+    # the only Task 11 merge where neither side pre-existed). Each merge
+    # converts one inbound + one outbound row into one `both` row, so five
+    # merges: inbound 28+1-5=24, outbound 20+10-5=25, both 1+5=6 — see
+    # test_pipeline.py for the full row-by-row breakdown.
+    assert rows == [("both", 6), ("inbound", 24), ("outbound", 25)]
