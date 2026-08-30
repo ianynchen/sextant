@@ -327,6 +327,84 @@ def test_e_a_handler_never_matched_by_this_catalogs_inbound_mapping_derives_no_r
     assert unmatched_rows == []
 
 
+# --- (f)/(g) a BARE reply annotation — declared, but naming no destination
+# — derives the same path-NULL unresolved row (f) does, never nothing -------
+
+
+def _bare_send_to_facts(handler: str, listener: str, args: dict) -> list:
+    """(f) and (g) differ only in how the bare annotation reached the facts —
+    the attribute key absent, or present holding an empty array — so the rest
+    of the fixture is shared rather than written twice."""
+    return [
+        SymbolFact(document_id="doc_1", symbol=listener, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handler,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=listener,
+            signature=Signature(returns=_receipt_returns()),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=KAFKA_LISTENER, args={"topics": ["order-bare"]}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=SEND_TO, args=args),
+        ),
+    ]
+
+
+def test_f_a_send_to_whose_destination_key_is_absent_derives_one_unresolved_row(
+    tmp_path: Path,
+):
+    """Final review, CRITICAL: a bare `@SendTo` reaches bytecode as its
+    annotation's own default — the destination attribute simply not recorded
+    — and the engine used to derive NOTHING for it, while the very same
+    handler with NO reply annotation at all derived a path-NULL `unresolved`
+    row (test (c)). That inverted the evidence: a handler that *declares* it
+    replies is strictly stronger evidence of a reply than one that declares
+    nothing, and stronger evidence must never produce less output. The bare
+    form now lands on (c)'s own answer — the reply destination exists, this
+    catalog just cannot name it."""
+    listener = "com/acme/notify/OrderListener#"
+    handler = "com/acme/notify/OrderListener#onBareAbsent()."
+    workspace = _resolve(tmp_path, _bare_send_to_facts(handler, listener, {}))
+    replies = _replies_for(workspace, handler)
+    workspace.close()
+
+    assert len(replies) == 1
+    [reply] = replies
+    assert reply["path"] is None
+    assert reply["resolution"] == "unresolved"
+    assert json.loads(reply["request_shape"])["shape_id"] == RECEIPT_VIEW
+
+
+def test_g_a_send_to_holding_an_explicit_empty_destination_array_derives_one_unresolved_row(
+    tmp_path: Path,
+):
+    """The other half of (f)'s bare form: `@SendTo({})` written out in
+    source, which records the attribute holding an empty array rather than
+    omitting it. Same evidence, same answer — the two must not diverge on a
+    distinction that is a bytecode emission detail, not a fact about the
+    handler."""
+    listener = "com/acme/notify/OrderListener#"
+    handler = "com/acme/notify/OrderListener#onBareEmpty()."
+    workspace = _resolve(tmp_path, _bare_send_to_facts(handler, listener, {"value": []}))
+    replies = _replies_for(workspace, handler)
+    workspace.close()
+
+    assert len(replies) == 1
+    [reply] = replies
+    assert reply["path"] is None
+    assert reply["resolution"] == "unresolved"
+    assert json.loads(reply["request_shape"])["shape_id"] == RECEIPT_VIEW
+
+
 # --- Fix round 1, BLOCKER: `endpoints` carries no catalog-identity column,
 # so two same-protocol `annotation_driven` catalogs must not let one
 # catalog's reply pass reach the other's handlers. ---------------------------

@@ -50,10 +50,11 @@ def _derive_replies(workspace: Workspace, catalog: Catalog) -> None:
     """D02 §2's `reply` block: a listener's declared reply (`@SendTo` and
     its like) derives a second, OUTBOUND row per listed destination —
     `caller` the handler, payload the handler's own return type — plus one
-    `path`-NULL `unresolved` row for a value-returning handler that never
-    declared the annotation at all (the reply destination exists, just not
-    where the annotations can name it — a `ReplyingKafkaTemplate` caller,
-    say). A `void` handler (its return type's own `_payload_descriptor` is
+    `path`-NULL `unresolved` row for a value-returning handler whose reply
+    destination this catalog cannot name: the annotation absent altogether
+    (the destination exists, just not where the annotations can see it — a
+    `ReplyingKafkaTemplate` caller, say), or present but bare, listing no
+    destination. A `void` handler (its return type's own `_payload_descriptor` is
     `None`) derives no reply row at all: there is nothing to reply with.
 
     Restricted to the handlers THIS catalog's own mapping actually matched —
@@ -82,9 +83,13 @@ def _derive_replies(workspace: Workspace, catalog: Catalog) -> None:
     destination_attr = reply["destination_from"]
     rules = _rules_of(catalog)
     enums = _enum_symbols(workspace)
-    # `_payload_descriptor` appends every object it meets to this, exactly as
-    # every other pass's own `referenced` accumulator does — so a reply
-    # payload type reached only here still reaches shape expansion.
+    # `_payload_descriptor` requires an accumulator, and this one is
+    # DISCARDED: nothing reads it after `_derive_replies` returns, so it is
+    # not what carries a reply payload into shape expansion. What does is the
+    # inbound row this reply belongs to — a reply's payload IS its handler's
+    # return type, which `shapes/contracts.py` roots as that same handler's
+    # `response_shape` off `handler_signature`. That, not this list, is why
+    # a reply payload is expanded today.
     referenced: list[str] = []
 
     # A dict first, then its keys sorted (NFR-1): one inbound row per
@@ -140,8 +145,22 @@ def _derive_replies(workspace: Workspace, catalog: Catalog) -> None:
             rows.append(_reply_row(catalog, handler, None, "unresolved", descriptor))
             continue
         args = json.loads(str(reply_use["args"])) if reply_use["args"] is not None else {}
+        destinations = _destinations_of(args, destination_attr)
+        # A BARE reply annotation — declared, but naming no destination at
+        # all — lands on the very same path-NULL `unresolved` row the
+        # no-annotation branch above emits (final review, CRITICAL). It used
+        # to derive nothing: the loop below simply never ran, so a handler
+        # that *declares* it replies produced strictly LESS than one that
+        # declares nothing, inverting the evidence. Both bytecode forms of
+        # bare reach here — `@SendTo`'s `value` defaults to `{}`, recorded
+        # either as the attribute key absent or as an explicit empty array —
+        # and neither is a fact about the handler, so neither may change the
+        # answer.
+        if not destinations:
+            rows.append(_reply_row(catalog, handler, None, "unresolved", descriptor))
+            continue
         # Destinations in listed order (NFR-1).
-        for destination in _destinations_of(args, destination_attr):
+        for destination in destinations:
             rows.append(_reply_row(catalog, handler, destination, "resolved", descriptor))
 
     workspace.derive("call_endpoints", rows=rows)
