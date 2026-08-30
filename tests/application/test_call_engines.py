@@ -1221,6 +1221,191 @@ def test_a_verbless_row_whose_channel_is_a_parameter_derives_unresolved_and_neve
     assert all(row["path"] is None and row["resolution"] == "unresolved" for row in rows)
 
 
+# --- Task 7: `record_arg` / `record_wrappers` (D02 §2's `single_call`,
+# amended) — `send(ProducerRecord)`'s one argument names neither the topic
+# nor the payload directly: both live on the record's own linked
+# constructor, found by the same `<init>` one-hop `call_wrappers` already
+# uses (`contracts._linked_constructor`), read at the catalog's declared
+# `channel_ctor_arg`/`payload_ctor_arg` positions. Real fixture shapes
+# (`com/acme/orders/messaging/EventProducers`, checkpoint-verified at BASE):
+# `new ProducerRecord<>("order-audit", event)` (2-arg) and `new
+# ProducerRecord<>("order-raw", key, event)` (3-arg).
+
+PRODUCER_RECORD = "org/apache/kafka/clients/producer/ProducerRecord#"
+ORDER_EVENT = "com/acme/orders/contracts/OrderEvent#"
+
+
+def _record_wrappers_catalog(catalog_id: str = "invented-record-wrappers") -> Catalog:
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [{"name": "send", "record_arg": 0}],
+        "record_wrappers": [
+            {
+                "type": "org.apache.kafka.clients.producer.ProducerRecord",
+                "channel_ctor_arg": 0,
+                "payload_ctor_arg": "last",
+            }
+        ],
+    }
+    return _single_call_catalog(matches, catalog_id)
+
+
+def _record_ctor(caller: str, ordinal: int, receiver: int, arguments: list) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(owner=PRODUCER_RECORD, name="<init>", descriptor="()V"),
+        invoke_kind="special",
+        ordinal=ordinal,
+        receiver=receiver,
+        result=None,
+        arguments=arguments,
+    )
+
+
+def test_a_two_arg_producer_record_derives_the_topic_and_the_payload(tmp_path: Path):
+    """D02 §2's `record_arg`: `new ProducerRecord<>("order-audit", event)`
+    linked into `send(record)` resolves the topic and the payload off the
+    record's own constructor, never off `send`'s own (single) argument —
+    `channel_ctor_arg: 0` is the topic, `payload_ctor_arg: "last"` is the
+    2-arg constructor's own last slot, the event."""
+    caller = "com/acme/orders/messaging/EventProducers#publishAudit()."
+    facts = [
+        _record_ctor(
+            caller,
+            0,
+            10,
+            [
+                CallArgument(kind="string", value="order-audit"),
+                CallArgument(kind="instance", symbol=ORDER_EVENT),
+            ],
+        ),
+        _send_call(caller, 1, [CallArgument(kind="instance", source=10, symbol=PRODUCER_RECORD)]),
+    ]
+    workspace = _resolve(tmp_path, facts, _record_wrappers_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["protocol"], endpoint["direction"]) == ("kafka", "outbound")
+    assert endpoint["method"] is None
+    assert endpoint["path"] == "order-audit"
+    assert endpoint["resolution"] == "resolved"
+    assert json.loads(endpoint["request_shape"]) == {
+        "wire_type": "object",
+        "wire_format": "",
+        "nullable": True,
+        "shape_id": ORDER_EVENT,
+    }
+
+
+def test_a_three_arg_producer_record_still_lands_the_payload_on_last(tmp_path: Path):
+    """The 3-arg overload (`topic, key, value`) proves `payload_ctor_arg:
+    "last"` is a rule about the constructor's own shape, not a fixed index —
+    it holds across every `ProducerRecord` overload (design doc), landing on
+    the value even though the value has moved from position 1 to position 2."""
+    caller = "com/acme/orders/messaging/EventProducers#publishRaw()."
+    facts = [
+        _record_ctor(
+            caller,
+            0,
+            11,
+            [
+                CallArgument(kind="string", value="order-raw"),
+                CallArgument(kind="string", value="order-42"),
+                CallArgument(kind="instance", symbol=ORDER_EVENT),
+            ],
+        ),
+        _send_call(caller, 1, [CallArgument(kind="instance", source=11, symbol=PRODUCER_RECORD)]),
+    ]
+    workspace = _resolve(tmp_path, facts, _record_wrappers_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "order-raw"
+    assert endpoint["resolution"] == "resolved"
+    assert json.loads(endpoint["request_shape"])["shape_id"] == ORDER_EVENT
+
+
+def test_an_unlinked_record_argument_derives_unresolved_with_a_null_path(tmp_path: Path):
+    """A `record_arg` the scanner could not resolve at all — a `ProducerRecord`
+    built elsewhere and passed in as a parameter, `kind: unresolved` — still
+    derives the row (D02 §2's unresolved-is-an-answer): there is no
+    constructor to link, so neither the topic nor the payload can be read,
+    and per I1 that drops the row's own `resolution`, `path` NULL."""
+    caller = "com/acme/orders/messaging/EventProducers#publishDynamic()."
+    facts = [_send_call(caller, 0, [CallArgument(kind="unresolved")])]
+    workspace = _resolve(tmp_path, facts, _record_wrappers_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["resolution"] == "unresolved"
+    assert endpoint["request_shape"] is None
+
+
+def test_a_row_declaring_record_arg_with_body_arg_is_refused_at_run_start(tmp_path: Path):
+    """`record_arg` IS the channel+payload source (D02 §2) — a row also
+    declaring `body_arg` (or `url_arg`/`channel_arg`/`response_arg`) is
+    contradictory evidence, not a richer row, and is refused before any call
+    site is matched, the same `_validate_methods` discipline as the
+    `url_arg`+`channel_arg` conflict."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [{"name": "send", "record_arg": 0, "body_arg": 1}],
+    }
+    catalog = _single_call_catalog(matches, "invented-record-body-conflict")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "invented-record-body-conflict.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        {"channel_ctor_arg": 0, "payload_ctor_arg": "last"},  # missing type
+        {"type": "org.apache.kafka.clients.producer.ProducerRecord", "payload_ctor_arg": "last"},
+        {
+            "type": "org.apache.kafka.clients.producer.ProducerRecord",
+            "channel_ctor_arg": "0",  # not an int
+            "payload_ctor_arg": "last",
+        },
+        {
+            "type": "org.apache.kafka.clients.producer.ProducerRecord",
+            "channel_ctor_arg": 0,
+            "payload_ctor_arg": "middle",  # neither an int nor "last"
+        },
+    ],
+)
+def test_a_malformed_record_wrappers_entry_is_refused_at_run_start(tmp_path: Path, wrapper: dict):
+    """The `record_wrappers` block shape (`{type, channel_ctor_arg: int,
+    payload_ctor_arg: int|"last"}`) is checked once, at `run` start, exactly
+    as a broken `methods` row is — a missing field, a non-int
+    `channel_ctor_arg`, or a `payload_ctor_arg` that is neither an int nor
+    the literal `"last"` is a broken catalog, never a silent no-op at
+    resolve time."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [{"name": "send", "record_arg": 0}],
+        "record_wrappers": [wrapper],
+    }
+    catalog = _single_call_catalog(matches, "invented-bad-record-wrapper")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "invented-bad-record-wrapper.yml" in str(raised.value)
+
+
 # --- The `fluent` engine (Task 11): chains reassembled from value links ----
 #
 # No catalog ships with this task (Task 12 writes the real spring-webclient/

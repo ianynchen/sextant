@@ -19,6 +19,7 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.contracts import (
     CallFacts,
     CarrierRules,
+    _linked_constructor,
     argument_descriptor,
     supertypes_of,
     url_of,
@@ -49,6 +50,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # `_matching_method` scans it per call site instead.
     methods = list(matches["methods"])
     _validate_methods(methods, catalog)
+    record_wrappers = list(matches.get("record_wrappers", []))
+    _validate_record_wrappers(record_wrappers, catalog)
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
@@ -58,6 +61,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             for wrapper in matches.get("call_wrappers", [])
         },
     )
+    # `record_arg`'s own lookup (D02 §2, Task 7): the record's type keys a
+    # `(channel_ctor_arg, payload_ctor_arg)` pair, converted once here rather
+    # than per call site, exactly as `call_wrappers` above is.
+    record_wrapper_args = {
+        _catalog_symbol(wrapper["type"]): (wrapper["channel_ctor_arg"], wrapper["payload_ctor_arg"])
+        for wrapper in record_wrappers
+    }
     supertypes = supertypes_of(workspace)
     # `arguments` is parsed once, here, rather than once per reader: the
     # `call_sites` query returns it as raw JSON text, and both the matching
@@ -104,12 +114,32 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # column nobody could fill; `method` NULL on an `unresolved` row
         # says it instead (D02 §2's unresolved-is-an-answer).
         verb = _verb_of(method, arguments)
-        # `channel_arg` is `url_arg`'s alias for a destination-shaped
-        # identity (D02 §2) — `_validate_methods` already refused a row
-        # declaring both, so at most one of the two is ever present here.
-        url_argument = _arg_at(arguments, method.get("url_arg", method.get("channel_arg")))
+        caller = str(site["caller"])
+        facts = CallFacts(
+            supertypes=supertypes,
+            caller_call_sites=by_caller.get(caller, []),
+            referenced=referenced,
+        )
+        if "record_arg" in method:
+            # `record_arg` names an argument whose *linked constructor*
+            # carries both identity and payload (D02 §2, Task 7) —
+            # `send(ProducerRecord)`'s one argument is the record, not the
+            # topic or the value. `_validate_methods` already refused a row
+            # declaring `record_arg` alongside `url_arg`/`channel_arg`/
+            # `body_arg`/`response_arg`, so this is the row's only source
+            # for both.
+            record = _arg_at(arguments, method["record_arg"])
+            url_argument, body_argument = _record_arguments(record, record_wrapper_args, facts)
+            body_declared: int | None = method["record_arg"]
+        else:
+            # `channel_arg` is `url_arg`'s alias for a destination-shaped
+            # identity (D02 §2) — `_validate_methods` already refused a row
+            # declaring both, so at most one of the two is ever present
+            # here.
+            url_argument = _arg_at(arguments, method.get("url_arg", method.get("channel_arg")))
+            body_argument = _arg_at(arguments, method.get("body_arg"))
+            body_declared = method.get("body_arg")
         peer, path, url_resolution = url_of(url_argument)
-        body_argument = _arg_at(arguments, method.get("body_arg"))
         response_argument = _arg_at(arguments, method.get("response_arg"))
         # Checkpoint ruling I1: any DECLARED capture that failed to resolve
         # drops the *row's* resolution, even when the url itself read fine —
@@ -118,16 +148,18 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # failure), but a resolved row promises every declared capture was
         # read, not only the url. `path` stays NULL-safe: this only ever
         # narrows resolution from `resolved` to `unresolved`, never the
-        # other way.
+        # other way. A `record_arg` row's own payload is exactly as
+        # "declared" as a `body_arg` row's (`body_declared` stands in for
+        # either), so a linked constructor whose payload slot could not be
+        # read narrows this row's resolution the same way.
         resolution = (
             "resolved"
             if (verb is not None or verbless)
             and url_resolution == "resolved"
-            and _capture_resolved(method.get("body_arg"), body_argument)
+            and _capture_resolved(body_declared, body_argument)
             and _capture_resolved(method.get("response_arg"), response_argument)
             else "unresolved"
         )
-        caller = str(site["caller"])
         # `direction` on a row overrides the catalog's own declared
         # direction (D02 §2) — Pub/Sub's `subscribe` is inbound even inside
         # an otherwise outbound file.
@@ -149,11 +181,6 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             if key in seen:
                 continue
             seen.add(key)
-        facts = CallFacts(
-            supertypes=supertypes,
-            caller_call_sites=by_caller.get(caller, []),
-            referenced=referenced,
-        )
         # An inbound row's deriving method is the consumer, not the caller
         # (D02 §2): it lands in `handler`, and `caller` stays NULL — the
         # same handler/caller split `derive_endpoints.sql` keeps for the
@@ -214,7 +241,9 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
     Direction values — the catalog-level `direction` is checked at load time
     (`yaml_source.py`'s `_closed`), but a row's override lives inside
     `matches`, opaque to that loader-level check, so it is checked here
-    instead."""
+    instead. `record_arg` (Task 7) IS the channel+payload source — a row
+    declaring it alongside `url_arg`/`channel_arg`/`body_arg`/`response_arg`
+    is contradictory evidence, not a richer row."""
     for row in rows:
         if "url_arg" in row and "channel_arg" in row:
             raise CatalogError(
@@ -222,12 +251,46 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                 f"`url_arg` and `channel_arg` — they name the same capture (D02 §2's "
                 f"single_call style)"
             )
+        if "record_arg" in row:
+            conflicts = [
+                key for key in ("url_arg", "channel_arg", "body_arg", "response_arg") if key in row
+            ]
+            if conflicts:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{row['name']}` declares "
+                    f"`record_arg` together with {', '.join(conflicts)} — the record IS "
+                    f"the channel+payload source (D02 §2's `record_arg`)"
+                )
         direction = row.get("direction")
         if direction is not None and direction not in _DIRECTIONS:
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{row['name']}` declares "
                 f"`direction: {direction}`, which is not one of {', '.join(_DIRECTIONS)} "
                 f"— D00's closed sets are closed (NFR-5)"
+            )
+
+
+def _validate_record_wrappers(rows: list[dict[str, Any]], catalog: Catalog) -> None:
+    """Refuses a broken `record_wrappers` block before any call site is
+    matched — the same `_validate_methods` discipline, applied to the
+    catalog-level block a `record_arg` row's lookup depends on. Each entry
+    must be `{type, channel_ctor_arg, payload_ctor_arg}`: `type` a string,
+    `channel_ctor_arg` an int, and `payload_ctor_arg` either an int or the
+    literal string `"last"` (the constructor's own final argument) —
+    anything else is a broken catalog, never a silent no-op once a call site
+    reaches it."""
+    for wrapper in rows:
+        payload_ctor_arg = wrapper.get("payload_ctor_arg")
+        valid = (
+            isinstance(wrapper.get("type"), str)
+            and isinstance(wrapper.get("channel_ctor_arg"), int)
+            and (isinstance(payload_ctor_arg, int) or payload_ctor_arg == "last")
+        )
+        if not valid:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: a `record_wrappers` entry must be "
+                f'`{{type, channel_ctor_arg: int, payload_ctor_arg: int|"last"}}`, got '
+                f"{wrapper!r}"
             )
 
 
@@ -241,6 +304,46 @@ def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any
     if index is None or index >= len(arguments):
         return None
     return arguments[index]
+
+
+def _record_arguments(
+    record: dict[str, Any] | None,
+    record_wrapper_args: dict[str, tuple[int, int | str]],
+    facts: CallFacts,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """A `record_arg` row's channel and payload arguments (D02 §2's
+    `record_wrappers`, Task 7): the record argument's own linked
+    constructor — the same one-hop `contracts._linked_constructor` already
+    gives `call_wrappers` — read at the catalog's declared
+    `channel_ctor_arg`/`payload_ctor_arg` positions, `"last"` meaning the
+    constructor's own final argument. Returns the two raw argument dicts,
+    fed straight back into `url_of`/`argument_descriptor` exactly as a
+    direct `url_arg`/`body_arg` row's own arguments are — the record path
+    invents no second resolution rule.
+
+    `(None, None)` wherever the chain breaks: the record itself was not
+    captured as a constructed `instance`, its type names no
+    `record_wrappers` entry, or no `<init>` call site in this same caller
+    links to it. Each of these is I1's declared-capture failure, not a
+    crash — the caller derives the row regardless, `resolution:
+    unresolved`."""
+    if record is None or record.get("kind") != "instance" or record.get("symbol") is None:
+        return None, None
+    symbol = str(record["symbol"])
+    wrapper = record_wrapper_args.get(symbol)
+    if wrapper is None:
+        return None, None
+    channel_ctor_arg, payload_ctor_arg = wrapper
+    constructor = _linked_constructor(symbol, record.get("source"), facts)
+    if constructor is None:
+        return None, None
+    ctor_arguments = constructor.get("arguments") or []
+    channel_argument = _arg_at(ctor_arguments, channel_ctor_arg)
+    if isinstance(payload_ctor_arg, int):
+        payload_argument = _arg_at(ctor_arguments, payload_ctor_arg)
+    else:
+        payload_argument = ctor_arguments[-1] if ctor_arguments else None
+    return channel_argument, payload_argument
 
 
 def _capture_resolved(declared_index: int | None, argument: dict[str, Any] | None) -> bool:
