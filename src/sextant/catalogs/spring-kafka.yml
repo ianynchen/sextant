@@ -51,15 +51,35 @@ matches:
     payload: return
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility: an
-# inbound catalog's own wrapper/serialization/known_types rules can settle
-# ANY same-direction row, including one a different catalog produced — D02
-# §2, Task 12 review round 1 finding 1), plus the two broker envelope types
-# below, added to this catalog only.
+# inbound catalog's own wrapper/serialization/known_types rules can describe
+# a row a *different*, same-direction-and-protocol catalog produced — D02
+# §2, Task 12 review round 1 finding 1; `_owns`, shapes/contracts.py, scopes
+# that sharing to same-protocol catalogs since Task 10 fix round 1, but
+# spring-mvc/spring-web are `protocol: http` and this file is `protocol:
+# kafka`, so the harvest still matters only within same-protocol catalogs —
+# moot today since this is the only shipped `kafka` catalog, kept for the
+# day a second one ships), plus the one broker envelope type below, added to
+# this catalog only. `nullability`, below, is harvested from spring-mvc.yml
+# instead — shape (type) expansion is a *global*, insert-if-absent pass keyed
+# on the type symbol alone (`derive_shapes`, outside `_owns` entirely), so a
+# shared payload type's fields get whichever catalog's nullability rules
+# process that type first, regardless of protocol (Task 10 fix round 1,
+# finding 1: reproduced a `@NonNull` HTTP field silently reading as nullable
+# once `spring-jms.yml` — sorted first among inbound catalogs — reached the
+# same shared type with no nullability rules of its own).
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
   - { type: org.apache.kafka.clients.consumer.ConsumerRecord, payload_arg: 1, semantics: envelope }
-  - { type: org.springframework.messaging.Message, payload_arg: 0, semantics: envelope }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
 
 serialization:
   name_from:

@@ -267,6 +267,15 @@ extended to the new files. If 2D's plan review finds that bet false for any mess
 payload, the producing-catalog column gets pulled into 2D at that point rather than
 papered over.
 
+**Amendment (Task 10 fix round 1):** the bet was found false, in real bytecode, in two
+directions — a same-direction, different-protocol catalog claiming an HTTP body rule
+never meant for it, and (separately) `nullability`, omitted from the harvest, silently
+degrading a shared payload's `@NonNull` field once a first-in-sort messaging catalog
+reached it. Settled within 2D by scoping `_owns` by protocol as well as direction and
+harvesting `nullability` verbatim too, not deferred. The producing-catalog column
+remains the principled fix for the class of bug this bet accepted; it is not resolved,
+only patched around, and stays slated pre-2E.
+
 New D02 vocabulary summarized for the amendment task: `type_carriers` positional form,
 `arity` on `methods` rows, `channel_arg` (alias of `url_arg`), `record_wrappers`,
 `reply`, `direction: inbound` on `single_call` catalogs, `payload_excludes`. Seven

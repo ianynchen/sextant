@@ -219,14 +219,13 @@ def _owns(catalog: Catalog, endpoint: dict[str, object]) -> bool:
     Also scoped by `protocol` (Task 10, messaging catalogs): direction alone
     let an `http` row and a `kafka` row sit in the same same-direction pool,
     and `spring-jms`'s `sole_unannotated` body fallback — sorted before
-    `spring-mvc` alphabetically among inbound catalogs — matched
-    `LegacyOrderController#amend`'s bare, unannotated `long id` HTTP
-    parameter as if it were a JMS listener's payload, describing an `http`
-    row nothing in `spring-jms.yml` ever mapped. Every catalog shipped before
-    this task is `protocol: http`, so this adds no new restriction among
-    them — it only stops a different-protocol catalog's rules (a broader
-    `sole_unannotated` fallback none of the HTTP catalogs declare) from
-    reaching a row it never produced.
+    `spring-mvc` alphabetically among inbound catalogs — matched a bare,
+    unannotated HTTP parameter as if it were a JMS listener's payload,
+    describing an `http` row nothing in `spring-jms.yml` ever mapped. Every
+    catalog shipped before this task is `protocol: http`, so this adds no
+    new restriction among them — it only stops a different-protocol
+    catalog's rules (a broader `sole_unannotated` fallback none of the HTTP
+    catalogs declare) from reaching a row it never produced.
     """
     if str(endpoint["protocol"]) != catalog.protocol:
         return False

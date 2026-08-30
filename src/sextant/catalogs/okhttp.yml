@@ -43,11 +43,13 @@ matches:
 
 # Shared verbatim across every outbound catalog on purpose (not just these
 # three plus RestTemplate): `_owns` (shapes/contracts.py) scopes ownership by
-# direction only, so whichever outbound catalog sorts first — okhttp, here —
-# describes every outbound row's shapes, including a row a *different*
-# catalog produced (Retrofit's own `Call<OrderView>`, say). Every outbound
-# catalog's wrappers/serialization/known_types must therefore agree, or the
-# first one alphabetically silently mis-describes a route it never derived.
+# direction AND protocol (Task 10 fix round 1) — every outbound catalog here
+# is `protocol: http`, so within this same-protocol group, whichever sorts
+# first — okhttp, here — still describes every outbound row's shapes,
+# including a row a *different* catalog produced (Retrofit's own
+# `Call<OrderView>`, say). Every outbound catalog's
+# wrappers/serialization/known_types must therefore agree, or the first one
+# alphabetically silently mis-describes a route it never derived.
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: reactor.core.publisher.Mono,              payload_arg: 0, semantics: async }
