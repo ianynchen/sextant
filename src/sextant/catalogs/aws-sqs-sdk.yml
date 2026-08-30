@@ -1,0 +1,99 @@
+id: aws-sqs-sdk
+displayName: AWS SDK for Java v2 (raw SqsClient)
+style: fluent
+protocol: sqs
+direction: outbound
+
+detect:
+  coordinates: ["software.amazon.awssdk:sqs"]
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  # `SendMessageRequest.builder()` is a static factory, not a `<init>` — the
+  # engine's own chain key (CP-3) already handles this: a non-`<init>` root's
+  # key is its own `result` (the returned builder value id), exactly the
+  # same rule every later step's `result` already feeds forward, so no
+  # engine change was needed beyond the precondition's verbless support.
+  # SQS has no HTTP-style verb, so this root captures none — a topic/queue
+  # has no verb, mirroring single_call's own D02 §2 verbless row (2E-prep
+  # Task 11 precondition).
+  roots:
+    - { owner: software.amazon.awssdk.services.sqs.model.SendMessageRequest, method: builder, captures: {} }
+  # Both steps live on the builder's own inner class (checkpoint fact,
+  # `$`-dotted exactly as OkHttp's `Request$Builder` already established) —
+  # no `owner` filter needed here, since neither method name collides with
+  # anything else this catalog declares.
+  steps:
+    - { method: queueUrl,    captures: { url: arg0 } }
+    - { method: messageBody, captures: { body: arg0 } }
+  # `Builder.build()` erases to `()Ljava/lang/Object;` (a generic builder
+  # interface) — a `CHECKCAST` back to `SendMessageRequest` links the
+  # erased result to `sendMessage`'s own argument (2C's CHECKCAST
+  # transparency, verified live against the real fixture at this task's
+  # checkpoint), through the same `terminal_via_argument` join OkHttp's own
+  # `build()` → `newCall()` split already uses.
+  terminal:
+    - { method: build, terminal_via_argument: { owner: software.amazon.awssdk.services.sqs.SqsClient, method: sendMessage } }
+
+# `queueUrl` captures the WHOLE queue URL, not a bare topic name — SQS's
+# `SendMessageRequest.Builder#queueUrl` genuinely takes an absolute
+# `https://sqs.<region>.amazonaws.com/<account>/<queue>` URL, an HTTP-style
+# URL by AWS's own API design. The fluent engine's `url` capture always
+# reads through `url_of` (never `channel_of`), so CP-2 splits it exactly as
+# OkHttp's own absolute `Request.Builder#url` does — peer
+# `sqs.<region>.amazonaws.com`, path `/<account>/<queue>` — a deliberate
+# contrast with `single_call`'s `channel_arg` (spring-sqs-template.yml),
+# which keeps a queue URL whole precisely BECAUSE it is a destination
+# expression on that surface, never a URL to parse. Both are honest: the
+# fluent engine has no `channel_arg`-shaped capture at all, only `url`, and
+# `url` genuinely is what AWS's own builder API takes here.
+
+# Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
+# discipline as spring-kafka-template.yml — see its own comment for the full
+# rationale). `nullability` is harvested from spring-mvc.yml. This catalog
+# sorts first alphabetically among every shipped file, so — unlike the
+# fluent HTTP trio (okhttp/webclient/restclient), which can rely on
+# spring-mvc.yml loading before them — it must carry its own nullability
+# copy to be self-sufficient for whichever shared payload type it reaches
+# first (Task 10 fix round 1, finding 1).
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

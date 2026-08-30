@@ -213,6 +213,35 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # merge target — `order-events`/`order-audit`/`order-returns`/
         # `audit.queue` — already existed as an inbound row from Task 10).
         (None, "order-notifications"),
+        # 2E-prep Task 11 (driver catalogs A): the raw-client sibling
+        # catalogs — `jakarta-jms.yml`, `kafka-consumer.yml`,
+        # `aws-sqs-sdk.yml` — none of whose routes merge with anything else
+        # in the fixture (each is a genuinely new destination). JMS:
+        # `RawJmsBridge#createAuditProducer`/`createIntakeConsumer`, read off
+        # `Session#createQueue`'s own linked-call argument (`channel_via`).
+        (None, "raw-audit"),
+        (None, "raw-intake"),
+        # Kafka: `RawKafkaConsumers#subscribeToTopics`'s one
+        # `consumer.subscribe(List.of("raw-t1", "raw-t2"))` call derives two
+        # rows off one handler — `channel_via`'s own `all_strings` form.
+        (None, "raw-t1"),
+        (None, "raw-t2"),
+        # `subscribeToPattern`'s `consumer.subscribe(Pattern.compile(
+        # "raw-.*"))` — the pattern lands on `path` verbatim, never expanded,
+        # same rule every other `topicPattern`/`topic_pattern` row keeps.
+        (None, "raw-.*"),
+        # SQS: `RawSqsClientSender#send`'s fluent
+        # `SendMessageRequest.builder().queueUrl(...).messageBody(body)
+        # .build()` chain — the FIRST fluent catalog to derive a verbless
+        # row (this task's own precondition commit). The queue URL is
+        # absolute, so CP-2 splits it into peer + path exactly as OkHttp's
+        # own absolute `Request.Builder#url` does — asserted below — a
+        # deliberate contrast with every `channel_arg` destination
+        # elsewhere in this file, which stays whole (`aws-sqs-sdk.yml`'s own
+        # catalog comment states why: the fluent engine's `url` capture is
+        # an HTTP-style URL by AWS's own builder API design, never an opaque
+        # destination expression to keep verbatim).
+        (None, "/123456789012/raw-queue"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -270,7 +299,17 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # collapsed or suppressed. 55 + 1 = 56 is the TRUE frozen baseline for
     # this fixture from Task 6 on — the dispatch's original "count must stay
     # 55" was the controller's own error, corrected at the Task 6 checkpoint.
-    assert len(report.endpoints) == 56
+    #
+    # 2E-prep Task 11 (driver catalogs A) adds 6 more, none of which merges
+    # with anything already in the fixture — every one of these six routes
+    # is a destination nothing else in the fixture ever names, so each is a
+    # genuinely new row rather than a new caller/handler joining an existing
+    # one: `jakarta-jms.yml`'s `raw-audit` (outbound) and `raw-intake`
+    # (inbound), `kafka-consumer.yml`'s `raw-t1` + `raw-t2` (two rows off one
+    # `subscribe(List.of(...))` call) and `raw-.*` (the pattern overload),
+    # and `aws-sqs-sdk.yml`'s own verbless fluent row (the queue URL's own
+    # path, after CP-2 splits off the peer). 56 + 6 = 62.
+    assert len(report.endpoints) == 62
     assert report.skipped_catalogs == []
 
     directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
@@ -283,6 +322,10 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # split into peer (the authority) and path (asserted in the route set
     # above), unlike every other outbound catalog's builder-code base URL.
     assert peers["/legacy/exports"] == "legacy.acme.internal"
+    # 2E-prep Task 11: `aws-sqs-sdk.yml`'s `queueUrl(...)` capture is the
+    # SAME CP-2 split — AWS's own builder API takes a full HTTP-style queue
+    # URL, unlike every `channel_arg` destination elsewhere in this file.
+    assert peers["/123456789012/raw-queue"] == "sqs.us-east-1.amazonaws.com"
 
     # The `uri(uriBuilder -> …)` chain: the engine only follows one hop off
     # the lambda argument, so the row still derives (a call was made) but
@@ -863,6 +906,130 @@ def test_a_catalogs_row_level_direction_override_is_still_owned_with_no_other_ca
 
     assert row["direction"] == "both"
     assert shape_id in shapes
+
+
+# --- 2E-prep Task 11: driver catalogs A — sqs-sdk, jakarta-jms,
+# kafka-consumer, end to end, on real bytecode. None of these six rows
+# merges with anything else in the fixture (each targets a destination
+# nothing else in the fixture names), so every assertion below is about a
+# genuinely new, standalone row.
+
+
+def test_a_raw_jms_producer_registration_derives_a_resolved_outbound_row_with_no_payload(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`RawJmsBridge#createAuditProducer`'s `session.createProducer(
+    session.createQueue("raw-audit"))`: `jakarta-jms.yml`'s `channel_via`
+    follows the queue instance back to its own creating `createQueue` call
+    to read the destination, the same linked-call follow Task 7's
+    `channel_via` already established. `Session#send` is deliberately not
+    declared — a raw `jakarta.jms.Message` is as opaque here as it is to
+    `spring-jms.yml`'s own listener-side `excludes` — so the PRODUCER
+    REGISTRATION itself is the evidence a route exists, and the row's own
+    payload is honestly absent rather than guessed."""
+    _, report = resolved_fixture
+    [row] = _messaging_rows(report, "jms", "raw-audit")
+
+    assert row["direction"] == "outbound"
+    assert row["handler"] is None
+    assert row["caller"].endswith("RawJmsBridge#createAuditProducer(sig_ca3b0a33).")
+    assert row["resolution"] == "resolved"
+    assert row["request_shape"] is None
+
+
+def test_a_raw_jms_consumer_registration_derives_a_resolved_inbound_row_with_no_payload(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`RawJmsBridge#createIntakeConsumer`'s `session.createConsumer(
+    session.createQueue("raw-intake"))` — the SAME `channel_via` form as the
+    producer row above, only this row's own `methods` entry declares
+    `direction: inbound`, so the deriving method lands in `handler`, not
+    `caller` (D02 §2's per-row direction override, applied here for the
+    first time on a catalog that is not otherwise entirely one direction)."""
+    _, report = resolved_fixture
+    [row] = _messaging_rows(report, "jms", "raw-intake")
+
+    assert row["direction"] == "inbound"
+    assert row["caller"] is None
+    assert row["handler"].endswith("RawJmsBridge#createIntakeConsumer(sig_69833420).")
+    assert row["resolution"] == "resolved"
+    assert row["request_shape"] is None
+
+
+def test_a_raw_kafka_consumers_topic_list_derives_two_rows_off_one_subscribe_call(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`RawKafkaConsumers#subscribeToTopics`'s `consumer.subscribe(List.of(
+    "raw-t1", "raw-t2"))`: `kafka-consumer.yml`'s `channel_via` reads the
+    linked `List.of(...)` call's own `all_strings` positional arguments —
+    one resolved row per topic, both sharing this one call's own handler.
+    `subscribe` carries no payload capture, so, unlike `@KafkaListener`'s
+    typed `ConsumerRecord<K, V>` parameter, the raw registration's own
+    request shape is honestly absent."""
+    _, report = resolved_fixture
+    t1 = _messaging_rows(report, "kafka", "raw-t1")
+    t2 = _messaging_rows(report, "kafka", "raw-t2")
+
+    assert len(t1) == 1 and len(t2) == 1
+    for row in (*t1, *t2):
+        assert row["direction"] == "inbound"
+        assert row["caller"] is None
+        assert row["handler"].endswith("RawKafkaConsumers#subscribeToTopics(sig_da8c82d5).")
+        assert row["resolution"] == "resolved"
+        assert row["request_shape"] is None
+
+
+def test_a_raw_kafka_consumers_pattern_subscribe_lands_the_pattern_on_path_verbatim(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`RawKafkaConsumers#subscribeToPattern`'s `consumer.subscribe(
+    Pattern.compile("raw-.*"))`: the `channel_via` form tried in this case is
+    `Pattern.compile`'s own single `arg: 0`, never `all_strings` — the
+    pattern reads onto `path` exactly as written, never expanded into real
+    topic names, the same rule every `topicPattern`/`topic_pattern` row in
+    this file already keeps."""
+    _, report = resolved_fixture
+    [row] = _messaging_rows(report, "kafka", "raw-.*")
+
+    assert row["direction"] == "inbound"
+    assert row["handler"].endswith("RawKafkaConsumers#subscribeToPattern(sig_da8c82d5).")
+    assert row["resolution"] == "resolved"
+    assert row["request_shape"] is None
+
+
+def test_the_raw_sqs_sdk_builder_chain_splits_its_absolute_queue_url_but_reads_unresolved(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`RawSqsClientSender#send`'s `SendMessageRequest.builder().queueUrl(
+    "https://sqs.us-east-1.amazonaws.com/123456789012/raw-queue")
+    .messageBody(body).build()`, joined to `SqsClient#sendMessage` through
+    `terminal_via_argument` (the same CHECKCAST-linked join OkHttp's own
+    `build()` → `newCall()` split established, `Builder.build()` erasing to
+    `()Ljava/lang/Object;`): the FIRST verbless fluent row this codebase
+    derives (this task's own precondition commit) — `method` is NULL, and
+    the queue URL, an absolute HTTP-style URL by AWS's own builder API
+    design, splits via CP-2 into peer (asserted separately, in the main
+    end-to-end test above) and this row's own `path`.
+
+    `messageBody(body)` captures `body` off `send`'s OWN parameter — a bare,
+    pass-through `String`, D00 §5's `unresolved` kind, the exact same
+    parameter-passthrough shape `order-raw`/`shipments-outbound` already hit
+    in Task 11's producer catalogs. So even though the url itself resolves
+    cleanly, the row's own `resolution` reads `unresolved` (I1: a DECLARED
+    capture — `messageBody` was reached — that failed to read drops the
+    row), and `request_shape` stays honestly absent: a genuine, live-verified
+    divergence from the brief's own shorthand, frozen as observed rather
+    than assumed."""
+    _, report = resolved_fixture
+    [row] = _messaging_rows(report, "sqs", "/123456789012/raw-queue")
+
+    assert row["direction"] == "outbound"
+    assert row["method"] is None
+    assert row["handler"] is None
+    assert row["caller"].endswith("RawSqsClientSender#send(sig_a7421bf5).")
+    assert row["peer"] == "sqs.us-east-1.amazonaws.com"
+    assert row["resolution"] == "unresolved"
+    assert row["request_shape"] is None
 
 
 def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(

@@ -1,0 +1,87 @@
+id: jakarta-jms
+displayName: Jakarta JMS (raw Session)
+style: single_call
+protocol: jms
+direction: outbound
+
+detect:
+  coordinates: ["jakarta.jms:jakarta.jms-api"]
+
+requires: [call_site, string_constants]
+
+matches:
+  owner: jakarta.jms.Session
+  # CHECKPOINT FACT (real javap descriptors, jakarta.jms-api 3.1.0):
+  # `createProducer(Destination)` and `createConsumer(Destination)` are both
+  # arity 1. Neither one's own argument is ever the destination NAME
+  # directly — it is a `Queue`/`Topic` instance, itself the return of a
+  # SEPARATE `Session#createQueue(String)`/`createTopic(String)` call, so
+  # `channel_via` (D02 §2h) follows that link rather than reading
+  # `channel_arg`'s position as a literal.
+  #
+  # `Session#send(Message, ...)` is deliberately NOT declared here: a raw
+  # `jakarta.jms.Message` is an opaque envelope this catalog's rules cannot
+  # pull a real payload contract out of (the same reasoning spring-jms.yml's
+  # own `excludes: [jakarta.jms.Message]` already states for the listener
+  # side) — the producer/consumer REGISTRATION itself is the evidence a
+  # route exists, not the send/receive call, so both rows below carry no
+  # `body_arg` at all and their payload is honestly absent.
+  methods:
+    - name: createProducer
+      arity: 1
+      direction: outbound
+      channel_arg: 0
+      channel_via:
+        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
+        - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
+    - name: createConsumer
+      arity: 1
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
+        - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
+
+# Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
+# discipline as spring-kafka-template.yml — see its own comment for the full
+# rationale). `nullability` is harvested from spring-mvc.yml.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

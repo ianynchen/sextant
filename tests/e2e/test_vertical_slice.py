@@ -103,27 +103,35 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # Phase 2D (Task 12): metadata.json's own direction/protocol buckets
     # (written by analyze, D05 §3) count every messaging protocol too, a
     # `both` row counting on both sides (metadata.py's own rule) — the same
-    # 56-endpoint fixture as the endpoints.parquet check below, viewed
+    # 62-endpoint fixture as the endpoints.parquet check below, viewed
     # through the other artifact. (2E-prep Task 6, checkpoint ruling
     # 2026-08-30: kafka outbound is 8, not 7 — `RawKafkaMessageSender#send`'s
     # `kafkaTemplate.send(Message<?>)` derives its own unresolved NULL-path
     # row off `spring-kafka-template.yml`'s pre-existing arity-1 `record_arg`
     # rule; see `test_pipeline.py`'s dedicated row-level test for the full
     # explanation.)
+    #
+    # 2E-prep Task 11 (driver catalogs A): `jakarta-jms.yml`,
+    # `kafka-consumer.yml` and `aws-sqs-sdk.yml` add 6 more rows, none
+    # merging with anything else in the fixture — jms +1 inbound (
+    # `raw-intake`) +1 outbound (`raw-audit`), kafka +3 inbound (`raw-t1`,
+    # `raw-t2`, `raw-.*`), sqs +1 outbound (the queue URL's own path). See
+    # `test_pipeline.py`'s own dedicated row-level tests for the full
+    # per-row breakdown.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "http": 18,
-        "jms": 2,
-        "kafka": 8,
+        "jms": 3,
+        "kafka": 11,
         "pubsub": 1,
         "sqs": 1,
     }
     assert metadata["endpoints"]["outbound"] == {
         "http": 19,
-        "jms": 2,
+        "jms": 3,
         "kafka": 8,
         "pubsub": 1,
-        "sqs": 2,
+        "sqs": 3,
     }
     runner = CliRunner()
     result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
@@ -160,4 +168,8 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # rule (predating this task) and derives its own unresolved NULL-path
     # row, distinct from `sendDefault`'s (different caller, no merge target)
     # — spec §4's duplicate-row ruling: 25 + 1 = 26.
-    assert rows == [("both", 6), ("inbound", 24), ("outbound", 26)]
+    # 2E-prep Task 11 (driver catalogs A): 6 more rows, none merging with
+    # anything else — inbound +4 (jms `raw-intake`, kafka `raw-t1`/`raw-t2`/
+    # `raw-.*`), outbound +2 (jms `raw-audit`, sqs the queue URL's own
+    # path), `both` unchanged: 24 + 4 = 28, 26 + 2 = 28.
+    assert rows == [("both", 6), ("inbound", 28), ("outbound", 28)]
