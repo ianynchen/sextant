@@ -87,26 +87,40 @@ public final class MethodFlow {
         return lines;
     }
 
-    /** {@code SourceInterpreter}, except that a {@code DUP} does not become the
-     *  producer of the value it duplicated.
+    /** {@code SourceInterpreter}, except that **moving a value is not producing
+     *  it**. ASM's own {@code copyOperation} mints a fresh {@code SourceValue}
+     *  attributed to the copying instruction; this one hands back the value it
+     *  was given, so a value's source stays the instruction that computed it.
      *
-     *  <p>ASM's own {@code copyOperation} mints a fresh {@code SourceValue}
-     *  attributed to the copying instruction, which makes a stack shuffle look
-     *  like a value's origin. On the one shape that matters that is not a
-     *  detail: {@code NEW T; DUP; INVOKESPECIAL T.<init>} leaves the
-     *  constructor's receiver pointing at the DUP while the value handed to the
-     *  enclosing call points at the NEW, so the two halves of a single
-     *  {@code new T(payload)} carry different ids and D02 §2h's one-hop body
-     *  follow has nothing to join on. Returning the incoming value unchanged
-     *  makes the DUP invisible, and both halves name the NEW.
+     *  <p>{@code copyOperation} is called for exactly seventeen opcodes — the
+     *  five loads, the five stores, the six DUPs and {@code SWAP} — and every
+     *  one of them only relocates a value between the stack and a local. None
+     *  computes anything, so none is an origin, and the rule needs no exception
+     *  list. ({@code CHECKCAST} does *not* arrive here; ASM routes it through
+     *  {@code unaryOperation}, and a cast keeps producing its own value.)
      *
-     *  <p>Deliberately the DUP family alone. The loads and stores {@code
-     *  copyOperation} also covers are left as ASM has them: making an
-     *  {@code ALOAD} transparent would resolve a {@code this}-receiver back to
-     *  a method parameter, which has no producing instruction at all, and every
-     *  {@code this.foo()} would lose the receiver id it reports today. Whether
-     *  a chain should survive a store and a reload is a real question and a
-     *  larger one than this. */
+     *  <p>Two joins depend on this, and neither is exotic:
+     *
+     *  <ul>
+     *  <li>{@code NEW T; DUP; INVOKESPECIAL T.<init>} — without transparency the
+     *  constructor's receiver names the DUP while the value handed to the
+     *  enclosing call names the NEW, so one object carries two ids and D02 §2h's
+     *  one-hop body follow has nothing to join on.</li>
+     *  <li>{@code Request r = builder.build(); client.newCall(r);} — the shape
+     *  every OkHttp caller actually writes. Without transparency the store and
+     *  the reload sit between the two halves, {@code newCall}'s argument is an
+     *  {@code unresolved} with no {@code source} at all, and a split builder
+     *  chain cannot be reconstructed on honest code.</li>
+     *  </ul>
+     *
+     *  <p>The cost, stated rather than discovered later: a receiver or argument
+     *  that arrives as a **method parameter** has no producing instruction in
+     *  this method — it existed before the first bytecode ran — so it now reads
+     *  as null where it used to report the index of the load. That is the more
+     *  honest answer, and nothing consumes the old one: a fluent root matches by
+     *  owner and method, and a step join runs call-result to receiver. A local
+     *  reassigned on two branches still merges to several producers and stays
+     *  {@code unresolved}, which is the same honest silence as before. */
     private static final class CopyTransparentSourceInterpreter extends SourceInterpreter {
         CopyTransparentSourceInterpreter() {
             super(Opcodes.ASM9);
@@ -114,11 +128,7 @@ public final class MethodFlow {
 
         @Override
         public SourceValue copyOperation(AbstractInsnNode insn, SourceValue value) {
-            return switch (insn.getOpcode()) {
-                case Opcodes.DUP, Opcodes.DUP_X1, Opcodes.DUP_X2,
-                     Opcodes.DUP2, Opcodes.DUP2_X1, Opcodes.DUP2_X2 -> value;
-                default -> super.copyOperation(insn, value);
-            };
+            return value;
         }
     }
 

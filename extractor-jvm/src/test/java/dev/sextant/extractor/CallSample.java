@@ -56,15 +56,28 @@ public final class CallSample {
      *  {@code SourceInterpreter} rests on. Naming either literal here would be a
      *  fact about a path that may never run.
      *
-     *  <p>Passed straight into the call on purpose. Assigning it to a local
-     *  first — {@code String path = fast ? "/a" : "/b"; sink(path);} — does
-     *  <em>not</em> test this: javac merges at the store, and the reload is a
-     *  fresh single-sourced value, so the slot reaches the invoke with one
-     *  producing instruction (the ALOAD) and lands in the ordinary
-     *  variable-argument case instead. That version passes whether or not the
-     *  merge rule works. */
+     *  <p>The merge at its narrowest: nothing at all sits between the branch
+     *  and the invoke. {@link #conditionalThroughLocal} is the same merge with
+     *  a store and a reload in the way, and the two must agree — see the note
+     *  there for why that pair is worth keeping. */
     public void conditionalArgument(boolean fast) {
         sink(fast ? "/a" : "/b");
+    }
+
+    /** The same two-literal merge, reached through a local.
+     *
+     *  <p>This spelling used to be the <em>weaker</em> of the pair and is now
+     *  the sharper one. While a store and a load each counted as a producer,
+     *  javac's merge was hidden behind them: the reload handed the invoke a
+     *  fresh single-sourced value, the slot landed in the ordinary
+     *  variable-argument case, and the assertion passed whether or not the
+     *  merge rule worked at all. With the copy instructions transparent the two
+     *  producers survive the round trip through the local, so the slot is
+     *  honestly {@code unresolved} — and this now genuinely tests the merge
+     *  across the store, which is where a real method puts it. */
+    public void conditionalThroughLocal(boolean fast) {
+        String path = fast ? "/a" : "/b";
+        sink(path);
     }
 
     public void staticCall() {
@@ -73,6 +86,24 @@ public final class CallSample {
 
     public void chain() {
         first().second().third();
+    }
+
+    /** The OkHttp shape, and the ordinary way people write a builder: the built
+     *  value goes into a local and a *separate* call consumes it. The store and
+     *  the reload are the only things between the two halves, and if they count
+     *  as producers the second call's argument names nothing — which is exactly
+     *  the join a split builder chain has to be reconstructed from. */
+    public void storedThenConsumed() {
+        Link built = first().second();
+        consume(built);
+    }
+
+    /** A receiver that arrives as a method parameter has no producing
+     *  instruction anywhere in this method — the value existed before the first
+     *  bytecode ran. The honest answer is a null receiver, not the index of the
+     *  load that pushed a copy of it onto the stack. */
+    public void parameterReceiver(Link supplied) {
+        supplied.third();
     }
 
     /** A lambda reaches the callee as the result of an {@code invokedynamic}
@@ -133,6 +164,10 @@ public final class CallSample {
 
     void hold(Holder held) {
         record(held.note());
+    }
+
+    void consume(Link value) {
+        record(String.valueOf(value));
     }
 
     Link first() {

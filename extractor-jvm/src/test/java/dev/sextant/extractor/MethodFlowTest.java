@@ -71,10 +71,10 @@ class MethodFlowTest {
         assertTrue(line.contains("\"invoke_kind\":\"virtual\""), line);
         assertTrue(line.contains("\"ordinal\":0"), line);
         assertTrue(line.contains("\"result\":null"), line);
-        // `this`, loaded by the ALOAD that precedes the argument. Its id is an
-        // instruction index — read back rather than pinned, because pinning it
-        // would assert javac's label placement, not the receiver capture.
-        assertTrue(Integer.parseInt(field(line, "receiver")) >= 0, line);
+        // `this` has no producing instruction: it was already in local 0 before
+        // the first bytecode ran. The ALOAD that pushes a copy of it is not its
+        // origin, so the receiver is null rather than that load's index.
+        assertTrue(line.contains("\"receiver\":null"), line);
     }
 
     /** javac folds a compile-time constant before the pass ever sees it, so a
@@ -138,6 +138,21 @@ class MethodFlowTest {
         String line = callSites("conditionalArgument").get(0);
         assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
         // Neither branch's literal leaked into the fact.
+        assertTrue(!line.contains("/a") && !line.contains("/b"), line);
+    }
+
+    /** Transparency must not turn a branch merge into a confident answer. A
+     *  local assigned on two paths still reaches the invoke with two producing
+     *  instructions — the store and the reload no longer collapse them into
+     *  one — so the slot stays honestly unresolved and neither literal leaks.
+     *  This is the case that would break first if the interpreter had made
+     *  copies transparent by *picking* a source rather than by passing the
+     *  whole set through. */
+    @Test
+    void reports_a_branch_merged_local_as_unresolved_after_a_store_and_a_reload()
+            throws Exception {
+        String line = callSites("conditionalThroughLocal").get(0);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
         assertTrue(!line.contains("/a") && !line.contains("/b"), line);
     }
 
@@ -259,6 +274,38 @@ class MethodFlowTest {
         assertTrue(lines.get(1).contains("\"name\":\"sink\""), lines.get(1));
         assertTrue(lines.get(1).contains("\"arguments\":[{\"kind\":\"unresolved\",\"source\":"
             + field(lines.get(0), "result") + "}]"), lines.get(1));
+    }
+
+    /** The join Task 12's terminal needs on honest code. Nobody writes
+     *  {@code client.newCall(new Request.Builder()….build())} in one expression;
+     *  they store the request in a local first, and a store followed by a
+     *  reload is not where that value came from. With the copy instructions
+     *  transparent the argument names {@code second()}'s result — the call that
+     *  actually built it — and the split chain reconstructs. */
+    @Test
+    void links_a_stored_and_reloaded_value_to_the_call_that_built_it() throws Exception {
+        List<String> lines = callSites("storedThenConsumed");
+        assertEquals(3, lines.size());
+        String builder = lines.get(1);
+        String consumer = lines.get(2);
+        assertTrue(builder.contains("\"name\":\"second\""), builder);
+        assertTrue(consumer.contains("\"name\":\"consume\""), consumer);
+        assertTrue(consumer.contains("\"arguments\":[{\"kind\":\"unresolved\",\"source\":"
+            + field(builder, "result") + "}]"), consumer);
+    }
+
+    /** The stated cost of that transparency, asserted rather than assumed: a
+     *  receiver that arrives as a method parameter has no producing instruction
+     *  in this method at all, so it degrades from "the index of the load" to
+     *  null. Nothing consumes it — a fluent root matches by owner and method,
+     *  and a step join runs call-result to receiver — but it is a real change
+     *  and it must be visible here rather than discovered downstream. */
+    @Test
+    void leaves_the_receiver_null_when_it_is_a_method_parameter() throws Exception {
+        List<String> lines = callSites("parameterReceiver");
+        assertEquals(1, lines.size());
+        assertTrue(lines.get(0).contains("\"name\":\"third\""), lines.get(0));
+        assertTrue(lines.get(0).contains("\"receiver\":null"), lines.get(0));
     }
 
     @Test
