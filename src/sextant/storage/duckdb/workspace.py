@@ -8,8 +8,12 @@ _NAMED_QUERIES = {
     "documents": "SELECT * FROM documents ORDER BY document_id",
     # `handler` is part of the ordering, not decoration: two mappings may share
     # a wire identity, and an ordering with ties is an ordering that can change
-    # between runs (NFR-1).
-    "endpoints": "SELECT * FROM endpoints ORDER BY protocol, method, path, handler",
+    # between runs (NFR-1). `caller` closes the last tie: an outbound row has
+    # no handler at all, so a messaging row whose destination could not be read
+    # (`method`/`path`/`handler` all NULL — `sendDefault`, and a reply whose
+    # `@SendTo` names nothing) ties with every other such row on the first four
+    # columns, leaving their order the insert order rather than an ordering.
+    "endpoints": "SELECT * FROM endpoints ORDER BY protocol, method, path, handler, caller",
     "shapes": "SELECT * FROM shapes ORDER BY shape_id",
     # `ordinal` alone would tie across shapes; `shape_id` first is what makes
     # the ordering total rather than merely stable within one shape (NFR-1).
