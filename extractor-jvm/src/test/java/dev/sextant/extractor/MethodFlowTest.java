@@ -347,6 +347,23 @@ class MethodFlowTest {
         assertEquals(field(lines.get(0), "result"), field(lines.get(1), "receiver"));
     }
 
+    /** Coordinator fix round 1: pins that {@code CHECKCAST}'s new
+     *  transparency is narrow, not a fully-transparent {@code
+     *  unaryOperation} (which the reviewer confirmed still passes every
+     *  other test in this suite). {@code box} is a method parameter — no
+     *  producing instruction, so its own id is absent (`"receiver":null`,
+     *  the same rule {@link #leaves_the_receiver_null_when_it_is_a_method_parameter}
+     *  pins) — and a {@code GETFIELD} genuinely computes a new value from
+     *  the object it reads, so {@code third()}'s own receiver must be that
+     *  {@code GETFIELD}'s own real id, never {@code box}'s absent one. */
+    @Test
+    void leaves_a_getfield_sourced_receiver_with_its_own_id_not_the_objects() throws Exception {
+        String line = callSites("getfieldSourcedReceiver").get(0);
+        assertTrue(line.contains("\"name\":\"third\""), line);
+        assertTrue(!line.contains("\"receiver\":null"), line);
+        assertTrue(Integer.parseInt(field(line, "receiver")) >= 0, line);
+    }
+
     /** The v1 control-flow position: assigned in instruction order, so two
      *  calls in one method are never the same call site. */
     @Test

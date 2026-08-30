@@ -29,8 +29,10 @@ from sextant.application.resolve.shapes import (
 from sextant.application.resolve.shapes.contracts import _contracts_of, _owns
 from sextant.application.resolve.shapes.expansion import _rules_of
 from sextant.application.resolve.shapes.nullability import _scope_nullable
+from sextant.cli.resources import catalogs_dir
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.facts import Document
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 
@@ -1318,6 +1320,93 @@ def test_owns_matches_only_a_catalogs_own_direction_and_both_reads_as_inbound():
     assert _owns(outbound, {"direction": "both"}) is False
     assert _owns(outbound, {"direction": "inbound"}) is False
     assert _owns(inbound, {"direction": "outbound"}) is False
+
+
+# --- Task 12 fix round 1 (coordinator review): wrapper vocabulary must be
+# shared across *every* outbound catalog, not just serialization/known_types.
+# `_owns` only scopes by direction (Finding 1 above), so whichever outbound
+# catalog sorts first describes every outbound row's shapes under its own
+# `wrappers` list — even a row a *different* catalog produced. Reviewer's
+# repro: `okhttp` sorts before `retrofit` alphabetically, and before this fix
+# declared no `wrappers` at all, so a Retrofit `Call<OrderView>` response
+# settled (first) as the raw `Call` envelope rather than unwrapping to
+# `OrderView` — and once settled, `retrofit`'s own correct answer never gets
+# a second chance (`_contracts_of`'s `column not in already` guard). ------
+
+_RETROFIT_CALLER_OWNER = "com/acme/orders/clients/PricingClient#"
+_RETROFIT_CALLER = _RETROFIT_CALLER_OWNER + "price(sig_00000002)."
+
+
+def _retrofit_shaped_caller_facts(root: Path) -> None:
+    """One hand-built Retrofit-annotated interface method — a real `@GET`
+    mapping annotation, `Call<OrderView>` return — matched by the real,
+    shipped `retrofit.yml`, not an invented stand-in: the bug is specifically
+    about two *real* catalogs' wrapper lists disagreeing, so the fixture
+    must be real enough for `retrofit.yml`'s own `mapping` rules to fire."""
+    caller = {
+        "kind": "symbol",
+        "document_id": "doc_pricing",
+        "symbol": _MODULE + _RETROFIT_CALLER,
+        "construct_kind": "method",
+        "enclosing": _MODULE + _RETROFIT_CALLER_OWNER,
+        "visibility": "public",
+        "line_start": 0,
+        "line_end": 0,
+        "signature": _signature(
+            returns=_ref("retrofit2/Call#", "object", arguments=[_ref(ORDER_VIEW_SHAPE, "object")])
+        ),
+    }
+    _write(
+        root / "PricingClient.jsonl",
+        _document("doc_pricing", "com/acme/orders/clients/PricingClient.java"),
+        [
+            _type("doc_pricing", _RETROFIT_CALLER_OWNER),
+            caller,
+            _annotation(
+                "doc_pricing",
+                _MODULE + _RETROFIT_CALLER,
+                "retrofit2/http/GET#",
+                {"value": ["/pricing"]},
+            ),
+        ],
+    )
+
+
+def test_an_unrelated_outbound_catalogs_wrapper_list_still_unwraps_another_catalogs_row(
+    tmp_path,
+):
+    """The real `okhttp` and `retrofit` catalogs, resolved together: `okhttp`
+    sorts first (asserted below — that ordering is what the bug depends on)
+    and never itself produces this row (no OkHttp call site exists in these
+    facts), yet its own `wrappers` list is what `retrofit`'s `Call<OrderView>`
+    response settles under first. With the union wrappers now shipped on
+    `okhttp.yml`, the response still correctly roots at `OrderView`, not at
+    the raw `retrofit2/Call#` envelope — the reviewer's exact repro, pinned
+    against the shipped files rather than an invented stand-in."""
+    catalogs = YamlCatalogSource(catalogs_dir()).load()
+    okhttp = next(c for c in catalogs if c.id == "okhttp")
+    retrofit = next(c for c in catalogs if c.id == "retrofit")
+    assert str(okhttp.source) < str(retrofit.source)
+
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _retrofit_shaped_caller_facts(root)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    capabilities = {
+        "annotation_args",
+        "typed_signatures",
+        "call_site",
+        "string_constants",
+        "chain_reconstruction",
+    }
+    derive_endpoints(workspace, [okhttp, retrofit], capabilities=capabilities)
+    derive_endpoint_shapes(workspace, [okhttp, retrofit], capabilities=capabilities)
+    [endpoint] = workspace.query("endpoints")
+    descriptor = json.loads(endpoint["response_shape"])
+    workspace.close()
+
+    assert descriptor["shape_id"] == ORDER_VIEW_SHAPE
 
 
 def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path):

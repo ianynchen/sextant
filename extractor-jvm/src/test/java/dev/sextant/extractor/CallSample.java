@@ -99,6 +99,18 @@ public final class CallSample {
         spec.uri("/x").body(payload);
     }
 
+    /** The other side of the {@code CHECKCAST}-only carve-out: a {@code
+     *  GETFIELD} genuinely computes a new value from the object it reads, so
+     *  it must NOT get the same transparent treatment. {@code box} itself is
+     *  a method parameter — no producing instruction, so its own id reads as
+     *  absent (D00 §5) — and a fully-transparent {@code unaryOperation}
+     *  would fold {@code box.link}'s read straight through to that same
+     *  absent id, leaking a null receiver onto {@code third()} instead of
+     *  the {@code GETFIELD}'s own real one. */
+    public void getfieldSourcedReceiver(Box box) {
+        box.link.third();
+    }
+
     /** The OkHttp shape, and the ordinary way people write a builder: the built
      *  value goes into a local and a *separate* call consumes it. The store and
      *  the reload are the only things between the two halves, and if they count
@@ -215,6 +227,12 @@ public final class CallSample {
         }
     }
 
+    /** A field whose read must count as producing a value, not relocating
+     *  one — see {@link #getfieldSourcedReceiver}. */
+    static final class Box {
+        Link link;
+    }
+
     /** The erased bound {@code UriStep.uri} actually returns — the exact shape
      *  {@code WebClient.RequestHeadersUriSpec}/{@code RestClient}'s own
      *  {@code UriSpec<S extends RequestHeadersSpec<S>>} takes. */
@@ -228,8 +246,8 @@ public final class CallSample {
     }
 
     /** The narrower type the next hop in a real request-body chain needs
-     *  (WebClient/RestClient's own {@code RequestBodySpec}) — a supertype of
-     *  {@link Wide}'s bound, never returned directly by {@link UriStep#uri}. */
+     *  (WebClient/RestClient's own {@code RequestBodySpec}) — a subtype of
+     *  {@link Wide}, never returned directly by {@link UriStep#uri}. */
     interface Narrow extends Wide {
         Narrow body(Object value);
     }

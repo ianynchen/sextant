@@ -1473,3 +1473,90 @@ def test_a_void_step_past_the_terminal_never_chains_into_an_unrelated_static_cal
 
     assert len(endpoints) == 1
     assert (endpoints[0]["method"], endpoints[0]["path"]) == ("GET", "/orders/{id}")
+
+
+# --- Task 12 fix round 1 (coordinator review): okhttp's own verb steps -----
+
+
+def test_okhttp_put_patch_delete_head_steps_derive_their_own_verb_not_the_roots_default(
+    tmp_path: Path,
+):
+    """MAJOR: the root always seeds `http_method: GET` (OkHttp's own real
+    default for a bare `Request.Builder`); before this fix `okhttp.yml`'s own
+    `steps` matched only `url`/`get`/`post`, so a `.put(body)`/`.delete()`/
+    `.head()` chain's own verb-setting call was an unmatched step (D02 §4:
+    "unmatched steps pass through uncaptured") and the root's GET default
+    stood uncorrected — a confidently WRONG verb derived, not an honest gap.
+    Uses the real, shipped `okhttp` catalog rather than an invented
+    stand-in, since the bug was in that file's own step list, not in the
+    engine. `patch` is exercised alongside `put` (both capture a body
+    argument the same way); `delete` and `head` both capture no body,
+    proving the catalog's per-verb `captures` are correct in both shapes."""
+    catalogs = YamlCatalogSource(CATALOGS_DIR).load()
+    okhttp = next(c for c in catalogs if c.id == "okhttp")
+    # The real owners `okhttp.yml` matches on — distinct from `BUILDER`/
+    # `OKHTTP_CLIENT`/`REQUEST` above, which belong to the *invented*
+    # `_OKHTTP_MATCHES` catalog's own made-up `com.acme.http` package.
+    real_builder = "okhttp3/Request$Builder#"
+    real_client = "okhttp3/OkHttpClient#"
+    real_request = "okhttp3/Request#"
+
+    def _builder_chain(caller: str, verb_call: str, has_body: bool) -> list:
+        return [
+            _call(
+                caller, real_builder, "<init>", 0, receiver=2, result=None, invoke_kind="special"
+            ),
+            _call(
+                caller,
+                real_builder,
+                "url",
+                1,
+                receiver=2,
+                result=8,
+                arguments=[CallArgument(kind="string", value="/orders/{id}")],
+            ),
+            _call(
+                caller,
+                real_builder,
+                verb_call,
+                2,
+                receiver=8,
+                result=11,
+                arguments=[CallArgument(kind="unresolved")] if has_body else [],
+            ),
+            _call(caller, real_builder, "build", 3, receiver=11, result=14),
+        ]
+
+    def _newcall(caller: str) -> CallSiteFact:
+        return _call(
+            caller,
+            real_client,
+            "newCall",
+            4,
+            receiver=99,
+            result=20,
+            arguments=[CallArgument(kind="instance", source=14, symbol=real_request)],
+        )
+
+    callers = {
+        "put": "com/acme/http/Client#replace().",
+        "patch": "com/acme/http/Client#amend().",
+        "delete": "com/acme/http/Client#remove().",
+        "head": "com/acme/http/Client#probe().",
+    }
+    facts = [
+        fact
+        for verb, caller in callers.items()
+        for fact in (
+            *_builder_chain(caller, verb, has_body=verb in ("put", "patch")),
+            _newcall(caller),
+        )
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, okhttp)
+    by_caller = {e["caller"]: e for e in workspace.query("endpoints")}
+    workspace.close()
+
+    assert by_caller[callers["put"]]["method"] == "PUT"
+    assert by_caller[callers["patch"]]["method"] == "PATCH"
+    assert by_caller[callers["delete"]]["method"] == "DELETE"
+    assert by_caller[callers["head"]]["method"] == "HEAD"

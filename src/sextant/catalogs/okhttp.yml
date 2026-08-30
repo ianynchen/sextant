@@ -16,19 +16,44 @@ matches:
   # receiver/result chaining, which is what `terminal_via_argument` is for.
   roots:
     - { owner: okhttp3.Request$Builder, method: <init>, captures: { http_method: GET } }  # GET is OkHttp's own default
+  # Every verb OkHttp's `Request.Builder` exposes as its own named method —
+  # not just `get`/`post`: a `.put(body)`/`.patch(body)`/`.delete()`/`.head()`
+  # chain that only matched `get`/`post` would fall through as an unmatched
+  # step (D02 §4's "unmatched steps pass through uncaptured") and the root's
+  # own `http_method: GET` default would stand uncorrected — a confidently
+  # WRONG verb, not an honest gap. `delete()` carries no body capture: OkHttp
+  # itself makes a DELETE body optional, and the zero-arg overload this
+  # step's bare method name matches has no `arg0` to capture in the first
+  # place; `head()` sets no body either, exactly like `get`. (`Request.Builder
+  # .method(String, RequestBody)` — the fully generic overload — is not
+  # covered: the fluent grammar has no way to read `http_method` off an
+  # argument, only off a catalog literal; a known gap, not silently guessed.)
   steps:
-    - { method: url,  captures: { url: arg0 } }
-    - { method: get,  captures: { http_method: GET } }
-    - { method: post, captures: { http_method: POST, body: arg0 } }
+    - { method: url,    captures: { url: arg0 } }
+    - { method: get,    captures: { http_method: GET } }
+    - { method: head,   captures: { http_method: HEAD } }
+    - { method: post,   captures: { http_method: POST, body: arg0 } }
+    - { method: put,    captures: { http_method: PUT, body: arg0 } }
+    - { method: patch,  captures: { http_method: PATCH, body: arg0 } }
+    - { method: delete, captures: { http_method: DELETE } }
   # A mapping, not the bare flag: without it, any consumer of `build`'s
   # result (a log statement) would count as executing the request.
   terminal:
     - { method: build, terminal_via_argument: { owner: okhttp3.OkHttpClient, method: newCall } }
 
-# Shared verbatim across every outbound catalog on purpose: the first catalog
-# in sort order harvests+expands shape roots from every outbound row under
-# its own serialization/known_types rules, so all four must describe wire
-# shapes identically or the loser's routes get silently mis-described.
+# Shared verbatim across every outbound catalog on purpose (not just these
+# three plus RestTemplate): `_owns` (shapes/contracts.py) scopes ownership by
+# direction only, so whichever outbound catalog sorts first — okhttp, here —
+# describes every outbound row's shapes, including a row a *different*
+# catalog produced (Retrofit's own `Call<OrderView>`, say). Every outbound
+# catalog's wrappers/serialization/known_types must therefore agree, or the
+# first one alphabetically silently mis-describes a route it never derived.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: reactor.core.publisher.Mono,              payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                       payload_arg: 0, semantics: optional }
+  - { type: retrofit2.Call,                           payload_arg: 0, semantics: async }
+
 serialization:
   name_from:
     - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }

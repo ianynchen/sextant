@@ -151,9 +151,10 @@ public final class MethodFlow {
 
         /** {@code CHECKCAST} is the one unary op that re-labels a value's
          *  static type without computing a new one; every other unary op
-         *  (`INSTANCEOF`, `ARRAYLENGTH`, `NEWARRAY`/`ANEWARRAY`, the numeric
-         *  conversions, `GETFIELD`, …) genuinely produces a fresh value and
-         *  keeps {@code SourceInterpreter}'s default behaviour. */
+         *  ({@code INSTANCEOF}, {@code ARRAYLENGTH}, {@code NEWARRAY}/
+         *  {@code ANEWARRAY}, the numeric conversions, {@code GETFIELD}, …)
+         *  genuinely produces a fresh value and keeps {@code
+         *  SourceInterpreter}'s default behaviour. */
         @Override
         public SourceValue unaryOperation(AbstractInsnNode insn, SourceValue value) {
             return insn.getOpcode() == Opcodes.CHECKCAST ? value : super.unaryOperation(insn, value);
