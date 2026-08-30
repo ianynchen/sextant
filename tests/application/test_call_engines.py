@@ -960,6 +960,267 @@ def test_split_url_reads_an_absolute_url_with_no_path_as_an_empty_path():
     assert split_url("https://billing.internal") == ("billing.internal", "")
 
 
+# --- Task 6: `single_call` learns arity, channel_arg, per-row direction and
+# verbless rows (D02 §2's `single_call` style, amended). No shipped catalog
+# declares any of these yet — invented catalogs, exactly as the fluent
+# section below invents its own (`ports/catalogs.py`'s own note that the
+# invented catalogs tests construct by hand are a documented case).
+
+PRODUCER = "com/acme/messaging/Producer#"
+CONSUMER = "com/acme/messaging/Consumer#"
+
+
+def _single_call_catalog(
+    matches: dict, catalog_id: str = "invented-single-call", direction: str = "outbound"
+) -> Catalog:
+    return Catalog(
+        id=catalog_id,
+        style="single_call",
+        protocol="kafka",
+        direction=direction,
+        requires=("call_site", "string_constants"),
+        matches=matches,
+        source=Path(f"tests/{catalog_id}.yml"),
+    )
+
+
+def _send_call(caller: str, ordinal: int, arguments: list, name: str = "send") -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(owner=PRODUCER, name=name, descriptor="()V"),
+        invoke_kind="virtual",
+        ordinal=ordinal,
+        receiver=3,
+        result=None,
+        arguments=arguments,
+    )
+
+
+def test_two_arities_of_the_same_name_route_the_body_capture_to_their_own_position(
+    tmp_path: Path,
+):
+    """D02 §2's `arity`: a row without it matches every overload (the
+    shipped 2C catalogs' own case, unchanged), but `send(topic, payload)`
+    and `send(topic, key, payload)` need telling apart, one row per arity —
+    and each row's own `body_arg` must route to its own declared position.
+    Before Task 6, `methods` was a dict keyed by name (`:40`), so the second
+    `send` row would have silently overwritten the first: this proves both
+    arities survive and each keeps its own `body_arg`."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [
+            {"name": "send", "arity": 2, "http_method": "SEND", "channel_arg": 0, "body_arg": 1},
+            {"name": "send", "arity": 3, "http_method": "SEND", "channel_arg": 0, "body_arg": 2},
+        ],
+    }
+    caller_two = "com/acme/messaging/Producer#sendTwoArg()."
+    caller_three = "com/acme/messaging/Producer#sendThreeArg()."
+    facts = [
+        _send_call(
+            caller_two,
+            0,
+            [
+                CallArgument(kind="string", value="orders.created"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+        ),
+        _send_call(
+            caller_three,
+            0,
+            [
+                CallArgument(kind="string", value="orders.updated"),
+                CallArgument(kind="string", value="order-42"),
+                CallArgument(kind="class", symbol=ORDER_REQUEST),
+            ],
+        ),
+    ]
+    catalog = _single_call_catalog(matches, "invented-arity")
+    workspace = _resolve(tmp_path, facts, catalog)
+    [two_arg] = [e for e in workspace.query("endpoints") if e["caller"] == caller_two]
+    [three_arg] = [e for e in workspace.query("endpoints") if e["caller"] == caller_three]
+    workspace.close()
+
+    assert json.loads(two_arg["request_shape"])["shape_id"] == ORDER_VIEW
+    assert json.loads(three_arg["request_shape"])["shape_id"] == ORDER_REQUEST
+
+
+def test_channel_arg_fills_path_exactly_as_url_arg_would(tmp_path: Path):
+    """D02 §2: `channel_arg` is an alias of `url_arg` for protocols whose
+    identity is a destination rather than a URL — a topic name behaves
+    exactly like a path template, string literal in, `path` out unchanged."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [{"name": "send", "http_method": "SEND", "channel_arg": 0}],
+    }
+    caller = "com/acme/messaging/Producer#publish()."
+    facts = [_send_call(caller, 0, [CallArgument(kind="string", value="orders.created")])]
+    catalog = _single_call_catalog(matches, "invented-channel-arg")
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "orders.created"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_a_row_declaring_both_url_arg_and_channel_arg_is_refused_at_run_start(
+    tmp_path: Path,
+):
+    """`url_arg` and `channel_arg` name the same capture (D02 §2); a row
+    declaring both is a broken catalog, not two pieces of evidence.
+    `ports/catalogs.py`'s own discipline: an unchecked value does not stay
+    in the file. The facts here are empty — no call site could ever reach
+    this row by name — proving the check runs once at `run` start rather
+    than lazily on first match."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [{"name": "send", "http_method": "SEND", "url_arg": 0, "channel_arg": 0}],
+    }
+    catalog = _single_call_catalog(matches, "invented-both-args")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "invented-both-args.yml" in str(raised.value)
+
+
+def test_an_invalid_row_level_direction_is_refused_at_run_start(tmp_path: Path):
+    """A row's own `direction` override is still D00's closed Direction set
+    (`inbound`/`outbound`/`both`) — a typo here is exactly the mistake
+    `yaml_source.py`'s own catalog-level `_closed` check exists to catch,
+    only this one is a row inside `matches`, invisible to that loader-level
+    check, so `single_call` must refuse it itself, at `run` start, naming
+    the file."""
+    matches = {
+        "owner": "com.acme.messaging.Consumer",
+        "methods": [
+            {
+                "name": "onMessage",
+                "direction": "sideways",
+                "http_method": "RECEIVE",
+                "channel_arg": 0,
+            }
+        ],
+    }
+    catalog = _single_call_catalog(matches, "invented-bad-direction")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "invented-bad-direction.yml" in str(raised.value)
+    assert "sideways" in str(raised.value)
+
+
+def test_a_row_level_inbound_direction_overrides_the_catalogs_own_direction(
+    tmp_path: Path,
+):
+    """D02 §2: `direction` on a row overrides the catalog's declared
+    direction — Pub/Sub's `subscribe` is inbound even inside an otherwise
+    outbound file. The deriving method (the call site's own `caller`) lands
+    in `handler`, not `caller`, on that row: it is the consumer, not the
+    caller (D01 §3's rule, applied per row's own direction)."""
+    matches = {
+        "owner": "com.acme.messaging.Consumer",
+        "methods": [
+            {
+                "name": "onMessage",
+                "direction": "inbound",
+                "http_method": "RECEIVE",
+                "channel_arg": 0,
+            }
+        ],
+    }
+    caller = "com/acme/messaging/Consumer#onMessage(Ljava/lang/String;)."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(owner=CONSUMER, name="onMessage", descriptor="()V"),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=None,
+            arguments=[CallArgument(kind="string", value="orders.created")],
+        )
+    ]
+    catalog = _single_call_catalog(matches, "invented-inbound-row", direction="outbound")
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["path"] == "orders.created"]
+    workspace.close()
+
+    assert endpoint["direction"] == "inbound"
+    assert endpoint["handler"] == caller
+    assert endpoint["caller"] is None
+
+
+def test_a_verbless_row_with_a_resolved_channel_derives_a_null_method_without_penalising_resolution(
+    tmp_path: Path,
+):
+    """D02 §2: a row declaring neither `http_method` nor `method_arg` is
+    verbless by declaration — a topic has no verb. `method` is NULL, but
+    `resolution` is not penalised for the missing verb (`this method calls
+    something over a channel` is still true and useful on its own); two
+    identical verbless resolved identities collapse to one row, deduped on
+    `(protocol, direction, path)` since there is no method to distinguish
+    them by."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [{"name": "publish", "channel_arg": 0}],
+    }
+    caller = "com/acme/messaging/Producer#publishTwice()."
+    facts = [
+        _send_call(
+            caller, 0, [CallArgument(kind="string", value="orders.deleted")], name="publish"
+        ),
+        _send_call(
+            caller, 1, [CallArgument(kind="string", value="orders.deleted")], name="publish"
+        ),
+    ]
+    catalog = _single_call_catalog(matches, "invented-verbless")
+    workspace = _resolve(tmp_path, facts, catalog)
+    rows = [e for e in workspace.query("endpoints") if e["path"] == "orders.deleted"]
+    workspace.close()
+
+    assert len(rows) == 1
+    assert rows[0]["method"] is None
+    assert rows[0]["resolution"] == "resolved"
+
+
+def test_a_verbless_row_whose_channel_is_a_parameter_derives_unresolved_and_never_dedups(
+    tmp_path: Path,
+):
+    """The other half of the verbless rule: a channel the scanner could not
+    read still derives the row — `path` NULL, `resolution: unresolved` —
+    and, because SQL's `NULL = NULL` is unknown rather than true (D02 §2's
+    unresolved-is-an-answer), two such calls never collapse into one; each
+    is its own real 'this method calls something' fact."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [{"name": "publish", "channel_arg": 0}],
+    }
+    caller = "com/acme/messaging/Producer#publishDynamic()."
+    facts = [
+        _send_call(caller, 0, [CallArgument(kind="unresolved")], name="publish"),
+        _send_call(caller, 1, [CallArgument(kind="unresolved")], name="publish"),
+    ]
+    catalog = _single_call_catalog(matches, "invented-verbless-unresolved")
+    workspace = _resolve(tmp_path, facts, catalog)
+    rows = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert len(rows) == 2
+    assert all(row["path"] is None and row["resolution"] == "unresolved" for row in rows)
+
+
 # --- The `fluent` engine (Task 11): chains reassembled from value links ----
 #
 # No catalog ships with this task (Task 12 writes the real spring-webclient/
