@@ -33,18 +33,23 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     )
     written = sorted(p.name for p in tmp_path.rglob("*.jsonl"))
     assert written == [
+        "AuditJmsListener.jsonl",
         "BillingClient.jsonl",
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
         "CustomerRef.jsonl",
+        "EventProducers.jsonl",
         "InventoryExchange.jsonl",
         "InventoryWebClient.jsonl",
         "KotlinOrder.jsonl",
         "LegacyBillingApi.jsonl",
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
+        "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
+        "OrderEvent.jsonl",
+        "OrderEventsListener.jsonl",
         "OrderPageController.jsonl",
         "OrderRequest.jsonl",
         "OrderResult$Detail.jsonl",
@@ -54,10 +59,12 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderView.jsonl",
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
+        "ReceiptView.jsonl",
         "ScopedRequest.jsonl",
+        "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]
-    assert report.documents == 23
+    assert report.documents == 30
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -78,18 +85,23 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         )
     )
     assert sorted(p.name for p in out.rglob("*.jsonl")) == [
+        "AuditJmsListener.jsonl",
         "BillingClient.jsonl",
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
         "CustomerRef.jsonl",
+        "EventProducers.jsonl",
         "InventoryExchange.jsonl",
         "InventoryWebClient.jsonl",
         "KotlinOrder.jsonl",
         "LegacyBillingApi.jsonl",
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
+        "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
+        "OrderEvent.jsonl",
+        "OrderEventsListener.jsonl",
         "OrderPageController.jsonl",
         "OrderRequest.jsonl",
         "OrderResult$Detail.jsonl",
@@ -99,7 +111,9 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderView.jsonl",
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
+        "ReceiptView.jsonl",
         "ScopedRequest.jsonl",
+        "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]
 
