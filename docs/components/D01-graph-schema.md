@@ -158,7 +158,12 @@ shape id — the grammar `shape_fields.item` uses above, reused rather than dupl
 `List<OrderView>` response is
 `{"wire_type":"array","item":{"wire_type":"object","shape_id":…}}`; a scalar response is
 recorded rather than dropped (`{"wire_type":"string"}`); and `NULL` means exactly *no
-payload* — a `void` return, or no body parameter — the one meaning it has always had.
+payload* — a `void` return, or no body parameter — the one meaning it has always had. On a
+row whose own `resolution` is `unresolved` ([D02](D02-catalog-schema.md) §2's `single_call`:
+any declared capture — url, body or response — that failed to resolve drops the row's
+`resolution`, checkpoint ruling I1), a `NULL` payload column instead means *the payload could
+not be read* — the row-level `resolution` is what separates that from no payload, never the
+column alone.
 
 **Inbound and outbound share one `endpoints` table** with a `direction` column taking
 `inbound`, `outbound` or `both`. Two near-identical tables were the alternative, and were

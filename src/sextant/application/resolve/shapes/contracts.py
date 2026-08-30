@@ -139,8 +139,6 @@ def _contracts_of(
         if not _owns(catalog, endpoint):
             continue
         owner = str(endpoint["handler"] or endpoint["caller"] or "")
-        if not owner or owner in found:
-            continue
         # A handler with no recorded signature declares no payload. `signature`
         # is optional in D00 §5, so the column is SQL NULL — read back as
         # `None` — whenever nothing typed it, and JSON `null` when a fact
@@ -151,6 +149,23 @@ def _contracts_of(
         declared = endpoint.get("handler_signature")
         signature = None if declared is None else json.loads(str(declared))
         if not isinstance(signature, dict):
+            # No declared signature to derive columns from at all — but a
+            # style with no handler (`single_call`, D02 §2h) may already have
+            # set `request_shape`/`response_shape` directly on this very row,
+            # off the call site's own arguments rather than off a signature.
+            # Those payload types still have to reach shape expansion (Task 9
+            # review, Finding C1: a dangling `shape_id` with no `shapes`/
+            # `shape_fields` behind it is a broken contract, not a degraded
+            # one) — harvested here rather than recomputed, since the engine
+            # that wrote the column already ran `_described` once and this
+            # only reads the roots back out of what it already decided.
+            # Every owned row is read, not only the first per owner: unlike
+            # one handler's one shared signature, two call sites sharing a
+            # single caller can each carry a genuinely different payload.
+            for column in (_REQUEST, _RESPONSE):
+                referenced.extend(_shape_roots_of(endpoint.get(column)))
+            continue
+        if not owner or owner in found:
             continue
         already = settled.get(owner, {})
         columns = {
@@ -165,6 +180,28 @@ def _contracts_of(
         if kept:
             found[owner] = kept
     return found
+
+
+def _shape_roots_of(descriptor_json: object) -> list[str]:
+    """The shape ids one already-computed `request_shape`/`response_shape`
+    column names, walking an `item` chain the same way `_described` builds
+    one — recovered from the finished JSON rather than re-derived, for a row
+    whose payload came from a call site's own arguments (D02 §2h) rather
+    than a declared signature. The engine that wrote the column already ran
+    `_described` once; this reads back the other half of what that call
+    already decided, so a shape reached only through a call site still gets
+    expanded and reported like every other root (Task 9 review, Finding
+    C1)."""
+    if descriptor_json is None:
+        return []
+    node = json.loads(str(descriptor_json))
+    roots: list[str] = []
+    while isinstance(node, dict):
+        shape_id = node.get("shape_id")
+        if shape_id is not None:
+            roots.append(str(shape_id))
+        node = node.get("item")
+    return roots
 
 
 def _owns(catalog: Catalog, endpoint: dict[str, object]) -> bool:

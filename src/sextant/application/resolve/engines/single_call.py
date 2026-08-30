@@ -78,7 +78,25 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         verb = _verb_of(method, arguments)
         if verb is None:
             continue
-        peer, path, resolution = _url_of(_arg_at(arguments, method["url_arg"]))
+        url_argument = _arg_at(arguments, method["url_arg"])
+        peer, path, url_resolution = _url_of(url_argument)
+        body_argument = _arg_at(arguments, method.get("body_arg"))
+        response_argument = _arg_at(arguments, method.get("response_arg"))
+        # Checkpoint ruling I1: any DECLARED capture that failed to resolve
+        # drops the *row's* resolution, even when the url itself read fine —
+        # `path` still carries the known template regardless (it is the
+        # url's own answer, untouched by a body/response capture's own
+        # failure), but a resolved row promises every declared capture was
+        # read, not only the url. `path` stays NULL-safe: this only ever
+        # narrows resolution from `resolved` to `unresolved`, never the
+        # other way.
+        resolution = (
+            "resolved"
+            if url_resolution == "resolved"
+            and _capture_resolved(method.get("body_arg"), body_argument)
+            and _capture_resolved(method.get("response_arg"), response_argument)
+            else "unresolved"
+        )
         caller = str(site["caller"])
         if path is not None:
             key = (catalog.protocol, catalog.direction, verb, path)
@@ -102,12 +120,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 "handler_signature": None,
                 "resolution": resolution,
                 "evidence": "compiler",
-                "request_shape": argument_descriptor(
-                    _arg_at(arguments, method.get("body_arg")), facts, carrier_rules
-                ),
-                "response_shape": argument_descriptor(
-                    _arg_at(arguments, method.get("response_arg")), facts, carrier_rules
-                ),
+                "request_shape": argument_descriptor(body_argument, facts, carrier_rules),
+                "response_shape": argument_descriptor(response_argument, facts, carrier_rules),
             }
         )
 
@@ -124,6 +138,26 @@ def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any
     if index is None or index >= len(arguments):
         return None
     return arguments[index]
+
+
+def _capture_resolved(declared_index: int | None, argument: dict[str, Any] | None) -> bool:
+    """Whether a DECLARED capture (checkpoint ruling I1) read something the
+    scanner could resolve.
+
+    A capture the `methods` row never declares at all — `put` names no
+    `response_arg` — never fails: it never claimed a payload, so its
+    absence is a genuine no-body/no-response, not a read failure. A
+    declared capture with nothing at that position, or whose own kind is
+    the compiler's `unresolved` (D00 §5: "anything else... a first-class
+    honest answer, never an omission" — the exact shape a passed-through
+    method parameter takes, verified against the real fixture), fails —
+    and per I1, that drops the *row's* own `resolution`, even though the
+    payload *column* itself stays NULL either way: NULL alone cannot say
+    which case it was, so the row is what disambiguates "no payload" from
+    "could not read it" (D01 §3, amended)."""
+    if declared_index is None:
+        return True
+    return argument is not None and argument.get("kind") != "unresolved"
 
 
 def _verb_of(method: dict[str, Any], arguments: list[dict[str, Any]]) -> str | None:

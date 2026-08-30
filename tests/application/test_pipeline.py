@@ -230,6 +230,59 @@ def test_the_resttemplate_exchange_row_carries_the_http_entity_and_ptr_descripto
     assert response["item"]["shape_id"] == "com/acme/orders/contracts/OrderView#"
 
 
+def test_every_resttemplate_route_carries_its_own_resolution_and_descriptors(
+    tmp_path: Path,
+):
+    """Task 9 review, Finding I3: `/billing/batch` was the only RestTemplate
+    row with an asserted descriptor; the other three routes' live-run
+    listings were pinned by no test at all. On real bytecode, respecting
+    checkpoint ruling I1 (Finding I1):
+
+    - `getBalance`'s response is a bare class literal (`OrderView.class`) —
+      `resolved`, no body declared at all (a genuine no-body call, not a
+      failure), a real response descriptor.
+    - `submitSettlement`'s `settlement` parameter is passed straight
+      through, never a literal or a `NEW`, so the scanner records it
+      `unresolved` (D00 §5) even though the url is a plain string — the row
+      itself is therefore `unresolved` (I1), `request_shape` stays NULL
+      (could-not-read, not no-payload), and `response_shape` — a
+      *different*, independently resolved capture on the very same row —
+      still carries its real descriptor.
+    - `updateSettlement` (`put`) has the identical `settlement` failure on
+      its body, and declares no `response_arg` at all: `unresolved` for the
+      same reason, `request_shape` NULL (could-not-read), `response_shape`
+      NULL for the ordinary reason (no capture ever named one).
+    """
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    by_route = {(e["method"], e["path"]): e for e in report.endpoints}
+
+    balances = by_route[("GET", "/billing/balances/{id}")]
+    assert balances["resolution"] == "resolved"
+    assert balances["request_shape"] is None
+    assert json.loads(balances["response_shape"]) == {
+        "wire_type": "object",
+        "wire_format": "",
+        "nullable": True,
+        "shape_id": "com/acme/orders/contracts/OrderView#",
+    }
+
+    settlements = by_route[("POST", "/billing/settlements")]
+    assert settlements["resolution"] == "unresolved"
+    assert settlements["request_shape"] is None
+    assert json.loads(settlements["response_shape"]) == {
+        "wire_type": "object",
+        "wire_format": "",
+        "nullable": True,
+        "shape_id": "com/acme/orders/contracts/OrderView#",
+    }
+
+    update = by_route[("PUT", "/billing/settlements/{id}")]
+    assert update["resolution"] == "unresolved"
+    assert update["request_shape"] is None
+    assert update["response_shape"] is None
+
+
 def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path: Path):
     """A server-rendered view name has no field list to compare, but NULL is
     reserved for exactly one meaning — no payload — so a scalar response is a

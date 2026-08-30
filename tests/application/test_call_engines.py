@@ -11,6 +11,7 @@ from pathlib import Path
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.endpoints import derive_endpoints
+from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.contracts import split_url
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -19,6 +20,7 @@ from sextant.domain.facts import (
     CallSiteFact,
     CallTarget,
     Document,
+    Signature,
     SymbolFact,
     TypeRef,
 )
@@ -27,6 +29,11 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CATALOGS_DIR = Path(__file__).parents[2] / "src" / "sextant" / "catalogs"
 CAPABILITIES = {"call_site", "string_constants"}
+# The module-coordinates prefix a real symbol fact's own `symbol` carries
+# (D00 §5a) — only `single_call`'s `supertypes` lookup and the shape pass's
+# own `fields`/`enum_types` queries ever read it; every call-argument symbol
+# stays bare, exactly as the real fixture emits it.
+_MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 
 RESTTEMPLATE = "org/springframework/web/client/RestTemplate#"
 ORDER_VIEW = "com/acme/orders/contracts/OrderView#"
@@ -319,6 +326,168 @@ def test_two_identical_calls_in_one_method_dedup_to_one_row(tmp_path: Path):
     workspace.close()
 
     assert len(rows) == 1
+
+
+# --- I1: a declared capture that fails to resolve drops the row's own
+# resolution (checkpoint ruling I1) — the url stays independently correct,
+# and a different, successfully-resolved column on the very same row keeps
+# its real value. ------------------------------------------------------
+
+
+def test_an_unresolved_body_capture_drops_the_rows_resolution_but_keeps_the_url(
+    tmp_path: Path,
+):
+    """Mirrors the real fixture's `postForObject` exactly: `settlement` is a
+    passed-through method parameter, not a literal or a `NEW`, so the
+    scanner records it as `unresolved` (D00 §5) even though the url is a
+    plain string. Before I1, this NULLed `request_shape` while leaving
+    `resolution` at `resolved` — indistinguishable from a call that
+    genuinely declares no body, violating D01's one-meaning-per-NULL rule.
+    After I1: the row's own `resolution` drops to `unresolved`; `path`
+    still carries the known template (the url's own answer is untouched by
+    a *different* capture's failure); and `response_shape` — a separately
+    resolved capture on the same row — still carries its real descriptor,
+    proving the two columns stay independently meaningful even once the row
+    itself reads `unresolved`."""
+    caller = "com/acme/http/Client#submitSettlement()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=RESTTEMPLATE,
+                name="postForObject",
+                descriptor=(
+                    "(Ljava/lang/String;Ljava/lang/Object;"
+                    "Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;"
+                ),
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=9,
+            arguments=[
+                CallArgument(kind="string", value="/billing/settlements"),
+                CallArgument(kind="unresolved"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["method"], endpoint["path"]) == ("POST", "/billing/settlements")
+    assert endpoint["resolution"] == "unresolved"
+    assert endpoint["request_shape"] is None
+    assert json.loads(endpoint["response_shape"]) == {
+        "wire_type": "object",
+        "wire_format": "",
+        "nullable": True,
+        "shape_id": ORDER_VIEW,
+    }
+
+
+# --- C1: a payload type reached only through a call site's own arguments
+# still gets expanded — never a shape_id with nothing behind it. -----------
+
+
+def test_a_call_only_payload_type_still_reaches_shape_expansion(tmp_path: Path):
+    """Reviewer-proved gap (Task 9 review, Finding C1): a response type
+    reached only through a call site's own arguments (D02 §2h) — never
+    through any handler's declared signature — must still get expanded.
+
+    Before the fix, `derive_endpoint_shapes`'s per-resolve `shapes_reset`
+    (which runs *after* `derive_endpoints`, and therefore after
+    `single_call.run`, unconditionally) wiped whatever `single_call`'s own
+    `referenced` accumulator reached — that accumulator was built and
+    threaded through `CallFacts`, and then never read by anything that ran
+    after the reset. The endpoint row still named a `shape_id`; the
+    `shapes`/`shape_fields` rows behind it simply did not exist. This test
+    proves both halves: a field-bearing call-only type gets real
+    `shapes`/`shape_fields` rows, and a call-only type with no field facts
+    at all still gets an open `shapes` row and is named in
+    `unexpanded_types` — reported as a gap, never silently dropped."""
+    call_only = "com/acme/http/CallOnly#"
+    unexpandable = "com/acme/http/Unexpandable#"
+    only_caller = "com/acme/http/Client#getOnly()."
+    gone_caller = "com/acme/http/Client#getUnexpandable()."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + call_only, construct_kind="class"),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + call_only + "note.",
+            construct_kind="field",
+            enclosing=_MODULE + call_only,
+            signature=Signature(
+                returns=TypeRef(
+                    symbol="java/lang/String#",
+                    wire_type="string",
+                    wire_format="",
+                    nullable=True,
+                    nullable_resolution="resolved",
+                )
+            ),
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=only_caller,
+            target=CallTarget(
+                owner=RESTTEMPLATE,
+                name="getForObject",
+                descriptor="(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;",
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=12,
+            arguments=[
+                CallArgument(kind="string", value="/only/thing"),
+                CallArgument(kind="class", symbol=call_only),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+        # A second call-only response type with no symbol fact at all — no
+        # field list, no class fact — the real "third-party type nobody
+        # described" case D02 §2g and D2 already name for a signature-rooted
+        # payload, now proven for a call-site-rooted one too.
+        CallSiteFact(
+            document_id="doc_1",
+            caller=gone_caller,
+            target=CallTarget(
+                owner=RESTTEMPLATE,
+                name="getForObject",
+                descriptor="(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;",
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=13,
+            arguments=[
+                CallArgument(kind="string", value="/unexpandable/thing"),
+                CallArgument(kind="class", symbol=unexpandable),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+    ]
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalog = _catalog()
+    skipped = derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    assert skipped == []
+    expanded = derive_endpoint_shapes(workspace, [catalog], capabilities=CAPABILITIES)
+    shape_ids = {s["shape_id"] for s in workspace.query("shapes")}
+    call_only_fields = {
+        f["wire_name"] for f in workspace.query("shape_fields") if f["shape_id"] == call_only
+    }
+    workspace.close()
+
+    assert call_only in shape_ids
+    assert call_only_fields == {"note"}
+    assert unexpandable in shape_ids
+    assert unexpandable in expanded.unexpanded_types
 
 
 # --- The shared url split (CP-2), unit-tested directly ---------------------
