@@ -52,6 +52,17 @@ _ARGUMENT_FIELDS = ("url", "body", "response")
 
 _ARG_REFERENCE = re.compile(r"^arg(\d+)$")
 
+# A `when` guard's own two keys (D02 §2b): `{arg: int, equals: str}` exactly.
+_WHEN_KEYS = {"arg", "equals"}
+
+# The D00 §5 compiler's own "unresolved" argument kind — what a `when` guard
+# poisons a step's declared captures to when the guard's own argument cannot
+# be read as a string literal. Every downstream reader already treats this
+# kind as an honest read failure, never an omission: `url_of` falls through
+# to its own unresolved answer, and `_capture_resolved` (Task 4's unified
+# helper) reads a `kind != "unresolved"` argument as failed to resolve.
+_UNRESOLVED_ARGUMENT = {"kind": "unresolved"}
+
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
     """Derives one endpoint row per chain reaching a terminal, via the same
@@ -79,6 +90,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # `body(Class)` response-extractor).
             "owner": _catalog_symbol(step["owner"]) if "owner" in step else None,
             "captures": step.get("captures", {}),
+            # D02 §2b: a step may declare a value guard on another argument
+            # — None for the (default) unguarded step, read by `_walk`
+            # (`_step_captures`) where `_matching_step` finds this row.
+            "when": step.get("when"),
         }
         for step in matches.get("steps", [])
     ]
@@ -210,11 +225,14 @@ def _walk(
         return
     for next_site in nexts:
         next_captures = dict(captures)
-        declared = _matching_step(next_site, context.steps)
-        if declared:
+        step = _matching_step(next_site, context.steps)
+        if step is not None:
             # Last wins (D02 §4): a repeated step overwrites its own earlier
             # capture here, in visitation order, with no extra bookkeeping.
-            next_captures.update(_resolve_captures(declared, next_site))
+            # `next_site`'s own arguments are what a `when` guard (D02 §2b)
+            # reads, so the guard is evaluated here, in `_resolve_captures`'s
+            # caller, rather than inside it.
+            next_captures.update(_step_captures(step, next_site))
         _walk(next_site, next_captures, reached_terminal, context)
 
 
@@ -306,7 +324,10 @@ def _matching_root(site: dict[str, Any], roots: list[dict[str, Any]]) -> dict[st
 
 
 def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The one declared step matching `site`, or None where nothing does —
+    """The one declared step matching `site` — the whole entry, `captures`
+    and its optional `when` guard together, since evaluating the guard
+    (D02 §2b) needs `site`'s own arguments, read by `_step_captures` in
+    `_walk` where they are at hand — or None where nothing does:
     "unmatched steps pass through uncaptured" (D02 §4). An owner-less step
     matches any owner; `_validate_steps` already refused any catalog where
     more than one entry could match the same row, so at most one candidate
@@ -314,7 +335,7 @@ def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[st
     name = str(site["name"])
     return next(
         (
-            step["captures"]
+            step
             for step in steps
             if step["method"] == name and step["owner"] in (None, site["owner"])
         ),
@@ -356,7 +377,11 @@ def _validate_captures(entries: list[dict[str, Any]], catalog: Catalog) -> None:
     carries neither. A capture out of *range* is a different answer and
     cannot be checked here, because the range belongs to each matched call
     site rather than to the catalog; ruling I1 already covers it at derive
-    time, where the site is known."""
+    time, where the site is known.
+
+    A step's own `when` guard (D02 §2b) must be `{arg: int, equals: str}`
+    exactly — checked here too, at the same load-time pass, rather than
+    only discovered the first time a call site reaches a malformed guard."""
     for entry in entries:
         for field, value in entry["captures"].items():
             if field in _ARGUMENT_FIELDS and not _ARG_REFERENCE.match(str(value)):
@@ -365,6 +390,24 @@ def _validate_captures(entries: list[dict[str, Any]], catalog: Catalog) -> None:
                     f"`{field}: {value}`, which is not a call-site position — an argument "
                     f"capture reads `argN` (D02 §4's fluent style)"
                 )
+        when = entry.get("when")
+        if when is not None and not _valid_when(when):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{entry['method']}` declares "
+                f"`when: {when!r}`, which must be `{{arg: int, equals: str}}` exactly "
+                f"(D02 §2b's value-guarded step)"
+            )
+
+
+def _valid_when(when: Any) -> bool:
+    """Whether a declared `when` guard is exactly `{arg: int, equals:
+    str}` — no missing key, no extra key, no wrong-typed value."""
+    return (
+        isinstance(when, dict)
+        and set(when) == _WHEN_KEYS
+        and isinstance(when.get("arg"), int)
+        and isinstance(when.get("equals"), str)
+    )
 
 
 def _terminal_index(
@@ -430,6 +473,33 @@ def _chain_key(site: dict[str, Any]) -> Any:
     own `result` is its answer, exactly as it is fed forward in real
     bytecode."""
     return site["receiver"] if site["name"] == "<init>" else site["result"]
+
+
+def _step_captures(step: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]:
+    """The captures one matched step contributes for `site` — plain
+    `_resolve_captures` where the step declares no `when`, and D02 §2b's
+    three-way guard answer otherwise, read off `site`'s own arguments:
+
+    - the guard argument is a string literal equal to `when["equals"]` —
+      the step's own captures apply, exactly as an unguarded step's would;
+    - the guard argument is a string literal, but a DIFFERENT one — the
+      step still matched the chain (D02 §2b: "the step matches the chain
+      either way"), only its captures do not apply, so nothing here
+      overwrites whatever an earlier step already folded in;
+    - anything else (no argument at that position, the wrong kind, or the
+      compiler's own `unresolved`) poisons every capture this step
+      declares to `_UNRESOLVED_ARGUMENT` — it might have been the guarded
+      key, and an unreadable key must never let a chain preserve an
+      earlier confident answer."""
+    when = step.get("when")
+    if when is None:
+        return _resolve_captures(step["captures"], site)
+    guard = _arg_at(site["arguments"], when["arg"])
+    if guard is not None and guard.get("kind") == "string" and isinstance(guard.get("value"), str):
+        if guard["value"] == when["equals"]:
+            return _resolve_captures(step["captures"], site)
+        return {}
+    return {field: _UNRESOLVED_ARGUMENT for field in step["captures"]}
 
 
 def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]:

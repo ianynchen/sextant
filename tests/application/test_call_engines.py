@@ -2819,3 +2819,184 @@ def test_okhttp_put_patch_delete_head_steps_derive_their_own_verb_not_the_roots_
     assert by_caller[callers["patch"]]["method"] == "PATCH"
     assert by_caller[callers["delete"]]["method"] == "DELETE"
     assert by_caller[callers["head"]]["method"] == "HEAD"
+
+
+# --- Task 8 (2E-prep): `when` — the value-guarded step (D02 §2b) -----------
+#
+# Checkpoint-confirmed (task-6-report.md javap evidence, reviewer-reproduced):
+# `KafkaHeaders.TOPIC` inlines to `LDC "kafka_topic"` at the call site, so a
+# `when` guard's string-literal comparison against a real `setHeader(String,
+# Object)` chain is sound. The invented catalog below stays HTTP-shaped (an
+# extra `setHeader` step folded into the WebClient chain) rather than
+# reaching for the real Kafka shape — `fluent`'s own `_derive` still requires
+# a root-seeded `http_method` today, and shipping the real
+# `spring-kafka-message.yml` catalog is a later task's job, not this one's.
+
+_GUARDED_STEP_MATCHES = {
+    "roots": [
+        {"owner": "com.acme.http.WebClient", "method": "get", "captures": {"http_method": "GET"}},
+    ],
+    "steps": [
+        {"method": "uri", "captures": {"url": "arg0"}},
+        {
+            "method": "setHeader",
+            "when": {"arg": 0, "equals": "kafka_topic"},
+            "captures": {"url": "arg1"},
+        },
+    ],
+    "terminal": ["retrieve"],
+}
+
+
+def test_a_guarded_step_whose_key_matches_captures_under_the_guard(tmp_path: Path):
+    """D02 §2b's plain case: the guard argument reads the declared `equals`
+    literal exactly, so the step's own captures apply — a `setHeader`
+    reached with `("kafka_topic", "t")` captures `url: "t"` exactly as an
+    unguarded step would."""
+    caller = "com/acme/http/Client#sendGuarded()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "setHeader",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[
+                CallArgument(kind="string", value="kafka_topic"),
+                CallArgument(kind="string", value="t"),
+            ],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 2, receiver=10, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_GUARDED_STEP_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "t"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_a_guarded_step_whose_key_is_a_different_literal_passes_through_uncaptured(
+    tmp_path: Path,
+):
+    """The step still matches the chain either way (D02 §2b: "the step
+    matches the chain either way, pass-through when the guard doesn't
+    hold") — a `setHeader` keyed `"other"` captures nothing at all, and the
+    url an earlier step set stands untouched, exactly like today's
+    unmatched-step pass-through."""
+    caller = "com/acme/http/Client#sendMismatched()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders/1")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "setHeader",
+            2,
+            receiver=10,
+            result=11,
+            arguments=[
+                CallArgument(kind="string", value="other"),
+                CallArgument(kind="string", value="x"),
+            ],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 3, receiver=11, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_GUARDED_STEP_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "/orders/1"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_a_guarded_step_whose_key_is_unresolved_poisons_the_capture_it_declares(
+    tmp_path: Path,
+):
+    """An unreadable guard key must never let a chain preserve an earlier
+    confident answer (D02 §2b): the guard argument's own kind is the
+    compiler's `unresolved` (never a string this catalog could compare), so
+    every capture this step declares — here just `url` — poisons to
+    unresolved, overwriting the resolved url an earlier `uri` step set, and
+    dropping the row's own resolution (checkpoint ruling I1, unified in Task
+    4's `_capture_resolved`)."""
+    caller = "com/acme/http/Client#sendUnresolvedKey()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders/1")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "setHeader",
+            2,
+            receiver=10,
+            result=11,
+            arguments=[CallArgument(kind="unresolved"), CallArgument(kind="string", value="x")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 3, receiver=11, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_GUARDED_STEP_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+@pytest.mark.parametrize(
+    "when",
+    [
+        {"equals": "kafka_topic"},  # missing arg
+        {"arg": 0},  # missing equals
+        {"arg": "0", "equals": "kafka_topic"},  # arg not an int
+        {"arg": 0, "equals": 7},  # equals not a str
+        {"arg": 0, "equals": "kafka_topic", "extra": True},  # extra key
+        "kafka_topic",  # not even a dict
+    ],
+)
+def test_a_malformed_when_guard_is_refused_at_run_start(tmp_path: Path, when: object):
+    """A `when` guard must be `{arg: int, equals: str}` exactly — anything
+    else is refused before any call site is matched, the same
+    `_validate_captures`/`_validate_methods` discipline every other
+    catalog-shape check in this file keeps: an unchecked value does not
+    stay in the file."""
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.http.WebClient",
+                "method": "get",
+                "captures": {"http_method": "GET"},
+            },
+        ],
+        "steps": [{"method": "setHeader", "when": when, "captures": {"url": "arg1"}}],
+        "terminal": ["retrieve"],
+    }
+    catalog = _fluent_catalog(matches, "invented-bad-when")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-bad-when.yml" in str(raised.value)
+    assert "setHeader" in str(raised.value)
