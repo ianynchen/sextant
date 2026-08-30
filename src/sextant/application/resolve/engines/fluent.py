@@ -255,6 +255,7 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
             "handler_signature": None,
             "resolution": resolution,
             "evidence": "compiler",
+            "catalog_id": context.catalog.id,
             "request_shape": argument_descriptor(
                 body_argument, context.facts, context.carrier_rules
             ),

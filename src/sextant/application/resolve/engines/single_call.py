@@ -210,6 +210,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 "handler_signature": None,
                 "resolution": resolution,
                 "evidence": "compiler",
+                "catalog_id": catalog.id,
                 "request_shape": argument_descriptor(body_argument, facts, carrier_rules),
                 "response_shape": argument_descriptor(response_argument, facts, carrier_rules),
             }

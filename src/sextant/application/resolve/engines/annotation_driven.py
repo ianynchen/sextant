@@ -39,6 +39,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         peer_from=list(mapping.get("peer_from", [])),
         method_from=mapping["method_from"],
         all_methods=list(mapping["all_methods"]),
+        catalog_id=catalog.id,
     )
     # Optional (D02 §2, amended): a catalog with no `reply` block declares no
     # second-row rule at all — the HTTP catalogs, which never see @SendTo.
@@ -205,6 +206,7 @@ def _reply_row(
         "handler_signature": None,
         "resolution": resolution,
         "evidence": "compiler",
+        "catalog_id": catalog.id,
         "request_shape": request_shape,
         "response_shape": None,
     }

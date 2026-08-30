@@ -110,6 +110,9 @@ def test_a_string_url_and_a_class_literal_response_derive_a_resolved_endpoint(
     assert endpoint["resolution"] == "resolved"
     assert endpoint["handler"] is None
     assert endpoint["peer"] is None
+    # D02D-prep spec §1a, Task 1: every row is stamped with the id of the
+    # catalog that derived it.
+    assert endpoint["catalog_id"] == "spring-resttemplate"
     assert json.loads(endpoint["response_shape"]) == {
         "wire_type": "object",
         "wire_format": "",

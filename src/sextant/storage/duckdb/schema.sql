@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS endpoints (
     peer              TEXT,
     resolution        TEXT,
     evidence          TEXT,
+    -- The id of the catalog that derived this row (2E-prep design §1a):
+    -- provenance for rule scoping, never part of wire identity, never
+    -- compared across services.
+    catalog_id        TEXT,
     request_shape     TEXT,
     response_shape    TEXT
 );

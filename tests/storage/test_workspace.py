@@ -236,6 +236,7 @@ def test_a_multi_valued_path_attribute_derives_one_row_per_value(tmp_path: Path)
         **_TOPIC_ENDPOINT_KWARGS,
         path_from=["topics"],
         all_methods=[],
+        catalog_id="cat-a",
     )
     rows = workspace.query("endpoints")
     workspace.close()
@@ -261,6 +262,7 @@ def test_an_empty_all_methods_derives_one_null_method_row(tmp_path: Path):
         **_TOPIC_ENDPOINT_KWARGS,
         path_from=["topic"],
         all_methods=[],
+        catalog_id="cat-a",
     )
     rows = workspace.query("endpoints")
     workspace.close()
@@ -288,6 +290,7 @@ def test_null_method_rows_dedup_and_merge_on_the_same_identity(tmp_path: Path):
             **_TOPIC_ENDPOINT_KWARGS,
             path_from=["topic"],
             all_methods=[],
+            catalog_id="cat-in",
         )
 
     outbound_row = {
@@ -303,6 +306,7 @@ def test_null_method_rows_dedup_and_merge_on_the_same_identity(tmp_path: Path):
         "evidence": "compiler",
         "request_shape": None,
         "response_shape": None,
+        "catalog_id": "cat-out",
     }
     # Same discipline on the call-site side: two separate derivations of the
     # same identity must still leave one outbound row.
@@ -316,6 +320,86 @@ def test_null_method_rows_dedup_and_merge_on_the_same_identity(tmp_path: Path):
     assert [(r["direction"], r["method"], r["path"]) for r in rows] == [
         ("both", None, "order-events"),
     ]
+
+
+def test_endpoints_carry_the_catalog_id_that_derived_them(tmp_path: Path):
+    """D02D-prep spec §1a, Task 1: every endpoints row is stamped with the id
+    of the catalog that derived it — an inbound row via `derive("endpoints",
+    catalog_id=...)`, an outbound row via `derive("call_endpoints",
+    rows=[{..., "catalog_id": ...}])`."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    workspace.derive(
+        "endpoints",
+        **_TOPIC_ENDPOINT_KWARGS,
+        path_from=["topic"],
+        all_methods=[],
+        catalog_id="cat-a",
+    )
+    outbound_row = {
+        "protocol": "kafka",
+        "direction": "outbound",
+        "method": None,
+        "path": "order-audit",
+        "handler": None,
+        "caller": "com/acme/notify/OrderPublisher#publish(sig_1a2b3c4d).",
+        "peer": None,
+        "handler_signature": None,
+        "resolution": "resolved",
+        "evidence": "compiler",
+        "request_shape": None,
+        "response_shape": None,
+        "catalog_id": "cat-b",
+    }
+    workspace.derive("call_endpoints", rows=[outbound_row])
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert {r["path"]: r["catalog_id"] for r in rows} == {
+        "order-events": "cat-a",
+        "order-audit": "cat-b",
+    }
+
+
+def test_merge_keeps_the_inbound_rows_catalog_id(tmp_path: Path):
+    """D02D-prep spec §1a: `merge_endpoints.sql` UPDATEs the inbound row in
+    place and only DELETEs the outbound one, so a `both` row keeps the
+    INBOUND side's `catalog_id` even though the outbound side was derived by
+    a different catalog."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    workspace.derive(
+        "endpoints",
+        **_TOPIC_ENDPOINT_KWARGS,
+        path_from=["topic"],
+        all_methods=[],
+        catalog_id="cat-in",
+    )
+    outbound_row = {
+        "protocol": "kafka",
+        "direction": "outbound",
+        "method": None,
+        "path": "order-events",
+        "handler": None,
+        "caller": "com/acme/notify/OrderPublisher#publish(sig_1a2b3c4d).",
+        "peer": None,
+        "handler_signature": None,
+        "resolution": "resolved",
+        "evidence": "compiler",
+        "request_shape": None,
+        "response_shape": None,
+        "catalog_id": "cat-out",
+    }
+    workspace.derive("call_endpoints", rows=[outbound_row])
+    workspace.derive("endpoints_merge")
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["direction"], r["catalog_id"]) for r in rows] == [("both", "cat-in")]
 
 
 def test_load_facts_reports_the_row_count_when_a_fact_tree_is_ingested(tmp_path: Path):
