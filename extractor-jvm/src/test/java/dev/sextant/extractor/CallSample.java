@@ -89,6 +89,13 @@ public final class CallSample {
         values.forEach(this::sink);
     }
 
+    /** A method reference into the JDK, which is the common case: the symbol
+     *  names a class no module declares, and every module that writes
+     *  {@code String::trim} must produce the same one (D00 §1). */
+    public void jdkMethodReferenceArgument(java.util.List<String> values) {
+        values.replaceAll(String::trim);
+    }
+
     /** {@code NEW Holder; DUP; INVOKESPECIAL <init>}: the constructor returns
      *  void, so the value that reaches the argument slot is the one the
      *  {@code NEW} pushed. */

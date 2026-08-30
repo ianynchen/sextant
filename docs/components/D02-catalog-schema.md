@@ -576,9 +576,12 @@ later. "PTR" is named here, in the catalog, and never in the engine.
 **`call_wrappers` names a constructor argument that holds the real payload.**
 `new HttpEntity<>(orderRequest)` is itself a `call_site` fact — a constructor invoke — and
 the outer call's `instance` argument that names `HttpEntity` carries a `source` id pointing
-at that constructor's `result` ([D00](D00-fact-schema.md) §5). `payload_ctor_arg: 0` tells
-the engine which of the constructor's own `arguments` is the payload; the engine follows
-exactly that one hop and stops. Beyond one hop, or where no `call_wrappers` entry matches
+at that constructor's `receiver` ([D00](D00-fact-schema.md) §5) — the constructed value's
+own id, shared by both facts. Not its `result`: `<init>` returns void, so a constructor
+call site's `result` is `null` by construction and could never carry the join.
+`payload_ctor_arg: 0` tells the engine which of the constructor's own `arguments` is the
+payload; the engine follows exactly that one hop and stops. Beyond one hop, or where no
+`call_wrappers` entry matches
 the `instance` type, the body stays `unresolved` — an envelope Sextant does not know is not
 one worth guessing through.
 

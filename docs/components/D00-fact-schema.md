@@ -54,7 +54,7 @@ emitted, because it is coerced to a number by YAML and by spreadsheets.
 
 ## 2. The document record
 
-Written once per source file. Every fact points at one.
+Written once per class file. Every fact points at one.
 
 | Field | Meaning |
 |---|---|
@@ -409,7 +409,7 @@ recovered later. Kinds:
 | `enum` | GETSTATIC of a **named constant of its own type** | symbol reference — `HttpMethod.POST`. Structural, not `ACC_ENUM`: an enum-like — a closed set of static final constants typed as their own owner — reads as `enum` here too, deliberately, because libraries move between the two spellings without changing what a constant means. A Kotlin `object`'s `INSTANCE` and constants such as `BigDecimal.ZERO` match the same shape; the referenced type's own `construct_kind` settles true enum-ness (§5b), so the distinction is a join away rather than a guess made where the answer is not available |
 | `class` | LDC of a class constant | symbol reference — the shape root |
 | `lambda` | invokedynamic via `LambdaMetafactory` | symbol reference to the lambda's synthetic body method — method references resolve the same way |
-| `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR (§5a) and the one-hop body follow ([D02](D02-catalog-schema.md) §2h) |
+| `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR (§5a) and the one-hop body follow ([D02](D02-catalog-schema.md) §2h). Always carries `source`: the constructed value's id, which is also the `receiver` of that object's own `<init>` call site, so the follow is a join on one number rather than a search for a nearby constructor |
 | `null` | ACONST_NULL | |
 | `unresolved` | anything else | a first-class honest answer, never an omission |
 

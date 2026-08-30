@@ -156,16 +156,13 @@ class MethodFlowTest {
 
     /** A lambda's code is not at the call site: javac lifts the body into a
      *  synthetic method and the call site only names it, through the second
-     *  bootstrap argument of a {@code LambdaMetafactory} invokedynamic. The
-     *  symbol is the impl method's full symbol in this module's grammar —
-     *  anything less cannot be joined against the method fact for it. */
+     *  bootstrap argument of a {@code LambdaMetafactory} invokedynamic. */
     @Test
     void captures_a_lambda_argument_as_the_symbol_of_the_body_javac_lifted_out() throws Exception {
         String line = last(callSites("lambdaArgument"));
         assertTrue(line.contains("\"name\":\"forEach\""), line);
         assertTrue(line.contains("\"kind\":\"lambda\",\"source\":"), line);
-        assertTrue(line.contains("\"symbol\":\"sextant-jvm maven com.acme/orders 1.0.0 "
-            + OWNER + "#lambda$lambdaArgument$0(sig_"), line);
+        assertTrue(line.contains("\"symbol\":\"" + OWNER + "#lambda$lambdaArgument$0(sig_"), line);
     }
 
     /** A method reference bootstraps identically and names the referenced
@@ -174,8 +171,26 @@ class MethodFlowTest {
     void captures_a_method_reference_argument_as_the_referenced_method() throws Exception {
         String line = last(callSites("methodReferenceArgument"));
         assertTrue(line.contains("\"kind\":\"lambda\",\"source\":"), line);
-        assertTrue(line.contains("\"symbol\":\"sextant-jvm maven com.acme/orders 1.0.0 "
-            + OWNER + "#sink(sig_"), line);
+        assertTrue(line.contains("\"symbol\":\"" + OWNER + "#sink(sig_"), line);
+    }
+
+    /** D00 §1's stability rule, at the one kind most likely to break it: a
+     *  method reference is very often into a library, and "two modules seeing
+     *  the same library type produce the same string" fails the moment the
+     *  *caller's* module coordinates are stamped onto `java/lang/String`. Every
+     *  module that writes {@code String::trim} would then mint a different
+     *  symbol for it, and none would join to another's. The bare descriptor
+     *  path is what the `class`, `enum` and `instance` kinds beside it emit,
+     *  and it is what this emits too. */
+    @Test
+    void names_a_jdk_method_reference_without_stamping_the_callers_coordinates_on_it()
+            throws Exception {
+        String line = last(callSites("jdkMethodReferenceArgument"));
+        assertTrue(line.contains("\"kind\":\"lambda\",\"source\":"), line);
+        assertTrue(line.contains("\"symbol\":\"java/lang/String#trim(sig_"), line);
+        // The prefix is the whole point: not merely "starts with the right
+        // path", but that the module's own coordinates appear nowhere in it.
+        assertTrue(!line.contains("com.acme/orders 1.0.0 java/lang/String"), line);
     }
 
     /** The value an argument slot holds after {@code NEW; DUP; <init>} is the
@@ -192,8 +207,30 @@ class MethodFlowTest {
         assertTrue(lines.get(0).contains("\"name\":\"<init>\""), lines.get(0));
         String line = lines.get(1);
         assertTrue(line.contains("\"name\":\"hold\""), line);
-        assertTrue(line.contains("\"arguments\":[{\"kind\":\"instance\","
-            + "\"symbol\":\"" + OWNER + "$Holder#\"}]"), line);
+        assertTrue(line.contains("\"kind\":\"instance\""), line);
+        assertTrue(line.contains("\"symbol\":\"" + OWNER + "$Holder#\""), line);
+    }
+
+    /** D02 §2h's one-hop body follow, made a join rather than a search: the
+     *  constructed value's id, the id its `<init>` site reports as receiver,
+     *  and the `source` on the argument that carries it are one number. All
+     *  three name the {@code NEW}.
+     *
+     *  <p>They agree only because the interpreter is copy-transparent. ASM's
+     *  own {@code SourceInterpreter} attributes the duplicated value to the
+     *  {@code DUP}, so the constructor's receiver named the stack shuffle while
+     *  the enclosing call named the NEW — two ids for one object, and a
+     *  consumer left matching by proximity, which is exactly what D00 §5
+     *  refuses everywhere else. */
+    @Test
+    void gives_a_constructed_value_one_id_across_its_constructor_and_its_consumer()
+            throws Exception {
+        List<String> lines = callSites("instanceArgument");
+        String constructor = lines.get(0);
+        String consumer = lines.get(1);
+        assertTrue(constructor.contains("\"name\":\"<init>\""), constructor);
+        assertTrue(consumer.contains("\"arguments\":[{\"kind\":\"instance\",\"source\":"
+            + field(constructor, "receiver") + ","), consumer);
     }
 
     /** An invokedynamic is a call site (D00 §5's {@code dynamic} dispatch

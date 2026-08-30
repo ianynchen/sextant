@@ -45,7 +45,8 @@ public final class MethodFlow {
     public static List<String> callSites(String documentId, String callerSymbol, MethodNode method) {
         Frame<SourceValue>[] frames;
         try {
-            frames = new Analyzer<>(new SourceInterpreter()).analyze(ownerOf(callerSymbol), method);
+            frames = new Analyzer<>(new CopyTransparentSourceInterpreter())
+                .analyze(ownerOf(callerSymbol), method);
         } catch (AnalyzerException unanalysable) {
             // A body the analyser cannot walk yields no call facts. The method's
             // own symbol was already emitted, so the loss is bounded and visible
@@ -54,7 +55,6 @@ public final class MethodFlow {
         }
         InsnList instructions = method.instructions;
         AbstractInsnNode[] insns = instructions.toArray();
-        String symbolPrefix = callerSymbol.substring(0, callerSymbol.lastIndexOf(' ') + 1);
         List<String> lines = new ArrayList<>();
         int ordinal = 0;
         for (int i = 0; i < insns.length; i++) {
@@ -75,8 +75,7 @@ public final class MethodFlow {
             int base = frame.getStackSize() - argumentTypes.length;
             List<String> arguments = new ArrayList<>();
             for (int a = 0; a < argumentTypes.length; a++) {
-                arguments.add(
-                    argumentJson(frame.getStack(base + a), argumentTypes[a], instructions, symbolPrefix));
+                arguments.add(argumentJson(frame.getStack(base + a), argumentTypes[a], instructions));
             }
             Integer receiver = target.hasReceiver()
                 ? sourceId(frame.getStack(base - 1), instructions)
@@ -86,6 +85,41 @@ public final class MethodFlow {
                                    arguments));
         }
         return lines;
+    }
+
+    /** {@code SourceInterpreter}, except that a {@code DUP} does not become the
+     *  producer of the value it duplicated.
+     *
+     *  <p>ASM's own {@code copyOperation} mints a fresh {@code SourceValue}
+     *  attributed to the copying instruction, which makes a stack shuffle look
+     *  like a value's origin. On the one shape that matters that is not a
+     *  detail: {@code NEW T; DUP; INVOKESPECIAL T.<init>} leaves the
+     *  constructor's receiver pointing at the DUP while the value handed to the
+     *  enclosing call points at the NEW, so the two halves of a single
+     *  {@code new T(payload)} carry different ids and D02 §2h's one-hop body
+     *  follow has nothing to join on. Returning the incoming value unchanged
+     *  makes the DUP invisible, and both halves name the NEW.
+     *
+     *  <p>Deliberately the DUP family alone. The loads and stores {@code
+     *  copyOperation} also covers are left as ASM has them: making an
+     *  {@code ALOAD} transparent would resolve a {@code this}-receiver back to
+     *  a method parameter, which has no producing instruction at all, and every
+     *  {@code this.foo()} would lose the receiver id it reports today. Whether
+     *  a chain should survive a store and a reload is a real question and a
+     *  larger one than this. */
+    private static final class CopyTransparentSourceInterpreter extends SourceInterpreter {
+        CopyTransparentSourceInterpreter() {
+            super(Opcodes.ASM9);
+        }
+
+        @Override
+        public SourceValue copyOperation(AbstractInsnNode insn, SourceValue value) {
+            return switch (insn.getOpcode()) {
+                case Opcodes.DUP, Opcodes.DUP_X1, Opcodes.DUP_X2,
+                     Opcodes.DUP2, Opcodes.DUP2_X1, Opcodes.DUP2_X2 -> value;
+                default -> super.copyOperation(insn, value);
+            };
+        }
     }
 
     /** What a call site needs to know about its callee, read from whichever of
@@ -140,8 +174,7 @@ public final class MethodFlow {
      *  load-bearing: a boolean and an int both arrive as {@code ICONST_*}, and
      *  only the descriptor tells them apart. Reporting a flag as {@code 1}
      *  throws away the distinction the flag exists for. */
-    private static String argumentJson(SourceValue value, Type declaredType, InsnList instructions,
-                                       String symbolPrefix) {
+    private static String argumentJson(SourceValue value, Type declaredType, InsnList instructions) {
         AbstractInsnNode producer = singleSource(value);
         if (producer == null) return argument("unresolved", null, null, null);
 
@@ -200,22 +233,28 @@ public final class MethodFlow {
         }
         // `NEW Type; DUP; INVOKESPECIAL <init>` — and the value that reaches an
         // argument slot is the one the NEW pushed, never the constructor's:
-        // `<init>` returns void and produces no value at all, and the DUP the
-        // constructor consumed is a copy the interpreter attributes to the DUP
-        // itself. So the NEW is the *only* instruction that names the concrete
-        // type here, and the concrete type is what D00 §5a's PTR carrier and
-        // D02's one-hop body follow both read.
+        // `<init>` returns void and produces no value at all. So the NEW is the
+        // *only* instruction that names the concrete type here, and the concrete
+        // type is what D00 §5a's PTR carrier and D02's one-hop body follow both
+        // read.
+        //
+        // The `source` is that same NEW's index, and it is what makes D02 §2h's
+        // one-hop follow a join rather than a search: the constructor call site
+        // in this method whose `receiver` equals this id is the one that built
+        // this value, and its arguments are the payload. That agreement is only
+        // true because CopyTransparentSourceInterpreter above keeps the DUP from
+        // standing between the two.
         if (producer instanceof TypeInsnNode created && created.getOpcode() == Opcodes.NEW) {
             return argument("instance", null,
                             JsonOut.string(TypeRefs.descriptorName(Type.getObjectType(created.desc))),
-                            null);
+                            String.valueOf(instructions.indexOf(producer)));
         }
         if (producer instanceof InvokeDynamicInsnNode indy) {
             // A lambda's code is not here: javac lifted the body into a
             // synthetic method and the call site only names it, in the
             // bootstrap's second argument. A method reference bootstraps
             // identically and names the referenced method itself.
-            String implementation = lambdaSymbol(indy, symbolPrefix);
+            String implementation = lambdaSymbol(indy);
             // Now that an indy is a call site of its own, the value it produced
             // has a `result` id — so the same join a plain call's result gets
             // applies, whether or not the kind resolved to `lambda`.
@@ -252,17 +291,20 @@ public final class MethodFlow {
      *  <p>Both {@code metafactory} and {@code altMetafactory} put the
      *  implementation handle in the same slot, behind the SAM method type.
      *
-     *  <p>Minted with the caller's own coordinates prefix, through the same
-     *  grammar {@code ClassScanner} uses for a method: a symbol that is not the
-     *  one the method fact carries cannot be joined to it, and half a symbol is
-     *  no better than none. A method reference into the JDK — {@code String::trim}
-     *  — therefore produces a symbol for a class this module does not contain,
-     *  which is correct: a symbol is a reference, and the fact that names it is
-     *  not a claim that the module declares it. */
-    private static String lambdaSymbol(InvokeDynamicInsnNode indy, String symbolPrefix) {
+     *  <p>The **bare descriptor path** — {@code java/lang/String#trim(sig_…).} —
+     *  with no coordinates prefix, exactly like the {@code class}, {@code enum}
+     *  and {@code instance} kinds beside it. A method reference is very often
+     *  into a library, and D00 §1 requires that two modules seeing the same
+     *  library type produce the same string: stamping the *caller's* module
+     *  coordinates onto {@code java/lang/String} would mint a different symbol
+     *  for {@code String::trim} in every module that used it, and none of them
+     *  would join to the other. An in-module reference is joined to its own
+     *  method fact by the descriptor suffix, which is what every consumer of
+     *  these symbols already keys on. */
+    private static String lambdaSymbol(InvokeDynamicInsnNode indy) {
         if (!"java/lang/invoke/LambdaMetafactory".equals(indy.bsm.getOwner())) return null;
         if (indy.bsmArgs.length < 2 || !(indy.bsmArgs[1] instanceof Handle implementation)) return null;
-        return JsonOut.string(symbolPrefix + implementation.getOwner() + "#" + implementation.getName()
+        return JsonOut.string(implementation.getOwner() + "#" + implementation.getName()
             + "(" + ClassScanner.disambiguatorOf(implementation.getDesc()) + ").");
     }
 
