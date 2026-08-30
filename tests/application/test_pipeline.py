@@ -77,9 +77,10 @@ def _spring_web() -> Catalog:
     return next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
 
 
-def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(tmp_path: Path):
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    _, report = resolved_fixture
 
     routes = {(e["method"], e["path"]) for e in report.endpoints}
     assert routes == {
@@ -291,7 +292,9 @@ def _messaging_rows(report: ResolveReport, protocol: str, path: str) -> list[dic
     return [e for e in report.endpoints if e["protocol"] == protocol and e["path"] == path]
 
 
-def test_a_kafka_listeners_two_topics_derive_two_rows_off_one_handler(tmp_path: Path):
+def test_a_kafka_listeners_two_topics_derive_two_rows_off_one_handler(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """`@KafkaListener(topics = {"order-events", "order-audit"})` on `onEvent`
     — a `String[]` in bytecode even though the fixture's own multi-topic
     listener is written with braces (CHECKPOINT FACT) — derives one row per
@@ -299,8 +302,7 @@ def test_a_kafka_listeners_two_topics_derive_two_rows_off_one_handler(tmp_path: 
     filtered request shape (`OrderEvent`, not `Acknowledgment` — the second,
     bare parameter `sole_unannotated` would otherwise have matched too, had
     it not been excluded)."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [events] = _messaging_rows(report, "kafka", "order-events")
     [audit] = _messaging_rows(report, "kafka", "order-audit")
 
@@ -313,7 +315,9 @@ def test_a_kafka_listeners_two_topics_derive_two_rows_off_one_handler(tmp_path: 
         assert row["response_shape"] is None
 
 
-def test_a_batch_listeners_request_shape_is_an_array(tmp_path: Path):
+def test_a_batch_listeners_request_shape_is_an_array(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """`onBatch(List<OrderEvent> events)`: the checkpoint's own expectation is
     `wire_type: array`, exactly what this asserts — no `item` (which would
     name the array's own element shape) survives, because the extractor does
@@ -326,8 +330,7 @@ def test_a_batch_listeners_request_shape_is_an_array(tmp_path: Path):
     *parameter*), not something a catalog's own rules can work around —
     verified live rather than assumed, and left as an honest gap rather than
     worked around."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [batch] = _messaging_rows(report, "kafka", "order-batches")
 
     descriptor = json.loads(batch["request_shape"])
@@ -336,7 +339,7 @@ def test_a_batch_listeners_request_shape_is_an_array(tmp_path: Path):
 
 
 def test_a_dead_letter_listeners_consumer_record_envelope_yields_no_request_shape(
-    tmp_path: Path,
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """`onDeadLetter(ConsumerRecord<String, OrderEvent> record)`: the same
     erased-parameter-generics limitation as the batch row above means
@@ -349,8 +352,7 @@ def test_a_dead_letter_listeners_consumer_record_envelope_yields_no_request_shap
     (`ConsumerRecord payload -> OrderEvent via payload_arg 1`) does not hold
     against this scanner's real output; this is that divergence, verified
     live and frozen honestly rather than guessed past."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [dlq] = _messaging_rows(report, "kafka", "order-.*-dlq")
 
     assert dlq["path"] == "order-.*-dlq"  # the pattern lands on `path` verbatim
@@ -358,7 +360,7 @@ def test_a_dead_letter_listeners_consumer_record_envelope_yields_no_request_shap
 
 
 def test_a_class_level_kafka_listener_derives_one_row_per_handler_sharing_the_topic(
-    tmp_path: Path,
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """`ClassLevelListener`'s class-level `@KafkaListener(topics =
     "order-polymorphic")` doubles as the `prefix_annotation`; each
@@ -369,8 +371,7 @@ def test_a_class_level_kafka_listener_derives_one_row_per_handler_sharing_the_to
     survive as genuinely separate rows sharing one wire identity, each
     keeping its own handler and its own request shape (`OrderEvent` for the
     typed handler, `Object` for the default one)."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     rows = _messaging_rows(report, "kafka", "order-polymorphic")
 
     assert len(rows) == 2
@@ -384,7 +385,9 @@ def test_a_class_level_kafka_listener_derives_one_row_per_handler_sharing_the_to
     )
 
 
-def test_a_kafka_listeners_sendto_reply_derives_a_resolved_outbound_row(tmp_path: Path):
+def test_a_kafka_listeners_sendto_reply_derives_a_resolved_outbound_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """`onReturn`'s static `@SendTo("order-return-receipts")`: D02 §2's
     `reply` block derives a second, OUTBOUND row, `caller` the handler,
     `direction` outbound, payload the handler's own RETURN type
@@ -400,8 +403,7 @@ def test_a_kafka_listeners_sendto_reply_derives_a_resolved_outbound_row(tmp_path
     resolved pipeline rather than only the hand-built facts `test_reply.py`
     uses, because that gap only exists once a reply row and its own
     handler's inbound row coexist in one real resolve."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [reply] = [
         e
         for e in report.endpoints
@@ -420,7 +422,7 @@ def test_a_kafka_listeners_sendto_reply_derives_a_resolved_outbound_row(tmp_path
 
 
 def test_a_value_returning_listener_with_no_sendto_derives_an_unresolved_reply_row(
-    tmp_path: Path,
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """`escalate`: value-returning, no `@SendTo` at all — the reply
     destination is resolved at runtime (a `ReplyingKafkaTemplate` caller,
@@ -429,8 +431,7 @@ def test_a_value_returning_listener_with_no_sendto_derives_an_unresolved_reply_r
     row — `path` NULL, `unresolved` — rather than deriving nothing, because
     "this handler replies" is true and useful on its own even when the
     destination cannot be named."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     # Task 11 adds a second kafka outbound, path-NULL row (`sendDefault`'s
     # own unresolved-channel row) — both share `(kafka, outbound, NULL)`,
     # so `caller` alone (never wire identity, which is identical) tells this
@@ -456,12 +457,13 @@ def test_a_value_returning_listener_with_no_sendto_derives_an_unresolved_reply_r
     assert reply["response_shape"] is None
 
 
-def test_a_jms_listener_resolves_its_converted_payload(tmp_path: Path):
+def test_a_jms_listener_resolves_its_converted_payload(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """`onAudit(OrderEvent event)`: `@JmsListener.destination` is genuinely
     scalar in bytecode (unlike Kafka's `topics`), and the sole bare
     parameter resolves as the payload."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [audit] = _messaging_rows(report, "jms", "audit.queue")
 
     assert json.loads(audit["request_shape"])["shape_id"] == (
@@ -469,7 +471,9 @@ def test_a_jms_listener_resolves_its_converted_payload(tmp_path: Path):
     )
 
 
-def test_a_jms_listeners_raw_message_envelope_yields_no_request_shape(tmp_path: Path):
+def test_a_jms_listeners_raw_message_envelope_yields_no_request_shape(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """`onRaw(Message message)`: unlike Kafka's generic `ConsumerRecord<K,
     V>`, a raw `jakarta.jms.Message` carries no compile-time-typed payload
     at all — no wrapper rule could ever unwrap it to one. `spring-jms.yml`
@@ -477,19 +481,19 @@ def test_a_jms_listeners_raw_message_envelope_yields_no_request_shape(tmp_path: 
     `sole_unannotated` fallback never treats the opaque envelope itself as
     though it were the payload; the row still derives (the listener exists),
     only the request shape is honestly absent."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [raw] = _messaging_rows(report, "jms", "audit.raw")
 
     assert raw["request_shape"] is None
 
 
-def test_an_sqs_listener_resolves_its_payload(tmp_path: Path):
+def test_an_sqs_listener_resolves_its_payload(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """`onShipment(OrderEvent event)`: `@SqsListener.value` is always a
     `String[]` in bytecode, even for the fixture's own bare-string
     declaration (CHECKPOINT FACT) — same shape family as Kafka's `topics`."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [shipment] = _messaging_rows(report, "sqs", "shipments-inbound")
 
     assert json.loads(shipment["request_shape"])["shape_id"] == (
@@ -498,7 +502,7 @@ def test_an_sqs_listener_resolves_its_payload(tmp_path: Path):
 
 
 def test_a_bare_unannotated_http_parameter_is_never_claimed_by_a_messaging_catalog(
-    tmp_path: Path,
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """`LegacyOrderController#amend(long id)`: a bare, unannotated HTTP
     parameter that predates this task — `spring-mvc.yml` declares
@@ -510,8 +514,7 @@ def test_a_bare_unannotated_http_parameter_is_never_claimed_by_a_messaging_catal
     in `spring-jms.yml`'s mapping ever produced. The 36 pre-Task-10 routes
     must be byte-identical; this is the row that would have silently
     diverged first."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     amend_rows = [
         e
         for e in report.endpoints
@@ -526,7 +529,7 @@ def test_a_bare_unannotated_http_parameter_is_never_claimed_by_a_messaging_catal
 
 
 def test_kafka_templates_two_send_arities_dedup_and_merge_into_the_listeners_row(
-    tmp_path: Path,
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """`kafkaTemplate.send("order-events", event)` (arity 2) and
     `kafkaTemplate.sendKeyed("order-events", key, event)` (arity 3) both
@@ -538,8 +541,7 @@ def test_kafka_templates_two_send_arities_dedup_and_merge_into_the_listeners_row
     request shape (`OrderEvent`, from `onEvent`'s signature), not whatever
     the single_call engine derived off `event`'s own pass-through capture,
     and gains the caller from whichever of the two send calls sorts first."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [row] = _messaging_rows(report, "kafka", "order-events")
 
     assert row["direction"] == "both"
@@ -549,7 +551,7 @@ def test_kafka_templates_two_send_arities_dedup_and_merge_into_the_listeners_row
 
 
 def test_the_producer_records_channel_and_payload_come_from_its_own_constructor(
-    tmp_path: Path,
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """`kafkaTemplate.send(new ProducerRecord<>("order-audit", event))`: the
     `record_wrappers` one-hop reads the topic and payload off the
@@ -557,8 +559,7 @@ def test_the_producer_records_channel_and_payload_come_from_its_own_constructor(
     argument (the record itself). `order-audit` also merges with Task 10's
     `onEvent` row (the SAME handler, its second `@KafkaListener` topic) —
     both, handler + caller, on the merged row."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [row] = _messaging_rows(report, "kafka", "order-audit")
 
     assert row["direction"] == "both"
@@ -566,7 +567,9 @@ def test_the_producer_records_channel_and_payload_come_from_its_own_constructor(
     assert row["caller"].endswith("EventProducers#sendAudit(sig_b2a754d9).")
 
 
-def test_the_raw_kafka_producer_derives_its_own_unmerged_outbound_row(tmp_path: Path):
+def test_the_raw_kafka_producer_derives_its_own_unmerged_outbound_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """`rawProducer.send(new ProducerRecord<>("order-raw", key, event))`
     (`kafka-clients.yml`, owner `KafkaProducer` — a different owner type and
     a different detect coordinate from `KafkaTemplate`): `order-raw` has no
@@ -583,8 +586,7 @@ def test_the_raw_kafka_producer_derives_its_own_unmerged_outbound_row(tmp_path: 
     brief's own shorthand ("resolved"), verified live rather than assumed —
     the SAME parameter-passthrough rule Phase 2C already established, not a
     new one."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [row] = _messaging_rows(report, "kafka", "order-raw")
 
     assert row["direction"] == "outbound"
@@ -595,7 +597,7 @@ def test_the_raw_kafka_producer_derives_its_own_unmerged_outbound_row(tmp_path: 
 
 
 def test_the_replying_kafka_templates_send_and_receive_merges_with_its_listener(
-    tmp_path: Path,
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """`replyingTemplate.sendAndReceive(new ProducerRecord<>("order-returns",
     event))` — `ReplyingKafkaTemplate` gets its own catalog file
@@ -607,8 +609,7 @@ def test_the_replying_kafka_templates_send_and_receive_merges_with_its_listener(
     handler's own contract (`OrderEvent` request, `ReceiptView` response —
     `onReturn`'s RETURN type, never the reply the `@SendTo` row already
     covers), plus the new caller from this task."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [row] = _messaging_rows(report, "kafka", "order-returns")
 
     assert row["direction"] == "both"
@@ -620,15 +621,16 @@ def test_the_replying_kafka_templates_send_and_receive_merges_with_its_listener(
     )
 
 
-def test_kafka_templates_send_default_derives_an_unresolved_null_path_row(tmp_path: Path):
+def test_kafka_templates_send_default_derives_an_unresolved_null_path_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """`kafkaTemplate.sendDefault(event)`: no channel argument at the call
     site at all — the topic is the template's own config-borne default,
     2F's territory — so `sendDefault`'s `methods` row declares no
     `channel_arg`, and `url_of` reads the missing capture as `path: NULL,
     resolution: unresolved` (I1). The row still derives: "this method
     produces a message" is true and useful on its own."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [row] = [
         e
         for e in report.endpoints
@@ -643,12 +645,13 @@ def test_kafka_templates_send_default_derives_an_unresolved_null_path_row(tmp_pa
     assert row["request_shape"] is None
 
 
-def test_a_jms_templates_destination_derives_and_merges_with_its_listener(tmp_path: Path):
+def test_a_jms_templates_destination_derives_and_merges_with_its_listener(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """`jmsTemplate.convertAndSend("audit.queue", event)` merges with Task
     10's own `AuditJmsListener#onAudit` inbound row into `direction: both`,
     keeping the handler's own converted-payload contract."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [row] = _messaging_rows(report, "jms", "audit.queue")
 
     assert row["direction"] == "both"
@@ -657,13 +660,14 @@ def test_a_jms_templates_destination_derives_and_merges_with_its_listener(tmp_pa
     assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
 
 
-def test_a_destination_less_jms_send_derives_an_unresolved_null_path_row(tmp_path: Path):
+def test_a_destination_less_jms_send_derives_an_unresolved_null_path_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """`jmsTemplate.convertAndSend(event)`: the destination-less overload
     targets the template's own configured default destination — no
     `channel_arg` declared for its `methods` row, same NULL-path shape as
     Kafka's `sendDefault`."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [row] = [
         e
         for e in report.endpoints
@@ -674,7 +678,9 @@ def test_a_destination_less_jms_send_derives_an_unresolved_null_path_row(tmp_pat
     assert row["resolution"] == "unresolved"
 
 
-def test_an_sqs_templates_send_derives_its_own_unmerged_outbound_row(tmp_path: Path):
+def test_an_sqs_templates_send_derives_its_own_unmerged_outbound_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """`sqsTemplate.send("shipments-outbound", event)`: no inbound listener
     targets this topic (`ShipmentsSqsListener` listens on the different
     `shipments-inbound` queue), so the row stays outbound, unmerged. `event`
@@ -683,8 +689,7 @@ def test_an_sqs_templates_send_derives_its_own_unmerged_outbound_row(tmp_path: P
     is `unresolved` (I1) even though the literal queue name resolves `path`
     cleanly. A genuine, live-verified divergence from the brief's own
     shorthand ("resolved"), frozen as observed."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [row] = _messaging_rows(report, "sqs", "shipments-outbound")
 
     assert row["direction"] == "outbound"
@@ -694,7 +699,7 @@ def test_an_sqs_templates_send_derives_its_own_unmerged_outbound_row(tmp_path: P
 
 
 def test_the_sqs_builder_lambda_derives_an_honest_unresolved_row_not_a_fabricated_path(
-    tmp_path: Path,
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """`sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))`:
     `SqsTemplate.send` has two arity-1 overloads (the destination-less
@@ -712,8 +717,7 @@ def test_the_sqs_builder_lambda_derives_an_honest_unresolved_row_not_a_fabricate
     site's own arg 0 carries `kind: lambda` (not assumed) — confirming the
     row derives the same honest answer either way, never the literal
     `"shipments-lambda"` string sitting inside the lambda body."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [row] = [
         e
         for e in report.endpoints
@@ -725,7 +729,9 @@ def test_the_sqs_builder_lambda_derives_an_honest_unresolved_row_not_a_fabricate
     assert row["request_shape"] is None
 
 
-def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(tmp_path: Path):
+def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """Pub/Sub's inbound and outbound rows ride the SAME `single_call` file
     (`spring-pubsub.yml`), unlike Kafka/JMS/SQS's separate listener/template
     catalogs — there is no standard Pub/Sub listener annotation, so the
@@ -744,8 +750,7 @@ def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(tmp_pa
     lands in) — so it lands in `request_shape`, matching
     `spring-kafka.yml`/`spring-jms.yml`/`spring-sqs.yml`'s own inbound rows,
     never `response_shape`, on the surviving inbound-owned row."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     [row] = _messaging_rows(report, "pubsub", "order-notifications")
 
     assert row["direction"] == "both"
@@ -791,8 +796,10 @@ def test_a_catalogs_row_level_direction_override_is_still_owned_with_no_other_ca
     assert shape_id in shapes
 
 
-def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_path: Path):
-    workspace, report = _resolved_fixture(tmp_path)
+def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    workspace, report = resolved_fixture
     endpoint = next(
         e for e in report.endpoints if e["method"] == "POST" and e["path"] == "/v1/orders/detailed"
     )
@@ -810,15 +817,15 @@ def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_pat
     assert json.loads(endpoint["response_shape"])["shape_id"] == (
         "com/acme/orders/contracts/OrderView#"
     )
-    workspace.close()
 
 
-def test_an_endpoint_whose_response_is_a_collection_records_its_element_shape(tmp_path: Path):
+def test_an_endpoint_whose_response_is_a_collection_records_its_element_shape(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """List<OrderResult> was 2A's parked gap: the endpoint said nothing at
     all. The descriptor keeps the array-ness — it IS the wire contract — and
     points at the element's shape, all the way through on real bytecode."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     listing = next(
         e for e in report.endpoints if e["path"] == "/v1/orders" and e["method"] == "GET"
     )
@@ -829,7 +836,7 @@ def test_an_endpoint_whose_response_is_a_collection_records_its_element_shape(tm
 
 
 def test_an_outbound_endpoints_collection_response_resolves_to_the_real_client_interface(
-    tmp_path: Path,
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """BillingClient's `List<OrderView> ...` is Phase 2B's outbound payoff:
     the Feign catalog derives the *route* — on real bytecode, no other
@@ -843,8 +850,7 @@ def test_an_outbound_endpoints_collection_response_resolves_to_the_real_client_i
     path itself, on an outbound row, on real bytecode — the same path that
     already serves inbound endpoints, now proven to reach one the module
     calls rather than exposes."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     invoices = next(
         e for e in report.endpoints if e["method"] == "GET" and e["path"] == "/billing/invoices"
     )
@@ -855,7 +861,7 @@ def test_an_outbound_endpoints_collection_response_resolves_to_the_real_client_i
 
 
 def test_the_resttemplate_exchange_row_carries_the_http_entity_and_ptr_descriptors(
-    tmp_path: Path,
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """`single_call` (Task 9), on real bytecode: `exchange`'s verb is an
     `enum` argument, never a string (D00 §5), its body is built inline as
@@ -864,8 +870,7 @@ def test_the_resttemplate_exchange_row_carries_the_http_entity_and_ptr_descripto
     subclass — D02 §2h's PTR follow through the type's own declared
     supertype. All three resolve off the call site's own arguments; nothing
     here comes from a handler signature, because this row has none."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     batch = next(
         e for e in report.endpoints if e["method"] == "POST" and e["path"] == "/billing/batch"
     )
@@ -882,7 +887,7 @@ def test_the_resttemplate_exchange_row_carries_the_http_entity_and_ptr_descripto
 
 
 def test_every_resttemplate_route_carries_its_own_resolution_and_descriptors(
-    tmp_path: Path,
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """Task 9 review, Finding I3: `/billing/batch` was the only RestTemplate
     row with an asserted descriptor; the other three routes' live-run
@@ -904,8 +909,7 @@ def test_every_resttemplate_route_carries_its_own_resolution_and_descriptors(
       same reason, `request_shape` NULL (could-not-read), `response_shape`
       NULL for the ordinary reason (no capture ever named one).
     """
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     by_route = {(e["method"], e["path"]): e for e in report.endpoints}
 
     balances = by_route[("GET", "/billing/balances/{id}")]
@@ -934,12 +938,13 @@ def test_every_resttemplate_route_carries_its_own_resolution_and_descriptors(
     assert update["response_shape"] is None
 
 
-def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path: Path):
+def test_a_scalar_response_is_recorded_rather_than_dropped(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """A server-rendered view name has no field list to compare, but NULL is
     reserved for exactly one meaning — no payload — so a scalar response is a
     real contract, recorded rather than silently dropped (D01 §5)."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
     rendered = next(e for e in report.endpoints if e["path"] == "/orders" and e["method"] == "GET")
 
     assert json.loads(rendered["response_shape"])["wire_type"] == "string"
@@ -947,16 +952,17 @@ def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path: Path):
     assert rendered["request_shape"] is None
 
 
-def test_only_the_fixtures_payload_fields_reach_the_request_contract(tmp_path: Path):
+def test_only_the_fixtures_payload_fields_reach_the_request_contract(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """On real bytecode, the whole way through. Every field of the fixture's
     request class is public and typed; what separates a contract term from a
     constant bound to the type or a field declared not serialized is nothing
     the shape pass can see for itself — so a regression anywhere along the
     chain publishes a contract nobody wrote, and D02 §4 makes the fixture the
     place that is caught."""
-    workspace, _ = _resolved_fixture(tmp_path)
+    workspace, _ = resolved_fixture
     names = [f["wire_name"] for f in shape_fields_of(workspace, ORDER_REQUEST)]
-    workspace.close()
 
     assert "SOURCE" not in names
     assert "cachedSummary" not in names
@@ -974,16 +980,17 @@ def test_only_the_fixtures_payload_fields_reach_the_request_contract(tmp_path: P
     ]
 
 
-def test_an_enumeration_typed_field_is_mapped_rather_than_expanded(tmp_path: Path):
+def test_an_enumeration_typed_field_is_mapped_rather_than_expanded(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """`OrderStatus` is scanned like any other contract type, and expanding it
     structurally would put `NEW` and `DONE` on the wire as payload fields.
     D00 §5b keeps `enum` in the vocabulary so the whole type is one value."""
-    workspace, report = _resolved_fixture(tmp_path)
+    workspace, report = resolved_fixture
     status = next(
         f for f in shape_fields_of(workspace, ORDER_REQUEST) if f["wire_name"] == "status"
     )
     shapes = [s["shape_id"] for s in workspace.query("shapes")]
-    workspace.close()
 
     assert status["wire_type"] == "enum"
     assert ORDER_STATUS not in shapes
@@ -992,11 +999,12 @@ def test_an_enumeration_typed_field_is_mapped_rather_than_expanded(tmp_path: Pat
     assert ORDER_STATUS not in report.unexpanded_types
 
 
-def test_the_report_names_the_types_expansion_could_not_open(tmp_path: Path):
+def test_the_report_names_the_types_expansion_could_not_open(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
     """A catalog grows from observation, so a type nothing could expand is
     reported by name (FR-17) — a count cannot be acted on."""
-    workspace, report = _resolved_fixture(tmp_path)
-    workspace.close()
+    _, report = resolved_fixture
 
     assert "org/springframework/http/HttpHeaders#" in report.unexpanded_types
     assert [s["shape_id"] for s in report.shapes]
