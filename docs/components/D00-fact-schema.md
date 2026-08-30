@@ -161,7 +161,10 @@ goes in `ext`, never into a widened set.
 `persistence` carries `target_kind`: `database`, `cache`, `file`. A sub-field, so that
 splitting it later is a rendering choice rather than a re-index.
 
-**`protocol`** — `http`, `soap`, `grpc`, `message`
+**`protocol`** — `http`, `soap`, `grpc`, `kafka`, `jms`, `sqs`, `pubsub`. `message` is
+retired: it was reserved and never declared by any shipped catalog, so nothing migrates.
+The broker family is the protocol because linking gates on protocol equality (DR-5), and
+a Kafka topic can never be answered by an SQS queue.
 
 **`control_flow_kind`** — `sequential`, `conditional`, `alternative`, `loop`, `handler`
 

@@ -154,6 +154,32 @@ matches:
 Covers Spring Web, JAX-RS, Spring Kafka, JMS listeners, and JAX-WS — inbound; Spring Cloud
 OpenFeign, Spring 6 `@HttpExchange`, and Retrofit — outbound.
 
+**Messaging listener catalogs generalise the annotation vocabulary a third time**, this
+time for a destination that carries no verb.
+
+- **A multi-valued destination attribute** (`@KafkaListener(topics = {"a", "b"})`) derives
+  one endpoint per listed value — the `all_methods` precedent above, extended from verb to
+  identity: an annotation naming several destinations means several endpoints, not one
+  endpoint with an unresolved destination.
+- **`all_methods: []` declares a verbless protocol.** A topic has no verb to enumerate, so
+  the catalog states an empty set rather than a method list: one row per mapping, `method`
+  NULL, and `resolution` untouched by the absence — the destination was read either way.
+- **The `reply` block** `{annotation, destination_from, payload: return}` derives one
+  additional outbound row per listed reply destination named on the annotation — one row
+  per destination, mirroring the multi-valued rule above. The reply row's `caller` is the
+  handler method, and its request payload is the handler's own return type. A
+  value-returning handler with no reply annotation still derives one outbound row, with
+  `path` NULL and `resolution: unresolved`: the handler is known to answer something, only
+  where it answers is not. A `void` handler derives no reply row — there is nothing to
+  send.
+
+`request_body` gains an `excludes: [<fqn types>]` sub-key: parameters of these types are
+ignored by the `sole_unannotated` fallback count. A listener taking `(OrderEvent event,
+Acknowledgment ack)` has two unannotated parameters, and without `excludes` the fallback
+would honestly find none; naming `Acknowledgment` there lets the fallback see the one real
+payload. This lives under `request_body` rather than as a separate top-level
+`payload_excludes`, because it is the same fallback rule this key already governs.
+
 ### `single_call`
 
 One call carries the whole declaration. Arguments are addressed by position or name.
@@ -168,7 +194,8 @@ matches:
     - { name: exchange,      method_arg: 1,     url_arg: 0, body_arg: 2, response_arg: 3 }
 ```
 
-Each `methods` row is `{name, http_method | method_arg, url_arg, body_arg?, response_arg?}`.
+Each `methods` row is `{name, arity?, http_method | method_arg | neither, url_arg |
+channel_arg, body_arg?, response_arg?, record_arg?, direction?}`.
 **`http_method` is a literal when the catalog already knows the verb** — `postForObject` is
 always a POST, so the catalog states it once. **`method_arg` is a position when the call
 site carries it instead** — `exchange`'s verb is its own `HttpMethod` argument, an
@@ -180,13 +207,40 @@ slot cannot be resolved — the verb arrives in a parameter — the row still de
 `response_arg` are optional: `getForObject` has no request body, and a `void`-returning
 call has no response to root.
 
+**`arity` restricts a row to call sites with exactly that many arguments.** A row without
+it matches every overload, so the shipped 2C catalogs parse unchanged; a catalog that
+needs to tell `send(topic, payload)` from `send(topic, key, payload)` apart writes one row
+per arity instead.
+
+**`channel_arg` is an alias of `url_arg` for protocols whose identity is a destination
+rather than a URL** — a topic or queue name in place of a path. Declaring both `url_arg`
+and `channel_arg` on one row is a `CatalogError`: the two name the same capture, and a row
+naming it twice is a broken catalog, not two different pieces of evidence.
+
+**A row declaring neither `http_method` nor `method_arg` is verbless by declaration** — a
+topic has no verb. The row derives `method` NULL without penalising `resolution`, exactly
+as `method_arg`'s own unresolved case does; resolved verbless rows dedup on `(protocol,
+direction, path)` rather than on a method-inclusive key, since there is no method to
+distinguish them by.
+
+**`direction` on a row overrides the catalog's declared direction** — Pub/Sub's
+`subscribe` is inbound even inside an otherwise outbound file. On an inbound row, the
+deriving method lands in `handler`, not `caller`: it is the consumer, not the caller.
+
+**`record_arg` names an argument whose linked constructor carries both identity and
+payload** — `send(ProducerRecord)`'s one argument names the record, not the topic or the
+value directly. It resolves through the catalog-level block `record_wrappers: [{type,
+channel_ctor_arg, payload_ctor_arg}]`, where `payload_ctor_arg` is an integer position or
+the string `last`.
+
 Per matching call site: `path` is the url argument's string literal — the template
 verbatim, placeholders and all, because the template is the wire identity — and
 **`resolution` is `resolved` when it did and `unresolved` when it did not; the row still
 derives either way**, because "this method calls something over HTTP" is true and useful
-on its own. `caller` is the calling method symbol; `peer` is NULL (§2d); `direction` is
-`outbound`; `evidence` is `compiler`. Rows enter the same `endpoints` table as every other
-style, merging and counting the same way.
+on its own. `direction` is `outbound` by default, or the row's own `direction` where
+declared; an outbound row's deriving method lands in `caller`, an inbound row's in
+`handler`, per the rule above. `peer` is NULL (§2d); `evidence` is `compiler`. Rows enter
+the same `endpoints` table as every other style, merging and counting the same way.
 
 ### `fluent`
 
@@ -336,6 +390,12 @@ endpoint's path for the blocking-call-on-async-path finding (FR-14). An unfamili
 wrapper with no declaration is **not unwrapped** — the shape roots at the wrapper and the
 endpoint records that no wrapper rule matched, so an incomplete catalog degrades visibly
 rather than guessing.
+
+**`payload_arg` already positions the payload type argument, so messaging's
+`ConsumerRecord<K, V>` needs no new carrier extension** — its payload is simply
+`payload_arg: 1`, declared the same way as every other wrapper above. The spec's
+`payload_type_arg` carrier extension (§7 permission) is dropped as redundant; recorded
+here so it is not reintroduced.
 
 ---
 
