@@ -144,6 +144,45 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
         # absolute, so CP-2 splits them into `peer`+`path` (asserted below).
         ("GET", "/legacy/exports"),
         ("POST", "/legacy/exports"),
+        # Inbound (Phase 2D, Task 10): the three listener catalogs.
+        # `method` is always NULL — a listener declares no HTTP-style verb
+        # (D02 §2, amended) — so every messaging route below shares that
+        # first tuple element; no two of them share a `path` with each other
+        # or with an HTTP route, so the set still tells every row apart.
+        # OrderEventsListener's `onEvent` carries two topics in one
+        # `@KafkaListener(topics = {...})` — two rows, one handler.
+        (None, "order-events"),
+        (None, "order-audit"),
+        # `onReturn`: the reply-carrying listener (its own outbound row is
+        # asserted separately below).
+        (None, "order-returns"),
+        # `onDeadLetter`: `topicPattern`, not `topics` — the pattern lands on
+        # `path` verbatim, never expanded into real topic names.
+        (None, "order-.*-dlq"),
+        # `onBatch`: `List<OrderEvent>` — asserted below for its `wire_type`.
+        (None, "order-batches"),
+        # `escalate`: value-returning, no `@SendTo` — the dynamic-reply
+        # listener; its own `unresolved` outbound row is `(None, None)`,
+        # asserted separately below.
+        (None, "order-escalations"),
+        # `ClassLevelListener`: a class-level `@KafkaListener(topics =
+        # "order-polymorphic")` plus two `@KafkaHandler` methods — TWO rows
+        # share this one path (asserted below); the set still shows one
+        # tuple, same as the two `get` overloads below share no path at all
+        # but this pair does.
+        (None, "order-polymorphic"),
+        # AuditJmsListener: a converted payload and a raw `jakarta.jms.Message`
+        # envelope (asserted below).
+        (None, "audit.queue"),
+        (None, "audit.raw"),
+        # ShipmentsSqsListener.
+        (None, "shipments-inbound"),
+        # Outbound (Phase 2D, Task 10): `@SendTo`'s two reply shapes.
+        # `onReturn`'s static `@SendTo("order-return-receipts")`.
+        (None, "order-return-receipts"),
+        # `escalate`'s dynamic reply: value-returning, no `@SendTo` at all —
+        # `path` NULL, `unresolved` (asserted below).
+        (None, None),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -153,8 +192,21 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
     # D02 §3 merge folds that into the existing inbound row (direction
     # `both`) rather than keeping both, so the count is 18 inbound + 7
     # annotation-driven outbound + 4 single_call outbound rows + 8 fluent
-    # outbound rows derived, minus the 1 that merges away — 36.
-    assert len(report.endpoints) == 36
+    # outbound rows derived, minus the 1 that merges away — 36 — plus Task
+    # 10's 13 messaging rows: 8 kafka inbound (`onEvent` on two topics,
+    # `onDeadLetter`, `onBatch`, `escalate`, `onReturn`, and
+    # `ClassLevelListener`'s two `@KafkaHandler` methods) + 2 jms inbound +
+    # 1 sqs inbound + 2 kafka outbound replies — 49. `ClassLevelListener`'s
+    # `onEvent`/`onDefault` share one wire identity (kafka, inbound, NULL,
+    # `order-polymorphic`) and do NOT dedup to one row: `derive_endpoints.sql`'s
+    # own insert-if-absent guard (D02 §5) only checks a new row against what
+    # the table already held *before* this statement began — it was written
+    # for cross-catalog duplicates, never for two method symbols the SAME
+    # catalog's own single `INSERT ... SELECT` maps to one identity in one
+    # pass — so both handlers' rows survive (asserted below). This is a real
+    # divergence from an original expectation that they would dedup to one;
+    # verified live against real bytecode rather than assumed.
+    assert len(report.endpoints) == 49
     assert report.skipped_catalogs == []
 
     directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
@@ -195,6 +247,233 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(t
         e for e in report.endpoints if (e["method"], e["path"]) == ("POST", "/v2/inventory/reserve")
     ]
     assert "lambda$reserveAfterLevels$" in reserve_row["caller"]
+
+
+# --- Task 10: the three listener catalogs, end to end, on real bytecode ---
+
+
+def _messaging_rows(report: ResolveReport, protocol: str, path: str) -> list[dict]:
+    return [e for e in report.endpoints if e["protocol"] == protocol and e["path"] == path]
+
+
+def test_a_kafka_listeners_two_topics_derive_two_rows_off_one_handler(tmp_path: Path):
+    """`@KafkaListener(topics = {"order-events", "order-audit"})` on `onEvent`
+    — a `String[]` in bytecode even though the fixture's own multi-topic
+    listener is written with braces (CHECKPOINT FACT) — derives one row per
+    topic, both sharing `onEvent`'s own handler symbol and its excludes-
+    filtered request shape (`OrderEvent`, not `Acknowledgment` — the second,
+    bare parameter `sole_unannotated` would otherwise have matched too, had
+    it not been excluded)."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [events] = _messaging_rows(report, "kafka", "order-events")
+    [audit] = _messaging_rows(report, "kafka", "order-audit")
+
+    assert events["handler"] == audit["handler"]
+    assert events["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
+    for row in (events, audit):
+        assert json.loads(row["request_shape"])["shape_id"] == (
+            "com/acme/orders/contracts/OrderEvent#"
+        )
+        assert row["response_shape"] is None
+
+
+def test_a_batch_listeners_request_shape_is_an_array(tmp_path: Path):
+    """`onBatch(List<OrderEvent> events)`: the checkpoint's own expectation is
+    `wire_type: array`, exactly what this asserts — no `item` (which would
+    name the array's own element shape) survives, because the extractor does
+    not capture a *parameter*'s own generic type arguments the way it does a
+    *return* type's (`OrderController#list`'s `List<OrderResult>` return, by
+    contrast, does carry its element — see
+    `test_an_endpoint_whose_response_is_a_collection_records_its_element_shape`
+    above). A real, pre-existing scanner limitation this task's fixture is
+    the first to expose (no earlier fixture ever put a generic type on a
+    *parameter*), not something a catalog's own rules can work around —
+    verified live rather than assumed, and left as an honest gap rather than
+    worked around."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [batch] = _messaging_rows(report, "kafka", "order-batches")
+
+    descriptor = json.loads(batch["request_shape"])
+    assert descriptor["wire_type"] == "array"
+    assert "item" not in descriptor
+
+
+def test_a_dead_letter_listeners_consumer_record_envelope_yields_no_request_shape(
+    tmp_path: Path,
+):
+    """`onDeadLetter(ConsumerRecord<String, OrderEvent> record)`: the same
+    erased-parameter-generics limitation as the batch row above means
+    `ConsumerRecord`'s own type arguments never reach the signature, so the
+    declared `{type: ..., payload_arg: 1, semantics: envelope}` wrapper rule
+    finds nothing at its payload position — D02 §2a's "a declared envelope
+    holding nothing at the payload position... is no payload either:
+    describing the envelope would report a type the catalog already declares
+    as one nobody could expand." The checkpoint's own expectation
+    (`ConsumerRecord payload -> OrderEvent via payload_arg 1`) does not hold
+    against this scanner's real output; this is that divergence, verified
+    live and frozen honestly rather than guessed past."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [dlq] = _messaging_rows(report, "kafka", "order-.*-dlq")
+
+    assert dlq["path"] == "order-.*-dlq"  # the pattern lands on `path` verbatim
+    assert dlq["request_shape"] is None
+
+
+def test_a_class_level_kafka_listener_derives_one_row_per_handler_sharing_the_topic(
+    tmp_path: Path,
+):
+    """`ClassLevelListener`'s class-level `@KafkaListener(topics =
+    "order-polymorphic")` doubles as the `prefix_annotation`; each
+    `@KafkaHandler` method (no path attribute of its own — path suffix '')
+    picks up that prefix whole as its `path`. `onEvent` and `onDefault` (the
+    `isDefault = true` handler) both derive, and do NOT dedup to one row —
+    see the divergence note on the module-level row count above — so both
+    survive as genuinely separate rows sharing one wire identity, each
+    keeping its own handler and its own request shape (`OrderEvent` for the
+    typed handler, `Object` for the default one)."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    rows = _messaging_rows(report, "kafka", "order-polymorphic")
+
+    assert len(rows) == 2
+    by_handler = {row["handler"].rsplit("#", 1)[1]: row for row in rows}
+    assert set(by_handler) == {"onEvent(sig_b2a754d9).", "onDefault(sig_f286d6bd)."}
+    assert json.loads(by_handler["onEvent(sig_b2a754d9)."]["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderEvent#"
+    )
+    assert json.loads(by_handler["onDefault(sig_f286d6bd)."]["request_shape"])["shape_id"] == (
+        "java/lang/Object#"
+    )
+
+
+def test_a_kafka_listeners_sendto_reply_derives_a_resolved_outbound_row(tmp_path: Path):
+    """`onReturn`'s static `@SendTo("order-return-receipts")`: D02 §2's
+    `reply` block derives a second, OUTBOUND row, `caller` the handler,
+    `direction` outbound, payload the handler's own RETURN type
+    (`ReceiptView`) — never its request shape, and never `None`, even though
+    `onReturn`'s own method symbol is ALSO `handler` on the INBOUND
+    `order-returns` row asserted above. Task 10 fix (`derive_endpoint_contracts.sql`):
+    before it, the owner-keyed contracts update — keyed on
+    `coalesce(handler, caller)`, a bare symbol — could not tell this row's
+    own already-correct values apart from the SAME symbol's unrelated
+    inbound contract, and silently overwrote them with it (`request_shape`
+    became `onReturn`'s received `OrderEvent`, `response_shape` gained a
+    value it should never carry at all). Pinned here against the real,
+    resolved pipeline rather than only the hand-built facts `test_reply.py`
+    uses, because that gap only exists once a reply row and its own
+    handler's inbound row coexist in one real resolve."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [reply] = [
+        e
+        for e in report.endpoints
+        if e["protocol"] == "kafka"
+        and e["direction"] == "outbound"
+        and e["path"] == "order-return-receipts"
+    ]
+
+    assert reply["handler"] is None
+    assert reply["caller"].endswith("OrderEventsListener#onReturn(sig_160f6bce).")
+    assert reply["resolution"] == "resolved"
+    assert json.loads(reply["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/ReceiptView#"
+    )
+    assert reply["response_shape"] is None
+
+
+def test_a_value_returning_listener_with_no_sendto_derives_an_unresolved_reply_row(
+    tmp_path: Path,
+):
+    """`escalate`: value-returning, no `@SendTo` at all — the reply
+    destination is resolved at runtime (a `ReplyingKafkaTemplate` caller,
+    off the record's own reply-topic header), never visible to the
+    annotations this catalog reads. D02 §2's `reply` block still derives the
+    row — `path` NULL, `unresolved` — rather than deriving nothing, because
+    "this handler replies" is true and useful on its own even when the
+    destination cannot be named."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [reply] = [
+        e
+        for e in report.endpoints
+        if e["protocol"] == "kafka" and e["direction"] == "outbound" and e["path"] is None
+    ]
+
+    assert reply["caller"].endswith("OrderEventsListener#escalate(sig_160f6bce).")
+    assert reply["resolution"] == "unresolved"
+    assert json.loads(reply["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/ReceiptView#"
+    )
+    assert reply["response_shape"] is None
+
+
+def test_a_jms_listener_resolves_its_converted_payload(tmp_path: Path):
+    """`onAudit(OrderEvent event)`: `@JmsListener.destination` is genuinely
+    scalar in bytecode (unlike Kafka's `topics`), and the sole bare
+    parameter resolves as the payload."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [audit] = _messaging_rows(report, "jms", "audit.queue")
+
+    assert json.loads(audit["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderEvent#"
+    )
+
+
+def test_a_jms_listeners_raw_message_envelope_yields_no_request_shape(tmp_path: Path):
+    """`onRaw(Message message)`: unlike Kafka's generic `ConsumerRecord<K,
+    V>`, a raw `jakarta.jms.Message` carries no compile-time-typed payload
+    at all — no wrapper rule could ever unwrap it to one. `spring-jms.yml`
+    excludes `jakarta.jms.Message` alongside `jakarta.jms.Session` so its own
+    `sole_unannotated` fallback never treats the opaque envelope itself as
+    though it were the payload; the row still derives (the listener exists),
+    only the request shape is honestly absent."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [raw] = _messaging_rows(report, "jms", "audit.raw")
+
+    assert raw["request_shape"] is None
+
+
+def test_an_sqs_listener_resolves_its_payload(tmp_path: Path):
+    """`onShipment(OrderEvent event)`: `@SqsListener.value` is always a
+    `String[]` in bytecode, even for the fixture's own bare-string
+    declaration (CHECKPOINT FACT) — same shape family as Kafka's `topics`."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    [shipment] = _messaging_rows(report, "sqs", "shipments-inbound")
+
+    assert json.loads(shipment["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderEvent#"
+    )
+
+
+def test_a_bare_unannotated_http_parameter_is_never_claimed_by_a_messaging_catalog(
+    tmp_path: Path,
+):
+    """`LegacyOrderController#amend(long id)`: a bare, unannotated HTTP
+    parameter that predates this task — `spring-mvc.yml` declares
+    `fallback: none`, so it never claimed a body here. Task 10 fix (`_owns`,
+    shapes/contracts.py): before scoping ownership by `protocol` as well as
+    `direction`, whichever inbound messaging catalog sorted first
+    (`spring-jms.yml`, alphabetically before `spring-mvc.yml`) matched this
+    bare `long` as its OWN `sole_unannotated` body — an `http` row nothing
+    in `spring-jms.yml`'s mapping ever produced. The 36 pre-Task-10 routes
+    must be byte-identical; this is the row that would have silently
+    diverged first."""
+    workspace, report = _resolved_fixture(tmp_path)
+    workspace.close()
+    amend_rows = [
+        e
+        for e in report.endpoints
+        if e["path"] == "/v1/legacy/orders/{id}" and e["method"] in ("PUT", "PATCH")
+    ]
+
+    assert len(amend_rows) == 2
+    assert all(row["request_shape"] is None for row in amend_rows)
 
 
 def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(tmp_path: Path):

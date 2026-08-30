@@ -102,4 +102,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # (BillingRestTemplate), plus the three `fluent` catalogs' eight
     # reconstructed-chain routes (WebClient/RestClient/OkHttp), join the
     # outbound side, real end to end.
-    assert rows == [("both", 1), ("inbound", 17), ("outbound", 18)]
+    # Phase 2D (Task 10): the three listener catalogs add 11 inbound rows
+    # (kafka 8, jms 2, sqs 1 — see test_pipeline.py for the full breakdown)
+    # and 2 kafka outbound `@SendTo` reply rows.
+    assert rows == [("both", 1), ("inbound", 28), ("outbound", 20)]

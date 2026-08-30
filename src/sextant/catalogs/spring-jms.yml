@@ -1,0 +1,72 @@
+id: spring-jms
+displayName: Spring JMS (listeners)
+style: annotation_driven
+protocol: jms
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework:spring-jms"]
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # No type-level gate: `@JmsListener` sits on the method directly.
+  # `jakarta.jms.Message` excluded alongside `Session`: unlike Kafka's
+  # `ConsumerRecord<K, V>`, a raw `Message` parameter carries no
+  # compile-time-typed payload this catalog's rules can pull a real
+  # contract out of — leaving it eligible for `sole_unannotated` would
+  # describe the opaque envelope itself as if it were the payload.
+  request_body: { annotation: org/springframework/messaging/handler/annotation/Payload#,
+                  fallback: sole_unannotated,
+                  excludes: [jakarta.jms.Session, jakarta.jms.Message] }
+  mapping:
+    # CHECKPOINT FACT: `@JmsListener.destination` is genuinely scalar in
+    # bytecode (unlike Kafka's `topics`).
+    path_from: [destination]
+    # No class-level listener shape for JMS (unlike Kafka's `@KafkaHandler`
+    # polymorphism) — no prefix annotation to declare.
+    prefix_from: []
+    method_from: method
+    # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
+    all_methods: []
+    prefix_annotation: null
+    annotations:
+      - { fqn: org/springframework/jms/annotation/JmsListener# }
+
+# Copied verbatim from spring-resttemplate.yml (harvest compatibility: an
+# inbound catalog's own wrapper/serialization/known_types rules can settle
+# ANY same-direction row, including one a different catalog produced — D02
+# §2, Task 12 review round 1 finding 1). No broker-specific wrapper is added
+# here: unlike Kafka's `ConsumerRecord<K, V>`, a raw `jakarta.jms.Message`
+# carries no compile-time-typed payload argument to unwrap to.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

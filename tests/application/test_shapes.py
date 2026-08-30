@@ -1312,14 +1312,31 @@ def test_owns_matches_only_a_catalogs_own_direction_and_both_reads_as_inbound():
     inbound = Catalog(**{**vars(_CATALOG), "direction": "inbound"})
     outbound = Catalog(**{**vars(_CATALOG), "direction": "outbound"})
 
-    assert _owns(inbound, {"direction": "inbound"}) is True
-    assert _owns(outbound, {"direction": "outbound"}) is True
+    assert _owns(inbound, {"protocol": "http", "direction": "inbound"}) is True
+    assert _owns(outbound, {"protocol": "http", "direction": "outbound"}) is True
     # A `both` row's surviving `handler_signature` is the handler's own
     # (merge_endpoints.sql), so it is inbound-owned, never outbound-owned.
-    assert _owns(inbound, {"direction": "both"}) is True
-    assert _owns(outbound, {"direction": "both"}) is False
-    assert _owns(outbound, {"direction": "inbound"}) is False
-    assert _owns(inbound, {"direction": "outbound"}) is False
+    assert _owns(inbound, {"protocol": "http", "direction": "both"}) is True
+    assert _owns(outbound, {"protocol": "http", "direction": "both"}) is False
+    assert _owns(outbound, {"protocol": "http", "direction": "inbound"}) is False
+    assert _owns(inbound, {"protocol": "http", "direction": "outbound"}) is False
+
+
+def test_owns_never_crosses_a_protocol_it_was_not_declared_for(tmp_path):
+    """Task 10 fix: `_owns` scoped by direction alone let `spring-jms`
+    (`protocol: jms`, `sole_unannotated` body fallback, sorted before
+    `spring-mvc` among inbound catalogs) settle a request shape for
+    `LegacyOrderController#amend`'s bare `long id` HTTP parameter — an
+    `http` row `spring-jms.yml`'s own mapping never matched. Mutation-tested
+    against the pre-fix body (direction check alone): a same-direction,
+    different-protocol row reads as owned, and this assertion fails."""
+    inbound_http = Catalog(**{**vars(_CATALOG), "direction": "inbound", "protocol": "http"})
+    inbound_kafka = Catalog(**{**vars(_CATALOG), "direction": "inbound", "protocol": "kafka"})
+
+    assert _owns(inbound_kafka, {"protocol": "http", "direction": "inbound"}) is False
+    assert _owns(inbound_http, {"protocol": "kafka", "direction": "inbound"}) is False
+    # A `both` row still only reaches a same-protocol inbound catalog.
+    assert _owns(inbound_kafka, {"protocol": "http", "direction": "both"}) is False
 
 
 # --- Task 12 fix round 1 (coordinator review): wrapper vocabulary must be
@@ -1407,6 +1424,56 @@ def test_an_unrelated_outbound_catalogs_wrapper_list_still_unwraps_another_catal
     workspace.close()
 
     assert descriptor["shape_id"] == ORDER_VIEW_SHAPE
+
+
+# --- Task 10: the three messaging catalogs' harvested blocks pin against
+# `spring-resttemplate.yml`'s (the checkpoint's own "harvest compatibility"
+# instruction: copy `wrappers`/`serialization`/`known_types` VERBATIM, then
+# add broker-specific entries on top) — extending this module's own
+# cross-catalog compatibility pinning discipline (Task 12 fix round 1, above)
+# to the three new files. `_owns` is now also scoped by `protocol` (Task 10
+# fix, `test_owns_never_crosses_a_protocol_it_was_not_declared_for` above),
+# so a same-protocol union is the only compatibility surface these three
+# still share with each other; there is exactly one catalog per new
+# protocol, so this pins the harvested baseline itself rather than a
+# multi-catalog resolve.
+
+
+def test_the_messaging_catalogs_serialization_and_known_types_are_harvested_verbatim():
+    """`serialization` and `known_types` on all three new files must be
+    byte-for-byte `spring-resttemplate.yml`'s own blocks — the harvest the
+    checkpoint calls for, mechanically pinned rather than eyeballed."""
+    catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
+    resttemplate = catalogs["spring-resttemplate"]
+
+    for catalog_id in ("spring-kafka", "spring-jms", "spring-sqs"):
+        catalog = catalogs[catalog_id]
+        assert catalog.serialization == resttemplate.serialization, catalog_id
+        assert catalog.known_types == resttemplate.known_types, catalog_id
+
+
+def test_the_messaging_catalogs_wrappers_include_the_harvested_baseline_plus_broker_entries():
+    """Each new file's own `wrappers` list must still contain every entry
+    `spring-resttemplate.yml` declares (the harvested baseline, verbatim);
+    `spring-kafka.yml` alone adds the two broker envelope entries
+    (`ConsumerRecord`, `Message`) on top — `spring-jms.yml`/`spring-sqs.yml`
+    add none, since neither broker's listener API declares an envelope-typed
+    parameter a wrapper rule could unwrap."""
+    catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
+    baseline = catalogs["spring-resttemplate"].wrappers
+
+    for catalog_id in ("spring-kafka", "spring-jms", "spring-sqs"):
+        wrappers = catalogs[catalog_id].wrappers
+        for entry in baseline:
+            assert entry in wrappers, (catalog_id, entry)
+
+    kafka_extra = [w for w in catalogs["spring-kafka"].wrappers if w not in baseline]
+    assert {w["type"] for w in kafka_extra} == {
+        "org.apache.kafka.clients.consumer.ConsumerRecord",
+        "org.springframework.messaging.Message",
+    }
+    assert [w for w in catalogs["spring-jms"].wrappers if w not in baseline] == []
+    assert [w for w in catalogs["spring-sqs"].wrappers if w not in baseline] == []
 
 
 def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path):

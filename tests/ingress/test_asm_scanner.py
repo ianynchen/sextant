@@ -37,6 +37,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "BillingClient.jsonl",
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
+        "ClassLevelListener.jsonl",
         "CustomerRef.jsonl",
         "EventProducers.jsonl",
         "InventoryExchange.jsonl",
@@ -64,7 +65,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]
-    assert report.documents == 30
+    assert report.documents == 31
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -89,6 +90,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "BillingClient.jsonl",
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
+        "ClassLevelListener.jsonl",
         "CustomerRef.jsonl",
         "EventProducers.jsonl",
         "InventoryExchange.jsonl",
