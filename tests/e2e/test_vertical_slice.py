@@ -66,6 +66,20 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # here `sendDefault`) renders `{protocol} (unresolved)`, the same
     # honesty rule as the HTTP `GET (unresolved)` row above.
     assert "kafka (unresolved)" in document
+    # 2E-prep Task 13: the raw-driver catalogs (Tasks 11-12) render like any
+    # other messaging row — `kafka-consumer.yml`'s
+    # `RawKafkaConsumers#subscribeToTopics` call derives both `raw-t1` and
+    # `raw-t2` off the SAME caller.
+    assert "kafka raw-t1" in document
+    # `google-pubsub-subscriber.yml`'s `interface_implementation` style
+    # resolves `raw-notify`'s instance receiver to its class's own declared
+    # `MessageReceiver#receiveMessage` implementer — the handler renders
+    # verbatim in the SAME row as the identity, no `(sig_...)` suffix (an
+    # implemented-interface match has no call-site signature to anchor).
+    assert (
+        "`pubsub raw-notify` | `com/acme/orders/messaging/raw/RawPubSubReceiver#receiveMessage`"
+        in document
+    )
 
 
 def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_path: Path):
