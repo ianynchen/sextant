@@ -1153,6 +1153,101 @@ def test_a_nest_shaped_continuation_with_an_unreadable_subtree_stays_one_unresol
     ]
 
 
+def test_a_nest_shaped_continuations_lambda_kind_subtree_folds_its_bodys_routes(
+    tmp_path: Path,
+):
+    """`_subtree_routes`' `lambda`-kind branch, deferred from Task 8's own
+    review: a shaped continuation's `subtree_arg` is ordinarily a same-method
+    expression reached through `source` (the two tests above), but the
+    grammar lets it be a `lambda`-kind argument instead — a whole router
+    folded from a body method, the same jump a body-linked entry or prefix
+    makes elsewhere. `andNest` declares `path_arg`/`subtree_arg` only —
+    continuations carry no `body_arg` of their own — so this IS the only way
+    a continuation ever reaches a linked body, and it is coded once in
+    `_subtree_routes` for every shaped continuation to share.
+
+    The body here itself contains a bare `RouterFunctions.route(...)` call —
+    an argument-rooted ENTRY, not a body-linked one — so it is independently
+    rootable on its own terms, exactly checkpoint (1a)'s frozen `other()`
+    case: two distinct facts about one method, `GET /y` from the body's own
+    walk and `GET /x/y` folded under the continuation's prefix, neither
+    suppressing the other."""
+    body = DECLARER + "andNestBody(sig_b1)."
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/a")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATES,
+            "path",
+            result=15,
+            arguments=[CallArgument(kind="string", value="/x")],
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTER_TYPE,
+            "andNest",
+            receiver=9,
+            result=21,
+            invoke_kind="interface",
+            arguments=[
+                CallArgument(kind="unresolved", source=15),
+                CallArgument(kind="lambda", symbol=body),
+            ],
+        ),
+        _site(
+            body,
+            0,
+            PREDICATES,
+            "GET",
+            result=5,
+            arguments=[CallArgument(kind="string", value="/y")],
+        ),
+        _site(
+            body,
+            1,
+            ROUTERS,
+            "route",
+            result=11,
+            arguments=[
+                CallArgument(kind="unresolved", source=5),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert sorted(_identities(rows)) == sorted(
+        [
+            ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
+            ("GET", "/x/y", _MODULE + CREATE_ORDER, "resolved"),
+            ("GET", "/y", _MODULE + CREATE_ORDER, "resolved"),
+        ]
+    )
+
+
 # --- owner-free continuations extend walks but never root them ------------
 
 

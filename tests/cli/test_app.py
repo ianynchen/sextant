@@ -53,9 +53,10 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # 2E-prep Task 6: +1 (`GET /composed`, the effective-annotations
     # pre-pass's `@ApiGet` composition). Phase 2E Task 7: +2 more
     # (`GET /api/orders`, `GET /api/composed`, the inherited-mappings
-    # pass) — see test_pipeline.py's own dedicated row-level test for the
-    # full breakdown.
-    assert metadata["endpoints"]["inbound"]["http"] == 21
+    # pass). Phase 2E Task 9: +10 more (the `combinator` engine's WebFlux
+    # functional-routing tree, both DSLs) — see test_pipeline.py's own
+    # dedicated row-level test for the full breakdown.
+    assert metadata["endpoints"]["inbound"]["http"] == 31
 
 
 def test_export_writes_a_bundle_with_manifest_graph_and_facts(tmp_path: Path):

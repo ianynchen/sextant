@@ -56,7 +56,7 @@ endpoints is the failure this prevents.
 
 ---
 
-## 2. The six styles
+## 2. The seven styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
 genuinely new shape needs a new engine.
@@ -421,6 +421,139 @@ could not be read" are different facts:
   `channel_via` ladder) are not argument reads and carry no `unresolved` form at all, so
   they are left out of the fold rather than poisoned into a value their readers cannot
   interpret.
+
+### `combinator`
+
+Neither one call (`single_call`) nor one chain (`fluent`) carries the declaration here:
+the router is a **tree**, assembled by handing predicate objects, subtrees and whole
+routers to further calls as arguments, rather than fluently through one receiver.
+Spring WebFlux's functional routing is the fixture case — `RouterFunctions.route(...)`/
+`.nest(...)` in Java, `coRouter { }` in Kotlin — but nothing below names either language:
+every edge the walk follows is already in the facts
+([D00](D00-fact-schema.md) §5) — a predicate argument links to its producing call
+through `source`, a chain link through `result` → `receiver`, and a subtree or a nested
+body arrives as one more linked argument, `lambda`-kind where the compiler moved the
+block into a method of its own.
+
+```yaml
+style: combinator
+requires: [call_site, string_constants, chain_reconstruction]
+matches:
+  entries:
+    - { owner: org.springframework.web.reactive.function.server.RouterFunctions,
+        methods: [route, nest], handler_arg: 1 }
+    - { owner: org.springframework.web.reactive.function.server.CoRouterFunctionDslKt,
+        method: coRouter, body_arg: 0 }
+  vocabulary:
+    verbs:
+      - { owner: "…RequestPredicates", method: GET, verb: GET, path_arg: 0 }
+      - { owner: "…CoRouterFunctionDsl", method: GET, verb: GET, path_arg: 0, handler_arg: 1 }
+    prefixes:
+      - { owner: "…RequestPredicates", method: path, path_arg: 0 }
+      - { owner: "…RouterFunctions", method: nest, path_arg: 0, subtree_arg: 1 }
+      - { owner: "…CoRouterFunctionDsl", method: nest, path_arg: 0, body_arg: 1 }
+    media:
+      - { owner: "…RequestPredicates", method: accept, fills: produces }
+    media_values:
+      owner: org.springframework.http.MediaType
+      values: { APPLICATION_JSON: application/json }
+    composers:
+      and: [{ owner: "…RequestPredicate", method: and }]
+      or:  [{ owner: "…RequestPredicate", method: or }]
+  continuations:
+    - { name: andRoute, owner: "…RouterFunction" }
+    - { name: andNest,  owner: "…RouterFunction", path_arg: 0, subtree_arg: 1 }
+    - { name: and,      owner: "…RouterFunction" }
+```
+
+**Three grammar blocks, and each is catalog data alone — nothing below names a
+framework:**
+
+- **`entries`** declares where trees start, in two shapes. An **argument-rooted**
+  entry (`{owner, methods, handler_arg}`) is a call that takes a predicate and a
+  handler as its own arguments — Java's static `route`/`nest`. A **body-linked**
+  entry (`{owner, method, body_arg}`) is a call whose `body_arg` names, as a
+  `lambda`-kind argument, the method holding the routes — Kotlin's `coRouter`, whose
+  builder body the compiler puts in a synthetic method of its own. The walk roots
+  ONLY at the entry call and jumps to the named method; a prefix rule's own
+  `body_arg` (below) makes the same jump one level deeper. Body methods are never
+  rooted on their own — a method that merely *contains* a vocabulary call is not a
+  root, because rooting it too would double-derive every nested route, once
+  prefixed and once bare (2E checkpoint F4, the frozen defect this rule exists to
+  close). The entry owner and the vocabulary owner are routinely two different
+  types — `CoRouterFunctionDslKt` (the file facade with the static entry point) is
+  not `CoRouterFunctionDsl` (the DSL type every builder call carries) — so a
+  catalog declares both.
+- **`vocabulary`** maps owner+method to a role: `verbs` (a verb plus the argument
+  its path sits at, and — the two-argument form — its handler position, ONE
+  vocabulary read at two arities: a one-argument predicate becomes a route only
+  once some entry attaches a handler to it, a two-argument call declares the whole
+  route itself), `prefixes` (a path contribution, plus optionally the
+  `subtree_arg`/`body_arg` holding the routes it prefixes — declaring both on one
+  row is nonsensical and never arises, since a subtree is a same-method expression
+  and a body is a compiler-moved one), `media` (which of `consumes`/`produces` a
+  predicate fills — `accept` is request-matching semantics: a route guarded by
+  `accept(JSON)` *serves* clients that accept JSON, not the reverse), `media_values`
+  (an enum type's member names to their declared wire values), and `composers`
+  (`and` merges constraint sets into one; `or` duplicates the route per branch, over
+  ANY predicate kind — verbs, paths, media alike — the `all_methods` precedent
+  generalised).
+- **`continuations`** are the calls that merge route SETS along `result` →
+  `receiver`, `fluent`'s own steps discipline extended: a plain name matches any
+  owner, useful for reaching a step inside a chain already known to be this
+  catalog's; a mapping narrows the same name to one `owner`, and — for the
+  nest-shaped form — adds `path_arg`/`subtree_arg`, which fold the *whole router* at
+  that argument under this call's own prefix rather than reading a handler it does
+  not have. **Every continuation that can END a chain needs an `owner`.** A bare
+  `and` matches a method name half the libraries on a classpath declare; rooting at
+  every one of them would invent a router out of any two-argument call that happens
+  to share the name. The cost is stated rather than hidden: an owner-free
+  continuation extends a walk some real root already reaches, but never roots one
+  by itself.
+
+**The walk, one core for both shapes.** From an argument-rooted entry, or from a
+body-linked entry's own named method, every argument is resolved through its
+`source` link recursively: predicate subtrees fold into (verb, path, consumes,
+produces); a prefix pushes its own contribution onto every route its subtree or
+body yields; a continuation merges the route sets on either side of it. Each leaf
+route derives one row: the catalog's declared `protocol`/`direction`, the verb, the
+concatenated prefix+path, the handler symbol (a bound method reference resolves to
+the real target, an inline block to its synthetic body — both joined against the
+scanned symbol facts and written module-prefixed, never fabricated; an adapted
+function object read as an `instance` of a generated class is not a method symbol
+at all, and reads NULL rather than being invented), `evidence: compiler`. Rows
+enter the same `endpoints` table as every other style, dedup and merge unchanged.
+
+**Honesty rules, verbatim from the design spec.** An unreadable part poisons
+EXACTLY its own column: a variable path leaves `path` NULL and the row
+`unresolved`; an unreadable media constant leaves only that media column NULL,
+since the verb and path — the wire identity — are intact and the row stays
+`resolved` (2E checkpoint F1's ruling: Spring's own vararg `accept(MediaType...)`
+constants are, in real bytecode, exactly this case — the `ANEWARRAY` producing the
+array has no case in the extractor's argument reader, so the argument is a bare
+`{"kind":"unresolved"}` with no `source` and no `symbol`, and the media vocabulary
+above is declared *specified-but-unread* against that fixture, proven by a
+synthetic-facts unit test rather than the live scan, for the day the extractor
+grows the missing case). A router composed from another method's own return value
+— the walk is per-method BY DESIGN — derives ONE unresolved row for the reference
+rather than a silent absence: the facts would support following it, and spec §1c's
+boundary is a stated one, not a gap the evidence left open. `request_shape`/
+`response_shape` stay honestly NULL always: a functional handler's signature is
+`Request → Response`, and its payload contracts live inside its body — `bodyToMono`
+calls and their like — which is call-evidence work for a later phase, not a
+signature this style can read.
+
+**Media unions within one batch, exactly `fluent`'s own rule reapplied**: two `or`
+branches differing ONLY in the media they declare are one endpoint, not two, folded
+before the insert ever sees them (spec §4).
+
+**This style is deliberately language-agnostic, and the engine enforces it: no JVM
+grammar, no framework name, no Kotlin-specific branch anywhere in its code** — the
+two entry shapes above are catalog declarations interpreted by one core, which is
+exactly what lets an axum `Router::new().route(...)` tree, a gin registration set,
+or an Express `app.get(...)` chain become a future catalog file against this SAME
+engine, once their languages' extractors emit the same fact grammar (D00 §5's
+`source`/`result`/`receiver` links). No engine change, only new YAML.
 
 ### `interface_implementation`
 
