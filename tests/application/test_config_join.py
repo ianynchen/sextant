@@ -341,19 +341,25 @@ def test_a_bean_whose_declared_type_implements_the_interface_is_a_candidate_too(
 
 def test_a_bean_matching_no_declared_interface_is_not_a_candidate(tmp_path: Path):
     """A declared method returning something the catalog says nothing about
-    is not a binding — the style needs a functional shape to read a suffix, a
-    direction and a payload position from, and inventing one would mint an
-    endpoint from a bean's name alone."""
+    is not a candidate at all — the style needs a functional shape to read a
+    suffix, a direction and a payload position from, and inventing one would
+    mint an endpoint from a bean's name alone.
+
+    No selection key here, so the candidate set IS the answer: the ordinary
+    method beside the functional one contributes nothing, rather than
+    contributing a degraded row. (A name the selection explicitly states but
+    no candidate answers to is a different question, and a different row —
+    the ghost case below.)"""
     workspace = _workspace(
         tmp_path,
-        [_bean("helper", "com/acme/streams/Helper#", EVENT)],
-        _selection("helper") + _destination("helper-in-0", "events"),
+        [_bean("handle", SINK, EVENT), _bean("helper", "com/acme/streams/Helper#", EVENT)],
+        _destination("handle-in-0", "events") + _destination("helper-in-0", "other"),
     )
     config_join.run(workspace, _catalog())
     rows = _rows(workspace)
     workspace.close()
 
-    assert rows == []
+    assert [row["path"] for row in rows] == ["events"]
 
 
 # --- job 1: selection ----------------------------------------------------
@@ -393,6 +399,112 @@ def test_every_candidate_binds_when_the_selection_key_is_absent(tmp_path: Path):
     workspace.close()
 
     assert sorted(row["path"] for row in rows) == ["a", "b"]
+
+
+def test_every_candidate_binds_when_the_key_exists_but_no_environment_resolved_it(
+    tmp_path: Path,
+):
+    """Fix round 1, I-2, half one. A key declared somewhere but resolvable in
+    no environment is still NOBODY having said anything: `resolved_config`
+    carries the rows only so that "unresolved for prod" stays expressible, and
+    an unreadable selection is not a selection. The framework default applies,
+    exactly as it does when the key is absent altogether."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("alpha", SINK, EVENT), _bean("beta", SINK, EVENT)],
+        [(SELECTION_KEY, "default", None), (SELECTION_KEY, "prod", None)]
+        + _destination("alpha-in-0", "a")
+        + _destination("beta-in-0", "b"),
+    )
+    config_join.run(workspace, _catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert sorted(row["path"] for row in rows) == ["a", "b"]
+
+
+@pytest.mark.parametrize("value", ["", "   ", ";", " ; ; "])
+def test_an_explicitly_empty_selection_binds_nothing_at_all(tmp_path: Path, value: str):
+    """Fix round 1, I-2, half two — the one path on which this engine could
+    have FABRICATED boundaries rather than degraded.
+
+    A selection that RESOLVED, to an empty value or to separators alone, is a
+    statement: select nothing. Read as an absence it would fall through to the
+    framework default and bind every candidate in the module — inventing a
+    binding for each of them against a configuration that said the opposite,
+    and inventing it silently, since each would look exactly like a
+    default-selected bean.
+
+    Both spellings are covered, and so is whitespace: a value is trimmed
+    before it is judged empty, because a trailing separator or a stray space
+    is not a different intent."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("alpha", SINK, EVENT), _bean("beta", SINK, EVENT)],
+        [(SELECTION_KEY, "default", value), (SELECTION_KEY, "prod", value)]
+        + _destination("alpha-in-0", "a")
+        + _destination("beta-in-0", "b"),
+    )
+    config_join.run(workspace, _catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
+def test_one_environment_selecting_nothing_does_not_erase_anothers_selection(
+    tmp_path: Path,
+):
+    """The union rule and the empty-selection rule together: an environment
+    that selects nothing removes nobody, because the SELECTION key is the one
+    place environments are unioned rather than required to agree — it decides
+    which rows EXIST rather than what a single-valued column holds, and a bean
+    bound in one environment is a real boundary."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("alpha", SINK, EVENT)],
+        [(SELECTION_KEY, "default", ""), (SELECTION_KEY, "prod", "alpha")]
+        + _destination("alpha-in-0", "a"),
+    )
+    config_join.run(workspace, _catalog())
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert row["path"] == "a"
+
+
+def test_a_selected_name_no_candidate_answers_to_derives_a_row_naming_nobody(
+    tmp_path: Path,
+):
+    """Fix round 1, M-1: the ghost entry. The selection names `departed`, and
+    no candidate answers to it — the realistic cause being a bean the code has
+    since renamed or deleted while configuration kept selecting it.
+
+    This used to derive NOTHING, which made a stale selection
+    indistinguishable from a module that never selected anything: the
+    configuration DID declare a binding, and that it names nobody is the
+    finding. It lands on the same degraded row a composed entry does — `path`
+    NULL, `handler` and `caller` NULL, the catalog's own direction, since no
+    functional shape was read to say otherwise — and the surviving bean's own
+    row is unaffected."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("present", SINK, EVENT)],
+        _selection("present;departed") + _destination("present-in-0", "events"),
+    )
+    config_join.run(workspace, _catalog())
+    rows = {row["path"]: row for row in _rows(workspace)}
+    workspace.close()
+
+    assert set(rows) == {"events", None}
+    assert rows["events"]["handler"].endswith("present(sig_present).")
+    ghost = rows[None]
+    assert ghost["protocol"] == "kafka"
+    assert ghost["direction"] == "inbound"
+    assert ghost["handler"] is None
+    assert ghost["caller"] is None
+    assert ghost["resolution"] == "unresolved"
+    assert ghost["request_shape"] is None
 
 
 def test_a_composed_selection_entry_derives_one_row_naming_nobody(tmp_path: Path):
@@ -485,6 +597,41 @@ def test_a_destination_resolved_in_only_one_environment_derives_an_unresolved_ro
 
     assert row["path"] is None
     assert row["resolution"] == "unresolved"
+
+
+def test_a_destination_with_two_real_values_across_environments_resolves_neither(
+    tmp_path: Path,
+):
+    """Fix round 1, M-2. The sibling of the test above, and the sharper case:
+    here BOTH environments answered, and answered differently. Agreement is
+    required for an ADDRESS exactly as it is for a media stamp — `path` is one
+    column, an endpoint row is environment-neutral by design, and folding two
+    real answers into one would invent a third that neither environment gave.
+    Picking the alphabetically-first, or the `default` one, would be that
+    invention wearing a rule.
+
+    The row is still derived — the binding exists — and both values are still
+    in `resolved_config`, which is where a per-environment question is
+    answered."""
+    key = DESTINATION_KEY.replace("{binding}", "handle-in-0")
+    workspace = _workspace(
+        tmp_path,
+        [_bean("handle", SINK, EVENT)],
+        _selection("handle") + [(key, "default", "events"), (key, "prod", "prod-events")],
+    )
+    config_join.run(workspace, _catalog())
+    [row] = _rows(workspace)
+    resolved = {
+        r["environment"]: r["value"] for r in workspace.query("resolved_config") if r["key"] == key
+    }
+    workspace.close()
+
+    assert row["path"] is None
+    assert row["resolution"] == "unresolved"
+    assert row["handler"].endswith("handle(sig_handle).")
+    # Neither value was lost — only the single-valued column declined to
+    # claim one of them.
+    assert resolved == {"default": "events", "prod": "prod-events"}
 
 
 def test_a_destination_that_is_still_an_expression_is_written_verbatim(
@@ -948,6 +1095,68 @@ def test_the_engine_is_registered_for_the_style_and_runs_after_every_other(
     assert [(row["path"], row["catalog_id"]) for row in rows] == [("events", "invented-caller")]
 
 
+def test_a_stamping_catalog_runs_after_every_deriving_one_whatever_its_filename(
+    tmp_path: Path,
+):
+    """Fix round 1, M-3: the runs-last rule again, one level down. A
+    `config_join` catalog that only STAMPS must not run before one that still
+    has rows to write, or the stamp reaches none of them — silently, since a
+    column that was never offered a value and one that refused it both read
+    NULL.
+
+    The filenames are deliberately adverse, the same pattern the runs-last
+    test above uses: `invented-a-stamper.yml` sorts BEFORE
+    `invented-z-bindings.yml`, both declare `direction: inbound`, and both are
+    the same style — so the filename tiebreak alone would run the stamper
+    first and leave the binding row's `consumes` NULL. The rank is what makes
+    it land."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("handle", SINK, EVENT)],
+        _selection("handle")
+        + _destination("handle-in-0", "events")
+        + [(MEDIA_KEY, "default", WRITER), (MEDIA_KEY, "prod", WRITER)],
+    )
+    binding_catalog = Catalog(
+        id="invented-z-bindings",
+        style="config_join",
+        protocol="kafka",
+        direction="inbound",
+        requires=("resolved_config",),
+        matches={"address_from_config": _address()},
+        source=Path("tests/invented-z-bindings.yml"),
+    )
+    stamping_catalog = Catalog(
+        id="invented-a-stamper",
+        style="config_join",
+        protocol="kafka",
+        direction="inbound",
+        requires=("resolved_config",),
+        matches={
+            "media_from_config": {
+                "rules": [
+                    {
+                        "key": MEDIA_KEY,
+                        "fills": "consumes",
+                        "on": {"protocol": "kafka", "direction": "inbound"},
+                    }
+                ],
+                "values": {WRITER: "application/json"},
+            }
+        },
+        source=Path("tests/invented-a-stamper.yml"),
+    )
+    skipped = derive_endpoints(
+        workspace, [stamping_catalog, binding_catalog], capabilities=CAPABILITIES
+    )
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert skipped == []
+    assert row["path"] == "events"
+    assert row["consumes"] == JSON_MEDIA
+
+
 def test_a_catalog_requiring_the_config_capability_is_skipped_without_it(
     tmp_path: Path,
 ):
@@ -1047,6 +1256,13 @@ def test_a_catalog_requiring_the_config_capability_is_skipped_without_it(
                 "address_from_config": _address(binder_protocols={"queues": "smoke-signal"}),
             },
             "closed sets are closed",
+        ),
+        # Fix round 1, M-8: `binder_key` is as per-binding as `key` is, and
+        # one missing placeholder is the difference between "what does THIS
+        # binding speak" and one key answered for every bean in the module.
+        (
+            {"address_from_config": _address(binder_key="acme.bindings.binder")},
+            "`address_from_config.binder_key` must carry the",
         ),
         ({"media_from_config": {"rules": []}}, "non-empty list"),
         (

@@ -26,6 +26,17 @@ from sextant.application.resolve.engines import (
 # makes. `config_join` is the first of them to ship.
 _RUNS_LAST = frozenset({"config_join"})
 
+# Within the runs-last group, the same reason applies once more, one level
+# down (fix round 1, M-3): a style whose catalogs may EITHER derive rows or
+# only stamp them must run every deriving one first, or a stamp arrives
+# before the rows it was meant to enrich and silently reaches none of them.
+# The predicate lives on the engine — which `matches` block means "derives"
+# is that style's own vocabulary, and this module names none. A style absent
+# from this map has no such split, and every one of its catalogs ranks alike.
+_DERIVES_ROWS: dict[str, Callable[[Catalog], bool]] = {
+    "config_join": config_join.derives_rows,
+}
+
 
 @dataclass(frozen=True)
 class SkippedCatalog:
@@ -60,10 +71,16 @@ def derive_endpoints(
     # insert-if-absent guard, which is a real consequence and not an
     # accident: a wire identity another catalog already recorded stays that
     # catalog's row.
+    #
+    # `_derives_rows` then orders WITHIN that group, for the same reason one
+    # level down: a catalog that only stamps must not run before one that
+    # still has rows to write, or the stamp reaches none of them (M-3).
+    # Direction and filename stay the tiebreaks after both ranks, unchanged.
     ordered = sorted(
         engines,
         key=lambda pair: (
             pair[0].style in _RUNS_LAST,
+            _derives_rows(pair[0]),
             pair[0].direction != "inbound",
             str(pair[0].source),
         ),
@@ -79,6 +96,15 @@ def derive_endpoints(
     # directions collapses to one row, direction `both` (D02 §3).
     workspace.derive("endpoints_merge")
     return skipped
+
+
+def _derives_rows(catalog: Catalog) -> int:
+    """The within-group sort rank: 0 for a catalog that derives rows, 1 for
+    one that only enriches them. `False < True` sorts a deriving catalog
+    first, which is the whole point; a style with no declared split ranks 0,
+    so nothing outside `_DERIVES_ROWS` is reordered by this key at all."""
+    declared = _DERIVES_ROWS.get(catalog.style)
+    return 0 if declared is None or declared(catalog) else 1
 
 
 def _engine_for(catalog: Catalog) -> "Callable[[Workspace, Catalog], None]":

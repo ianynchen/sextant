@@ -61,6 +61,25 @@ _SELECTION_SEPARATOR = ";"
 _COMPOSITION_SEPARATOR = "|"
 
 
+def derives_rows(catalog: Catalog) -> bool:
+    """Whether this catalog DERIVES endpoint rows rather than only enriching
+    rows other catalogs derived — read by `resolve/endpoints.py`'s ordering
+    (fix round 1, M-3), which must run every deriving `config_join` catalog
+    before any purely stamping one.
+
+    The reason is the same one that puts this whole style last: a stamp
+    cannot enrich a row that does not exist yet. Left to the filename
+    tiebreak, a stamping catalog sorting alphabetically ahead of a deriving
+    one would silently skip every row that deriving catalog was about to
+    write — no error, just a media column that stayed NULL for reasons
+    nothing in the answer explains.
+
+    Lives here, not in the registry: which `matches` block means "derives"
+    is this style's own vocabulary, and `endpoints.py` names no catalog
+    vocabulary of its own."""
+    return _ADDRESS in catalog.matches
+
+
 def run(workspace: Workspace, catalog: Catalog) -> None:
     """Runs whichever of D02 §2d's two vocabularies this catalog declares.
 
@@ -135,22 +154,26 @@ def _derive_bindings(workspace: Workspace, catalog: Catalog) -> None:
     seen: set[tuple[str, str, str]] = set()
     composition = str(binding.get("composition_separator", _COMPOSITION_SEPARATOR))
     for entry in entries:
-        if composition in entry:
-            # D02 §2d: a composed binding is not decomposed — there is no
-            # single bean to name a handler from, and guessing which half
-            # contributed the destination would be an invention. One row,
-            # `path` NULL, `handler` AND `caller` NULL, `unresolved`; the
-            # expression itself stays readable in the configuration the
-            # `catalog_id` and `resolved_config` trail names.
-            rows.append(_row(catalog, catalog.protocol, catalog.direction, None, None, None))
-            continue
-        candidate = candidates.get(entry)
+        candidate = None if composition in entry else candidates.get(entry)
         if candidate is None:
-            # A selected name that names no candidate bean at all: this
-            # catalog's declared interfaces say nothing about it, so there
-            # is no suffix, no direction and no key to build. Silence is the
-            # honest answer — a row would claim a binding whose shape
-            # nothing here read.
+            # Two ways an entry names no single readable bean, and both land
+            # on the SAME degraded row — `path` NULL, `handler` AND `caller`
+            # NULL, `unresolved`, the catalog's own declared direction, since
+            # no functional shape was read to say otherwise:
+            #
+            # * a COMPOSED entry (D02 §2d): not decomposed, because guessing
+            #   which half contributed the destination would be an invention;
+            # * a GHOST entry (fix round 1, M-1): a name the selection states
+            #   but no candidate answers to — a bean renamed, deleted, or of
+            #   a shape this catalog's interfaces say nothing about.
+            #
+            # The ghost case used to derive nothing at all, which made the
+            # most common real cause of it — configuration still selecting a
+            # bean the code has since renamed — look exactly like a module
+            # that never selected it. The configuration DID declare a
+            # binding; that it names nobody is the finding, not a reason to
+            # stay silent.
+            rows.append(_row(catalog, catalog.protocol, catalog.direction, None, None, None))
             continue
         for suffix, direction, payload_arg in _rule_bindings(candidate.rule, catalog):
             name = entry + suffix
@@ -270,6 +293,10 @@ def _selected_entries(
     never names derives nothing at all: selection is the only thing that can
     exclude a bean whose facts are otherwise identical to a selected one's.
 
+    **An EXPLICITLY EMPTY selection selects nothing** (fix round 1, I-2) —
+    an empty value, or separators alone, is a statement, not an absence, and
+    the two must not collapse into the same answer.
+
     Where environments DISAGREE about the selection, the entries are unioned
     in environment order rather than one environment being picked: a bean
     selected in production binds in production, and an endpoint row is
@@ -282,15 +309,27 @@ def _selected_entries(
         return list(candidates)
     separator = str(binding.get("selection_separator", _SELECTION_SEPARATOR))
     entries: list[str] = []
+    # Whether ANY environment resolved this key to a value at all — the
+    # distinction fix round 1 (I-2) turns on. "Nobody said anything" and
+    # "somebody said: nothing" are opposite statements, and only the first is
+    # the framework default. A key declared but resolvable in no environment
+    # (every row a `missing_key`) is still nobody saying anything, so it takes
+    # the default; a key that resolved to an empty value, or to separators
+    # alone, is an explicit select-NOTHING and must derive nothing. Falling
+    # through to `candidates` there would bind every bean in the module
+    # against a configuration that said the opposite — the one place this
+    # engine could fabricate a boundary rather than degrade.
+    stated = False
     for environment in sorted(per_environment):
         value = per_environment[environment]
         if value is None:
             continue
+        stated = True
         for entry in value.split(separator):
             stripped = entry.strip()
             if stripped and stripped not in entries:
                 entries.append(stripped)
-    return entries or list(candidates)
+    return entries if stated else list(candidates)
 
 
 def _rule_bindings(rule: dict[str, Any], catalog: Catalog) -> list[tuple[str, str, int]]:
@@ -535,12 +574,20 @@ def _validate_address(catalog: Catalog, address: Any) -> None:
         raise CatalogError(
             f"loading catalog {catalog.source}: `{_ADDRESS}` needs `key` and `binding` (D02 §2d)"
         )
-    if _BINDING not in str(address["key"]):
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `{_ADDRESS}.key` must carry the "
-            f"`{_BINDING}` placeholder — a key template naming no binding "
-            f"resolves the same address for every bean (D02 §2d)"
-        )
+    # Both per-binding templates take the same check (fix round 1, M-8):
+    # `binder_key` is as per-binding as `key` is, and one missing placeholder
+    # is the whole difference between "what does THIS binding speak" and "read
+    # one key and answer it for every bean in the module". `default_binder_key`
+    # is deliberately not in this list — it is the module-wide fallback, and
+    # naming no binding is exactly what makes it that.
+    for field in ("key", "binder_key"):
+        template = address.get(field)
+        if template is not None and _BINDING not in str(template):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{_ADDRESS}.{field}` must carry the "
+                f"`{_BINDING}` placeholder — a per-binding key template naming no "
+                f"binding resolves the same answer for every bean (D02 §2d)"
+            )
     binding = address["binding"]
     if not isinstance(binding, dict) or binding.get("from") != _BEAN_NAME:
         raise CatalogError(

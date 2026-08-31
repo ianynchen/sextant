@@ -1622,6 +1622,14 @@ def test_the_producer_catalogs_wrappers_are_the_harvested_baseline_verbatim():
         "google-pubsub-client",
         "google-pubsub-subscriber",
         "spring-kafka-message",
+        # 2F Task 7: `spring-cloud-stream.yml` adds no broker entry either —
+        # a binding row's payload comes from the functional type's own type
+        # ARGUMENT, read at the declared `payload_arg` position, never
+        # through an envelope a `wrappers` rule would unwrap. It matters as
+        # much here as in the `known_types` sweep above: it sorts ahead of
+        # every `spring-*` catalog, so it is the first to reach the shared
+        # messaging payload types.
+        "spring-cloud-stream",
     ):
         assert catalogs[catalog_id].wrappers == baseline, catalog_id
 

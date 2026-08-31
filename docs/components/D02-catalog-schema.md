@@ -714,9 +714,11 @@ matches:
 ```
 
 **`key` is a template carrying exactly one placeholder, `{binding}`**, and a key naming
-no binding is refused: it would resolve the same address for every bean. **`binding.from`
-is `bean_name`** — the only source implemented, and anything else is refused rather than
-read as this one.
+no binding is refused: it would resolve the same address for every bean. `binder_key`
+takes the same check, being as per-binding as `key` is; `default_binder_key` does not,
+since naming no binding is exactly what makes it the module-wide fallback.
+**`binding.from` is `bean_name`** — the only source implemented, and anything else is
+refused rather than read as this one.
 
 **A candidate is a declared method whose RETURN type matches a suffix rule**, tried two
 ways in that order: equality against the declared interface's own descriptor, then the
@@ -757,38 +759,61 @@ protocol — an unmapped name is a gap to grow the catalog from, never a guessed
 `binder_protocols`' values are checked against [D00](D00-fact-schema.md)'s closed set,
 like every other protocol a catalog writes.
 
-**Four honesty rules, none of them silence:**
+**Six honesty rules, none of them silence:**
 
 - **A missing key still derives a row.** The bean exists and the binding was declared;
   only the address is unread. `path` NULL, `resolution: unresolved`, handler named
   (§2d: "an unresolved address is not an absent endpoint").
-- **A composed selection entry derives ONE row naming nobody.** `path` NULL, `handler`
-  AND `caller` NULL — there is no single bean to name, and picking one of the composed
-  halves would be an invention. It is the only endpoint row in the schema that names no
-  symbol at all. It shares `(protocol, direction, NULL, NULL)` with a missing-key row and
-  stays a second row: a NULL path never dedups, in the pass or in SQL.
+- **An entry naming no single readable bean derives ONE row naming nobody.** `path`
+  NULL, `handler` AND `caller` NULL, the catalog's own declared direction — no functional
+  shape was read to say otherwise. Two entries land here: a **composed** one, which is not
+  decomposed because picking one of the halves would be an invention, and a **ghost** one,
+  a name the selection states that no candidate answers to (a bean renamed, deleted, or of
+  a shape this catalog's interfaces do not describe). The ghost case must derive a row and
+  not silence: its most common real cause is configuration still selecting a bean the code
+  has since renamed, and silence makes that indistinguishable from a module that never
+  selected it. These are the only endpoint rows in the schema that name no symbol at all.
+  They share `(protocol, direction, NULL, NULL)` with each other and with a missing-key
+  row, and each stays its own row: a NULL path never dedups, in the pass or in SQL.
 - **A destination is written verbatim.** This engine never interprets what it reads: a
   resolved value still carrying a placeholder expression keeps that expression as its
   `path`, and the row still resolves, because the address WAS found. Rows keep
   expressions; `resolved_config` keeps values; the per-environment answer is the
   `resolved_peers` join's (§2d, job 3), never a rewritten row.
+- **Agreement across environments is required for every single-valued answer — an
+  ADDRESS as much as a stamp.** A destination key resolving to two different values in two
+  environments derives the row with `path` NULL and `resolution: unresolved`, exactly as a
+  missing key does: `path` is one column, an endpoint row is environment-neutral by design,
+  and folding two real answers into one would invent a third that neither environment gave.
+  Both values stay in `resolved_config`, which is where a per-environment question is
+  answered.
 - **A stamp lands only on agreement.** Every environment must resolve the same class, and
   the class must be in `values`; an environment that resolves a different one, one that
   never resolved the key, and a class the catalog does not know all stamp nothing. A stamp
   never overwrites a non-NULL column. The unstamped column is not a claim that nothing was
   declared — the class name is in `resolved_config` either way.
+- **An explicitly EMPTY selection selects nothing.** "Nobody said anything" and "somebody
+  said: nothing" are opposite statements. A `selected_by` key absent from configuration —
+  or declared but resolvable in no environment — takes the framework default and binds
+  every candidate; a key that RESOLVED, to an empty value or to separators alone, is a
+  select-nothing statement and derives no row. Collapsing the two would bind every bean in
+  the module against a configuration that said the opposite: the one place this style
+  could fabricate a boundary rather than degrade.
 
-Where the environments disagree about the SELECTION key rather than a destination, the
-entries are unioned in environment order rather than one environment being picked: a bean
-selected in production binds in production, and an endpoint row is environment-neutral by
-design — it says a boundary exists, never which profile it exists under.
+The SELECTION key is the one place environments are unioned rather than required to
+agree, because it decides which rows EXIST rather than what a single-valued column holds:
+entries are taken in environment order, so a bean selected in production binds in
+production. An endpoint row says a boundary exists, never which profile it exists under.
 
 **Ordering: `config_join` runs LAST**, after every call-site and annotation style,
 whatever its own declared direction (§3) — the `protocol_hint` precedent below. A style
 that enriches rows other engines minted cannot run before those rows exist. The
 consequence is real and not an accident: its rows are also the last to face §5's
 insert-if-absent guard, so a wire identity another catalog already recorded stays that
-catalog's row.
+catalog's row. **Within the style, every catalog declaring `address_from_config` runs
+before every catalog that only stamps**, for the same reason one level down — filename
+order must not decide whether a stamp arrives before the rows it was meant to enrich.
+Direction and filename remain the tiebreaks after that rank.
 
 **Every join this style makes is RECORDED with its full trail, and verified later.** The
 trail is `resolved_config` (the key, its value, the file that won it, per environment)
