@@ -27,9 +27,13 @@ The catalog declares three things:
 
 - **Entry points** — where trees start. Two shapes, both catalog data:
   argument-rooted static calls (`RouterFunctions.route`, `RouterFunctions.nest`) and
-  receiver-rooted builder bodies (Kotlin's `coRouter`/`router`: the DSL lambda's
-  synthetic method is the tree body, its builder-receiver calls the tree's nodes —
-  2C already records call sites inside synthetic methods).
+  receiver-rooted builder calls (Kotlin's `coRouter`/`router`): the engine matches
+  builder-node call sites **by owner** (the DSL type), grouped by their containing
+  method, wherever the compiler put them. Kotlin suspend lambdas do NOT compile to
+  indy synthetics — the DSL body may land in a generated inner class's `invoke`
+  (its class file is scanned; 2C's nested-class work) or, for non-suspend bodies,
+  in a synthetic method. The exact container per compiler version is checkpoint
+  item (1b), not assumed here; owner-based matching works for either.
 - **A vocabulary table** mapping owner+method to roles:
   - verb-sources: `RequestPredicates.GET("/x")` → verb `GET`, path at arg 0 (and the
     Kotlin builder's `GET("/x", handler)` two-argument form — one vocabulary, two
@@ -39,12 +43,18 @@ The catalog declares three things:
     `produces` — request-matching semantics (a route guarded by `accept(JSON)` serves
     clients that accept JSON), frozen at the checkpoint against real facts, not
     assumed;
-  - composers: `and` merges constraints; `or` over verb predicates duplicates rows
-    (the `all_methods` precedent — the handler genuinely accepts both);
-  - handler positions: a `lambda`-kind argument resolves to its synthetic-method
-    symbol; the symbol is resolved against the symbols facts and emitted
-    module-prefixed (the 2E-prep interface-engine rule — never a fabricated
-    encoding), NULL when unresolvable.
+  - composers: `and` merges constraints; `or` duplicates the route per branch —
+    over any predicate kind (verbs, paths, media), the `all_methods` precedent; an
+    unresolvable branch derives its row unresolved rather than vanishing;
+  - handler positions, three cases: a Java **method reference** (`handler::hello`)
+    is an indy whose fact names the real referenced method — the handler symbol is
+    the actual handler; a **lambda** resolves to its synthetic body's symbol; a
+    Kotlin **suspend reference or adapted function object** may arrive as an
+    `instance` of a generated class — the engine resolves what the facts support
+    and emits handler NULL otherwise (never a fabricated encoding; every emitted
+    symbol is resolved against the symbols facts, module-prefixed, per the 2E-prep
+    interface-engine rule). What Kotlin's compiler makes recoverable is checkpoint
+    item (1b).
 - **Chain continuations** — `.andRoute`, `.andNest`, `.and`, `build` — merging route
   sets along result→receiver links.
 
@@ -125,9 +135,11 @@ derive — one COVERAGE sentence (the standing compiled-library boundary).
 `handler_signature` comes from the implementing method, so shapes and nullability
 derive from real implementation types.
 
-**Home:** §2 and §3 share a pre-pass computing "effective annotations for a method";
-the plan decides how much lands in the pre-pass versus `derive_endpoints.sql`,
-optimizing for SQL readability.
+**Home:** §2 and §3 share a pre-pass computing "effective annotations for a method",
+living in its own module (`resolve/effective_annotations.py`) — deliberately NOT in
+`annotation_driven.py`, which the 2D architecture review rated deteriorating for
+absorbing exactly this kind of growth. The plan decides how much lands in the
+pre-pass versus `derive_endpoints.sql`, optimizing for SQL readability.
 
 ## 4. The media-type columns
 
@@ -165,8 +177,11 @@ D02 gains `consumes_from`/`produces_from` alias lists on `annotation_driven` map
 the `default_produces`/`default_consumes` catalog vocabulary is specified now for the
 frameworks that will use it (Spring's catalogs do not). Dedup and merge treat the
 columns as carried data, never identity: wire identity stays (protocol, direction,
-method, path); rows differing only in media types are one endpoint whose lists merge
-(union, order-normalized — NFR-1). Rendering shows them compactly when present; the
+method, path). Rows differing only in media types are one endpoint: the union happens
+**engine-side, within one derivation batch** (order-normalized — NFR-1), which is
+where Spring's content-negotiated sibling mappings actually arise; across batches the
+existing first-writer dedup stands, stated rather than silently assumed — no new SQL
+merge machinery is promised. Rendering shows the lists compactly when present; the
 D06 bundle carries them by construction.
 
 ## 5. Fixtures, testing, gaps, carries, close-out
@@ -177,8 +192,12 @@ cross-method composition for the honest-unresolved case); a Kotlin `coRouter`
 mirroring the core shapes (the fixture's first Kotlin code beyond contracts; the
 build already compiles Kotlin); an `@ApiGet` HTTP composition and an
 `@OrderTopicListener` messaging composition; an OpenAPI-style interface with mappings
-plus its implementing controller, including one composed-and-inherited case;
-`produces`/`consumes` attributes on existing MVC mappings.
+plus its implementing controller, including one composed-and-inherited case AND one
+covariant-return override (the name+descriptor join must miss it honestly, and must
+not double-join on the compiler's bridge method); `produces`/`consumes` attributes on
+existing MVC mappings. Kotlin needs `kotlinx-coroutines-core` and
+`kotlinx-coroutines-reactor` in compile scope for suspend handlers (exact versions
+checkpoint-resolved).
 
 **Testing.** The four layers: engine unit tests for the walk (poisoning, `or`
 duplication, nest prefixing, cross-method honesty, both entry shapes through one
@@ -206,13 +225,18 @@ baseline.
 
 ## 6. Checkpoint — frozen from reality after the fixture task
 
-(1) Both DSLs' real bytecode shapes — the static-call tree and the `coRouter`
-synthetic-method body — proving the zero-extractor-changes bet, or falsifying it
-before catalog tasks dispatch; (2) the composed annotation's emitted attribute
-placement (use-site value vs composition defaults); (3) `accept`/`contentType`
+(1) Both DSLs' real bytecode shapes proving the zero-extractor-changes bet, or
+falsifying it before catalog tasks dispatch — (1a) the Java static-call tree and
+method-ref indy facts; (1b) Kotlin: WHERE the DSL body's calls land (inner-class
+`invoke` vs synthetic method), what kind the handler argument carries (adapted
+function object vs reference), and what is honestly recoverable as the handler
+symbol; (2) the composed annotation's emitted attribute placement (use-site value vs
+composition defaults) AND its retention/visibility in bytecode (Spring requires
+RUNTIME retention so real compositions carry it — verified, not assumed); (3) `accept`/`contentType`
 call-site fact shapes and the exact `MediaType` constant forms (inlined literals vs
 enum-like fields — the media predicates' reader is written against what is emitted);
-(4) the interface/controller method-symbol descriptor forms the §3 join keys on;
+(4) the interface/controller method-symbol descriptor forms the §3 join keys on,
+including the bridge-method fact shape for the covariant fixture case;
 (5) the exact route additions frozen for the catalog tasks.
 
 ## 7. Review discipline
