@@ -9,8 +9,10 @@ until it passes is worse than no rule, because it still reads as enforcement.
 """
 
 import ast
+from collections.abc import Iterator
 
-from rules import SRC, offenders, python_files, sql_files
+import yaml
+from rules import SRC, offenders, python_files, sql_files, yaml_files
 
 FRAMEWORKS = {
     "spring",
@@ -51,6 +53,25 @@ def test_no_framework_is_named_anywhere_in_code():
     data, never code (D02). Catalogs are excluded because naming frameworks is
     exactly what they are for — the rule is about the engines that read them."""
     assert offenders(python_files() + sql_files(), FRAMEWORKS) == {}
+
+
+def test_catalogs_use_one_fqn_notation():
+    """2E-prep design §1c: every annotation fqn in every catalog is dotted
+    (`org.springframework.web.bind.annotation.RequestBody`), never the SCIP
+    symbol form the fact stream uses (`org/springframework/.../RequestBody#`).
+    `_catalog_symbol` (`shapes/rooting.py`) is the one seam that converts
+    between the two notations; a `#` surviving into a catalog value is that
+    seam skipped, not applied. Values are read through `yaml.safe_load`,
+    never a raw-text scan, because a YAML comment legitimately starts with
+    `#` and must not trip this rule."""
+    offending = []
+    for path in yaml_files("catalogs"):
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for value in _string_values(document):
+            if "#" in value:
+                offending.append(f"{path.relative_to(SRC)}: {value}")
+
+    assert offending == []
 
 
 def test_storage_names_no_framework_language_or_protocol():
@@ -169,6 +190,20 @@ def test_application_reads_no_files():
             found[str(path.relative_to(SRC))] = hits
 
     assert found == {}
+
+
+def _string_values(node: object) -> Iterator[str]:
+    """Every string leaf in a parsed YAML document, walked recursively —
+    the values a catalog author writes, as opposed to the comments beside
+    them, which `yaml.safe_load` already discards."""
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for value in node.values():
+            yield from _string_values(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _string_values(item)
 
 
 def _is_contract(node: ast.ClassDef) -> bool:

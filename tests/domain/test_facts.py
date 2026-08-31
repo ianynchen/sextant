@@ -206,6 +206,23 @@ def test_an_older_hand_built_symbol_fact_still_validates_without_the_2b_fields()
     assert fact.modifiers == {}
     assert fact.supertype is None
     assert fact.signature is None
+    assert fact.interfaces == []
+
+
+def test_a_class_symbol_lists_its_implemented_interfaces_in_declaration_order():
+    # `implemented_interfaces`: erased interface symbols, in the order the
+    # class declares them (D00 §5a) — round-trips like `supertype` above.
+    fact = SymbolFact(
+        document_id="doc_1",
+        symbol="sextant-jvm maven com.acme/orders 1.0 com/acme/orders/messaging/raw/RawPubSubReceiver#",
+        construct_kind=ConstructKind.CLASS,
+        interfaces=["com/google/cloud/pubsub/v1/MessageReceiver#"],
+    )
+
+    dumped = fact.model_dump(mode="json")
+    reloaded = SymbolFact.model_validate(dumped)
+
+    assert reloaded.interfaces == ["com/google/cloud/pubsub/v1/MessageReceiver#"]
 
 
 def test_a_class_symbol_carries_its_generic_supertype_as_a_type_reference():

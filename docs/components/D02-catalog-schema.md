@@ -112,13 +112,13 @@ matches:
   # Optional: a catalog may declare no type-level gate. Any type containing a
   # matching mapping annotation then participates (a Retrofit interface has no
   # type-level marker at all).
-  type_annotation: org/springframework/cloud/openfeign/FeignClient#
+  type_annotation: org.springframework.cloud.openfeign.FeignClient
   # The body rule is catalog data: which annotation marks the payload
   # parameter, and whether the sole unannotated parameter is the fallback.
-  request_body: { annotation: org/springframework/web/bind/annotation/RequestBody#,
+  request_body: { annotation: org.springframework.web.bind.annotation.RequestBody,
                   fallback: sole_unannotated }   # or: none
   mapping:
-    prefix_annotation: org/springframework/cloud/openfeign/FeignClient#
+    prefix_annotation: org.springframework.cloud.openfeign.FeignClient
     # Type-level and method-level annotations are different roles. On
     # @RequestMapping, value/path are aliases meaning *path*; on @FeignClient,
     # value aliases *name* — the service id — and only path means prefix. One
@@ -223,6 +223,29 @@ destination is a whole queue URL
 (`https://sqs.us-east-1.amazonaws.com/123456789012/my-queue`), and splitting it would
 record a destination nothing could send to plus a peer no messaging fact ever carried.
 
+**`channel_via` reads a destination the consuming call's own argument position never names
+directly** — `session.createProducer(session.createQueue("raw-audit"))`'s topic lives on
+`createQueue`'s own argument, not `createProducer`'s. A row declaring it is `[{owner,
+method, arg: int | "all_strings"}]`, each form tried in the order written until one's
+`owner`+`method` reach the argument's own linked call site (the same value-id join
+`call_wrappers` uses, §2h, generalised to any named method rather than only `<init>`); `arg`
+an integer reads that one position off the linked call, verbatim, and `arg: "all_strings"`
+reads every one of its string-kind positional arguments as its own resolved tuple — one row
+per element, plus one trailing unresolved tuple if any element failed to resolve, never a
+per-element guess. **The ladder tries the literal argument FIRST, `channel_via` only as a
+fallback**: some APIs genuinely overload a destination-taking method with both a
+literal-string form and a linked-instance form, so a `channel_via`-declared row still reads
+the captured position directly before ever following the link, and only falls back once
+that direct read is not a resolved string literal. `channel_via` without `channel_arg`/
+`url_arg` on the same row is a `CatalogError`: it says *how* to read a position the row has
+to name first. **`channel_via` together with `url_arg` is a `CatalogError` too** — it pairs
+with `channel_arg`'s verbatim reader, since a linked call's own argument is read as a
+destination (`peer` always NULL), and a row asking for CP-2's peer/path split as well would
+have one destination read two incompatible ways depending on which rung of the ladder
+answered. This same ladder — literal first, linked call as fallback — is what `fluent`
+and `interface_implementation` (both below) read a `channel`/`channel_arg` position through
+too.
+
 **A row declaring neither `http_method` nor `method_arg` is verbless by declaration** — a
 topic has no verb. The row derives `method` NULL without penalising `resolution`, exactly
 as `method_arg`'s own unresolved case does; resolved verbless rows dedup on `(protocol,
@@ -305,11 +328,143 @@ consumer — `Request r = builder.build(); log.debug("…", r);` alongside the r
 the join narrows to that one declared call; every other consumer of the same value no longer
 counts.
 
+**A root's or a step's own `captures` may also name `channel`** — `url`'s
+destination-shaped counterpart, exactly the distinction `single_call`'s own `url_arg`/
+`channel_arg` pair keeps (§2, above): a `url` capture is an address CP-2 may split into
+peer and path, a `channel` capture is a destination expression recorded verbatim as `path`
+with `peer` always NULL. `google-pubsub-publisher.yml`'s root captures
+`Publisher.newBuilder`'s own `channel: arg0`. **A chain's `roots` and `steps`, TAKEN TOGETHER, may
+declare `url` or `channel`, never both** — checked over every entry's own captures at once,
+not one entry at a time: a chain folds every step's captures into one running set as it
+walks (above), so `channel` declared on one step and `url` declared on a *different* step
+in the same catalog collide in that one running set exactly as one entry naming both would,
+and a per-entry-only check would let the collision load silently.
+
+**A `channel`-declaring entry may also declare `channel_via`**, read through the SAME
+literal-first, linked-call-fallback ladder `single_call`'s own `channel_arg`/`channel_via`
+pair defines (§2, above) — a `[{owner, method, arg}]` list, tried in order, followed only
+once the captured position itself is not a resolved string literal. `channel_via` is
+declared alongside `captures` on the SAME root or step entry that captures `channel`, and —
+since a root's own captures already fold forward through every later step it reaches — a
+root's own `channel_via` ladder rides forward the same way, available to resolve the
+chain's `channel` wherever the walk finally derives, with no need to repeat it on a later
+step.
+
+**A step may declare `when`** — `{arg: int, equals: str}`, exactly those two keys — a value
+guard on one of the *matched call's own* arguments, for the builder shape where the
+capturing method is generic and only the argument says what it set:
+`MessageBuilder.setHeader(KafkaHeaders.TOPIC, "raw-messages")` sets a topic, while
+`setHeader(anythingElse, …)` on the same chain does not. **`when` guards steps only.** A
+root starts the chain, with no prior capture a guard could ever condition, so a `when` on a
+root is a broken catalog, refused by name at load rather than silently stripped.
+
+The guard has **three** answers, not two, because "the guard did not hold" and "the guard
+could not be read" are different facts:
+
+- the guard argument is a string literal **equal to** `equals` — the step's own captures
+  apply, exactly as an unguarded step's would;
+- the guard argument is a string literal, but a **different** one — the step still *matched*
+  the chain, only its captures do not apply, so nothing it declares overwrites whatever an
+  earlier step already folded in (pass-through);
+- **anything else** — no argument at that position, the wrong kind, or the compiler's own
+  `unresolved` — poisons every *argument* capture (`url`/`body`/`response`/`channel`) the
+  step declares to `unresolved`. It might have been the guarded key, and an unreadable key
+  must never let a chain keep an earlier confident answer. A later step that writes the same
+  key unambiguously supersedes the poison: "can't tell" is an answer this pass records, not
+  a state it locks. The step's *literal* declarations (`http_method`, `response_is`, a
+  `channel_via` ladder) are not argument reads and carry no `unresolved` form at all, so
+  they are left out of the fold rather than poisoned into a value their readers cannot
+  interpret.
+
 ### `interface_implementation`
 
-The boundary is declared by implementing a framework interface — a JMS `MessageListener`,
-a generated gRPC base class. Matching is on the hierarchy, and for gRPC it joins to the
-protobuf descriptor so that one endpoint is produced per remote method.
+The boundary is declared by implementing a framework interface — Pub/Sub's
+`MessageReceiver`, JMS's `MessageListener`. Unlike every style above, one call's own
+declaration is not the evidence: two facts are joined instead, a *registration* call
+site and, where its receiver is a named instance rather than a lambda, that instance's
+own declared `interfaces` ([D00](D00-fact-schema.md) §5a's `implemented_interfaces`
+capability).
+
+```yaml
+style: interface_implementation
+protocol: pubsub
+direction: inbound
+requires: [call_site, string_constants, implemented_interfaces]
+matches:
+  interface: com.google.cloud.pubsub.v1.MessageReceiver
+  handler_method: receiveMessage
+  registration:
+    owner: com.google.cloud.pubsub.v1.Subscriber
+    method: newBuilder
+    channel_arg: 0
+    receiver_arg: 1
+    channel_via:
+      - { owner: com.google.pubsub.v1.ProjectSubscriptionName, method: of, arg: 1 }
+```
+
+`registration` is `{owner, method, channel_arg, receiver_arg, channel_via?}` — the one
+call site that binds a receiver to a channel. **`channel_arg` reads through the same
+capture ladder `single_call`'s own `channel_via` already defines (§2, above), tried in
+that order**: a string literal at that position resolves directly first — `Subscriber.newBuilder(String,
+MessageReceiver)` is a real overload alongside the `ProjectSubscriptionName` one, and a
+`channel_via`-declared row must still catch it — and only when the argument is not a
+resolved string literal does a declared `channel_via` form follow the linked call's own
+argument instead (`ProjectSubscriptionName.of`'s own `name` argument, not `newBuilder`'s);
+anything else is `path` NULL, `unresolved` — the registration was made, only its channel
+is unread.
+
+**`receiver_arg` is the argument that names the handler**, read one of two ways depending
+on what the compiler resolved it to: a `lambda`-kind argument names its own synthetic body
+method ([D00](D00-fact-schema.md) §5a) — the lambda IS the handler, whatever the declared
+interface's method is named. An `instance`-kind argument (a `NEW`-produced named class)
+names `<type>#<handler_method>` only when that type's own declared `interfaces` include the
+declared `interface` — **direct implementers only**: the fact carries a class's own
+interface table, never a superclass's, so a subclass of an implementing class is a stated
+one-hop limitation, not a gap to close later.
+
+**Either way the receiver only names the method; the `handler` written is the method
+*symbol*, joined out of the scanned symbol facts and copied verbatim.** A call argument's
+own `symbol` is always the *bare* descriptor — no module coordinates, and for an `instance`
+receiver no signature either ([D00](D00-fact-schema.md) §5a) — so a `handler` assembled by
+gluing that descriptor to the catalog's `handler_method` would name nothing any fact ever
+emitted, and would join to no `symbols` row: a decorative string in a column the graph is
+supposed to be able to follow. The engine matches the bare form against the declared method
+symbols instead, and writes the one it found.
+
+Anything else — the receiver uncaptured, an `unresolved` kind, a registered instance whose
+type does not implement the declared interface, or a receiver whose handler method no
+scanned document declares (the implementer lives outside this module) — resolves `handler`
+to NULL: the subscription is still consumed, only who handles it is unread, never
+fabricated.
+
+**The registration is the evidence.** A class implementing the declared interface but
+never handed to a matching registration call site derives nothing at all — implementing an
+interface is not, on its own, an endpoint. This is the failure mode this style exists to
+prevent: a phantom endpoint conjured from a class's shape alone, with no call anywhere in
+the scanned code that ever wires it to a channel.
+
+**This style needs no execute-terminal.** `fluent`'s `terminal`/`terminal_via_argument`
+(§2, above) exists because a *built* HTTP request is not yet a *sent* one — a
+`Request.Builder` built and logged, never executed, made no call. Binding a receiver to a
+subscription has no such gap: the registration call itself IS the intent, in a way a built
+request is not, so `interface_implementation` derives directly off the registration site
+with no further join to prove the subscription actually ran.
+
+Per registration call site: one row per resolved channel tuple, `direction`/`protocol` the
+catalog's own declared fields, `method` always NULL (the style is verbless — a subscription
+has no verb), `caller`/`peer` always NULL (the deriving method is a `handler`, never a
+`caller`, and a channel is never split into a peer, §2d). **A resolved row's wire identity
+includes `handler`**: two registrations of the *same* channel by the *same* handler
+collapse to one row (the usual duplicate-registration merge every style keeps), but two
+*different* handlers registered on the same channel — two `@KafkaHandler`-shaped consumers
+sharing one subscription, say — each keep their own row; dropping `handler` from the key
+would silently discard the second registration's own evidence. **`request_shape`/`response_shape`
+are always NULL** — `PubsubMessage` is a declared no-shape envelope: the registration names
+an identity and, where readable, a handler, never a payload. This is the same
+honest-absence precedent a future messaging catalog whose payload is likewise opaque
+(`jakarta.jms.Message`) is expected to keep: NULL means "no shape to root", not "unread".
+`evidence` is `compiler`; rows enter the same `endpoints` table as every other style,
+merging and counting the same way.
 
 ### `protocol_hint`
 

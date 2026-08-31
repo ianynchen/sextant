@@ -66,6 +66,23 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # here `sendDefault`) renders `{protocol} (unresolved)`, the same
     # honesty rule as the HTTP `GET (unresolved)` row above.
     assert "kafka (unresolved)" in document
+    # 2E-prep Task 13: the raw-driver catalogs (Tasks 11-12) render like any
+    # other messaging row — `kafka-consumer.yml`'s
+    # `RawKafkaConsumers#subscribeToTopics` call derives both `raw-t1` and
+    # `raw-t2` off the SAME caller.
+    assert "kafka raw-t1" in document
+    # `google-pubsub-subscriber.yml`'s `interface_implementation` style
+    # resolves `raw-notify`'s instance receiver to its class's own declared
+    # `MessageReceiver#receiveMessage` implementer — the handler renders
+    # verbatim in the SAME row as the identity. The `(sig_...)` suffix is
+    # there because the handler is the METHOD SYMBOL the facts carry, joined
+    # out of `symbols` (final review, FIX 1), not a string built from the
+    # receiver's type descriptor and the catalog's method name — the older,
+    # suffix-free form named no symbol at all and joined to nothing.
+    assert (
+        "`pubsub raw-notify` | "
+        "`com/acme/orders/messaging/raw/RawPubSubReceiver#receiveMessage(sig_bb1c3cf6).`"
+    ) in document
 
 
 def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_path: Path):
@@ -103,22 +120,48 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # Phase 2D (Task 12): metadata.json's own direction/protocol buckets
     # (written by analyze, D05 §3) count every messaging protocol too, a
     # `both` row counting on both sides (metadata.py's own rule) — the same
-    # 55-endpoint fixture as the endpoints.parquet check below, viewed
-    # through the other artifact.
+    # 68-endpoint fixture as the endpoints.parquet check below, viewed
+    # through the other artifact. (2E-prep Task 6, checkpoint ruling
+    # 2026-08-30: kafka outbound is 8, not 7 — `RawKafkaMessageSender#send`'s
+    # `kafkaTemplate.send(Message<?>)` derives its own unresolved NULL-path
+    # row off `spring-kafka-template.yml`'s pre-existing arity-1 `record_arg`
+    # rule; see `test_pipeline.py`'s dedicated row-level test for the full
+    # explanation.)
+    #
+    # 2E-prep Task 11 (driver catalogs A): `jakarta-jms.yml`,
+    # `kafka-consumer.yml` and `aws-sqs-sdk.yml` add 6 more rows, none
+    # merging with anything else in the fixture — jms +1 inbound (
+    # `raw-intake`) +1 outbound (`raw-audit`), kafka +3 inbound (`raw-t1`,
+    # `raw-t2`, `raw-.*`), sqs +1 outbound (the queue URL's own path). See
+    # `test_pipeline.py`'s own dedicated row-level tests for the full
+    # per-row breakdown.
+    #
+    # 2E-prep Task 12 (driver catalogs B): the pubsub trio +
+    # spring-kafka-message add 6 more rows, none merging with anything else
+    # — pubsub inbound +2 (`raw-notify`, `raw-notify-lambda`,
+    # `google-pubsub-subscriber.yml`'s own `interface_implementation` rows),
+    # pubsub outbound +3 (`google-pubsub-publisher.yml`'s resolved
+    # `raw-events` plus `google-pubsub-client.yml`'s two deliberate
+    # unresolved duplicates, spec §4's ruling), kafka outbound +1
+    # (`spring-kafka-message.yml`'s own `raw-messages` row, resolved
+    # identity but unresolved overall — a divergence from this task's own
+    # checkpoint shorthand, verified live, see `test_pipeline.py`). See
+    # `test_pipeline.py`'s own dedicated row-level tests for the full
+    # per-row breakdown.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "http": 18,
-        "jms": 2,
-        "kafka": 8,
-        "pubsub": 1,
+        "jms": 3,
+        "kafka": 11,
+        "pubsub": 3,
         "sqs": 1,
     }
     assert metadata["endpoints"]["outbound"] == {
         "http": 19,
-        "jms": 2,
-        "kafka": 7,
-        "pubsub": 1,
-        "sqs": 2,
+        "jms": 3,
+        "kafka": 9,
+        "pubsub": 4,
+        "sqs": 3,
     }
     runner = CliRunner()
     result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
@@ -149,4 +192,19 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # converts one inbound + one outbound row into one `both` row, so five
     # merges: inbound 28+1-5=24, outbound 20+10-5=25, both 1+5=6 — see
     # test_pipeline.py for the full row-by-row breakdown.
-    assert rows == [("both", 6), ("inbound", 24), ("outbound", 25)]
+    # 2E-prep Task 6 (checkpoint ruling, 2026-08-30) adds one more outbound
+    # row: `RawKafkaMessageSender#send`'s `kafkaTemplate.send(Message<?>)`
+    # matches `spring-kafka-template.yml`'s existing arity-1 `record_arg`
+    # rule (predating this task) and derives its own unresolved NULL-path
+    # row, distinct from `sendDefault`'s (different caller, no merge target)
+    # — spec §4's duplicate-row ruling: 25 + 1 = 26.
+    # 2E-prep Task 11 (driver catalogs A): 6 more rows, none merging with
+    # anything else — inbound +4 (jms `raw-intake`, kafka `raw-t1`/`raw-t2`/
+    # `raw-.*`), outbound +2 (jms `raw-audit`, sqs the queue URL's own
+    # path), `both` unchanged: 24 + 4 = 28, 26 + 2 = 28.
+    # 2E-prep Task 12 (driver catalogs B): 6 more rows, none merging with
+    # anything else — inbound +2 (pubsub `raw-notify`, `raw-notify-lambda`),
+    # outbound +4 (pubsub `raw-events` resolved + the two deliberate
+    # `google-pubsub-client.yml` duplicates, kafka `raw-messages`), `both`
+    # unchanged: 28 + 2 = 30, 28 + 4 = 32.
+    assert rows == [("both", 6), ("inbound", 30), ("outbound", 32)]

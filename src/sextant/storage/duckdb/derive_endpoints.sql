@@ -34,13 +34,15 @@
 --                           where the catalog declares no peer at all.
 --   $method_from         -- attribute name holding the method, where one is given
 --   $all_methods         -- the methods a mapping annotation means when it names none
+--   $catalog_id          -- the id of the catalog running this derivation (2E-prep
+--                           design §1a) — provenance only, never part of wire identity
 
 -- Named explicitly: `endpoints` also carries request_shape/response_shape
 -- (D01 §3 Contracts), which this engine does not populate — that is the
 -- shape pass's job, not the annotation-driven endpoint engine's.
 INSERT INTO endpoints (
     protocol, direction, method, path, handler, caller, peer,
-    handler_signature, resolution, evidence
+    handler_signature, resolution, evidence, catalog_id
 )
 WITH mapping_catalog AS (
     SELECT s.fqn AS fqn, s.methods AS methods
@@ -133,7 +135,8 @@ derived AS (
         p.peer      AS peer,
         s.signature AS handler_signature,
         'resolved'  AS resolution,
-        'compiler'  AS evidence
+        'compiler'  AS evidence,
+        $catalog_id AS catalog_id
     FROM mappings m
     -- A handler or caller is always a method. Without this, a TYPE-level
     -- mapping annotation (a prefix-carrying @HttpExchange, a class-level

@@ -1,0 +1,106 @@
+id: google-pubsub-publisher
+displayName: Google Cloud Pub/Sub (raw Publisher, co-located build+publish)
+style: fluent
+protocol: pubsub
+direction: outbound
+
+detect:
+  coordinates: ["com.google.cloud:google-cloud-pubsub"]
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  # CHECKPOINT FACT: `Publisher.newBuilder(TopicName)` is a static factory
+  # (`invokestatic`, no `<init>`) — the same non-`<init>` static-root shape
+  # `aws-sqs-sdk.yml`'s own `SendMessageRequest.builder()` already proved
+  # (`_chain_key`'s CP-3 rule: a non-`<init>` root's own `result` is its own
+  # chain key, no engine change needed). A topic has no verb — this root
+  # captures no `http_method` at all, verbless by declaration (D02 §2's
+  # verbless row, Task 11 precondition).
+  #
+  # `channel`/`channel_via` (2E-prep Task 12 precondition — fluent gained
+  # the SAME literal-first, linked-call-fallback ladder `single_call`
+  # already uses): the ladder tries `newBuilder`'s own arg0 as a string
+  # literal FIRST — a same-arity `String` overload of `newBuilder` genuinely
+  # exists — and only follows `channel_via` when that literal did not
+  # resolve, which is the real fixture's own shape:
+  # `Publisher.newBuilder(TopicName.of(project, "raw-events"))` reaches its
+  # consumer as the compiler's own `unresolved` kind, carrying only
+  # `source`, exactly like every other linked `channel_via` call this
+  # codebase already reads (`kafka-consumer.yml`'s `List.of`, `jakarta-
+  # jms.yml`'s `createQueue`). `arg: 1` is the topic id; `arg: 0` (the
+  # project) is never read here — a destination is opaque, never split into
+  # a peer (D02 §2's `fluent` style, its own `channel` paragraph).
+  roots:
+    - { owner: com.google.cloud.pubsub.v1.Publisher, method: newBuilder,
+        captures: { channel: arg0 },
+        channel_via: [{ owner: com.google.pubsub.v1.TopicName, method: of, arg: 1 }] }
+  # No `body` capture, deliberately: the fixture's own
+  # `publish(PubsubMessage message)` argument is a bare method parameter
+  # (never a `NEW`-constructed instance the shape walk could root), and
+  # `PubsubMessage` is a protobuf envelope this catalog declares no shape
+  # rule for — `request_shape` stays honestly NULL, the same
+  # `jakarta.jms.Message` opaque-envelope precedent `jakarta-jms.yml`
+  # already states for `send()`. Steps: none needed — `newBuilder` and
+  # `build` chain straight through undeclared (D02 §2's `fluent` style:
+  # "unmatched steps pass through uncaptured"), no intermediate call folds
+  # in a capture.
+  #
+  # CHECKPOINT FACT (live `javap`, corrects an earlier checkpoint
+  # assumption modelled on `aws-sqs-sdk.yml`'s own erased-builder join):
+  # `Publisher.Builder#build()` returns the CONCRETE `Publisher` type, no
+  # generic erasure and no `CHECKCAST` — `build()` is `invokevirtual`
+  # immediately followed by `invokevirtual publish` on that SAME stack
+  # value (`build().publish(message)`, one straight-line chain), so
+  # `build`'s own result IS `publish`'s own receiver — a plain
+  # receiver-linked continuation, exactly the WebClient `retrieve()` →
+  # `bodyToMono()` shape, never the OkHttp/SQS "built value passed as a
+  # DIFFERENT call's argument" shape `terminal_via_argument` exists for.
+  # `publish` is declared as a bare terminal name; `build` needs no entry
+  # at all.
+  terminal:
+    - publish
+
+# Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
+# discipline as spring-kafka-template.yml — see its own comment for the full
+# rationale). `nullability` is harvested from spring-mvc.yml.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

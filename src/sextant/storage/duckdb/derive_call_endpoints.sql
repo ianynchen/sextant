@@ -23,20 +23,25 @@
 --
 -- Parameters:
 --   $rows -- {protocol, direction, method, path, handler, caller, peer,
---             handler_signature, resolution, evidence, request_shape,
---             response_shape} rows, one per matching call site, already
---             deduplicated on wire identity by the pass
+--             handler_signature, resolution, evidence, catalog_id,
+--             request_shape, response_shape} rows, one per matching call
+--             site, already deduplicated on wire identity by the pass.
+--             `catalog_id` (2E-prep design §1a) is the id of the catalog
+--             that built the row — provenance only, never part of wire
+--             identity.
 INSERT INTO endpoints (
     protocol, direction, method, path, handler, caller, peer,
-    handler_signature, resolution, evidence, request_shape, response_shape
+    handler_signature, resolution, evidence, catalog_id, request_shape, response_shape
 )
 SELECT r.protocol, r.direction, r.method, r.path, r.handler, r.caller, r.peer,
-       r.handler_signature, r.resolution, r.evidence, r.request_shape, r.response_shape
+       r.handler_signature, r.resolution, r.evidence, r.catalog_id, r.request_shape,
+       r.response_shape
 FROM (SELECT UNNEST(
     $rows::STRUCT(
         protocol VARCHAR, direction VARCHAR, method VARCHAR, path VARCHAR,
         handler VARCHAR, caller VARCHAR, peer VARCHAR, handler_signature VARCHAR,
-        resolution VARCHAR, evidence VARCHAR, request_shape VARCHAR, response_shape VARCHAR
+        resolution VARCHAR, evidence VARCHAR, catalog_id VARCHAR,
+        request_shape VARCHAR, response_shape VARCHAR
     )[]
 ) AS r)
 WHERE NOT EXISTS (

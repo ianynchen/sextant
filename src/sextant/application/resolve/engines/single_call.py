@@ -7,22 +7,26 @@ annotation facts: it matches each site against the catalog's declared
 symbol), splits the url argument into peer and path (CP-2) — or, for a
 `channel_arg` destination, keeps it whole and peerless — and resolves the
 request/response descriptors from the call's own arguments through
-`shapes.contracts.argument_descriptor` (D02 §2h). Framework knowledge — the
+`shapes.arguments.argument_descriptor` (D02 §2h). Framework knowledge — the
 owner type, which argument is which, the PTR/call-wrapper rules — arrives as
 catalog data; this module never names a framework.
 """
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.shapes.contracts import (
+from sextant.application.resolve.shapes.arguments import (
     CallFacts,
     CarrierRules,
+    _arg_at,
+    _capture_resolved,
     _linked_constructor,
     argument_descriptor,
     channel_of,
+    linked_channels,
     supertypes_of,
     url_of,
 )
@@ -54,6 +58,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # `_matching_method` scans it per call site instead.
     methods = list(matches["methods"])
     _validate_methods(methods, catalog)
+    # `channel_via`'s declared `owner`s converted to the SCIP symbol form
+    # once, at run start, rather than once per matched call site — the
+    # `record_wrapper_args` precedent below, and the same binding-seam
+    # discipline `call_wrappers`/`record_wrappers` keep. A copied row, never
+    # the catalog's own dict: `matches` is the loaded file, and a normalizing
+    # pass must not rewrite it in place.
+    methods = [
+        {**row, "channel_via": _channel_via_forms(row)} if "channel_via" in row else row
+        for row in methods
+    ]
     record_wrappers = list(matches.get("record_wrappers", []))
     _validate_record_wrappers(record_wrappers, catalog)
     carrier_rules = CarrierRules(
@@ -91,9 +105,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # derive_endpoint_shapes keeps for its own `referenced` accumulator.
     referenced: list[str] = []
     rows: list[dict[str, Any]] = []
-    # Only a *resolved* wire identity dedups here: two unresolved calls carry
-    # no path to compare, and SQL's `NULL = NULL` is unknown rather than
-    # true, so each stays its own row (D02 §2's unresolved-is-an-answer).
+    # Only a row whose identity is known dedups here: two calls whose paths
+    # nobody could read carry nothing to compare, and SQL's `NULL = NULL` is
+    # unknown rather than true, so each stays its own row (D02 §2's
+    # unresolved-is-an-answer). The key is the identity columns, never the
+    # `resolution` column — a row can be `unresolved` because some OTHER
+    # declared capture failed (I1) and still dedup on the path it did read.
     seen: set[tuple[str, str, str, str]] = set()
     for site in call_sites:
         if site["owner"] != owner:
@@ -134,7 +151,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # for both.
             record = _arg_at(arguments, method["record_arg"])
             url_argument, body_argument = _record_arguments(record, record_wrapper_args, facts)
-            body_declared: int | None = method["record_arg"]
+            # `record_arg` is always a declared position (the row is only
+            # reached here because it has one) — always True, the same
+            # sentinel a `body_arg` row's own presence check collapses to.
+            body_declared = True
         else:
             # `channel_arg` is `url_arg`'s alias for a destination-shaped
             # identity (D02 §2) — `_validate_methods` already refused a row
@@ -142,78 +162,126 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # here.
             url_argument = _arg_at(arguments, method.get("url_arg", method.get("channel_arg")))
             body_argument = _arg_at(arguments, method.get("body_arg"))
-            body_declared = method.get("body_arg")
+            body_declared = method.get("body_arg") is not None
         # `channel_arg` aliases `url_arg` in the grammar but not in the
         # READER (final review, IMPORTANT): a destination is an opaque
         # expression, never a URL to split. SQS's canonical destination is a
         # whole queue URL, and `url_of` would turn it into a fabricated peer
         # plus a truncated path. `_validate_methods` already refused a row
         # naming both, so this test is unambiguous.
+        #
+        # `channel_via` (Task 7) reads the destination off the call that
+        # PRODUCED the argument instead of the argument's own position —
+        # `session.createProducer(session.createQueue("raw-audit"))`'s topic
+        # lives on `createQueue`'s own argument, never `createProducer`'s —
+        # and it may read several channel identities off that one linked
+        # call (`all_strings`). `linked_channels` always returns a list, so
+        # this collapses to the same one-tuple list the non-`channel_via`
+        # case builds by hand.
+        #
+        # The ladder is a LADDER, not an either/or (2E-prep Task 12 fix
+        # round 1, unifying this with `interface_implementation`'s own
+        # ladder, D02 §2's own new `channel_via` paragraph): a
+        # `channel_via`-declared row still tries the
+        # literal read FIRST, through the SAME reader (`channel_of`/`url_of`)
+        # the non-`channel_via` branch below uses — some APIs genuinely
+        # overload a destination-taking method with both a literal-string
+        # and a linked-instance form — and only falls back to the linked
+        # call when the literal itself did not resolve. Fixture-neutral for
+        # every catalog shipped so far: `jakarta-jms.yml`/`kafka-consumer.yml`'s
+        # own `channel_arg` positions are never themselves string literals
+        # (a `Queue`/`Collection` instance, always linked), so the ladder's
+        # first rung never fires there and every frozen row is unchanged.
+        destinations: Sequence[tuple[str | None, str | None, str]]
         read_destination = channel_of if "channel_arg" in method else url_of
-        peer, path, url_resolution = read_destination(url_argument)
+        if "channel_via" in method:
+            literal = read_destination(url_argument)
+            forms = method["channel_via"]
+            if literal[2] != "resolved" and forms:
+                destinations = linked_channels(url_argument, facts, forms)
+            else:
+                destinations = [literal]
+        else:
+            destinations = [read_destination(url_argument)]
         response_argument = _arg_at(arguments, method.get("response_arg"))
-        # Checkpoint ruling I1: any DECLARED capture that failed to resolve
-        # drops the *row's* resolution, even when the url itself read fine —
-        # `path` still carries the known template regardless (it is the
-        # url's own answer, untouched by a body/response capture's own
-        # failure), but a resolved row promises every declared capture was
-        # read, not only the url. `path` stays NULL-safe: this only ever
-        # narrows resolution from `resolved` to `unresolved`, never the
-        # other way. A `record_arg` row's own payload is exactly as
-        # "declared" as a `body_arg` row's (`body_declared` stands in for
-        # either), so a linked constructor whose payload slot could not be
-        # read narrows this row's resolution the same way.
-        resolution = (
-            "resolved"
-            if (verb is not None or verbless)
-            and url_resolution == "resolved"
-            and _capture_resolved(body_declared, body_argument)
-            and _capture_resolved(method.get("response_arg"), response_argument)
-            else "unresolved"
-        )
         # `direction` on a row overrides the catalog's own declared
         # direction (D02 §2) — Pub/Sub's `subscribe` is inbound even inside
         # an otherwise outbound file.
         row_direction = method.get("direction", catalog.direction)
-        # Only a *whole* resolved wire identity dedups, so an unreadable verb
-        # keeps each row its own for the same reason an unreadable url does:
-        # `NULL = NULL` is unknown in the table this batch is inserted into,
-        # and two calls whose verbs nobody could read are not known to be the
-        # same call. A verbless row dedups on `(protocol, row_direction,
-        # path)` alone — there is no method to distinguish them by — hence
-        # `verb or ""` rather than `verb`: every shipped HTTP row declares
-        # `http_method` or `method_arg`, so `verbless` is always False and
-        # `verb` is never None wherever this key is built for them, making
-        # `verb or ""` equal to `verb` and this change a no-op for those
-        # catalogs; likewise no shipped row declares its own `direction`, so
-        # `row_direction` is always `catalog.direction` there too.
-        if path is not None and (verb is not None or verbless):
-            key = (catalog.protocol, row_direction, verb or "", path)
-            if key in seen:
-                continue
-            seen.add(key)
         # An inbound row's deriving method is the consumer, not the caller
         # (D02 §2): it lands in `handler`, and `caller` stays NULL — the
         # same handler/caller split `derive_endpoints.sql` keeps for the
         # annotation-driven styles, applied here per row rather than per
         # catalog.
         inbound = row_direction == "inbound"
-        rows.append(
-            {
-                "protocol": catalog.protocol,
-                "direction": row_direction,
-                "method": verb,
-                "path": path,
-                "handler": caller if inbound else None,
-                "caller": None if inbound else caller,
-                "peer": peer,
-                "handler_signature": None,
-                "resolution": resolution,
-                "evidence": "compiler",
-                "request_shape": argument_descriptor(body_argument, facts, carrier_rules),
-                "response_shape": argument_descriptor(response_argument, facts, carrier_rules),
-            }
-        )
+        # Computed once, outside the destinations loop: neither depends on
+        # `peer`/`path`/`url_resolution`, and `argument_descriptor` appends
+        # to the shared `referenced` accumulator (deduped downstream,
+        # `contracts.py`'s own `list(dict.fromkeys(...))`), so calling it
+        # once per row rather than once per destination tuple keeps that
+        # list from carrying the same shape root once per topic.
+        request_shape = argument_descriptor(body_argument, facts, carrier_rules)
+        response_shape = argument_descriptor(response_argument, facts, carrier_rules)
+        # One row per destination tuple (the same multi-topic precedent
+        # `annotation_driven._derive_replies` already keeps for a listener's
+        # declared reply destinations) — every row shares the same verb/body
+        # /response captures; only the destination itself varies.
+        for peer, path, url_resolution in destinations:
+            # Checkpoint ruling I1: any DECLARED capture that failed to
+            # resolve drops the *row's* resolution, even when the url itself
+            # read fine — `path` still carries the known template regardless
+            # (it is the url's own answer, untouched by a body/response
+            # capture's own failure), but a resolved row promises every
+            # declared capture was read, not only the url. `path` stays
+            # NULL-safe: this only ever narrows resolution from `resolved`
+            # to `unresolved`, never the other way. A `record_arg` row's own
+            # payload is exactly as "declared" as a `body_arg` row's
+            # (`body_declared` stands in for either), so a linked
+            # constructor whose payload slot could not be read narrows this
+            # row's resolution the same way.
+            resolution = (
+                "resolved"
+                if (verb is not None or verbless)
+                and url_resolution == "resolved"
+                and _capture_resolved(body_declared, body_argument)
+                and _capture_resolved(method.get("response_arg") is not None, response_argument)
+                else "unresolved"
+            )
+            # Only a *whole* resolved wire identity dedups, so an unreadable
+            # verb keeps each row its own for the same reason an unreadable
+            # url does: `NULL = NULL` is unknown in the table this batch is
+            # inserted into, and two calls whose verbs nobody could read are
+            # not known to be the same call. A verbless row dedups on
+            # `(protocol, row_direction, path)` alone — there is no method to
+            # distinguish them by — hence `verb or ""` rather than `verb`:
+            # every shipped HTTP row declares `http_method` or `method_arg`,
+            # so `verbless` is always False and `verb` is never None
+            # wherever this key is built for them, making `verb or ""` equal
+            # to `verb` and this change a no-op for those catalogs; likewise
+            # no shipped row declares its own `direction`, so `row_direction`
+            # is always `catalog.direction` there too.
+            if path is not None and (verb is not None or verbless):
+                key = (catalog.protocol, row_direction, verb or "", path)
+                if key in seen:
+                    continue
+                seen.add(key)
+            rows.append(
+                {
+                    "protocol": catalog.protocol,
+                    "direction": row_direction,
+                    "method": verb,
+                    "path": path,
+                    "handler": caller if inbound else None,
+                    "caller": None if inbound else caller,
+                    "peer": peer,
+                    "handler_signature": None,
+                    "resolution": resolution,
+                    "evidence": "compiler",
+                    "catalog_id": catalog.id,
+                    "request_shape": request_shape,
+                    "response_shape": response_shape,
+                }
+            )
 
     workspace.derive("call_endpoints", rows=rows)
 
@@ -254,7 +322,22 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
     `matches`, opaque to that loader-level check, so it is checked here
     instead. `record_arg` (Task 7) IS the channel+payload source — a row
     declaring it alongside `url_arg`/`channel_arg`/`body_arg`/`response_arg`
-    is contradictory evidence, not a richer row."""
+    is contradictory evidence, not a richer row. `channel_via` (Task 7's
+    linked-call follow) says HOW to read an instance already named by
+    `channel_arg` — it is not itself a position, so a row declaring it
+    without one is missing the position it describes; each declared form
+    must be `{owner, method, arg: int|"all_strings"}`, the same shape
+    discipline `record_wrappers` entries keep.
+
+    `channel_via` alongside `url_arg` is refused too (final review, minor
+    10): `linked_channels` reads a linked call's own argument through
+    `channel_of` — verbatim, `peer` unconditionally NULL — which is
+    `channel_arg`'s reader, while `url_arg` asks for CP-2's peer/path split.
+    A row declaring both asks for one destination to be read two
+    incompatible ways depending on which rung of the ladder answered, and
+    the ladder's own fallback would silently drop the split the row asked
+    for. No shipped catalog declares the pair; this refuses the file rather
+    than letting the contradiction pick a reader at derive time."""
     for row in rows:
         if "url_arg" in row and "channel_arg" in row:
             raise CatalogError(
@@ -262,6 +345,33 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                 f"`url_arg` and `channel_arg` — they name the same capture (D02 §2's "
                 f"single_call style)"
             )
+        if "channel_via" in row and "channel_arg" not in row and "url_arg" not in row:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{row['name']}` declares `channel_via` "
+                f"without `channel_arg`/`url_arg` — `channel_via` says how to read an "
+                f"instance already named by one of those, never a destination position on "
+                f"its own (D02 §2's single_call style)"
+            )
+        if "channel_via" in row and "url_arg" in row:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{row['name']}` declares `channel_via` "
+                f"together with `url_arg` — `channel_via` pairs with `channel_arg`'s "
+                f"verbatim destination reader, and `url_arg`'s CP-2 peer/path splitter "
+                f"cannot be mixed with it on one row (D02 §2's single_call style)"
+            )
+        for entry in _channel_via_entries(row):
+            valid = (
+                isinstance(entry, dict)
+                and isinstance(entry.get("owner"), str)
+                and isinstance(entry.get("method"), str)
+                and (entry.get("arg") == "all_strings" or isinstance(entry.get("arg"), int))
+            )
+            if not valid:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{row['name']}` declares a "
+                    f"`channel_via` entry that must be `{{owner, method, "
+                    f'arg: int|"all_strings"}}`, got {entry!r}'
+                )
         if "record_arg" in row:
             conflicts = [
                 key for key in ("url_arg", "channel_arg", "body_arg", "response_arg") if key in row
@@ -279,6 +389,28 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                 f"`direction: {direction}`, which is not one of {', '.join(_DIRECTIONS)} "
                 f"— D00's closed sets are closed (NFR-5)"
             )
+
+
+def _channel_via_entries(method: dict[str, Any]) -> list[Any]:
+    """`channel_via`'s `{owner, method, arg}` | `[{...}, ...]` grammar,
+    normalized to a list without touching the entries themselves — shared by
+    `_validate_methods` (which must not crash reading `owner`/`method` off a
+    malformed entry) and `_channel_via_forms` below (which converts each
+    `owner` once a row is already known-valid)."""
+    via = method.get("channel_via")
+    if via is None:
+        return []
+    return via if isinstance(via, list) else [via]
+
+
+def _channel_via_forms(method: dict[str, Any]) -> list[dict[str, Any]]:
+    """Task 7's `channel_via` entries, each declared `owner` converted to
+    the SCIP symbol form once. Only ever called on a row `_validate_methods`
+    already passed, from the `methods` normalization at `run` start."""
+    return [
+        {"owner": _catalog_symbol(entry["owner"]), "method": entry["method"], "arg": entry["arg"]}
+        for entry in _channel_via_entries(method)
+    ]
 
 
 def _validate_record_wrappers(rows: list[dict[str, Any]], catalog: Catalog) -> None:
@@ -303,18 +435,6 @@ def _validate_record_wrappers(rows: list[dict[str, Any]], catalog: Catalog) -> N
                 f'`{{type, channel_ctor_arg: int, payload_ctor_arg: int|"last"}}`, got '
                 f"{wrapper!r}"
             )
-
-
-def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any] | None:
-    """The argument at a `methods` row's declared position, or None where the
-    row names no position at all (`body_arg`/`response_arg` are optional) or
-    the real call site carries fewer arguments than the catalog expects — the
-    varargs slot on `getForObject`/`exchange` is exactly this case (Task 7
-    checkpoint): declared positions still read correctly, and the excess
-    trailing argument is simply never addressed."""
-    if index is None or index >= len(arguments):
-        return None
-    return arguments[index]
 
 
 def _record_arguments(
@@ -368,26 +488,6 @@ def _record_arguments(
     else:
         payload_argument = _arg_at(ctor_arguments, payload_index)
     return channel_argument, payload_argument
-
-
-def _capture_resolved(declared_index: int | None, argument: dict[str, Any] | None) -> bool:
-    """Whether a DECLARED capture (checkpoint ruling I1) read something the
-    scanner could resolve.
-
-    A capture the `methods` row never declares at all — `put` names no
-    `response_arg` — never fails: it never claimed a payload, so its
-    absence is a genuine no-body/no-response, not a read failure. A
-    declared capture with nothing at that position, or whose own kind is
-    the compiler's `unresolved` (D00 §5: "anything else... a first-class
-    honest answer, never an omission" — the exact shape a passed-through
-    method parameter takes, verified against the real fixture), fails —
-    and per I1, that drops the *row's* own `resolution`, even though the
-    payload *column* itself stays NULL either way: NULL alone cannot say
-    which case it was, so the row is what disambiguates "no payload" from
-    "could not read it" (D01 §3, amended)."""
-    if declared_index is None:
-        return True
-    return argument is not None and argument.get("kind") != "unresolved"
 
 
 def _verb_of(method: dict[str, Any], arguments: list[dict[str, Any]]) -> str | None:

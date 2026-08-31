@@ -99,7 +99,19 @@ public final class ClassScanner {
             // — which is the shape a real one takes — the class declares
             // nothing else that names the payload at all.
             emit(typeSymbol, constructKindOf(access), null, null, access, null, null,
-                 TypeRefs.genericSuperclassFromSignature(sig));
+                 TypeRefs.genericSuperclassFromSignature(sig), interfaceSymbolsJson(ifaces));
+        }
+
+        /** `implemented_interfaces`: the interface array ASM hands {@code visit},
+         *  converted to the same symbol grammar every class-level reference uses
+         *  ({@link #symbolOf}), in declaration order. Null — never an empty array —
+         *  for a class implementing none, so an absent key means "none" rather than
+         *  an empty array a consumer has to special-case identically. */
+        private String interfaceSymbolsJson(String[] ifaces) {
+            if (ifaces == null || ifaces.length == 0) return null;
+            List<String> symbols = new ArrayList<>();
+            for (String iface : ifaces) symbols.add(JsonOut.string(symbolOf(iface + "#")));
+            return JsonOut.array(symbols);
         }
 
         /** D00 §4's construct kinds carry `enum` beside `class` and `interface`, and
@@ -462,16 +474,21 @@ public final class ClassScanner {
         }
 
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access) {
-            emit(symbol, constructKind, enclosing, signature, access, null, null, null);
+            emit(symbol, constructKind, enclosing, signature, access, null, null, null, null);
         }
 
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
                            String ext, String modifiers) {
-            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, null);
+            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, null, null);
         }
 
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
                            String ext, String modifiers, String supertype) {
+            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, supertype, null);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext, String modifiers, String supertype, String interfaces) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -485,6 +502,7 @@ public final class ClassScanner {
             if (ext != null) fact.put("ext", ext);
             if (modifiers != null) fact.put("modifiers", modifiers);
             if (supertype != null) fact.put("supertype", supertype);
+            if (interfaces != null) fact.put("interfaces", interfaces);
             lines.add(JsonOut.object(fact));
         }
     }

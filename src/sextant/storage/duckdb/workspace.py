@@ -76,6 +76,34 @@ _NAMED_QUERIES = {
         WHERE kind = 'symbol' AND json_type(payload -> 'supertype') NOT IN ('NULL')
         ORDER BY symbol
     """,
+    # `implemented_interfaces`: every class symbol's own declared interfaces,
+    # keyed by the type's own (module-prefixed) symbol — Task 10 consumes this
+    # the way `single_call` consumes `supertypes` above. Unlike `supertype`,
+    # whose Python default is `None` (dumped as the JSON scalar `null`),
+    # `interfaces`' default is an empty list — a hand-built or Python-written
+    # fact always carries the key, empty or not, so `json_type(...) <> 'NULL'`
+    # would keep every symbol. `json_array_length(...) > 0` excludes both a
+    # genuinely absent key (SQL NULL propagates through the comparison) and an
+    # explicit empty array the same way, which is what "a class implementing
+    # none" must mean regardless of which writer produced the fact.
+    "implementations": """
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'interfaces' AS interfaces
+        FROM raw_facts
+        WHERE kind = 'symbol' AND json_array_length(payload -> 'interfaces') > 0
+        ORDER BY symbol
+    """,
+    # Every declared method symbol, module-prefixed exactly as the fact wrote
+    # it — what `interface_implementation` joins a receiver back to (D02 §2's
+    # handler rule). A registration's own receiver argument carries only the
+    # BARE descriptor (D00 §5a: a call argument never repeats the module
+    # coordinates), so a handler built by concatenating that descriptor with
+    # the catalog's method name would name no symbol any fact ever emitted;
+    # the engine matches against these instead and writes the row it found,
+    # verbatim. Ordered by symbol so a type declaring two overloads of the
+    # handler method is read the same way twice (NFR-1).
+    "method_symbols": """
+        SELECT symbol FROM symbols WHERE construct_kind = 'method' ORDER BY symbol
+    """,
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents

@@ -14,7 +14,7 @@ import pytest
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.shapes import derive_endpoint_shapes
-from sextant.application.resolve.shapes.contracts import split_url
+from sextant.application.resolve.shapes.arguments import split_url
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -110,6 +110,9 @@ def test_a_string_url_and_a_class_literal_response_derive_a_resolved_endpoint(
     assert endpoint["resolution"] == "resolved"
     assert endpoint["handler"] is None
     assert endpoint["peer"] is None
+    # D02D-prep spec §1a, Task 1: every row is stamped with the id of the
+    # catalog that derived it.
+    assert endpoint["catalog_id"] == "spring-resttemplate"
     assert json.loads(endpoint["response_shape"]) == {
         "wire_type": "object",
         "wire_format": "",
@@ -971,12 +974,15 @@ CONSUMER = "com/acme/messaging/Consumer#"
 
 
 def _single_call_catalog(
-    matches: dict, catalog_id: str = "invented-single-call", direction: str = "outbound"
+    matches: dict,
+    catalog_id: str = "invented-single-call",
+    direction: str = "outbound",
+    protocol: str = "kafka",
 ) -> Catalog:
     return Catalog(
         id=catalog_id,
         style="single_call",
-        protocol="kafka",
+        protocol=protocol,
         direction=direction,
         requires=("call_site", "string_constants"),
         matches=matches,
@@ -1490,6 +1496,386 @@ def test_a_malformed_record_wrappers_entry_is_refused_at_run_start(tmp_path: Pat
     workspace.close()
 
     assert "invented-bad-record-wrapper.yml" in str(raised.value)
+
+
+# --- Task 7 (2E-prep): `channel_via` — the linked-call follow (D02 §2h,
+# amended). An instance argument's own channel is not the literal captured
+# at its position but read off the call that PRODUCED it —
+# `session.createProducer(session.createQueue("raw-audit"))` reads the topic
+# off `createQueue`'s own argument, never `createProducer`'s. Real fixture
+# shapes (`com/acme/orders/messaging/raw/RawJmsBridge`,
+# `RawKafkaConsumers`, checkpoint-verified at BASE): `session.createQueue
+# ("raw-audit")` (`(String)Queue`, `invokeinterface`) and
+# `KafkaConsumer#subscribe(List.of("raw-t1", "raw-t2"))`
+# (`List.of(Object,Object)`, `invokestatic`). The checkpoint's own probe
+# against the real scanner (not assumed): the linked call's return value
+# reaches its consumer as the compiler's `unresolved` kind, never
+# `instance` — only a `NEW` names a concrete type, and `createQueue`/
+# `List.of` are a method result, not a constructor — but it still carries
+# `source`, which is all `linked_channels` ever reads.
+
+SESSION = "jakarta/jms/Session#"
+JAVA_LIST = "java/util/List#"
+KAFKA_CONSUMER = "org/apache/kafka/clients/consumer/KafkaConsumer#"
+
+
+def _channel_via_catalog(matches: dict, catalog_id: str, protocol: str) -> Catalog:
+    return _single_call_catalog(matches, catalog_id, protocol=protocol)
+
+
+def _create_queue_form(arg: int | str = 0) -> dict:
+    return {"owner": "jakarta.jms.Session", "method": "createQueue", "arg": arg}
+
+
+def _list_of_form(arg: int | str = "all_strings") -> dict:
+    return {"owner": "java.util.List", "method": "of", "arg": arg}
+
+
+def _create_queue_call(caller: str, ordinal: int, result: int, topic: str) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=SESSION, name="createQueue", descriptor="(Ljava/lang/String;)Ljakarta/jms/Queue;"
+        ),
+        invoke_kind="interface",
+        ordinal=ordinal,
+        receiver=5,
+        result=result,
+        arguments=[CallArgument(kind="string", value=topic)],
+    )
+
+
+def _create_producer_call(caller: str, ordinal: int, source: int | None) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=SESSION,
+            name="createProducer",
+            descriptor="(Ljakarta/jms/Destination;)Ljakarta/jms/MessageProducer;",
+        ),
+        invoke_kind="interface",
+        ordinal=ordinal,
+        receiver=3,
+        result=8,
+        arguments=[CallArgument(kind="unresolved", source=source)],
+    )
+
+
+def _list_of_call(caller: str, ordinal: int, result: int, values: list) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=JAVA_LIST,
+            name="of",
+            descriptor="(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;",
+        ),
+        invoke_kind="static",
+        ordinal=ordinal,
+        receiver=None,
+        result=result,
+        arguments=values,
+    )
+
+
+def _subscribe_call(caller: str, ordinal: int, source: int | None) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=KAFKA_CONSUMER, name="subscribe", descriptor="(Ljava/util/Collection;)V"
+        ),
+        invoke_kind="virtual",
+        ordinal=ordinal,
+        receiver=3,
+        result=None,
+        arguments=[CallArgument(kind="unresolved", source=source)],
+    )
+
+
+_CREATE_PRODUCER_MATCHES = {
+    "owner": "jakarta.jms.Session",
+    "methods": [
+        {"name": "createProducer", "channel_arg": 0, "channel_via": _create_queue_form()},
+    ],
+}
+
+_SUBSCRIBE_LIST_MATCHES = {
+    "owner": "org.apache.kafka.clients.consumer.KafkaConsumer",
+    "methods": [
+        {"name": "subscribe", "channel_arg": 0, "channel_via": _list_of_form()},
+    ],
+}
+
+
+def test_a_linked_createqueue_call_derives_the_topic_off_its_own_argument(tmp_path: Path):
+    """`createProducer(instance -> createQueue("raw-audit"))`: `arg: 0` reads
+    `createQueue`'s own single argument, never `createProducer`'s (which the
+    scanner never resolved beyond `unresolved` + `source` in the first
+    place) — one row, `path` the topic, `resolution: resolved`, `peer`
+    always None (a destination is opaque, D02 §3)."""
+    caller = "com/acme/orders/messaging/raw/RawJmsBridge#createAuditProducer()."
+    facts = [
+        _create_queue_call(caller, 0, 7, "raw-audit"),
+        _create_producer_call(caller, 1, 7),
+    ]
+    catalog = _channel_via_catalog(
+        _CREATE_PRODUCER_MATCHES, "invented-channel-via-createqueue", "jms"
+    )
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["protocol"], endpoint["direction"]) == ("jms", "outbound")
+    assert endpoint["peer"] is None
+    assert endpoint["path"] == "raw-audit"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_a_channel_via_declaring_row_still_resolves_a_literal_argument_first(tmp_path: Path):
+    """Fix round 1 ruling: `single_call`'s own `channel_via` branch is now
+    the SAME literal-first, linked-call-fallback LADDER `fluent`/
+    `interface_implementation` already read a destination through, not an
+    either/or that always follows the link once `channel_via` is declared.
+    `createProducer`'s own arg0 here is a plain string literal — no
+    `createQueue` call anywhere in this caller for it to link to — so the
+    ladder's first rung (`channel_of`, the SAME reader the non-`channel_via`
+    branch uses) answers directly, `channel_via`'s own linked-call form
+    never even tried. Fixture-neutral for every catalog shipped so far
+    (`jakarta-jms.yml`/`kafka-consumer.yml`'s real `channel_arg` positions
+    are never themselves literals — verified live, every frozen pipeline
+    row unchanged), but the ladder's own first rung has to exist and be
+    provably reachable on its own."""
+    caller = "com/acme/orders/messaging/raw/RawJmsBridge#createLiteralProducer()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=SESSION,
+                name="createProducer",
+                descriptor="(Ljakarta/jms/Destination;)Ljakarta/jms/MessageProducer;",
+            ),
+            invoke_kind="interface",
+            ordinal=0,
+            receiver=3,
+            result=8,
+            arguments=[CallArgument(kind="string", value="raw-literal")],
+        ),
+    ]
+    catalog = _channel_via_catalog(
+        _CREATE_PRODUCER_MATCHES, "invented-channel-via-literal-first", "jms"
+    )
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "raw-literal"
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_all_strings_derives_one_row_per_element_of_a_linked_list_of_call(tmp_path: Path):
+    """`subscribe(instance -> List.of("raw-t1", "raw-t2"))` with
+    `arg: "all_strings"`: `List.of` with <=2 elements binds the FIXED-ARITY
+    overload (checkpoint ruling), so both elements are their own positional
+    string literals — `linked_channels` reads each as its own tuple, and the
+    engine derives ONE ROW PER TUPLE (the same multi-topic precedent
+    `annotation_driven._derive_replies` keeps for a listener's declared
+    reply destinations)."""
+    caller = "com/acme/orders/messaging/raw/RawKafkaConsumers#subscribeToTopics()."
+    facts = [
+        _list_of_call(
+            caller,
+            0,
+            6,
+            [
+                CallArgument(kind="string", value="raw-t1"),
+                CallArgument(kind="string", value="raw-t2"),
+            ],
+        ),
+        _subscribe_call(caller, 1, 6),
+    ]
+    catalog = _channel_via_catalog(_SUBSCRIBE_LIST_MATCHES, "invented-channel-via-list-of", "kafka")
+    workspace = _resolve(tmp_path, facts, catalog)
+    endpoints = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert sorted(e["path"] for e in endpoints) == ["raw-t1", "raw-t2"]
+    assert all(e["resolution"] == "resolved" for e in endpoints)
+    assert all(e["peer"] is None for e in endpoints)
+
+
+def test_a_partially_resolved_list_derives_its_resolved_elements_plus_one_unresolved_row(
+    tmp_path: Path,
+):
+    """One element of the linked `List.of` call reads as a literal, the
+    other as the compiler's own `unresolved` (a variable, not a constant):
+    the resolved element still derives its own row, and the one that failed
+    derives a SINGLE trailing `(None, None, unresolved)` row rather than
+    being silently dropped — D02 §2's unresolved-is-an-answer, applied per
+    element."""
+    caller = "com/acme/orders/messaging/raw/RawKafkaConsumers#subscribeToPartial()."
+    facts = [
+        _list_of_call(
+            caller,
+            0,
+            6,
+            [CallArgument(kind="string", value="raw-t1"), CallArgument(kind="unresolved")],
+        ),
+        _subscribe_call(caller, 1, 6),
+    ]
+    catalog = _channel_via_catalog(
+        _SUBSCRIBE_LIST_MATCHES, "invented-channel-via-list-partial", "kafka"
+    )
+    workspace = _resolve(tmp_path, facts, catalog)
+    endpoints = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    rows = sorted((e["path"] or "", e["resolution"]) for e in endpoints)
+    assert rows == [("", "unresolved"), ("raw-t1", "resolved")]
+
+
+def test_an_unlinked_argument_derives_one_null_path_unresolved_row(tmp_path: Path):
+    """The `createProducer` argument never resolved to a call at all — the
+    scanner's `unresolved` kind with no `source` (a `Queue` built elsewhere
+    and passed in as a parameter). There is nothing to follow, so
+    `linked_channels` gives the same honest answer an unreadable url would:
+    one row, `path` NULL, `resolution: unresolved` — never a dropped row."""
+    caller = "com/acme/orders/messaging/raw/RawJmsBridge#createDynamicProducer()."
+    facts = [_create_producer_call(caller, 0, None)]
+    catalog = _channel_via_catalog(_CREATE_PRODUCER_MATCHES, "invented-channel-via-unlinked", "jms")
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_linked_call_matching_no_declared_form_derives_one_null_path_unresolved_row(
+    tmp_path: Path,
+):
+    """The argument IS linked to a real call site — `Session#
+    createTemporaryQueue()` — but the catalog's only declared `channel_via`
+    form names `createQueue`, a different method. "Matches at most one
+    form" (D02 §2h) means none of them ever reach this site, so the row
+    derives exactly as an unlinked argument would: `path` NULL,
+    `resolution: unresolved` — never a guess at the wrong method's own
+    identity."""
+    caller = "com/acme/orders/messaging/raw/RawJmsBridge#createTempProducer()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=SESSION,
+                name="createTemporaryQueue",
+                descriptor="()Ljakarta/jms/TemporaryQueue;",
+            ),
+            invoke_kind="interface",
+            ordinal=0,
+            receiver=5,
+            result=7,
+            arguments=[],
+        ),
+        _create_producer_call(caller, 1, 7),
+    ]
+    catalog = _channel_via_catalog(
+        _CREATE_PRODUCER_MATCHES, "invented-channel-via-no-form-match", "jms"
+    )
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_row_declaring_channel_via_without_channel_arg_or_url_arg_is_refused_at_run_start(
+    tmp_path: Path,
+):
+    """`channel_via` says HOW to read an instance already named by
+    `channel_arg`/`url_arg` — it is not itself a position. A row declaring
+    it alone is missing the position it describes, refused before any call
+    site is matched, the same `_validate_methods` discipline as the
+    `url_arg`+`channel_arg` conflict."""
+    matches = {
+        "owner": "jakarta.jms.Session",
+        "methods": [{"name": "createProducer", "channel_via": _create_queue_form()}],
+    }
+    catalog = _channel_via_catalog(matches, "invented-channel-via-no-position", "jms")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "invented-channel-via-no-position.yml" in str(raised.value)
+
+
+def test_a_row_declaring_channel_via_together_with_url_arg_is_refused_at_run_start(
+    tmp_path: Path,
+):
+    """Final review, minor 10: `channel_via` pairs with `channel_arg`'s
+    reader, not `url_arg`'s. `linked_channels` reads a linked call's own
+    argument through `channel_of` — verbatim, `peer` unconditionally NULL —
+    while `url_arg` asks for CP-2's peer/path split, so a row declaring both
+    would have ONE destination read two incompatible ways depending on which
+    rung of the ladder answered: split when the literal read succeeded,
+    verbatim when the linked call did. That is a contradiction in the file,
+    refused before any call site is matched rather than resolved silently at
+    derive time by whichever rung happened to win."""
+    matches = {
+        "owner": "jakarta.jms.Session",
+        "methods": [{"name": "createProducer", "url_arg": 0, "channel_via": _create_queue_form()}],
+    }
+    catalog = _channel_via_catalog(matches, "invented-channel-via-with-url-arg", "jms")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "invented-channel-via-with-url-arg.yml" in str(raised.value)
+    assert "url_arg" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"method": "createQueue", "arg": 0},  # missing owner
+        {"owner": "jakarta.jms.Session", "arg": 0},  # missing method
+        {"owner": "jakarta.jms.Session", "method": "createQueue", "arg": "first"},  # bad arg
+        "jakarta.jms.Session",  # not even a dict
+    ],
+)
+def test_a_malformed_channel_via_entry_is_refused_at_run_start(tmp_path: Path, entry):
+    """Each declared `channel_via` entry must be `{owner, method, arg:
+    int|"all_strings"}` — the same shape discipline `record_wrappers`
+    entries keep, checked once at `run` start rather than a crash the first
+    time a call site reaches it."""
+    matches = {
+        "owner": "jakarta.jms.Session",
+        "methods": [{"name": "createProducer", "channel_arg": 0, "channel_via": entry}],
+    }
+    catalog = _channel_via_catalog(matches, "invented-bad-channel-via", "jms")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "invented-bad-channel-via.yml" in str(raised.value)
 
 
 # --- The `fluent` engine (Task 11): chains reassembled from value links ----
@@ -2505,3 +2891,765 @@ def test_okhttp_put_patch_delete_head_steps_derive_their_own_verb_not_the_roots_
     assert by_caller[callers["patch"]]["method"] == "PATCH"
     assert by_caller[callers["delete"]]["method"] == "DELETE"
     assert by_caller[callers["head"]]["method"] == "HEAD"
+
+
+# --- Task 8 (2E-prep): `when` — the value-guarded step (D02 §2's fluent) ---
+#
+# Checkpoint-confirmed (task-6-report.md javap evidence, reviewer-reproduced):
+# `KafkaHeaders.TOPIC` inlines to `LDC "kafka_topic"` at the call site, so a
+# `when` guard's string-literal comparison against a real `setHeader(String,
+# Object)` chain is sound. The invented catalog below stays HTTP-shaped (an
+# extra `setHeader` step folded into the WebClient chain) rather than
+# reaching for the real Kafka shape — `fluent`'s own `_derive` still requires
+# a root-seeded `http_method` today, and shipping the real
+# `spring-kafka-message.yml` catalog is a later task's job, not this one's.
+
+_GUARDED_STEP_MATCHES = {
+    "roots": [
+        {"owner": "com.acme.http.WebClient", "method": "get", "captures": {"http_method": "GET"}},
+    ],
+    "steps": [
+        {"method": "uri", "captures": {"url": "arg0"}},
+        {
+            "method": "setHeader",
+            "when": {"arg": 0, "equals": "kafka_topic"},
+            "captures": {"url": "arg1"},
+        },
+    ],
+    "terminal": ["retrieve"],
+}
+
+
+def test_a_guarded_step_whose_key_matches_captures_under_the_guard(tmp_path: Path):
+    """D02 §2's `fluent` style, the plain case: the guard argument reads
+    the declared `equals`
+    literal exactly, so the step's own captures apply — a `setHeader`
+    reached with `("kafka_topic", "t")` captures `url: "t"` exactly as an
+    unguarded step would."""
+    caller = "com/acme/http/Client#sendGuarded()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "setHeader",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[
+                CallArgument(kind="string", value="kafka_topic"),
+                CallArgument(kind="string", value="t"),
+            ],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 2, receiver=10, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_GUARDED_STEP_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "t"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_a_guarded_step_whose_key_is_a_different_literal_passes_through_uncaptured(
+    tmp_path: Path,
+):
+    """The step still matches the chain either way (D02 §2's `fluent`
+    style: "the step
+    matches the chain either way, pass-through when the guard doesn't
+    hold") — a `setHeader` keyed `"other"` captures nothing at all, and the
+    url an earlier step set stands untouched, exactly like today's
+    unmatched-step pass-through."""
+    caller = "com/acme/http/Client#sendMismatched()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders/1")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "setHeader",
+            2,
+            receiver=10,
+            result=11,
+            arguments=[
+                CallArgument(kind="string", value="other"),
+                CallArgument(kind="string", value="x"),
+            ],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 3, receiver=11, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_GUARDED_STEP_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "/orders/1"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_a_guarded_step_whose_key_is_unresolved_poisons_the_capture_it_declares(
+    tmp_path: Path,
+):
+    """An unreadable guard key must never let a chain preserve an earlier
+    confident answer (D02 §2's `fluent` style): the guard argument's own
+    kind is the compiler's `unresolved` (never a string this catalog could compare), so
+    every capture this step declares — here just `url` — poisons to
+    unresolved, overwriting the resolved url an earlier `uri` step set, and
+    dropping the row's own resolution (checkpoint ruling I1, unified in Task
+    4's `_capture_resolved`)."""
+    caller = "com/acme/http/Client#sendUnresolvedKey()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders/1")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "setHeader",
+            2,
+            receiver=10,
+            result=11,
+            arguments=[CallArgument(kind="unresolved"), CallArgument(kind="string", value="x")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 3, receiver=11, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_GUARDED_STEP_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_later_guarded_write_supersedes_an_earlier_poison(tmp_path: Path):
+    """Last-wins (D02 §4) applies across a poison too: an unresolved guard
+    key poisons `url`, but a LATER `setHeader` reached with a matching,
+    resolved guard key overwrites the poison exactly like any other
+    repeated step's capture — the poison is not sticky once a confident
+    answer follows it, and the row derives fully resolved off the later
+    write."""
+    caller = "com/acme/http/Client#sendUnpoisoned()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders/1")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "setHeader",
+            2,
+            receiver=10,
+            result=11,
+            arguments=[CallArgument(kind="unresolved"), CallArgument(kind="string", value="x")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "setHeader",
+            3,
+            receiver=11,
+            result=12,
+            arguments=[
+                CallArgument(kind="string", value="kafka_topic"),
+                CallArgument(kind="string", value="t"),
+            ],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 4, receiver=12, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_GUARDED_STEP_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "t"
+    assert endpoint["resolution"] == "resolved"
+
+
+_TOPIC_NAME = "com/acme/msg/TopicName#"
+# Final review (minor): the poison covers a step's ARGUMENT captures only.
+# `_merged_captures` folds a `channel_via` ladder into the SAME dict the
+# argument reads live in, so poisoning every declared field replaced the
+# list of `{owner, method, arg}` forms with `{"kind": "unresolved"}` — and
+# `linked_channels`, iterating that mapping, raised `TypeError: string
+# indices must be integers` the moment a later step rewrote `channel` with
+# an argument worth following. The same poison wrote that mapping into
+# `http_method`, which reaches the `method` column unstringified.
+_GUARDED_CHANNEL_MATCHES = {
+    "roots": [
+        {
+            "owner": "com.acme.http.WebClient",
+            "method": "get",
+            # The ladder rides forward from the root (D02 §2's `fluent`
+            # style) — which is precisely what makes the poisoned copy
+            # observable: no later step rewrites it.
+            "captures": {"http_method": "GET", "channel": "arg0"},
+            "channel_via": [{"owner": "com.acme.msg.TopicName", "method": "of", "arg": 0}],
+        }
+    ],
+    "steps": [
+        {
+            "method": "setHeader",
+            "when": {"arg": 0, "equals": "kafka_topic"},
+            "captures": {"http_method": "POST", "channel": "arg1"},
+            "channel_via": [{"owner": "com.acme.msg.TopicName", "method": "of", "arg": 0}],
+        },
+        # Rewrites `channel` alone, so a ladder poisoned by the step above
+        # is never overwritten and survives all the way into `_derive`.
+        {"method": "setDestination", "captures": {"channel": "arg0"}},
+    ],
+    "terminal": ["retrieve"],
+}
+
+
+def test_an_unreadable_guard_poisons_the_argument_reads_and_leaves_the_literals_alone(
+    tmp_path: Path,
+):
+    """A guarded step's `http_method` literal and the chain's `channel_via`
+    ladder are not argument reads and have no `unresolved` form, so an
+    unreadable guard key must leave both alone (D02 §2's `fluent` style,
+    final review): the step contributed no readable evidence, and what an
+    earlier entry declared stands.
+
+    Poisoning them instead is not a wrong answer but a crash and a garbage
+    column — `linked_channels` iterating a poisoned ladder raises
+    `TypeError`, and a poisoned `http_method` reaches `method` as a mapping.
+    Here the guard is `unresolved`, so `channel` poisons (and is superseded
+    by the later `setDestination` write, the un-poisoning rule above), while
+    the root's own verb and ladder survive to resolve the destination
+    through `TopicName.of`."""
+    caller = "com/acme/http/Client#sendGuardedChannel()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "setHeader",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="unresolved"), CallArgument(kind="string", value="x")],
+        ),
+        _call(
+            caller,
+            _TOPIC_NAME,
+            "of",
+            2,
+            receiver=None,
+            result=20,
+            arguments=[CallArgument(kind="string", value="raw-x")],
+            invoke_kind="static",
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "setDestination",
+            3,
+            receiver=10,
+            result=11,
+            arguments=[CallArgument(kind="unresolved", source=20)],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 4, receiver=11, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_GUARDED_CHANNEL_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["method"] == "GET"
+    assert endpoint["path"] == "raw-x"
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "resolved"
+
+
+@pytest.mark.parametrize(
+    "when",
+    [
+        {"equals": "kafka_topic"},  # missing arg
+        {"arg": 0},  # missing equals
+        {"arg": "0", "equals": "kafka_topic"},  # arg not an int
+        {"arg": 0, "equals": 7},  # equals not a str
+        {"arg": 0, "equals": "kafka_topic", "extra": True},  # extra key
+        "kafka_topic",  # not even a dict
+    ],
+)
+def test_a_malformed_when_guard_is_refused_at_run_start(tmp_path: Path, when: object):
+    """A `when` guard must be `{arg: int, equals: str}` exactly — anything
+    else is refused before any call site is matched, the same
+    `_validate_captures`/`_validate_methods` discipline every other
+    catalog-shape check in this file keeps: an unchecked value does not
+    stay in the file."""
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.http.WebClient",
+                "method": "get",
+                "captures": {"http_method": "GET"},
+            },
+        ],
+        "steps": [{"method": "setHeader", "when": when, "captures": {"url": "arg1"}}],
+        "terminal": ["retrieve"],
+    }
+    catalog = _fluent_catalog(matches, "invented-bad-when")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-bad-when.yml" in str(raised.value)
+    assert "setHeader" in str(raised.value)
+
+
+def test_a_when_guard_on_a_root_is_refused_at_run_start(tmp_path: Path):
+    """`when` (D02 §2's `fluent` style) is a STEP's own guard — a root
+    starts the chain,
+    with no prior capture a guard could ever condition. Fix round 1
+    (reviewer MAJOR): the root's own list construction used to carry only
+    `owner`/`method`/`captures` forward, so a `when` on a root entry was
+    silently stripped before validation ever saw it — exactly the "an
+    unchecked value does not stay in the file" failure mode every other
+    catalog-shape check in this file refuses instead. Refused here even
+    though the guard itself is otherwise well-formed: placement, not
+    shape, is what is wrong."""
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.http.WebClient",
+                "method": "get",
+                "when": {"arg": 0, "equals": "kafka_topic"},
+                "captures": {"http_method": "GET"},
+            }
+        ],
+        "steps": [{"method": "uri", "captures": {"url": "arg0"}}],
+        "terminal": ["retrieve"],
+    }
+    catalog = _fluent_catalog(matches, "invented-when-on-root")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-when-on-root.yml" in str(raised.value)
+    assert "when" in str(raised.value)
+    assert "get" in str(raised.value)
+
+
+# --- Task 11 precondition (2E-prep, controller plan-amendment ruling):
+# verbless fluent chains — a root declaring NO `http_method` capture derives
+# `method` NULL, resolution not penalised for the missing verb, mirroring
+# single_call's own D02 §2 `verbless` row (a topic has no verb). The invented
+# catalog below shapes its root as a static factory ("builder", never
+# `<init>`) and its terminal through `terminal_via_argument`, deliberately
+# mirroring `aws-sqs-sdk.yml`'s real
+# `SendMessageRequest.builder()...queueUrl(...)...build()` chain — proving
+# the static-root chain-key (`_chain_key`: a non-`<init>` root's own
+# `result`, not its `receiver`) already carries a verbless walk end to end.
+
+ENVELOPE = "com/acme/messaging/Envelope#"
+ENVELOPE_PRODUCER = "com/acme/messaging/Producer#"
+
+_VERBLESS_MATCHES = {
+    "roots": [
+        # No `http_method` in this root's own captures at all — verbless by
+        # declaration, not by a read that came back empty.
+        {"owner": "com.acme.messaging.Envelope", "method": "builder", "captures": {}},
+    ],
+    "steps": [
+        {"method": "destination", "captures": {"url": "arg0"}},
+    ],
+    "terminal": [
+        {
+            "method": "build",
+            "terminal_via_argument": {
+                "owner": "com.acme.messaging.Producer",
+                "method": "send",
+            },
+        }
+    ],
+}
+
+
+def _verbless_chain(caller: str, ordinal: int, destination) -> list:
+    """One full builder→destination→build→send chain, `ordinal` offsetting
+    every call site so two chains in the same caller never collide on their
+    own `receiver`/`result` value ids."""
+    base = ordinal * 10
+    return [
+        _call(
+            caller,
+            ENVELOPE,
+            "builder",
+            base,
+            receiver=None,
+            result=base + 1,
+            invoke_kind="static",
+        ),
+        _call(
+            caller,
+            ENVELOPE,
+            "destination",
+            base + 1,
+            receiver=base + 1,
+            result=base + 2,
+            arguments=[destination],
+        ),
+        _call(caller, ENVELOPE, "build", base + 2, receiver=base + 2, result=base + 3),
+        _call(
+            caller,
+            ENVELOPE_PRODUCER,
+            "send",
+            base + 3,
+            receiver=999,
+            result=None,
+            arguments=[CallArgument(kind="instance", source=base + 3, symbol=ENVELOPE)],
+        ),
+    ]
+
+
+def test_a_verbless_chain_derives_a_null_method_resolved_row(tmp_path: Path):
+    """The plain case: the root seeds no verb at all, so `method` reads NULL
+    — never a dropped row, and never penalised in `resolution`, exactly as
+    single_call's own verbless row (D02 §2, amended)."""
+    caller = "com/acme/messaging/Client#publishOnce()."
+    facts = _verbless_chain(caller, 0, CallArgument(kind="string", value="orders.created"))
+    catalog = _fluent_catalog(_VERBLESS_MATCHES, "invented-verbless-fluent")
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["method"] is None
+    assert endpoint["path"] == "orders.created"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_two_identical_resolved_verbless_chains_dedup_to_one_row(tmp_path: Path):
+    """Two separate chains — different callers, same wire identity — collapse
+    to one row: a verbless resolved identity dedups on `(protocol,
+    direction, path)` alone, there being no method to tell them apart by
+    (mirroring single_call's own verbless dedup rule)."""
+    first_caller = "com/acme/messaging/Client#publishFirst()."
+    second_caller = "com/acme/messaging/Client#publishSecond()."
+    facts = [
+        *_verbless_chain(first_caller, 0, CallArgument(kind="string", value="orders.deleted")),
+        *_verbless_chain(second_caller, 1, CallArgument(kind="string", value="orders.deleted")),
+    ]
+    catalog = _fluent_catalog(_VERBLESS_MATCHES, "invented-verbless-fluent-dedup")
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    rows = [e for e in workspace.query("endpoints") if e["path"] == "orders.deleted"]
+    workspace.close()
+
+    assert len(rows) == 1
+    assert rows[0]["method"] is None
+    assert rows[0]["resolution"] == "resolved"
+
+
+def test_a_verbless_unresolved_row_never_dedups_with_its_twin(tmp_path: Path):
+    """The other half: a destination the scanner could not read still
+    derives the row (`path` NULL, `resolution: unresolved`), and two such
+    calls never collapse into one — SQL's `NULL = NULL` is unknown, not
+    true, so `path is not None` never gates the dedup key at all here, and
+    each stays its own real 'this method calls something' fact."""
+    first_caller = "com/acme/messaging/Client#publishDynamicFirst()."
+    second_caller = "com/acme/messaging/Client#publishDynamicSecond()."
+    facts = [
+        *_verbless_chain(first_caller, 0, CallArgument(kind="unresolved")),
+        *_verbless_chain(second_caller, 1, CallArgument(kind="unresolved")),
+    ]
+    catalog = _fluent_catalog(_VERBLESS_MATCHES, "invented-verbless-fluent-unresolved")
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    rows = [e for e in workspace.query("endpoints") if e["caller"] in (first_caller, second_caller)]
+    workspace.close()
+
+    assert len(rows) == 2
+    assert all(row["path"] is None and row["resolution"] == "unresolved" for row in rows)
+    assert all(row["method"] is None for row in rows)
+
+
+# --- Task 12 precondition (2E-prep, checkpoint ruling): fluent gains a
+# `channel` capture field, resolved through the SAME literal-first,
+# `channel_via`-fallback ladder `single_call`/`interface_implementation`
+# already use (`shapes.arguments.channel_of`/`linked_channels`) — never
+# `url`'s own CP-2 peer/path split, D02 §2d's "a destination is never split
+# into a peer". `google-pubsub-publisher.yml`'s real chain is the shape
+# this mirrors: `Publisher.newBuilder(...)` is a static-factory root (no
+# `<init>`, chain-keyed on its own `result`, Task 11's precondition already
+# proved this) whose own arg0 is either a literal topic string (an overload
+# that genuinely exists) or a `TopicName.of(project, topic)` linked call —
+# read via `channel_via`'s own `{owner, method, arg}` ladder, exactly
+# `kafka-consumer.yml`'s `subscribe` row already reads off `List.of`.
+
+PUBLISHER = "com/acme/pubsub/Publisher#"
+TOPIC_NAME = "com/acme/pubsub/TopicName#"
+
+_PUBSUB_MATCHES = {
+    "roots": [
+        {
+            "owner": "com.acme.pubsub.Publisher",
+            "method": "newBuilder",
+            "captures": {"channel": "arg0"},
+            "channel_via": [{"owner": "com.acme.pubsub.TopicName", "method": "of", "arg": 1}],
+        }
+    ],
+    "steps": [],
+    # `build()` returns the concrete `Publisher` type — no erasure, no
+    # `CHECKCAST` — and `publish` is called directly on that same stack
+    # value (`build().publish(message)`, real `javap` verified at this
+    # task's checkpoint): `build`'s own result IS `publish`'s own receiver,
+    # a plain receiver-linked continuation, never the OkHttp/SQS
+    # `terminal_via_argument` "built value passed as a DIFFERENT call's
+    # argument" shape. `publish` alone is the terminal; `build` needs no
+    # entry, D02 §4's "unmatched steps pass through uncaptured".
+    "terminal": ["publish"],
+}
+
+
+def _newbuilder_call(
+    caller: str, ordinal: int, result: int, channel_arg: CallArgument
+) -> CallSiteFact:
+    return _call(
+        caller,
+        PUBLISHER,
+        "newBuilder",
+        ordinal,
+        receiver=None,
+        result=result,
+        arguments=[channel_arg],
+        invoke_kind="static",
+    )
+
+
+def _build_and_publish_calls(caller: str, ordinal: int, builder_result: int) -> list:
+    build_result = builder_result + 1
+    return [
+        _call(caller, PUBLISHER, "build", ordinal, receiver=builder_result, result=build_result),
+        _call(
+            caller,
+            PUBLISHER,
+            "publish",
+            ordinal + 1,
+            receiver=build_result,
+            result=None,
+            arguments=[CallArgument(kind="unresolved")],
+        ),
+    ]
+
+
+def test_a_fluent_root_channel_resolves_the_literal_argument_first(tmp_path: Path):
+    """The ladder tries the literal read FIRST — `Publisher.newBuilder`
+    genuinely has a same-arity `String` overload alongside the `TopicName`
+    one — so a plain string argument resolves without ever consulting
+    `channel_via`, exactly `interface_implementation`'s own ladder order."""
+    caller = "com/acme/pubsub/Client#publishDirect()."
+    facts = [
+        _newbuilder_call(
+            caller, 0, 1, CallArgument(kind="string", value="projects/p/topics/orders")
+        ),
+        *_build_and_publish_calls(caller, 1, 1),
+    ]
+    catalog = _fluent_catalog(_PUBSUB_MATCHES, "invented-pubsub-literal")
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["method"] is None
+    assert endpoint["path"] == "projects/p/topics/orders"
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_a_fluent_root_channel_falls_back_to_the_linked_topicname_call(tmp_path: Path):
+    """The literal read fails (`newBuilder`'s own arg0 is the compiler's
+    `unresolved`, carrying only `source`) — the ladder falls back to the
+    declared `channel_via` form, following `source` to `TopicName.of`'s own
+    call site and reading its `arg: 1` (the topic id, project at arg 0),
+    exactly the checkpoint's real-fixture shape."""
+    caller = "com/acme/pubsub/Client#publishViaTopicName()."
+    facts = [
+        _call(
+            caller,
+            TOPIC_NAME,
+            "of",
+            0,
+            receiver=None,
+            result=5,
+            arguments=[
+                CallArgument(kind="string", value="p"),
+                CallArgument(kind="string", value="orders"),
+            ],
+            invoke_kind="static",
+        ),
+        _newbuilder_call(caller, 1, 1, CallArgument(kind="unresolved", source=5)),
+        *_build_and_publish_calls(caller, 2, 1),
+    ]
+    catalog = _fluent_catalog(_PUBSUB_MATCHES, "invented-pubsub-channel-via")
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "orders"
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_a_fluent_root_channel_neither_literal_nor_linked_derives_unresolved(tmp_path: Path):
+    """Neither the literal nor the linked-call follow reaches an answer (a
+    field-held `TopicName` passed straight in, `source: None`) — the row
+    still derives, `path` NULL, `resolution: unresolved`, D02 §2's
+    unresolved-is-an-answer, never a dropped row."""
+    caller = "com/acme/pubsub/Client#publishDynamic()."
+    facts = [
+        _newbuilder_call(caller, 0, 1, CallArgument(kind="unresolved")),
+        *_build_and_publish_calls(caller, 1, 1),
+    ]
+    catalog = _fluent_catalog(_PUBSUB_MATCHES, "invented-pubsub-unresolved")
+    workspace = _resolve_fluent(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_fluent_root_declaring_channel_via_without_a_channel_capture_is_refused_at_run_start(
+    tmp_path: Path,
+):
+    """`channel_via` says HOW to read an instance already named by
+    `channel` — it is not itself a position, mirroring `single_call`'s own
+    `channel_via`-without-`channel_arg` refusal (D02 §2h)."""
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.pubsub.Publisher",
+                "method": "newBuilder",
+                "captures": {},
+                "channel_via": [{"owner": "com.acme.pubsub.TopicName", "method": "of", "arg": 1}],
+            }
+        ],
+        "steps": [],
+        "terminal": [{"method": "build", "terminal_via_argument": True}],
+    }
+    catalog = _fluent_catalog(matches, "invented-pubsub-channel-via-no-position")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-pubsub-channel-via-no-position.yml" in str(raised.value)
+
+
+def test_a_malformed_channel_via_entry_on_a_fluent_root_is_refused_at_run_start(tmp_path: Path):
+    """Each declared `channel_via` entry must be `{owner, method, arg:
+    int|"all_strings"}` — the same shape discipline
+    `single_call`/`interface_implementation` already keep, checked once at
+    `run` start rather than a crash the first time a call site reaches it."""
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.pubsub.Publisher",
+                "method": "newBuilder",
+                "captures": {"channel": "arg0"},
+                "channel_via": [{"method": "of", "arg": 1}],  # missing owner
+            }
+        ],
+        "steps": [],
+        "terminal": [{"method": "build", "terminal_via_argument": True}],
+    }
+    catalog = _fluent_catalog(matches, "invented-pubsub-bad-channel-via")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-pubsub-bad-channel-via.yml" in str(raised.value)
+
+
+def test_a_url_and_a_channel_capture_on_the_same_entry_is_refused_at_run_start(
+    tmp_path: Path,
+):
+    """The plain case (fix round 1, closing MINOR-6's untested per-entry
+    refusal): one root declaring both `url` and `channel` is refused —
+    `_derive` only ever reads one of the two."""
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.pubsub.Publisher",
+                "method": "newBuilder",
+                "captures": {"url": "arg0", "channel": "arg0"},
+            }
+        ],
+        "steps": [],
+        "terminal": ["build"],
+    }
+    catalog = _fluent_catalog(matches, "invented-url-and-channel-same-entry")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-url-and-channel-same-entry.yml" in str(raised.value)
+
+
+def test_a_url_on_one_step_and_a_channel_on_a_different_step_is_refused_at_run_start(
+    tmp_path: Path,
+):
+    """The mutation-proven case (fix round 1, MAJOR): `url` declared on ONE
+    step and `channel` declared on a DIFFERENT step, in the same chain,
+    used to load with no error at all — a per-entry-only check never saw
+    the two together, and `_derive` silently discarded whichever one folded
+    in first (a real okhttp-shaped probe: resolved became unresolved with
+    no diagnostic). Refused now: the check runs over the UNION of every
+    root's and every step's own captures, not one entry at a time."""
+    matches = {
+        "roots": [
+            {"owner": "com.acme.http.WebClient", "method": "get", "captures": {}},
+        ],
+        "steps": [
+            {"method": "uri", "captures": {"url": "arg0"}},
+            {"method": "topic", "captures": {"channel": "arg0"}},
+        ],
+        "terminal": ["retrieve"],
+    }
+    catalog = _fluent_catalog(matches, "invented-url-and-channel-different-steps")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-url-and-channel-different-steps.yml" in str(raised.value)

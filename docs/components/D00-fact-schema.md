@@ -249,6 +249,13 @@ ordinary, non-generic superclass carries no such field — there is nothing gene
 capture, and the relationship is still stated once, at `relationship_kind: extends` (§4).
 This also pre-feeds `inherits` edges ([D01](D01-graph-schema.md)).
 
+**A class symbol fact also carries the erased symbols of every interface it implements, in
+declaration order, as `interfaces` — emitted only when non-empty** (the `implemented_interfaces`
+capability, [M03](M03-scanner.md)): a receiver registered by its declared type
+(`Subscriber.newBuilder(subscription, new RawPubSubReceiver())`) names no method by itself, and
+`interfaces` is what lets a catalog join that type back to the single method the interface
+declares.
+
 **Presence and nullability are two independent flags, and both are two-valued.** A field
 either accepts null or it does not; a field either has to appear or it does not. Neither
 carries an `unknown` value — doubt about what we managed to work out is what `resolution` and

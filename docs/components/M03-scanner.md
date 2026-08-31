@@ -57,10 +57,13 @@ finding fewer endpoints.
 | `control_flow` | Honest sequence diagrams |
 | `kotlin_metadata` | Nullability and data-class shapes |
 | `call_site` | Every call-site-driven engine — [D02](D02-catalog-schema.md)'s `single_call` and `fluent` both |
+| `implemented_interfaces` | The `interface_implementation` style — matching a registered receiver's own type against an interface a catalog names |
 
-**Seven of the scanner's ten designed capabilities are now shipped.** `annotation_args`,
+**Eight of the scanner's now-eleven designed capabilities are shipped.** `annotation_args`,
 `typed_signatures`, `type_annotations` and `kotlin_metadata` since Phase 2A/2B; `call_site`,
-`string_constants` and `chain_reconstruction` from Phase 2C's dataflow pass (below).
+`string_constants` and `chain_reconstruction` from Phase 2C's dataflow pass (below);
+`implemented_interfaces` from a class symbol fact's own `interfaces` list, in declaration
+order ([D00](D00-fact-schema.md) §5a).
 **`chain_reconstruction` means exactly this: receiver and result value ids are present on
 `call_site` facts** ([D00](D00-fact-schema.md) §5) — a `fluent` catalog's steps are a join
 over those links, nothing more. `invokedynamic` stays undeclared: an indy call site is
@@ -85,7 +88,7 @@ Facts as JSONL, one file per **source file**, plus the uncovered-source list.
 ### The JVM scanner
 
 ASM over class files. See [ARCHITECTURE.md](../ARCHITECTURE.md) DR-1 for why this rather
-than a source indexer. Two of its ten capabilities are hard, and the rest are
+than a source indexer. Two of its eleven capabilities are hard, and the rest are
 straightforward.
 
 ### The hard part: control flow

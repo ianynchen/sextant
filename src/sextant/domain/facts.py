@@ -105,6 +105,9 @@ class SymbolFact(BaseModel):
     # D00 §5a's PTR carrier: a class symbol's generic supertype reference,
     # when the superclass signature is generic.
     supertype: TypeRef | None = None
+    # `implemented_interfaces`: erased interface symbols a class declares,
+    # in declaration order. Empty for a class implementing none.
+    interfaces: list[str] = Field(default_factory=list)
 
 
 class AnnotationFact(BaseModel):

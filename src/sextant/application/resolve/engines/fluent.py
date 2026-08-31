@@ -21,34 +21,60 @@ checkpoint ruling CP-3), every other row's key is its own `result`. A chain
 that never reaches a terminal derives nothing (D02 §4's "the true answer").
 
 Shares `argument_descriptor`, `url_of` and `supertypes_of` verbatim with
-`single_call` (`shapes.contracts`) — the same D00 §5 argument grammar,
+`single_call` (`shapes.arguments`) — the same D00 §5 argument grammar,
 resolved here off a captured step argument rather than a `methods` row's
 positional slot.
 """
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.shapes.contracts import (
+from sextant.application.resolve.shapes.arguments import (
     CallFacts,
     CarrierRules,
+    _arg_at,
+    _capture_resolved,
     argument_descriptor,
+    channel_of,
+    linked_channels,
     supertypes_of,
     url_of,
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 
-# The three capture fields whose declared value is an `argN` reference into
+# The four capture fields whose declared value is an `argN` reference into
 # the matched call site's own arguments, rather than a literal already known
-# from the catalog (`http_method`, `response_is`).
-_ARGUMENT_FIELDS = ("url", "body", "response")
+# from the catalog (`http_method`, `response_is`). `channel` (Task 12,
+# 2E-prep) is `url`'s destination-shaped counterpart, exactly as
+# `single_call`'s own `channel_arg` is `url_arg`'s — never split into a peer
+# (D02 §2's `fluent` style), and resolved through the SAME literal-first,
+# `channel_via`-fallback ladder `single_call`/`interface_implementation`
+# already use, rather than `url_of`'s CP-2 split.
+_ARGUMENT_FIELDS = ("url", "body", "response", "channel")
 
 _ARG_REFERENCE = re.compile(r"^arg(\d+)$")
+
+# A `when` guard's own two keys (D02 §2's `fluent` style): `{arg: int,
+# equals: str}` exactly.
+_WHEN_KEYS = {"arg", "equals"}
+
+# The D00 §5 compiler's own "unresolved" argument kind — what a `when` guard
+# poisons a step's declared captures to when the guard's own argument cannot
+# be read as a string literal. Every downstream reader already treats this
+# kind as an honest read failure, never an omission: `url_of` falls through
+# to its own unresolved answer, and `_capture_resolved` (Task 4's unified
+# helper) reads a `kind != "unresolved"` argument as failed to resolve.
+# Immutable (GUIDELINES §8): every downstream reader only ever reads it —
+# never a template a caller mutates in place — so a plain `dict` invites a
+# shared-mutable-state bug this constant should not have to defend against.
+_UNRESOLVED_ARGUMENT = MappingProxyType({"kind": "unresolved"})
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
@@ -59,11 +85,22 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     (CP-2) — and `direction`/`protocol` are the catalog's own declared
     fields."""
     matches = catalog.matches
+    # Validated on the RAW (pre-`_catalog_symbol`) entries, before
+    # `_channel_via_forms` ever dereferences an `owner` — the same two-phase
+    # discipline `single_call._validate_methods` keeps for its own
+    # `channel_via` (shape first, symbol conversion only once shape is
+    # known-good).
+    _validate_channel_via_entries(matches.get("roots", []), catalog)
+    _validate_channel_via_entries(matches.get("steps", []), catalog)
     roots = [
         {
             "owner": _catalog_symbol(root["owner"]),
             "method": root["method"],
-            "captures": root.get("captures", {}),
+            "captures": _merged_captures(root),
+            # Carried forward (never a root's own field, D02 §2's `fluent`
+            # style) purely so `_validate_captures` can see and refuse it,
+            # exactly as an unchecked value must not silently survive the file.
+            "when": root.get("when"),
         }
         for root in matches.get("roots", [])
     ]
@@ -76,12 +113,19 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # RestClient's `body(Object)` request-setter and its
             # `body(Class)` response-extractor).
             "owner": _catalog_symbol(step["owner"]) if "owner" in step else None,
-            "captures": step.get("captures", {}),
+            "captures": _merged_captures(step),
+            # D02 §2's `fluent` style: a step may declare a value guard on
+            # another argument — None for the (default) unguarded step, read
+            # by `_walk` (`_step_captures`) where `_matching_step` finds this
+            # row.
+            "when": step.get("when"),
         }
         for step in matches.get("steps", [])
     ]
     _validate_steps(steps, catalog)
-    _validate_captures(roots + steps, catalog)
+    _validate_captures(roots, catalog, allow_when=False)
+    _validate_captures(steps, catalog, allow_when=True)
+    _validate_url_channel_exclusivity(roots, steps, catalog)
     terminal_names, via_argument_names = _terminal_index(matches.get("terminal", []))
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
@@ -108,11 +152,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # `referenced` accumulator is one.
     referenced: list[str] = []
     rows: list[dict[str, Any]] = []
-    # Only a resolved wire identity dedups here, exactly as single_call:
-    # two unresolved chains carry no path to compare, so each stays its own
-    # row. Required by derive_call_endpoints.sql's own contract — it only
-    # guards against what is already in the table, not against duplicates
-    # arriving in the same `$rows` batch.
+    # Only a row whose identity is known dedups here, exactly as
+    # single_call: two chains whose paths nobody could read carry nothing to
+    # compare, so each stays its own row — the key is the identity columns,
+    # never the `resolution` column. Required by
+    # derive_call_endpoints.sql's own contract — it only guards against what
+    # is already in the table, not against duplicates arriving in the same
+    # `$rows` batch.
     seen: set[tuple[str, str, str, str]] = set()
     for caller, sites in by_caller.items():
         # Chain reconstruction is within-method only (D00 §5): `by_receiver`
@@ -208,64 +254,129 @@ def _walk(
         return
     for next_site in nexts:
         next_captures = dict(captures)
-        declared = _matching_step(next_site, context.steps)
-        if declared:
+        step = _matching_step(next_site, context.steps)
+        if step is not None:
             # Last wins (D02 §4): a repeated step overwrites its own earlier
             # capture here, in visitation order, with no extra bookkeeping.
-            next_captures.update(_resolve_captures(declared, next_site))
+            # `next_site`'s own arguments are what a `when` guard (D02 §2's
+            # `fluent` style) reads, so the guard is evaluated here, in
+            # `_resolve_captures`'s caller, rather than inside it.
+            next_captures.update(_step_captures(step, next_site))
         _walk(next_site, next_captures, reached_terminal, context)
 
 
 def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     verb = captures.get("http_method")
-    if verb is None:
-        # No root ever seeded a verb — not a shape this catalog declares.
-        return
-    peer, path, url_resolution = url_of(captures.get("url"))
+    # A chain whose root (and every step it folded through) never captured
+    # `http_method` is verbless by declaration — mirroring single_call's D02
+    # §2 `verbless` row (a topic has no verb, precondition commit, 2E-prep
+    # Task 11): SQS's `SendMessageRequest.builder()` chain never seeds one.
+    # `"http_method" not in captures` is what tells "no root ever declared
+    # one" apart from a read failure — every fluent `http_method` is the
+    # catalog's own literal (never an `argN` read, D02 §4), so it can never
+    # itself fail to resolve; the only way `verb` reads None here is that the
+    # key was never folded in at all.
+    verbless = "http_method" not in captures
     body_argument = captures.get("body")
     response_argument = captures.get("response")
-    # Checkpoint ruling I1, folded in from single_call: a capture that WAS
-    # reached but which the scanner could not read drops the row's
-    # resolution; a capture never reached at all is simply not part of this
-    # chain's declaration and cannot fail it. Presence of the key is what
-    # separates the two — a reached step always writes its declared field,
-    # even when the slot it addresses is empty (I4), so `None` under a key
-    # that exists is a read failure while an absent key is no claim at all.
-    resolution = (
-        "resolved"
-        if url_resolution == "resolved"
-        and _capture_resolved("body" in captures, body_argument)
-        and _capture_resolved("response" in captures, response_argument)
-        else "unresolved"
+    # A chain's own identity comes from EITHER a `url` capture (CP-2's
+    # peer/path split, `aws-sqs-sdk.yml`'s absolute queue URL) OR a
+    # `channel` capture (Task 12: an opaque destination, never split into a
+    # peer — D02 §2's `fluent` style, the same rule `single_call`'s own
+    # `channel_arg` keeps) — `_validate_url_channel_exclusivity` refuses a catalog whose
+    # roots/steps declare both ANYWHERE (checked over their union, not per
+    # entry — fix round 1), so at most one is ever folded in here.
+    # `channel`'s own ladder mirrors
+    # `single_call`/`interface_implementation`'s: try the literal argument
+    # first (`channel_of`), and only fall back to the declared
+    # `channel_via` linked call when the literal itself did not resolve —
+    # `Publisher.newBuilder(String, ...)` genuinely has a same-arity
+    # `TopicName` overload, so the literal read is tried even where
+    # `channel_via` is declared. `linked_channels` may answer several
+    # destinations (`all_strings`); a bare `url`/no-`channel` chain always
+    # collapses to the same one-tuple list `single_call`'s own non-ladder
+    # case builds by hand.
+    destinations: Sequence[tuple[str | None, str | None, str]]
+    if "channel" in captures:
+        channel_argument = captures.get("channel")
+        literal = channel_of(channel_argument)
+        channel_via_forms = captures.get("channel_via") or []
+        if literal[2] != "resolved" and channel_via_forms:
+            destinations = linked_channels(channel_argument, context.facts, channel_via_forms)
+        else:
+            destinations = [literal]
+    else:
+        destinations = [url_of(captures.get("url"))]
+    # Computed once, outside the destinations loop — the same
+    # `single_call` reasoning: neither depends on peer/path/resolution, and
+    # `argument_descriptor` appends to the shared `referenced` accumulator,
+    # so calling it once per row rather than once per destination keeps
+    # that list from carrying the same shape root once per channel.
+    request_shape = argument_descriptor(body_argument, context.facts, context.carrier_rules)
+    response_shape = _response_descriptor(
+        response_argument, captures.get("response_is"), context.facts, context.carrier_rules
     )
-    if path is not None:
-        key = (context.catalog.protocol, context.catalog.direction, str(verb), path)
-        if key in context.seen:
-            return
-        context.seen.add(key)
-    context.rows.append(
-        {
-            "protocol": context.catalog.protocol,
-            "direction": context.catalog.direction,
-            "method": str(verb),
-            "path": path,
-            "handler": None,
-            "caller": context.caller,
-            "peer": peer,
-            "handler_signature": None,
-            "resolution": resolution,
-            "evidence": "compiler",
-            "request_shape": argument_descriptor(
-                body_argument, context.facts, context.carrier_rules
-            ),
-            "response_shape": _response_descriptor(
-                response_argument,
-                captures.get("response_is"),
-                context.facts,
-                context.carrier_rules,
-            ),
-        }
-    )
+    for peer, path, url_resolution in destinations:
+        # Checkpoint ruling I1, folded in from single_call: a capture that
+        # WAS reached but which the scanner could not read drops the row's
+        # resolution; a capture never reached at all is simply not part of
+        # this chain's declaration and cannot fail it. Presence of the key
+        # is what separates the two — a reached step always writes its
+        # declared field, even when the slot it addresses is empty (I4), so
+        # `None` under a key that exists is a read failure while an absent
+        # key is no claim at all. `verb is not None or verbless` is
+        # single_call's own rule (`_verb_of` callers): the missing verb
+        # narrows a verbless row's resolution only when a verb was declared
+        # but unreadable, never when none was ever declared at all — "this
+        # method calls something over a channel" stays true and useful on
+        # its own.
+        resolution = (
+            "resolved"
+            if (verb is not None or verbless)
+            and url_resolution == "resolved"
+            and _capture_resolved("body" in captures, body_argument)
+            and _capture_resolved("response" in captures, response_argument)
+            else "unresolved"
+        )
+        if path is not None and (verb is not None or verbless):
+            # `verb or ""` — single_call's own dedup key (`_matching_method`'s
+            # caller): a verbless row has no method to distinguish it by, so
+            # every verbless resolved identity collapses to `(protocol,
+            # direction, "", path)`, deduping on `(protocol, direction, path)`
+            # alone exactly as the brief requires; a verbed row's own `verb` is
+            # always a non-empty string, so this is unchanged for every shipped
+            # fluent catalog (okhttp/webclient/restclient), none of which is
+            # verbless. `caller` never enters the key — fluent rows carry
+            # `caller`, but outbound producer rows collapse across callers on
+            # wire identity alone, single_call's own established convention
+            # (the interface engine's handler-in-key ruling is for inbound
+            # handler rows and does not apply to an outbound fluent chain).
+            key = (context.catalog.protocol, context.catalog.direction, verb or "", path)
+            if key in context.seen:
+                continue
+            context.seen.add(key)
+        context.rows.append(
+            {
+                "protocol": context.catalog.protocol,
+                "direction": context.catalog.direction,
+                # Not `str(verb)`: a verbless chain's `verb` is genuinely None
+                # (no root ever declared `http_method`), and `str(None)` would
+                # write the literal text "None" into a column NULL is supposed
+                # to mean "no verb" — single_call's own `method: verb` (never
+                # stringified) is the same answer for the same reason.
+                "method": verb,
+                "path": path,
+                "handler": None,
+                "caller": context.caller,
+                "peer": peer,
+                "handler_signature": None,
+                "resolution": resolution,
+                "evidence": "compiler",
+                "catalog_id": context.catalog.id,
+                "request_shape": request_shape,
+                "response_shape": response_shape,
+            }
+        )
 
 
 def _response_descriptor(
@@ -303,7 +414,11 @@ def _matching_root(site: dict[str, Any], roots: list[dict[str, Any]]) -> dict[st
 
 
 def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The one declared step matching `site`, or None where nothing does —
+    """The one declared step matching `site` — the whole entry, `captures`
+    and its optional `when` guard together, since evaluating the guard
+    (D02 §2's `fluent` style) needs `site`'s own arguments, read by
+    `_step_captures` in `_walk` where they are at hand — or None where
+    nothing does:
     "unmatched steps pass through uncaptured" (D02 §4). An owner-less step
     matches any owner; `_validate_steps` already refused any catalog where
     more than one entry could match the same row, so at most one candidate
@@ -311,7 +426,7 @@ def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[st
     name = str(site["name"])
     return next(
         (
-            step["captures"]
+            step
             for step in steps
             if step["method"] == name and step["owner"] in (None, site["owner"])
         ),
@@ -341,19 +456,37 @@ def _validate_steps(steps: list[dict[str, Any]], catalog: Catalog) -> None:
             )
 
 
-def _validate_captures(entries: list[dict[str, Any]], catalog: Catalog) -> None:
-    """Refuses a catalog whose `url`/`body`/`response` capture does not name
-    a call-site position (`ports/catalogs.py`'s own discipline again: an
-    unchecked value does not stay in the file).
+def _validate_captures(
+    entries: list[dict[str, Any]], catalog: Catalog, *, allow_when: bool
+) -> None:
+    """Refuses a catalog whose `url`/`body`/`response`/`channel` capture does
+    not name a call-site position (`ports/catalogs.py`'s own discipline
+    again: an unchecked value does not stay in the file).
 
-    These three fields address an argument by position, and anything that is
+    These four fields address an argument by position, and anything that is
     not `argN` — a typo, a bare number, a field name — silently captures
     nothing: the row still derives, with the payload column NULL and the url
     unresolved, which is indistinguishable from a call site that genuinely
     carries neither. A capture out of *range* is a different answer and
     cannot be checked here, because the range belongs to each matched call
     site rather than to the catalog; ruling I1 already covers it at derive
-    time, where the site is known."""
+    time, where the site is known.
+
+    `url`/`channel` exclusivity is NOT checked here, per entry — that is
+    `_validate_url_channel_exclusivity`'s own job, over the UNION of every
+    root's and every step's own captures (fix round 1: a per-entry-only
+    check let `channel` on one step and `url` on a DIFFERENT step load with
+    no error at all, silently discarding the url capture at derive time —
+    mutation-proven against a real okhttp-shaped probe).
+
+    `when` (D02 §2's `fluent` style) is a STEP's own guard — a root starts
+    the chain, with no prior capture a guard could ever condition, so
+    `allow_when=False`
+    (roots) refuses ANY declared `when` outright, well-formed or not;
+    `allow_when=True` (steps) instead checks the guard is exactly `{arg:
+    int, equals: str}`. Both checked here, at the same load-time pass,
+    rather than only discovered the first time a call site reaches a
+    misplaced or malformed guard."""
     for entry in entries:
         for field, value in entry["captures"].items():
             if field in _ARGUMENT_FIELDS and not _ARG_REFERENCE.match(str(value)):
@@ -362,6 +495,132 @@ def _validate_captures(entries: list[dict[str, Any]], catalog: Catalog) -> None:
                     f"`{field}: {value}`, which is not a call-site position — an argument "
                     f"capture reads `argN` (D02 §4's fluent style)"
                 )
+        when = entry.get("when")
+        if when is None:
+            continue
+        if not allow_when:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: root `{entry['method']}` declares "
+                f"`when` — `when` guards steps only; a root has no prior chain to guard "
+                f"(D02 §2's `fluent` style)"
+            )
+        if not _valid_when(when):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{entry['method']}` declares "
+                f"`when: {when!r}`, which must be `{{arg: int, equals: str}}` exactly "
+                f"(D02 §2's `fluent` style, the value-guarded step)"
+            )
+
+
+def _validate_url_channel_exclusivity(
+    roots: list[dict[str, Any]], steps: list[dict[str, Any]], catalog: Catalog
+) -> None:
+    """Refuses a catalog whose `roots`/`steps`, TAKEN TOGETHER, declare both
+    a `url` capture and a `channel` capture anywhere — the two are
+    different readings of the same identity position (D02 §2's `fluent` style, mirroring
+    `single_call`'s own `url_arg`/`channel_arg` exclusivity), and `_derive`
+    only ever reads one of the two (`"channel" in captures` wins outright,
+    `url_of(captures.get("url"))` otherwise).
+
+    Checked over the UNION of every entry's own captures, never per entry
+    (fix round 1, mutation-proven): a chain's own `captures` dict is folded
+    step by step as the walk proceeds (`_walk`'s own last-wins fold), so
+    `channel` declared on one step and `url` declared on a DIFFERENT step
+    in the SAME catalog still collide in that one running dict by the time
+    `_derive` reads it — a per-entry-only check let exactly this load with
+    no error at all, silently discarding whichever capture folded in
+    first."""
+    fields: set[str] = set()
+    for entry in (*roots, *steps):
+        fields.update(entry["captures"])
+    if "url" in fields and "channel" in fields:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: this catalog's roots/steps declare both "
+            f"`url` and `channel` captures — they are two different readings of the same "
+            f"identity position (D02 §2's `fluent` style, mirroring single_call's own "
+            f"`url_arg`/`channel_arg` exclusivity)"
+        )
+
+
+def _valid_when(when: Any) -> bool:
+    """Whether a declared `when` guard is exactly `{arg: int, equals:
+    str}` — no missing key, no extra key, no wrong-typed value."""
+    return (
+        isinstance(when, dict)
+        and set(when) == _WHEN_KEYS
+        and isinstance(when.get("arg"), int)
+        and isinstance(when.get("equals"), str)
+    )
+
+
+def _merged_captures(entry: dict[str, Any]) -> dict[str, Any]:
+    """An entry's own `captures` plus its `channel_via` ladder (Task 12),
+    when declared — folded into the SAME dict `_resolve_captures`/
+    `_step_captures` already fold forward chain-wide, so a root's own
+    `channel_via` forms travel alongside its `channel` capture through
+    every later step exactly like `http_method`/`response_is` already do
+    (neither is an `argN` position, so both take the same literal
+    pass-through branch in `_resolve_captures`). Only ever called on an
+    entry `_validate_channel_via_entries` already checked, at `run` start —
+    `_channel_via_forms`'s own `_catalog_symbol` conversion is safe here."""
+    captures = dict(entry.get("captures", {}))
+    if "channel_via" in entry:
+        captures["channel_via"] = _channel_via_forms(entry)
+    return captures
+
+
+def _validate_channel_via_entries(entries: list[dict[str, Any]], catalog: Catalog) -> None:
+    """Refuses a broken `channel_via` ladder before any call site is
+    matched, on the RAW (pre-`_catalog_symbol`) `roots`/`steps` entries —
+    the same two-phase discipline `single_call._validate_methods` keeps for
+    its own `channel_via` (shape checked here; `_channel_via_forms`'s
+    symbol conversion only ever runs on an entry this already passed).
+    `channel_via` without a `channel` capture is missing the position it
+    describes — the same `single_call` rule, `_merged_captures` never
+    reaches it because this raises first."""
+    for entry in entries:
+        for form in _channel_via_entries(entry):
+            valid = (
+                isinstance(form, dict)
+                and isinstance(form.get("owner"), str)
+                and isinstance(form.get("method"), str)
+                and (form.get("arg") == "all_strings" or isinstance(form.get("arg"), int))
+            )
+            if not valid:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{entry.get('method')}` declares a "
+                    f"`channel_via` entry that must be `{{owner, method, "
+                    f'arg: int|"all_strings"}}`, got {form!r}'
+                )
+        if "channel_via" in entry and "channel" not in entry.get("captures", {}):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{entry.get('method')}` declares "
+                f"`channel_via` without a `channel` capture — `channel_via` says how to "
+                f"read an instance already named by `channel`, never a destination on its "
+                f"own (D02 §2's `fluent` style, mirroring single_call's own rule)"
+            )
+
+
+def _channel_via_entries(entry: dict[str, Any]) -> list[Any]:
+    """`channel_via`'s `{owner, method, arg}` | `[{...}, ...]` grammar,
+    normalized to a list without touching the entries themselves — the
+    `single_call`/`interface_implementation` precedent, shared in spirit
+    rather than in code (this module owns its own root/step shape, never a
+    `methods`/`registration` row)."""
+    via = entry.get("channel_via")
+    if via is None:
+        return []
+    return via if isinstance(via, list) else [via]
+
+
+def _channel_via_forms(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """`channel_via` entries, each declared `owner` converted to the SCIP
+    symbol form once — only ever called on an entry
+    `_validate_channel_via_entries` already passed, at `run` start."""
+    return [
+        {"owner": _catalog_symbol(form["owner"]), "method": form["method"], "arg": form["arg"]}
+        for form in _channel_via_entries(entry)
+    ]
 
 
 def _terminal_index(
@@ -429,6 +688,49 @@ def _chain_key(site: dict[str, Any]) -> Any:
     return site["receiver"] if site["name"] == "<init>" else site["result"]
 
 
+def _step_captures(step: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]:
+    """The captures one matched step contributes for `site` — plain
+    `_resolve_captures` where the step declares no `when`, and D02 §2's
+    `fluent` style's three-way guard answer otherwise, read off `site`'s own
+    arguments:
+
+    - the guard argument is a string literal equal to `when["equals"]` —
+      the step's own captures apply, exactly as an unguarded step's would;
+    - the guard argument is a string literal, but a DIFFERENT one — the
+      step still matched the chain (D02 §2's `fluent` style: "the step
+      matches the chain either way"), only its captures do not apply, so nothing here
+      overwrites whatever an earlier step already folded in;
+    - anything else (no argument at that position, the wrong kind, or the
+      compiler's own `unresolved`) poisons every ARGUMENT capture this step
+      declares to `_UNRESOLVED_ARGUMENT` — it might have been the guarded
+      key, and an unreadable key must never let a chain preserve an
+      earlier confident answer.
+
+    Only the `_ARGUMENT_FIELDS` are poisoned (final review, minor): every
+    other declared field is a literal the catalog already knows, not a
+    position read off the call site, and none of their readers has an
+    `unresolved` form to fall through to. `channel_via` is the case that
+    proved it — `_merged_captures` folds a step's own ladder in under that
+    same key, so poisoning it replaced a list of `{owner, method, arg}`
+    forms with a one-key mapping, and `linked_channels` iterating that
+    mapping raised `TypeError: string indices must be integers` the moment
+    a later step rewrote `channel` with a readable argument. The same
+    poisoning wrote the mapping itself into `http_method`, which reaches
+    the `method` column unstringified. So a literal a guarded step declares
+    is simply not folded in when the guard could not be read — the step
+    contributed no readable evidence, and an earlier step's own literal is
+    left standing rather than replaced by a value nothing can interpret."""
+    when = step.get("when")
+    if when is None:
+        return _resolve_captures(step["captures"], site)
+    guard = _arg_at(site["arguments"], when["arg"])
+    if guard is not None and guard.get("kind") == "string" and isinstance(guard.get("value"), str):
+        if guard["value"] == when["equals"]:
+            return _resolve_captures(step["captures"], site)
+        return {}
+    return {field: _UNRESOLVED_ARGUMENT for field in step["captures"] if field in _ARGUMENT_FIELDS}
+
+
 def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]:
     """One matched row's own captured values: `url`/`body`/`response` read
     the `argN`-addressed argument off `site` itself (the raw D00 §5 argument,
@@ -447,29 +749,3 @@ def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[st
 def _arg_index(value: Any) -> int | None:
     match = _ARG_REFERENCE.match(str(value))
     return int(match.group(1)) if match else None
-
-
-def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any] | None:
-    if index is None or index >= len(arguments):
-        return None
-    return arguments[index]
-
-
-def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
-    """Checkpoint ruling I1, with exactly single_call's own
-    `_capture_resolved(declared_index, argument)` semantics — `declared` is
-    this engine's form of the same question, since a chain declares a
-    capture by *reaching* a step that names it rather than by a `methods`
-    row's positional slot.
-
-    A capture no step along this chain ever declared cannot fail: it never
-    claimed a payload. A declared one fails both ways it can — its own kind
-    is the compiler's honest `unresolved`, or the step that declared it
-    carries nothing at that position at all (I4: a zero-argument
-    `bodyValue()` overload reached after a good `bodyValue(request)`, whose
-    empty capture wins under last-wins and must therefore drop the row's
-    resolution rather than leave it reading `resolved` beside a NULL
-    payload)."""
-    if not declared:
-        return True
-    return argument is not None and argument.get("kind") != "unresolved"

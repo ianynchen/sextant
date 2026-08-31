@@ -7,8 +7,8 @@ the linking tier that turns per-service analyses into a system. Each phase is it
 plan, ships one *capability* and the frameworks that ride it, and ends with the same
 review discipline.
 
-**Where we actually are.** Seventeen of the seventy-six Java rows in
-[COVERAGE.md](../../COVERAGE.md) §5 are shipped — about 22%. An endpoint carries request and
+**Where we actually are.** Twenty-three of the seventy-six Java rows in
+[COVERAGE.md](../../COVERAGE.md) §5 are shipped — about 30%. An endpoint carries request and
 response contracts field by field, in both directions, with `required` and `nullable`
 resolved; Feign, Retrofit and `@HttpExchange` outbound clients are read (a path a module
 both exposes and calls merges into one endpoint), and a module's analysis exports as a D06
@@ -31,6 +31,7 @@ messaging) both exist.
 | **2B** | Outbound annotation clients + export | delivered (PR #3) | Feign, `@HttpExchange`, Retrofit; the D06 bundle exporter | generalized `annotation_driven`; payload descriptors |
 | **2C** | Call-site HTTP clients | delivered — [spec](../specs/2026-08-29-phase-2c-call-site-clients-design.md) | RestTemplate, WebClient, RestClient, OkHttp; PTR payloads; lambda-body calls | linked `call_site` facts (the dataflow pass); `single_call` + `fluent` engines |
 | **2D** | Messaging | delivered | `@KafkaListener` (class-level + `@KafkaHandler` included), `@JmsListener`, `@SqsListener`, Pub/Sub `subscribeAndConvert`; `KafkaTemplate`/`ReplyingKafkaTemplate`/raw `KafkaProducer`/`JmsTemplate`/`SqsTemplate`/`PubSubTemplate` producers riding 2C's `single_call` engine unchanged; `@SendTo` replies | non-HTTP **wire identity**: NULL method + the path column carrying the destination, no new `endpoints` column |
+| **2E-prep** | Hardening + raw messaging drivers | delivered | `catalog_id` provenance on every `endpoints` row; `channel_via`/`when` catalog vocabulary; six surfaces (seven catalog files) of raw drivers — direct jakarta.jms, AWS SDK v2 `SqsClient`, `KafkaConsumer.subscribe`, Google `Publisher`, `Subscriber`+`MessageReceiver`, `KafkaTemplate.send(Message)`; the session-scoped pipeline fixture (suite ~140s → ~50s) | the sixth engine style, `interface_implementation`, gated by a new `implemented_interfaces` capability |
 | **2E** | Spring inbound completeness | planned | WebFlux functional routing (`RouterFunctions`, `coRouter`), meta-annotations, inherited `@RequestMapping`, `produces`/`consumes` | the `combinator` engine, on 2C's indy groundwork |
 | **2F** | Configuration resolution | planned | `application.yml`/properties into `resolved_config`; environment expressions; **base URLs become real peers**; Spring Cloud Stream and spring-cloud-aws bindings | the `config_join` engine; D02 §2d made real |
 | **L** | Linking and system scope | planned | `participants`, `links`, DR-5 over bundles; the system document; shape provenance fixed structurally | M05/M06 over federated Parquet |

@@ -1,10 +1,11 @@
 """Capability gating (D02 §1, M04) — split out from `endpoints` so a module
 that needs the gate, but not the endpoint-derivation loop itself, does not
-have to import it. `shapes.contracts` is exactly that case: an engine
-registered in `endpoints._ENGINES` may need `contracts`'s call-payload
+have to import it. `shapes.arguments` is exactly that case: an engine
+registered in `endpoints._ENGINES` may need `arguments`'s call-payload
 helpers (D02 §2h), and `endpoints` importing that engine while `contracts`
-imported the gate back from `endpoints` was a real cycle, not a hypothetical
-one — this file is the seam that keeps both directions acyclic."""
+(which `arguments` itself imports) pulled the gate back from `endpoints` was
+a real cycle, not a hypothetical one — this file is the seam that keeps both
+directions acyclic."""
 
 from sextant.application.ports.catalogs import Catalog
 
