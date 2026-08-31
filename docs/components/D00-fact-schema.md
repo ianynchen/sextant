@@ -178,7 +178,7 @@ removed.
 
 ## 5. Fact kinds
 
-Thirteen. Every one exists because a stated requirement consumes it (NFR-6).
+Fourteen. Every one exists because a stated requirement consumes it (NFR-6).
 
 | Kind | Carries | Consumed by |
 |---|---|---|
@@ -189,9 +189,10 @@ Thirteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
 | `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, structured `arguments` | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
+| `field_write` | Constructor symbol, the assigned field's symbol, the source parameter's ordinal | The field resolution ladder (2F) |
 | `constant` | Symbol, value | Topic and URL resolution |
 | `string_literal` | Document, range, enclosing symbol, value | Endpoint literals, log-line search |
-| `config_entry` | Key, raw value, source file, profile | Configuration resolution |
+| `config_entry` | `key_raw`, `key_path`, `value`, source document, `doc_index` (§5c) | Configuration resolution |
 | `dependency` | Coordinates, scope, tier | Classpath tiering, library identity |
 | `deployment` | Service name, ports, kind, source | System linking |
 | `declared_contract` | Protocol, wire identity, references to `declared_shape` facts, **whether the build consumes it** | Endpoint catalog, drift |
@@ -355,6 +356,30 @@ request contract missing a field the callee requires is a real defect; a contrac
 `required` we only inferred from a language default is not evidence that it is safe. That is
 the general `resolution` rule, not a special case for nullability.
 
+### 5c. Configuration entries
+
+**One `config_entry` fact per key, one per configuration file.** The neutral pieces of a
+config file, and nothing more:
+
+- `key_raw` — exactly as written;
+- `key_path` — normalized dot-joined segments; a YAML list normalizes to indexed segments
+  (`foo[0]`, Spring's own canonical form and a neutral one);
+- `value` — verbatim, always a string, never coerced — a value is a claim to resolve, not
+  a typed answer;
+- the source document and `doc_index` — the source file's YAML document index, which a
+  multi-document file's `on-profile` activation needs to tell its documents apart.
+
+**The document's `language` column carries the FORMAT** (`yaml`, `properties`) for a
+config file, never a language name. This is the same discipline that keeps `language`
+itself off individual facts (§2): a field meaning one thing for a config format and
+another for a programming language would be exactly the schema defect NFR-7 forbids, so
+format reuses the one column rather than earning a field of its own.
+
+**A reader is neutral: it never layers, never resolves, and never interprets a profile.**
+Which files matter, in what order, and what a placeholder means, is the resolution side's
+question, answered from catalog data ([D02](D02-catalog-schema.md)) — ingestion only
+reads what is on disk into these fields.
+
 ### Why `module` is a fact and not a passing argument
 
 [M02](M02-detector.md) works out the module inventory and the classpath tiering, and
@@ -426,6 +451,7 @@ recovered later. Kinds:
 | `class` | LDC of a class constant | symbol reference — the shape root |
 | `lambda` | invokedynamic via `LambdaMetafactory` | symbol reference to the lambda's synthetic body method — method references resolve the same way |
 | `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR (§5a) and the one-hop body follow ([D02](D02-catalog-schema.md) §2h). Always carries `source`: the constructed value's id, which is also the `receiver` of that object's own `<init>` call site, so the follow is a join on one number rather than a search for a nearby constructor |
+| `field` | GETFIELD/GETSTATIC that is not the enum-constant shape | symbol reference — the field's own bare descriptor |
 | `null` | ACONST_NULL | |
 | `unresolved` | anything else | a first-class honest answer, never an omission |
 
@@ -439,6 +465,23 @@ every extractor normalizes its own mechanism into it: a JVM `invokedynamic`, a G
 or function value, a Python nested function or reference, a JS arrow or function
 expression. `symbol` names the function's own method/function symbol — the bare
 descriptor, exactly as the JVM extractor emits.
+
+**`field` is the canonical cross-language kind for "this argument reads a declared
+field"** — an argument that reads a declared field, carrying that field's symbol. The
+JVM mapping: a GETFIELD/GETSTATIC that is not the enum-constant shape (the `enum` row
+above) becomes `{kind: field, symbol: <the field's bare descriptor>}` instead of
+`unresolved`; a Python attribute read or a Go struct-field read normalizes into the same
+kind. Strictly additive: an engine that does not consult `field` treats it exactly as it
+always treated `unresolved`.
+
+**`field_write` is a fact of its own, constructors only, direct traces only** — a
+constructor assigns parameter N directly to field F. The JVM mapping: a PUTFIELD inside
+`<init>` whose value traces straight to a parameter produces `{kind: field_write, field:
+<symbol>, from_parameter: N}`; a computed assignment — concatenation, a default
+expression, anything but a direct load of the parameter — emits nothing, and the
+resolution that would have followed it degrades honestly rather than guessing a source.
+Setter injection is deliberately out of this fact's reach — a named gap, not an
+omission.
 
 Every entry additionally carries an optional **`source`** value id when the argument is
 itself another call's result — the join that makes OkHttp's `build()` → `newCall(request)`

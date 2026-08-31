@@ -39,7 +39,7 @@ matches:
 | `style` | Which engine interprets `matches` |
 | `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c |
 | `detect` | Coordinates that make this catalog active for a module |
-| `requires` | Scanner capabilities. **If unmet, the catalog does not run and the skip is reported.** |
+| `requires` | Capabilities — scanner-declared or pipeline-declared (below). **If unmet, the catalog does not run and the skip is reported.** |
 | `matches` | Style-specific |
 
 **Every type name a catalog writes — `owner`, `fqn`, `type` — is dotted**
@@ -53,6 +53,15 @@ than ossifying as a universal one.
 reconstruction simply does not run against a scanner that lacks it, and
 [M04](M04-resolver.md) reports which catalogs were skipped and why. Silently finding fewer
 endpoints is the failure this prevents.
+
+**Capabilities are scanner-declared or pipeline-declared.** Every capability above is
+scanner-declared — earned once, up front, by the scanner that produced a module's facts.
+`resolved_config` ([D01](D01-graph-schema.md)) is the first pipeline-declared capability:
+the pipeline adds it once [M04](M04-resolver.md)'s pass 2 has run, so a catalog naming it
+in `requires` does not run — and is reported skipped, the same as any unmet scanner
+capability — until that pass has produced it in this run. A config-less run therefore
+skips such a catalog visibly, never silently, the guarantee `requires` already gives every
+scanner capability above.
 
 ---
 
@@ -849,17 +858,42 @@ names a channel, not a topic — that is `mp.messaging.incoming.orders.topic`. M
 
 The pattern is constant: **the code carries a name, and configuration says what the name
 means.** Configuration resolution is already a first-class pass, so what is missing is only
-the vocabulary for the derivation. A catalog declares it:
+the vocabulary for the derivation. Two vocabularies read `resolved_config` this way:
+`address_from_config`, below, and `media_from_config` (end of this section), which stamps a
+module's declared media types from the same source rather than an address. A catalog
+declares the first:
 
 ```yaml
 address_from_config:
   key: "spring.cloud.stream.bindings.{binding}.destination"
   binding:
     from: bean_name
+    selected_by: spring.cloud.function.definition
     suffix:
-      - { when: { implements: java.util.function.Consumer }, then: "-in-0" }
-      - { when: { implements: java.util.function.Supplier }, then: "-out-0" }
+      - { when: { implements: java.util.function.Consumer }, then: "-in-0", direction: inbound }
+      - { when: { implements: java.util.function.Supplier }, then: "-out-0", direction: outbound }
+      # A Function is both halves at once: its one entry derives TWO rows,
+      # `-in-0` inbound and `-out-0` outbound, each through the same key template.
+      - { when: { implements: java.util.function.Function }, then: ["-in-0", "-out-0"] }
 ```
+
+**A candidate bean is a method whose return type is, or implements, one of the declared
+interfaces** — checked on the returned type through the `interfaces` facts the
+`interface_implementation` style already reads ([D00](D00-fact-schema.md) §5a's
+`implemented_interfaces` capability) — **and its bean name is the method's own name**,
+Spring's own default, stated here so no later pass re-derives it.
+
+**`selected_by` names a configuration key that narrows the candidate set**, read through
+`resolved_config`: absent, every candidate binds — Spring's own default when
+`spring.cloud.function.definition` is not set. A `definition` value containing `|`
+composes two or more functions into one binding and is not decomposed here — the
+vocabulary records the whole expression rather than guessing which function contributed
+which half.
+
+**Each `suffix` entry carries its own `direction`.** A `Consumer` is inbound, a `Supplier`
+outbound; **a `Function` is both halves at once, and its one entry derives TWO rows** —
+`-in-0` inbound and `-out-0` outbound, each built through the same key template — rather
+than a single row whose direction cannot say which.
 
 **Three layers, in order of authority.** The catalog rule is primary, because this is
 framework knowledge and framework knowledge belongs in data — five rules written once beat
@@ -877,6 +911,39 @@ inherits that precedence and renders as unconfirmed.
 configuration source, the endpoint is still recorded with its address as the unresolved
 expression, and the coverage report names the key that was not found. Dropping it would make
 a partially-configured module look like a module with fewer boundaries.
+
+**`media_from_config` stamps declared media onto messaging endpoints from the same resolved
+keys, rather than deriving an address:**
+
+```yaml
+media_from_config:
+  rules:
+    - { key: spring.kafka.producer.value-serializer,   fills: produces, on: { protocol: kafka, direction: outbound } }
+    - { key: spring.kafka.consumer.value-deserializer, fills: consumes, on: { protocol: kafka, direction: inbound } }
+  values:
+    org.springframework.kafka.support.serializer.JsonSerializer: application/json
+    org.apache.kafka.common.serialization.StringSerializer: text/plain
+    org.apache.kafka.common.serialization.ByteArraySerializer: application/octet-stream
+```
+
+Each `rules` entry names a resolved config key, which of `consumes`/`produces`
+([D01](D01-graph-schema.md) §3) it fills, and the `(protocol, direction)` pair of rows it
+applies to; `values` maps the resolved class name to the MIME string it means — the
+config-declared evidence kind [D01](D01-graph-schema.md) §3 already reserves a place for.
+
+**A stamp lands only where every resolved environment agrees.** A serializer that differs
+across environments leaves the column NULL with the disagreement recorded as a degrade —
+[D01](D01-graph-schema.md)'s `consumes`/`produces` are single-valued, so a per-environment
+split cannot be forced into one column without inventing an answer neither environment gave
+alone. **A stamp never overwrites a non-NULL column** — the same first-writer discipline
+every other media-declaring evidence kind already follows. **An unresolved or unknown
+serializer class stamps nothing**: the class name still lands in `resolved_config`
+regardless, which is what a later format-inference pass reads; a class absent from `values`
+is a gap to grow the catalog from, not a guess.
+
+The engine that runs both `address_from_config` and `media_from_config` — `config_join`,
+the eighth style — gets its own full section once a later task delivers it; this section
+specifies the vocabulary the two jobs read.
 
 ---
 
@@ -1022,6 +1089,57 @@ payload; the engine follows exactly that one hop and stops. Beyond one hop, or w
 `call_wrappers` entry matches
 the `instance` type, the body stays `unresolved` — an envelope Sextant does not know is not
 one worth guessing through.
+
+---
+
+## 2i. The configuration model
+
+Which files matter, in what order, and what a placeholder means is framework knowledge
+too — Spring's own layering of `application.yml` over `bootstrap.yml`, its own profile
+spellings, its own `${key:default}` grammar — so it is catalog data, read by
+[M04](M04-resolver.md)'s pass 2 ([D01](D01-graph-schema.md)) rather than assumed by the
+engine. **The model is a new top-level, optional catalog block, one per framework family.**
+Spring's ships in 2F:
+
+```yaml
+config_model:
+  sources:                      # precedence order, lowest first
+    - { pattern: "bootstrap{-profile}.properties" }
+    - { pattern: "bootstrap{-profile}.yml" }
+    - { pattern: "application{-profile}.properties" }
+    - { pattern: "application{-profile}.yml" }
+  profiles:
+    from_filename: "{-profile}"
+    from_document_key: spring.config.activate.on-profile
+    default_profile: default
+  placeholders: { open: "${", close: "}", default_separator: ":" }
+  key_matching: relaxed          # relaxed | exact
+```
+
+**`sources` is precedence order, lowest first** — a later source in the list, and a
+profile variant of any source, both win over what came before. Each entry's `pattern` is
+matched against files under the module's resource roots; a module missing a listed source
+simply contributes nothing from it.
+
+**Profile spelling is a closed three-mechanism vocabulary** — `from_filename`,
+`from_document_key`, and `from_key_prefix` (reserved for Quarkus's `%dev.` prefix style,
+documented now, unimplemented until a Quarkus catalog exists). **The filename marker
+generalizes: a `{profile}` (or `{-profile}`) placeholder may sit ANYWHERE in a source
+pattern** — `application{-profile}.yml` for Spring, `{profile}.json` for a node-config
+layout whose whole filename is the profile — with the empty match naming the base file.
+No regex-in-YAML anywhere; the placeholder grammar is delimiters plus a default separator,
+which covers every surveyed ecosystem.
+
+**`placeholders` declares the open/close delimiters and the default-value separator** a
+`${key:default}` expression resolves through — nothing more. No ecosystem-specific
+escaping rules live here; a delimiter pair and one separator character are what every
+surveyed placeholder grammar reduces to.
+
+**`key_matching` is a closed two-value set governing how a `config_entry`'s normalized
+`key_path` ([D00](D00-fact-schema.md) §5c) is compared against a catalog-declared key
+template.** `relaxed` tolerates Spring's own RELAXED binding — kebab-case, camelCase and
+`ENV_VAR` style all matching one canonical key; `exact` requires a literal match. A
+catalog declares which its framework uses; the pass never guesses.
 
 ---
 
