@@ -375,6 +375,8 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
                 "catalog_id": context.catalog.id,
                 "request_shape": request_shape,
                 "response_shape": response_shape,
+                "consumes": None,
+                "produces": None,
             }
         )
 

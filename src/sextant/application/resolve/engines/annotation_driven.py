@@ -179,4 +179,6 @@ def _reply_row(
         "catalog_id": catalog.id,
         "request_shape": request_shape,
         "response_shape": None,
+        "consumes": None,
+        "produces": None,
     }

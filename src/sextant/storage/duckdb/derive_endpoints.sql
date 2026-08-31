@@ -42,7 +42,7 @@
 -- shape pass's job, not the annotation-driven endpoint engine's.
 INSERT INTO endpoints (
     protocol, direction, method, path, handler, caller, peer,
-    handler_signature, resolution, evidence, catalog_id
+    handler_signature, resolution, evidence, catalog_id, consumes, produces
 )
 WITH mapping_catalog AS (
     SELECT s.fqn AS fqn, s.methods AS methods
@@ -136,7 +136,11 @@ derived AS (
         s.signature AS handler_signature,
         'resolved'  AS resolution,
         'compiler'  AS evidence,
-        $catalog_id AS catalog_id
+        $catalog_id AS catalog_id,
+        -- Task 5 replaces these literals with mapping-attribute media
+        -- (spec §4 evidence kind (a)); every other engine passes NULL too.
+        NULL        AS consumes,
+        NULL        AS produces
     FROM mappings m
     -- A handler or caller is always a method. Without this, a TYPE-level
     -- mapping annotation (a prefix-carrying @HttpExchange, a class-level

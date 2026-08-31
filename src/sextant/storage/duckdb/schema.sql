@@ -30,7 +30,12 @@ CREATE TABLE IF NOT EXISTS endpoints (
     -- compared across services.
     catalog_id        TEXT,
     request_shape     TEXT,
-    response_shape    TEXT
+    response_shape    TEXT,
+    -- JSON arrays of MIME strings, or NULL where no declaration is
+    -- derivable from any evidence source (2E-prep spec §4): carried data,
+    -- never identity — dedup and merge never compare these two columns.
+    consumes          TEXT,
+    produces          TEXT
 );
 
 -- Pre-declared for the same reason as `endpoints` above: a scanner too weak

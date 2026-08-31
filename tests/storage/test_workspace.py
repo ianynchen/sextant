@@ -484,6 +484,46 @@ def test_endpoints_carry_the_two_shape_columns(tmp_path: Path):
     assert columns == []
 
 
+def test_media_columns_round_trip_and_never_join_into_dedup_identity(tmp_path: Path):
+    """Spec §4: `consumes`/`produces` are carried data, never identity — the
+    dedup `NOT EXISTS` join in `derive_call_endpoints.sql` compares only wire
+    identity. A first row's declared media round-trips through the table, and
+    a second row sharing the same wire identity but declaring different media
+    must not insert — proving the join really excludes these two columns.
+
+    Two separate `derive` calls, not one two-row batch: `NOT EXISTS` is
+    evaluated against the table as it stood before the statement began (the
+    file's own documented caveat), so a single batch would never exercise the
+    dedup path this test is pinning."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+
+    def _row(consumes: str | None, produces: str | None) -> dict:
+        return {
+            "protocol": "http",
+            "direction": "outbound",
+            "method": "POST",
+            "path": "/orders",
+            "handler": None,
+            "caller": "com/acme/notify/OrderPublisher#publish(sig_1a2b3c4d).",
+            "peer": None,
+            "handler_signature": None,
+            "resolution": "resolved",
+            "evidence": "compiler",
+            "catalog_id": "cat-out",
+            "request_shape": None,
+            "response_shape": None,
+            "consumes": consumes,
+            "produces": produces,
+        }
+
+    workspace.derive("call_endpoints", rows=[_row('["application/json"]', None)])
+    workspace.derive("call_endpoints", rows=[_row('["application/xml"]', '["application/json"]')])
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["consumes"], r["produces"]) for r in rows] == [('["application/json"]', None)]
+
+
 def test_query_rejects_a_name_that_is_not_a_named_query(tmp_path: Path):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:

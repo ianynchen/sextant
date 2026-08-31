@@ -24,24 +24,27 @@
 -- Parameters:
 --   $rows -- {protocol, direction, method, path, handler, caller, peer,
 --             handler_signature, resolution, evidence, catalog_id,
---             request_shape, response_shape} rows, one per matching call
---             site, already deduplicated on wire identity by the pass.
---             `catalog_id` (2E-prep design §1a) is the id of the catalog
---             that built the row — provenance only, never part of wire
---             identity.
+--             request_shape, response_shape, consumes, produces} rows, one
+--             per matching call site, already deduplicated on wire identity
+--             by the pass. `catalog_id` (2E-prep design §1a) is the id of
+--             the catalog that built the row — provenance only, never part
+--             of wire identity. `consumes`/`produces` (2E-prep spec §4) are
+--             carried data, never identity — every engine but Task 5's
+--             Spring pass passes NULL for both.
 INSERT INTO endpoints (
     protocol, direction, method, path, handler, caller, peer,
-    handler_signature, resolution, evidence, catalog_id, request_shape, response_shape
+    handler_signature, resolution, evidence, catalog_id, request_shape, response_shape,
+    consumes, produces
 )
 SELECT r.protocol, r.direction, r.method, r.path, r.handler, r.caller, r.peer,
        r.handler_signature, r.resolution, r.evidence, r.catalog_id, r.request_shape,
-       r.response_shape
+       r.response_shape, r.consumes, r.produces
 FROM (SELECT UNNEST(
     $rows::STRUCT(
         protocol VARCHAR, direction VARCHAR, method VARCHAR, path VARCHAR,
         handler VARCHAR, caller VARCHAR, peer VARCHAR, handler_signature VARCHAR,
         resolution VARCHAR, evidence VARCHAR, catalog_id VARCHAR,
-        request_shape VARCHAR, response_shape VARCHAR
+        request_shape VARCHAR, response_shape VARCHAR, consumes VARCHAR, produces VARCHAR
     )[]
 ) AS r)
 WHERE NOT EXISTS (

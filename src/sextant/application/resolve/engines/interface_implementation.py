@@ -132,6 +132,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     "catalog_id": catalog.id,
                     "request_shape": None,
                     "response_shape": None,
+                    "consumes": None,
+                    "produces": None,
                 }
             )
 
