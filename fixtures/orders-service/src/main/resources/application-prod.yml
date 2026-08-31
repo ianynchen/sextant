@@ -1,0 +1,17 @@
+# application-prod.yml — the "prod" filename-profile variant, layered over
+# application.yml (config_model.profiles.from_filename). only.in.default is
+# deliberately never mentioned here — the per-env unresolved pin.
+
+# Overrides application.yml's billing.url for prod.
+billing:
+  url: http://billing.prod.internal
+
+# Repeats application.yml's kafka serializer keys with the SAME value, so
+# the media stamp sees agreement across every resolved environment (2F
+# design §3, job 2).
+spring:
+  kafka:
+    producer:
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      value-deserializer: org.springframework.kafka.support.serializer.JsonSerializer

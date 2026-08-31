@@ -36,6 +36,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ApiGet.jsonl",
         "AuditJmsListener.jsonl",
         "BillingClient.jsonl",
+        "BillingClients$BillingProperties.jsonl",
+        "BillingClients.jsonl",
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
         "ClassLevelListener.jsonl",
@@ -66,6 +68,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderRoutes.jsonl",
         "OrderService.jsonl",
         "OrderStatus.jsonl",
+        "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
         "OrderView.jsonl",
         "OrdersApi.jsonl",
@@ -85,7 +88,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]
-    assert report.documents == 51
+    assert report.documents == 54
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -109,6 +112,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "ApiGet.jsonl",
         "AuditJmsListener.jsonl",
         "BillingClient.jsonl",
+        "BillingClients$BillingProperties.jsonl",
+        "BillingClients.jsonl",
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
         "ClassLevelListener.jsonl",
@@ -139,6 +144,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderRoutes.jsonl",
         "OrderService.jsonl",
         "OrderStatus.jsonl",
+        "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
         "OrderView.jsonl",
         "OrdersApi.jsonl",

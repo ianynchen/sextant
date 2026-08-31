@@ -1,0 +1,7 @@
+# bootstrap.yml — lowest precedence in config_model.sources (2F design §2):
+# both bootstrap{-profile}.* patterns sort before both application{-profile}.*
+# patterns. `boot.layer.probe` here must lose to application.yml's own value
+# for the same key once the layering pass runs — the layering-order pin.
+boot:
+  layer:
+    probe: bootstrap-value

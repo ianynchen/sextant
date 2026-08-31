@@ -1,6 +1,9 @@
 // The JMS half: a typed listener (payload converted to OrderEvent) beside a
 // raw one (the `jakarta.jms.Message` envelope itself), same `destination`
-// attribute shape on both.
+// attribute shape on both. `onAudit`'s destination is a placeholder
+// (application.yml supplies `orders.audit.topic: audit-events`) — the
+// row's own identity stays the expression verbatim per M04, never the
+// resolved value.
 package com.acme.orders.messaging;
 
 import com.acme.orders.contracts.OrderEvent;
@@ -9,7 +12,7 @@ import org.springframework.jms.annotation.JmsListener;
 
 public class AuditJmsListener {
 
-    @JmsListener(destination = "audit.queue")
+    @JmsListener(destination = "${orders.audit.topic}")
     public void onAudit(OrderEvent event) {
     }
 

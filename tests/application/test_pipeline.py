@@ -347,6 +347,16 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `record_arg` row for this SAME call, which shares the existing
         # `(None, None)` tuple, so the SET gains only this one new entry.
         (None, "raw-messages"),
+        # 2F Task 3 (the configuration surface fixture): `AuditJmsListener
+        # #onAudit`'s destination literal moves to the placeholder
+        # `${orders.audit.topic}` (application.yml supplies the value) —
+        # `@JmsListener.destination` is read as a string literal regardless
+        # of its placeholder content, so the row still resolves, only under
+        # a new identity. `(None, "audit.queue")` above stays in the set too
+        # — `EventProducers#sendAuditMessage`'s own send no longer shares an
+        # identity with the listener, so it now stands unmerged (asserted
+        # below) rather than disappearing into `direction: both`.
+        (None, "${orders.audit.topic}"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -460,7 +470,32 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # `GET /kt/rich`, handler NULL on all three). 72 + 10 = 82 — exactly the
     # checkpoint's own frozen target (checkpoint item (5)). Verified live
     # against real bytecode, not computed from the brief alone.
-    assert len(report.endpoints) == 82
+    #
+    # 2F Task 3 (the configuration surface fixture) adds 5 more. Four are
+    # `BillingClients`' own half-2 WebClient chains (`fieldFedInvoice`/
+    # `constructorFedInvoice`/`propertiesFedInvoice`/`computedBaseInvoice`):
+    # each chain's `.uri()` argument is a field read, a properties-getter
+    # call result, or a computed concatenation — never a string literal —
+    # so `url_of` degrades every one honestly to `path: NULL, resolution:
+    # unresolved` (the `field` argument kind doesn't exist until Task 5;
+    # today every one of these reads as the compiler's own `unresolved`
+    # kind). All four share the `(GET, None)` tuple the route set already
+    # holds (InventoryWebClient#search), so the SET gains no new entry for
+    # them even though this count does. `OrderStreamBindings`' four
+    # `@Bean Consumer<OrderEvent>`/`Supplier<OrderEvent>` methods derive
+    # nothing at all under the shipped engines (no `single_call`/`fluent`
+    # root inside a trivial lambda body) — `config_join` (Task 7) is what
+    # eventually reads them. The fifth new row is `AuditJmsListener#onAudit`
+    # moving to `${orders.audit.topic}`: its previous merge with
+    # `EventProducers#sendAuditMessage`'s own `"audit.queue"` send no longer
+    # fires (different literal strings), so the send stands unmerged —
+    # `(None, "audit.queue")` keeps its existing tuple in the SET, but the
+    # table itself gains a genuine second row (`onAudit`'s inbound row moves
+    # to its own new identity; `sendAuditMessage`'s outbound row survives
+    # standalone rather than being deleted by the merge). 82 + 5 = 87.
+    # Verified live against real bytecode, not computed from the brief
+    # alone — this is Task 3's own frozen baseline for Tasks 4-8.
+    assert len(report.endpoints) == 87
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
@@ -769,9 +804,13 @@ def test_a_jms_listener_resolves_its_converted_payload(
 ):
     """`onAudit(OrderEvent event)`: `@JmsListener.destination` is genuinely
     scalar in bytecode (unlike Kafka's `topics`), and the sole bare
-    parameter resolves as the payload."""
+    parameter resolves as the payload. 2F Task 3: the destination literal
+    is now the placeholder `${orders.audit.topic}` — a `JmsListener`
+    destination is always read as a string literal regardless of its
+    placeholder content, so the row still resolves and its own identity is
+    the expression verbatim (M04's rule: nothing here interprets it)."""
     _, report = resolved_fixture
-    [audit] = _messaging_rows(report, "jms", "audit.queue")
+    [audit] = _messaging_rows(report, "jms", "${orders.audit.topic}")
 
     assert json.loads(audit["request_shape"])["shape_id"] == (
         "com/acme/orders/contracts/OrderEvent#"
@@ -993,19 +1032,29 @@ def test_a_kafka_templates_message_send_derives_a_second_distinct_unresolved_row
     assert row["request_shape"] is None
 
 
-def test_a_jms_templates_destination_derives_and_merges_with_its_listener(
+def test_a_jms_templates_destination_no_longer_merges_once_its_listener_moves_to_a_placeholder(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """`jmsTemplate.convertAndSend("audit.queue", event)` merges with Task
-    10's own `AuditJmsListener#onAudit` inbound row into `direction: both`,
-    keeping the handler's own converted-payload contract."""
+    """`jmsTemplate.convertAndSend("audit.queue", event)` used to merge with
+    Task 10's own `AuditJmsListener#onAudit` inbound row into `direction:
+    both`. 2F Task 3 moves `onAudit`'s own destination to the placeholder
+    `${orders.audit.topic}` (application.yml supplies the value) — a
+    different literal string from this call's own `"audit.queue"`, so the
+    wire-identity merge no longer fires: this row now stands on its own,
+    unmerged, `direction: outbound`. Its own `event` argument is a bare,
+    pass-through parameter of `sendAuditMessage(OrderEvent event)` — D00
+    §5's `unresolved` kind, the same capture failure Task 11's `order-raw`
+    row already pins — so `resolution` reads `unresolved` even though the
+    destination literal itself resolves the `path` cleanly; this was always
+    true, just invisible under the merge before this task."""
     _, report = resolved_fixture
     [row] = _messaging_rows(report, "jms", "audit.queue")
 
-    assert row["direction"] == "both"
-    assert row["handler"].endswith("AuditJmsListener#onAudit(sig_b2a754d9).")
+    assert row["direction"] == "outbound"
+    assert row["handler"] is None
     assert row["caller"].endswith("EventProducers#sendAuditMessage(sig_b2a754d9).")
-    assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
+    assert row["resolution"] == "unresolved"
+    assert row["request_shape"] is None
 
 
 def test_a_destination_less_jms_send_derives_an_unresolved_null_path_row(

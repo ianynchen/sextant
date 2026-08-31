@@ -166,6 +166,17 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # DSLs, none merging with anything already in the fixture. See
     # `test_pipeline.py`'s own dedicated row-level test for the full
     # per-row breakdown.
+    #
+    # 2F Task 3 (the configuration surface fixture): +4 http outbound —
+    # `BillingClients`' own four half-2 WebClient chains, each an
+    # unresolved `(None, None)` row (a field read, a properties-getter call
+    # result, or a computed concatenation at `.uri()`'s own position, never
+    # a string literal). jms/kafka/pubsub/sqs are unchanged: `onAudit`'s own
+    # move to `${orders.audit.topic}` splits its previous `both`-direction
+    # merge with `sendAuditMessage`'s send into two standalone rows (one
+    # inbound, one outbound) rather than changing either bucket's total —
+    # see `test_pipeline.py`'s own dedicated row-level test. `82 + 5 = 87`
+    # total, Task 3's own frozen baseline for Tasks 4-8.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "http": 31,
@@ -175,7 +186,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "sqs": 1,
     }
     assert metadata["endpoints"]["outbound"] == {
-        "http": 19,
+        "http": 23,
         "jms": 3,
         "kafka": 9,
         "pubsub": 4,
@@ -235,4 +246,15 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # WebFlux functional-routing tree, both DSLs), outbound and `both`
     # unchanged: 34 + 10 = 44 — the checkpoint's own frozen 82-endpoint
     # total (6 + 44 + 32 = 82).
-    assert rows == [("both", 6), ("inbound", 44), ("outbound", 32)]
+    # 2F Task 3 (the configuration surface fixture): `BillingClients`' four
+    # half-2 WebClient chains add 4 outbound rows (each unresolved,
+    # `.uri()`'s own argument never a string literal — see
+    # `test_pipeline.py`). `AuditJmsListener#onAudit`'s destination moves to
+    # `${orders.audit.topic}`, a different literal from
+    # `EventProducers#sendAuditMessage`'s own `"audit.queue"` — the wire-
+    # identity merge that used to fold both into one `both` row no longer
+    # fires, so it splits into one standalone inbound row (`onAudit`) and
+    # one standalone outbound row (`sendAuditMessage`): `both` 6 - 1 = 5,
+    # inbound 44 + 1 = 45, outbound 32 + 1 + 4 = 37 — Task 3's own frozen
+    # 87-endpoint total (5 + 45 + 37 = 87).
+    assert rows == [("both", 5), ("inbound", 45), ("outbound", 37)]
