@@ -166,7 +166,7 @@
 **Interfaces:** Consumes everything shipped; produces the phase's documentation close-out.
 
 - [ ] **Step 1: Renderer + metadata** per the file list; the unresolved-key line renders reason and environment (`only.in.default — missing_key in prod`).
-- [ ] **Step 2: COVERAGE flips + boundaries; roadmap; module docs.** Verify no doc still calls pass 2 planned.
+- [ ] **Step 2: COVERAGE flips + boundaries; roadmap; module docs.** Verify no doc still calls pass 2 planned. Also correct §5.12's Spring Integration row (user-caught): its "`config_join` — D02 §2d, Phase 2F" tag overpromises — 2F ships the ENGINE, not that catalog; reword to "rides 2F's `config_join` once catalogued" with its tier unchanged.
 - [ ] **Step 3: Matrix + volume + full close.** `python scripts/coverage_matrix.py` + `--check`; fact volume vs the pre-2F baseline in the commit body; full suite + both e2e determinism runs green. Commit: `docs: 2F close-out — coverage, roadmap, environments live`
 
 ---
