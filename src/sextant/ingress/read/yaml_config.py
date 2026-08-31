@@ -65,7 +65,12 @@ def _flatten(value: object, prefix: str, doc_index: int, document_id: str) -> li
             # No relaxed-binding normalization happens at ingestion (M04
             # pass 2's `key_matching` catalog knob owns that) — the dotted
             # path is built purely by joining the literal keys as written,
-            # so key_raw and key_path name the same string here.
+            # so key_raw and key_path name the same string here. The two
+            # fields genuinely diverge for a flat format whose own raw
+            # spelling can need unescaping — see PropertiesReader's
+            # `_entry` (2F review fix round 1) — but joining already-literal
+            # segments is not that kind of transform, so nothing to
+            # unescape ever arises here.
             key_raw=prefix,
             key_path=prefix,
             value=value if isinstance(value, str) else str(value),

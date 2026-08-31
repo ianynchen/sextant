@@ -75,6 +75,23 @@ def test_properties_reader_skips_comments_and_blank_lines(tmp_path: Path):
     assert [entry.key_raw for entry in facts] == ["key"]
 
 
+def test_properties_reader_treats_a_backslash_escaped_delimiter_as_key_content(tmp_path: Path):
+    # 2F review fix round 1: the naive first-`:`-or-`=` scan mis-parses
+    # `a\:b=v` as key `a\` / value `b=v`. Per the Java properties spec, a
+    # backslash-escaped delimiter is key content, not the split point.
+    file = _write(tmp_path, "application.properties", "a\\:b=v\n")
+    _, facts = _read_one(PropertiesReader(), tmp_path, file)
+
+    assert len(facts) == 1
+    entry = facts[0]
+    # key_raw keeps the as-written, still-escaped spelling...
+    assert entry.key_raw == "a\\:b"
+    # ...key_path carries the unescaped form — the raw-vs-path distinction
+    # D00 §5c states, made real for the first time by a flat format.
+    assert entry.key_path == "a:b"
+    assert entry.value == "v"
+
+
 def test_properties_reader_skips_a_malformed_line_without_failing_the_file(tmp_path: Path):
     file = _write(tmp_path, "application.properties", "not-a-valid-line\nkey=value\n")
     document, facts = _read_one(PropertiesReader(), tmp_path, file)
@@ -158,6 +175,25 @@ def test_yaml_reader_never_coerces_a_scalar_that_looks_typed(tmp_path: Path):
     assert all(isinstance(value, str) for value in values.values())
 
 
+def test_yaml_reader_document_fields_mirror_a_scanner_emitted_document(tmp_path: Path):
+    # 2F review fix round 1: pins the same Document-field contract the
+    # properties reader's equivalent test pins above — both readers share
+    # `build_document`, but each path (and `language`) is worth asserting
+    # on its own rather than trusting the shared helper by inference.
+    file = _write(tmp_path, "sub/application.yml", "key: value\n")
+    document, _ = _read_one(YamlConfigReader(), tmp_path, file)
+
+    assert document.relative_path == "sub/application.yml"
+    assert document.module_id == "com.acme:orders"
+    assert document.language == "yaml"
+    assert document.scanner_id == "sextant-config-reader"
+    assert document.origin_tier == OriginTier.MODULE_OUTPUT
+    assert document.content_hash.startswith("sha256:")
+    assert document.document_id  # a non-empty derived id
+    assert not document.partial
+    assert document.partial_reason is None
+
+
 def test_yaml_reader_degrades_honestly_on_an_unparseable_file(tmp_path: Path):
     file = _write(tmp_path, "application.yml", "a: [unclosed\n")
     document, facts = _read_one(YamlConfigReader(), tmp_path, file)
@@ -168,6 +204,19 @@ def test_yaml_reader_degrades_honestly_on_an_unparseable_file(tmp_path: Path):
 
 
 # --- Shared discovery/grouping helpers ------------------------------------
+
+
+def test_list_files_sorts_by_relative_path_string_not_path_parts(tmp_path: Path):
+    # 2F review fix round 1: `Path.__lt__` compares parts tuples, not the
+    # rendered string — `("a", "b.yml")` sorts before `("a.yml",))`
+    # because a shorter first segment always sorts first regardless of what
+    # follows it, the reverse of comparing the relative path *strings*
+    # `"a.yml"` and `"a/b.yml"` (`.` sorts before `/`), which is what NFR-1
+    # actually means by "sorted by relative path."
+    a_yml = _write(tmp_path, "a.yml", "a: 1\n")
+    a_b_yml = _write(tmp_path, "a/b.yml", "a: 1\n")
+
+    assert list_files(tmp_path) == (a_yml, a_b_yml)
 
 
 def test_list_files_returns_every_file_sorted_by_relative_path(tmp_path: Path):
