@@ -49,6 +49,21 @@ def member_name(descriptor: str) -> str:
     return descriptor.rpartition("#")[2].removesuffix(".")
 
 
+def method_name(descriptor: str) -> str:
+    """The method's plain name, with its trailing signature-hash argument
+    list stripped (D00 §5a's `sig_...` disambiguator) — the identifier a
+    compiler bridge shares with the real, differently-descriptored override
+    it stands in for (2E checkpoint item (4)). `member_name` alone cannot
+    tell the two apart: both `find(sig_95a78dff)` and `find(sig_4cb6f523)`
+    already differ there, by design, since the disambiguator is what makes
+    the descriptor form join-safe. This strips one layer further, to the
+    name a same-class same-name conflict actually shares. A descriptor with
+    no parameter list (a field, a type) returns `member_name` unchanged."""
+    name = member_name(descriptor)
+    head, paren, _ = name.partition("(")
+    return head if paren else name
+
+
 def type_descriptor(dotted: str) -> str:
     """Converts a catalog's dotted type name to the SCIP symbol form the facts
     use.

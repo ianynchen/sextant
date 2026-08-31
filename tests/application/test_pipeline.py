@@ -122,6 +122,26 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # only). `ComposedController` carries `@RestController` and no
         # class-level `@RequestMapping`, so no prefix applies.
         ("GET", "/composed"),
+        # Phase 2E Task 7 (inherited mappings): the OpenAPI-generator
+        # pattern — `OrdersApi` declares mappings, `OrdersApiController`
+        # implements it with bare `@Override`s carrying none of their own.
+        # `/api/orders`: the interface's own `@GetMapping("/orders")` on
+        # `list()`, inherited onto the implementation and prefixed by the
+        # interface's own class-level `@RequestMapping("/api")` — neither of
+        # which `OrdersApiController` (only `@RestController`) repeats.
+        # `/api/composed`: the composed-AND-inherited case — `@ApiGet` on
+        # `OrdersApi#composed` composes to a real `@RequestMapping` (Task 6)
+        # BEFORE this task's own inheritance walk has anything to resolve.
+        # NOT here, and asserted absent below: `/api/orders/{id}` —
+        # `OrdersApiController#find` returns the covariant
+        # `DetailedOrderResult`, a different descriptor from the interface's
+        # `find`, so the real override misses the join honestly; the
+        # compiler's own bridge method DOES carry the interface's exact
+        # descriptor and would join if left alone, so its exclusion
+        # (checkpoint item (4)'s structural rule) is load-bearing here, not
+        # a nicety.
+        ("GET", "/api/orders"),
+        ("GET", "/api/composed"),
         # Outbound (Phase 2B): the client interfaces' declared calls.
         ("POST", "/billing/invoices"),
         ("GET", "/billing/invoices"),
@@ -379,10 +399,36 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # `@RequestMapping`) and `composed-orders` (kafka inbound,
     # `ComposedListener#onComposedEvent`'s `@OrderTopicListener` resolving
     # through `@KafkaListener`) — neither merges with anything already in
-    # the fixture. 68 + 2 = 70. Verified live against real bytecode, not
-    # computed from the brief alone.
-    assert len(report.endpoints) == 70
+    # the fixture. 68 + 2 = 70.
+    #
+    # Phase 2E Task 7 (inherited mappings) adds 2 more: `GET /api/orders`
+    # and `GET /api/composed`, neither merging with anything already in the
+    # fixture. `GET /api/orders/{id}` — the naive join's target, per
+    # checkpoint item (4) — is asserted absent below rather than merely
+    # omitted from the route set above (the honesty pin: a join that DID
+    # leak here would silently inflate this same count, and a set
+    # comparison alone would not say which row was extra). 70 + 2 = 72.
+    # Verified live against real bytecode, not computed from the brief
+    # alone.
+    assert len(report.endpoints) == 72
     assert report.skipped_catalogs == []
+    assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
+
+    # Task 7: `handler_signature` comes from the IMPLEMENTING method (spec
+    # §3's own boundary sentence), never the interface's — shapes and
+    # nullability derive from the real implementation types even when, as
+    # here, both happen to declare the identical signature.
+    inherited_handlers = {
+        (e["method"], e["path"]): e["handler"]
+        for e in report.endpoints
+        if e["path"] in ("/api/orders", "/api/composed")
+    }
+    assert inherited_handlers[("GET", "/api/orders")].endswith(
+        "OrdersApiController#list(sig_3f061508)."
+    )
+    assert inherited_handlers[("GET", "/api/composed")].endswith(
+        "OrdersApiController#composed(sig_d5afb768)."
+    )
 
     directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
     assert directions[("POST", "/billing/invoices")] == "outbound"

@@ -11,17 +11,20 @@ its place."""
 import json
 from pathlib import Path
 
-from sextant.application.resolve.effective_annotations import composed_mapping_rows
+from sextant.application.resolve.effective_annotations import composed_mapping_rows, inherited_rows
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
+from sextant.domain.symbols import bare_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 _REQUEST_MAPPING = "org/springframework/web/bind/annotation/RequestMapping#"
+_GET_MAPPING = "org/springframework/web/bind/annotation/GetMapping#"
 _API_GET = _MODULE + "com/acme/orders/composed/ApiGet#"
 _API_GET_DESCRIPTOR = "com/acme/orders/composed/ApiGet#"
 _HANDLER = _MODULE + "com/acme/orders/composed/ComposedController#composed()."
+_MAPPING_FQNS = {_REQUEST_MAPPING, _GET_MAPPING}
 
 
 def test_one_hop_composition_synthesizes_a_row_naming_the_base_annotation():
@@ -244,3 +247,271 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
     workspace.close()
 
     assert [(r["method"], r["path"]) for r in rows] == [("GET", "/plain")]
+
+
+# --- Task 7: `inherited_rows` (spec §3) -----------------------------------
+#
+# Pure over hand-built rows, the same way `composed_mapping_rows` is tested
+# above — no workspace. `annotation_rows` here always plays the role of the
+# COMPOSED universe `annotation_driven._synthetic_annotations` builds (real
+# `annotations` rows plus `composed_mapping_rows`'s own output); scenario
+# (vii) below is the one that actually puts a composed-shaped row in it.
+
+_I = _MODULE + "com/acme/orders/inherit/OrdersApi#"
+_I2 = _MODULE + "com/acme/orders/inherit/OtherApi#"
+_C = _MODULE + "com/acme/orders/inherit/OrdersApiController#"
+_B = _MODULE + "com/acme/orders/inherit/BaseController#"
+_A = _MODULE + "com/acme/orders/inherit/RootController#"
+
+
+def _method(symbol: str, enclosing: str, signature: dict | None = None) -> dict:
+    return {"symbol": symbol, "enclosing": enclosing, "signature": signature}
+
+
+def _implements(symbol: str, interfaces: list[str]) -> dict:
+    return {"symbol": symbol, "interfaces": interfaces}
+
+
+def _extends(symbol: str, supertype_symbol: str) -> dict:
+    # The `supertypes` fact's own inner `symbol` is bare even for a
+    # module-local ancestor (2E checkpoint item (4)) — see
+    # `inherited_rows`'s docstring.
+    return {"symbol": symbol, "supertype": {"symbol": bare_descriptor(supertype_symbol)}}
+
+
+def test_an_interface_methods_mapping_lands_on_the_unannotated_implementing_method():
+    """(i): the interface's own `@GetMapping` reaches the implementing
+    method that repeats none of its own."""
+    interface_method = _I + "list()."
+    class_method = _C + "list()."
+    annotation_rows = [
+        {"target": interface_method, "annotation": _GET_MAPPING, "args": {"value": ["/orders"]}}
+    ]
+    method_rows = [_method(interface_method, _I), _method(class_method, _C)]
+    implementation_rows = [_implements(_C, [_I])]
+
+    result = inherited_rows(
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == [
+        {"target": class_method, "annotation": _GET_MAPPING, "args": {"value": ["/orders"]}}
+    ]
+
+
+def test_the_implementing_methods_own_annotation_wins_outright_no_synthesis():
+    """(ii): a class method carrying its own mapping is never touched — the
+    real `annotations` row already covers it, so `inherited_rows` must add
+    nothing."""
+    interface_method = _I + "list()."
+    class_method = _C + "list()."
+    annotation_rows = [
+        {"target": interface_method, "annotation": _GET_MAPPING, "args": {"value": ["/orders"]}},
+        {"target": class_method, "annotation": _GET_MAPPING, "args": {"value": ["/mine"]}},
+    ]
+    method_rows = [_method(interface_method, _I), _method(class_method, _C)]
+    implementation_rows = [_implements(_C, [_I])]
+
+    result = inherited_rows(
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == []
+
+
+def test_two_interfaces_mapping_the_same_method_resolve_to_declaration_order():
+    """(iii): `_C` implements `[_I, _I2]`, both declaring a same-key `list`
+    with their own mapping — the first interface in declaration order wins,
+    deterministically, never the second even though it is also a match."""
+    i1_method = _I + "list()."
+    i2_method = _I2 + "list()."
+    class_method = _C + "list()."
+    annotation_rows = [
+        {"target": i1_method, "annotation": _GET_MAPPING, "args": {"value": ["/from-i1"]}},
+        {"target": i2_method, "annotation": _GET_MAPPING, "args": {"value": ["/from-i2"]}},
+    ]
+    method_rows = [
+        _method(i1_method, _I),
+        _method(i2_method, _I2),
+        _method(class_method, _C),
+    ]
+    implementation_rows = [_implements(_C, [_I, _I2])]
+
+    result = inherited_rows(
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == [
+        {"target": class_method, "annotation": _GET_MAPPING, "args": {"value": ["/from-i1"]}}
+    ]
+
+
+def test_superclass_resolution_loses_to_interfaces_and_reaches_transitively():
+    """(iv), both halves: `_C` implements `_I` and extends `_B`, which
+    itself extends `_A` (spec §3's "applied transitively up scanned
+    chains"). `get` is mapped on BOTH `_I` and (reachable through `_B`)
+    `_A` — the interface wins, so the superclass path is never taken even
+    though it would also resolve. `list` is mapped ONLY on `_A`, two hops up
+    from `_C` past `_B` (which declares `list` but no mapping on it) — that
+    walk must still be reached and must still win, proving the chain is
+    followed past an ancestor with nothing to contribute rather than
+    stopping there. `_B`'s OWN `list` is, by the same rule, itself a
+    candidate that inherits from `_A` too (it has no own mapping any more
+    than `_C`'s does) — a third row, asserted alongside the other two,
+    proving resolution is not special-cased to only the one class the test
+    happens to be "about"."""
+    i_get = _I + "get()."
+    a_get = _A + "get()."
+    c_get = _C + "get()."
+    b_list = _B + "list()."
+    a_list = _A + "list()."
+    c_list = _C + "list()."
+    annotation_rows = [
+        {"target": i_get, "annotation": _GET_MAPPING, "args": {"value": ["/from-interface"]}},
+        {"target": a_get, "annotation": _GET_MAPPING, "args": {"value": ["/from-superclass"]}},
+        {"target": a_list, "annotation": _GET_MAPPING, "args": {"value": ["/from-grandparent"]}},
+    ]
+    method_rows = [
+        _method(i_get, _I),
+        _method(a_get, _A),
+        _method(c_get, _C),
+        _method(b_list, _B),
+        _method(a_list, _A),
+        _method(c_list, _C),
+    ]
+    implementation_rows = [_implements(_C, [_I])]
+    supertype_rows = [_extends(_C, _B), _extends(_B, _A)]
+
+    result = inherited_rows(
+        annotation_rows,
+        implementation_rows,
+        supertype_rows,
+        method_rows,
+        _MAPPING_FQNS,
+        _REQUEST_MAPPING,
+    )
+
+    assert result == [
+        # Sorted by (target, annotation) — NFR-1 — so `_B`'s own inherited
+        # row (`BaseController`) sorts before either of `_C`'s
+        # (`OrdersApiController`).
+        {"target": b_list, "annotation": _GET_MAPPING, "args": {"value": ["/from-grandparent"]}},
+        {"target": c_get, "annotation": _GET_MAPPING, "args": {"value": ["/from-interface"]}},
+        {"target": c_list, "annotation": _GET_MAPPING, "args": {"value": ["/from-grandparent"]}},
+    ]
+
+
+def test_a_type_level_prefix_is_inherited_from_the_interface_when_the_class_has_none():
+    """(v), first half: `_C` carries no own `@RequestMapping`; `_I`'s own
+    type-level one is synthesized onto `_C`."""
+    annotation_rows = [{"target": _I, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api"]}}]
+    implementation_rows = [_implements(_C, [_I])]
+
+    result = inherited_rows(
+        annotation_rows, implementation_rows, [], [], _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == [{"target": _C, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api"]}}]
+
+
+def test_a_type_level_prefix_is_not_inherited_when_the_class_carries_its_own():
+    """(v), second half: `_C` already carries its own `@RequestMapping` —
+    `_I`'s is never reached, and nothing synthesizes."""
+    annotation_rows = [
+        {"target": _I, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api"]}},
+        {"target": _C, "annotation": _REQUEST_MAPPING, "args": {"value": ["/mine"]}},
+    ]
+    implementation_rows = [_implements(_C, [_I])]
+
+    result = inherited_rows(
+        annotation_rows, implementation_rows, [], [], _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == []
+
+
+def test_a_covariant_override_and_its_bridge_both_miss_honestly():
+    """(vi): checkpoint item (4)'s frozen bytecode shape — the bridge
+    (`find(sig_a)`, the interface's exact descriptor) and the real override
+    (`find(sig_b)`, the covariant `DetailedOrderResult` return) are BOTH
+    declared on `_C`. The bridge's descriptor is what the join actually
+    hits, so it is the one that would synthesize without the structural
+    exclusion; the real override's descriptor never matches the interface's
+    at all, so it was already missing honestly on its own. Neither may end
+    up with a row."""
+    interface_method = _I + "find(sig_a)."
+    bridge_method = _C + "find(sig_a)."
+    override_method = _C + "find(sig_b)."
+    long_param = [{"type": {"symbol": "long#"}}]
+    annotation_rows = [
+        {
+            "target": interface_method,
+            "annotation": _GET_MAPPING,
+            "args": {"value": ["/orders/{id}"]},
+        }
+    ]
+    method_rows = [
+        _method(
+            interface_method,
+            _I,
+            {"parameters": long_param, "returns": {"symbol": "com/acme/orders/OrderResult#"}},
+        ),
+        _method(
+            bridge_method,
+            _C,
+            {"parameters": long_param, "returns": {"symbol": "com/acme/orders/OrderResult#"}},
+        ),
+        _method(
+            override_method,
+            _C,
+            {
+                "parameters": long_param,
+                "returns": {"symbol": "com/acme/orders/DetailedOrderResult#"},
+            },
+        ),
+    ]
+    implementation_rows = [_implements(_C, [_I])]
+
+    result = inherited_rows(
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == []
+
+
+def test_a_composed_interface_side_row_inherits_onto_the_implementation():
+    """(vii): `annotation_rows` here plays the COMPOSED universe
+    `annotation_driven._synthetic_annotations` actually builds — a row
+    shaped exactly like `composed_mapping_rows`'s own output, targeting the
+    interface method, standing in for `@ApiGet` having already resolved to
+    a real `@RequestMapping` on `OrdersApi#composed`. `inherited_rows` must
+    resolve through it exactly as it would a genuinely-declared row."""
+    interface_method = _I + "composed()."
+    class_method = _C + "composed()."
+    annotation_rows = [
+        {
+            "target": interface_method,
+            "annotation": _REQUEST_MAPPING,
+            "args": {
+                "method": ["org/springframework/web/bind/annotation/RequestMethod#GET."],
+                "path": ["/composed"],
+            },
+        }
+    ]
+    method_rows = [_method(interface_method, _I), _method(class_method, _C)]
+    implementation_rows = [_implements(_C, [_I])]
+
+    result = inherited_rows(
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == [
+        {
+            "target": class_method,
+            "annotation": _REQUEST_MAPPING,
+            "args": {
+                "method": ["org/springframework/web/bind/annotation/RequestMethod#GET."],
+                "path": ["/composed"],
+            },
+        }
+    ]

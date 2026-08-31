@@ -11,7 +11,10 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.effective_annotations import composed_mapping_rows
+from sextant.application.resolve.effective_annotations import (
+    composed_mapping_rows,
+    inherited_rows,
+)
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
@@ -25,6 +28,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     mapping = catalog.matches["mapping"]
     type_annotation = catalog.matches.get("type_annotation")
     prefix_annotation = mapping["prefix_annotation"]
+    # Optional too (Retrofit, spring-jms): no class-level prefix shape.
+    prefix_fqn = None if prefix_annotation is None else _catalog_symbol(prefix_annotation)
     mapping_annotations = [
         {"fqn": _catalog_symbol(m["fqn"]), "methods": m.get("method")}
         for m in mapping["annotations"]
@@ -35,10 +40,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         direction=catalog.direction,
         # Optional (D02 §2, amended): absence means "no type-level gate".
         type_annotation=None if type_annotation is None else _catalog_symbol(type_annotation),
-        # Optional too (Retrofit, spring-jms): no class-level prefix shape.
-        prefix_annotation=(
-            None if prefix_annotation is None else _catalog_symbol(prefix_annotation)
-        ),
+        prefix_annotation=prefix_fqn,
         # `method` is absent for an annotation that pre-sets none, and the
         # derivation reads that absence as "every method in all_methods".
         mapping_annotations=mapping_annotations,
@@ -55,11 +57,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         produces_from=list(mapping.get("produces_from", [])),
         # 2E-prep design §2, §3: the effective-annotations pre-pass widens
         # this catalog's own mapping fqns to every module-local annotation
-        # type transitively meta-annotated with one of them, computed once
-        # per catalog (its own mapping fqns seed a different closure each
-        # time) and handed to the SQL as synthetic `annotations` rows rather
-        # than as a second code path there.
-        synthetic_annotations=_synthetic_annotations(workspace, mapping_annotations),
+        # type transitively meta-annotated with one of them PLUS every
+        # mapping a scanned interface/superclass method declares that an
+        # implementing method doesn't repeat (Task 7, spec §3), computed
+        # once per catalog (its own mapping fqns seed a different closure
+        # and a different inheritance walk each time) and handed to the SQL
+        # as synthetic `annotations` rows rather than as a second code path
+        # there.
+        synthetic_annotations=_synthetic_annotations(workspace, mapping_annotations, prefix_fqn),
     )
     # Optional (D02 §2, amended): a catalog with no `reply` block declares no
     # second-row rule at all — the HTTP catalogs, which never see @SendTo.
@@ -68,13 +73,23 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 
 
 def _synthetic_annotations(
-    workspace: Workspace, mapping_annotations: list[dict[str, object]]
+    workspace: Workspace,
+    mapping_annotations: list[dict[str, object]],
+    prefix_fqn: str | None,
 ) -> list[dict[str, str]]:
     """The bound-parameter form `derive_endpoints.sql`'s `annotations_effective`
-    CTE expects (D02 §2, §3): every composed-annotation row `composed_mapping_rows`
-    derives, `args` re-serialized to JSON text — DuckDB's `STRUCT(... VARCHAR)`
-    binding shape carries a string, not a nested JSON value, the same way
-    every other JSON-typed bound parameter in this engine already does."""
+    CTE expects (D02 §2, §3): every row `composed_mapping_rows` and
+    `inherited_rows` derive, `args` re-serialized to JSON text — DuckDB's
+    `STRUCT(... VARCHAR)` binding shape carries a string, not a nested JSON
+    value, the same way every other JSON-typed bound parameter in this
+    engine already does.
+
+    Task 7's inheritance walk runs over the COMPOSED universe (real rows
+    plus Task 6's own synthetic ones), not just the real `annotations`
+    table — the fixture's composed-and-inherited case
+    (`OrdersApi#composed`'s `@ApiGet`) only has anything to inherit once §2
+    has already turned it into a real `@RequestMapping` on the interface
+    method."""
     annotation_rows = [
         {
             "target": row["target"],
@@ -85,13 +100,55 @@ def _synthetic_annotations(
     ]
     scanned_targets = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
     mapping_fqns = {str(m["fqn"]) for m in mapping_annotations}
+    composed = composed_mapping_rows(annotation_rows, scanned_targets, mapping_fqns)
+    inherited = inherited_rows(
+        [*annotation_rows, *composed],
+        _implementation_rows(workspace),
+        _supertype_rows(workspace),
+        _method_declaration_rows(workspace),
+        mapping_fqns,
+        prefix_fqn,
+    )
+    return [
+        {"target": row["target"], "annotation": row["annotation"], "args": json.dumps(row["args"])}
+        for row in (*composed, *inherited)
+    ]
+
+
+def _implementation_rows(workspace: Workspace) -> list[dict[str, object]]:
+    """`implementations`'s rows, `interfaces` decoded — Task 7's own read of
+    D00 §5a's `implemented_interfaces` capability (`resolve/effective_annotations.py`)."""
+    return [
+        {"symbol": row["symbol"], "interfaces": json.loads(str(row["interfaces"]))}
+        for row in workspace.query("implementations")
+    ]
+
+
+def _supertype_rows(workspace: Workspace) -> list[dict[str, object]]:
+    """`supertypes`'s rows, `supertype` decoded — Task 7's own read of D00
+    §5a's PTR carrier, distinct from `shapes/arguments.py`'s `supertypes_of`
+    (which strips the outer key to bare on purpose, for a different join)."""
+    return [
+        {"symbol": row["symbol"], "supertype": json.loads(str(row["supertype"]))}
+        for row in workspace.query("supertypes")
+    ]
+
+
+def _method_declaration_rows(workspace: Workspace) -> list[dict[str, object]]:
+    """`method_declarations`'s rows, `signature` decoded — the one named
+    query 2E-prep's `method_symbols` cannot serve, since Task 7's bridge
+    exclusion (checkpoint item (4)) needs a candidate's own parameter/return
+    types, and its inheritance walk needs `enclosing` to place a method
+    within its declaring type at all."""
     return [
         {
-            "target": row["target"],
-            "annotation": row["annotation"],
-            "args": json.dumps(row["args"]),
+            "symbol": row["symbol"],
+            "enclosing": row["enclosing"],
+            "signature": (
+                json.loads(str(row["signature"])) if row["signature"] is not None else None
+            ),
         }
-        for row in composed_mapping_rows(annotation_rows, scanned_targets, mapping_fqns)
+        for row in workspace.query("method_declarations")
     ]
 
 

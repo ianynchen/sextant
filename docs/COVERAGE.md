@@ -516,6 +516,17 @@ is, what it costs.
 | Swift | Vapor `app.get("users", ":id") { … }` | **path segments are variadic args** | `registration_call` | A |
 | Swift | iOS apps | apps are not servers | — | — |
 
+**Phase 2E Task 7** ships the interface/superclass row above (`@RequestMapping` inherited
+mapping resolution, `annotation` + `hierarchy`), with three boundaries drawn deliberately
+rather than left implicit: a **jar-defined interface is never scanned**, so its own mappings
+never derive onto an implementer — the standing compiled-library boundary that gates every
+form until dependency scanning exists (D02 §7); a class **directly implementing two
+interfaces that map the same method** resolves to declaration order — recorded as the
+implementer's own read of the ambiguity, never rendered as one; and inheritance folds
+attributes through the same same-name-attribute subset of `@AliasFor` the meta-annotation
+pass already commits to, never its full cross-name aliasing or `@AliasFor(annotation=...)`
+re-targeting generality.
+
 ### 5.2 REST outbound
 
 **Phase 2B shipped the first three; Phase 2C shipped the next four.** Feign, Retrofit and

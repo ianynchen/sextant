@@ -118,6 +118,19 @@ _NAMED_QUERIES = {
     "interface_symbols": """
         SELECT symbol FROM symbols WHERE construct_kind = 'interface' ORDER BY symbol
     """,
+    # Every declared method's own enclosing type and signature JSON,
+    # module-prefixed exactly as the fact wrote them (D00 §5a) — checkpoint
+    # item (4)'s inheritance join needs both, and `method_symbols` above
+    # cannot serve it: `enclosing` places a candidate within its declaring
+    # type at all (interface, implementer, or a scanned ancestor further up
+    # the chain), and `signature` is what the structural bridge rule
+    # (`resolve/effective_annotations.py`'s `inherited_rows`) compares a
+    # same-name sibling's parameter/return types against. Ordered by symbol
+    # for the same reason `method_symbols` is.
+    "method_declarations": """
+        SELECT symbol, enclosing, signature FROM symbols
+        WHERE construct_kind = 'method' ORDER BY symbol
+    """,
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
