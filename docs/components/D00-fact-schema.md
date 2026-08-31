@@ -434,6 +434,12 @@ Python's `__init__` maps in, and a language without constructors (Go has none) s
 never emits it. Readers already tolerate absence: it is a name compared, not a field
 whose presence is assumed.
 
+**`lambda` is the canonical cross-language kind for "this argument is that function"** —
+every extractor normalizes its own mechanism into it: a JVM `invokedynamic`, a Go closure
+or function value, a Python nested function or reference, a JS arrow or function
+expression. `symbol` names the function's own method/function symbol — the bare
+descriptor, exactly as the JVM extractor emits.
+
 Every entry additionally carries an optional **`source`** value id when the argument is
 itself another call's result — the join that makes OkHttp's `build()` → `newCall(request)`
 split reconstructable, and the `HttpEntity` one-hop follow possible. One grammar, three

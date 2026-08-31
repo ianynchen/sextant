@@ -567,11 +567,17 @@ call sites, never one).
 
 **This style is deliberately language-agnostic, and the engine enforces it: no JVM
 grammar, no framework name, no Kotlin-specific branch anywhere in its code** — the
-two entry shapes above are catalog declarations interpreted by one core, which is
-exactly what lets an axum `Router::new().route(...)` tree, a gin registration set,
-or an Express `app.get(...)` chain become a future catalog file against this SAME
-engine, once their languages' extractors emit the same fact grammar (D00 §5's
-`source`/`result`/`receiver` links). No engine change, only new YAML.
+two entry shapes above are catalog declarations interpreted by one core. The ENGINE
+stays unchanged; the catalog VOCABULARY it reads is additively extensible, not
+frozen at these two shapes. That said, some shapes are known to need vocabulary
+additions before their catalogs can be written: a verb row with no path argument
+(axum's `get(handler)`, the path supplied by whatever `.route("/x", get(handler))`
+it is nested under), a literal route path carried at the entry call rather than
+folded through a chain, and a receiver-accumulated router topology (gin's `Group`,
+which mutates a receiver across calls rather than composing a return value). Simple
+per-call registrations — gin's `r.GET("/x", h)`, Express's `app.get(...)` — need none
+of that: they already fit the existing `single_call` style once their languages'
+extractors emit the same fact grammar (D00 §5's `source`/`result`/`receiver` links).
 
 ### `interface_implementation`
 

@@ -584,6 +584,61 @@ def test_and_merges_verb_path_and_media_into_a_single_row(tmp_path: Path):
     assert row["resolution"] == "resolved"
 
 
+def test_a_string_kind_media_argument_reads_as_its_literal_value(tmp_path: Path):
+    """`_media_value`'s `string` branch — some frameworks spell their media
+    type inline rather than through an enum constant — is otherwise
+    untested: every other media fact in this file arrives `enum`-kind. Built
+    the same way as the `and`-merge test above, but the `accept` predicate
+    here carries a bare string literal instead of a `MediaType` constant."""
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            PREDICATES,
+            "accept",
+            result=5,
+            arguments=[CallArgument(kind="string", value=JSON)],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATE_TYPE,
+            "and",
+            receiver=3,
+            result=7,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=7),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["method"], row["path"]) == ("GET", "/orders")
+    assert row["produces"] == f'["{JSON}"]'
+    assert row["resolution"] == "resolved"
+
+
 def test_a_second_verb_inside_one_and_chain_poisons_only_the_verb(tmp_path: Path):
     """A request carries exactly one verb, so two of them merged by a single
     `and` is a constraint no route satisfies. Picking either would be a guess;

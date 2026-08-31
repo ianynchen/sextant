@@ -104,8 +104,12 @@ _NAMED_QUERIES = {
     # the engine matches against these instead and writes the row it found,
     # verbatim. Ordered by symbol so a type declaring two overloads of the
     # handler method is read the same way twice (NFR-1).
+    #
+    # A handler may be a method OR a free function (D00 §4) — the same
+    # widening `derive_endpoints.sql` already carries; the JVM extractor
+    # emits no `function`, so today's behavior is unchanged.
     "method_symbols": """
-        SELECT symbol FROM symbols WHERE construct_kind = 'method' ORDER BY symbol
+        SELECT symbol FROM symbols WHERE construct_kind IN ('method', 'function') ORDER BY symbol
     """,
     # Annotation TYPE symbols — checkpoint item (2): an annotation type
     # compiles to `construct_kind: "interface"` (there is no dedicated
