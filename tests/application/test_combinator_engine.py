@@ -1,0 +1,1250 @@
+"""Tests for the `combinator` engine (D02 §2's `combinator` style) — the fold
+over a router TREE, where predicate arguments link to their producing calls
+through `source`, chains link through `result` → `receiver`, and a nested body
+arrives as a `lambda`-kind argument naming the method that holds it.
+
+Facts are hand-built to mirror the *real* emitted grammar exactly — every
+`owner`/`name`/`invoke_kind`/`ordinal`/`receiver`/`result`/`arguments` shape
+here is the one this phase's checkpoint froze against a live scan (items (1a)
+and (1b)), down to the compiler noise the walk has to step over: the
+`requireNonNull` javac emits beside every bound method reference, the indy site
+whose own arguments are opaque, the DSL body's null-check preamble. The
+framework the checkpoint scanned is deliberately NOT the one named here — the
+catalog below is invented, because an engine that only works for one library's
+fqns is the thing spec §1d forbids.
+
+CHECKPOINT FACT, pinned by (1a): a predicate argument arrives
+`{"kind":"unresolved","source":<producing call's result>}` — never carrying
+the predicate itself — so every constraint in a tree is reached by following
+`source`, and a bound method reference arrives as a `lambda`-kind argument
+whose `symbol` is the real target method, BARE.
+CHECKPOINT FACT, pinned by (1b): a DSL body lands in a synthetic method of its
+own, its calls carry `receiver: null` and (mostly) `result: null`, and the
+entry-to-body and nest-to-body edges are both `lambda`-kind arguments naming
+that method's symbol exactly.
+CHECKPOINT FACT, pinned by (3)/F1: a vararg media constant reaches the facts as
+a bare `{"kind":"unresolved"}` with no symbol at all. The `enum`-kind read path
+below is therefore exercised with synthetic facts, and the unreadable case is
+pinned beside it.
+"""
+
+from pathlib import Path
+
+import pytest
+
+from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve.endpoints import derive_endpoints
+from sextant.domain.closed_sets import ConstructKind, OriginTier
+from sextant.domain.factfile import write_fact_file
+from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
+from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+CAPABILITIES = {"call_site", "string_constants", "chain_reconstruction"}
+# The module-coordinates prefix a real symbol fact's own `symbol` carries (D00
+# §5a); every call-argument symbol stays bare, exactly as the real facts emit
+# it (`test_call_engines.py`'s own `_MODULE` precedent).
+_MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
+
+# The invented library. `ROUTERS` (static entry calls) and `PREDICATE_TYPE`
+# (the composers) and `ROUTER_TYPE` (the chain continuations) are three
+# different owners for the same tree, which is exactly the shape the checkpoint
+# froze; `DSL_FACADE` and `DSL` are the body-linked entry's own pair, and the
+# checkpoint's whole point about them is that they are NOT the same fqn.
+ROUTERS = "com/example/web/Routers#"
+PREDICATES = "com/example/web/Predicates#"
+PREDICATE_TYPE = "com/example/web/Predicate#"
+ROUTER_TYPE = "com/example/web/Router#"
+DSL_FACADE = "com/example/web/RouterDslFacade#"
+DSL = "com/example/web/RouterDsl#"
+MEDIA_TYPE = "com/example/web/MediaType#"
+
+HANDLERS = "com/example/routes/Handlers#"
+LIST_ORDERS = HANDLERS + "listOrders(sig_a1)."
+CREATE_ORDER = HANDLERS + "createOrder(sig_a1)."
+HEALTH = HANDLERS + "health(sig_a1)."
+DECLARER = "com/example/routes/Routes#"
+INLINE_BODY = DECLARER + "lambda$routes$0(sig_a1)."
+HANDLER_CLASS = "com/example/routes/Routes$1#"
+
+ROUTES = DECLARER + "routes(sig_r0)."
+DSL_ROUTES = DECLARER + "dslRoutes(sig_r0)."
+DSL_BODY = DECLARER + "dslRoutes$body(sig_b1)."
+DSL_CHILD = DECLARER + "dslRoutes$body$child(sig_b1)."
+DSL_GRANDCHILD = DECLARER + "dslRoutes$body$child$leaf(sig_b1)."
+
+JSON = "application/json"
+XML = "application/xml"
+
+
+def _document(document_id: str = "doc_1") -> Document:
+    return Document(
+        document_id=document_id,
+        relative_path="com/example/routes/Routes.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+
+
+def _site(
+    caller: str,
+    ordinal: int,
+    owner: str,
+    name: str,
+    *,
+    arguments: list[CallArgument] | None = None,
+    receiver: int | None = None,
+    result: int | None = None,
+    invoke_kind: str = "static",
+) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(owner=owner, name=name, descriptor="(...)V"),
+        invoke_kind=invoke_kind,
+        ordinal=ordinal,
+        receiver=receiver,
+        result=result,
+        arguments=list(arguments or []),
+    )
+
+
+def _method_symbol(bare: str) -> SymbolFact:
+    """The method symbol fact a `handler` joins back to — module-prefixed
+    exactly as a real one is (D00 §5a). Without it in the workspace no scanned
+    document declares that method, and the handler reads NULL rather than
+    being concatenated into existence."""
+    return SymbolFact(
+        document_id="doc_1", symbol=_MODULE + bare, construct_kind=ConstructKind.METHOD
+    )
+
+
+def _handler_symbols() -> list[SymbolFact]:
+    return [
+        _method_symbol(LIST_ORDERS),
+        _method_symbol(CREATE_ORDER),
+        _method_symbol(HEALTH),
+        _method_symbol(INLINE_BODY),
+    ]
+
+
+def _matches() -> dict[str, object]:
+    return {
+        "entries": [
+            {"owner": "com.example.web.Routers", "methods": ["route", "nest"], "handler_arg": 1},
+            {"owner": "com.example.web.RouterDslFacade", "method": "router", "body_arg": 0},
+        ],
+        "vocabulary": {
+            "verbs": [
+                {
+                    "owner": "com.example.web.Predicates",
+                    "method": "GET",
+                    "verb": "GET",
+                    "path_arg": 0,
+                },
+                {
+                    "owner": "com.example.web.Predicates",
+                    "method": "HEAD",
+                    "verb": "HEAD",
+                    "path_arg": 0,
+                },
+                {
+                    "owner": "com.example.web.Predicates",
+                    "method": "POST",
+                    "verb": "POST",
+                    "path_arg": 0,
+                },
+                {
+                    "owner": "com.example.web.RouterDsl",
+                    "method": "GET",
+                    "verb": "GET",
+                    "path_arg": 0,
+                    "handler_arg": 1,
+                },
+            ],
+            "prefixes": [
+                {"owner": "com.example.web.Predicates", "method": "path", "path_arg": 0},
+                {
+                    "owner": "com.example.web.Routers",
+                    "method": "nest",
+                    "path_arg": 0,
+                    "subtree_arg": 1,
+                },
+                {
+                    "owner": "com.example.web.RouterDsl",
+                    "method": "nest",
+                    "path_arg": 0,
+                    "body_arg": 1,
+                },
+            ],
+            "media": [
+                {"owner": "com.example.web.Predicates", "method": "accept", "fills": "produces"},
+                {
+                    "owner": "com.example.web.Predicates",
+                    "method": "contentType",
+                    "fills": "consumes",
+                },
+                {"owner": "com.example.web.RouterDsl", "method": "accept", "fills": "produces"},
+            ],
+            "media_values": {
+                "owner": "com.example.web.MediaType",
+                "values": {"APPLICATION_JSON": JSON, "APPLICATION_XML": XML},
+            },
+            "composers": {
+                "and": [{"owner": "com.example.web.Predicate", "method": "and"}],
+                "or": [{"owner": "com.example.web.Predicate", "method": "or"}],
+            },
+        },
+        "continuations": ["andRoute", "andNest", "and"],
+    }
+
+
+def _catalog(matches: dict[str, object] | None = None) -> Catalog:
+    return Catalog(
+        id="test-functional-routing",
+        style="combinator",
+        protocol="http",
+        direction="inbound",
+        requires=("call_site", "string_constants", "chain_reconstruction"),
+        matches=_matches() if matches is None else matches,
+        source=Path("test-functional-routing.yml"),
+    )
+
+
+def _resolve(tmp_path: Path, facts: list, catalog: Catalog | None = None) -> DuckDbWorkspace:
+    write_fact_file(tmp_path / "facts" / "Routes.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [catalog or _catalog()], capabilities=CAPABILITIES)
+    assert skipped == []
+    return workspace
+
+
+def _rows(workspace: DuckDbWorkspace) -> list[dict]:
+    return [dict(row) for row in workspace.query("endpoints")]
+
+
+def _identities(rows: list[dict]) -> list[tuple]:
+    """Every row's own identity, in the `endpoints` query's own total order
+    (`protocol, method, path, handler, caller` — NFR-1), so an assertion below
+    reads as the SET of rows the fold derived rather than as the order the
+    engine happened to append them in."""
+    return [(row["method"], row["path"], row["handler"], row["resolution"]) for row in rows]
+
+
+# --- (1) one static route call is one resolved endpoint -------------------
+
+
+def test_a_static_route_call_derives_one_resolved_endpoint_with_its_handler(tmp_path: Path):
+    """The whole style in one tree: the predicate argument is followed through
+    `source` to the call that produced it, the verb and path come off that
+    call, and the handler is the method the `lambda`-kind argument names —
+    joined to a real symbol fact, never concatenated. The two compiler-emitted
+    noise calls beside it (checkpoint (1a) ruling 5) must change nothing: no
+    catalog rule claims their owners, so they are neither rooted nor
+    consumed."""
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/x")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            "java/util/Objects#",
+            "requireNonNull",
+            result=20,
+            arguments=[CallArgument(kind="unresolved")],
+        ),
+        _site(
+            ROUTES,
+            2,
+            "java/lang/invoke/LambdaMetafactory#",
+            "handle",
+            result=22,
+            invoke_kind="dynamic",
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTERS,
+            "route",
+            result=25,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", source=22, symbol=LIST_ORDERS),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert len(rows) == 1
+    [row] = rows
+    assert (row["protocol"], row["direction"]) == ("http", "inbound")
+    assert (row["method"], row["path"]) == ("GET", "/x")
+    assert row["handler"] == _MODULE + LIST_ORDERS
+    assert row["resolution"] == "resolved"
+    assert row["evidence"] == "compiler"
+    assert row["catalog_id"] == "test-functional-routing"
+    assert row["caller"] == ROUTES
+    assert row["peer"] is None
+    # spec §1c: a functional handler's payloads live inside its body, so both
+    # shape columns stay honestly NULL rather than being guessed from the
+    # `ServerRequest`-shaped signature every handler shares.
+    assert (row["request_shape"], row["response_shape"]) == (None, None)
+
+
+# --- (2) a nest prefix folds onto every route of its subtree ---------------
+
+
+def test_a_nest_prefix_folds_onto_every_route_of_its_subtree_exactly_once(tmp_path: Path):
+    """The prefix is pushed onto the whole subtree, and — the half that is easy
+    to get wrong — the subtree is NOT also derived bare. The inner `route` is
+    consumed as the chain's receiver and the chain's own result is consumed as
+    the nest's subtree argument, so the only tree root in the method is the
+    nest itself."""
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "path",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/fn")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            PREDICATES,
+            "GET",
+            result=7,
+            arguments=[CallArgument(kind="string", value="/a")],
+        ),
+        _site(
+            ROUTES,
+            2,
+            ROUTERS,
+            "route",
+            result=25,
+            arguments=[
+                CallArgument(kind="unresolved", source=7),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            ROUTES,
+            3,
+            PREDICATES,
+            "GET",
+            result=30,
+            arguments=[CallArgument(kind="string", value="/b")],
+        ),
+        _site(
+            ROUTES,
+            4,
+            ROUTER_TYPE,
+            "andRoute",
+            receiver=25,
+            result=40,
+            invoke_kind="interface",
+            arguments=[
+                CallArgument(kind="unresolved", source=30),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER),
+            ],
+        ),
+        _site(
+            ROUTES,
+            5,
+            ROUTERS,
+            "nest",
+            result=59,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="unresolved", source=40),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/fn/a", _MODULE + LIST_ORDERS, "resolved"),
+        ("GET", "/fn/b", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+
+
+# --- (3) `or` duplicates the route per branch, over any predicate kind -----
+
+
+def test_or_over_verbs_duplicates_the_route_and_over_media_unions_into_one_row(
+    tmp_path: Path,
+):
+    """`or` fans a route out per branch over ANY predicate kind (spec §1a's
+    `all_methods` precedent) — but two branches that differ ONLY in the media
+    they declare are one endpoint, not two, so the batch unions them before it
+    is ever inserted (spec §4, the same rule the annotation pass applies in
+    SQL). Two verbs on one path stay two rows; two media types on one route
+    become one row with both."""
+    verbs = ROUTES
+    media = DECLARER + "mediaRoutes(sig_r0)."
+    facts = [
+        _site(
+            verbs,
+            0,
+            PREDICATES,
+            "GET",
+            result=51,
+            arguments=[CallArgument(kind="string", value="/health")],
+        ),
+        _site(
+            verbs,
+            1,
+            PREDICATES,
+            "HEAD",
+            result=53,
+            arguments=[CallArgument(kind="string", value="/health")],
+        ),
+        _site(
+            verbs,
+            2,
+            PREDICATE_TYPE,
+            "or",
+            receiver=51,
+            result=54,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=53)],
+        ),
+        _site(
+            verbs,
+            3,
+            ROUTERS,
+            "route",
+            result=56,
+            arguments=[
+                CallArgument(kind="unresolved", source=54),
+                CallArgument(kind="lambda", symbol=INLINE_BODY),
+            ],
+        ),
+        _site(
+            media,
+            0,
+            PREDICATES,
+            "GET",
+            result=5,
+            arguments=[CallArgument(kind="string", value="/m")],
+        ),
+        _site(
+            media,
+            1,
+            PREDICATES,
+            "accept",
+            result=10,
+            arguments=[CallArgument(kind="enum", symbol=MEDIA_TYPE + "APPLICATION_JSON.")],
+        ),
+        _site(
+            media,
+            2,
+            PREDICATES,
+            "accept",
+            result=12,
+            arguments=[CallArgument(kind="enum", symbol=MEDIA_TYPE + "APPLICATION_XML.")],
+        ),
+        _site(
+            media,
+            3,
+            PREDICATE_TYPE,
+            "or",
+            receiver=10,
+            result=14,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=12)],
+        ),
+        _site(
+            media,
+            4,
+            PREDICATE_TYPE,
+            "and",
+            receiver=5,
+            result=16,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=14)],
+        ),
+        _site(
+            media,
+            5,
+            ROUTERS,
+            "route",
+            result=20,
+            arguments=[
+                CallArgument(kind="unresolved", source=16),
+                CallArgument(kind="lambda", symbol=HEALTH),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    by_path = {row["path"]: row for row in rows}
+    assert sorted(_identities([row for row in rows if row["path"] == "/health"])) == [
+        ("GET", "/health", _MODULE + INLINE_BODY, "resolved"),
+        ("HEAD", "/health", _MODULE + INLINE_BODY, "resolved"),
+    ]
+    assert len([row for row in rows if row["path"] == "/m"]) == 1
+    assert by_path["/m"]["produces"] == f'["{JSON}","{XML}"]'
+    assert by_path["/m"]["method"] == "GET"
+    assert by_path["/m"]["resolution"] == "resolved"
+
+
+# --- (4) `and` merges constraints onto one row ----------------------------
+
+
+def test_and_merges_verb_path_and_media_into_a_single_row(tmp_path: Path):
+    """`and` is the merge half of the composer pair: the verb, the path and the
+    media predicate reached through it all land on one route, and the media
+    column the rule declares (`contentType` fills `consumes`, never
+    `produces`) is the one that fills."""
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "POST",
+            result=29,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            PREDICATES,
+            "contentType",
+            result=38,
+            arguments=[CallArgument(kind="enum", symbol=MEDIA_TYPE + "APPLICATION_JSON.")],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATE_TYPE,
+            "and",
+            receiver=29,
+            result=39,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=38)],
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTERS,
+            "route",
+            result=47,
+            arguments=[
+                CallArgument(kind="unresolved", source=39),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["method"], row["path"]) == ("POST", "/orders")
+    assert row["consumes"] == f'["{JSON}"]'
+    assert row["produces"] is None
+    assert row["resolution"] == "resolved"
+
+
+def test_a_second_verb_inside_one_and_chain_poisons_only_the_verb(tmp_path: Path):
+    """A request carries exactly one verb, so two of them merged by a single
+    `and` is a constraint no route satisfies. Picking either would be a guess;
+    the verb column goes NULL and the row goes unresolved, while the path — read
+    from the same chain and not in doubt — survives intact. (`or` is how two
+    verbs on one path are really expressed, and test (3) pins that it stays two
+    rows.)
+
+    The second predicate declares the empty path a nest-relative root really
+    compiles to, which isolates the verb in the assertion below: within one
+    conjunction, path parts concatenate exactly as a prefix's do, because the
+    vocabulary cannot tell a prefix predicate from a full-path one and
+    inventing that distinction would be a guess."""
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/both")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            PREDICATES,
+            "POST",
+            result=5,
+            arguments=[CallArgument(kind="string", value="")],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATE_TYPE,
+            "and",
+            receiver=3,
+            result=7,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=7),
+                CallArgument(kind="lambda", symbol=HEALTH),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert row["method"] is None
+    assert row["path"] == "/both"
+    assert row["resolution"] == "unresolved"
+    assert row["handler"] == _MODULE + HEALTH
+
+
+# --- (5) poisoning is per column ------------------------------------------
+
+
+def test_an_unreadable_path_poisons_the_path_while_an_unreadable_media_constant_does_not(
+    tmp_path: Path,
+):
+    """The two halves of spec §1c's poisoning rule, side by side.
+
+    A path the scanner could not read is a wire identity nobody knows: `path`
+    goes NULL and the row goes unresolved, while the verb — read from the same
+    call and not in doubt — stays. A media constant that could not be read is
+    the opposite case: it is carried data, the verb and path are the identity
+    and both are known, so only that column goes NULL and the row stays
+    resolved (checkpoint F1's ruling, which the real vararg constants make the
+    common case rather than the corner one).
+    """
+    variable = ROUTES
+    unread = DECLARER + "unreadMedia(sig_r0)."
+    facts = [
+        _site(
+            variable, 0, PREDICATES, "GET", result=3, arguments=[CallArgument(kind="unresolved")]
+        ),
+        _site(
+            variable,
+            1,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            unread,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/x")],
+        ),
+        # The frozen shape of a real vararg media call: one bare `unresolved`
+        # argument, no `source` and no `symbol` to follow (checkpoint (3)).
+        _site(
+            unread, 1, PREDICATES, "accept", result=5, arguments=[CallArgument(kind="unresolved")]
+        ),
+        _site(
+            unread,
+            2,
+            PREDICATE_TYPE,
+            "and",
+            receiver=3,
+            result=7,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        _site(
+            unread,
+            3,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=7),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    by_caller = {row["caller"]: row for row in _rows(workspace)}
+    workspace.close()
+
+    assert by_caller[variable]["method"] == "GET"
+    assert by_caller[variable]["path"] is None
+    assert by_caller[variable]["resolution"] == "unresolved"
+    assert by_caller[variable]["handler"] == _MODULE + LIST_ORDERS
+
+    assert (by_caller[unread]["method"], by_caller[unread]["path"]) == ("GET", "/x")
+    assert by_caller[unread]["produces"] is None
+    assert by_caller[unread]["resolution"] == "resolved"
+
+
+# --- (6) the three handler cases ------------------------------------------
+
+
+def test_the_three_handler_cases_all_derive_their_row(tmp_path: Path):
+    """A bound method reference names the real target method; an inline block
+    names the synthetic body the compiler emitted for it; an adapted function
+    object names a generated CLASS, which is not a method symbol at all. The
+    first two join `method_symbols` and are written module-prefixed; the third
+    reads NULL rather than being invented — and its route still derives, since
+    the wire identity never depended on the handler."""
+    reference = ROUTES
+    inline = DECLARER + "inline(sig_r0)."
+    adapted = DECLARER + "adapted(sig_r0)."
+    facts = [
+        _site(
+            reference,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/ref")],
+        ),
+        _site(
+            reference,
+            1,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", source=8, symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            inline,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/inline")],
+        ),
+        _site(
+            inline,
+            1,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", source=8, symbol=INLINE_BODY),
+            ],
+        ),
+        _site(
+            adapted,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/adapted")],
+        ),
+        _site(
+            adapted,
+            1,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="instance", source=8, symbol=HANDLER_CLASS),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    by_path = {row["path"]: row for row in _rows(workspace)}
+    workspace.close()
+
+    assert by_path["/ref"]["handler"] == _MODULE + LIST_ORDERS
+    assert by_path["/inline"]["handler"] == _MODULE + INLINE_BODY
+    assert by_path["/adapted"]["handler"] is None
+    assert {row["resolution"] for row in by_path.values()} == {"resolved"}
+
+
+def test_a_handler_name_no_scanned_document_declares_is_never_fabricated(tmp_path: Path):
+    """The no-fabrication rule (the 2E-prep interface-engine ruling, kept
+    verbatim here): a `lambda` argument naming a method outside the scanned
+    module joins no symbol fact, so `handler` is NULL. Writing the bare name
+    would produce a column nothing else in the graph could ever follow."""
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/x")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", symbol="com/elsewhere/NotScanned#handle(sig_zz)."),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert row["handler"] is None
+    assert (row["method"], row["path"], row["resolution"]) == ("GET", "/x", "resolved")
+
+
+# --- (7) a cross-method router reference is one unresolved row ------------
+
+
+def test_a_router_composed_from_another_methods_return_derives_one_unresolved_row(
+    tmp_path: Path,
+):
+    """The walk is per-method by design (spec §1c). Checkpoint (1a) shows the
+    facts would support following the reference — the argument's `source` names
+    a call whose own owner+name is the other method — so this is a deliberate
+    boundary, not a limit of the evidence, and the boundary must be VISIBLE:
+    one unresolved row for the reference, never a silent absence. The route
+    declared beside it in the same chain is unaffected."""
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/extra")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", symbol=HEALTH),
+            ],
+        ),
+        _site(ROUTES, 2, DECLARER, "other", result=11, invoke_kind="virtual"),
+        _site(
+            ROUTES,
+            3,
+            ROUTER_TYPE,
+            "and",
+            receiver=9,
+            result=12,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=11)],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/extra", _MODULE + HEALTH, "resolved"),
+        (None, None, None, "unresolved"),
+    ]
+
+
+# --- (8) chain continuations merge route sets ----------------------------
+
+
+def test_a_continuation_chain_merges_every_route_it_links_exactly_once(tmp_path: Path):
+    """Continuations link `result` → `receiver`, so a three-call chain declares
+    three routes — and only three. Each link is consumed as the next link's
+    receiver, which is exactly what stops the middle of the chain from being
+    rooted a second time on its own."""
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/a")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATES,
+            "POST",
+            result=11,
+            arguments=[CallArgument(kind="string", value="/b")],
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTER_TYPE,
+            "andRoute",
+            receiver=9,
+            result=13,
+            invoke_kind="interface",
+            arguments=[
+                CallArgument(kind="unresolved", source=11),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER),
+            ],
+        ),
+        _site(
+            ROUTES,
+            4,
+            PREDICATES,
+            "GET",
+            result=15,
+            arguments=[CallArgument(kind="string", value="/c")],
+        ),
+        _site(
+            ROUTES,
+            5,
+            ROUTER_TYPE,
+            "andRoute",
+            receiver=13,
+            result=17,
+            invoke_kind="interface",
+            arguments=[
+                CallArgument(kind="unresolved", source=15),
+                CallArgument(kind="lambda", symbol=HEALTH),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
+        ("GET", "/c", _MODULE + HEALTH, "resolved"),
+        ("POST", "/b", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+
+
+# --- (9) the body-linked entry, and the no-independent-rooting rule -------
+
+
+def _body_linked_facts() -> list:
+    """One body-linked tree, three methods deep, plus one method holding a
+    vocabulary call that no entry links to. The shapes are checkpoint (1b)'s
+    verbatim: the entry names its body through a `lambda` argument, the body's
+    own calls carry `receiver: null` and `result: null`, the media predicate is
+    the one exception that carries a result and is consumed by the nest beside
+    it, and a nested block is linked exactly the same way its parent was."""
+    return [
+        _site(
+            DSL_ROUTES,
+            0,
+            "java/lang/invoke/LambdaMetafactory#",
+            "invoke",
+            result=3,
+            invoke_kind="dynamic",
+        ),
+        _site(
+            DSL_ROUTES,
+            1,
+            DSL_FACADE,
+            "router",
+            result=4,
+            arguments=[CallArgument(kind="lambda", source=3, symbol=DSL_BODY)],
+        ),
+        _site(
+            DSL_BODY,
+            0,
+            "kotlin/jvm/internal/Intrinsics#",
+            "checkNotNullParameter",
+            arguments=[
+                CallArgument(kind="unresolved"),
+                CallArgument(kind="string", value="$this$router"),
+            ],
+        ),
+        _site(
+            DSL_BODY,
+            1,
+            "java/lang/invoke/LambdaMetafactory#",
+            "invoke",
+            result=9,
+            invoke_kind="dynamic",
+        ),
+        _site(
+            DSL_BODY,
+            2,
+            DSL,
+            "nest",
+            invoke_kind="virtual",
+            arguments=[
+                CallArgument(kind="string", value="/kt"),
+                CallArgument(kind="lambda", source=9, symbol=DSL_CHILD),
+            ],
+        ),
+        _site(DSL_CHILD, 0, HANDLER_CLASS, "<init>", receiver=8, invoke_kind="special"),
+        _site(
+            DSL_CHILD,
+            1,
+            DSL,
+            "GET",
+            invoke_kind="virtual",
+            arguments=[
+                CallArgument(kind="string", value="/orders"),
+                CallArgument(kind="instance", source=8, symbol=HANDLER_CLASS),
+            ],
+        ),
+        _site(
+            DSL_CHILD,
+            2,
+            DSL,
+            "accept",
+            result=39,
+            invoke_kind="virtual",
+            arguments=[CallArgument(kind="unresolved")],
+        ),
+        _site(
+            DSL_CHILD,
+            3,
+            "java/lang/invoke/LambdaMetafactory#",
+            "invoke",
+            result=40,
+            invoke_kind="dynamic",
+        ),
+        _site(
+            DSL_CHILD,
+            4,
+            DSL,
+            "nest",
+            invoke_kind="virtual",
+            arguments=[
+                CallArgument(kind="unresolved", source=39),
+                CallArgument(kind="lambda", source=40, symbol=DSL_GRANDCHILD),
+            ],
+        ),
+        _site(
+            DSL_GRANDCHILD,
+            0,
+            DSL,
+            "GET",
+            invoke_kind="virtual",
+            arguments=[
+                CallArgument(kind="string", value="/rich"),
+                CallArgument(kind="lambda", symbol=INLINE_BODY),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+
+
+def test_a_body_linked_entry_folds_its_bodies_under_the_entrys_own_prefixes(tmp_path: Path):
+    """The entry roots the tree and the walk jumps to the body its `lambda`
+    argument names, then jumps again through the nested block's own link
+    (checkpoint (1b)). Every prefix on the way composes, so the leaf route
+    carries both; the unreadable media predicate a nest was built from poisons
+    only its own column; and every row of the tree carries the ENTRY's
+    containing method as `caller` — one router, one declarer — never the
+    compiler-generated body a route was folded from."""
+    workspace = _resolve(tmp_path, _body_linked_facts())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/kt/orders", None, "resolved"),
+        ("GET", "/kt/rich", _MODULE + INLINE_BODY, "resolved"),
+    ]
+    assert {row["caller"] for row in rows} == {DSL_ROUTES}
+    assert [row["produces"] for row in rows] == [None, None]
+
+
+def test_a_vocabulary_call_in_a_method_no_entry_links_to_derives_nothing(tmp_path: Path):
+    """Checkpoint F4, pinned. Rooting a method because it merely CONTAINS a
+    vocabulary call would derive every nested route twice — once under its
+    prefixes, once bare — and would also invent routes for a helper that holds
+    DSL calls no entry ever links to. Bodies are reached only through an
+    entry's or a nest's `lambda` argument, so the orphan below contributes
+    nothing at all, and the linked bodies contribute nothing SECOND."""
+    orphan = DECLARER + "orphan(sig_r0)."
+    facts = [
+        *_body_linked_facts(),
+        _site(
+            orphan,
+            0,
+            DSL,
+            "GET",
+            invoke_kind="virtual",
+            arguments=[
+                CallArgument(kind="string", value="/orphan"),
+                CallArgument(kind="lambda", symbol=HEALTH),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [row["path"] for row in rows] == ["/kt/orders", "/kt/rich"]
+    assert all(row["caller"] == DSL_ROUTES for row in rows)
+
+
+# --- (10) dedup: identity-known only, and the handler is part of it -------
+
+
+def test_only_identity_known_rows_dedup_and_the_key_includes_the_handler(tmp_path: Path):
+    """Two rules in one batch.
+
+    A row whose path nobody could read carries nothing to compare, so it never
+    enters the dedup key at all and each such reference stays its own row —
+    `fluent`'s own discipline, and the reason two unreadable routers do not
+    collapse into a single misleading fact.
+
+    `handler` IS part of the wire identity for an inbound handler row (the
+    `interface_implementation` parity rule): the same verb and path bound to
+    two different handlers are two facts, and a key without the handler would
+    silently discard the second. The same handler on the same identity, from
+    two methods, still collapses to one.
+    """
+    first = DECLARER + "first(sig_r0)."
+    second = DECLARER + "second(sig_r0)."
+    third = DECLARER + "third(sig_r0)."
+    unreadable = DECLARER + "unreadable(sig_r0)."
+
+    def _same_route(caller: str, handler: str) -> list:
+        return [
+            _site(
+                caller,
+                0,
+                PREDICATES,
+                "GET",
+                result=3,
+                arguments=[CallArgument(kind="string", value="/dup")],
+            ),
+            _site(
+                caller,
+                1,
+                ROUTERS,
+                "route",
+                result=9,
+                arguments=[
+                    CallArgument(kind="unresolved", source=3),
+                    CallArgument(kind="lambda", symbol=handler),
+                ],
+            ),
+        ]
+
+    facts = [
+        *_same_route(first, LIST_ORDERS),
+        *_same_route(second, LIST_ORDERS),
+        *_same_route(third, CREATE_ORDER),
+        _site(
+            unreadable,
+            0,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved"),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            unreadable,
+            1,
+            ROUTERS,
+            "route",
+            result=11,
+            arguments=[
+                CallArgument(kind="unresolved"),
+                CallArgument(kind="lambda", symbol=HEALTH),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    duplicated = [row for row in rows if row["path"] == "/dup"]
+    assert sorted(row["handler"] for row in duplicated) == [
+        _MODULE + CREATE_ORDER,
+        _MODULE + LIST_ORDERS,
+    ]
+    assert sorted(row["caller"] for row in duplicated) == sorted([first, third])
+    unresolved = [row for row in rows if row["resolution"] == "unresolved"]
+    assert len(unresolved) == 2
+    assert {row["path"] for row in unresolved} == {None}
+
+
+# --- catalog validation ---------------------------------------------------
+
+
+def test_an_entry_that_is_neither_declared_shape_is_refused(tmp_path: Path):
+    """An unchecked value does not stay in the file (`ports/catalogs.py`'s
+    discipline): an entry declaring neither `{methods, handler_arg}` nor
+    `{method, body_arg}` matches no call site at all, which reads as "this
+    router declares nothing" — the silent degradation the refusal exists to
+    prevent."""
+    matches = _matches()
+    matches["entries"] = [{"owner": "com.example.web.Routers", "methods": ["route"]}]
+    with pytest.raises(CatalogError, match="every `entries` item"):
+        _resolve(tmp_path, [], _catalog(matches))
+
+
+def test_a_media_rule_filling_a_column_that_does_not_exist_is_refused(tmp_path: Path):
+    """A `fills` typo would file every value the rule reads under the wrong
+    column — or none at all — and nothing downstream could tell that from a
+    framework that declares no media."""
+    matches = _matches()
+    vocabulary = matches["vocabulary"]
+    assert isinstance(vocabulary, dict)
+    vocabulary["media"] = [
+        {"owner": "com.example.web.Predicates", "method": "accept", "fills": "produce"}
+    ]
+    with pytest.raises(CatalogError, match="fills"):
+        _resolve(tmp_path, [], _catalog(matches))

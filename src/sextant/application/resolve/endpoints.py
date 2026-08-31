@@ -11,6 +11,7 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.capabilities import missing_capabilities
 from sextant.application.resolve.engines import (
     annotation_driven,
+    combinator,
     fluent,
     interface_implementation,
     single_call,
@@ -81,4 +82,5 @@ _ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
     "single_call": single_call.run,
     "fluent": fluent.run,
     "interface_implementation": interface_implementation.run,
+    "combinator": combinator.run,
 }
