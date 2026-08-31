@@ -357,6 +357,23 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # identity with the listener, so it now stands unmerged (asserted
         # below) rather than disappearing into `direction: both`.
         (None, "${orders.audit.topic}"),
+        # 2F Task 3 fix round 1 (review ruling, spec §4 amended at commit
+        # 461d35d): `BillingClients`' four half-2 chains feed their base
+        # address through `WebClient.builder().baseUrl(...)` after all (a
+        # `base` capture with base+path composition is Task 8's own
+        # amendment, not yet shipped). TODAY, `baseUrl()` is not a declared
+        # step in `spring-webclient.yml`, so each chain derives off its own
+        # `.uri()` literal alone — resolved, peer NULL (a relative path) —
+        # regardless of what feeds `baseUrl()`. Each method's own literal is
+        # deliberately distinct so all three real cases (plus the computed
+        # miss) survive `fluent.py`'s cross-caller wire-identity dedup as
+        # four separate rows rather than collapsing into one. These four
+        # rows are expected to change again once Task 8 lands (re-freezing,
+        # not a bug) — pinned exactly as this live run emits them.
+        ("GET", "/invoices"),
+        ("GET", "/refunds"),
+        ("GET", "/statements"),
+        ("GET", "/adjustments"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -473,28 +490,30 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     #
     # 2F Task 3 (the configuration surface fixture) adds 5 more. Four are
     # `BillingClients`' own half-2 WebClient chains (`fieldFedInvoice`/
-    # `constructorFedInvoice`/`propertiesFedInvoice`/`computedBaseInvoice`):
-    # each chain's `.uri()` argument is a field read, a properties-getter
-    # call result, or a computed concatenation — never a string literal —
-    # so `url_of` degrades every one honestly to `path: NULL, resolution:
-    # unresolved` (the `field` argument kind doesn't exist until Task 5;
-    # today every one of these reads as the compiler's own `unresolved`
-    # kind). All four share the `(GET, None)` tuple the route set already
-    # holds (InventoryWebClient#search), so the SET gains no new entry for
-    # them even though this count does. `OrderStreamBindings`' four
-    # `@Bean Consumer<OrderEvent>`/`Supplier<OrderEvent>` methods derive
-    # nothing at all under the shipped engines (no `single_call`/`fluent`
-    # root inside a trivial lambda body) — `config_join` (Task 7) is what
-    # eventually reads them. The fifth new row is `AuditJmsListener#onAudit`
-    # moving to `${orders.audit.topic}`: its previous merge with
-    # `EventProducers#sendAuditMessage`'s own `"audit.queue"` send no longer
-    # fires (different literal strings), so the send stands unmerged —
-    # `(None, "audit.queue")` keeps its existing tuple in the SET, but the
-    # table itself gains a genuine second row (`onAudit`'s inbound row moves
-    # to its own new identity; `sendAuditMessage`'s outbound row survives
-    # standalone rather than being deleted by the merge). 82 + 5 = 87.
-    # Verified live against real bytecode, not computed from the brief
-    # alone — this is Task 3's own frozen baseline for Tasks 4-8.
+    # `constructorFedInvoice`/`propertiesFedInvoice`/`computedBaseInvoice`),
+    # each feeding its base address through `WebClient.builder().baseUrl(...)`
+    # imperatively — a field, a constructor-injected `@Value` parameter, a
+    # bound `@ConfigurationProperties` object, and a computed concatenation
+    # respectively (fix round 1, review ruling: `baseUrl()` is NOT a
+    # declared step in the shipped `spring-webclient.yml` catalog, so it is
+    # never consulted — each row derives off its own DISTINCT `.uri()`
+    # literal alone, `resolved`, peer NULL, four new tuples in the route
+    # SET above). `OrderStreamBindings`' four `@Bean Consumer<OrderEvent>`/
+    # `Supplier<OrderEvent>` methods derive nothing at all under the shipped
+    # engines (no `single_call`/`fluent` root inside a trivial lambda body)
+    # — `config_join` (Task 7) is what eventually reads them. The fifth new
+    # row is `AuditJmsListener#onAudit` moving to `${orders.audit.topic}`:
+    # its previous merge with `EventProducers#sendAuditMessage`'s own
+    # `"audit.queue"` send no longer fires (different literal strings), so
+    # the send stands unmerged — `(None, "audit.queue")` keeps its existing
+    # tuple in the SET, but the table itself gains a genuine second row
+    # (`onAudit`'s inbound row moves to its own new identity;
+    # `sendAuditMessage`'s outbound row survives standalone rather than
+    # being deleted by the merge). 82 + 5 = 87. Verified live against real
+    # bytecode, not computed from the brief alone — this is Task 3's own
+    # frozen baseline for Tasks 4-8. The four `BillingClients` rows are
+    # expected to change again once Task 8's `base` capture lands
+    # (re-freezing, not a bug) — see the review ruling above.
     assert len(report.endpoints) == 87
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
