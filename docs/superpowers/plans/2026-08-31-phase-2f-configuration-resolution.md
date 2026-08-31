@@ -141,7 +141,19 @@
 
 ---
 
-### Task 8: The field ladder — both halves joined
+### Task 8: The field ladder and base composition — both halves joined
+
+> AMENDED by the Task 3 execution ruling (spec §4's base-composition paragraph): this
+> task ALSO adds the `base` capture to the fluent vocabulary — `base` joins
+> `_ARGUMENT_FIELDS`, the HTTP builder catalogs (`spring-webclient.yml`,
+> `spring-restclient.yml`) declare `{method: baseUrl, base: arg0}` steps, and
+> `_derive` composes: captured base + captured url when both exist; base alone
+> through `url_of`; an expression-bearing composition keeps the whole expression as
+> `path`, `peer` NULL. Unit tests: literal base + literal path compose and CP-2
+> splits the result; field-kind base resolved through the ladder + literal path;
+> base alone; poisoned base (unreadable field, no ladder match) → row unresolved.
+> Existing builder rows with a literal `baseUrl` upgrade — re-freeze their pins from
+> the live run and record the delta.
 
 **Files:**
 - Modify: `src/sextant/application/resolve/shapes/arguments.py` (the ladder: `field_expression(argument, field_facts) -> str | None` + a `FieldFacts` container built once per engine run: field annotations, `field_writes`, `<init>` parameter annotations, `@ConfigurationProperties` prefixes by enclosing class), `single_call.py` + `fluent.py` (where a url/channel capture reads its argument: a `field`-kind argument first consults the ladder; a returned expression proceeds exactly as a string literal — CP-2 split and all; None → today's unresolved path), `src/sextant/egress/render/metadata.py` + `document.py` (gap rotation: retire `client_base_addresses_not_resolved`; add `computed_base_addresses_not_traced` and `config_as_code_not_read` with their sentences)

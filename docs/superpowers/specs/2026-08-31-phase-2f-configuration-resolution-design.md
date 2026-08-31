@@ -204,6 +204,17 @@ literal); values stay in `resolved_config`. Scope fence: the `field` kind is con
 only where an argument ladder reads it — no shape or nullability behavior changes from
 field-kind arguments, and the frozen pins prove it.
 
+**Base composition (amended during execution — the fluent engine never read `baseUrl`
+at all, so without this the half above silently narrows to uri-argument resolution):**
+the `fluent` vocabulary gains a `base` capture field, declared like `url` (`{method:
+baseUrl, base: arg0}` on the HTTP builder catalogs). At derive time a captured base
+composes with the captured url — `base + path`; a base with no url stands alone through
+`url_of`; a composition carrying an expression keeps the WHOLE expression as `path`
+with `peer` NULL (unsplittable until resolution — the per-environment peer join
+produces the resolved URL). The ladder feeds a base-position `field` argument exactly
+as a url-position one. Existing builder rows that carry a literal `baseUrl` upgrade
+(today that literal is silently ignored); their pins re-freeze once, from the live run.
+
 **Gap rotation:** `client_base_addresses_not_resolved` retires;
 `computed_base_addresses_not_traced` arrives (concatenation, setter injection,
 method-returned bases) so the boundary stays named instead of vanishing.
