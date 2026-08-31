@@ -46,6 +46,11 @@ honest) — and one `config_entry` fact per key:
 - the source file, the YAML document index (multi-doc activation needs it), and
   declaration-order `seq` (NFR-1).
 
+**Where the facts land.** Readers return facts; the analyze stage writes them through
+the existing domain factfile writer into the same JSONL fact tree the scanner feeds, one
+document per config file — `load_facts`'s bulk read picks them up with zero changes, and
+ingress keeps its write-only contract (readers never touch the Workspace port).
+
 Unparseable files record their document `partial` (the existing degradation vocabulary).
 Config-as-code — Django `settings.py`, Nest config factories — is out of any file
 reader's reach by construction; its gap key lands in §5.
@@ -72,7 +77,10 @@ config_model:
 
 Profile spelling is a closed three-mechanism vocabulary — `from_filename`,
 `from_document_key`, and `from_key_prefix` (reserved for Quarkus's `%dev.`, documented
-now, unimplemented until a Quarkus catalog exists). No regex-in-YAML anywhere; the
+now, unimplemented until a Quarkus catalog exists). The filename marker generalizes: a
+`{profile}` (or `{-profile}`) placeholder may sit ANYWHERE in a source pattern —
+`application{-profile}.yml` for Spring, `{profile}.json` for a node-config layout whose
+whole filename is the profile — with the empty match naming the base file. No regex-in-YAML anywhere; the
 placeholder grammar is delimiters plus a default separator, which covers every surveyed
 ecosystem.
 
@@ -96,8 +104,11 @@ nothing rewrites an endpoint row per environment.
 
 Registered like the other seven; sequenced after pass 2 (it consumes `resolved_config`)
 and after the call-site styles within the engine loop (its stamps enrich rows other
-engines minted). `requires: [resolved_config]` — a new capability the pipeline declares
-once pass 2 runs, so a config-less run skips these catalogs visibly, never silently.
+engines minted). `requires: [resolved_config]` — the first PIPELINE-declared capability
+(every prior one is scanner-declared): the pipeline adds it once pass 2 has run, so a
+config-less run skips these catalogs visibly, never silently. D02 §1's capability
+paragraph gains one sentence naming the two provenance kinds, so 2J's reviewers read
+this as design, not drift.
 
 **Job 1 — binding-derived endpoints** (D02 §2d's `address_from_config`, implemented):
 
@@ -159,7 +170,11 @@ D06 bundles it; L links on it; endpoint rows are untouched.
 ## 4. Both halves of base addresses — the scoped extractor amendments
 
 Two additive D00 amendments, both bumping the extractor version (D05 invalidation; the
-version-coupling build note applies):
+version-coupling build note applies). **Both are written into D00 the way `lambda` and
+`<init>` were** — a neutral cross-language contract definition first ("an argument that
+reads a declared field, carrying that field's symbol"; "a constructor assigns parameter
+N directly to field F"), with the JVM instructions below as ONE extractor's mapping into
+it: a Python attribute read or a Go struct-field read normalizes into the same kinds.
 
 1. **A `field` argument kind.** A GETFIELD/GETSTATIC that is not the enum-constant shape
    becomes `{kind: field, symbol: <the field's bare descriptor>}` instead of
@@ -212,10 +227,17 @@ frozen exact sets extended once from live runs; the determinism double-run cover
 `resolved_config` and the new facts by construction; loader-iterating sweeps picking up
 the new catalogs automatically.
 
-**Docs.** D00: the `field` kind, the `field_write` fact, `config_entry`; D01:
-`resolved_config` real, the peer join documented; D02: `config_model`,
-`address_from_config` as-implemented, `media_from_config`, the eighth style's section;
-D06: `environments` live; M02 resource roots; M03 readers real; M04 pass 2 real.
+**Docs.** D00: the `field` kind, the `field_write` fact, `config_entry` (each with its
+cross-language contract sentence, §4's rule); D01: `resolved_config` real, the peer join
+documented; D02: `config_model`, `address_from_config` as-implemented,
+`media_from_config`, the eighth style's section, the capability-provenance sentence in
+§1; D06: `environments` live; M02 resource roots; M03 readers real; M04 pass 2 real.
+**Renderer (M07):** the module document's coverage section lists the environments
+resolved and NAMES every unresolved config key with its reason and environment — the
+missing-`prod`-key case must be readable on the page, not only in the table.
+Per-environment peer tables are deliberately NOT rendered at module level (one
+sentence records it): resolved peers are L's system-document material; the module page
+stays environment-neutral like its endpoint rows.
 COVERAGE: Stream/aws rows flip with their boundaries (config-as-code, setter injection,
 computed bases, per-env serializer splits, remote sources). Gap keys: retire
 `client_base_addresses_not_resolved`; add `computed_base_addresses_not_traced` and
