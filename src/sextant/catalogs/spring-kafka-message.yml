@@ -39,8 +39,18 @@ matches:
   # constant's own symbol — any OTHER `setHeader` call on the same chain
   # still matches this step (D02 §2b: "the step matches the chain either
   # way"), only its own capture does not apply.
+  #
+  # `channel`, not `url` (fix round 1, MINOR-5): a Kafka topic is a
+  # destination expression, never a URL — reading it as `url` would route
+  # it through CP-2's `split_url`, which happens to be output-neutral here
+  # ("raw-messages" is not an absolute `scheme://` string, so `split_url`
+  # already answers `peer: None`) but is the WRONG reader on principle, the
+  # same distinction `aws-sqs-sdk.yml`'s own catalog comment draws between
+  # its genuinely HTTP-shaped queue URL and every `channel`/`channel_arg`
+  # destination elsewhere. `channel_of` is the honest reader: a destination
+  # is recorded verbatim, `peer` unconditionally NULL, never split.
   steps:
-    - { method: setHeader, when: { arg: 0, equals: "kafka_topic" }, captures: { url: arg1 } }
+    - { method: setHeader, when: { arg: 0, equals: "kafka_topic" }, captures: { channel: arg1 } }
   # `build`'s own result reaches `KafkaTemplate#send`'s own argument
   # `source` — the same `terminal_via_argument` join every other
   # builder-shaped catalog in this file uses (`aws-sqs-sdk.yml`,

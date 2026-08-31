@@ -223,6 +223,25 @@ destination is a whole queue URL
 (`https://sqs.us-east-1.amazonaws.com/123456789012/my-queue`), and splitting it would
 record a destination nothing could send to plus a peer no messaging fact ever carried.
 
+**`channel_via` reads a destination the consuming call's own argument position never names
+directly** — `session.createProducer(session.createQueue("raw-audit"))`'s topic lives on
+`createQueue`'s own argument, not `createProducer`'s. A row declaring it is `[{owner,
+method, arg: int | "all_strings"}]`, each form tried in the order written until one's
+`owner`+`method` reach the argument's own linked call site (the same value-id join
+`call_wrappers` uses, §2h, generalised to any named method rather than only `<init>`); `arg`
+an integer reads that one position off the linked call, verbatim, and `arg: "all_strings"`
+reads every one of its string-kind positional arguments as its own resolved tuple — one row
+per element, plus one trailing unresolved tuple if any element failed to resolve, never a
+per-element guess. **The ladder tries the literal argument FIRST, `channel_via` only as a
+fallback**: some APIs genuinely overload a destination-taking method with both a
+literal-string form and a linked-instance form, so a `channel_via`-declared row still reads
+the captured position directly before ever following the link, and only falls back once
+that direct read is not a resolved string literal. `channel_via` without `channel_arg`/
+`url_arg` on the same row is a `CatalogError`: it says *how* to read a position the row has
+to name first. This same ladder — literal first, linked call as fallback — is what `fluent`
+and `interface_implementation` (both below) read a `channel`/`channel_arg` position through
+too.
+
 **A row declaring neither `http_method` nor `method_arg` is verbless by declaration** — a
 topic has no verb. The row derives `method` NULL without penalising `resolution`, exactly
 as `method_arg`'s own unresolved case does; resolved verbless rows dedup on `(protocol,
@@ -305,6 +324,28 @@ consumer — `Request r = builder.build(); log.debug("…", r);` alongside the r
 the join narrows to that one declared call; every other consumer of the same value no longer
 counts.
 
+**A root's or a step's own `captures` may also name `channel`** — `url`'s
+destination-shaped counterpart, exactly the distinction `single_call`'s own `url_arg`/
+`channel_arg` pair keeps (§2, above): a `url` capture is an address CP-2 may split into
+peer and path, a `channel` capture is a destination expression recorded verbatim as `path`
+with `peer` always NULL. `google-pubsub-publisher.yml`'s root captures
+`Publisher.newBuilder`'s own `channel: arg0`. **A chain's `roots` and `steps`, TAKEN TOGETHER, may
+declare `url` or `channel`, never both** — checked over every entry's own captures at once,
+not one entry at a time: a chain folds every step's captures into one running set as it
+walks (above), so `channel` declared on one step and `url` declared on a *different* step
+in the same catalog collide in that one running set exactly as one entry naming both would,
+and a per-entry-only check would let the collision load silently.
+
+**A `channel`-declaring entry may also declare `channel_via`**, read through the SAME
+literal-first, linked-call-fallback ladder `single_call`'s own `channel_arg`/`channel_via`
+pair defines (§2, above) — a `[{owner, method, arg}]` list, tried in order, followed only
+once the captured position itself is not a resolved string literal. `channel_via` is
+declared alongside `captures` on the SAME root or step entry that captures `channel`, and —
+since a root's own captures already fold forward through every later step it reaches — a
+root's own `channel_via` ladder rides forward the same way, available to resolve the
+chain's `channel` wherever the walk finally derives, with no need to repeat it on a later
+step.
+
 ### `interface_implementation`
 
 The boundary is declared by implementing a framework interface — Pub/Sub's
@@ -333,8 +374,8 @@ matches:
 
 `registration` is `{owner, method, channel_arg, receiver_arg, channel_via?}` — the one
 call site that binds a receiver to a channel. **`channel_arg` reads through the same
-capture ladder §2h's `channel_via` already defines, tried in that order**: a string
-literal at that position resolves directly first — `Subscriber.newBuilder(String,
+capture ladder `single_call`'s own `channel_via` already defines (§2, above), tried in
+that order**: a string literal at that position resolves directly first — `Subscriber.newBuilder(String,
 MessageReceiver)` is a real overload alongside the `ProjectSubscriptionName` one, and a
 `channel_via`-declared row must still catch it — and only when the argument is not a
 resolved string literal does a declared `channel_via` form follow the linked call's own

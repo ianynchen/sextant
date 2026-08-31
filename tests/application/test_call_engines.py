@@ -1634,6 +1634,49 @@ def test_a_linked_createqueue_call_derives_the_topic_off_its_own_argument(tmp_pa
     assert endpoint["resolution"] == "resolved"
 
 
+def test_a_channel_via_declaring_row_still_resolves_a_literal_argument_first(tmp_path: Path):
+    """Fix round 1 ruling: `single_call`'s own `channel_via` branch is now
+    the SAME literal-first, linked-call-fallback LADDER `fluent`/
+    `interface_implementation` already read a destination through, not an
+    either/or that always follows the link once `channel_via` is declared.
+    `createProducer`'s own arg0 here is a plain string literal — no
+    `createQueue` call anywhere in this caller for it to link to — so the
+    ladder's first rung (`channel_of`, the SAME reader the non-`channel_via`
+    branch uses) answers directly, `channel_via`'s own linked-call form
+    never even tried. Fixture-neutral for every catalog shipped so far
+    (`jakarta-jms.yml`/`kafka-consumer.yml`'s real `channel_arg` positions
+    are never themselves literals — verified live, every frozen pipeline
+    row unchanged), but the ladder's own first rung has to exist and be
+    provably reachable on its own."""
+    caller = "com/acme/orders/messaging/raw/RawJmsBridge#createLiteralProducer()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=SESSION,
+                name="createProducer",
+                descriptor="(Ljakarta/jms/Destination;)Ljakarta/jms/MessageProducer;",
+            ),
+            invoke_kind="interface",
+            ordinal=0,
+            receiver=3,
+            result=8,
+            arguments=[CallArgument(kind="string", value="raw-literal")],
+        ),
+    ]
+    catalog = _channel_via_catalog(
+        _CREATE_PRODUCER_MATCHES, "invented-channel-via-literal-first", "jms"
+    )
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "raw-literal"
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "resolved"
+
+
 def test_all_strings_derives_one_row_per_element_of_a_linked_list_of_call(tmp_path: Path):
     """`subscribe(instance -> List.of("raw-t1", "raw-t2"))` with
     `arg: "all_strings"`: `List.of` with <=2 elements binds the FIXED-ARITY
@@ -3422,3 +3465,64 @@ def test_a_malformed_channel_via_entry_on_a_fluent_root_is_refused_at_run_start(
     workspace.close()
 
     assert "invented-pubsub-bad-channel-via.yml" in str(raised.value)
+
+
+def test_a_url_and_a_channel_capture_on_the_same_entry_is_refused_at_run_start(
+    tmp_path: Path,
+):
+    """The plain case (fix round 1, closing MINOR-6's untested per-entry
+    refusal): one root declaring both `url` and `channel` is refused —
+    `_derive` only ever reads one of the two."""
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.pubsub.Publisher",
+                "method": "newBuilder",
+                "captures": {"url": "arg0", "channel": "arg0"},
+            }
+        ],
+        "steps": [],
+        "terminal": ["build"],
+    }
+    catalog = _fluent_catalog(matches, "invented-url-and-channel-same-entry")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-url-and-channel-same-entry.yml" in str(raised.value)
+
+
+def test_a_url_on_one_step_and_a_channel_on_a_different_step_is_refused_at_run_start(
+    tmp_path: Path,
+):
+    """The mutation-proven case (fix round 1, MAJOR): `url` declared on ONE
+    step and `channel` declared on a DIFFERENT step, in the same chain,
+    used to load with no error at all — a per-entry-only check never saw
+    the two together, and `_derive` silently discarded whichever one folded
+    in first (a real okhttp-shaped probe: resolved became unresolved with
+    no diagnostic). Refused now: the check runs over the UNION of every
+    root's and every step's own captures, not one entry at a time."""
+    matches = {
+        "roots": [
+            {"owner": "com.acme.http.WebClient", "method": "get", "captures": {}},
+        ],
+        "steps": [
+            {"method": "uri", "captures": {"url": "arg0"}},
+            {"method": "topic", "captures": {"channel": "arg0"}},
+        ],
+        "terminal": ["retrieve"],
+    }
+    catalog = _fluent_catalog(matches, "invented-url-and-channel-different-steps")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-url-and-channel-different-steps.yml" in str(raised.value)

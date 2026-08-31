@@ -1161,8 +1161,9 @@ def test_the_field_held_publisher_derives_two_honest_unresolved_duplicate_rows(
 def test_a_named_messagereceiver_and_a_lambda_receiver_each_derive_their_own_handler(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """`google-pubsub-subscriber.yml`, D02 §3b's own worked example against
-    the real fixture: `RawPubSubSubscribers#withNamedReceiver`'s
+    """`google-pubsub-subscriber.yml`, D02 §2's `interface_implementation`
+    style's own worked example against the real fixture:
+    `RawPubSubSubscribers#withNamedReceiver`'s
     `Subscriber.newBuilder(ProjectSubscriptionName.of(project,
     "raw-notify"), new RawPubSubReceiver())` resolves the `instance`
     receiver to `RawPubSubReceiver#receiveMessage` (its class's own

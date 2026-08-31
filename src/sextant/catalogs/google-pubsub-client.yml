@@ -20,8 +20,9 @@ matches:
   # honest path-NULL unresolved row instead of silence: without it, a
   # config-built `Publisher` field would never appear as an endpoint at
   # all (a fluent chain that never reaches its own terminal derives
-  # nothing, D02 §4's "the true answer", and a field-held `Publisher`'s own
-  # construction is never itself a chain this catalog's fluent sibling
+  # nothing, D02 §2's `fluent` style's own "the true answer", and a
+  # field-held `Publisher`'s own construction is never itself a chain this
+  # catalog's fluent sibling
   # could ever walk).
   #
   # EXPECTED DUPLICATE (spec §4's duplicate-row ruling — asserted
@@ -35,7 +36,7 @@ matches:
   # `spring-kafka-message.yml`/`spring-kafka-template.yml`'s own
   # `record_arg` row keeps for `KafkaTemplate.send(Message)` — "unresolved
   # is an answer, never an omission" outranks tidiness, and cross-catalog
-  # suppression is deliberately not this catalog's concern (D02 §4).
+  # suppression is deliberately not this catalog's concern (spec §4).
   methods:
     - { name: publish, arity: 1, body_arg: 0 }
 

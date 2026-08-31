@@ -165,11 +165,30 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # call (`all_strings`). `linked_channels` always returns a list, so
         # this collapses to the same one-tuple list the non-`channel_via`
         # case builds by hand.
+        #
+        # The ladder is a LADDER, not an either/or (2E-prep Task 12 fix
+        # round 1, unifying this with `interface_implementation`'s own
+        # ladder, D02 §2's own new `channel_via` paragraph): a
+        # `channel_via`-declared row still tries the
+        # literal read FIRST, through the SAME reader (`channel_of`/`url_of`)
+        # the non-`channel_via` branch below uses — some APIs genuinely
+        # overload a destination-taking method with both a literal-string
+        # and a linked-instance form — and only falls back to the linked
+        # call when the literal itself did not resolve. Fixture-neutral for
+        # every catalog shipped so far: `jakarta-jms.yml`/`kafka-consumer.yml`'s
+        # own `channel_arg` positions are never themselves string literals
+        # (a `Queue`/`Collection` instance, always linked), so the ladder's
+        # first rung never fires there and every frozen row is unchanged.
         destinations: Sequence[tuple[str | None, str | None, str]]
+        read_destination = channel_of if "channel_arg" in method else url_of
         if "channel_via" in method:
-            destinations = linked_channels(url_argument, facts, _channel_via_forms(method))
+            literal = read_destination(url_argument)
+            forms = _channel_via_forms(method)
+            if literal[2] != "resolved" and forms:
+                destinations = linked_channels(url_argument, facts, forms)
+            else:
+                destinations = [literal]
         else:
-            read_destination = channel_of if "channel_arg" in method else url_of
             destinations = [read_destination(url_argument)]
         response_argument = _arg_at(arguments, method.get("response_arg"))
         # `direction` on a row overrides the catalog's own declared

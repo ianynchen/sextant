@@ -10,10 +10,10 @@ detect:
 requires: [call_site, string_constants, implemented_interfaces]
 
 matches:
-  # D02 §3b's own worked example, shipped verbatim against the real
-  # fixture: `Subscriber.newBuilder(subscription, receiver)` is the
-  # evidence — a `MessageReceiver` implementation never handed to a
-  # matching registration derives nothing (D02 §3b's "the registration is
+  # D02 §2's `interface_implementation` style's own worked example, shipped
+  # verbatim against the real fixture: `Subscriber.newBuilder(subscription,
+  # receiver)` is the evidence — a `MessageReceiver` implementation never
+  # handed to a matching registration derives nothing ("the registration is
   # the evidence"), so this style needs no execute-terminal.
   interface: com.google.cloud.pubsub.v1.MessageReceiver
   handler_method: receiveMessage
@@ -35,10 +35,10 @@ matches:
 # discipline as spring-kafka-template.yml — see its own comment for the full
 # rationale). `nullability` is harvested from spring-mvc.yml. Neither rule
 # actually applies to a row this style derives (`request_shape`/
-# `response_shape` are always NULL, D02 §3b — `PubsubMessage` is a declared
-# no-shape envelope), carried only for the loader's own compatibility-block
-# pin, the same discipline every shipped catalog keeps regardless of
-# whether its own rows exercise every block.
+# `response_shape` are always NULL, D02 §2's `interface_implementation` style
+# — `PubsubMessage` is a declared no-shape envelope), carried only for the
+# loader's own compatibility-block pin, the same discipline every shipped
+# catalog keeps regardless of whether its own rows exercise every block.
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }

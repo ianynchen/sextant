@@ -20,8 +20,8 @@ matches:
   # CHECKPOINT FACT (real javap descriptors, kafka-clients 3.6.2):
   # `subscribe(Collection<String>)` and `subscribe(Pattern)` are BOTH arity
   # 1, indistinguishable by name+arity alone — one declared row covers both,
-  # `channel_via` (D02 §2h) trying each declared form in turn until one
-  # reaches the argument's own linked call.
+  # `channel_via` (D02 §2's `single_call` style) trying each declared form
+  # in turn until one reaches the argument's own linked call.
   #
   # `List.of` binds a FIXED-ARITY overload for up to 10 elements (checkpoint
   # ruling, also `linked_channels`'s own docstring): each element is its own

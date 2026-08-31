@@ -54,7 +54,7 @@ from sextant.application.resolve.shapes.rooting import _catalog_symbol
 # from the catalog (`http_method`, `response_is`). `channel` (Task 12,
 # 2E-prep) is `url`'s destination-shaped counterpart, exactly as
 # `single_call`'s own `channel_arg` is `url_arg`'s — never split into a peer
-# (D02 §2d), and resolved through the SAME literal-first,
+# (D02 §2's `fluent` style), and resolved through the SAME literal-first,
 # `channel_via`-fallback ladder `single_call`/`interface_implementation`
 # already use, rather than `url_of`'s CP-2 split.
 _ARGUMENT_FIELDS = ("url", "body", "response", "channel")
@@ -123,6 +123,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     _validate_steps(steps, catalog)
     _validate_captures(roots, catalog, allow_when=False)
     _validate_captures(steps, catalog, allow_when=True)
+    _validate_url_channel_exclusivity(roots, steps, catalog)
     terminal_names, via_argument_names = _terminal_index(matches.get("terminal", []))
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
@@ -277,9 +278,11 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     # A chain's own identity comes from EITHER a `url` capture (CP-2's
     # peer/path split, `aws-sqs-sdk.yml`'s absolute queue URL) OR a
     # `channel` capture (Task 12: an opaque destination, never split into a
-    # peer — D02 §2d, the same rule `single_call`'s own `channel_arg`
-    # keeps) — `_validate_captures` refuses a chain declaring both, so at
-    # most one is ever folded in. `channel`'s own ladder mirrors
+    # peer — D02 §2's `fluent` style, the same rule `single_call`'s own
+    # `channel_arg` keeps) — `_validate_url_channel_exclusivity` refuses a catalog whose
+    # roots/steps declare both ANYWHERE (checked over their union, not per
+    # entry — fix round 1), so at most one is ever folded in here.
+    # `channel`'s own ladder mirrors
     # `single_call`/`interface_implementation`'s: try the literal argument
     # first (`channel_of`), and only fall back to the declared
     # `channel_via` linked call when the literal itself did not resolve —
@@ -451,11 +454,11 @@ def _validate_steps(steps: list[dict[str, Any]], catalog: Catalog) -> None:
 def _validate_captures(
     entries: list[dict[str, Any]], catalog: Catalog, *, allow_when: bool
 ) -> None:
-    """Refuses a catalog whose `url`/`body`/`response` capture does not name
-    a call-site position (`ports/catalogs.py`'s own discipline again: an
-    unchecked value does not stay in the file).
+    """Refuses a catalog whose `url`/`body`/`response`/`channel` capture does
+    not name a call-site position (`ports/catalogs.py`'s own discipline
+    again: an unchecked value does not stay in the file).
 
-    These three fields address an argument by position, and anything that is
+    These four fields address an argument by position, and anything that is
     not `argN` — a typo, a bare number, a field name — silently captures
     nothing: the row still derives, with the payload column NULL and the url
     unresolved, which is indistinguishable from a call site that genuinely
@@ -463,6 +466,13 @@ def _validate_captures(
     cannot be checked here, because the range belongs to each matched call
     site rather than to the catalog; ruling I1 already covers it at derive
     time, where the site is known.
+
+    `url`/`channel` exclusivity is NOT checked here, per entry — that is
+    `_validate_url_channel_exclusivity`'s own job, over the UNION of every
+    root's and every step's own captures (fix round 1: a per-entry-only
+    check let `channel` on one step and `url` on a DIFFERENT step load with
+    no error at all, silently discarding the url capture at derive time —
+    mutation-proven against a real okhttp-shaped probe).
 
     `when` (D02 §2b) is a STEP's own guard — a root starts the chain, with
     no prior capture a guard could ever condition, so `allow_when=False`
@@ -479,13 +489,6 @@ def _validate_captures(
                     f"`{field}: {value}`, which is not a call-site position — an argument "
                     f"capture reads `argN` (D02 §4's fluent style)"
                 )
-        if "url" in entry["captures"] and "channel" in entry["captures"]:
-            raise CatalogError(
-                f"loading catalog {catalog.source}: `{entry['method']}` captures both `url` "
-                f"and `channel` — they are two different readings of the same identity "
-                f"position (D02 §2h, mirroring single_call's own `url_arg`/`channel_arg` "
-                f"exclusivity)"
-            )
         when = entry.get("when")
         if when is None:
             continue
@@ -501,6 +504,36 @@ def _validate_captures(
                 f"`when: {when!r}`, which must be `{{arg: int, equals: str}}` exactly "
                 f"(D02 §2b's value-guarded step)"
             )
+
+
+def _validate_url_channel_exclusivity(
+    roots: list[dict[str, Any]], steps: list[dict[str, Any]], catalog: Catalog
+) -> None:
+    """Refuses a catalog whose `roots`/`steps`, TAKEN TOGETHER, declare both
+    a `url` capture and a `channel` capture anywhere — the two are
+    different readings of the same identity position (D02 §2's `fluent` style, mirroring
+    `single_call`'s own `url_arg`/`channel_arg` exclusivity), and `_derive`
+    only ever reads one of the two (`"channel" in captures` wins outright,
+    `url_of(captures.get("url"))` otherwise).
+
+    Checked over the UNION of every entry's own captures, never per entry
+    (fix round 1, mutation-proven): a chain's own `captures` dict is folded
+    step by step as the walk proceeds (`_walk`'s own last-wins fold), so
+    `channel` declared on one step and `url` declared on a DIFFERENT step
+    in the SAME catalog still collide in that one running dict by the time
+    `_derive` reads it — a per-entry-only check let exactly this load with
+    no error at all, silently discarding whichever capture folded in
+    first."""
+    fields: set[str] = set()
+    for entry in (*roots, *steps):
+        fields.update(entry["captures"])
+    if "url" in fields and "channel" in fields:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: this catalog's roots/steps declare both "
+            f"`url` and `channel` captures — they are two different readings of the same "
+            f"identity position (D02 §2's `fluent` style, mirroring single_call's own "
+            f"`url_arg`/`channel_arg` exclusivity)"
+        )
 
 
 def _valid_when(when: Any) -> bool:
@@ -558,7 +591,7 @@ def _validate_channel_via_entries(entries: list[dict[str, Any]], catalog: Catalo
                 f"loading catalog {catalog.source}: `{entry.get('method')}` declares "
                 f"`channel_via` without a `channel` capture — `channel_via` says how to "
                 f"read an instance already named by `channel`, never a destination on its "
-                f"own (D02 §2h, mirroring single_call's own rule)"
+                f"own (D02 §2's `fluent` style, mirroring single_call's own rule)"
             )
 
 

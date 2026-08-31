@@ -58,9 +58,11 @@ matches:
 # `sqs.<region>.amazonaws.com`, path `/<account>/<queue>` — a deliberate
 # contrast with `single_call`'s `channel_arg` (spring-sqs-template.yml),
 # which keeps a queue URL whole precisely BECAUSE it is a destination
-# expression on that surface, never a URL to parse. Both are honest: the
-# fluent engine has no `channel_arg`-shaped capture at all, only `url`, and
-# `url` genuinely is what AWS's own builder API takes here.
+# expression on that surface, never a URL to parse. Both are honest: this
+# catalog declares `url`, never `channel` (fluent's own destination-shaped
+# capture, added in 2E-prep Task 12 for `google-pubsub-publisher.yml`'s
+# opaque topic identity) — `url` genuinely is what AWS's own builder API
+# takes here, a real HTTP-style URL, not a destination expression.
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full

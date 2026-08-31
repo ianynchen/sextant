@@ -16,8 +16,8 @@ matches:
   # arity 1. Neither one's own argument is ever the destination NAME
   # directly — it is a `Queue`/`Topic` instance, itself the return of a
   # SEPARATE `Session#createQueue(String)`/`createTopic(String)` call, so
-  # `channel_via` (D02 §2h) follows that link rather than reading
-  # `channel_arg`'s position as a literal.
+  # `channel_via` (D02 §2's `single_call` style) follows that link rather
+  # than reading `channel_arg`'s position as a literal.
   #
   # `Session#send(Message, ...)` is deliberately NOT declared here: a raw
   # `jakarta.jms.Message` is an opaque envelope this catalog's rules cannot

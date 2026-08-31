@@ -30,7 +30,7 @@ matches:
   # codebase already reads (`kafka-consumer.yml`'s `List.of`, `jakarta-
   # jms.yml`'s `createQueue`). `arg: 1` is the topic id; `arg: 0` (the
   # project) is never read here — a destination is opaque, never split into
-  # a peer (D02 §2d/§3).
+  # a peer (D02 §2's `fluent` style, its own `channel` paragraph).
   roots:
     - { owner: com.google.cloud.pubsub.v1.Publisher, method: newBuilder,
         captures: { channel: arg0 },
@@ -42,8 +42,9 @@ matches:
   # rule for — `request_shape` stays honestly NULL, the same
   # `jakarta.jms.Message` opaque-envelope precedent `jakarta-jms.yml`
   # already states for `send()`. Steps: none needed — `newBuilder` and
-  # `build` chain straight through undeclared (D02 §4: "unmatched steps
-  # pass through uncaptured"), no intermediate call folds in a capture.
+  # `build` chain straight through undeclared (D02 §2's `fluent` style:
+  # "unmatched steps pass through uncaptured"), no intermediate call folds
+  # in a capture.
   #
   # CHECKPOINT FACT (live `javap`, corrects an earlier checkpoint
   # assumption modelled on `aws-sqs-sdk.yml`'s own erased-builder join):
