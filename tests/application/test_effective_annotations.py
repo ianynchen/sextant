@@ -8,7 +8,14 @@ not `@GetMapping` (javac rejects `@GetMapping` as a meta-annotation — its own
 `@Target` is `METHOD` only). Every scenario below uses `RequestMapping` in
 its place."""
 
+import json
+from pathlib import Path
+
 from sextant.application.resolve.effective_annotations import composed_mapping_rows
+from sextant.domain.closed_sets import ConstructKind, OriginTier
+from sextant.domain.factfile import write_fact_file
+from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
+from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 _REQUEST_MAPPING = "org/springframework/web/bind/annotation/RequestMapping#"
@@ -152,3 +159,88 @@ def test_a_plain_direct_use_of_a_mapping_fqn_yields_no_synthetic_row():
     )
 
     assert result == []
+
+
+def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: Path):
+    """Regression (Task 6 review, round 1): the docstring above states the
+    invariant this pins — a type-targeted synthetic row (a composing type's
+    own declaration row, folded through pass 2) can carry `annotation` equal
+    to `$prefix_annotation` itself, whenever a catalog's prefix annotation is
+    also one of its mapping fqns (every shipped catalog). That row then
+    genuinely reaches `derive_endpoints.sql`'s `prefixes` CTE, not just the
+    `mappings` one `construct_kind IN ('method', 'function')` already guards.
+    It must still not leak: `prefixes.type_symbol` only ever joins a real
+    handler's `enclosing`, and an annotation TYPE never encloses a method.
+
+    Driven through `workspace.derive("endpoints", ...)` directly — the SQL
+    itself, not `composed_mapping_rows` — with a hand-built
+    `synthetic_annotations` row targeting an annotation-type symbol that
+    carries no method of its own, exactly the shape pass 2 can produce."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rest/PlainController.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    controller = "com/acme/rest/PlainController#"
+    handle = "com/acme/rest/PlainController#handle()."
+    facts = [
+        # The controller carries NO prefix annotation of its own — the only
+        # source of a prefix in this fixture is the synthetic row below.
+        SymbolFact(document_id="doc_1", symbol=controller, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handle,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=controller,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handle,
+            retention="runtime",
+            use=AnnotationUse(annotation="com/acme/rest/Get#", args={"value": "/plain"}),
+        ),
+    ]
+    write_fact_file(tmp_path / "facts" / "PlainController.jsonl", document, facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    workspace.derive(
+        "endpoints",
+        protocol="http",
+        direction="inbound",
+        type_annotation=None,
+        prefix_annotation="com/acme/rest/Mapping#",
+        mapping_annotations=[{"fqn": "com/acme/rest/Get#", "methods": ["GET"]}],
+        path_from=["value"],
+        prefix_from=["value"],
+        peer_from=[],
+        method_from="method",
+        all_methods=["GET"],
+        catalog_id="task6-regression",
+        consumes_from=[],
+        produces_from=[],
+        # A type-targeted row (never a real symbol fact — an annotation type
+        # composing another annotation needs no `SymbolFact` for the SQL
+        # itself to accept it), carrying $prefix_annotation as its own
+        # `annotation` — pass 2's own shape, per the docstring above.
+        synthetic_annotations=[
+            {
+                "target": "com/acme/rest/ComposedMapping#",
+                "annotation": "com/acme/rest/Mapping#",
+                "args": json.dumps({"value": "/should-not-leak"}),
+            }
+        ],
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["path"]) for r in rows] == [("GET", "/plain")]

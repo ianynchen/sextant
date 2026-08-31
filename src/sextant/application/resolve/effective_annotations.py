@@ -74,6 +74,25 @@ def composed_mapping_rows(
     2. One pass over every row whose `annotation` names a composed
        identifier — an ordinary USE of the composed annotation — folding the
        use site's own args on top (use-site wins) and emitting the row.
+
+    Pass 2 does not distinguish a "declaration" row (round 1's own input,
+    where a composing type names what it composes) from a "use" row: a
+    composing type's own declaration row is itself a genuine use of the
+    identifier it just became active, so it can ALSO synthesize a row
+    targeting the composing type itself, not just downstream method-level
+    uses (see the two-hop and cycle tests). Such a type-targeted row is
+    inert everywhere the caller's SQL joins a mapping annotation to a
+    handler method (`derive_endpoints.sql`'s `mappings`/`declared` chain,
+    gated on `construct_kind IN ('method', 'function')`) — but when
+    `prefix_annotation` is itself one of `mapping_fqns` (every shipped
+    catalog), the same row's `annotation` also matches `prefix_annotation`,
+    so it genuinely reaches `derive_endpoints.sql`'s `prefixes` CTE too. It
+    stays harmless there only because of an invariant the SQL relies on but
+    never states: an annotation TYPE symbol never encloses a handler method,
+    so `prefixes.type_symbol` (this row's own type-targeted `target`) can
+    never equal `s.enclosing` for a real handler — the prefix never joins,
+    never leaks. `tests/application/test_effective_annotations.py` pins this
+    at the SQL level, not just here.
     """
     composed: dict[str, tuple[str, dict[str, Any]]] = {}
     active = set(mapping_fqns)
