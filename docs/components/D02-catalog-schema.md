@@ -65,7 +65,7 @@ scanner capability above.
 
 ---
 
-## 2. The seven styles
+## 2. The eight styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
 genuinely new shape needs a new engine.
@@ -678,9 +678,130 @@ honest-absence precedent a future messaging catalog whose payload is likewise op
 `evidence` is `compiler`; rows enter the same `endpoints` table as every other style,
 merging and counting the same way.
 
+### `config_join`
+
+The declaration is not in the code at all. **The code carries a name — a bean's own
+method name — and configuration says what the name means** (§2d). A `config_join`
+catalog reads exactly one input, the `resolved_config` table [M04](M04-resolver.md)'s
+pass 2 produced, and does two jobs with it: `address_from_config` DERIVES endpoint rows
+from a key template, and `media_from_config` STAMPS declared media onto rows other
+engines already minted. Both blocks are optional and independent; a `config_join`
+catalog declaring neither is a broken file.
+
+```yaml
+style: config_join
+protocol: kafka           # the default; a resolved binder may say otherwise (§2c)
+direction: inbound        # the default; each suffix rule carries its own
+requires: [resolved_config, typed_signatures, implemented_interfaces]
+matches:
+  address_from_config:
+    key: "spring.cloud.stream.bindings.{binding}.destination"
+    binding:
+      from: bean_name
+      selected_by: spring.cloud.function.definition
+      selection_separator: ";"
+      composition_separator: "|"
+      suffix:
+        - { when: { implements: java.util.function.Consumer }, then: "-in-0",
+            direction: inbound, payload_arg: 0 }
+        - { when: { implements: java.util.function.Supplier }, then: "-out-0",
+            direction: outbound, payload_arg: 0 }
+        - { when: { implements: java.util.function.Function }, then: ["-in-0", "-out-0"],
+            direction: [inbound, outbound], payload_arg: [0, 1] }
+    binder_key: "spring.cloud.stream.bindings.{binding}.binder"
+    default_binder_key: spring.cloud.stream.default-binder
+    binder_protocols: { kafka: kafka, rabbit: jms }
+```
+
+**`key` is a template carrying exactly one placeholder, `{binding}`**, and a key naming
+no binding is refused: it would resolve the same address for every bean. **`binding.from`
+is `bean_name`** — the only source implemented, and anything else is refused rather than
+read as this one.
+
+**A candidate is a declared method whose RETURN type matches a suffix rule**, tried two
+ways in that order: equality against the declared interface's own descriptor, then the
+`implemented_interfaces` join for a scanned type that declares it. The equality half is
+what a library's functional interface reaches — an interface the module does not itself
+compile has no symbol fact and can never appear in any class's interface table — and the
+join half is for a module's own named implementation. Suffix rules are tried in declared
+order; two methods sharing a bean name keep the first in symbol order (NFR-1).
+
+**`then`, `direction` and `payload_arg` are read in parallel.** A scalar `then` is one
+row; a LIST is the both-halves-at-once case (§2d), where one bean derives two rows
+through the same key template. `direction` and `payload_arg` may each be a scalar
+(applying to every suffix) or a list of the same length (one per suffix) — which is what
+makes that case expressible as data, since each half of a two-argument functional type
+carries a different payload position and a different direction, and neither is derivable
+from the suffix string without the engine learning a framework's naming convention. A
+rule stating no `direction` takes the catalog's own; `payload_arg` defaults to 0.
+
+**Row shape.** Verbless (`method` always NULL), `evidence: compiler`, `peer` always NULL
+(a destination is never split into a peer, §2d). **`handler` versus `caller` follows
+[D01](D01-graph-schema.md) §3's direction rule, not the style**: an inbound binding's
+bean method is the row's `handler`; an outbound one's is its `caller`, `handler` NULL.
+`request_shape` roots from the functional type's own type ARGUMENT at the declared
+position — the interface itself is machinery and never reaches a shape column — and is
+`request_shape` on both directions, the reply-row precedent ([D01](D01-graph-schema.md)
+§3): an outbound row's payload is what it sends, and `response_shape` is reserved for a
+response the row actually receives, which a binding has none of.
+**`handler_signature` is always NULL**, exactly as it is on every other pass-computed
+row (`single_call`, `fluent`, a `reply` row): the payload is decided here, and the
+owner-keyed contract update is guarded on that column precisely so a row that answered
+for itself is not answered again from a signature whose return type is the functional
+interface.
+
+**Protocol is resolved per match (§2c)**, most specific first: the binding's own
+`binder_key`, then `default_binder_key`, each looked up in `binder_protocols`. A
+configured name absent from that map leaves the row on the catalog's own declared
+protocol — an unmapped name is a gap to grow the catalog from, never a guessed protocol.
+`binder_protocols`' values are checked against [D00](D00-fact-schema.md)'s closed set,
+like every other protocol a catalog writes.
+
+**Four honesty rules, none of them silence:**
+
+- **A missing key still derives a row.** The bean exists and the binding was declared;
+  only the address is unread. `path` NULL, `resolution: unresolved`, handler named
+  (§2d: "an unresolved address is not an absent endpoint").
+- **A composed selection entry derives ONE row naming nobody.** `path` NULL, `handler`
+  AND `caller` NULL — there is no single bean to name, and picking one of the composed
+  halves would be an invention. It is the only endpoint row in the schema that names no
+  symbol at all. It shares `(protocol, direction, NULL, NULL)` with a missing-key row and
+  stays a second row: a NULL path never dedups, in the pass or in SQL.
+- **A destination is written verbatim.** This engine never interprets what it reads: a
+  resolved value still carrying a placeholder expression keeps that expression as its
+  `path`, and the row still resolves, because the address WAS found. Rows keep
+  expressions; `resolved_config` keeps values; the per-environment answer is the
+  `resolved_peers` join's (§2d, job 3), never a rewritten row.
+- **A stamp lands only on agreement.** Every environment must resolve the same class, and
+  the class must be in `values`; an environment that resolves a different one, one that
+  never resolved the key, and a class the catalog does not know all stamp nothing. A stamp
+  never overwrites a non-NULL column. The unstamped column is not a claim that nothing was
+  declared — the class name is in `resolved_config` either way.
+
+Where the environments disagree about the SELECTION key rather than a destination, the
+entries are unioned in environment order rather than one environment being picked: a bean
+selected in production binds in production, and an endpoint row is environment-neutral by
+design — it says a boundary exists, never which profile it exists under.
+
+**Ordering: `config_join` runs LAST**, after every call-site and annotation style,
+whatever its own declared direction (§3) — the `protocol_hint` precedent below. A style
+that enriches rows other engines minted cannot run before those rows exist. The
+consequence is real and not an accident: its rows are also the last to face §5's
+insert-if-absent guard, so a wire identity another catalog already recorded stays that
+catalog's row.
+
+**Every join this style makes is RECORDED with its full trail, and verified later.** The
+trail is `resolved_config` (the key, its value, the file that won it, per environment)
+plus the row's own `catalog_id` — enough for a reader, or a later pass, to reconstruct
+exactly which key produced which address. §2d's second authority layer — an LLM
+**verifying** a doubtful join, a human curation settling what it disputes — is deferred
+to a later phase: the seat is deferred, never the evidence, and nothing here is ever the
+sole source of an address an LLM invented.
+
 ### `protocol_hint`
 
-Runs last, and **reclassifies endpoints other engines already produced** — a streaming
+Runs last with `config_join` (§3), and **reclassifies endpoints other engines already
+produced** — a streaming
 response, a long-poll. It changes protocol, never direction, and it never creates an
 endpoint.
 
@@ -874,7 +995,10 @@ address_from_config:
       - { when: { implements: java.util.function.Supplier }, then: "-out-0", direction: outbound }
       # A Function is both halves at once: its one entry derives TWO rows,
       # `-in-0` inbound and `-out-0` outbound, each through the same key template.
-      - { when: { implements: java.util.function.Function }, then: ["-in-0", "-out-0"] }
+      # `direction` and `payload_arg` are read in PARALLEL with `then` — see the
+      # `config_join` style (§2) for the as-implemented grammar.
+      - { when: { implements: java.util.function.Function }, then: ["-in-0", "-out-0"],
+          direction: [inbound, outbound], payload_arg: [0, 1] }
 ```
 
 **A candidate bean is a method whose return type is, or implements, one of the declared
@@ -942,8 +1066,19 @@ regardless, which is what a later format-inference pass reads; a class absent fr
 is a gap to grow the catalog from, not a guess.
 
 The engine that runs both `address_from_config` and `media_from_config` — `config_join`,
-the eighth style — gets its own full section once a later task delivers it; this section
-specifies the vocabulary the two jobs read.
+the eighth style — has its own full section in §2 above; this section specifies the
+vocabulary the two jobs read, and §2 specifies what the engine does with it, including
+the two separators (`selection_separator`, `composition_separator`) that give the list
+and composition semantics described in prose here a spelling a second framework family
+can override.
+
+**Job 3, peer resolution, is a JOIN and never a write** — the `resolved_peers` named
+query ([D01](D01-graph-schema.md)): every client-side row's `${...}`-bearing `peer` and
+`path` expressions, substituted against `resolved_config` once per environment. A literal
+passes through as itself; a single placeholder is substituted; an expression carrying more
+than one surfaces with `unresolved_reason: multi_placeholder` — the one reason M04's pass
+2 never emits, because it is a property of an endpoint expression rather than of a
+configuration value. Endpoint rows are untouched, in every environment.
 
 ---
 
@@ -1162,9 +1297,12 @@ files alone. A model declaring no `remote_prefixes` simply never emits the reaso
 ## 3. Ordering
 
 Engines run in a fixed order because later passes depend on earlier ones: inbound first,
-then outbound, then `protocol_hint`. Inbound precedes outbound so that a path a module both
+then outbound, then the styles that ENRICH what those produced — `config_join` and
+`protocol_hint`. Inbound precedes outbound so that a path a module both
 exposes and calls merges into one endpoint with direction `both` rather than appearing
-twice.
+twice. The enriching styles come after both, whatever direction their own catalog file
+declares, because a stamp cannot reach a row that does not exist yet and a
+reclassification cannot rewrite one.
 
 **The order is a property of the engine style, not of the catalog file.** A catalog cannot
 request a position.
@@ -1219,5 +1357,5 @@ were skipped, and why.
 | Whether a scope rule (`@NullMarked`) may be declared on a package as well as a class, and how it interacts with `@NullUnmarked` | §2e |
 | Whether the manifest reader pins framework versions, given the files are undocumented internals that may shift | §2's `filesystem` style |
 | Whether a globally configured naming strategy is read from configuration, or only declared per catalog | §2f, and any module that sets one in `application.yml` |
-| **How much expressiveness `address_from_config` needs before it stops being data.** Spring Cloud Stream's binding suffix depends on the functional interface, gains an index for multiple inputs, and can be overridden wholesale by `spring.cloud.function.definition` | §2d, and the Spring Cloud Stream catalog |
+| **How much expressiveness `address_from_config` needs before it stops being data.** Partly settled: the suffix table, its parallel `direction`/`payload_arg` lists, the two separators and the binder→protocol map all ship as data (§2's `config_join`). Still open — a binding INDEX beyond `-in-0`/`-out-0` for a multi-input function, and whether a composed `a\|b` entry should ever be decomposed rather than degraded | §2d, and the Spring Cloud Stream catalog |
 | Precedence between a `known_types` entry's own `nullable` and an enclosing `not_null_by_default` scope — unspecified; as implemented the scope wins. Unreachable with shipped catalogs. | §2e, §2g |

@@ -177,18 +177,28 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # inbound, one outbound) rather than changing either bucket's total —
     # see `test_pipeline.py`'s own dedicated row-level test. `82 + 5 = 87`
     # total, Task 3's own frozen baseline for Tasks 4-8.
+    #
+    # 2F Task 7 (the `config_join` engine): +3 kafka inbound and +1 kafka
+    # outbound — the four rows `spring.cloud.function.definition` selects
+    # (`handleOrder` → `stream-orders`, `orphanConsumer` and the composed
+    # `pipeA|pipeB` entry both path-NULL, `auditTap` → `audit-tap`). Nothing
+    # else moves: no other protocol has a `config_join` catalog, and neither
+    # resolved destination has a twin to merge with. Metadata counts a
+    # `both` row in BOTH buckets, so kafka reads 12 + 3 = 15 inbound and
+    # 6 + 1 = 7 outbound, plus the 3 unchanged `both` rows on each side —
+    # 15 and 10. `87 + 4 = 91` total.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "http": 31,
         "jms": 3,
-        "kafka": 12,
+        "kafka": 15,
         "pubsub": 3,
         "sqs": 1,
     }
     assert metadata["endpoints"]["outbound"] == {
         "http": 23,
         "jms": 3,
-        "kafka": 9,
+        "kafka": 10,
         "pubsub": 4,
         "sqs": 3,
     }
@@ -257,4 +267,8 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # one standalone outbound row (`sendAuditMessage`): `both` 6 - 1 = 5,
     # inbound 44 + 1 = 45, outbound 32 + 1 + 4 = 37 — Task 3's own frozen
     # 87-endpoint total (5 + 45 + 37 = 87).
-    assert rows == [("both", 5), ("inbound", 45), ("outbound", 37)]
+    # 2F Task 7 (`config_join`): +3 inbound and +1 outbound binding rows,
+    # `both` unchanged (neither resolved destination has a twin, and a
+    # path-NULL row never merges): inbound 45 + 3 = 48, outbound 37 + 1 = 38
+    # — the 91-endpoint total (5 + 48 + 38 = 91).
+    assert rows == [("both", 5), ("inbound", 48), ("outbound", 38)]

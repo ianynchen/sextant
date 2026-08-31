@@ -1508,6 +1508,14 @@ _MESSAGING_CATALOG_IDS = (
     "google-pubsub-client",
     "google-pubsub-subscriber",
     "spring-kafka-message",
+    # 2F Task 7 (the `config_join` engine): `spring-cloud-stream.yml` copies
+    # the same baseline, and it matters as much as `aws-sqs-sdk.yml` does
+    # above — it sorts ahead of every `spring-*` catalog, so it is now the
+    # first to reach the messaging payload types this fixture shares, and a
+    # fork here would silently redescribe them for every catalog behind it.
+    # (`spring-kafka-media.yml` declares none of these blocks at all: it
+    # derives no rows, so it expands no shapes.)
+    "spring-cloud-stream",
 )
 
 

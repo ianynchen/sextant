@@ -16,7 +16,9 @@ public class OrderStreamBindings {
 
     // Consumer -> "-in-0" inbound binding, key
     // spring.cloud.stream.bindings.handleOrder-in-0.destination (resolved:
-    // order-events).
+    // stream-orders — a destination no other catalog derives, so the
+    // resolved happy path survives the wire-identity guard; Task 6
+    // checkpoint F-3).
     @Bean
     public Consumer<OrderEvent> handleOrder() {
         return event -> {};

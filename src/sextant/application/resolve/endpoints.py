@@ -12,10 +12,19 @@ from sextant.application.resolve.capabilities import missing_capabilities
 from sextant.application.resolve.engines import (
     annotation_driven,
     combinator,
+    config_join,
     fluent,
     interface_implementation,
     single_call,
 )
+
+# The styles that run after every call-site and annotation style, whatever
+# their own declared direction (D02 §3). The `protocol_hint` precedent: a
+# style that ENRICHES rows other engines minted — reclassifying one, stamping
+# a declared media type onto one — cannot run before the rows exist, so its
+# position is a property of the style, never a request the catalog file
+# makes. `config_join` is the first of them to ship.
+_RUNS_LAST = frozenset({"config_join"})
 
 
 @dataclass(frozen=True)
@@ -43,8 +52,21 @@ def derive_endpoints(
     # not affect which rows it finds — it exists for determinism only (NFR-1):
     # inbound before outbound, filename breaking the tie within a direction,
     # which is the loader's own order.
+    #
+    # One style sorts ahead of all of that, or rather behind it: a `_RUNS_LAST`
+    # style enriches rows the other engines minted (above), so its own
+    # declared direction says nothing about when it must run. Its rows are
+    # therefore also the last to face `derive_call_endpoints.sql`'s
+    # insert-if-absent guard, which is a real consequence and not an
+    # accident: a wire identity another catalog already recorded stays that
+    # catalog's row.
     ordered = sorted(
-        engines, key=lambda pair: (pair[0].direction != "inbound", str(pair[0].source))
+        engines,
+        key=lambda pair: (
+            pair[0].style in _RUNS_LAST,
+            pair[0].direction != "inbound",
+            str(pair[0].source),
+        ),
     )
     skipped = []
     for catalog, engine in ordered:
@@ -83,4 +105,5 @@ _ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
     "fluent": fluent.run,
     "interface_implementation": interface_implementation.run,
     "combinator": combinator.run,
+    "config_join": config_join.run,
 }
