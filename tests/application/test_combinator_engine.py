@@ -202,7 +202,20 @@ def _matches() -> dict[str, object]:
                 "or": [{"owner": "com.example.web.Predicate", "method": "or"}],
             },
         },
-        "continuations": ["andRoute", "andNest", "and"],
+        # All three forms the grammar allows, and each is load-bearing here.
+        # `andRoute`/`and` are owner-qualified because they END chains, and only
+        # an owner-declaring continuation may root one; `andNest` is the
+        # nest-shaped form, whose second argument is a whole router rather than
+        # a handler; `withRoute` is the owner-free form, which extends a walk
+        # from a real root and never roots one itself. `and` is deliberately
+        # ALSO a composer method — on a different owner — which is the frozen
+        # reality of a real predicate/router pair (checkpoint (1a)).
+        "continuations": [
+            {"name": "andRoute", "owner": "com.example.web.Router"},
+            {"name": "andNest", "owner": "com.example.web.Router", "path_arg": 0, "subtree_arg": 1},
+            {"name": "and", "owner": "com.example.web.Router"},
+            "withRoute",
+        ],
     }
 
 
@@ -972,6 +985,300 @@ def test_a_continuation_chain_merges_every_route_it_links_exactly_once(tmp_path:
     ]
 
 
+def test_a_nest_shaped_continuation_folds_its_whole_subtree_under_its_prefix(
+    tmp_path: Path,
+):
+    """The nest-shaped continuation (`{name, owner, path_arg, subtree_arg}`):
+    its second argument is a whole router, not a handler.
+
+    Read as a PLAIN continuation it would be a silent disaster — the second
+    argument falls in the global handler slot and is skipped, the first is
+    taken as this call's own predicate, and the result is a fabricated
+    handler-less `resolved` row where the subtree's routes should have been.
+    Declared shape, folded shape: the chain to the left keeps its own routes
+    untouched, and the prefix lands on the SUBTREE's routes only.
+    """
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/a")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATES,
+            "GET",
+            result=11,
+            arguments=[CallArgument(kind="string", value="/b")],
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTER_TYPE,
+            "andRoute",
+            receiver=9,
+            result=13,
+            invoke_kind="interface",
+            arguments=[
+                CallArgument(kind="unresolved", source=11),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER),
+            ],
+        ),
+        _site(
+            ROUTES,
+            4,
+            PREDICATES,
+            "path",
+            result=15,
+            arguments=[CallArgument(kind="string", value="/x")],
+        ),
+        _site(
+            ROUTES,
+            5,
+            PREDICATES,
+            "GET",
+            result=17,
+            arguments=[CallArgument(kind="string", value="/y")],
+        ),
+        _site(
+            ROUTES,
+            6,
+            ROUTERS,
+            "route",
+            result=19,
+            arguments=[
+                CallArgument(kind="unresolved", source=17),
+                CallArgument(kind="lambda", symbol=HEALTH),
+            ],
+        ),
+        _site(
+            ROUTES,
+            7,
+            ROUTER_TYPE,
+            "andNest",
+            receiver=13,
+            result=21,
+            invoke_kind="interface",
+            arguments=[
+                CallArgument(kind="unresolved", source=15),
+                CallArgument(kind="unresolved", source=19),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
+        ("GET", "/b", _MODULE + CREATE_ORDER, "resolved"),
+        ("GET", "/x/y", _MODULE + HEALTH, "resolved"),
+    ]
+
+
+def test_a_nest_shaped_continuation_with_an_unreadable_subtree_stays_one_unresolved_row(
+    tmp_path: Path,
+):
+    """Poison discipline through the nest-shaped continuation: a subtree
+    nobody can read is one unresolved row for the nest — never silence, and
+    never a `resolved` row carrying only the prefix, which would claim the
+    router declares an endpoint at `/x` that nobody wrote. The chain to its
+    left is untouched."""
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/a")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATES,
+            "path",
+            result=15,
+            arguments=[CallArgument(kind="string", value="/x")],
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTER_TYPE,
+            "andNest",
+            receiver=9,
+            result=21,
+            invoke_kind="interface",
+            arguments=[
+                CallArgument(kind="unresolved", source=15),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
+        (None, None, None, "unresolved"),
+    ]
+
+
+# --- owner-free continuations extend walks but never root them ------------
+
+
+def test_an_owner_free_continuation_extends_a_real_root_but_never_roots_one(
+    tmp_path: Path,
+):
+    """A continuation name is matched owner-free by design (`fluent`'s steps
+    discipline: an owner narrows a step, its absence reaches one wherever it
+    appears) — but matching a bare name against every owner is right for
+    REACHING a step inside a chain already known to be this catalog's, and
+    reckless for deciding a chain is this catalog's at all.
+
+    So an owner-free continuation folds normally when a real root walks back
+    through it (`/b` below, declared on a type the catalog never names), and a
+    call that merely shares the name — the same `and` on the predicate type
+    that the catalog declares as a COMPOSER, or on some unrelated type
+    entirely — roots nothing and derives nothing at all.
+    """
+    chain = ROUTES
+    lone_composer = DECLARER + "loneComposer(sig_r0)."
+    lone_stranger = DECLARER + "loneStranger(sig_r0)."
+    lone_owner_free = DECLARER + "loneOwnerFree(sig_r0)."
+    facts = [
+        _site(
+            chain,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/a")],
+        ),
+        _site(
+            chain,
+            1,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            chain,
+            2,
+            PREDICATES,
+            "GET",
+            result=11,
+            arguments=[CallArgument(kind="string", value="/b")],
+        ),
+        # Owner-free: declared as the bare name `withRoute`, and reached here
+        # on a type the catalog never mentions.
+        _site(
+            chain,
+            3,
+            "com/example/web/RouterExtensions#",
+            "withRoute",
+            receiver=9,
+            result=13,
+            invoke_kind="static",
+            arguments=[
+                CallArgument(kind="unresolved", source=11),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER),
+            ],
+        ),
+        _site(
+            chain,
+            4,
+            PREDICATES,
+            "GET",
+            result=15,
+            arguments=[CallArgument(kind="string", value="/c")],
+        ),
+        _site(
+            chain,
+            5,
+            ROUTER_TYPE,
+            "andRoute",
+            receiver=13,
+            result=17,
+            invoke_kind="interface",
+            arguments=[
+                CallArgument(kind="unresolved", source=15),
+                CallArgument(kind="lambda", symbol=HEALTH),
+            ],
+        ),
+        _site(
+            lone_composer,
+            0,
+            PREDICATE_TYPE,
+            "and",
+            receiver=2,
+            result=4,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved")],
+        ),
+        _site(
+            lone_stranger,
+            0,
+            "com/example/util/Conditions#",
+            "and",
+            result=4,
+            arguments=[CallArgument(kind="unresolved"), CallArgument(kind="unresolved")],
+        ),
+        _site(
+            lone_owner_free,
+            0,
+            "com/example/util/Conditions#",
+            "withRoute",
+            result=4,
+            arguments=[CallArgument(kind="unresolved"), CallArgument(kind="unresolved")],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
+        ("GET", "/b", _MODULE + CREATE_ORDER, "resolved"),
+        ("GET", "/c", _MODULE + HEALTH, "resolved"),
+    ]
+    assert {row["caller"] for row in rows} == {chain}
+
+
 # --- (9) the body-linked entry, and the no-independent-rooting rule -------
 
 
@@ -1139,10 +1446,14 @@ def test_a_vocabulary_call_in_a_method_no_entry_links_to_derives_nothing(tmp_pat
 def test_only_identity_known_rows_dedup_and_the_key_includes_the_handler(tmp_path: Path):
     """Two rules in one batch.
 
-    A row whose path nobody could read carries nothing to compare, so it never
-    enters the dedup key at all and each such reference stays its own row —
-    `fluent`'s own discipline, and the reason two unreadable routers do not
-    collapse into a single misleading fact.
+    A row whose path nobody could read carries nothing to compare, so it takes
+    part in NEITHER the media union nor the dedup key, and each such reference
+    stays its own row — two IDENTICAL unresolved rows below, same handler and
+    all, and both survive. That is `derive_call_endpoints.sql`'s own written
+    contract (SQL's `NULL = NULL` is unknown rather than true, so two
+    unresolved rows are two distinct facts about two distinct call sites), and
+    a batch that collapsed them here would hide one before the insert ever saw
+    it.
 
     `handler` IS part of the wire identity for an inbound handler row (the
     `interface_implementation` parity rule): the same verb and path bound to
@@ -1193,6 +1504,8 @@ def test_only_identity_known_rows_dedup_and_the_key_includes_the_handler(tmp_pat
                 CallArgument(kind="lambda", symbol=LIST_ORDERS),
             ],
         ),
+        # Byte-identical to the row above — SAME handler, same everything —
+        # and it must still survive as its own row.
         _site(
             unreadable,
             1,
@@ -1201,7 +1514,7 @@ def test_only_identity_known_rows_dedup_and_the_key_includes_the_handler(tmp_pat
             result=11,
             arguments=[
                 CallArgument(kind="unresolved"),
-                CallArgument(kind="lambda", symbol=HEALTH),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
             ],
         ),
         *_handler_symbols(),
@@ -1219,6 +1532,9 @@ def test_only_identity_known_rows_dedup_and_the_key_includes_the_handler(tmp_pat
     unresolved = [row for row in rows if row["resolution"] == "unresolved"]
     assert len(unresolved) == 2
     assert {row["path"] for row in unresolved} == {None}
+    # Both carry the SAME handler: it is the path being unread, not any
+    # difference between them, that keeps them apart.
+    assert {row["handler"] for row in unresolved} == {_MODULE + LIST_ORDERS}
 
 
 # --- catalog validation ---------------------------------------------------
@@ -1247,4 +1563,119 @@ def test_a_media_rule_filling_a_column_that_does_not_exist_is_refused(tmp_path: 
         {"owner": "com.example.web.Predicates", "method": "accept", "fills": "produce"}
     ]
     with pytest.raises(CatalogError, match="fills"):
+        _resolve(tmp_path, [], _catalog(matches))
+
+
+def test_a_name_declared_as_both_composer_and_owner_free_continuation_is_refused(
+    tmp_path: Path,
+):
+    """The two roles fold a call completely differently — one merges
+    constraints, the other merges route sets — so a name claimed by both with
+    nothing to tell them apart leaves dispatch order, not the catalog,
+    deciding which wins. The catalog says which; an owner-free continuation
+    cannot."""
+    matches = _matches()
+    matches["continuations"] = ["and"]
+    with pytest.raises(CatalogError, match="both a composer and a continuation"):
+        _resolve(tmp_path, [], _catalog(matches))
+
+
+def test_the_same_name_on_two_different_owners_is_allowed_for_the_two_roles(
+    tmp_path: Path,
+):
+    """The counterpart the refusal above must NOT catch: a predicate type and a
+    router type each declaring `and` is the frozen reality this style was built
+    for (checkpoint (1a)), and there the owners make the reading exact. The
+    default catalog declares exactly that pair, so this asserts the two roles
+    really do fold differently — the predicate `and` merges constraints onto
+    one row, the router `and` merges route sets."""
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/x")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            PREDICATES,
+            "accept",
+            result=5,
+            arguments=[CallArgument(kind="enum", symbol=MEDIA_TYPE + "APPLICATION_JSON.")],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATE_TYPE,
+            "and",
+            receiver=3,
+            result=7,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=7),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(ROUTES, 4, DECLARER, "other", result=11, invoke_kind="virtual"),
+        _site(
+            ROUTES,
+            5,
+            ROUTER_TYPE,
+            "and",
+            receiver=9,
+            result=13,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=11)],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/x", _MODULE + LIST_ORDERS, "resolved"),
+        (None, None, None, "unresolved"),
+    ]
+    assert rows[0]["produces"] == f'["{JSON}"]'
+
+
+def test_half_a_nest_shaped_continuation_is_refused(tmp_path: Path):
+    """`path_arg` without `subtree_arg` would fold as the PLAIN shape and drop
+    the subtree the author was declaring — the exact defect the shaped form
+    exists to prevent, arriving through a half-written declaration instead."""
+    matches = _matches()
+    matches["continuations"] = [
+        {"name": "andNest", "owner": "com.example.web.Router", "path_arg": 0}
+    ]
+    with pytest.raises(CatalogError, match="needs `path_arg` and `subtree_arg` together"):
+        _resolve(tmp_path, [], _catalog(matches))
+
+
+def test_two_continuations_sharing_a_name_need_distinct_owners(tmp_path: Path):
+    """`fluent._validate_steps`' rule, for the same reason: silent last-wins
+    would hide exactly the bug the check exists for. An owner-free entry
+    matches every owner, so it collides with any sibling regardless of what
+    that sibling declares."""
+    matches = _matches()
+    matches["continuations"] = ["andRoute", {"name": "andRoute", "owner": "com.example.web.Router"}]
+    with pytest.raises(CatalogError, match="need distinct `owner`s"):
+        _resolve(tmp_path, [], _catalog(matches))
+
+
+def test_a_continuation_entry_of_neither_declared_form_is_refused(tmp_path: Path):
+    matches = _matches()
+    matches["continuations"] = [{"owner": "com.example.web.Router"}]
+    with pytest.raises(CatalogError, match="every `continuations` item"):
         _resolve(tmp_path, [], _catalog(matches))

@@ -25,17 +25,31 @@ is therefore a fold over that tree rather than a walk along a line.
   routes it prefixes), `media` (which of `consumes`/`produces` the call fills),
   `media_values` (an enum type's member names to their wire values), and
   `composers` (`and` merges constraints, `or` duplicates the route per branch).
-- `continuations` — method names, owner-free like `fluent`'s steps, that merge
-  route sets along `result` → `receiver`.
+- `continuations` — the calls that merge route sets along `result` →
+  `receiver`. A plain method name is owner-free, exactly like `fluent`'s
+  steps; a mapping declares the same name with an `owner` that narrows it to
+  one type, and — for the nest-shaped continuation — a `path_arg` and a
+  `subtree_arg`, which make it fold its argument's whole router under its own
+  prefix rather than reading a handler it does not have.
 
-**Rooting.** A candidate — an entry call or a continuation call — is a root
-unless its own `result` is consumed elsewhere in the same method: handed to
-another routing call as an argument, or taken as a composer's or
-continuation's receiver. A consumed routing value belongs to the tree that
-consumed it, so rooting at the outermost unconsumed call derives each route
-exactly once. This is what tells `route(...).and(...)` (rooted at the `and`,
-which nothing consumes) apart from `nest(prefix, route(...).andRoute(...))`
-(rooted at the `nest` alone).
+**Rooting.** A candidate — an entry call, or a continuation call whose catalog
+entry declares an `owner` that the call site matches — is a root unless its own
+`result` is consumed elsewhere in the same method: handed to another routing
+call as an argument, or taken as a composer's or continuation's receiver. A
+consumed routing value belongs to the tree that consumed it, so rooting at the
+outermost unconsumed call derives each route exactly once. This is what tells
+`route(...).and(...)` (rooted at the `and`, which nothing consumes) apart from
+`nest(prefix, route(...).andRoute(...))` (rooted at the `nest` alone).
+
+An owner-FREE continuation extends a walk that some real root reaches, but
+never roots one on its own (`fluent`'s own steps discipline: an owner-free step
+matches any owner, which is useful for reaching a step and reckless for
+deciding a chain belongs to this catalog at all). A bare `and` matches a method
+name half the libraries on a classpath declare, and rooting at every one of
+them invents a router out of any two-argument call that happens to be named
+that. The cost is stated rather than hidden: a chain whose OUTERMOST call is an
+owner-free continuation is not rooted, so a catalog declares an `owner` on
+every continuation that can end a chain.
 
 **`caller`.** Every row of one tree carries the containing method of the tree's
 ROOT call, never the body method a nested route was folded from. This matches
@@ -149,6 +163,21 @@ class _Route:
 
 
 @dataclass(frozen=True)
+class _Continuation:
+    """One declared continuation. `owner` is None for the owner-free form,
+    which matches any owner and never roots (see the module docstring's
+    Rooting note). `path_arg`/`subtree_arg` are both set or both None: together
+    they make the continuation nest-shaped — it folds the router at
+    `subtree_arg` under the prefix at `path_arg`, instead of reading a
+    predicate and a handler."""
+
+    name: str
+    owner: str | None
+    path_arg: int | None
+    subtree_arg: int | None
+
+
+@dataclass(frozen=True)
 class _TreeContext:
     """Everything every tree in the run shares — the catalog's own vocabulary,
     already converted to the symbol forms the facts are keyed on, plus the two
@@ -163,13 +192,16 @@ class _TreeContext:
     media_owner: str | None
     media_values: dict[str, str]
     composers: dict[tuple[str, str], str]
-    continuations: frozenset[str]
-    # The handler positions a CONTINUATION reads. A continuation is the same
-    # declaration shape as an argument-rooted entry, only reached through a
-    # chain rather than written on its own, so it reuses those entries'
-    # declared positions rather than needing a second declaration of the same
-    # fact. A continuation that carries no argument at any of them — a
-    # router-composing `and(other)` — simply reads no handler.
+    continuations: tuple[_Continuation, ...]
+    # The handler positions a PLAIN continuation reads. A plain continuation is
+    # the same declaration shape as an argument-rooted entry, only reached
+    # through a chain rather than written on its own, so it reuses those
+    # entries' declared positions rather than needing a second declaration of
+    # the same fact. A continuation that carries no argument at any of them — a
+    # router-composing `and(other)` — simply reads no handler. A nest-shaped
+    # continuation never consults these at all: its second argument is a whole
+    # router, and skipping it as a handler slot would drop that router's routes
+    # on the floor while emitting a handler-less row in their place.
     continuation_handlers: frozenset[int]
     by_caller: dict[str, list[dict[str, Any]]]
     by_bare_caller: dict[str, list[dict[str, Any]]]
@@ -218,6 +250,20 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
     by_caller: dict[str, list[dict[str, Any]]] = {}
     for site in call_sites:
         by_caller.setdefault(str(site["caller"]), []).append(site)
+    # A body-linked entry's own `lambda` argument names its body BARE (D00
+    # §5a), while a `call_sites` row's `caller` carries the module coordinates,
+    # so the jump joins on the bare form — the same key `method_symbols` below
+    # is built on, for the same reason. One module is scanned at a time today;
+    # two modules declaring the identical bare descriptor collide here, and
+    # `setdefault` makes the first read win rather than the last, so the answer
+    # does not depend on which module the loader happened to reach second
+    # (NFR-1, Task 7's own first-writer precedent).
+    by_bare_caller: dict[str, list[dict[str, Any]]] = {}
+    for caller, sites in by_caller.items():
+        by_bare_caller.setdefault(bare_descriptor(caller), sites)
+    method_symbols: dict[str, str] = {}
+    for row in workspace.query("method_symbols"):
+        method_symbols.setdefault(bare_descriptor(str(row["symbol"])), str(row["symbol"]))
     return _TreeContext(
         entries=entries,
         body_entries=body_entries,
@@ -227,22 +273,31 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
         media_owner=(_catalog_symbol(media_values["owner"]) if "owner" in media_values else None),
         media_values=dict(media_values.get("values", {})),
         composers=composers,
-        continuations=frozenset(matches.get("continuations", [])),
+        continuations=_continuations_of(matches.get("continuations", [])),
         continuation_handlers=frozenset(
             entry["handler_arg"] for entry in entries if "handler_arg" in entry
         ),
         by_caller=by_caller,
-        # A body-linked entry's own `lambda` argument names its body BARE (D00
-        # §5a), while a `call_sites` row's `caller` carries the module
-        # coordinates, so the jump joins on the bare form — the same key
-        # `method_symbols` below is built on, for the same reason. One module
-        # is scanned at a time today; two modules declaring the identical bare
-        # descriptor would collide here, and the first read wins.
-        by_bare_caller={bare_descriptor(caller): sites for caller, sites in by_caller.items()},
-        method_symbols={
-            bare_descriptor(str(row["symbol"])): str(row["symbol"])
-            for row in workspace.query("method_symbols")
-        },
+        by_bare_caller=by_bare_caller,
+        method_symbols=method_symbols,
+    )
+
+
+def _continuations_of(declared: list[Any]) -> tuple[_Continuation, ...]:
+    """`continuations`' two forms, normalized to one: a plain method name is
+    the owner-free continuation, a mapping carries the same `name` plus
+    whichever of `owner`/`path_arg`/`subtree_arg` the catalog declared. Only
+    ever called on entries `_validate_matches` already passed."""
+    return tuple(
+        _Continuation(name=entry, owner=None, path_arg=None, subtree_arg=None)
+        if isinstance(entry, str)
+        else _Continuation(
+            name=entry["name"],
+            owner=_catalog_symbol(entry["owner"]) if "owner" in entry else None,
+            path_arg=entry.get("path_arg"),
+            subtree_arg=entry.get("subtree_arg"),
+        )
+        for entry in declared
     )
 
 
@@ -284,36 +339,67 @@ def _scope_of(sites: list[dict[str, Any]], context: _TreeContext) -> _Scope:
 
 
 def _claimed(site: dict[str, Any], context: _TreeContext) -> bool:
-    """Whether any declared rule claims this call at all."""
+    """Whether any declared rule claims this call at all — including an
+    owner-free continuation, which never roots but is genuinely part of the
+    tree it extends, so the routing value it takes as its receiver is really
+    consumed."""
     key = (str(site["owner"]), str(site["name"]))
     return (
         key in context.verbs
         or key in context.prefixes
         or key in context.media
         or key in context.composers
-        or _is_root_candidate(site, context)
+        or _matching_entry(site, context) is not None
+        or _matching_body_entry(site, context) is not None
+        or _matching_continuation(site, context) is not None
     )
 
 
 def _extends_a_receiver(site: dict[str, Any], context: _TreeContext) -> bool:
     key = (str(site["owner"]), str(site["name"]))
-    return key in context.composers or str(site["name"]) in context.continuations
+    return key in context.composers or _matching_continuation(site, context) is not None
+
+
+def _matching_continuation(site: dict[str, Any], context: _TreeContext) -> _Continuation | None:
+    """The one declared continuation matching this call, or None — `fluent`'s
+    own `_matching_step` rule verbatim: the name must match, and an entry's
+    `owner`, where it declares one, narrows it to that type.
+    `_validate_matches` already refused a catalog where two entries could match
+    the same call, so at most one ever applies."""
+    name = str(site["name"])
+    return next(
+        (
+            continuation
+            for continuation in context.continuations
+            if continuation.name == name and continuation.owner in (None, site["owner"])
+        ),
+        None,
+    )
 
 
 def _is_root_candidate(site: dict[str, Any], context: _TreeContext) -> bool:
-    """Whether this call could start a tree: an entry of either shape, or a
-    continuation (which roots the chain it ends — `route(...).and(...)` is
-    rooted at the `and`, since the `route` is consumed as its receiver).
+    """Whether this call could start a tree: an entry of either shape, or an
+    OWNER-DECLARING continuation (which roots the chain it ends —
+    `route(...).and(...)` is rooted at the `and`, since the `route` is consumed
+    as its receiver).
 
     A vocabulary call is deliberately NOT a candidate. That is the whole of
     checkpoint F4: bodies hold nothing but vocabulary calls, and treating a
     method as a root because it merely contains one derives every nested route
     a second time, unprefixed.
+
+    Nor is an owner-free continuation. Matching a bare method name against
+    every owner is `fluent`'s steps discipline — right for REACHING a step
+    inside a chain that is already known to be this catalog's, wrong for
+    deciding a chain is this catalog's in the first place. A lone `and` on some
+    unrelated type would otherwise be rooted and derive a row for a router
+    nobody wrote.
     """
+    continuation = _matching_continuation(site, context)
     return (
         _matching_entry(site, context) is not None
         or _matching_body_entry(site, context) is not None
-        or str(site["name"]) in context.continuations
+        or (continuation is not None and continuation.owner is not None)
     )
 
 
@@ -373,7 +459,10 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
     body_entry = _matching_body_entry(site, context)
     if body_entry is not None:
         return _body_routes(_arg_at(site["arguments"], body_entry["body_arg"]), scope)
-    if str(site["name"]) in context.continuations:
+    continuation = _matching_continuation(site, context)
+    if continuation is not None:
+        if continuation.subtree_arg is not None:
+            return _nest_continuation_routes(site, continuation, scope)
         return _declared_routes(site, context.continuation_handlers, scope, extends_receiver=True)
     return []
 
@@ -421,14 +510,8 @@ def _declared_routes(
     arguments = site["arguments"]
     handler = _handler_of(arguments, handler_positions, scope.context.method_symbols)
     routes: list[_Route] = []
-    if extends_receiver and site["receiver"] is not None:
-        extended = _producing_site(site["receiver"], scope, exclude=site)
-        chained = _routes_of(extended, scope) if extended is not None else []
-        # The chain this continuation extends is invisible — its producing
-        # call is in another method, or is not a routing call at all — so the
-        # composition is one honest unresolved row rather than a silently
-        # shorter route set.
-        routes.extend(chained or [_Route(poisons=_IDENTITY_POISON)])
+    if extends_receiver:
+        routes.extend(_chained_routes(site, scope))
     for position, argument in enumerate(arguments):
         if position in handler_positions:
             continue
@@ -437,6 +520,51 @@ def _declared_routes(
                 branch if branch.handler is not None else replace(branch, handler=handler)
             )
     return routes
+
+
+def _nest_continuation_routes(
+    site: dict[str, Any], continuation: _Continuation, scope: _Scope
+) -> list[_Route]:
+    """The nest-shaped continuation: the routes of the chain it extends, PLUS
+    the routes of the whole router at its `subtree_arg`, each carrying the
+    prefix at its `path_arg`.
+
+    The prefix lands on the SUBTREE's routes only — the chain to its left is
+    already complete and was never inside this nest. A plain continuation's
+    argument fold cannot serve here: it would read the second argument as a
+    handler slot (skipping it entirely) and the first as this call's own
+    predicate, which drops every route the subtree declares and emits a
+    handler-less row where they should have been.
+    """
+    arguments = site["arguments"]
+    routes = list(_chained_routes(site, scope))
+    subtree = _subtree_routes(_arg_at(arguments, continuation.subtree_arg), scope)
+    prefixes = _argument_constraints(_arg_at(arguments, continuation.path_arg), scope, (_PATH,))
+    routes.extend(_merged(prefix, route) for prefix in prefixes for route in subtree)
+    return routes
+
+
+def _chained_routes(site: dict[str, Any], scope: _Scope) -> list[_Route]:
+    """The routes of the chain a continuation extends. A receiver naming no
+    routing call this method can see — its producing call is in another method,
+    or is not a routing call at all — is one honest unresolved row rather than
+    a silently shorter route set; a continuation with no receiver at all
+    extends nothing and says nothing."""
+    if site["receiver"] is None:
+        return []
+    extended = _producing_site(site["receiver"], scope, exclude=site)
+    chained = _routes_of(extended, scope) if extended is not None else []
+    return chained or [_Route(poisons=_IDENTITY_POISON)]
+
+
+def _subtree_routes(argument: dict[str, Any] | None, scope: _Scope) -> list[_Route]:
+    """The router one argument holds, by whichever of the two links it carries
+    — the same recursion the entry-shaped `nest` makes. A `lambda`-kind
+    argument names a method whose body holds the routes; anything else is an
+    expression in this same method, reached through its `source`."""
+    if argument is not None and argument.get("kind") == "lambda":
+        return _body_routes(argument, scope)
+    return _argument_routes(argument, scope)
 
 
 def _nested_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> list[_Route]:
@@ -727,11 +855,17 @@ def _emitted(rows: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any
     endpoint (spec §4, the same rule `derive_endpoints.sql` applies to
     annotation rows), and comparing them before folding would keep both.
 
-    Only an identity-KNOWN row dedups, exactly as every other style: two routes
-    whose paths nobody could read carry nothing to compare, so each stays its
-    own row. `handler` is part of the key rather than decoration — two handlers
-    bound to one wire identity are two facts (the `interface_implementation`
-    parity rule), and a key without it would silently discard the second.
+    Only an identity-KNOWN row takes part in EITHER step, exactly as every
+    other style: two routes whose paths nobody could read carry nothing to
+    compare, so each stays its own row through the union and never enters the
+    dedup key. That is `derive_call_endpoints.sql`'s own written contract —
+    SQL's `NULL = NULL` is unknown rather than true, so two unresolved rows are
+    two distinct "this method declares something" facts, and collapsing them
+    here would hide one of them before the insert ever saw it.
+
+    `handler` is part of the key rather than decoration — two handlers bound to
+    one wire identity are two facts (the `interface_implementation` parity
+    rule), and a key without it would silently discard the second.
     """
     seen: set[tuple[str, str, str, str, str]] = set()
     emitted: list[dict[str, Any]] = []
@@ -759,17 +893,31 @@ def _emitted(rows: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any
 
 def _media_unioned(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Rows differing ONLY in their declared media folded into one, in
-    first-seen order (NFR-1)."""
+    first-seen order (NFR-1).
+
+    A row with no readable path is passed through untouched and never grouped.
+    Grouping compares columns for equality, and two rows whose identity columns
+    are all NULL compare equal to each other while standing for two genuinely
+    different unread declarations — `derive_call_endpoints.sql` keeps both for
+    exactly that reason, and a union that collapsed them would contradict the
+    contract this batch is written against.
+    """
     grouped: dict[tuple[Any, ...], dict[str, Any]] = {}
+    unioned: list[dict[str, Any]] = []
     for row in rows:
+        if row["path"] is None:
+            unioned.append(dict(row))
+            continue
         key = tuple(row[field] for field in _GROUPED_FIELDS)
         existing = grouped.get(key)
         if existing is None:
-            grouped[key] = dict(row)
+            fresh = dict(row)
+            grouped[key] = fresh
+            unioned.append(fresh)
             continue
         for field in _MEDIA_FIELDS:
             existing[field] = sorted(set(existing[field]) | set(row[field]))
-    return list(grouped.values())
+    return unioned
 
 
 def _media_json(values: list[str]) -> str | None:
@@ -785,7 +933,13 @@ def _validate_matches(catalog: Catalog) -> None:
     precedent): an entry that is neither of the two declared shapes, and a
     media rule filling a column that does not exist, are both broken files
     rather than degraded runs — the second especially, since a typo there
-    would silently file every value it reads under the wrong column."""
+    would silently file every value it reads under the wrong column.
+
+    `continuations` is checked hardest, because it is the one block where two
+    declarations can silently claim the same call: the same method name is
+    routinely a composer on one type and a chain continuation on another, and
+    only an `owner` tells them apart."""
+    _validate_continuations(catalog)
     for entry in catalog.matches.get("entries", []):
         argument_rooted = "methods" in entry and "handler_arg" in entry
         body_linked = "method" in entry and "body_arg" in entry
@@ -801,4 +955,67 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"loading catalog {catalog.source}: `{rule.get('method')}` declares "
                 f"`fills: {rule.get('fills')!r}` — a media rule fills `consumes` or "
                 f"`produces` (D02 §2's `combinator` style)"
+            )
+
+
+def _validate_continuations(catalog: Catalog) -> None:
+    """Refuses a `continuations` block that cannot be read unambiguously.
+
+    Three ways it can be broken, all of them silent otherwise:
+
+    - an entry that is neither a plain name nor a mapping carrying one, or a
+      mapping declaring only half of the `path_arg`/`subtree_arg` pair — a
+      nest-shaped continuation needs both, and half of it would fold as the
+      plain shape and drop the subtree;
+    - two entries sharing a name with no `owner` telling them apart — silent
+      last-wins would hide exactly the bug the check exists for
+      (`fluent._validate_steps`, same rule for the same reason);
+    - a name that is ALSO a declared composer method on the same owner, or on
+      any owner where the continuation declares none. Those two roles fold a
+      call completely differently — one merges constraints, the other merges
+      route sets — and dispatch order, not the catalog, would decide which
+      won. The one shape deliberately allowed is the same name declared for
+      BOTH roles on two DIFFERENT owners, which is the frozen reality this
+      style was built for (checkpoint (1a): a predicate type and a router type
+      each declare `and`), and there the owners make the reading exact.
+    """
+    composer_owners: dict[str, list[str]] = {}
+    for role in catalog.matches.get("vocabulary", {}).get("composers", {}).values():
+        for rule in role:
+            composer_owners.setdefault(rule["method"], []).append(_catalog_symbol(rule["owner"]))
+    by_name: dict[str, list[str | None]] = {}
+    name: str
+    owner: str | None
+    positions: tuple[str, ...]
+    for entry in catalog.matches.get("continuations", []):
+        if isinstance(entry, str):
+            name, owner, positions = entry, None, ()
+        elif isinstance(entry, dict) and isinstance(entry.get("name"), str):
+            name = entry["name"]
+            owner = _catalog_symbol(entry["owner"]) if "owner" in entry else None
+            positions = tuple(key for key in ("path_arg", "subtree_arg") if key in entry)
+        else:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: every `continuations` item is either a "
+                f"method name or `{{name, owner?, path_arg?, subtree_arg?}}`, got {entry!r} "
+                f"(D02 §2's `combinator` style)"
+            )
+        if len(positions) == 1:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: continuation `{name}` declares "
+                f"`{positions[0]}` alone — the nest-shaped continuation needs `path_arg` "
+                f"and `subtree_arg` together (D02 §2's `combinator` style)"
+            )
+        if name in composer_owners and (owner is None or owner in composer_owners[name]):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{name}` is declared as both a composer "
+                f"and a continuation with no `owner` telling the two apart — the two roles "
+                f"fold a call differently (D02 §2's `combinator` style)"
+            )
+        by_name.setdefault(name, []).append(owner)
+    for name, owners in by_name.items():
+        if len(owners) > 1 and (None in owners or len(set(owners)) != len(owners)):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: continuations named `{name}` need "
+                f"distinct `owner`s to tell them apart (D02 §2's `combinator` style)"
             )
