@@ -346,6 +346,32 @@ root's own `channel_via` ladder rides forward the same way, available to resolve
 chain's `channel` wherever the walk finally derives, with no need to repeat it on a later
 step.
 
+**A step may declare `when`** — `{arg: int, equals: str}`, exactly those two keys — a value
+guard on one of the *matched call's own* arguments, for the builder shape where the
+capturing method is generic and only the argument says what it set:
+`MessageBuilder.setHeader(KafkaHeaders.TOPIC, "raw-messages")` sets a topic, while
+`setHeader(anythingElse, …)` on the same chain does not. **`when` guards steps only.** A
+root starts the chain, with no prior capture a guard could ever condition, so a `when` on a
+root is a broken catalog, refused by name at load rather than silently stripped.
+
+The guard has **three** answers, not two, because "the guard did not hold" and "the guard
+could not be read" are different facts:
+
+- the guard argument is a string literal **equal to** `equals` — the step's own captures
+  apply, exactly as an unguarded step's would;
+- the guard argument is a string literal, but a **different** one — the step still *matched*
+  the chain, only its captures do not apply, so nothing it declares overwrites whatever an
+  earlier step already folded in (pass-through);
+- **anything else** — no argument at that position, the wrong kind, or the compiler's own
+  `unresolved` — poisons every *argument* capture (`url`/`body`/`response`/`channel`) the
+  step declares to `unresolved`. It might have been the guarded key, and an unreadable key
+  must never let a chain keep an earlier confident answer. A later step that writes the same
+  key unambiguously supersedes the poison: "can't tell" is an answer this pass records, not
+  a state it locks. The step's *literal* declarations (`http_method`, `response_is`, a
+  `channel_via` ladder) are not argument reads and carry no `unresolved` form at all, so
+  they are left out of the fold rather than poisoned into a value their readers cannot
+  interpret.
+
 ### `interface_implementation`
 
 The boundary is declared by implementing a framework interface — Pub/Sub's

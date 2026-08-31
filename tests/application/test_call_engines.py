@@ -2864,7 +2864,7 @@ def test_okhttp_put_patch_delete_head_steps_derive_their_own_verb_not_the_roots_
     assert by_caller[callers["head"]]["method"] == "HEAD"
 
 
-# --- Task 8 (2E-prep): `when` — the value-guarded step (D02 §2b) -----------
+# --- Task 8 (2E-prep): `when` — the value-guarded step (D02 §2's fluent) ---
 #
 # Checkpoint-confirmed (task-6-report.md javap evidence, reviewer-reproduced):
 # `KafkaHeaders.TOPIC` inlines to `LDC "kafka_topic"` at the call site, so a
@@ -2892,7 +2892,8 @@ _GUARDED_STEP_MATCHES = {
 
 
 def test_a_guarded_step_whose_key_matches_captures_under_the_guard(tmp_path: Path):
-    """D02 §2b's plain case: the guard argument reads the declared `equals`
+    """D02 §2's `fluent` style, the plain case: the guard argument reads
+    the declared `equals`
     literal exactly, so the step's own captures apply — a `setHeader`
     reached with `("kafka_topic", "t")` captures `url: "t"` exactly as an
     unguarded step would."""
@@ -2924,7 +2925,8 @@ def test_a_guarded_step_whose_key_matches_captures_under_the_guard(tmp_path: Pat
 def test_a_guarded_step_whose_key_is_a_different_literal_passes_through_uncaptured(
     tmp_path: Path,
 ):
-    """The step still matches the chain either way (D02 §2b: "the step
+    """The step still matches the chain either way (D02 §2's `fluent`
+    style: "the step
     matches the chain either way, pass-through when the guard doesn't
     hold") — a `setHeader` keyed `"other"` captures nothing at all, and the
     url an earlier step set stands untouched, exactly like today's
@@ -2967,8 +2969,8 @@ def test_a_guarded_step_whose_key_is_unresolved_poisons_the_capture_it_declares(
     tmp_path: Path,
 ):
     """An unreadable guard key must never let a chain preserve an earlier
-    confident answer (D02 §2b): the guard argument's own kind is the
-    compiler's `unresolved` (never a string this catalog could compare), so
+    confident answer (D02 §2's `fluent` style): the guard argument's own
+    kind is the compiler's `unresolved` (never a string this catalog could compare), so
     every capture this step declares — here just `url` — poisons to
     unresolved, overwriting the resolved url an earlier `uri` step set, and
     dropping the row's own resolution (checkpoint ruling I1, unified in Task
@@ -3054,6 +3056,101 @@ def test_a_later_guarded_write_supersedes_an_earlier_poison(tmp_path: Path):
     assert endpoint["resolution"] == "resolved"
 
 
+_TOPIC_NAME = "com/acme/msg/TopicName#"
+# Final review (minor): the poison covers a step's ARGUMENT captures only.
+# `_merged_captures` folds a `channel_via` ladder into the SAME dict the
+# argument reads live in, so poisoning every declared field replaced the
+# list of `{owner, method, arg}` forms with `{"kind": "unresolved"}` — and
+# `linked_channels`, iterating that mapping, raised `TypeError: string
+# indices must be integers` the moment a later step rewrote `channel` with
+# an argument worth following. The same poison wrote that mapping into
+# `http_method`, which reaches the `method` column unstringified.
+_GUARDED_CHANNEL_MATCHES = {
+    "roots": [
+        {
+            "owner": "com.acme.http.WebClient",
+            "method": "get",
+            # The ladder rides forward from the root (D02 §2's `fluent`
+            # style) — which is precisely what makes the poisoned copy
+            # observable: no later step rewrites it.
+            "captures": {"http_method": "GET", "channel": "arg0"},
+            "channel_via": [{"owner": "com.acme.msg.TopicName", "method": "of", "arg": 0}],
+        }
+    ],
+    "steps": [
+        {
+            "method": "setHeader",
+            "when": {"arg": 0, "equals": "kafka_topic"},
+            "captures": {"http_method": "POST", "channel": "arg1"},
+            "channel_via": [{"owner": "com.acme.msg.TopicName", "method": "of", "arg": 0}],
+        },
+        # Rewrites `channel` alone, so a ladder poisoned by the step above
+        # is never overwritten and survives all the way into `_derive`.
+        {"method": "setDestination", "captures": {"channel": "arg0"}},
+    ],
+    "terminal": ["retrieve"],
+}
+
+
+def test_an_unreadable_guard_poisons_the_argument_reads_and_leaves_the_literals_alone(
+    tmp_path: Path,
+):
+    """A guarded step's `http_method` literal and the chain's `channel_via`
+    ladder are not argument reads and have no `unresolved` form, so an
+    unreadable guard key must leave both alone (D02 §2's `fluent` style,
+    final review): the step contributed no readable evidence, and what an
+    earlier entry declared stands.
+
+    Poisoning them instead is not a wrong answer but a crash and a garbage
+    column — `linked_channels` iterating a poisoned ladder raises
+    `TypeError`, and a poisoned `http_method` reaches `method` as a mapping.
+    Here the guard is `unresolved`, so `channel` poisons (and is superseded
+    by the later `setDestination` write, the un-poisoning rule above), while
+    the root's own verb and ladder survive to resolve the destination
+    through `TopicName.of`."""
+    caller = "com/acme/http/Client#sendGuardedChannel()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "setHeader",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="unresolved"), CallArgument(kind="string", value="x")],
+        ),
+        _call(
+            caller,
+            _TOPIC_NAME,
+            "of",
+            2,
+            receiver=None,
+            result=20,
+            arguments=[CallArgument(kind="string", value="raw-x")],
+            invoke_kind="static",
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "setDestination",
+            3,
+            receiver=10,
+            result=11,
+            arguments=[CallArgument(kind="unresolved", source=20)],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 4, receiver=11, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_GUARDED_CHANNEL_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["method"] == "GET"
+    assert endpoint["path"] == "raw-x"
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "resolved"
+
+
 @pytest.mark.parametrize(
     "when",
     [
@@ -3096,7 +3193,8 @@ def test_a_malformed_when_guard_is_refused_at_run_start(tmp_path: Path, when: ob
 
 
 def test_a_when_guard_on_a_root_is_refused_at_run_start(tmp_path: Path):
-    """`when` (D02 §2b) is a STEP's own guard — a root starts the chain,
+    """`when` (D02 §2's `fluent` style) is a STEP's own guard — a root
+    starts the chain,
     with no prior capture a guard could ever condition. Fix round 1
     (reviewer MAJOR): the root's own list construction used to carry only
     `owner`/`method`/`captures` forward, so a `when` on a root entry was

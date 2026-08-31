@@ -61,7 +61,8 @@ _ARGUMENT_FIELDS = ("url", "body", "response", "channel")
 
 _ARG_REFERENCE = re.compile(r"^arg(\d+)$")
 
-# A `when` guard's own two keys (D02 §2b): `{arg: int, equals: str}` exactly.
+# A `when` guard's own two keys (D02 §2's `fluent` style): `{arg: int,
+# equals: str}` exactly.
 _WHEN_KEYS = {"arg", "equals"}
 
 # The D00 §5 compiler's own "unresolved" argument kind — what a `when` guard
@@ -96,9 +97,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             "owner": _catalog_symbol(root["owner"]),
             "method": root["method"],
             "captures": _merged_captures(root),
-            # Carried forward (never a root's own field, D02 §2b) purely so
-            # `_validate_captures` can see and refuse it, exactly as an
-            # unchecked value must not silently survive the file.
+            # Carried forward (never a root's own field, D02 §2's `fluent`
+            # style) purely so `_validate_captures` can see and refuse it,
+            # exactly as an unchecked value must not silently survive the file.
             "when": root.get("when"),
         }
         for root in matches.get("roots", [])
@@ -113,9 +114,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # `body(Class)` response-extractor).
             "owner": _catalog_symbol(step["owner"]) if "owner" in step else None,
             "captures": _merged_captures(step),
-            # D02 §2b: a step may declare a value guard on another argument
-            # — None for the (default) unguarded step, read by `_walk`
-            # (`_step_captures`) where `_matching_step` finds this row.
+            # D02 §2's `fluent` style: a step may declare a value guard on
+            # another argument — None for the (default) unguarded step, read
+            # by `_walk` (`_step_captures`) where `_matching_step` finds this
+            # row.
             "when": step.get("when"),
         }
         for step in matches.get("steps", [])
@@ -254,9 +256,9 @@ def _walk(
         if step is not None:
             # Last wins (D02 §4): a repeated step overwrites its own earlier
             # capture here, in visitation order, with no extra bookkeeping.
-            # `next_site`'s own arguments are what a `when` guard (D02 §2b)
-            # reads, so the guard is evaluated here, in `_resolve_captures`'s
-            # caller, rather than inside it.
+            # `next_site`'s own arguments are what a `when` guard (D02 §2's
+            # `fluent` style) reads, so the guard is evaluated here, in
+            # `_resolve_captures`'s caller, rather than inside it.
             next_captures.update(_step_captures(step, next_site))
         _walk(next_site, next_captures, reached_terminal, context)
 
@@ -412,8 +414,9 @@ def _matching_root(site: dict[str, Any], roots: list[dict[str, Any]]) -> dict[st
 def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The one declared step matching `site` — the whole entry, `captures`
     and its optional `when` guard together, since evaluating the guard
-    (D02 §2b) needs `site`'s own arguments, read by `_step_captures` in
-    `_walk` where they are at hand — or None where nothing does:
+    (D02 §2's `fluent` style) needs `site`'s own arguments, read by
+    `_step_captures` in `_walk` where they are at hand — or None where
+    nothing does:
     "unmatched steps pass through uncaptured" (D02 §4). An owner-less step
     matches any owner; `_validate_steps` already refused any catalog where
     more than one entry could match the same row, so at most one candidate
@@ -474,8 +477,9 @@ def _validate_captures(
     no error at all, silently discarding the url capture at derive time —
     mutation-proven against a real okhttp-shaped probe).
 
-    `when` (D02 §2b) is a STEP's own guard — a root starts the chain, with
-    no prior capture a guard could ever condition, so `allow_when=False`
+    `when` (D02 §2's `fluent` style) is a STEP's own guard — a root starts
+    the chain, with no prior capture a guard could ever condition, so
+    `allow_when=False`
     (roots) refuses ANY declared `when` outright, well-formed or not;
     `allow_when=True` (steps) instead checks the guard is exactly `{arg:
     int, equals: str}`. Both checked here, at the same load-time pass,
@@ -496,13 +500,13 @@ def _validate_captures(
             raise CatalogError(
                 f"loading catalog {catalog.source}: root `{entry['method']}` declares "
                 f"`when` — `when` guards steps only; a root has no prior chain to guard "
-                f"(D02 §2b)"
+                f"(D02 §2's `fluent` style)"
             )
         if not _valid_when(when):
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{entry['method']}` declares "
                 f"`when: {when!r}`, which must be `{{arg: int, equals: str}}` exactly "
-                f"(D02 §2b's value-guarded step)"
+                f"(D02 §2's `fluent` style, the value-guarded step)"
             )
 
 
@@ -684,20 +688,36 @@ def _chain_key(site: dict[str, Any]) -> Any:
 
 def _step_captures(step: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]:
     """The captures one matched step contributes for `site` — plain
-    `_resolve_captures` where the step declares no `when`, and D02 §2b's
-    three-way guard answer otherwise, read off `site`'s own arguments:
+    `_resolve_captures` where the step declares no `when`, and D02 §2's
+    `fluent` style's three-way guard answer otherwise, read off `site`'s own
+    arguments:
 
     - the guard argument is a string literal equal to `when["equals"]` —
       the step's own captures apply, exactly as an unguarded step's would;
     - the guard argument is a string literal, but a DIFFERENT one — the
-      step still matched the chain (D02 §2b: "the step matches the chain
-      either way"), only its captures do not apply, so nothing here
+      step still matched the chain (D02 §2's `fluent` style: "the step
+      matches the chain either way"), only its captures do not apply, so nothing here
       overwrites whatever an earlier step already folded in;
     - anything else (no argument at that position, the wrong kind, or the
-      compiler's own `unresolved`) poisons every capture this step
+      compiler's own `unresolved`) poisons every ARGUMENT capture this step
       declares to `_UNRESOLVED_ARGUMENT` — it might have been the guarded
       key, and an unreadable key must never let a chain preserve an
-      earlier confident answer."""
+      earlier confident answer.
+
+    Only the `_ARGUMENT_FIELDS` are poisoned (final review, minor): every
+    other declared field is a literal the catalog already knows, not a
+    position read off the call site, and none of their readers has an
+    `unresolved` form to fall through to. `channel_via` is the case that
+    proved it — `_merged_captures` folds a step's own ladder in under that
+    same key, so poisoning it replaced a list of `{owner, method, arg}`
+    forms with a one-key mapping, and `linked_channels` iterating that
+    mapping raised `TypeError: string indices must be integers` the moment
+    a later step rewrote `channel` with a readable argument. The same
+    poisoning wrote the mapping itself into `http_method`, which reaches
+    the `method` column unstringified. So a literal a guarded step declares
+    is simply not folded in when the guard could not be read — the step
+    contributed no readable evidence, and an earlier step's own literal is
+    left standing rather than replaced by a value nothing can interpret."""
     when = step.get("when")
     if when is None:
         return _resolve_captures(step["captures"], site)
@@ -706,7 +726,7 @@ def _step_captures(step: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]
         if guard["value"] == when["equals"]:
             return _resolve_captures(step["captures"], site)
         return {}
-    return {field: _UNRESOLVED_ARGUMENT for field in step["captures"]}
+    return {field: _UNRESOLVED_ARGUMENT for field in step["captures"] if field in _ARGUMENT_FIELDS}
 
 
 def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]:
