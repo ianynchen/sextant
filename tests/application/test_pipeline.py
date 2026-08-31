@@ -59,7 +59,10 @@ def _resolved_fixture(
         # Phase 2C: `call_site` and `string_constants` gate the RestTemplate
         # catalog (D02 §1's `single_call`); `chain_reconstruction` gates the
         # `fluent` catalogs (WebClient/RestClient/OkHttp/aws-sqs-sdk/
-        # google-pubsub-publisher/spring-kafka-message); `implemented_interfaces`
+        # google-pubsub-publisher/spring-kafka-message) AND, as of Phase 2E
+        # Task 9, `spring-webflux-router.yml`'s own `combinator` style — the
+        # SAME three capabilities (`call_site`, `string_constants`,
+        # `chain_reconstruction`), no new one added; `implemented_interfaces`
         # (2E-prep Task 12) gates `google-pubsub-subscriber.yml`'s own
         # `interface_implementation` style — a real subset of what
         # `AsmScanner.capabilities()` actually declares, the same way the
@@ -112,6 +115,66 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
             (verb, "/v1/legacy/orders/any")
             for verb in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE")
         ),
+        # Phase 2E Task 6 (composed annotations — distinct from "2E-prep Task
+        # 6" elsewhere in this file, a different plan's numbering): the
+        # effective-annotations pre-pass's own fixture —
+        # `ComposedController#composed`'s `@ApiGet`, a module-local
+        # composition of `@RequestMapping(method=[GET], path=["/composed"])`
+        # (the checkpoint's ratified deviation from `@GetMapping`, which
+        # javac rejects as a meta-annotation — its own `@Target` is `METHOD`
+        # only). `ComposedController` carries `@RestController` and no
+        # class-level `@RequestMapping`, so no prefix applies.
+        ("GET", "/composed"),
+        # Phase 2E Task 7 (inherited mappings): the OpenAPI-generator
+        # pattern — `OrdersApi` declares mappings, `OrdersApiController`
+        # implements it with bare `@Override`s carrying none of their own.
+        # `/api/orders`: the interface's own `@GetMapping("/orders")` on
+        # `list()`, inherited onto the implementation and prefixed by the
+        # interface's own class-level `@RequestMapping("/api")` — neither of
+        # which `OrdersApiController` (only `@RestController`) repeats.
+        # `/api/composed`: the composed-AND-inherited case — `@ApiGet` on
+        # `OrdersApi#composed` composes to a real `@RequestMapping` (Task 6)
+        # BEFORE this task's own inheritance walk has anything to resolve.
+        # NOT here, and asserted absent below: `/api/orders/{id}` —
+        # `OrdersApiController#find` returns the covariant
+        # `DetailedOrderResult`, a different descriptor from the interface's
+        # `find`, so the real override misses the join honestly; the
+        # compiler's own bridge method DOES carry the interface's exact
+        # descriptor and would join if left alone, so its exclusion
+        # (checkpoint item (4)'s structural rule) is load-bearing here, not
+        # a nicety.
+        ("GET", "/api/orders"),
+        ("GET", "/api/composed"),
+        # Phase 2E Task 9 (the `combinator` engine — the WebFlux router tree,
+        # both DSLs through one core, spring-webflux-router.yml).
+        # `OrderRoutes#routes`: `RouterFunctions.nest("/fn", ...)` prefixing a
+        # chain of `route`/`andRoute` — `GET`+`POST /fn/orders` off the
+        # method-ref and inline-lambda handlers, and the `or`'d
+        # `GET`+`HEAD /fn/health` pair sharing the inline lambda's synthetic
+        # body (checkpoint (1a)).
+        ("GET", "/fn/orders"),
+        ("POST", "/fn/orders"),
+        ("GET", "/fn/health"),
+        ("HEAD", "/fn/health"),
+        # `OrderRoutes#composite`/`#other` (checkpoint (1a)'s cross-method
+        # case): `composite()` derives `GET /extra` off its own predicate,
+        # PLUS one unresolved row for `.and(other())` — the walk is
+        # per-method by design, so the cross-method `RouterFunction`
+        # reference is a visible unresolved row rather than a silent
+        # absence (asserted by caller below). `other()` is itself an
+        # argument-rooted entry, so `GET /other` ALSO derives, resolved,
+        # from its own independent walk — two rows for one method, not one
+        # (checkpoint (1a)'s frozen "consequence").
+        ("GET", "/extra"),
+        ("GET", "/other"),
+        # `KotlinOrderRoutes#ktRoutes`'s `coRouter { }` DSL, nested under
+        # `/kt`: `GET`+`POST /kt/orders` and `GET /kt/rich`, handler NULL on
+        # all three (checkpoint (1b) Tier-0: the Kotlin compiler hands every
+        # handler here as an `instance` of a generated class, never a method
+        # reference — never fabricated into one).
+        ("GET", "/kt/orders"),
+        ("POST", "/kt/orders"),
+        ("GET", "/kt/rich"),
         # Outbound (Phase 2B): the client interfaces' declared calls.
         ("POST", "/billing/invoices"),
         ("GET", "/billing/invoices"),
@@ -182,6 +245,15 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         (None, "audit.raw"),
         # ShipmentsSqsListener.
         (None, "shipments-inbound"),
+        # Phase 2E Task 6 (composed annotations): the messaging half of the
+        # same fixture — `ComposedListener#onComposedEvent`'s
+        # `@OrderTopicListener`, a
+        # module-local composition of `@KafkaListener(topics =
+        # ["composed-orders"])`. `spring-kafka.yml` declares no type-level
+        # gate, so `ComposedListener` needs none; the handler returns `void`,
+        # so no reply row derives (the pre-pass proving itself catalog-
+        # generic — the same mechanism, a different catalog, for free).
+        (None, "composed-orders"),
         # Outbound (Phase 2D, Task 10): `@SendTo`'s two reply shapes.
         # `onReturn`'s static `@SendTo("order-return-receipts")`.
         (None, "order-return-receipts"),
@@ -202,6 +274,12 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # "unresolved is an answer, never an omission"; duplicate
         # fluent-resolved + single_call-degraded rows for one call are
         # accepted and documented). Asserted on its own, by caller, below.
+        # Phase 2E Task 9 adds one more to this same shared tuple:
+        # `OrderRoutes#composite`'s `.and(other())` — the combinator walk is
+        # per-method by design, so this cross-method `RouterFunction`
+        # reference derives its own unresolved row, sharing the identical
+        # `(None, None)` shape every other unreadable-identity row does
+        # (asserted on its own, by caller, below).
         (None, None),
         # Outbound (Phase 2D, Task 11): `kafka-clients.yml`'s raw
         # `KafkaProducer#send(ProducerRecord)` — `order-raw` has no inbound
@@ -353,8 +431,54 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # overall resolution, standing beside `spring-kafka-template.yml`'s
     # pre-existing `record_arg` sibling, spec §4's ruling again). 62 + 6 =
     # 68.
-    assert len(report.endpoints) == 68
+    #
+    # Phase 2E Task 6 (composed annotations, the effective-annotations
+    # pre-pass) adds 2 more: `GET /composed` (http inbound,
+    # `ComposedController#composed`'s `@ApiGet` resolving through
+    # `@RequestMapping`) and `composed-orders` (kafka inbound,
+    # `ComposedListener#onComposedEvent`'s `@OrderTopicListener` resolving
+    # through `@KafkaListener`) — neither merges with anything already in
+    # the fixture. 68 + 2 = 70.
+    #
+    # Phase 2E Task 7 (inherited mappings) adds 2 more: `GET /api/orders`
+    # and `GET /api/composed`, neither merging with anything already in the
+    # fixture. `GET /api/orders/{id}` — the naive join's target, per
+    # checkpoint item (4) — is asserted absent below rather than merely
+    # omitted from the route set above (the honesty pin: a join that DID
+    # leak here would silently inflate this same count, and a set
+    # comparison alone would not say which row was extra). 70 + 2 = 72.
+    #
+    # Phase 2E Task 9 (the `combinator` engine, spring-webflux-router.yml)
+    # adds 10 more, none merging with anything already in the fixture: 4 off
+    # `OrderRoutes#routes` (`GET`+`POST /fn/orders`, `GET`+`HEAD
+    # /fn/health`), 3 off `OrderRoutes#composite`/`#other` (`GET /extra`
+    # resolved, `GET /other` resolved from `other()`'s own walk, and one
+    # unresolved row for `composite()`'s cross-method `.and(other())`
+    # reference — sharing the existing `(None, None)` tuple above, so the
+    # SET gains no new entry for it even though this count does), and 3 off
+    # `KotlinOrderRoutes#ktRoutes`'s `coRouter` DSL (`GET`+`POST /kt/orders`,
+    # `GET /kt/rich`, handler NULL on all three). 72 + 10 = 82 — exactly the
+    # checkpoint's own frozen target (checkpoint item (5)). Verified live
+    # against real bytecode, not computed from the brief alone.
+    assert len(report.endpoints) == 82
     assert report.skipped_catalogs == []
+    assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
+
+    # Task 7: `handler_signature` comes from the IMPLEMENTING method (spec
+    # §3's own boundary sentence), never the interface's — shapes and
+    # nullability derive from the real implementation types even when, as
+    # here, both happen to declare the identical signature.
+    inherited_handlers = {
+        (e["method"], e["path"]): e["handler"]
+        for e in report.endpoints
+        if e["path"] in ("/api/orders", "/api/composed")
+    }
+    assert inherited_handlers[("GET", "/api/orders")].endswith(
+        "OrdersApiController#list(sig_3f061508)."
+    )
+    assert inherited_handlers[("GET", "/api/composed")].endswith(
+        "OrdersApiController#composed(sig_d5afb768)."
+    )
 
     directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
     assert directions[("POST", "/billing/invoices")] == "outbound"
@@ -398,6 +522,74 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         e for e in report.endpoints if (e["method"], e["path"]) == ("POST", "/v2/inventory/reserve")
     ]
     assert "lambda$reserveAfterLevels$" in reserve_row["caller"]
+
+    # Task 5: OrderController's two media-declaring routes fill consumes/
+    # produces off their own `@GetMapping`/`@PostMapping` attributes (spec §4
+    # evidence kind (a)); every other row in the fixture — `create`'s own
+    # bare `@PostMapping` among them — derives both NULL, the fixture's own
+    # NULL-stays-NULL pin (no declaration is a guessed default, D01 §4).
+    media = {(e["method"], e["path"]): (e["consumes"], e["produces"]) for e in report.endpoints}
+    assert media[("GET", "/v1/orders/{id}")] == (None, '["application/json"]')
+    assert media[("POST", "/v1/orders/detailed")] == (
+        '["application/json"]',
+        '["application/json"]',
+    )
+    assert media[("POST", "/v1/orders")] == (None, None)
+
+    # Phase 2E Task 9 (the `combinator` engine): the WebFlux router tree's
+    # own pins, verified live against real bytecode rather than hand-derived
+    # (checkpoint item (5)).
+    combinator_rows = {
+        (e["method"], e["path"]): e
+        for e in report.endpoints
+        if e["catalog_id"] == "spring-webflux-router"
+    }
+    assert len(combinator_rows) == 10
+    # Java: a bound method reference resolves to the real handler; the inline
+    # lambda resolves to its synthetic body — both module-prefixed, joined
+    # against the scanned symbol facts, never fabricated (checkpoint (1a)).
+    assert combinator_rows[("GET", "/fn/orders")]["handler"].endswith(
+        "RouteHandlers#listOrders(sig_a2451eb8)."
+    )
+    assert combinator_rows[("POST", "/fn/orders")]["handler"].endswith(
+        "RouteHandlers#createOrder(sig_a2451eb8)."
+    )
+    assert (
+        combinator_rows[("GET", "/fn/health")]["handler"]
+        == combinator_rows[("HEAD", "/fn/health")]["handler"]
+    )
+    assert combinator_rows[("GET", "/fn/health")]["handler"].endswith(
+        "OrderRoutes#lambda$routes$0(sig_a2451eb8)."
+    )
+    # `composite()`'s cross-method `.and(other())` reference derives one
+    # unresolved row, `(None, None)` — asserted by caller, since its own
+    # identity is unreadable by design (spec §1c: the walk is per-method,
+    # and following the reference is a deliberate boundary, never silence);
+    # `other()` derives `GET /other`, resolved, from its own independent
+    # walk — two distinct facts about one method name (checkpoint (1a)'s
+    # frozen "consequence").
+    assert combinator_rows[("GET", "/extra")]["resolution"] == "resolved"
+    assert combinator_rows[("GET", "/other")]["resolution"] == "resolved"
+    assert combinator_rows[("GET", "/other")]["caller"].endswith("OrderRoutes#other(sig_2e6d7578).")
+    composite_unresolved = combinator_rows[(None, None)]
+    assert composite_unresolved["resolution"] == "unresolved"
+    assert composite_unresolved["caller"].endswith("OrderRoutes#composite(sig_30e7fc92).")
+    # Kotlin: `coRouter`'s own handlers arrive as `instance` of a generated
+    # class, never a method reference — Tier-0, honestly NULL rather than
+    # fabricated (checkpoint (1b)).
+    kt_rows = [row for (m, p), row in combinator_rows.items() if p and p.startswith("/kt/")]
+    assert {(row["method"], row["path"]) for row in kt_rows} == {
+        ("GET", "/kt/orders"),
+        ("POST", "/kt/orders"),
+        ("GET", "/kt/rich"),
+    }
+    assert all(row["handler"] is None for row in kt_rows)
+    # F1: every predicate-derived media column on every combinator row is
+    # NULL — the vararg `accept`/`contentType` constants are unreadable
+    # (checkpoint (3)), and that unreadability never touches `resolution`.
+    assert all(
+        (row["consumes"], row["produces"]) == (None, None) for row in combinator_rows.values()
+    )
 
 
 # --- Task 10: the three listener catalogs, end to end, on real bytecode ---

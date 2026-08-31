@@ -4,6 +4,12 @@ reads it, so it carries no `D` document (M07 "The view model is internal")."""
 
 from dataclasses import dataclass
 
+# Re-exported: document.py and diagrams.py both import `simple_name` from
+# here, and the seam (`domain/symbols.py`) is where the definition now lives.
+from sextant.domain.symbols import simple_name
+
+__all__ = ["ClassEdge", "ClassNode", "simple_name"]
+
 
 @dataclass(frozen=True)
 class ClassNode:
@@ -16,9 +22,3 @@ class ClassNode:
 class ClassEdge:
     source: str
     target: str
-
-
-def simple_name(symbol: str) -> str:
-    """The display name for a SCIP symbol (D00 §5a): the last path segment,
-    with the trailing `#` a type descriptor always carries stripped."""
-    return symbol.rsplit("/", 1)[-1].rstrip("#")

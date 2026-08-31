@@ -29,6 +29,12 @@ class ConstructKind(StrEnum):
     CONSTRUCTOR = "constructor"
     FIELD = "field"
     MODULE = "module"
+    STRUCT = "struct"
+    TRAIT = "trait"
+    PROTOCOL = "protocol"
+    ALIAS = "alias"
+    FUNCTION = "function"
+    ACCESSOR = "accessor"
 
 
 class OriginTier(StrEnum):

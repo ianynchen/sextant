@@ -17,6 +17,11 @@ matches:
     # typed reaches the bytecode. First present wins, in this order.
     path_from: [value, path]
     prefix_from: [value, path]
+    # Declared media types (2E Task 5, evidence kind (a)): each mapping
+    # annotation's own `consumes`/`produces` attribute, read scalar-or-array
+    # like `path_from`. Neither has an alias to worry about here.
+    consumes_from: [consumes]
+    produces_from: [produces]
     method_from: method
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
     prefix_annotation: org.springframework.web.bind.annotation.RequestMapping

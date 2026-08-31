@@ -8,6 +8,21 @@ declares."""
 from dataclasses import dataclass
 from typing import Any
 
+# Two forms exist for the same type on purpose: D02's catalogs write a dotted
+# name (`reactor.core.publisher.Mono`) because that is how the spec and every
+# catalog author spells a fully qualified type; the scanner emits SCIP symbols
+# (`reactor/core/publisher/Mono#`, D00 §5a) because that is the grammar the
+# rest of the fact stream is keyed on. Neither side should change to suit the
+# other — the catalog stays readable in its source notation, the facts stay
+# one grammar — so the conversion happens once, at the point of comparison.
+# A plain assignment, not `import ... as _catalog_symbol`: mypy's strict
+# implicit-reexport rule only recognises the same-name `import X as X` form,
+# and this module's own importers (unchanged by this task) reach the name
+# through `rooting`, not through `domain.symbols`.
+from sextant.domain.symbols import type_descriptor
+
+_catalog_symbol = type_descriptor
+
 
 @dataclass(frozen=True)
 class RootedType:
@@ -64,19 +79,3 @@ def _matching_wrapper(symbol: str, wrappers: list[dict[str, Any]]) -> dict[str, 
     return next(
         (wrapper for wrapper in wrappers if _catalog_symbol(wrapper["type"]) == symbol), None
     )
-
-
-def _catalog_symbol(dotted_type: str) -> str:
-    """Converts a catalog's dotted type name to the SCIP symbol form the facts
-    use.
-
-    Two forms exist for the same type on purpose: D02's catalogs write a
-    dotted name (`reactor.core.publisher.Mono`) because that is how the spec
-    and every catalog author spells a fully qualified type; the scanner emits
-    SCIP symbols (`reactor/core/publisher/Mono#`, D00 §5a) because that is the
-    grammar the rest of the fact stream is keyed on. Neither side should
-    change to suit the other — the catalog stays readable in its source
-    notation, the facts stay one grammar — so the conversion happens once,
-    here, at the point of comparison.
-    """
-    return dotted_type.replace(".", "/") + "#"

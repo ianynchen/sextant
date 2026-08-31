@@ -22,7 +22,7 @@ public class OrderController {
         return service.place(command);
     }
 
-    @GetMapping("/{id}")
+    @GetMapping(value = "/{id}", produces = "application/json")
     public OrderResult get(@PathVariable long id) {
         return service.find(id);
     }
@@ -43,7 +43,7 @@ public class OrderController {
     // The one endpoint that exercises the whole chain: a request payload
     // covering every nullability and naming case, and a response wrapped in a
     // declared envelope, so rooting has something real to unwrap.
-    @PostMapping("/detailed")
+    @PostMapping(value = "/detailed", consumes = "application/json", produces = "application/json")
     public ResponseEntity<OrderView> createDetailed(@RequestBody OrderRequest request) {
         return ResponseEntity.ok(new OrderView());
     }

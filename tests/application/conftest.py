@@ -48,7 +48,10 @@ def resolved_fixture(
         # Phase 2C: `call_site` and `string_constants` gate the RestTemplate
         # catalog (D02 §1's `single_call`); `chain_reconstruction` gates the
         # `fluent` catalogs (WebClient/RestClient/OkHttp/aws-sqs-sdk/
-        # google-pubsub-publisher/spring-kafka-message); `implemented_interfaces`
+        # google-pubsub-publisher/spring-kafka-message) AND, as of Phase 2E
+        # Task 9, `spring-webflux-router.yml`'s own `combinator` style — the
+        # SAME three capabilities (`call_site`, `string_constants`,
+        # `chain_reconstruction`), no new one added; `implemented_interfaces`
         # (2E-prep Task 12) gates `google-pubsub-subscriber.yml`'s own
         # `interface_implementation` style — a real subset of what
         # `AsmScanner.capabilities()` actually declares, the same way the

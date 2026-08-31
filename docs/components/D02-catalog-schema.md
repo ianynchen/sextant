@@ -42,6 +42,13 @@ matches:
 | `requires` | Scanner capabilities. **If unmet, the catalog does not run and the skip is reported.** |
 | `matches` | Style-specific |
 
+**Every type name a catalog writes — `owner`, `fqn`, `type` — is dotted**
+(`reactor.core.publisher.Mono`), never the SCIP symbol form the fact stream uses
+(`reactor/core/publisher/Mono#`). The dotted notation is sugar for the JVM symbol scheme
+specifically: the conversion (`domain/symbols.type_descriptor`) becomes scheme-aware when
+the first non-JVM catalog arrives, so this notation is documented as JVM sugar now rather
+than ossifying as a universal one.
+
 **`requires` is the mechanism that keeps degradation visible.** A catalog needing chain
 reconstruction simply does not run against a scanner that lacks it, and
 [M04](M04-resolver.md) reports which catalogs were skipped and why. Silently finding fewer
@@ -49,7 +56,7 @@ endpoints is the failure this prevents.
 
 ---
 
-## 2. The six styles
+## 2. The seven styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
 genuinely new shape needs a new engine.
@@ -100,9 +107,16 @@ Four rules follow, and none of them names a framework:
   the comparison the tool exists to make.
 
 **This table hand-copies what the bytecode already states**, and that is a deliberate,
-temporary duplication. A `meta_annotations` capability would derive it instead, by reading the
-annotation's own class file and following the composition — which would also cover a project's
-own composed annotations, such as an `@ApiGet` built from `@GetMapping`. Recorded in §7.
+temporary duplication for *framework-internal* composition (`@GetMapping` = `@RequestMapping`
+with the method pre-set) — those class files live in unscanned jars, out of reach until
+dependency scanning exists. Recorded in §7.
+
+**A project's own composed annotations resolve for free, as of Phase 2E.** An `@ApiGet` built
+from `@RequestMapping` lives in this module's own scanned bytecode, so the effective-annotations
+pre-pass (`resolve/effective_annotations.py`, spec §2, §3) widens the mapping-annotation set to
+every module-local annotation type transitively meta-annotated with one of the catalog's own
+declared fqns, before this table is ever consulted — no catalog author hand-copies a project's
+own composition. The jar half above is what remains open.
 
 **Outbound annotation clients generalise the same vocabulary rather than needing a new
 style.** Three parts of the shape above, previously assumed constant, become catalog data:
@@ -179,6 +193,38 @@ Acknowledgment ack)` has two unannotated parameters, and without `excludes` the 
 would honestly find none; naming `Acknowledgment` there lets the fallback see the one real
 payload. This lives under `request_body` rather than as a separate top-level
 `payload_excludes`, because it is the same fallback rule this key already governs.
+
+**`mapping` gains `consumes_from`/`produces_from`, two more alias lists reading declared
+media types (`endpoints.consumes`/`endpoints.produces`, [D01](D01-graph-schema.md) §4's
+evidence kind (a)).**
+
+```yaml
+mapping:
+  consumes_from: [consumes]
+  produces_from: [produces]
+```
+
+- **Same scalar-or-array read as `path_from`, first present alias wins.** A mapping
+  annotation whose `produces()` is a plain `String` and one whose `produces()` is a
+  `String[]` both read correctly; the values that survive are sorted and de-duplicated
+  before landing in the column ([D01](D01-graph-schema.md) §4's order-normalisation, NFR-1)
+  — a catalog author never orders these by hand.
+- **A catalog declaring neither key reads nothing.** `consumes_from`/`produces_from` both
+  default to an empty alias list, and an empty list matches no attribute, so the column is
+  `NULL` — absence is not a licence to invent a default. This is why every catalog that
+  predates this key keeps deriving `NULL` with zero YAML change.
+- **`default_consumes`/`default_produces` are specified here, not yet used**: a
+  catalog-declared framework-contract default ([D01](D01-graph-schema.md) §4's evidence kind
+  (b)) — a media type the framework enforces whenever a mapping declares none itself, rather
+  than one read off any single annotation attribute. `spring-web.yml` and `spring-mvc.yml`
+  deliberately declare neither key: Spring negotiates an undeclared mapping at runtime rather
+  than enforcing a contract default, so filling one in here would misrepresent an undeclared
+  mapping as a declared one. Left for the catalogs that do carry a real framework-contract
+  default to declare when they are added.
+- **Type-level media attributes are not read in 2E.** A class-level
+  `@RequestMapping(produces = ...)` — Spring's own equivalent of `prefix_from` for media —
+  is out of scope for this phase; only the method-level mapping annotation's own attributes
+  fill `consumes`/`produces`.
 
 ### `single_call`
 
@@ -375,6 +421,163 @@ could not be read" are different facts:
   `channel_via` ladder) are not argument reads and carry no `unresolved` form at all, so
   they are left out of the fold rather than poisoned into a value their readers cannot
   interpret.
+
+### `combinator`
+
+Neither one call (`single_call`) nor one chain (`fluent`) carries the declaration here:
+the router is a **tree**, assembled by handing predicate objects, subtrees and whole
+routers to further calls as arguments, rather than fluently through one receiver.
+Spring WebFlux's functional routing is the fixture case — `RouterFunctions.route(...)`/
+`.nest(...)` in Java, `coRouter { }` in Kotlin — but nothing below names either language:
+every edge the walk follows is already in the facts
+([D00](D00-fact-schema.md) §5) — a predicate argument links to its producing call
+through `source`, a chain link through `result` → `receiver`, and a subtree or a nested
+body arrives as one more linked argument, `lambda`-kind where the compiler moved the
+block into a method of its own.
+
+```yaml
+style: combinator
+requires: [call_site, string_constants, chain_reconstruction]
+matches:
+  entries:
+    - { owner: org.springframework.web.reactive.function.server.RouterFunctions,
+        methods: [route, nest], handler_arg: 1 }
+    - { owner: org.springframework.web.reactive.function.server.CoRouterFunctionDslKt,
+        method: coRouter, body_arg: 0 }
+  vocabulary:
+    verbs:
+      - { owner: "…RequestPredicates", method: GET, verb: GET, path_arg: 0 }
+      - { owner: "…CoRouterFunctionDsl", method: GET, verb: GET, path_arg: 0, handler_arg: 1 }
+    prefixes:
+      - { owner: "…RequestPredicates", method: path, path_arg: 0 }
+      - { owner: "…RouterFunctions", method: nest, path_arg: 0, subtree_arg: 1 }
+      - { owner: "…CoRouterFunctionDsl", method: nest, path_arg: 0, body_arg: 1 }
+    media:
+      - { owner: "…RequestPredicates", method: accept, fills: produces }
+    media_values:
+      owner: org.springframework.http.MediaType
+      values: { APPLICATION_JSON: application/json }
+    composers:
+      and: [{ owner: "…RequestPredicate", method: and }]
+      or:  [{ owner: "…RequestPredicate", method: or }]
+  continuations:
+    - { name: andRoute, owner: "…RouterFunction" }
+    - { name: andNest,  owner: "…RouterFunction", path_arg: 0, subtree_arg: 1 }
+    - { name: and,      owner: "…RouterFunction" }
+```
+
+**Three grammar blocks, and each is catalog data alone — nothing below names a
+framework:**
+
+- **`entries`** declares where trees start, in two shapes. An **argument-rooted**
+  entry (`{owner, methods, handler_arg}`) is a call that takes a predicate and a
+  handler as its own arguments — Java's static `route`/`nest`. A **body-linked**
+  entry (`{owner, method, body_arg}`) is a call whose `body_arg` names, as a
+  `lambda`-kind argument, the method holding the routes — Kotlin's `coRouter`, whose
+  builder body the compiler puts in a synthetic method of its own. The walk roots
+  ONLY at the entry call and jumps to the named method; a prefix rule's own
+  `body_arg` (below) makes the same jump one level deeper. Body methods are never
+  rooted on their own — a method that merely *contains* a vocabulary call is not a
+  root, because rooting it too would double-derive every nested route, once
+  prefixed and once bare (2E checkpoint F4, the frozen defect this rule exists to
+  close). The entry owner and the vocabulary owner are routinely two different
+  types — `CoRouterFunctionDslKt` (the file facade with the static entry point) is
+  not `CoRouterFunctionDsl` (the DSL type every builder call carries) — so a
+  catalog declares both.
+- **`vocabulary`** maps owner+method to a role: `verbs` (a verb plus the argument
+  its path sits at, and — the two-argument form — its handler position, ONE
+  vocabulary read at two arities: a one-argument predicate becomes a route only
+  once some entry attaches a handler to it, a two-argument call declares the whole
+  route itself), `prefixes` (a path contribution, plus optionally the
+  `subtree_arg`/`body_arg` holding the routes it prefixes — declaring both on one
+  row is nonsensical and never arises, since a subtree is a same-method expression
+  and a body is a compiler-moved one), `media` (which of `consumes`/`produces` a
+  predicate fills — `accept` is request-matching semantics: a route guarded by
+  `accept(JSON)` *serves* clients that accept JSON, not the reverse), `media_values`
+  (an enum type's member names to their declared wire values), and `composers`
+  (`and` merges constraint sets into one; `or` duplicates the route per branch, over
+  ANY predicate kind — verbs, paths, media alike — the `all_methods` precedent
+  generalised).
+- **`continuations`** are the calls that merge route SETS along `result` →
+  `receiver`, `fluent`'s own steps discipline extended: a plain name matches any
+  owner, useful for reaching a step inside a chain already known to be this
+  catalog's; a mapping narrows the same name to one `owner`, and — for the
+  nest-shaped form — adds `path_arg`/`subtree_arg`, which fold the *whole router* at
+  that argument under this call's own prefix rather than reading a handler it does
+  not have. **Every continuation that can END a chain needs an `owner`.** A bare
+  `and` matches a method name half the libraries on a classpath declare; rooting at
+  every one of them would invent a router out of any two-argument call that happens
+  to share the name. The cost is stated rather than hidden: an owner-free
+  continuation extends a walk some real root already reaches, but never roots one
+  by itself.
+
+**The walk, one core for both shapes.** From an argument-rooted entry, or from a
+body-linked entry's own named method, every argument is resolved through its
+`source` link recursively: predicate subtrees fold into (verb, path, consumes,
+produces); a prefix pushes its own contribution onto every route its subtree or
+body yields; a continuation merges the route sets on either side of it. Each leaf
+route derives one row: the catalog's declared `protocol`/`direction`, the verb, the
+concatenated prefix+path, the handler symbol (a bound method reference resolves to
+the real target, an inline block to its synthetic body — both joined against the
+scanned symbol facts and written module-prefixed, never fabricated; an adapted
+function object read as an `instance` of a generated class is not a method symbol
+at all, and reads NULL rather than being invented), `evidence: compiler`. Rows
+enter the same `endpoints` table as every other style, dedup and merge unchanged.
+
+**Honesty rules, verbatim from the design spec.** An unreadable part poisons
+EXACTLY its own column: a variable path leaves `path` NULL and the row
+`unresolved`; an unreadable media constant leaves only that media column NULL,
+since the verb and path — the wire identity — are intact and the row stays
+`resolved` (2E checkpoint F1's ruling: Spring's own vararg `accept(MediaType...)`
+constants are, in real bytecode, exactly this case — the `ANEWARRAY` producing the
+array has no case in the extractor's argument reader, so the argument is a bare
+`{"kind":"unresolved"}` with no `source` and no `symbol`, and the media vocabulary
+above is declared *specified-but-unread* against that fixture, proven by a
+synthetic-facts unit test rather than the live scan, for the day the extractor
+grows the missing case). A router composed from another method's own return value
+— the walk is per-method BY DESIGN — derives ONE unresolved row for the reference
+rather than a silent absence: the facts would support following it, and spec §1c's
+boundary is a stated one, not a gap the evidence left open. `request_shape`/
+`response_shape` stay honestly NULL always: a functional handler's signature is
+`Request → Response`, and its payload contracts live inside its body — `bodyToMono`
+calls and their like — which is call-evidence work for a later phase, not a
+signature this style can read.
+
+**Two PATH predicates inside one `and`-chain CONCATENATE rather than poison, and
+the resulting row still emits `resolved`** — the identical fold that composes a
+`nest` prefix onto whatever its subtree contributes, run twice in the same chain.
+This is a deliberate asymmetry from the doubled-verb case above, and it is stated
+openly rather than smoothed over: `and`ing two full path patterns together
+(`path("/a").and(path("/b"))`) is a degenerate input to begin with — no real
+request path satisfies both at once — and the fold has no way to tell a `nest`
+prefix apart from a full path predicate at this point in the merge, so it
+concatenates the one the same way it concatenates the other. Concatenation is the
+2E behavior; poisoning the path here, the way a doubled verb already is, is the
+stated future fix, not the current one.
+
+**Media unions within one batch, exactly `fluent`'s own rule reapplied**: two `or`
+branches differing ONLY in the media they declare are one endpoint, not two, folded
+before the insert ever sees them (spec §4). **A row whose path could not be read
+takes part in NEITHER the union nor the dedup key that follows it** — two such rows
+compare equal on every identity column and would collapse into one under a naive
+key, but each is its own distinct "this method declares something unreadable" fact,
+so each stays its own row (`derive_call_endpoints.sql`'s own contract: SQL's
+`NULL = NULL` is unknown, not true, and two unresolved rows are two facts about two
+call sites, never one).
+
+**This style is deliberately language-agnostic, and the engine enforces it: no JVM
+grammar, no framework name, no Kotlin-specific branch anywhere in its code** — the
+two entry shapes above are catalog declarations interpreted by one core. The ENGINE
+stays unchanged; the catalog VOCABULARY it reads is additively extensible, not
+frozen at these two shapes. That said, some shapes are known to need vocabulary
+additions before their catalogs can be written: a verb row with no path argument
+(axum's `get(handler)`, the path supplied by whatever `.route("/x", get(handler))`
+it is nested under), a literal route path carried at the entry call rather than
+folded through a chain, and a receiver-accumulated router topology (gin's `Group`,
+which mutates a receiver across calls rather than composing a return value). Simple
+per-call registrations — gin's `r.GET("/x", h)`, Express's `app.get(...)` — need none
+of that: they already fit the existing `single_call` style once their languages'
+extractors emit the same fact grammar (D00 §5's `source`/`result`/`receiver` links).
 
 ### `interface_implementation`
 
@@ -878,7 +1081,7 @@ were skipped, and why.
 | How a catalog expresses a topic name assembled from a constant and a literal | Kafka catalogs |
 | The closed set for `format`, and whether a schema-registry subject is part of it | §2c, and Avro or Protobuf on Kafka |
 | Whether `resolves` needs config-sourced conditions, for a Kafka `value.serializer` in properties | §2c format resolution for Kafka |
-| A `meta_annotations` capability: follow an annotation's own meta-annotations so composed annotations resolve, instead of listing each one | §2 `annotation_driven`, and every custom composed mapping annotation |
+| A `meta_annotations` capability reading an UNSCANNED jar's own class files, so framework-internal composition (`@GetMapping` = `@RequestMapping`) stops being hand-copied catalog data too — the module-local half (a project's own composed annotations) shipped in Phase 2E and is no longer open | §2 `annotation_driven`'s hand-copied mapping table |
 | Whether a scope rule (`@NullMarked`) may be declared on a package as well as a class, and how it interacts with `@NullUnmarked` | §2e |
 | Whether the manifest reader pins framework versions, given the files are undocumented internals that may shift | §2's `filesystem` style |
 | Whether a globally configured naming strategy is read from configuration, or only declared per catalog | §2f, and any module that sets one in `application.yml` |

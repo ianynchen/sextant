@@ -1,0 +1,197 @@
+id: spring-webflux-router
+displayName: Spring WebFlux (functional routing)
+style: combinator
+protocol: http
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework:spring-webflux"]
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+# D02 §2's `combinator` style, both DSLs Spring WebFlux ships for functional
+# routing: the Java `RouterFunctions.route`/`.nest` tree and the Kotlin
+# `coRouter { }` builder. Two different owners feed one core (the engine has
+# no framework knowledge at all) — argument-rooted for Java, body-linked
+# (receiver-rooted) for Kotlin — and every owner/method/arity/argument
+# position below is exactly what 2E's checkpoint froze against a real scan
+# (checkpoint items (1a), (1b), (3)); nothing here is invented past that.
+matches:
+  entries:
+    # Java: `RouterFunctions.route(predicate, handler)` and `.nest(prefix,
+    # subtree)` are both static two-argument calls on the same owner
+    # (checkpoint (1a)). `nest` is ALSO declared as a `prefixes` rule below —
+    # dispatch there wins, so this entry's own `handler_arg` is read only for
+    # `route`; `nest` never reaches it.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions
+      methods: [route, nest]
+      handler_arg: 1
+    # Kotlin: `coRouter(builderLambda)` — the file-facade class (`…Kt`
+    # suffix), NOT `CoRouterFunctionDsl` itself (checkpoint (1b) ruling 2).
+    # Its one argument is a `lambda`-kind argument naming the DSL body's own
+    # synthetic method, so the tree roots here and jumps straight to it;
+    # `ktRoutes` is the only root the checkpoint found (ruling 5) — the body
+    # methods themselves are reached only through this and the `nest` link
+    # below, never rooted on their own (2E checkpoint F4).
+    - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDslKt
+      method: coRouter
+      body_arg: 0
+
+  vocabulary:
+    verbs:
+      # Java: `RequestPredicates.GET/POST/HEAD("/x")` are one-argument
+      # predicates with no handler of their own — a route only once some
+      # `RouterFunctions.route` attaches a handler to the predicate they
+      # produce (checkpoint (1a)'s full call sequence).
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: GET
+        verb: GET
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: POST
+        verb: POST
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: HEAD
+        verb: HEAD
+        path_arg: 0
+      # Kotlin: the builder's own two-argument form — `GET("/x") { handler
+      # }`/`POST("/x") { handler }` declare a whole route in one call
+      # (checkpoint (1b), the `…$1$1$1#`/`…$1$1$2#` call sites). One
+      # vocabulary, two arities: the Java rows above and these two rows are
+      # the same verbs, read off two different owners because the DSL
+      # receiver (`ALOAD 0`) carries no chain to fold a bare predicate
+      # through (checkpoint (1b) ruling 3).
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: GET
+        verb: GET
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: POST
+        verb: POST
+        path_arg: 0
+        handler_arg: 1
+
+    prefixes:
+      # Java: `RequestPredicates.path("/api")` — a predicate contributing
+      # only a path, folded wherever some `nest`'s `path_arg` reaches it.
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: path
+        path_arg: 0
+      # Java: `RouterFunctions.nest(prefix, subtree)` — the subtree is an
+      # expression in the SAME method (checkpoint (1a)'s `nest`@18 sources
+      # both its prefix and its subtree by `source`), so it reads through
+      # `subtree_arg`, never `body_arg`.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions
+        method: nest
+        path_arg: 0
+        subtree_arg: 1
+      # Kotlin: `"/kt".nest { }` (string prefix) and `accept(JSON).nest { }`
+      # (predicate prefix) are the SAME owner+method with two different
+      # descriptors/arities, and checkpoint (1b) ruling 4 freezes that BOTH
+      # link to their body the identical way — a `lambda`-kind argument
+      # naming the body method's symbol exactly. One `path_arg`/`body_arg`
+      # pair therefore covers both arities: `path_arg` reads a string literal
+      # directly for the first, or follows `source` into whatever the second
+      # call's own predicate contributes (here, an unreadable `accept(...)`
+      # constraint, checkpoint (3)/F1 — which folds in nothing rather than
+      # poisoning the path, since it is not a path-shaped argument at all).
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: nest
+        path_arg: 0
+        body_arg: 1
+
+    media:
+      # `accept` fills `produces`, `contentType` fills `consumes` —
+      # request-matching semantics (spec §1a): a route guarded by
+      # `accept(JSON)` serves clients that accept JSON.
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: accept
+        fills: produces
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: contentType
+        fills: consumes
+      # Kotlin only declares `accept` (checkpoint (1b)'s one media call site);
+      # no `contentType` call exists anywhere in the checkpoint's Kotlin scan,
+      # so none is declared here.
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: accept
+        fills: produces
+
+    # 2E checkpoint (3)/F1, frozen ruling: every `accept`/`contentType` call
+    # in the fixture — Java and Kotlin alike — is a vararg
+    # (`([Lorg/springframework/http/MediaType;)…`), and the extractor's
+    # `MethodFlow.argumentJson` has no case for the `ANEWARRAY` that produces
+    # a vararg array argument, so every media predicate reaches the facts as
+    # a bare `{"kind":"unresolved"}` with no `source` and no `symbol` — this
+    # table has NOTHING to read against the 2E fixture, and every
+    # predicate-derived media column comes back NULL (row resolution
+    # untouched: the verb and path are the wire identity and both are known).
+    # Declared anyway, at the one member the checkpoint confirms the fixture
+    # actually carries — `MediaType.APPLICATION_JSON`, seen only by accident
+    # on an unrelated Kotlin null-check fact — because `MediaType` is a real,
+    # stable enum and this is the table the extractor's own varargs case
+    # reads against the day it exists. Until then this block is
+    # specified-but-unused, proven by a synthetic-facts unit test
+    # (`test_combinator_engine.py`) rather than by anything the live fixture
+    # exercises.
+    media_values:
+      owner: org.springframework.http.MediaType
+      values:
+        APPLICATION_JSON: application/json
+
+    composers:
+      # `RequestPredicate.and`/`.or` — the SAME method name `RouterFunction`
+      # declares below as a chain continuation, on a DIFFERENT owner
+      # (checkpoint (1a): a predicate type and a router type each declare
+      # `and`). The owners are what tell the two roles apart; see
+      # `continuations` for the router-merging half.
+      and: [{ owner: org.springframework.web.reactive.function.server.RequestPredicate, method: and }]
+      or: [{ owner: org.springframework.web.reactive.function.server.RequestPredicate, method: or }]
+
+  # `RouterFunction.andRoute`/`.andNest`/`.and` — merging ROUTE SETS along
+  # result→receiver, never constraints, so every one of them is
+  # owner-qualified to `RouterFunction` (they end chains; an owner-free
+  # continuation never roots one, D02 §2's rooting rule). `andNest` is the
+  # SHAPED form: its second argument is a whole router to fold under its own
+  # prefix, not a handler.
+  continuations:
+    - { name: andRoute, owner: org.springframework.web.reactive.function.server.RouterFunction }
+    - name: andNest
+      owner: org.springframework.web.reactive.function.server.RouterFunction
+      path_arg: 0
+      subtree_arg: 1
+    - { name: and, owner: org.springframework.web.reactive.function.server.RouterFunction }
+
+# Harvest compatibility (Task 9 ruling): copied verbatim from spring-web.yml
+# rather than re-declared, so an outbound-shapes join never has to reconcile
+# two catalogs describing the same wrapper/nullability/serialization surface
+# two different ways.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: reactor.core.publisher.Mono,             payload_arg: 0, semantics: async }
+  - { type: reactor.core.publisher.Flux,             payload_arg: 0, semantics: streaming }
+  - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.time.LocalDate,  wire: string, format: date }
+  - { type: java.math.BigDecimal, wire: number }
+  - { type: java.util.UUID,       wire: string, format: uuid }

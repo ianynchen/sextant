@@ -96,7 +96,7 @@ call, and does not rank candidates against one another.
 |---|---|
 | `shapes` | `shape_id`, content hash, whether open |
 | `shape_fields` | Shape, ordinal, **wire name**, wire type and format, required, nullable, trust fields, tags, item descriptor |
-| `endpoints` | Direction, protocol, wire identity, handler and/or caller, peer, request and response payload descriptors, trust fields |
+| `endpoints` | Direction, protocol, wire identity, handler and/or caller, peer, request and response payload descriptors, declared media types, trust fields |
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
 
 **A `both` row keeps both `handler` and `caller`.** A wire identity a module both exposes and
@@ -172,6 +172,26 @@ any declared capture — url, body or response — that failed to resolve drops 
 `resolution`, checkpoint ruling I1), a `NULL` payload column *may* mean the payload could not
 be read — the flag says some declared capture failed, without naming which, so a `NULL`
 column on such a row is not by itself a claim of no payload.
+
+**`endpoints.consumes` and `endpoints.produces` hold the declared media types**, each a JSON
+array of MIME strings verbatim, or `NULL`. `NULL` means no declaration is derivable from any
+evidence source — never a guessed default: an undeclared mapping is negotiated at runtime
+against the caller's `Accept` header, which is a different fact from a declared
+`["application/json"]`. A declared restriction rejects a mismatched request with 406; an
+undeclared one negotiates. Four evidence kinds fill the lists — mapping attributes and route
+options; catalog-declared framework-contract defaults; call- and type-evidence such as a typed
+response wrapper; and config-declared defaults. 2E implements the first kind, for Spring's own
+mapping attributes; the framework-default and config-declared kinds are specified for later
+phases to fill. MIME strings are the comparison vocabulary because they are byte-comparable
+across languages: DR-5's rule over them is conservative — `NULL` is compatible with anything,
+and two declared lists must otherwise intersect. Which evidence kind produced a declaration (an
+enforced `produces=` attribute versus an observed response-wrapper type) is not distinguished by
+these two columns; that strictness is deferred to L, where `catalog_id` above already names each
+row's provenance. Dedup and merge treat `consumes`/`produces` as carried data, never identity —
+wire identity is `(protocol, direction, method, path)` regardless of what either column holds.
+Rows that differ only in declared media are one endpoint: the union of their lists happens
+engine-side, within a single derivation batch, order-normalised (NFR-1); across batches the
+existing first-writer dedup stands unchanged.
 
 **Inbound and outbound share one `endpoints` table** with a `direction` column taking
 `inbound`, `outbound` or `both`. Two near-identical tables were the alternative, and were

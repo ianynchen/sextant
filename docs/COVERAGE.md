@@ -177,9 +177,12 @@ module today produces:
   `JmsTemplate`, `SqsTemplate` and `PubSubTemplate` outbound — and since 2E-prep, direct
   `jakarta.jms.Session` producers/consumers, `KafkaConsumer.subscribe` and AWS SDK v2
   `SqsClient`/co-located Google `Publisher` outbound, plus `Subscriber` + `MessageReceiver`
-  inbound through the new `interface_implementation` style), each with its wire identity,
-  handler and/or caller, `peer` where the code declares one (NULL on every messaging row
-  except SQS's queue URL — broker addresses are otherwise configuration), and its request
+  inbound through the new `interface_implementation` style — and since Phase 2E, WebFlux
+  functional routing (`RouterFunctions.route()`/`.andRoute()`/`.nest()`, Kotlin's `coRouter {}`)
+  through the new `combinator` engine, inherited and meta-annotation-composed `@RequestMapping`
+  rows, and every inbound row's declared `consumes`/`produces` media types), each with its wire
+  identity, handler and/or caller, `peer` where the code declares one (NULL on every messaging
+  row except SQS's queue URL — broker addresses are otherwise configuration), and its request
   and response payload descriptors; `shapes`/`shape_fields` holding every reachable payload
   field by field — wire name, wire type and format, `required`, `nullable`, trust fields —
   with known types mapped and expansion stopping visibly at unknown ones. A path the module
@@ -202,7 +205,9 @@ than silently absent:
 | A full class diagram (inheritance) | only contract types are drawn (`structure_diagram_limited_to_contracts`) | with the `edges` table |
 | Outbound base addresses for `@HttpExchange`/Retrofit/`RestTemplate`/`RestClient`/`WebClient`/OkHttp; every messaging peer except SQS's queue URL | they live in builder or config code (`client_base_addresses_not_resolved`); `peer` is NULL there | Phase 2F |
 | Cross-service links or a system document | linking is a system-scope pass over bundles; no `participants`/`links` exist yet | linking phase |
-| WebFlux functional routes, meta-annotations, inherited mappings | unimplemented forms, each listed in §5 | per their tiers |
+| `consumes`/`produces` on a predicate-derived WebFlux functional route | `accept(...)`/`contentType(...)`'s `MediaType` vararg constants compile through an `ANEWARRAY` the extractor cannot read | a later extractor candidate |
+| `@RequestMapping` inherited from a non-generic superclass | the `supertype` edge exists only for a generic superclass — the extractor reads it from the Signature attribute alone | undecided |
+| A handler symbol for a Kotlin WebFlux functional route | Kotlin compiles every DSL handler to an `instance`-kind argument naming a generated class, never a method | undecided |
 | Trustworthy analysis of a POM using parents/profiles/interpolation | the detector reads `pom.xml` raw (`maven_parent_and_profile_resolution_not_implemented`) | undecided |
 
 Two honesty caveats also ride every output: a merged `both` endpoint keeps only the
@@ -219,7 +224,7 @@ was expanded correctly.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ 6A 6B 5C | ◐ 2A 2B | 2A | 4A | 2A 1B | 1A 2B |
+| **Java / Kotlin** | ✅ ASM | ◐ 5A 3B 5C | ◐ 2A 2B | 2A | 4A | 2A 1B | 1A 2B |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -475,18 +480,18 @@ is, what it costs.
 | Java | **`@RequestMapping(method = RequestMethod.GET)`** | the pre-4.3 form | `annotation` | ✅ shipped |
 | Java | `@RequestMapping` naming no method | Spring accepts every method, so it is one endpoint per method, not one with an unresolved method | `annotation` | ✅ shipped |
 | Java | `path =` alias for `value =` | `@AliasFor`, so only the one typed reaches the bytecode | `annotation` | ✅ shipped |
-| Java | `produces` / `consumes` | — | `annotation` | A |
+| Java | `produces` / `consumes` | — | `annotation` | ✅ shipped |
 | Java | Spring 7 `version = "1.1"` / `"1.2+"` on `@RequestMapping` | API versioning | `annotation` | A |
 | Java | Micronaut `@Controller` + `@Get`/`@Post`… (`value`/`uri` String, **`uris` String[]**) | — | `annotation` | A |
 | Java | Quarkus / JAX-RS **`jakarta.ws.rs`** `@Path` + `@GET`… | `@Path` value is a scalar String | `annotation` | A |
 | Java | Quarkus `io.quarkus.vertx.web.Route` | second Quarkus style | `annotation` | A |
 | Java | Actuator `@Endpoint` / `@ReadOperation` | — | `annotation` | A |
-| Java | `@RequestMapping` on an **interface or superclass** | Spring inherits mappings | `annotation` + hierarchy | B |
-| Java | **Meta-annotations** — custom `@ApiGet` composed from `@GetMapping` | Spring resolves transitively | `annotation` (recursive) | B |
+| Java | `@RequestMapping` on an **interface or superclass** | Spring inherits mappings | `annotation` + hierarchy | ✅ shipped |
+| Java | **Meta-annotations** — custom `@ApiGet` composed from `@RequestMapping(method = GET)` | Spring resolves transitively | `annotation` (recursive) | ✅ shipped |
 | Java | Nested / inner classes | the phase-1 skip lifted in Phase 2C — read as ordinary class files, so `@RestController`/`@Controller` resolve the same nested or not | `annotation` | ✅ shipped |
 | Java | WebFlux `Mono`/`Flux` return types | response shape roots through the declared wrapper ([D02](components/D02-catalog-schema.md) §2a) | — | ✅ shipped |
 | Java | **Vert.x** `router.get("/x").handler(this::h)` | receiver + verb + first arg | `fluent_chain` | **B — the cleanest first exercise for chain reconstruction** |
-| Java | WebFlux functional `RouterFunctions.route().GET(…)`, `coRouter { }` | — | `combinator` | B |
+| Java | WebFlux functional `RouterFunctions.route().GET(…)`, `coRouter { }` | — | `combinator` | ✅ shipped |
 | Java | **Akka HTTP** `path("users" / IntNumber) { get { complete(…) } }` | nested closures, route is a *value* | `combinator` | **C-ish — the hardest inbound form surveyed** |
 | Java | Ktor `routing { get("/path") { … } }` | Kotlin DSL | `combinator` | B |
 | Java | Javalin `app.get("/path", ctx -> …)` | — | `registration_call` | B |
@@ -515,6 +520,56 @@ is, what it costs.
 | Rust | **`warp`** `warp::path("u").and(warp::get()).and_then(h)` | route is a composed value, type-encoded | `combinator` | **C** |
 | Swift | Vapor `app.get("users", ":id") { … }` | **path segments are variadic args** | `registration_call` | A |
 | Swift | iOS apps | apps are not servers | — | — |
+
+**Phase 2E Task 7** ships the interface/superclass row above (`@RequestMapping` inherited
+mapping resolution, `annotation` + `hierarchy`), gated to catalogs that declare their own
+`type_annotation` — spec §3's own scope is the handler-side OpenAPI-generator pattern
+(mappings on an interface, `@RestController` on the class that implements it); a gateless
+catalog (Retrofit, `spring-http-interface`, `spring-jms`, `spring-kafka`, `spring-sqs`) never
+runs the inheritance walk at all, since its annotated interface method already IS the
+client/listener identity and an unrelated implementing class is never a plausible mapping
+target (Task 7 review, Critical finding C1). Five boundaries are drawn deliberately rather
+than left implicit: a **jar-defined interface is never scanned**, so its own mappings never
+derive onto an implementer — the standing compiled-library boundary that gates every form
+until dependency scanning exists (D02 §7); a class **directly implementing two interfaces
+that map the same method** resolves to declaration order, **depth-first** — the first
+interface's own ancestor chain is walked to exhaustion before the second interface is ever
+consulted, matching Spring's own hierarchy-scan order — recorded as the implementer's own
+read of the ambiguity, never rendered as one; inheritance folds attributes through the same
+same-name-attribute subset of `@AliasFor` the meta-annotation pass already commits to, never
+its full cross-name aliasing or `@AliasFor(annotation=...)` re-targeting generality; and a
+class that inherits the SAME-named method from both a mapped interface AND a generic
+superclass together **loses that mapping entirely** — the compiler's bridge-exclusion rule
+(checkpoint item (4)) is purely structural, per class, and cannot tell which ancestor a given
+bridge belongs to, so every bridge AND the real override are excluded together rather than
+only the genuine bridge (Task 7 review, Important finding I1); and the **supertype edge
+itself only exists for a generic superclass** — the extractor derives `supertype` solely
+from the class's generic `Signature` attribute, so a plain non-generic `class B extends A`
+carries no such edge and its mappings do not derive at all, even though the superclass
+branch is implemented and unit-tested synthetically (checkpoint ruling F3).
+
+**Phase 2E Task 6** ships the meta-annotations row above — the **module-local** half only: a
+project's own composed mapping annotation (its `@Retention`/`@Target` and mapping attributes
+declared on a type the scan reaches) resolves through a fixpoint pass over the scanned
+annotation facts, folding attributes base-outward through the same same-name-attribute
+`@AliasFor` subset Task 7's inheritance pass reuses. An **unscanned framework jar's own
+internal composition** — `@GetMapping` itself is meta-annotated with
+`@RequestMapping(method = RequestMethod.GET)` inside `spring-web`'s own compiled classes —
+stays a hand-copied mapping table in the catalog, not a read; a `meta_annotations` capability
+that scans dependency jars to replace it remains open (D02 §7).
+
+**Phase 2E Tasks 8–9** ship the WebFlux functional-routing row above (`RouterFunctions.route()
+.GET(…)`/`.andRoute(…)`/`.nest(…)`, Kotlin's `coRouter { "/p".nest { GET(…) } }`) through the
+new `combinator` engine, walking the routing tree from its declared entry call rather than by
+owner alone. Two more boundaries ride with it, beside the superclass one above: **predicate-
+declared media is invisible** — `accept(...)`/`contentType(...)`'s `MediaType` vararg constants
+compile through an `ANEWARRAY` the extractor's argument reader has no case for, so every
+predicate-derived row's `consumes`/`produces` reads NULL even though a declaration
+demonstrably exists on the call site (checkpoint F1) — a later extractor candidate, not a gap
+in the engine; and **Kotlin functional handlers resolve to NULL** — Kotlin 2.2 compiles every
+DSL handler, bound method reference and lambda alike, to an `instance`-kind argument naming a
+compiler-generated class rather than a method symbol, so the honest answer is no handler
+rather than a fabricated guess through that class's own `invokeSuspend` (checkpoint (1b)).
 
 ### 5.2 REST outbound
 
