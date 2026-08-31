@@ -52,9 +52,12 @@ _NAMED_QUERIES = {
     # Every annotation in the workspace, regardless of target — what a scope
     # rule (D02 §2e) needs: the class or package it was declared on is not the
     # field it claims, so `annotations_of`'s per-field lookup cannot find it.
+    # `args` rides along for Task 6's effective-annotations pre-pass
+    # (`resolve/effective_annotations.py`), which needs a composing type's
+    # own declared attributes and not just which annotation it carries.
     # Ordered so two fields under the same scope read its claim the same way.
     "annotations": """
-        SELECT target, annotation, type_path FROM annotations ORDER BY target, annotation
+        SELECT target, annotation, args, type_path FROM annotations ORDER BY target, annotation
     """,
     # `ordinal` alone would tie across callers; `caller` first is what makes
     # the ordering total, the same reason `shape_fields` orders by
@@ -103,6 +106,17 @@ _NAMED_QUERIES = {
     # handler method is read the same way twice (NFR-1).
     "method_symbols": """
         SELECT symbol FROM symbols WHERE construct_kind = 'method' ORDER BY symbol
+    """,
+    # Annotation TYPE symbols — checkpoint item (2): an annotation type
+    # compiles to `construct_kind: "interface"` (there is no dedicated
+    # `annotation` kind), so this is the cheapest correct source for Task
+    # 6's "module-local" test (`resolve/effective_annotations.py`): a
+    # composed annotation's own type symbol must appear here before its
+    # meta-annotations are followed at all — the jar half (D02 §7) never
+    # does. `method_symbols` above cannot serve this; a composing type is
+    # never a method.
+    "interface_symbols": """
+        SELECT symbol FROM symbols WHERE construct_kind = 'interface' ORDER BY symbol
     """,
     "coverage": """
         SELECT count(*) AS documents,

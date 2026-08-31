@@ -112,6 +112,16 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
             (verb, "/v1/legacy/orders/any")
             for verb in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE")
         ),
+        # Phase 2E Task 6 (composed annotations — distinct from "2E-prep Task
+        # 6" elsewhere in this file, a different plan's numbering): the
+        # effective-annotations pre-pass's own fixture —
+        # `ComposedController#composed`'s `@ApiGet`, a module-local
+        # composition of `@RequestMapping(method=[GET], path=["/composed"])`
+        # (the checkpoint's ratified deviation from `@GetMapping`, which
+        # javac rejects as a meta-annotation — its own `@Target` is `METHOD`
+        # only). `ComposedController` carries `@RestController` and no
+        # class-level `@RequestMapping`, so no prefix applies.
+        ("GET", "/composed"),
         # Outbound (Phase 2B): the client interfaces' declared calls.
         ("POST", "/billing/invoices"),
         ("GET", "/billing/invoices"),
@@ -182,6 +192,15 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         (None, "audit.raw"),
         # ShipmentsSqsListener.
         (None, "shipments-inbound"),
+        # Phase 2E Task 6 (composed annotations): the messaging half of the
+        # same fixture — `ComposedListener#onComposedEvent`'s
+        # `@OrderTopicListener`, a
+        # module-local composition of `@KafkaListener(topics =
+        # ["composed-orders"])`. `spring-kafka.yml` declares no type-level
+        # gate, so `ComposedListener` needs none; the handler returns `void`,
+        # so no reply row derives (the pre-pass proving itself catalog-
+        # generic — the same mechanism, a different catalog, for free).
+        (None, "composed-orders"),
         # Outbound (Phase 2D, Task 10): `@SendTo`'s two reply shapes.
         # `onReturn`'s static `@SendTo("order-return-receipts")`.
         (None, "order-return-receipts"),
@@ -353,7 +372,16 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # overall resolution, standing beside `spring-kafka-template.yml`'s
     # pre-existing `record_arg` sibling, spec §4's ruling again). 62 + 6 =
     # 68.
-    assert len(report.endpoints) == 68
+    #
+    # Phase 2E Task 6 (composed annotations, the effective-annotations
+    # pre-pass) adds 2 more: `GET /composed` (http inbound,
+    # `ComposedController#composed`'s `@ApiGet` resolving through
+    # `@RequestMapping`) and `composed-orders` (kafka inbound,
+    # `ComposedListener#onComposedEvent`'s `@OrderTopicListener` resolving
+    # through `@KafkaListener`) — neither merges with anything already in
+    # the fixture. 68 + 2 = 70. Verified live against real bytecode, not
+    # computed from the brief alone.
+    assert len(report.endpoints) == 70
     assert report.skipped_catalogs == []
 
     directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}

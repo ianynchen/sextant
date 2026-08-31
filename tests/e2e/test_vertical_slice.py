@@ -148,11 +148,18 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # checkpoint shorthand, verified live, see `test_pipeline.py`). See
     # `test_pipeline.py`'s own dedicated row-level tests for the full
     # per-row breakdown.
+    #
+    # Phase 2E Task 6 (composed annotations — a different plan's numbering
+    # from the "2E-prep Task" comments above): +1 http inbound (`GET
+    # /composed`) and +1 kafka inbound (`composed-orders`), the
+    # effective-annotations pre-pass's own fixture. See
+    # `test_pipeline.py`'s own dedicated row-level test for the full
+    # explanation.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
-        "http": 18,
+        "http": 19,
         "jms": 3,
-        "kafka": 11,
+        "kafka": 12,
         "pubsub": 3,
         "sqs": 1,
     }
@@ -207,4 +214,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # outbound +4 (pubsub `raw-events` resolved + the two deliberate
     # `google-pubsub-client.yml` duplicates, kafka `raw-messages`), `both`
     # unchanged: 28 + 2 = 30, 28 + 4 = 32.
-    assert rows == [("both", 6), ("inbound", 30), ("outbound", 32)]
+    # Phase 2E Task 6 (composed annotations — a different plan's numbering
+    # from the "2E-prep Task" comments above): +2 inbound (`GET /composed`,
+    # `composed-orders`), outbound and `both` unchanged: 30 + 2 = 32.
+    assert rows == [("both", 6), ("inbound", 32), ("outbound", 32)]

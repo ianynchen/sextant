@@ -107,9 +107,16 @@ Four rules follow, and none of them names a framework:
   the comparison the tool exists to make.
 
 **This table hand-copies what the bytecode already states**, and that is a deliberate,
-temporary duplication. A `meta_annotations` capability would derive it instead, by reading the
-annotation's own class file and following the composition — which would also cover a project's
-own composed annotations, such as an `@ApiGet` built from `@GetMapping`. Recorded in §7.
+temporary duplication for *framework-internal* composition (`@GetMapping` = `@RequestMapping`
+with the method pre-set) — those class files live in unscanned jars, out of reach until
+dependency scanning exists. Recorded in §7.
+
+**A project's own composed annotations resolve for free, as of Phase 2E.** An `@ApiGet` built
+from `@RequestMapping` lives in this module's own scanned bytecode, so the effective-annotations
+pre-pass (`resolve/effective_annotations.py`, spec §2, §3) widens the mapping-annotation set to
+every module-local annotation type transitively meta-annotated with one of the catalog's own
+declared fqns, before this table is ever consulted — no catalog author hand-copies a project's
+own composition. The jar half above is what remains open.
 
 **Outbound annotation clients generalise the same vocabulary rather than needing a new
 style.** Three parts of the shape above, previously assumed constant, become catalog data:
@@ -917,7 +924,7 @@ were skipped, and why.
 | How a catalog expresses a topic name assembled from a constant and a literal | Kafka catalogs |
 | The closed set for `format`, and whether a schema-registry subject is part of it | §2c, and Avro or Protobuf on Kafka |
 | Whether `resolves` needs config-sourced conditions, for a Kafka `value.serializer` in properties | §2c format resolution for Kafka |
-| A `meta_annotations` capability: follow an annotation's own meta-annotations so composed annotations resolve, instead of listing each one | §2 `annotation_driven`, and every custom composed mapping annotation |
+| A `meta_annotations` capability reading an UNSCANNED jar's own class files, so framework-internal composition (`@GetMapping` = `@RequestMapping`) stops being hand-copied catalog data too — the module-local half (a project's own composed annotations) shipped in Phase 2E and is no longer open | §2 `annotation_driven`'s hand-copied mapping table |
 | Whether a scope rule (`@NullMarked`) may be declared on a package as well as a class, and how it interacts with `@NullUnmarked` | §2e |
 | Whether the manifest reader pins framework versions, given the files are undocumented internals that may shift | §2's `filesystem` style |
 | Whether a globally configured naming strategy is read from configuration, or only declared per catalog | §2f, and any module that sets one in `application.yml` |

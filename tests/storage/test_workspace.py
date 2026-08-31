@@ -222,6 +222,9 @@ _TOPIC_ENDPOINT_KWARGS = {
     # lists are empty — the "every non-HTTP catalog derives NULL" default.
     "consumes_from": [],
     "produces_from": [],
+    # Task 6: no fixture in this file composes an annotation, so the
+    # effective-annotations pre-pass always resolves to nothing here.
+    "synthetic_annotations": [],
 }
 
 

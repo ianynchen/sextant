@@ -44,6 +44,14 @@
 --   $produces_from       -- attribute names the mapping annotation's declared
 --                           response media types are read from; same rules as
 --                           $consumes_from.
+--   $synthetic_annotations -- Task 6 (D02 §2, §3): rows the effective-
+--                           annotations pre-pass (`resolve/effective_annotations.py`)
+--                           synthesizes for a module-local composed annotation
+--                           (`@ApiGet` built from `@RequestMapping`) — the same
+--                           {target, annotation, args} shape `annotations`
+--                           itself carries, `args` JSON-encoded as text the
+--                           same way this file's own STRUCT bindings always
+--                           are. Empty where a catalog composes nothing.
 
 -- Named explicitly: `endpoints` also carries request_shape/response_shape
 -- (D01 §3 Contracts), which this engine does not populate — that is the
@@ -58,12 +66,24 @@ WITH mapping_catalog AS (
         $mapping_annotations::STRUCT(fqn VARCHAR, methods VARCHAR[])[]
     ) AS s)
 ),
+-- Task 6 (D02 §2, §3): widens the annotation set every CTE below reads from
+-- the catalog's own declared fqns to those plus the module-local composed
+-- ones the Python pre-pass already resolved — a plain UNION ALL, so a
+-- catalog composing nothing (every catalog but the two the fixture proves)
+-- costs one empty UNNEST.
+annotations_effective AS (
+    SELECT target, annotation, args FROM annotations
+    UNION ALL
+    SELECT s.target, s.annotation, s.args::JSON FROM (SELECT UNNEST(
+        $synthetic_annotations::STRUCT(target VARCHAR, annotation VARCHAR, args VARCHAR)[]
+    ) AS s)
+),
 -- The type-level gate is optional (D02 §2, amended): a catalog that declares
 -- none matches on method annotations alone — a Retrofit interface has no
 -- type-level marker at all.
 controllers AS (
     SELECT DISTINCT target AS type_symbol
-    FROM annotations
+    FROM annotations_effective
     WHERE annotation = $type_annotation
 ),
 declared AS (
@@ -110,7 +130,7 @@ declared AS (
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
         ), v -> v IS NOT NULL), 1) AS produces_list
-    FROM annotations a
+    FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
 ),
 -- Type-level and method-level annotations are different roles: on
@@ -128,7 +148,7 @@ prefixes AS (
             $peer_from::VARCHAR[],
             n -> coalesce(a.args -> n ->> 0, a.args ->> n)
         ), v -> v IS NOT NULL), 1) AS peer
-    FROM annotations a
+    FROM annotations_effective a
     WHERE a.annotation = $prefix_annotation
 ),
 -- Cross product of methods and paths (a two-topic, two-method mapping is

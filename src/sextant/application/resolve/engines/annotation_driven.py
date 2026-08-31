@@ -11,6 +11,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.effective_annotations import composed_mapping_rows
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
@@ -24,6 +25,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     mapping = catalog.matches["mapping"]
     type_annotation = catalog.matches.get("type_annotation")
     prefix_annotation = mapping["prefix_annotation"]
+    mapping_annotations = [
+        {"fqn": _catalog_symbol(m["fqn"]), "methods": m.get("method")}
+        for m in mapping["annotations"]
+    ]
     workspace.derive(
         "endpoints",
         protocol=catalog.protocol,
@@ -36,10 +41,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         ),
         # `method` is absent for an annotation that pre-sets none, and the
         # derivation reads that absence as "every method in all_methods".
-        mapping_annotations=[
-            {"fqn": _catalog_symbol(m["fqn"]), "methods": m.get("method")}
-            for m in mapping["annotations"]
-        ],
+        mapping_annotations=mapping_annotations,
         path_from=list(mapping["path_from"]),
         prefix_from=list(mapping["prefix_from"]),
         peer_from=list(mapping.get("peer_from", [])),
@@ -51,11 +53,46 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # change — the HTTP catalogs are the only ones that declare these.
         consumes_from=list(mapping.get("consumes_from", [])),
         produces_from=list(mapping.get("produces_from", [])),
+        # 2E-prep design §2, §3: the effective-annotations pre-pass widens
+        # this catalog's own mapping fqns to every module-local annotation
+        # type transitively meta-annotated with one of them, computed once
+        # per catalog (its own mapping fqns seed a different closure each
+        # time) and handed to the SQL as synthetic `annotations` rows rather
+        # than as a second code path there.
+        synthetic_annotations=_synthetic_annotations(workspace, mapping_annotations),
     )
     # Optional (D02 §2, amended): a catalog with no `reply` block declares no
     # second-row rule at all — the HTTP catalogs, which never see @SendTo.
     if "reply" in catalog.matches:
         _derive_replies(workspace, catalog)
+
+
+def _synthetic_annotations(
+    workspace: Workspace, mapping_annotations: list[dict[str, object]]
+) -> list[dict[str, str]]:
+    """The bound-parameter form `derive_endpoints.sql`'s `annotations_effective`
+    CTE expects (D02 §2, §3): every composed-annotation row `composed_mapping_rows`
+    derives, `args` re-serialized to JSON text — DuckDB's `STRUCT(... VARCHAR)`
+    binding shape carries a string, not a nested JSON value, the same way
+    every other JSON-typed bound parameter in this engine already does."""
+    annotation_rows = [
+        {
+            "target": row["target"],
+            "annotation": row["annotation"],
+            "args": json.loads(str(row["args"])) if row["args"] is not None else {},
+        }
+        for row in workspace.query("annotations")
+    ]
+    scanned_targets = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
+    mapping_fqns = {str(m["fqn"]) for m in mapping_annotations}
+    return [
+        {
+            "target": row["target"],
+            "annotation": row["annotation"],
+            "args": json.dumps(row["args"]),
+        }
+        for row in composed_mapping_rows(annotation_rows, scanned_targets, mapping_fqns)
+    ]
 
 
 def _derive_replies(workspace: Workspace, catalog: Catalog) -> None:

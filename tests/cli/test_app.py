@@ -50,7 +50,10 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     )
     assert result.exit_code == 0, result.output
     metadata = json.loads((tmp_path / "metadata.json").read_text())
-    assert metadata["endpoints"]["inbound"]["http"] == 18
+    # 2E-prep Task 6: +1 (`GET /composed`, the effective-annotations
+    # pre-pass's `@ApiGet` composition) — see test_pipeline.py's own
+    # dedicated row-level test for the full breakdown.
+    assert metadata["endpoints"]["inbound"]["http"] == 19
 
 
 def test_export_writes_a_bundle_with_manifest_graph_and_facts(tmp_path: Path):
