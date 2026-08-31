@@ -16,8 +16,6 @@ from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SE
 # _GAPS in the same order, so a catalog that cannot be complete never reads
 # as complete (M07 "Honesty obligations").
 KNOWN_GAPS = [
-    "call_site_clients_not_read",
-    "messaging_endpoints_not_read",
     "http_exchange_inbound_use_not_detected",
     "client_base_addresses_not_resolved",
     "sequence_diagrams_pending_call_graph",
@@ -25,10 +23,10 @@ KNOWN_GAPS = [
     "call_graph_not_implemented",
     "maven_parent_and_profile_resolution_not_implemented",
     "catalog_module_matching_not_implemented",
-    "nested_and_anonymous_classes_not_read",
     "module_classification_evidence_incomplete",
     "merged_endpoints_keep_only_the_handlers_contract",
     "shape_rules_unscoped_to_the_producing_catalog",
+    "reactive_flow_not_traced",
 ]
 
 

@@ -62,6 +62,19 @@ def test_document_lists_every_endpoint_and_names_its_gaps():
     assert "org/example/Opaque#" in text.split("## Known gaps", 1)[1]
 
 
+def test_an_unread_source_reaches_both_the_metadata_and_the_gap_list(tmp_path: Path):
+    """FR-17's channel, tested where it can be driven directly. The fixture no
+    longer has anything uncovered — its nested class is scanned now — but a
+    Kotlin class whose `@Metadata` a newer compiler wrote still travels this
+    path, and a channel nothing exercises is a channel that rots."""
+    unread = ("com/acme/orders/Newer.class: kotlin metadata unreadable (2.9)",)
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c", unread)
+    assert json.loads((tmp_path / "metadata.json").read_text())["uncovered"] == list(unread)
+
+    text = render_module_document(MODULE, REPORT, "a3f91c", unread)
+    assert unread[0] in text.split("## Known gaps", 1)[1]
+
+
 def test_document_is_identical_when_rendered_twice_from_the_same_report():
     assert render_module_document(MODULE, REPORT, "a3f91c") == render_module_document(
         MODULE, REPORT, "a3f91c"
@@ -221,6 +234,130 @@ def test_document_draws_the_contract_class_diagram_and_lists_outbound_calls():
     assert "## Outbound endpoints" in text
     assert "/billing/invoices" in text
     assert "unresolved" in text  # the inventory base address is builder code
+
+
+def test_outbound_row_with_no_path_renders_unresolved_in_the_endpoint_column():
+    """A `uri(uriBuilder -> …)` call — InventoryWebClient#search in the
+    fixture — is real HTTP with no readable path (Task 13, spec §5): the
+    fluent engine records the call honestly rather than guessing at the
+    literal inside the lambda, so `path` is NULL. The Endpoint column must
+    say so rather than rendering the method beside a literal `None`."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": None,
+                "caller": "s maven c 1 com/acme/orders/clients/InventoryWebClient#search(String).",
+                "peer": None,
+                "resolution": "unresolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert (
+        "| `GET (unresolved)` | unresolved | "
+        "`com/acme/orders/clients/InventoryWebClient#search(String).` | unresolved |"
+    ) in text
+
+
+def test_outbound_row_with_no_method_renders_unresolved_in_the_endpoint_column():
+    """The verb's own half of the same rule (final review, I2): a call whose
+    `HttpMethod` argument arrives as a parameter derives with `method` NULL,
+    and the column must say so in the same words the path already uses. A
+    bare `None` beside a real path would read as a verb literally named
+    None, and dropping the row would hide a call the module demonstrably
+    makes."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": None,
+                "path": "/billing/passed-verb",
+                "caller": "s maven c 1 com/acme/orders/clients/BillingRestTemplate#relay(String).",
+                "peer": None,
+                "resolution": "unresolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert (
+        "| `(unresolved) /billing/passed-verb` | unresolved | "
+        "`com/acme/orders/clients/BillingRestTemplate#relay(String).` | unresolved |"
+    ) in text
+
+
+def test_kafka_inbound_row_renders_verbless_with_no_unresolved_marker():
+    """A protocol in the verbless set (Task 9) defines no verb, so its wire
+    identity is `protocol path` — never a bare `None` standing in for a verb
+    that was never there to begin with."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "kafka",
+                "direction": "inbound",
+                "method": None,
+                "path": "order-events",
+                "handler": "s maven c 1 com/acme/orders/listeners/OrderEventsListener#onMessage(String).",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert (
+        "| `kafka order-events` | "
+        "`com/acme/orders/listeners/OrderEventsListener#onMessage(String).` | resolved |"
+    ) in text
+    assert "(unresolved)" not in text
+
+
+def test_kafka_row_with_null_path_renders_unresolved_identity():
+    """The path half of a verbless identity is unresolved the same way an
+    HTTP row's method or path is: named, never a bare `None`."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "kafka",
+                "direction": "outbound",
+                "method": None,
+                "path": None,
+                "caller": "s maven c 1 com/acme/orders/OrderEventsProducer#send(Order).",
+                "peer": None,
+                "resolution": "unresolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert (
+        "| `kafka (unresolved)` | unresolved | "
+        "`com/acme/orders/OrderEventsProducer#send(Order).` | unresolved |"
+    ) in text
+
+
+def test_messaging_gap_retires_and_both_lists_rotate_to_eleven():
+    """The messaging-not-read gap closes now that annotation_driven reads
+    Kafka/JMS/SQS/pub-sub catalogs: it drops from both lists at the same
+    position (spec ruling I3), so the equal-length pairing in
+    `test_every_machine_readable_gap_has_a_sentence_a_person_can_read` never
+    masks a key that lost its sentence."""
+    assert "messaging_endpoints_not_read" not in KNOWN_GAPS
+    assert len(KNOWN_GAPS) == 11
+    assert len(_GAPS) == 11
+    assert not any("Messaging endpoints" in gap for gap in _GAPS)
 
 
 def test_structure_and_outbound_sections_state_looked_and_found_nothing():

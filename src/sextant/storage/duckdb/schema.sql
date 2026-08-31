@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS endpoints (
     peer              TEXT,
     resolution        TEXT,
     evidence          TEXT,
+    -- The id of the catalog that derived this row (2E-prep design §1a):
+    -- provenance for rule scoping, never part of wire identity, never
+    -- compared across services.
+    catalog_id        TEXT,
     request_shape     TEXT,
     response_shape    TEXT
 );
@@ -107,3 +111,16 @@ SELECT document_id,
        payload ->> 'type_path'           AS type_path,
        payload ->> 'retention'           AS retention
 FROM raw_facts WHERE kind = 'annotation';
+
+CREATE OR REPLACE VIEW call_sites AS
+SELECT document_id,
+       payload ->> 'caller'                    AS caller,
+       payload -> 'target' ->> 'owner'         AS owner,
+       payload -> 'target' ->> 'name'          AS name,
+       payload -> 'target' ->> 'descriptor'    AS descriptor,
+       payload ->> 'invoke_kind'               AS invoke_kind,
+       (payload ->> 'ordinal')::INTEGER        AS ordinal,
+       (payload ->> 'receiver')::INTEGER       AS receiver,
+       (payload ->> 'result')::INTEGER         AS result,
+       payload ->  'arguments'                 AS arguments
+FROM raw_facts WHERE kind = 'call_site';

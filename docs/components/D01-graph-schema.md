@@ -106,6 +106,14 @@ calls merges into one endpoint row rather than two — `handler` names the serve
 outbound target hint — a declared service name or a literal authority — that the system tier
 later resolves against `participants`; it carries no meaning on an inbound-only row.
 
+**`endpoints.catalog_id` is provenance, not identity.** It names the catalog whose rules
+produced the row, so a catalog describing an endpoint's request/response contract can
+scope itself to exactly the rows its own derivation wrote rather than reasoning about
+direction, protocol or row-level overrides. It plays no part in endpoint identity — the
+hash below never includes it, and a refactor of the catalog files themselves must not
+orphan an endpoint — and it is never compared across services: it is a local fact about
+which catalog derived this graph's own row, not a cross-service correlation key.
+
 **The merge keeps only the handler's request and response payload descriptors.** Where the
 module both exposes a path and calls it through a client with its own declared contract, the
 two declarations can differ — the handler's survives on the `both` row and the client's is
@@ -158,7 +166,12 @@ shape id — the grammar `shape_fields.item` uses above, reused rather than dupl
 `List<OrderView>` response is
 `{"wire_type":"array","item":{"wire_type":"object","shape_id":…}}`; a scalar response is
 recorded rather than dropped (`{"wire_type":"string"}`); and `NULL` means exactly *no
-payload* — a `void` return, or no body parameter — the one meaning it has always had.
+payload* — a `void` return, or no body parameter — the one meaning it has always had. On a
+row whose own `resolution` is `unresolved` ([D02](D02-catalog-schema.md) §2's `single_call`:
+any declared capture — url, body or response — that failed to resolve drops the row's
+`resolution`, checkpoint ruling I1), a `NULL` payload column *may* mean the payload could not
+be read — the flag says some declared capture failed, without naming which, so a `NULL`
+column on such a row is not by itself a claim of no payload.
 
 **Inbound and outbound share one `endpoints` table** with a `direction` column taking
 `inbound`, `outbound` or `both`. Two near-identical tables were the alternative, and were

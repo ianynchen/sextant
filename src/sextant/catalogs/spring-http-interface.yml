@@ -15,21 +15,21 @@ requires: [annotation_args, typed_signatures]
 matches:
   # No type gate: @HttpExchange at type level is optional — methods alone may
   # carry the exchange annotations.
-  request_body: { annotation: org/springframework/web/bind/annotation/RequestBody#,
+  request_body: { annotation: org.springframework.web.bind.annotation.RequestBody,
                   fallback: none }
   mapping:
     path_from: [value, url]
     method_from: method
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
-    prefix_annotation: org/springframework/web/service/annotation/HttpExchange#
+    prefix_annotation: org.springframework.web.service.annotation.HttpExchange
     prefix_from: [value, url]
     annotations:
-      - { fqn: org/springframework/web/service/annotation/HttpExchange# }
-      - { fqn: org/springframework/web/service/annotation/GetExchange#,    method: [GET] }
-      - { fqn: org/springframework/web/service/annotation/PostExchange#,   method: [POST] }
-      - { fqn: org/springframework/web/service/annotation/PutExchange#,    method: [PUT] }
-      - { fqn: org/springframework/web/service/annotation/DeleteExchange#, method: [DELETE] }
-      - { fqn: org/springframework/web/service/annotation/PatchExchange#,  method: [PATCH] }
+      - { fqn: org.springframework.web.service.annotation.HttpExchange }
+      - { fqn: org.springframework.web.service.annotation.GetExchange,    method: [GET] }
+      - { fqn: org.springframework.web.service.annotation.PostExchange,   method: [POST] }
+      - { fqn: org.springframework.web.service.annotation.PutExchange,    method: [PUT] }
+      - { fqn: org.springframework.web.service.annotation.DeleteExchange, method: [DELETE] }
+      - { fqn: org.springframework.web.service.annotation.PatchExchange,  method: [PATCH] }
 
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }

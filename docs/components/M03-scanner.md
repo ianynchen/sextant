@@ -48,6 +48,7 @@ finding fewer endpoints.
 | Capability | Gates |
 |---|---|
 | `annotation_args` | Every annotation-driven framework |
+| `typed_signatures` | Structured parameter and return types — the field a body-parameter or `response_arg` join reads instead of a positional guess ([D00](D00-fact-schema.md) §5a) |
 | `type_annotations` | `nullable` on contract fields, per reference — never `required`, which comes from presence machinery ([D00](D00-fact-schema.md) §5b) |
 | `string_constants` | Topic and URL literals |
 | `invokedynamic` | Lambdas, and therefore functional routing |
@@ -55,6 +56,23 @@ finding fewer endpoints.
 | `chain_reconstruction` | The whole `fluent` style |
 | `control_flow` | Honest sequence diagrams |
 | `kotlin_metadata` | Nullability and data-class shapes |
+| `call_site` | Every call-site-driven engine — [D02](D02-catalog-schema.md)'s `single_call` and `fluent` both |
+| `implemented_interfaces` | The `interface_implementation` style — matching a registered receiver's own type against an interface a catalog names |
+
+**Eight of the scanner's now-eleven designed capabilities are shipped.** `annotation_args`,
+`typed_signatures`, `type_annotations` and `kotlin_metadata` since Phase 2A/2B; `call_site`,
+`string_constants` and `chain_reconstruction` from Phase 2C's dataflow pass (below);
+`implemented_interfaces` from a class symbol fact's own `interfaces` list, in declaration
+order ([D00](D00-fact-schema.md) §5a).
+**`chain_reconstruction` means exactly this: receiver and result value ids are present on
+`call_site` facts** ([D00](D00-fact-schema.md) §5) — a `fluent` catalog's steps are a join
+over those links, nothing more. `invokedynamic` stays undeclared: an indy call site is
+still recorded — a `call_site` fact exists for it — but its arguments are honestly
+`unresolved` rather than decompiled (Java 9+ string concatenation compiles to indy, and
+refusing to guess it is the point); a lambda's own bootstrap handle is captured separately,
+through the `lambda` argument kind ([D00](D00-fact-schema.md) §5), wherever a lambda or
+method reference is passed as an argument. `constant_propagation` and `control_flow` remain
+unshipped, each for the reason recorded below.
 
 ## Inputs
 
@@ -70,7 +88,7 @@ Facts as JSONL, one file per **source file**, plus the uncovered-source list.
 ### The JVM scanner
 
 ASM over class files. See [ARCHITECTURE.md](../ARCHITECTURE.md) DR-1 for why this rather
-than a source indexer. Two of its eight capabilities are hard, and the rest are
+than a source indexer. Two of its eleven capabilities are hard, and the rest are
 straightforward.
 
 ### The hard part: control flow
@@ -213,6 +231,14 @@ derived from it says so.
 
 | Decision | Blocks |
 |---|---|
-| Whether chain reconstruction is inside the ASM extractor or a pass over its output | Module size |
 | How far constant propagation follows a value across method boundaries | Endpoint URL resolution |
 | Whether a partially-structured method is a fact-level or document-level `partial` | [D00](D00-fact-schema.md) |
+
+One decision formerly here was closed by Phase 2C's approved design (2026-08-29):
+
+- **Chain reconstruction is split, not sited in one place.** The extractor emits the
+  linked value ids — `receiver`/`result` on every `call_site` fact
+  ([D00](D00-fact-schema.md) §5) — and stops there; walking those links into a chain is
+  the derivation's job, a join the `fluent` engine performs over facts already on disk.
+  Module size stays bounded on the extractor side because there is nothing left to grow
+  there: one dataflow pass, not a graph walk.

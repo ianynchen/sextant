@@ -26,20 +26,20 @@ CATALOGS = catalogs_dir()
 _INVENTED_LISTENER = Catalog(
     id="invented-listener",
     style="annotation_driven",
-    protocol="message",
+    protocol="kafka",
     direction="outbound",
     requires=("annotation_args",),
     source=Path("tests/invented.yml"),
     matches={
-        "type_annotation": "com/acme/messaging/annotation/Listener#",
+        "type_annotation": "com.acme.messaging.annotation.Listener",
         "mapping": {
             "path_from": ["value"],
             "prefix_from": ["value"],
             "method_from": "method",
             "all_methods": ["PUBLISH"],
-            "prefix_annotation": "com/acme/messaging/annotation/Topic#",
+            "prefix_annotation": "com.acme.messaging.annotation.Topic",
             "annotations": [
-                {"fqn": "com/acme/messaging/annotation/OnMessage#", "method": ["PUBLISH"]},
+                {"fqn": "com.acme.messaging.annotation.OnMessage", "method": ["PUBLISH"]},
             ],
         },
     },
@@ -114,7 +114,7 @@ def test_catalog_maps_post_mapping_to_the_post_method():
     spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
     annotations = spring.matches["mapping"]["annotations"]
     methods = {m["fqn"]: m.get("method") for m in annotations}
-    assert methods["org/springframework/web/bind/annotation/PostMapping#"] == ["POST"]
+    assert methods["org.springframework.web.bind.annotation.PostMapping"] == ["POST"]
 
 
 def test_catalog_leaves_request_mapping_without_a_preset_method():
@@ -126,7 +126,7 @@ def test_catalog_leaves_request_mapping_without_a_preset_method():
     request_mapping = next(
         m
         for m in annotations
-        if m["fqn"] == "org/springframework/web/bind/annotation/RequestMapping#"
+        if m["fqn"] == "org.springframework.web.bind.annotation.RequestMapping"
     )
     assert "method" not in request_mapping
 
@@ -253,7 +253,7 @@ def _invented_listener_facts(root: Path) -> None:
     used only to prove that `protocol` and `direction` on the derived rows
     come from the catalog's own declared fields rather than from a literal
     baked into the SQL. D02 groups Spring Kafka and JMS listeners under this
-    same style with `protocol: message`; a catalog like this one is exactly
+    same style with `protocol: kafka`; a catalog like this one is exactly
     what would have silently come out labelled http/inbound before this fix."""
     document = Document(
         document_id="doc_1",
@@ -320,7 +320,7 @@ def test_derive_endpoints_carries_the_catalogs_own_protocol_and_direction_when_n
 
     assert skipped == []
     assert len(rows) == 1
-    assert rows[0]["protocol"] == "message"
+    assert rows[0]["protocol"] == "kafka"
     assert rows[0]["direction"] == "outbound"
     assert rows[0]["protocol"] != "http"
     assert rows[0]["direction"] != "inbound"
@@ -353,7 +353,7 @@ def test_derive_endpoints_keeps_both_catalogs_results_when_two_catalogs_match(
         ("http", "POST", "/v1/orders"),
         ("http", "GET", "/v1/orders/{id}"),
         ("http", "GET", "/v1/orders"),
-        ("message", "PUBLISH", "orders.created"),
+        ("kafka", "PUBLISH", "orders.created"),
     }
 
 
@@ -479,7 +479,7 @@ _SCALAR_PATH_CATALOG = Catalog(
     requires=("annotation_args",),
     source=Path("tests/invented.yml"),
     matches={
-        "type_annotation": "com/acme/rest/Resource#",
+        "type_annotation": "com.acme.rest.Resource",
         "mapping": {
             "path_from": ["value"],
             "prefix_from": ["value"],
@@ -487,8 +487,8 @@ _SCALAR_PATH_CATALOG = Catalog(
             "all_methods": ["GET"],
             # Not a mapping annotation: this catalog is the JAX-RS shape, where
             # the type carries the path and the method carries the verb.
-            "prefix_annotation": "com/acme/rest/Path#",
-            "annotations": [{"fqn": "com/acme/rest/Get#", "method": ["GET"]}],
+            "prefix_annotation": "com.acme.rest.Path",
+            "annotations": [{"fqn": "com.acme.rest.Get", "method": ["GET"]}],
         },
     },
 )
@@ -511,6 +511,92 @@ def test_derive_endpoints_reads_a_scalar_annotation_argument_when_it_is_not_an_a
     workspace.close()
 
     assert [(r["method"], r["path"]) for r in rows] == [("GET", "/rest/orders/{id}")]
+
+
+_MULTI_PATH_CATALOG = Catalog(
+    id="invented-multi-path",
+    style="annotation_driven",
+    protocol="http",
+    direction="inbound",
+    requires=("annotation_args",),
+    source=Path("tests/invented.yml"),
+    matches={
+        "mapping": {
+            "path_from": ["value"],
+            "prefix_from": ["value"],
+            "method_from": "method",
+            "all_methods": ["GET", "POST", "PUT", "DELETE"],
+            "prefix_annotation": "com.acme.rest.Mapping",
+            # No `method` key: the annotation pre-sets no verb, so the
+            # derivation reads that absence as "every method in all_methods"
+            # — and the row below hands it two of them explicitly instead.
+            "annotations": [{"fqn": "com.acme.rest.Mapping", "method": ["GET", "POST"]}],
+        },
+    },
+)
+
+
+def test_a_mapping_naming_two_paths_and_two_methods_derives_all_four_identities(
+    tmp_path: Path,
+):
+    """`derive_endpoints.sql` claims it in a comment — "a two-topic,
+    two-method mapping is four identities" — and until now nothing pinned it.
+    The claim is load-bearing and fragile: DuckDB ZIPS two `UNNEST`s that sit
+    in the same SELECT rather than cross-joining them, so the naive spelling
+    of this derivation would silently yield TWO rows (`GET /a`, `POST /b`),
+    dropping `GET /b` and `POST /a` — two real routes gone, with the two that
+    survived reported at full `resolved`/`compiler` confidence. The separate
+    `mapped_methods` CTE is what makes it a cross product, and this is the
+    test that fails if anyone folds it back into one SELECT.
+
+    `@RequestMapping(value = {"/a", "/b"}, method = {GET, POST})` is the real
+    Spring shape; the annotation here is invented so the pin holds on the
+    generic engine rather than on one framework's catalog file."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rest/OrderResource.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    resource = "com/acme/rest/OrderResource#"
+    handle = "com/acme/rest/OrderResource#handle(sig_5ea17c38)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=resource, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handle,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=resource,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handle,
+            retention="runtime",
+            use=AnnotationUse(annotation="com/acme/rest/Mapping#", args={"value": ["/a", "/b"]}),
+        ),
+    ]
+    write_fact_file(tmp_path / "facts" / "OrderResource.jsonl", document, facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    derive_endpoints(workspace, [_MULTI_PATH_CATALOG], capabilities={"annotation_args"})
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["path"]) for r in rows] == [
+        ("GET", "/a"),
+        ("GET", "/b"),
+        ("POST", "/a"),
+        ("POST", "/b"),
+    ]
 
 
 def _client_facts(root: Path, type_args: dict[str, object]) -> None:
@@ -574,8 +660,8 @@ _OUTBOUND_CATALOG = Catalog(
     requires=("annotation_args",),
     source=Path("tests/invented.yml"),
     matches={
-        "type_annotation": "com/acme/billing/annotation/ServiceClient#",
-        "request_body": {"annotation": "com/acme/billing/annotation/Body#", "fallback": "none"},
+        "type_annotation": "com.acme.billing.annotation.ServiceClient",
+        "request_body": {"annotation": "com.acme.billing.annotation.Body", "fallback": "none"},
         "mapping": {
             "path_from": ["value"],
             # `path` carries the prefix; `name` (read by peer_from below)
@@ -584,9 +670,9 @@ _OUTBOUND_CATALOG = Catalog(
             "peer_from": ["name", "value"],
             "method_from": "method",
             "all_methods": ["GET"],
-            "prefix_annotation": "com/acme/billing/annotation/ServiceClient#",
+            "prefix_annotation": "com.acme.billing.annotation.ServiceClient",
             "annotations": [
-                {"fqn": "com/acme/billing/annotation/PostExchange#", "method": ["POST"]},
+                {"fqn": "com.acme.billing.annotation.PostExchange", "method": ["POST"]},
             ],
         },
     },
@@ -811,9 +897,9 @@ _UNGATED_CATALOG = Catalog(
             "peer_from": [],
             "method_from": "method",
             "all_methods": ["GET"],
-            "prefix_annotation": "com/acme/legacy/annotation/Prefix#",
+            "prefix_annotation": "com.acme.legacy.annotation.Prefix",
             "annotations": [
-                {"fqn": "com/acme/legacy/annotation/GET#", "method": ["GET"]},
+                {"fqn": "com.acme.legacy.annotation.GET", "method": ["GET"]},
             ],
         },
     },
@@ -916,10 +1002,10 @@ _UNGATED_PREFIXED_CATALOG = Catalog(
             "peer_from": [],
             "method_from": "method",
             "all_methods": ["GET"],
-            "prefix_annotation": "com/acme/inventory/annotation/Exchange#",
+            "prefix_annotation": "com.acme.inventory.annotation.Exchange",
             "annotations": [
-                {"fqn": "com/acme/inventory/annotation/Exchange#"},
-                {"fqn": "com/acme/inventory/annotation/GetExchange#", "method": ["GET"]},
+                {"fqn": "com.acme.inventory.annotation.Exchange"},
+                {"fqn": "com.acme.inventory.annotation.GetExchange", "method": ["GET"]},
             ],
         },
     },
@@ -950,7 +1036,7 @@ def test_a_type_level_mapping_annotation_mints_no_endpoint_of_its_own(tmp_path):
 
 
 _UNKNOWN_STYLE_CATALOG = """id: invented
-style: fluent
+style: protocol_hint
 protocol: http
 direction: inbound
 matches: {}
@@ -1016,10 +1102,50 @@ def test_load_catalogs_accepts_a_catalog_whose_values_are_all_in_the_closed_sets
     assert (catalog.protocol, catalog.direction) == ("http", "inbound")
 
 
+def test_broker_family_protocols_load_and_message_is_retired(tmp_path):
+    """D00's protocol set names four broker families — `kafka`, `jms`, `sqs`,
+    `pubsub` — in place of the single `message` value they retired, and a
+    catalog declaring any of them loads. The single value could not have said
+    which broker a row addressed, and D01's wire identity is protocol-scoped,
+    so the four are the answer, not a convenience. Loading order is by
+    filename (NFR-1), which is why the assertion is a list rather than a
+    set."""
+    _minimal_catalog = """id: {id}
+style: annotation_driven
+protocol: {protocol}
+direction: inbound
+matches: {{}}
+"""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    for protocol in ("kafka", "jms", "sqs", "pubsub"):
+        filename = f"x-{protocol}.yml"
+        content = _minimal_catalog.format(id=filename.replace(".yml", ""), protocol=protocol)
+        (tmp_path / filename).write_text(content, encoding="utf-8")
+
+    loaded = YamlCatalogSource(tmp_path).load()
+    assert [c.protocol for c in loaded] == ["jms", "kafka", "pubsub", "sqs"]
+
+
+def test_message_is_no_longer_a_protocol(tmp_path):
+    """The 'message' protocol value is rejected as a closed-set violation.
+
+    MESSAGE was removed from the Protocol closed set in favor of specific
+    broker family protocols. Any catalog declaring protocol: message should
+    raise CatalogError with a message about closed sets.
+    """
+    catalog_text = _VALID_CATALOG.replace("http", "message")
+    directory = _catalog_dir(tmp_path, catalog_text)
+
+    with pytest.raises(CatalogError, match="closed"):
+        YamlCatalogSource(directory).load()
+
+
 def test_catalog_naming_a_style_with_no_engine_is_refused_by_file(tmp_path: Path):
     """A style with no engine matches nothing, so it would yield no endpoints
     and no skip — indistinguishable from a framework that exposes none. D02 §2
-    declares six styles and this codebase implements one, so the gap is real.
+    declares six styles and this codebase implements four (2E-prep's
+    `interface_implementation` joins the original three), so the gap is
+    real.
 
     The reader cannot check it: which engines exist is knowledge of
     `application/resolve`, which `ingress` must not import. So the catalog
@@ -1030,7 +1156,7 @@ def test_catalog_naming_a_style_with_no_engine_is_refused_by_file(tmp_path: Path
     with pytest.raises(CatalogError) as raised:
         derive_endpoints(_UnusedWorkspace(), catalogs, capabilities=set())
 
-    assert "fluent" in str(raised.value)
+    assert "protocol_hint" in str(raised.value)
     assert "annotation_driven" in str(raised.value)
     assert "invented.yml" in str(raised.value)
 

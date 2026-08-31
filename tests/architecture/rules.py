@@ -36,6 +36,11 @@ def sql_files(*relative: str) -> list[Path]:
     return sorted(path for root in roots for path in root.rglob("*.sql"))
 
 
+def yaml_files(*relative: str) -> list[Path]:
+    roots = [SRC.joinpath(part) for part in relative] or [SRC]
+    return sorted(path for root in roots for path in root.rglob("*.yml"))
+
+
 def code_words(path: Path) -> set[str]:
     """Every identifier and string literal in a file, lowercased.
 

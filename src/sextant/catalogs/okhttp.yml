@@ -1,0 +1,85 @@
+id: okhttp
+displayName: OkHttp
+style: fluent
+protocol: http
+direction: outbound
+
+detect:
+  coordinates: ["com.squareup.okhttp3:okhttp"]
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  # OkHttp has no fluent client object to root a chain on: a `Request.Builder`
+  # is built and thrown to a *separate* `OkHttpClient.newCall(request)` call,
+  # joined only through the argument `source` id (D00 §5) — never through
+  # receiver/result chaining, which is what `terminal_via_argument` is for.
+  roots:
+    - { owner: okhttp3.Request$Builder, method: <init>, captures: { http_method: GET } }  # GET is OkHttp's own default
+  # Every verb OkHttp's `Request.Builder` exposes as its own named method —
+  # not just `get`/`post`: a `.put(body)`/`.patch(body)`/`.delete()`/`.head()`
+  # chain that only matched `get`/`post` would fall through as an unmatched
+  # step (D02 §4's "unmatched steps pass through uncaptured") and the root's
+  # own `http_method: GET` default would stand uncorrected — a confidently
+  # WRONG verb, not an honest gap. `delete()` carries no body capture: OkHttp
+  # itself makes a DELETE body optional, and the zero-arg overload this
+  # step's bare method name matches has no `arg0` to capture in the first
+  # place; `head()` sets no body either, exactly like `get`. (`Request.Builder
+  # .method(String, RequestBody)` — the fully generic overload — is not
+  # covered: the fluent grammar has no way to read `http_method` off an
+  # argument, only off a catalog literal; a known gap, not silently guessed.)
+  steps:
+    - { method: url,    captures: { url: arg0 } }
+    - { method: get,    captures: { http_method: GET } }
+    - { method: head,   captures: { http_method: HEAD } }
+    - { method: post,   captures: { http_method: POST, body: arg0 } }
+    - { method: put,    captures: { http_method: PUT, body: arg0 } }
+    - { method: patch,  captures: { http_method: PATCH, body: arg0 } }
+    - { method: delete, captures: { http_method: DELETE } }
+  # A mapping, not the bare flag: without it, any consumer of `build`'s
+  # result (a log statement) would count as executing the request.
+  terminal:
+    - { method: build, terminal_via_argument: { owner: okhttp3.OkHttpClient, method: newCall } }
+
+# Shared verbatim across every outbound catalog on purpose (not just these
+# three plus RestTemplate): `_owns` (shapes/contracts.py) scopes ownership by
+# direction AND protocol (Task 10 fix round 1) — every outbound catalog here
+# is `protocol: http`, so within this same-protocol group, whichever sorts
+# first — okhttp, here — still describes every outbound row's shapes,
+# including a row a *different* catalog produced (Retrofit's own
+# `Call<OrderView>`, say). Every outbound catalog's
+# wrappers/serialization/known_types must therefore agree, or the first one
+# alphabetically silently mis-describes a route it never derived.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: reactor.core.publisher.Mono,              payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                       payload_arg: 0, semantics: optional }
+  - { type: retrofit2.Call,                           payload_arg: 0, semantics: async }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

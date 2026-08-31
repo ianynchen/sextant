@@ -22,16 +22,17 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.shapes import (
     ExpandedShapes,
-    _contracts_of,
-    _owns,
-    _rules_of,
-    _scope_nullable,
     derive_endpoint_shapes,
     derive_shapes,
     root_type,
 )
+from sextant.application.resolve.shapes.contracts import _contracts_of, _owns
+from sextant.application.resolve.shapes.expansion import _rules_of
+from sextant.application.resolve.shapes.nullability import _scope_nullable
+from sextant.cli.resources import catalogs_dir
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.facts import Document
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 
@@ -915,15 +916,15 @@ _ENDPOINT_CATALOG = Catalog(
         **vars(_CATALOG),
         "id": "invented-endpoints",
         "matches": {
-            "type_annotation": "com/acme/rest/Resource#",
-            "request_body": {"annotation": "com/acme/rest/Body#", "fallback": "none"},
+            "type_annotation": "com.acme.rest.Resource",
+            "request_body": {"annotation": "com.acme.rest.Body", "fallback": "none"},
             "mapping": {
                 "path_from": ["value"],
                 "prefix_from": ["value"],
                 "method_from": "method",
                 "all_methods": ["POST"],
-                "prefix_annotation": "com/acme/rest/Path#",
-                "annotations": [{"fqn": "com/acme/rest/Post#", "method": ["POST"]}],
+                "prefix_annotation": "com.acme.rest.Path",
+                "annotations": [{"fqn": "com.acme.rest.Post", "method": ["POST"]}],
             },
         },
     }
@@ -1158,15 +1159,15 @@ _OUTBOUND_CATALOG = Catalog(
         # `ResponseEntity` entry, so this catalog has no idea how to open one.
         "wrappers": [{"type": "com.acme.client.Call", "payload_arg": 0, "semantics": "async"}],
         "matches": {
-            "type_annotation": "com/acme/client/Client#",
-            "request_body": {"annotation": "com/acme/client/Body#", "fallback": "none"},
+            "type_annotation": "com.acme.client.Client",
+            "request_body": {"annotation": "com.acme.client.Body", "fallback": "none"},
             "mapping": {
                 "path_from": ["value"],
                 "prefix_from": ["value"],
                 "method_from": "method",
                 "all_methods": ["GET"],
-                "prefix_annotation": "com/acme/client/Path#",
-                "annotations": [{"fqn": "com/acme/client/Get#", "method": ["GET"]}],
+                "prefix_annotation": "com.acme.client.Path",
+                "annotations": [{"fqn": "com.acme.client.Get", "method": ["GET"]}],
             },
         },
     }
@@ -1303,22 +1304,341 @@ def test_an_outbound_catalog_cannot_claim_an_inbound_row_even_processed_first(tm
     assert descriptor["shape_id"] == ORDER_VIEW_SHAPE
 
 
-def test_owns_matches_only_a_catalogs_own_direction_and_both_reads_as_inbound():
-    """`_owns` in isolation, every combination the closed set (D00) allows —
-    the predicate Finding 1's fix is built on, and the fastest thing to
-    mutate-check: reverting its body to `return True` fails exactly the three
-    assertions below that read `is False`."""
-    inbound = Catalog(**{**vars(_CATALOG), "direction": "inbound"})
-    outbound = Catalog(**{**vars(_CATALOG), "direction": "outbound"})
+def test_owns_never_crosses_a_protocol_it_was_not_declared_for():
+    """2E-prep collapse: `_owns` now reads a single fact off the row — the
+    `catalog_id` Task 1 stamps on every endpoint — rather than reasoning
+    about direction and protocol at all. A row naming one catalog's id must
+    never read as owned by a different catalog, same-protocol or not: this
+    is what used to require `_owns`'s direction/protocol scoping (Task 10's
+    `spring-jms`-crosses-into-`spring-mvc` bug), and is now just the id
+    comparison. Mutation-tested against `return True`: every assertion below
+    that reads `is False` fails."""
+    inbound_http = Catalog(**{**vars(_CATALOG), "id": "catalog-a", "protocol": "http"})
+    inbound_kafka = Catalog(**{**vars(_CATALOG), "id": "catalog-b", "protocol": "kafka"})
 
-    assert _owns(inbound, {"direction": "inbound"}) is True
-    assert _owns(outbound, {"direction": "outbound"}) is True
-    # A `both` row's surviving `handler_signature` is the handler's own
-    # (merge_endpoints.sql), so it is inbound-owned, never outbound-owned.
-    assert _owns(inbound, {"direction": "both"}) is True
-    assert _owns(outbound, {"direction": "both"}) is False
-    assert _owns(outbound, {"direction": "inbound"}) is False
-    assert _owns(inbound, {"direction": "outbound"}) is False
+    assert _owns(inbound_http, {"catalog_id": "catalog-a"}) is True
+    assert _owns(inbound_kafka, {"catalog_id": "catalog-a"}) is False
+    assert _owns(inbound_http, {"catalog_id": "catalog-b"}) is False
+    # A row naming no catalog at all (impossible after Task 1) is owned by
+    # nobody.
+    assert _owns(inbound_http, {}) is False
+
+
+def test_owns_is_the_id_comparison_even_for_a_row_level_direction_override():
+    """Task 11 review round 1, finding 2, restated post-collapse: a
+    `single_call` row's own `direction` override (D02 §2/§3, Task 6 —
+    `spring-pubsub.yml`'s `subscribeAndConvert` row) used to need `_owns` to
+    reason about `catalog.matches["methods"]`, or a catalog whose
+    catalog-level `direction` is `outbound` never owned the inbound/`both`
+    rows its OWN override-carrying row produces. With ownership read off
+    `catalog_id` alone, the override needs no special-casing at all: every
+    row a catalog's own derivation writes — override or not — carries that
+    SAME catalog's id, so it stays owned regardless of the row's own
+    `direction`. Proven here with only one catalog's id in play, and a
+    second catalog's id alongside it to show ownership still never crosses,
+    override or not."""
+    pubsub = Catalog(**{**vars(_CATALOG), "id": "spring-pubsub", "direction": "outbound"})
+
+    # The plain row and the row-level override both carry the producing
+    # catalog's own id — both owned, direction plays no part in the answer.
+    assert _owns(pubsub, {"catalog_id": "spring-pubsub", "direction": "outbound"}) is True
+    assert _owns(pubsub, {"catalog_id": "spring-pubsub", "direction": "inbound"}) is True
+    assert _owns(pubsub, {"catalog_id": "spring-pubsub", "direction": "both"}) is True
+
+    # A different catalog's id is never owned, override or not.
+    other = Catalog(**{**vars(_CATALOG), "id": "other-catalog"})
+    assert _owns(other, {"catalog_id": "spring-pubsub", "direction": "inbound"}) is False
+
+
+# --- Task 12 fix round 1 (coordinator review): wrapper vocabulary must be
+# shared across *every* outbound catalog, not just serialization/known_types.
+# Historical: before 2E-prep's `catalog_id` collapse, `_owns` scoped by
+# direction and protocol alone (protocol added in Task 10 fix round 1), so
+# within one same-protocol group whichever catalog sorted first described
+# every outbound row's shapes under its own `wrappers` list — even a row a
+# *different* catalog produced. Reviewer's repro: `okhttp` sorts before
+# `retrofit` alphabetically (both `protocol: http`), and before that fix
+# declared no `wrappers` at all, so a Retrofit `Call<OrderView>` response
+# settled (first) as the raw `Call` envelope rather than unwrapping to
+# `OrderView`. The harvested `wrappers` union this section pins for
+# (`okhttp.yml` carrying `retrofit2.Call` among them) was that fix's answer,
+# and stays shipped — harmless now that `_owns` reads `catalog_id`, since
+# ownership can no longer cross catalogs at all regardless of sort order or
+# wrapper vocabulary. ------
+
+_RETROFIT_CALLER_OWNER = "com/acme/orders/clients/PricingClient#"
+_RETROFIT_CALLER = _RETROFIT_CALLER_OWNER + "price(sig_00000002)."
+
+
+def _retrofit_shaped_caller_facts(root: Path) -> None:
+    """One hand-built Retrofit-annotated interface method — a real `@GET`
+    mapping annotation, `Call<OrderView>` return — matched by the real,
+    shipped `retrofit.yml`, not an invented stand-in: the bug is specifically
+    about two *real* catalogs' wrapper lists disagreeing, so the fixture
+    must be real enough for `retrofit.yml`'s own `mapping` rules to fire."""
+    caller = {
+        "kind": "symbol",
+        "document_id": "doc_pricing",
+        "symbol": _MODULE + _RETROFIT_CALLER,
+        "construct_kind": "method",
+        "enclosing": _MODULE + _RETROFIT_CALLER_OWNER,
+        "visibility": "public",
+        "line_start": 0,
+        "line_end": 0,
+        "signature": _signature(
+            returns=_ref("retrofit2/Call#", "object", arguments=[_ref(ORDER_VIEW_SHAPE, "object")])
+        ),
+    }
+    _write(
+        root / "PricingClient.jsonl",
+        _document("doc_pricing", "com/acme/orders/clients/PricingClient.java"),
+        [
+            _type("doc_pricing", _RETROFIT_CALLER_OWNER),
+            caller,
+            _annotation(
+                "doc_pricing",
+                _MODULE + _RETROFIT_CALLER,
+                "retrofit2/http/GET#",
+                {"value": ["/pricing"]},
+            ),
+        ],
+    )
+
+
+def test_an_unrelated_outbound_catalogs_wrapper_list_still_unwraps_another_catalogs_row(
+    tmp_path,
+):
+    """The real `okhttp` and `retrofit` catalogs, resolved together: `okhttp`
+    sorts first (asserted below) and never itself produces this row (no
+    OkHttp call site exists in these facts). Post-collapse, `_owns` reading
+    `catalog_id` means `okhttp` cannot touch this row at all, sort order or
+    not — it is `retrofit`'s own `wrappers` list (which independently
+    declares `retrofit2.Call`) that resolves it. The response still
+    correctly roots at `OrderView`, not at the raw `retrofit2/Call#`
+    envelope, proving the historical cross-catalog bug this section
+    documents cannot recur under the new ownership rule, pinned against the
+    shipped files rather than an invented stand-in."""
+    catalogs = YamlCatalogSource(catalogs_dir()).load()
+    okhttp = next(c for c in catalogs if c.id == "okhttp")
+    retrofit = next(c for c in catalogs if c.id == "retrofit")
+    assert str(okhttp.source) < str(retrofit.source)
+
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _retrofit_shaped_caller_facts(root)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    capabilities = {
+        "annotation_args",
+        "typed_signatures",
+        "call_site",
+        "string_constants",
+        "chain_reconstruction",
+    }
+    derive_endpoints(workspace, [okhttp, retrofit], capabilities=capabilities)
+    derive_endpoint_shapes(workspace, [okhttp, retrofit], capabilities=capabilities)
+    [endpoint] = workspace.query("endpoints")
+    descriptor = json.loads(endpoint["response_shape"])
+    workspace.close()
+
+    assert descriptor["shape_id"] == ORDER_VIEW_SHAPE
+
+
+# --- Task 10: the three messaging catalogs' harvested blocks pin against
+# `spring-resttemplate.yml`'s (the checkpoint's own "harvest compatibility"
+# instruction: copy `wrappers`/`serialization`/`known_types` VERBATIM, then
+# add broker-specific entries on top) — extending this module's own
+# cross-catalog compatibility pinning discipline (Task 12 fix round 1, above)
+# to the three new files. This compatibility is no longer load-bearing for
+# `_owns` (2E-prep's `catalog_id` collapse means ownership never crosses
+# catalogs at all, regardless of protocol) — it remains load-bearing for
+# *shape expansion* (`derive_shapes`, below), which stays global and
+# first-reached-wins (`shape_rules_unscoped_to_the_producing_catalog`, the
+# still-open half of that gap). `root_type` reads `rules.wrappers` there too
+# (`expansion.py`), so a field type expanded under a different catalog's
+# rules than the one whose endpoint reaches it needs the same wrapper
+# vocabulary or it opens differently depending on which catalog got there
+# first — which is exactly what verbatim harvesting keeps safe.
+#
+# `nullability` pins separately, against `spring-mvc.yml` rather than
+# `spring-resttemplate.yml` (Task 10 fix round 1, finding 1): shape (type)
+# expansion — unlike endpoint/contract description — is a *global*,
+# insert-if-absent pass keyed on the type symbol alone (`derive_shapes`),
+# entirely outside `_owns`'s `catalog_id` scoping, so a payload type an HTTP
+# catalog and a messaging catalog both happen to reference gets whichever
+# catalog's nullability rules reach it first, regardless of protocol. The
+# reviewer's repro: `spring-jms.yml` sorts first among ALL inbound catalogs
+# (not just same-protocol ones), and — before this fix — declared no
+# `nullability` block at all, so a `@NonNull` HTTP field shared with a JMS
+# listener's payload type silently read as nullable once JMS's
+# own (empty) rules answered for it first.
+
+
+# Task 11: the six producer catalogs join the same harvest-compatibility
+# pinning — `spring-kafka-template`, `spring-kafka-replying`,
+# `kafka-clients`, `spring-jms-template`, `spring-sqs-template` and
+# `spring-pubsub` all copy the FULL compatible block set verbatim
+# (`wrappers`/`serialization`/`known_types` from `spring-resttemplate.yml`,
+# `nullability` from `spring-mvc.yml`), not only the three Task 10 listener
+# catalogs. Only `known_types` still reads this list: `serialization` and
+# `nullability` generalised to every loaded catalog (final review), and
+# `wrappers` has its own producers-only list below.
+_MESSAGING_CATALOG_IDS = (
+    "spring-kafka",
+    "spring-jms",
+    "spring-sqs",
+    "spring-kafka-template",
+    "spring-kafka-replying",
+    "kafka-clients",
+    "spring-jms-template",
+    "spring-sqs-template",
+    "spring-pubsub",
+    # 2E-prep Task 11 (driver catalogs A): the three raw-client catalogs
+    # copy the same harvested `known_types` baseline. `aws-sqs-sdk.yml`
+    # matters most here — it sorts FIRST among every shipped catalog file
+    # (its own comment states why: it cannot rely on any other catalog
+    # loading before it), so a fork here would go undetected by every other
+    # pin in this file.
+    "aws-sqs-sdk",
+    "jakarta-jms",
+    "kafka-consumer",
+    # 2E-prep Task 12 (driver catalogs B): the pubsub trio +
+    # spring-kafka-message copy the same harvested `known_types` baseline.
+    "google-pubsub-publisher",
+    "google-pubsub-client",
+    "google-pubsub-subscriber",
+    "spring-kafka-message",
+)
+
+
+def test_the_messaging_catalogs_known_types_are_harvested_verbatim():
+    """`known_types` on every messaging catalog must be byte-for-byte
+    `spring-resttemplate.yml`'s own block — the harvest the checkpoint calls
+    for, mechanically pinned rather than eyeballed.
+
+    This one keeps its explicit list where `serialization` below does not:
+    `known_types` genuinely DIFFERS across the shipped catalogs (`retrofit`,
+    `spring-mvc`, `spring-web`, `spring-cloud-openfeign` and
+    `spring-http-interface` each carry their own), so "every catalog that
+    declares one declares the same one" is simply not true of it — the
+    harvest baseline is what these nine were told to copy, not a repo-wide
+    invariant."""
+    catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
+    resttemplate = catalogs["spring-resttemplate"]
+
+    for catalog_id in _MESSAGING_CATALOG_IDS:
+        assert catalogs[catalog_id].known_types == resttemplate.known_types, catalog_id
+
+
+def test_every_catalog_declaring_serialization_declares_the_harvested_block_verbatim():
+    """`serialization` is the one harvested block every shipped catalog
+    agrees on, so it is pinned across ALL of them rather than a hand-listed
+    subset — the same generalisation the `nullability` pin below makes, and
+    for the same reason: field-name and enum-value reading, like nullability,
+    feeds `derive_shapes`' global, symbol-keyed expansion, so a catalog that
+    quietly forks its own rules changes how a SHARED payload type reads for
+    every other catalog. A hand-maintained id list cannot notice a catalog
+    added later; iterating what the loader actually returns can."""
+    catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
+    baseline = catalogs["spring-resttemplate"].serialization
+    assert baseline != {}
+
+    declaring = [c for c in catalogs.values() if c.serialization]
+    # Not vacuous, and not one lonely catalog agreeing with itself.
+    assert len(declaring) > 1
+    for catalog in declaring:
+        assert catalog.serialization == baseline, catalog.id
+
+
+def test_every_catalog_declaring_nullability_declares_spring_mvcs_verbatim():
+    """Task 10 fix round 1, finding 1: a catalog's `nullability` block must
+    be byte-for-byte `spring-mvc.yml`'s own — `derive_shapes`' expansion is
+    global and insert-if-absent, keyed on the type symbol alone and entirely
+    outside `_owns`'s direction/protocol scoping, so ANY catalog reaching a
+    shared payload type first with rules of its own degrades that type's
+    fields for every other catalog, whichever side of the wire it describes.
+
+    Generalised from the hand-listed messaging ids (final review): the
+    invariant is not "the nine messaging catalogs agree", it is "nobody
+    forks these rules", and an id list can only pin catalogs that already
+    existed when it was written. Iterating the loader's own output means a
+    catalog added tomorrow is covered the day it lands.
+
+    Catalogs declaring NO block at all are tolerated, not asserted about:
+    five outbound HTTP catalogs (`okhttp`, `retrofit`, `spring-restclient`,
+    `spring-resttemplate`, `spring-webclient`) still carry none, and giving
+    them one is a behaviour change owed its own change — every field
+    nullability answer on a type they reach first would move. `mvc` being
+    non-empty is asserted first so a future edit that quietly empties
+    spring-mvc's own block fails loud here rather than passing by making
+    every comparison an empty-dict tautology."""
+    catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
+    mvc = catalogs["spring-mvc"]
+    assert mvc.nullability != {}
+
+    declaring = [c for c in catalogs.values() if c.nullability]
+    assert len(declaring) > 1
+    for catalog in declaring:
+        assert catalog.nullability == mvc.nullability, catalog.id
+
+
+def test_the_producer_catalogs_wrappers_are_the_harvested_baseline_verbatim():
+    """Unlike the three Task 10 listener catalogs (`spring-kafka.yml` adds a
+    `ConsumerRecord` envelope entry on top of the baseline, for the one
+    listener parameter shape that needs unwrapping), none of the six Task 11
+    producer catalogs, nor 2E-prep Task 11's three raw-client catalogs, nor
+    2E-prep Task 12's four (the Pub/Sub trio plus `spring-kafka-message`),
+    add a broker-specific `wrappers` entry: a `single_call`/`fluent` row's payload
+    comes from its own declared position (`body_arg`/a step's own `body`
+    capture) or a `record_wrappers` constructor hop, never through an
+    envelope type a `wrappers` rule would need to unwrap. So each of these
+    catalogs' own `wrappers` list must be exactly `spring-resttemplate.yml`'s,
+    not merely a superset of it."""
+    catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
+    baseline = catalogs["spring-resttemplate"].wrappers
+
+    for catalog_id in (
+        "spring-kafka-template",
+        "spring-kafka-replying",
+        "kafka-clients",
+        "spring-jms-template",
+        "spring-sqs-template",
+        "spring-pubsub",
+        # 2E-prep Task 11 (driver catalogs A).
+        "aws-sqs-sdk",
+        "jakarta-jms",
+        "kafka-consumer",
+        # 2E-prep Task 12 (driver catalogs B): the pubsub trio +
+        # spring-kafka-message — none adds a broker-specific wrapper either.
+        "google-pubsub-publisher",
+        "google-pubsub-client",
+        "google-pubsub-subscriber",
+        "spring-kafka-message",
+    ):
+        assert catalogs[catalog_id].wrappers == baseline, catalog_id
+
+
+def test_the_messaging_catalogs_wrappers_include_the_harvested_baseline_plus_broker_entries():
+    """Each new file's own `wrappers` list must still contain every entry
+    `spring-resttemplate.yml` declares (the harvested baseline, verbatim);
+    `spring-kafka.yml` alone adds a broker envelope entry (`ConsumerRecord`)
+    on top — `spring-jms.yml`/`spring-sqs.yml` add none, since neither
+    broker's listener API declares an envelope-typed parameter a wrapper
+    rule could unwrap."""
+    catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
+    baseline = catalogs["spring-resttemplate"].wrappers
+
+    for catalog_id in ("spring-kafka", "spring-jms", "spring-sqs"):
+        wrappers = catalogs[catalog_id].wrappers
+        for entry in baseline:
+            assert entry in wrappers, (catalog_id, entry)
+
+    kafka_extra = [w for w in catalogs["spring-kafka"].wrappers if w not in baseline]
+    assert {w["type"] for w in kafka_extra} == {
+        "org.apache.kafka.clients.consumer.ConsumerRecord",
+    }
+    assert [w for w in catalogs["spring-jms"].wrappers if w not in baseline] == []
+    assert [w for w in catalogs["spring-sqs"].wrappers if w not in baseline] == []
 
 
 def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path):
@@ -1347,7 +1667,7 @@ _SOLE_UNANNOTATED_CATALOG = Catalog(
         "matches": {
             **_ENDPOINT_CATALOG.matches,
             "request_body": {
-                "annotation": "com/acme/rest/Body#",
+                "annotation": "com.acme.rest.Body",
                 "fallback": "sole_unannotated",
             },
         },
@@ -1403,6 +1723,91 @@ def test_two_bare_parameters_mean_no_body_at_all(tmp_path):
     """'Sole' is load-bearing: with two candidates, picking either is a coin
     flip recorded as fact."""
     endpoint = _resolved_two_bare_handler(tmp_path)
+    assert endpoint["request_shape"] is None
+
+
+def test_excluded_infrastructure_types_do_not_defeat_the_sole_unannotated_fallback(tmp_path):
+    """Excluded types are never considered as the sole unannotated fallback,
+    allowing infrastructure parameters to be hidden so the message payload
+    becomes the sole unannotated parameter."""
+    catalog = Catalog(
+        **{
+            **vars(_SOLE_UNANNOTATED_CATALOG),
+            "id": "invented-endpoints-excludes",
+            "matches": {
+                **_SOLE_UNANNOTATED_CATALOG.matches,
+                "request_body": {
+                    "annotation": "com.acme.rest.Body",
+                    "fallback": "sole_unannotated",
+                    "excludes": ["org.springframework.kafka.support.Acknowledgment"],
+                },
+            },
+        }
+    )
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(
+        root,
+        _signature(
+            returns=_ref(ORDER_VIEW_SHAPE, "object"),
+            parameters=(
+                _bare_parameter(_ref(ORDER_REQUEST, "object"), name="payload"),
+                _bare_parameter(
+                    _ref("org/springframework/kafka/support/Acknowledgment#", "object"), name="ack"
+                ),
+            ),
+        ),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [catalog], capabilities=set())
+    derive_endpoint_shapes(workspace, [catalog], capabilities=set())
+    endpoint = workspace.query("endpoints")[0]
+    workspace.close()
+
+    assert json.loads(endpoint["request_shape"])["shape_id"] == ORDER_REQUEST
+
+
+def test_two_non_excluded_bare_parameters_still_yield_no_body(tmp_path):
+    """The `sole_unannotated` fallback needs exactly ONE bare parameter to
+    survive exclusion, and here two do: the catalog declares an `excludes`
+    list, but neither parameter's type is on it, so both remain candidates
+    and the fallback has no sole one to pick. It yields None rather than
+    guessing which of the two is the body — the excludes list narrows the
+    candidates, it never breaks a tie among what it does not name."""
+    catalog = Catalog(
+        **{
+            **vars(_SOLE_UNANNOTATED_CATALOG),
+            "id": "invented-endpoints-excludes-multi",
+            "matches": {
+                **_SOLE_UNANNOTATED_CATALOG.matches,
+                "request_body": {
+                    "annotation": "com.acme.rest.Body",
+                    "fallback": "sole_unannotated",
+                    "excludes": ["org.springframework.kafka.support.Acknowledgment"],
+                },
+            },
+        }
+    )
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(
+        root,
+        _signature(
+            returns=_ref(ORDER_VIEW_SHAPE, "object"),
+            parameters=(
+                _bare_parameter(_ref(ORDER_REQUEST, "object"), name="payload"),
+                _bare_parameter(_ref(CUSTOMER_REF, "object"), name="customer"),
+            ),
+        ),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [catalog], capabilities=set())
+    derive_endpoint_shapes(workspace, [catalog], capabilities=set())
+    endpoint = workspace.query("endpoints")[0]
+    workspace.close()
+
     assert endpoint["request_shape"] is None
 
 

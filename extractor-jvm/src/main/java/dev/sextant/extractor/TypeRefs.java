@@ -51,6 +51,35 @@ public final class TypeRefs {
         return collected.isEmpty() ? null : toJson(collected.get(0));
     }
 
+    /** The generic superclass reference from a class {@code Signature}, or null when there is
+     *  none to capture — D00 §5a's PTR carrier. {@code new ParameterizedTypeReference<List<OrderView>>() {}}
+     *  compiles to a class whose own descriptor names nothing and whose signature names
+     *  everything, so this is the only place that payload type survives.
+     *
+     *  <p>Null for a superclass with **no type argument**, not merely for an absent signature.
+     *  A class signature is written whenever the class *itself* declares a type parameter, so
+     *  {@code class Box<T>} has one and its superclass part reads {@code java/lang/Object} —
+     *  emitting that would put a supertype reference on a large fraction of every module and
+     *  say nothing with any of them. D00 §5a draws the line in the same place: "an ordinary,
+     *  non-generic superclass carries no such field", the relationship itself being already
+     *  stated once at {@code relationship_kind: extends}.
+     *
+     *  <p>Walked by the same {@link NodeCollector} a field and a return type are, so the
+     *  argument a consumer roots a payload from is the same recursive shape it reads
+     *  everywhere else. */
+    public static String genericSuperclassFromSignature(String signature) {
+        if (signature == null) return null;
+        List<Node> collected = new ArrayList<>();
+        new SignatureReader(signature).accept(new SignatureVisitor(org.objectweb.asm.Opcodes.ASM9) {
+            @Override public SignatureVisitor visitSuperclass() {
+                return new NodeCollector(collected::add);
+            }
+        });
+        if (collected.isEmpty()) return null;
+        Node superclass = collected.get(0);
+        return superclass.argumentsJson().isEmpty() ? null : toJson(superclass);
+    }
+
     /** A field's fully augmented type reference: the {symbol, arguments} envelope every
      *  type reference carries (D00 §5a), plus D1's wire-type projection and D3's
      *  nullability at **every** level of the chain — a parameterized type keeps each of

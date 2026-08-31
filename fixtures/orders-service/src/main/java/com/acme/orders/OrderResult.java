@@ -7,9 +7,9 @@ public class OrderResult {
     public String getOrderId() { return orderId; }
     public String getStatus() { return status; }
 
-    // Nested, so the scanner does not read it. It is the fixture's one
-    // compiled source the facts do not account for, and the run must say so
-    // rather than let it disappear (M03, FR-17).
+    // Nested, so it compiles to a class file of its own and gets a document of
+    // its own (D00 §2): its own `document_id`, from the class-relative path,
+    // and this file as its `relative_path`.
     public static class Detail {
         private String note;
 

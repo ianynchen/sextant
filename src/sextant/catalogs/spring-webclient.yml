@@ -1,0 +1,72 @@
+id: spring-webclient
+displayName: Spring WebClient
+style: fluent
+protocol: http
+direction: outbound
+
+detect:
+  coordinates: ["org.springframework:spring-webflux"]
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  roots:
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: get,    captures: { http_method: GET } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: post,   captures: { http_method: POST } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: put,    captures: { http_method: PUT } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: delete, captures: { http_method: DELETE } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: patch,  captures: { http_method: PATCH } }
+  # `retrieve`/`exchange` mark the chain executable, not the walk's end:
+  # `bodyToMono`/`bodyToFlux` follow `retrieve` in every real chain, so the
+  # engine keeps folding step captures past a terminal (D02 §4, Task 11).
+  steps:
+    - { method: uri,        captures: { url: arg0 } }
+    - { method: bodyValue,  captures: { body: arg0 } }
+    - { method: body,       captures: { body: arg0 } }
+    - { method: bodyToMono, captures: { response: arg0 } }
+    - { method: bodyToFlux, captures: { response: arg0, response_is: array } }
+  terminal: [retrieve, exchange]
+  type_carriers: [org.springframework.core.ParameterizedTypeReference]
+
+# Shared verbatim across every outbound catalog on purpose (not just these
+# three plus RestTemplate): `_owns` (shapes/contracts.py) scopes ownership by
+# direction AND protocol (Task 10 fix round 1) — every outbound catalog here
+# is `protocol: http`, so within this same-protocol group, whichever sorts
+# first — okhttp, here — still describes every outbound row's shapes,
+# including a row a *different* catalog produced (Retrofit's own
+# `Call<OrderView>`, say). Every outbound catalog's
+# wrappers/serialization/known_types must therefore agree, or the first one
+# alphabetically silently mis-describes a route it never derived.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: reactor.core.publisher.Mono,              payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                       payload_arg: 0, semantics: optional }
+  - { type: retrofit2.Call,                           payload_arg: 0, semantics: async }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

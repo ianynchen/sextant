@@ -1,0 +1,81 @@
+id: google-pubsub-subscriber
+displayName: Google Cloud Pub/Sub (raw Subscriber/MessageReceiver)
+style: interface_implementation
+protocol: pubsub
+direction: inbound
+
+detect:
+  coordinates: ["com.google.cloud:google-cloud-pubsub"]
+
+requires: [call_site, string_constants, implemented_interfaces]
+
+matches:
+  # D02 §2's `interface_implementation` style's own worked example, shipped
+  # verbatim against the real fixture: `Subscriber.newBuilder(subscription,
+  # receiver)` is the evidence — a `MessageReceiver` implementation never
+  # handed to a matching registration derives nothing ("the registration is
+  # the evidence"), so this style needs no execute-terminal.
+  interface: com.google.cloud.pubsub.v1.MessageReceiver
+  handler_method: receiveMessage
+  registration:
+    owner: com.google.cloud.pubsub.v1.Subscriber
+    method: newBuilder
+    channel_arg: 0
+    receiver_arg: 1
+    # CHECKPOINT FACT: `ProjectSubscriptionName` (and its publisher-side
+    # sibling `TopicName`) live in `com.google.pubsub.v1` — the generated
+    # proto package, deliberately WITHOUT the `.cloud` segment the client
+    # classes here (`Subscriber`, `MessageReceiver`) carry. `arg: 1` is the
+    # subscription id; `arg: 0` (the project) is unread, same as
+    # `google-pubsub-publisher.yml`'s own `TopicName.of` read.
+    channel_via:
+      - { owner: com.google.pubsub.v1.ProjectSubscriptionName, method: of, arg: 1 }
+
+# Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
+# discipline as spring-kafka-template.yml — see its own comment for the full
+# rationale). `nullability` is harvested from spring-mvc.yml. Neither rule
+# actually applies to a row this style derives (`request_shape`/
+# `response_shape` are always NULL, D02 §2's `interface_implementation` style
+# — `PubsubMessage` is a declared no-shape envelope), carried only for the
+# loader's own compatibility-block pin, the same discipline every shipped
+# catalog keeps regardless of whether its own rows exercise every block.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

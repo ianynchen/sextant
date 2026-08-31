@@ -9,19 +9,11 @@ from collections.abc import Sequence
 
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.pipeline import ResolveReport
+from sextant.domain.closed_sets import Protocol
 from sextant.egress.render.diagrams import class_diagram
 from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
 
 _GAPS = [
-    (
-        "HTTP calls made through RestTemplate, WebClient or OkHttp are not "
-        "read: the URL and verb live in method calls, which the scanner does "
-        "not yet record."
-    ),
-    (
-        "Messaging endpoints — listeners and producers alike — are not read: "
-        "Kafka, JMS and SQS annotations have no catalog yet."
-    ),
     "An @HttpExchange interface implemented server-side is still reported outbound.",
     (
         "Outbound base addresses configured in builder code are not resolved: "
@@ -42,11 +34,6 @@ _GAPS = [
         "module whether or not the module depends on that framework."
     ),
     (
-        "Nested and anonymous classes are not read: they are named below as "
-        "uncovered, but their endpoints and annotations are absent from "
-        "everything above. A non-empty uncovered list does not yet stop the run."
-    ),
-    (
         "Module classification reads only a container file and a declared main "
         "class: a module showing neither is reported `undetermined` rather than "
         "weighed against the rest of the evidence."
@@ -57,12 +44,52 @@ _GAPS = [
         "difference is not recorded."
     ),
     (
-        "A payload type reachable from several catalogs is expanded under the "
-        "first catalog's serialisation and nullability rules, not necessarily "
-        "the one that produced its endpoint; the shipped catalogs declare "
-        "compatible rules, so no answer differs today."
+        "Endpoint request and response contracts are scoped to the catalog "
+        "that produced them. Shape expansion itself is not: a payload type "
+        "reachable from several catalogs is still expanded once, under "
+        "whichever catalog's rules reach it first, not necessarily the ones "
+        "that produced the endpoint referencing it. The shipped catalogs do "
+        "not declare identical rules, so a wrapper type one of them unwraps "
+        "and another does not can be named below as unexpanded even where the "
+        "shape behind it was expanded correctly."
+    ),
+    (
+        "Reactive and lambda flow is recorded but not traced: calls inside "
+        "flatMap and map derive endpoints, but the sequence between them "
+        "awaits the call graph."
     ),
 ]
+
+# D00 §4 closed-set protocol names whose wire identity has no verb: a Kafka
+# topic, a JMS destination, an SQS queue or a Pub/Sub topic is addressed, not
+# called, so there is no method to render beside the path.
+#
+# Derived from D00's closed set by SUBTRACTING the verbed protocols, rather
+# than hand-listing the verbless ones. Two sets naming halves of one closed
+# set drift; one set and a subtraction cannot. Which half to hand-list is
+# then the question of what an UNLISTED new protocol should default to, and
+# verbless is the honest default: it renders `protocol path`, while the other
+# way round renders `(unresolved) path` — a verb reported as unread when the
+# protocol was never going to have one. The verbed half is also the stable
+# half: growth in D00's set is broker families, not new request-response
+# verbs.
+_VERBED_PROTOCOLS = frozenset({"http", "soap", "grpc"})
+_VERBLESS_PROTOCOLS = frozenset(p.value for p in Protocol) - _VERBED_PROTOCOLS
+
+
+def _wire_identity(endpoint: dict[str, object]) -> str:
+    """A row's wire identity as one string. A protocol in `_VERBLESS_PROTOCOLS`
+    defines no verb, so it renders `protocol path` with no method at all;
+    every other protocol renders `method path` as before. Either half of
+    either shape may be NULL, and `(unresolved)` stays the marker for an
+    identity the analysis could not read — never a bare `None`."""
+    path = endpoint["path"]
+    rendered_path = "(unresolved)" if path is None else str(path)
+    if str(endpoint["protocol"]) in _VERBLESS_PROTOCOLS:
+        return f"{endpoint['protocol']} {rendered_path}"
+    method = endpoint["method"]
+    rendered_method = "(unresolved)" if method is None else str(method)
+    return f"{rendered_method} {rendered_path}"
 
 
 def render_module_document(
@@ -106,8 +133,7 @@ def render_module_document(
         for endpoint in inbound:
             handler = str(endpoint["handler"]).rsplit(" ", 1)[-1]
             lines.append(
-                f"| `{endpoint['method']} {endpoint['path']}` | "
-                f"`{handler}` | {endpoint['resolution']} |"
+                f"| `{_wire_identity(endpoint)}` | `{handler}` | {endpoint['resolution']} |"
             )
         for endpoint in inbound:
             request = _descriptor_lines("Request", endpoint.get("request_shape"), fields_by_shape)
@@ -115,7 +141,7 @@ def render_module_document(
                 "Response", endpoint.get("response_shape"), fields_by_shape
             )
             if request or response:
-                lines += ["", f"- `{endpoint['method']} {endpoint['path']}`"]
+                lines += ["", f"- `{_wire_identity(endpoint)}`"]
                 lines += request
                 lines += response
     else:
@@ -131,7 +157,7 @@ def render_module_document(
             peer = endpoint.get("peer")
             caller = str(endpoint["caller"]).rsplit(" ", 1)[-1]
             lines.append(
-                f"| `{endpoint['method']} {endpoint['path']}` | "
+                f"| `{_wire_identity(endpoint)}` | "
                 f"{'unresolved' if peer is None else peer} | "
                 f"`{caller}` | {endpoint['resolution']} |"
             )

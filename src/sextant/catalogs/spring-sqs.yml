@@ -1,0 +1,85 @@
+id: spring-sqs
+displayName: Spring Cloud AWS SQS (listeners)
+style: annotation_driven
+protocol: sqs
+direction: inbound
+
+detect:
+  coordinates: ["io.awspring.cloud:spring-cloud-aws-sqs"]
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # No type-level gate: `@SqsListener` sits on the method directly.
+  request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
+                  fallback: sole_unannotated,
+                  excludes: [io.awspring.cloud.sqs.listener.acknowledgement.Acknowledgement] }
+  mapping:
+    # CHECKPOINT FACT: `@SqsListener.value` is always a `String[]` in
+    # bytecode, even for a bare-string source declaration.
+    path_from: [value]
+    # No class-level listener shape for SQS — no prefix annotation to declare.
+    prefix_from: []
+    method_from: method
+    # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
+    all_methods: []
+    prefix_annotation: null
+    annotations:
+      - { fqn: io.awspring.cloud.sqs.annotation.SqsListener }
+
+# Copied verbatim from spring-resttemplate.yml, for the same reason
+# `nullability` below is copied from spring-mvc.yml: shape (type) expansion
+# is a *global*, insert-if-absent pass keyed on the type symbol alone
+# (`derive_shapes`), so the FIRST catalog to reach a shared payload type is
+# the one that expands it, and every later catalog finds it already there.
+# Whichever catalog that turns out to be, ITS
+# `wrappers`/`serialization`/`known_types` are the rules that describe the
+# type for everyone, regardless of protocol or direction — so a file whose
+# copy disagreed would make the answer depend on catalog sort order (Task 10
+# fix round 1, finding 1). Endpoint-level ownership is a different question
+# and is NOT this reason: `_owns` reads a row's own `catalog_id` (2E-prep
+# design §1a), so a catalog's rules describe only the rows it derived
+# itself.
+#
+# No broker-specific wrapper is added here: `@SqsListener` never declares an
+# envelope-typed parameter the way Kafka's `ConsumerRecord<K, V>` does.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

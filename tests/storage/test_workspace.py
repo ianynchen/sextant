@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import duckdb
@@ -6,7 +7,15 @@ from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.cli.resources import catalogs_dir
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
+from sextant.domain.facts import (
+    AnnotationFact,
+    AnnotationUse,
+    CallArgument,
+    CallSiteFact,
+    CallTarget,
+    Document,
+    SymbolFact,
+)
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -107,6 +116,339 @@ def _workspace_with_an_endpoint(tmp_path: Path) -> DuckDbWorkspace:
     return workspace
 
 
+def _call_site_facts(root: Path) -> None:
+    """One call_site fact with a null receiver and result — the shape a
+    static call (or, post-6b, a parameter-rooted receiver such as every
+    super() call) actually emits — and two arguments, to exercise the
+    view's ::INTEGER casts over JSON null and the JSON round trip of
+    `arguments` in the same row."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/orders/OrderController.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    call_site = CallSiteFact(
+        document_id="doc_1",
+        caller="sextant-jvm maven com.acme/orders 1.0 com/acme/OrderController#create().",
+        target=CallTarget(
+            owner="org/springframework/web/client/RestTemplate#",
+            name="postForObject",
+            descriptor="(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;",
+        ),
+        invoke_kind="static",
+        ordinal=0,
+        arguments=[
+            CallArgument(kind="string", value="/billing/invoices"),
+            CallArgument(kind="unresolved", source=7),
+        ],
+    )
+    write_fact_file(root / "OrderController.jsonl", document, [call_site])
+
+
+def _workspace_with_a_call_site(tmp_path: Path) -> DuckDbWorkspace:
+    _call_site_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    return workspace
+
+
+def _topic_annotation_facts(root: Path, args: dict) -> None:
+    """A synthetic messaging annotation on a single method — no type-level
+    gate, deliberately not Spring — so `path_from`/`all_methods` can be
+    exercised directly against `derive_endpoints.sql` without the mapping
+    catalog's other machinery (mirrors test_endpoints.py's invented-listener
+    fixtures, trimmed to what Task 3's NULL-verb/multi-valued-path tests
+    need)."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/notify/OrderListener.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    listener = "com/acme/notify/OrderListener#"
+    handle = "com/acme/notify/OrderListener#onOrderCreated(sig_3d92af60)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=listener, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handle,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=listener,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handle,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/messaging/annotation/OnMessage#",
+                args=args,
+            ),
+        ),
+    ]
+    write_fact_file(root / "OrderListener.jsonl", document, facts)
+
+
+# Shared across the derivation, unaffected by which path attribute is used —
+# no annotation in these fixtures carries $prefix_annotation, so `prefixes`
+# always resolves empty and $prefix_from/$peer_from's exact contents do not
+# matter.
+_TOPIC_ENDPOINT_KWARGS = {
+    "protocol": "kafka",
+    "direction": "inbound",
+    "type_annotation": None,
+    "prefix_annotation": "com/acme/messaging/annotation/Topic#",
+    "mapping_annotations": [{"fqn": "com/acme/messaging/annotation/OnMessage#", "methods": None}],
+    "prefix_from": [],
+    "peer_from": [],
+    "method_from": "method",
+}
+
+
+def test_a_multi_valued_path_attribute_derives_one_row_per_value(tmp_path: Path):
+    """D02D Task 3: a list-valued path attribute (a Kafka listener's
+    `topics = {"order-events", "order-audit"}`) must derive one endpoint row
+    per element. Before the fix, `declared.path` took only the first element
+    (`list_extract(..., 1)` on the raw value), so a two-topic listener
+    silently lost the second topic."""
+    _topic_annotation_facts(tmp_path / "facts", {"topics": ["order-events", "order-audit"]})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    workspace.derive(
+        "endpoints",
+        **_TOPIC_ENDPOINT_KWARGS,
+        path_from=["topics"],
+        all_methods=[],
+        catalog_id="cat-a",
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["path"]) for r in rows] == [
+        (None, "order-audit"),
+        (None, "order-events"),
+    ]
+
+
+def test_an_empty_all_methods_derives_one_null_method_row(tmp_path: Path):
+    """D02D Task 3: `all_methods=[]` (a mapping annotation that presets no
+    method, on a catalog with no per-call method attribute) must derive
+    exactly one row with `method` NULL, not zero. Before the fix,
+    `UNNEST(d.methods)` over the empty list produced no row at all — the
+    method was silently dropped along with the whole endpoint."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    workspace.derive(
+        "endpoints",
+        **_TOPIC_ENDPOINT_KWARGS,
+        path_from=["topic"],
+        all_methods=[],
+        catalog_id="cat-a",
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["path"]) for r in rows] == [(None, "order-events")]
+
+
+def test_null_method_rows_dedup_and_merge_on_the_same_identity(tmp_path: Path):
+    """D02D Task 3's core invariant: a NULL-verb wire identity must dedup and
+    merge exactly like every HTTP identity does. Plain SQL equality treats
+    `NULL = NULL` as unknown, so before the fix: re-deriving the same
+    NULL-method inbound row twice would double it, deriving the same
+    NULL-method outbound row twice via `call_endpoints` would double it too,
+    and `merge_endpoints.sql`'s join from outbound back to inbound would
+    never find its NULL-method twin to fold into `both`."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    # Derived twice — D02 §5's "two catalogs may both match" case, or simply
+    # a second resolve — must still leave one inbound row.
+    for _ in range(2):
+        workspace.derive(
+            "endpoints",
+            **_TOPIC_ENDPOINT_KWARGS,
+            path_from=["topic"],
+            all_methods=[],
+            catalog_id="cat-in",
+        )
+
+    outbound_row = {
+        "protocol": "kafka",
+        "direction": "outbound",
+        "method": None,
+        "path": "order-events",
+        "handler": None,
+        "caller": "com/acme/notify/OrderPublisher#publish(sig_1a2b3c4d).",
+        "peer": None,
+        "handler_signature": None,
+        "resolution": "resolved",
+        "evidence": "compiler",
+        "request_shape": None,
+        "response_shape": None,
+        "catalog_id": "cat-out",
+    }
+    # Same discipline on the call-site side: two separate derivations of the
+    # same identity must still leave one outbound row.
+    for _ in range(2):
+        workspace.derive("call_endpoints", rows=[outbound_row])
+
+    workspace.derive("endpoints_merge")
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["direction"], r["method"], r["path"]) for r in rows] == [
+        ("both", None, "order-events"),
+    ]
+
+
+def test_endpoints_carry_the_catalog_id_that_derived_them(tmp_path: Path):
+    """2E-prep spec §1a, Task 1: every endpoints row is stamped with the id
+    of the catalog that derived it — an inbound row via `derive("endpoints",
+    catalog_id=...)`, an outbound row via `derive("call_endpoints",
+    rows=[{..., "catalog_id": ...}])`."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    workspace.derive(
+        "endpoints",
+        **_TOPIC_ENDPOINT_KWARGS,
+        path_from=["topic"],
+        all_methods=[],
+        catalog_id="cat-a",
+    )
+    outbound_row = {
+        "protocol": "kafka",
+        "direction": "outbound",
+        "method": None,
+        "path": "order-audit",
+        "handler": None,
+        "caller": "com/acme/notify/OrderPublisher#publish(sig_1a2b3c4d).",
+        "peer": None,
+        "handler_signature": None,
+        "resolution": "resolved",
+        "evidence": "compiler",
+        "request_shape": None,
+        "response_shape": None,
+        "catalog_id": "cat-b",
+    }
+    workspace.derive("call_endpoints", rows=[outbound_row])
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert {r["path"]: r["catalog_id"] for r in rows} == {
+        "order-events": "cat-a",
+        "order-audit": "cat-b",
+    }
+
+
+def test_merge_keeps_the_inbound_rows_catalog_id(tmp_path: Path):
+    """2E-prep spec §1a: `merge_endpoints.sql` UPDATEs the inbound row in
+    place and only DELETEs the outbound one, so a `both` row keeps the
+    INBOUND side's `catalog_id` even though the outbound side was derived by
+    a different catalog."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    workspace.derive(
+        "endpoints",
+        **_TOPIC_ENDPOINT_KWARGS,
+        path_from=["topic"],
+        all_methods=[],
+        catalog_id="cat-in",
+    )
+    outbound_row = {
+        "protocol": "kafka",
+        "direction": "outbound",
+        "method": None,
+        "path": "order-events",
+        "handler": None,
+        "caller": "com/acme/notify/OrderPublisher#publish(sig_1a2b3c4d).",
+        "peer": None,
+        "handler_signature": None,
+        "resolution": "resolved",
+        "evidence": "compiler",
+        "request_shape": None,
+        "response_shape": None,
+        "catalog_id": "cat-out",
+    }
+    workspace.derive("call_endpoints", rows=[outbound_row])
+    workspace.derive("endpoints_merge")
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["direction"], r["catalog_id"]) for r in rows] == [("both", "cat-in")]
+
+
+def test_the_endpoints_ordering_breaks_a_full_tie_on_caller(tmp_path: Path):
+    """NFR-1: the `endpoints` query orders by protocol, method, path, handler
+    and finally `caller`, and `caller` is the tiebreak that turns an ordering
+    with ties into an ordering at all. Two outbound rows can tie on every
+    earlier column — a messaging destination nobody could read leaves
+    `method`/`path`/`handler` all NULL, which `sendDefault` and a `@SendTo`
+    naming nothing both produce — leaving only the calling method to tell
+    them apart. Inserted here in REVERSE caller order, so an ORDER BY that
+    stopped before `caller` would hand back insert order and the query's
+    answer would depend on which call site the resolver reached first.
+
+    Pinned directly rather than through the whole pipeline: the resolve
+    fixture's rows already reach the table caller-sorted, so the two-run
+    agreement test in `test_pipeline.py` passes with or without this
+    tiebreak. Mutation-checked — dropping `caller` from the ORDER BY turns
+    this red."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    def _unreadable_destination(caller: str) -> dict:
+        return {
+            "protocol": "kafka",
+            "direction": "outbound",
+            "method": None,
+            "path": None,
+            "handler": None,
+            "caller": caller,
+            "peer": None,
+            "handler_signature": None,
+            "resolution": "unresolved",
+            "evidence": "compiler",
+            "request_shape": None,
+            "response_shape": None,
+            "catalog_id": "cat-out",
+        }
+
+    zulu = "com/acme/notify/ZuluPublisher#publish(sig_1a2b3c4d)."
+    alpha = "com/acme/notify/AlphaPublisher#publish(sig_1a2b3c4d)."
+    workspace.derive("call_endpoints", rows=[_unreadable_destination(zulu)])
+    workspace.derive("call_endpoints", rows=[_unreadable_destination(alpha)])
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [r["caller"] for r in rows] == [alpha, zulu]
+
+
 def test_load_facts_reports_the_row_count_when_a_fact_tree_is_ingested(tmp_path: Path):
     _fixture_facts(tmp_path / "facts")
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
@@ -155,10 +497,98 @@ def test_query_rejects_a_name_that_is_not_a_named_query(tmp_path: Path):
         workspace.close()
 
 
+def test_implementations_query_lists_a_classs_declared_interfaces(tmp_path: Path):
+    """`implementations` (D00 §5a's `implemented_interfaces` capability, the
+    counterpart to `supertypes` above): a class implementing something is
+    returned with its interfaces as a JSON list; a class implementing none
+    (`Plain` below, whose `SymbolFact.interfaces` default is `[]`, not the
+    `None` `supertype` defaults to) is excluded rather than returned with an
+    empty list — proving the query's `json_array_length(...) > 0` guard
+    handles the empty-array case `supertypes`' null guard does not have to."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/A.java",
+        module_id="com.acme:orders",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    receiver = SymbolFact(
+        document_id="doc_1",
+        symbol="sextant-jvm maven com.acme/orders 1.0 com/acme/Receiver#",
+        construct_kind=ConstructKind.CLASS,
+        interfaces=["com/google/cloud/pubsub/v1/MessageReceiver#"],
+    )
+    plain = SymbolFact(
+        document_id="doc_1",
+        symbol="sextant-jvm maven com.acme/orders 1.0 com/acme/Plain#",
+        construct_kind=ConstructKind.CLASS,
+    )
+    write_fact_file(tmp_path / "facts" / "A.jsonl", document, [receiver, plain])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    rows = workspace.query("implementations")
+    workspace.close()
+
+    assert [row["symbol"] for row in rows] == [
+        "sextant-jvm maven com.acme/orders 1.0 com/acme/Receiver#"
+    ]
+    assert json.loads(rows[0]["interfaces"]) == ["com/google/cloud/pubsub/v1/MessageReceiver#"]
+
+
+def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tmp_path: Path):
+    workspace = _workspace_with_a_call_site(tmp_path)
+    rows = workspace.query("call_sites")
+    workspace.close()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["document_id"] == "doc_1"
+    assert row["caller"] == (
+        "sextant-jvm maven com.acme/orders 1.0 com/acme/OrderController#create()."
+    )
+    assert row["owner"] == "org/springframework/web/client/RestTemplate#"
+    assert row["name"] == "postForObject"
+    assert row["descriptor"] == (
+        "(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;"
+    )
+    assert row["invoke_kind"] == "static"
+    assert row["ordinal"] == 0
+    # A static call carries no receiver, and this fixture leaves result
+    # unset too — the view's ::INTEGER cast of a JSON null must come back
+    # as SQL NULL, not the string "null" or an error.
+    assert row["receiver"] is None
+    assert row["result"] is None
+    assert json.loads(row["arguments"]) == [
+        {"kind": "string", "value": "/billing/invoices", "symbol": None, "source": None},
+        {"kind": "unresolved", "value": None, "symbol": None, "source": 7},
+    ]
+
+
+def test_exported_tables_include_call_sites(tmp_path: Path):
+    workspace = _workspace_with_a_call_site(tmp_path)
+    workspace.export_tables(tmp_path / "bundle")
+    workspace.close()
+    assert (tmp_path / "bundle" / "graph" / "call_sites.parquet").exists()
+
+
 def test_exported_tables_read_back_equal_to_the_workspace_query(tmp_path: Path):
     workspace = _workspace_with_an_endpoint(tmp_path)
     written = workspace.export_tables(tmp_path / "bundle")
-    assert written == ["annotations", "documents", "endpoints", "shape_fields", "shapes", "symbols"]
+    assert written == [
+        "annotations",
+        "call_sites",
+        "documents",
+        "endpoints",
+        "shape_fields",
+        "shapes",
+        "symbols",
+    ]
     back = duckdb.sql(
         f"SELECT * FROM read_parquet('{tmp_path / 'bundle' / 'graph' / 'endpoints.parquet'}')"
     ).fetchall()

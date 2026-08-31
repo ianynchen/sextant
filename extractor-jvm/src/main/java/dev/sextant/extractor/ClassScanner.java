@@ -93,7 +93,25 @@ public final class ClassScanner {
         @Override
         public void visit(int v, int access, String name, String sig, String superName, String[] ifaces) {
             typeSymbol = symbolOf(name + "#");
-            emit(typeSymbol, constructKindOf(access), null, null, access);
+            // D00 §5a's PTR carrier. `superName` says only "extends
+            // ParameterizedTypeReference"; the Signature attribute is the only
+            // place its argument is written down, and for an anonymous subclass
+            // — which is the shape a real one takes — the class declares
+            // nothing else that names the payload at all.
+            emit(typeSymbol, constructKindOf(access), null, null, access, null, null,
+                 TypeRefs.genericSuperclassFromSignature(sig), interfaceSymbolsJson(ifaces));
+        }
+
+        /** `implemented_interfaces`: the interface array ASM hands {@code visit},
+         *  converted to the same symbol grammar every class-level reference uses
+         *  ({@link #symbolOf}), in declaration order. Null — never an empty array —
+         *  for a class implementing none, so an absent key means "none" rather than
+         *  an empty array a consumer has to special-case identically. */
+        private String interfaceSymbolsJson(String[] ifaces) {
+            if (ifaces == null || ifaces.length == 0) return null;
+            List<String> symbols = new ArrayList<>();
+            for (String iface : ifaces) symbols.add(JsonOut.string(symbolOf(iface + "#")));
+            return JsonOut.array(symbols);
         }
 
         /** D00 §4's construct kinds carry `enum` beside `class` and `interface`, and
@@ -127,12 +145,27 @@ public final class ClassScanner {
                 parameterTypeAnnotations.add(new ArrayList<>());
             }
             List<String> returnTypeAnnotations = new ArrayList<>();
+            // Read back through a local rather than through the visitor below, whose
+            // own `access` field (a MethodNode's) shadows this parameter with the
+            // same value. Same answer either way; naming which one is meant keeps it
+            // that way if either ever stops being true.
+            int methodAccess = access;
 
             // Parameter names (visitParameter) and parameter annotations
             // (visitParameterAnnotation) arrive as callbacks during the visit, so the
             // symbol fact — whose signature embeds both — is only emitted at visitEnd,
             // once every callback for this method has fired.
-            return new MethodVisitor(Opcodes.ASM9) {
+            //
+            // A MethodNode rather than a bare MethodVisitor, because the call-site
+            // pass needs the whole instruction list and ASM's Analyzer reads it from
+            // exactly this type. MethodNode *is* a MethodVisitor, so the annotation
+            // and signature collection below is unchanged; the instruction stream it
+            // does not override is what the node records. Deliberately no super call
+            // in the annotation overrides: each returns a visitor of its own, and
+            // delegating as well would have MethodNode build annotation nodes nobody
+            // reads from values it never receives.
+            return new org.objectweb.asm.tree.MethodNode(
+                    Opcodes.ASM9, access, name, descriptor, sig, ex) {
                 private int parameterIndex = 0;
 
                 @Override
@@ -183,9 +216,13 @@ public final class ClassScanner {
 
                 @Override
                 public void visitEnd() {
+                    super.visitEnd();
                     emit(methodSymbol, constructKind, typeSymbol,
                          signatureJson(descriptor, sig, parameterNames, parameterAnnotations,
-                                       parameterTypeAnnotations, returnTypeAnnotations), access);
+                                       parameterTypeAnnotations, returnTypeAnnotations), methodAccess);
+                    // After the method's own symbol, never before: a call site
+                    // names its caller, and a fact file reads top-down.
+                    lines.addAll(MethodFlow.callSites(documentId, methodSymbol, this));
                 }
             };
         }
@@ -437,11 +474,21 @@ public final class ClassScanner {
         }
 
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access) {
-            emit(symbol, constructKind, enclosing, signature, access, null, null);
+            emit(symbol, constructKind, enclosing, signature, access, null, null, null, null);
         }
 
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
                            String ext, String modifiers) {
+            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, null, null);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext, String modifiers, String supertype) {
+            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, supertype, null);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext, String modifiers, String supertype, String interfaces) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -454,6 +501,8 @@ public final class ClassScanner {
             fact.put("line_end", "0");
             if (ext != null) fact.put("ext", ext);
             if (modifiers != null) fact.put("modifiers", modifiers);
+            if (supertype != null) fact.put("supertype", supertype);
+            if (interfaces != null) fact.put("interfaces", interfaces);
             lines.add(JsonOut.object(fact));
         }
     }

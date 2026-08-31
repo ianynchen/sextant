@@ -34,13 +34,15 @@
 --                           where the catalog declares no peer at all.
 --   $method_from         -- attribute name holding the method, where one is given
 --   $all_methods         -- the methods a mapping annotation means when it names none
+--   $catalog_id          -- the id of the catalog running this derivation (2E-prep
+--                           design §1a) — provenance only, never part of wire identity
 
 -- Named explicitly: `endpoints` also carries request_shape/response_shape
 -- (D01 §3 Contracts), which this engine does not populate — that is the
 -- shape pass's job, not the annotation-driven endpoint engine's.
 INSERT INTO endpoints (
     protocol, direction, method, path, handler, caller, peer,
-    handler_signature, resolution, evidence
+    handler_signature, resolution, evidence, catalog_id
 )
 WITH mapping_catalog AS (
     SELECT s.fqn AS fqn, s.methods AS methods
@@ -61,8 +63,10 @@ declared AS (
         a.target AS target,
         coalesce(list_extract(list_filter(list_transform(
             $path_from::VARCHAR[],
-            n -> coalesce(a.args -> n ->> 0, a.args ->> n)
-        ), v -> v IS NOT NULL), 1), '') AS path,
+            n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
+                      THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
+                                    [a.args ->> n]) END
+        ), v -> v IS NOT NULL), 1), ['']) AS paths,
         coalesce(
             CASE WHEN len(coalesce(
                 TRY_CAST(a.args -> $method_from AS VARCHAR[]),
@@ -101,11 +105,22 @@ prefixes AS (
     FROM annotations a
     WHERE a.annotation = $prefix_annotation
 ),
-mappings AS (
-    SELECT d.target AS method_symbol,
-           UNNEST(d.methods) AS wire_method,
-           d.path AS path_suffix
+-- Cross product of methods and paths (a two-topic, two-method mapping is
+-- four identities): DuckDB zips rather than cross-joins when two UNNESTs sit
+-- in the same SELECT (verified empirically), so methods are unnested in
+-- their own CTE first, and mapped_methods.paths is unnested from that.
+mapped_methods AS (
+    SELECT d.target AS target,
+           UNNEST(CASE WHEN len(d.methods) = 0
+                       THEN [CAST(NULL AS VARCHAR)] ELSE d.methods END) AS wire_method,
+           d.paths AS paths
     FROM declared d
+),
+mappings AS (
+    SELECT mm.target AS method_symbol,
+           mm.wire_method AS wire_method,
+           UNNEST(mm.paths) AS path_suffix
+    FROM mapped_methods mm
 ),
 derived AS (
     SELECT
@@ -120,7 +135,8 @@ derived AS (
         p.peer      AS peer,
         s.signature AS handler_signature,
         'resolved'  AS resolution,
-        'compiler'  AS evidence
+        'compiler'  AS evidence,
+        $catalog_id AS catalog_id
     FROM mappings m
     -- A handler or caller is always a method. Without this, a TYPE-level
     -- mapping annotation (a prefix-carrying @HttpExchange, a class-level
@@ -138,6 +154,6 @@ WHERE NOT EXISTS (
     SELECT 1 FROM endpoints existing
     WHERE existing.protocol  = d.protocol
       AND existing.direction = d.direction
-      AND existing.method    = d.method
+      AND existing.method IS NOT DISTINCT FROM d.method
       AND existing.path      = d.path
 );

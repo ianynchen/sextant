@@ -22,7 +22,7 @@ FROM (
 ) twins
 WHERE e.direction = 'inbound'
   AND e.protocol = twins.protocol
-  AND e.method   = twins.method
+  AND e.method IS NOT DISTINCT FROM twins.method
   AND e.path     = twins.path;
 
 DELETE FROM endpoints o
@@ -31,6 +31,6 @@ WHERE o.direction = 'outbound'
     SELECT 1 FROM endpoints b
     WHERE b.direction = 'both'
       AND b.protocol = o.protocol
-      AND b.method   = o.method
+      AND b.method IS NOT DISTINCT FROM o.method
       AND b.path     = o.path
   );

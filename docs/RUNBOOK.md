@@ -116,6 +116,25 @@ stop, use cycle detection, which is a correctness requirement rather than a limi
 Path enumeration is the exception that proves it: routes between two symbols grow
 exponentially, so return the union subgraph of all routes rather than a truncated list.
 
+### A type's wire answer belongs to the extractor or to a catalog — never to the resolver
+
+`OrderView.class` and `String.class` arrive as call arguments carrying a bare symbol and
+nothing else: [D00](components/D00-fact-schema.md) §5's argument grammar has no room for the
+wire projection a type *reference* carries, so the payload rooting had to invent one, and
+invented `object` for every argument — a shape claim about `String`, about `Void`, and about
+an array.
+
+The obvious repair — a small table of JDK scalars in the resolver — is forbidden, and
+rightly: [ARCHITECTURE](ARCHITECTURE.md) §10 confines language names to
+`ingress/extract/jvm`, two architecture tests enforce it, and a table like that is a
+language branch waiting to happen. The two legitimate homes are the extractor's own
+projection and a catalog's `known_types` ([D02](components/D02-catalog-schema.md) §2g). The
+fix used the second, declaring the boxes, `String` and `Void` with exactly the wire types
+and formats the extractor emits, so the two halves cannot answer differently.
+
+Before writing a type name in the language-blind half, ask which of the two owns the
+answer. If neither can be made to, the fact schema is what needs the change.
+
 ---
 
 ## Working practice

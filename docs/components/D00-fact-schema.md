@@ -54,7 +54,7 @@ emitted, because it is coerced to a number by YAML and by spreadsheets.
 
 ## 2. The document record
 
-Written once per source file. Every fact points at one.
+Written once per class file. Every fact points at one.
 
 | Field | Meaning |
 |---|---|
@@ -70,6 +70,15 @@ Written once per source file. Every fact points at one.
 | `origin` | **The classpath entry this was read from, and that entry's tier** — module output, first-party, third-party |
 | `redaction_set_hash` | From [D04](D04-config-and-exclusion.md) |
 | `partial` | True when the file was analysed incompletely, with a reason |
+
+**One class file is one document — a nested or anonymous class's own `.class` file
+included.** `document_id` stays the sha256 of the **class-relative path**
+(`com/acme/orders/OrderResult$Detail.class`), so `OrderResult` and its nested `Detail`
+never collide on one id. `relative_path` instead points at the **outer source file** —
+`OrderResult$Detail.class` produces a document whose `relative_path` is
+`com/acme/orders/OrderResult.java`, because that is the file a human edited and the file
+`content_hash` fingerprints. The two fields answer different questions on purpose: one
+keeps ids unique per class file, the other keeps source mapping honest.
 
 **Language, tool and version live here, never on a fact.** A fact that needed its own
 language field would mean the schema was not language-neutral (NFR-7). Putting the versions
@@ -152,7 +161,10 @@ goes in `ext`, never into a widened set.
 `persistence` carries `target_kind`: `database`, `cache`, `file`. A sub-field, so that
 splitting it later is a rendering choice rather than a re-index.
 
-**`protocol`** — `http`, `soap`, `grpc`, `message`
+**`protocol`** — `http`, `soap`, `grpc`, `kafka`, `jms`, `sqs`, `pubsub`. `message` is
+retired: it was reserved and never declared by any shipped catalog, so nothing migrates.
+The broker family is the protocol because linking gates on protocol equality (DR-5), and
+a Kafka topic can never be answered by an SQS queue.
 
 **`control_flow_kind`** — `sequential`, `conditional`, `alternative`, `loop`, `handler`
 
@@ -175,7 +187,7 @@ Thirteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `relationship` | Subject, object, relationship kind | Hierarchy, dispatch, class diagrams |
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
-| `call_site` | Caller, target owner, name, descriptor, invoke kind, **control-flow position**, literal arguments | Call edges, dispatch, traces, endpoints |
+| `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, structured `arguments` | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
 | `constant` | Symbol, value | Topic and URL resolution |
 | `string_literal` | Document, range, enclosing symbol, value | Endpoint literals, log-line search |
@@ -225,6 +237,24 @@ knowledge, so unwrapping is catalog data ([D02](D02-catalog-schema.md)) applied 
 [M04](M04-resolver.md) at shape-rooting time, never baked into facts. Occurrences keep a
 deliberately small role set — `read`, `write`, `import`, `generated`, `type_use` — for
 body-level uses only; signature-level type uses come from the structured signatures.
+
+**A class symbol fact also carries its generic supertype reference, when the superclass
+signature is generic.** `new ParameterizedTypeReference<List<OrderView>>() {}` compiles to
+an anonymous class whose signature names that parameterized supertype, and the fact records
+it as a type reference (above), never as a string — the same recursive shape a field or a
+parameter carries, run once more here. This is the PTR carrier: a catalog-declared
+`type_carrier` ([D02](D02-catalog-schema.md) §2h) resolves `List<OrderView>` through this
+field rather than through the anonymous class's own declared type, which names nothing. An
+ordinary, non-generic superclass carries no such field — there is nothing generic to
+capture, and the relationship is still stated once, at `relationship_kind: extends` (§4).
+This also pre-feeds `inherits` edges ([D01](D01-graph-schema.md)).
+
+**A class symbol fact also carries the erased symbols of every interface it implements, in
+declaration order, as `interfaces` — emitted only when non-empty** (the `implemented_interfaces`
+capability, [M03](M03-scanner.md)): a receiver registered by its declared type
+(`Subscriber.newBuilder(subscription, new RawPubSubReceiver())`) names no method by itself, and
+`interfaces` is what lets a catalog join that type back to the single method the interface
+declares.
 
 **Presence and nullability are two independent flags, and both are two-valued.** A field
 either accepts null or it does not; a field either has to appear or it does not. Neither
@@ -334,28 +364,73 @@ So the detector's conclusions are facts like any other, and travel like any othe
 
 ### `call_site` is the load-bearing one
 
-Three of its fields deserve emphasis:
+The full shape, verbatim:
 
-**`descriptor`** makes the target unambiguous. `owner.name` alone collides; two methods
-named `execute` are not the same method.
-
-**`literal_arguments`** carries the argument values a scanner could resolve — the URL, the
-topic name. Without it, every endpoint path is unresolved. This is why annotation arguments
-and call literals are first-class fields rather than something recovered later.
-
-**`control_flow`** carries the position of the call within the method's control flow:
-
+```json
+{"kind": "call_site", "document_id": "…", "caller": "<method symbol>",
+ "target": {"owner": "org/springframework/web/client/RestTemplate#",
+            "name": "postForObject", "descriptor": "(…)…"},
+ "invoke_kind": "virtual",
+ "ordinal": 14,
+ "receiver": 3, "result": 7,
+ "arguments": [
+   {"kind": "string", "value": "/billing/invoices"},
+   {"kind": "unresolved", "source": 7},
+   {"kind": "class", "symbol": "com/acme/orders/contracts/OrderView#"}]}
 ```
-{ kind: alternative, region: 3, branch: 1, depth: 2 }
-```
 
-Two calls sharing a region with different branch numbers are alternatives; they never both
-happen. A call inside a `loop` region happens zero or more times. Without this field a
-sequence diagram lists four calls in source order and claims all four occur, which is the
-lying diagram `GUIDELINES.md` §8 forbids.
+**`target.descriptor`** makes the target unambiguous. `owner.name` alone collides; two
+methods named `execute` are not the same method.
 
-**Producing it from bytecode is real work** — see [M03](M03-scanner.md), which owns the
-problem and its scope.
+**An `invokedynamic` has no receiver, so its `target.owner` names the bootstrap method's
+owner** — `LambdaMetafactory`, `StringConcatFactory` — because that is the thing that says
+what the site means, where the instruction's own name and descriptor describe only the call
+site's signature. A `dynamic` site is recorded like any other: skipping it would leave every
+`source` pointing at it dangling, and a string concatenation is a real producer.
+
+**`invoke_kind`** is one of `virtual`, `static`, `interface`, `special`, `dynamic` — the
+five JVM dispatch forms — plus `throw`, which the row above already names: a throw site is
+a call-site-shaped observation whose target is the thrown exception type, and it is what
+gives traces their `throws` terminal.
+
+**`ordinal`** is the invoke's index within its method, assigned in instruction order and
+therefore deterministic (NFR-1). It is **the v1 of the control-flow position** this schema
+has always reserved a field for — enough for the call-graph phase to start from these
+facts. It is not the richer context a sequence diagram needs to show a `loop` or an `alt`
+without lying about it (§8 of `GUIDELINES.md`): that structure — region, branch, depth —
+remains an **enrichment of this same field in a later phase**, and [D01](D01-graph-schema.md)
+§7's schema versioning prices that re-extraction openly rather than pretending it is free.
+
+**`receiver` / `result`** are per-method value ids from a dataflow pass over the method's
+bytecode — `receiver` is null for a static call, `result` is null for a void one. They are
+**deliberately meaningless across methods**: chain reconstruction is a within-method join,
+and a chain that crosses a method boundary stops honestly rather than being stitched by
+proximity.
+
+**`arguments`** carries one entry per argument slot, resolved by walking the frame back to
+each slot's source instruction. Without it, every endpoint path is unresolved — this is why
+annotation arguments and call literals are first-class fields rather than something
+recovered later. Kinds:
+
+| Kind | Source instruction | Notes |
+|---|---|---|
+| `string` | LDC (incl. javac-folded constants) | the URL/topic carrier |
+| `int` / `long` / `boolean` | constant instructions | |
+| `enum` | GETSTATIC of a **named constant of its own type** | symbol reference — `HttpMethod.POST`. Structural, not `ACC_ENUM`: an enum-like — a closed set of static final constants typed as their own owner — reads as `enum` here too, deliberately, because libraries move between the two spellings without changing what a constant means. A Kotlin `object`'s `INSTANCE` and constants such as `BigDecimal.ZERO` match the same shape; the referenced type's own `construct_kind` settles true enum-ness (§5b), so the distinction is a join away rather than a guess made where the answer is not available |
+| `class` | LDC of a class constant | symbol reference — the shape root |
+| `lambda` | invokedynamic via `LambdaMetafactory` | symbol reference to the lambda's synthetic body method — method references resolve the same way |
+| `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR (§5a) and the one-hop body follow ([D02](D02-catalog-schema.md) §2h). Always carries `source`: the constructed value's id, which is also the `receiver` of that object's own `<init>` call site, so the follow is a join on one number rather than a search for a nearby constructor |
+| `null` | ACONST_NULL | |
+| `unresolved` | anything else | a first-class honest answer, never an omission |
+
+Every entry additionally carries an optional **`source`** value id when the argument is
+itself another call's result — the join that makes OkHttp's `build()` → `newCall(request)`
+split reconstructable, and the `HttpEntity` one-hop follow possible. One grammar, three
+consumers: the argument's own kind, the chain join, and the wrapper follow all read the
+same entry.
+
+**Producing all of this from bytecode is real work** — see [M03](M03-scanner.md), which
+owns the problem and its scope.
 
 ---
 

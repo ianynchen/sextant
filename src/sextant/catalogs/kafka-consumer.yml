@@ -1,0 +1,94 @@
+id: kafka-consumer
+displayName: Apache Kafka (raw KafkaConsumer)
+style: single_call
+protocol: kafka
+direction: inbound
+
+# Its own detect coordinate is the SAME artifact `kafka-clients.yml` (the raw
+# producer's own file) already names — `kafka-clients` ships both
+# `KafkaProducer` and `KafkaConsumer`, so any module pulling one in pulls the
+# other's own class too. This is its own file because the OWNER differs
+# (`KafkaConsumer`, not `KafkaProducer`) and the direction differs
+# (inbound), never because the dependency does.
+detect:
+  coordinates: ["org.apache.kafka:kafka-clients"]
+
+requires: [call_site, string_constants]
+
+matches:
+  owner: org.apache.kafka.clients.consumer.KafkaConsumer
+  # CHECKPOINT FACT (real javap descriptors, kafka-clients 3.6.2):
+  # `subscribe(Collection<String>)` and `subscribe(Pattern)` are BOTH arity
+  # 1, indistinguishable by name+arity alone — one declared row covers both,
+  # `channel_via` (D02 §2's `single_call` style) trying each declared form
+  # in turn until one reaches the argument's own linked call.
+  #
+  # `List.of` binds a FIXED-ARITY overload for up to 10 elements (checkpoint
+  # ruling, also `linked_channels`'s own docstring): each element is its own
+  # positional literal argument, never an array to unpack, so `all_strings`
+  # reads one resolved row per topic — exactly what the fixture's own
+  # two-topic call derives. `Arrays.asList` is declared here too, but review
+  # round 1 disassembled a real probe: it is a genuine varargs call, one
+  # single `anewarray` argument in bytecode, never several positional ones —
+  # the scanner never unpacks an array argument into its elements, so
+  # `all_strings` can NEVER yield a per-topic row for it. It still derives
+  # honestly rather than silently matching nothing: `linked_channels`'s own
+  # documented varargs answer is the one trailing unresolved tuple, exactly
+  # what this form degrades to. `singletonList` and `Pattern.compile` each
+  # take exactly one string argument, so `arg: 0` alone reads it — a topic
+  # pattern lands on `path` verbatim, never expanded into real topic names,
+  # the same rule `spring-kafka.yml`'s own `topicPattern` listener row
+  # already keeps.
+  methods:
+    - name: subscribe
+      arity: 1
+      channel_arg: 0
+      channel_via:
+        - { owner: java.util.List, method: of, arg: all_strings }
+        - { owner: java.util.Arrays, method: asList, arg: all_strings }
+        - { owner: java.util.Collections, method: singletonList, arg: 0 }
+        - { owner: java.util.regex.Pattern, method: compile, arg: 0 }
+
+# Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
+# discipline as spring-kafka-template.yml — see its own comment for the full
+# rationale). `nullability` is harvested from spring-mvc.yml.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

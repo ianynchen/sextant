@@ -8,8 +8,12 @@ _NAMED_QUERIES = {
     "documents": "SELECT * FROM documents ORDER BY document_id",
     # `handler` is part of the ordering, not decoration: two mappings may share
     # a wire identity, and an ordering with ties is an ordering that can change
-    # between runs (NFR-1).
-    "endpoints": "SELECT * FROM endpoints ORDER BY protocol, method, path, handler",
+    # between runs (NFR-1). `caller` closes the last tie: an outbound row has
+    # no handler at all, so a messaging row whose destination could not be read
+    # (`method`/`path`/`handler` all NULL — `sendDefault`, and a reply whose
+    # `@SendTo` names nothing) ties with every other such row on the first four
+    # columns, leaving their order the insert order rather than an ordering.
+    "endpoints": "SELECT * FROM endpoints ORDER BY protocol, method, path, handler, caller",
     "shapes": "SELECT * FROM shapes ORDER BY shape_id",
     # `ordinal` alone would tie across shapes; `shape_id` first is what makes
     # the ordering total rather than merely stable within one shape (NFR-1).
@@ -52,6 +56,54 @@ _NAMED_QUERIES = {
     "annotations": """
         SELECT target, annotation, type_path FROM annotations ORDER BY target, annotation
     """,
+    # `ordinal` alone would tie across callers; `caller` first is what makes
+    # the ordering total, the same reason `shape_fields` orders by
+    # `shape_id, ordinal` rather than `ordinal` alone (NFR-1).
+    "call_sites": "SELECT * FROM call_sites ORDER BY caller, ordinal",
+    # D00 §5a's PTR carrier: every declared type's own generic supertype
+    # reference, keyed by the type's own (module-prefixed) symbol — the
+    # `single_call` engine strips the prefix itself, the same way
+    # `_enum_symbols` does, so this stays a plain projection like every other
+    # named query. `json_type(...) NOT IN ('NULL')` is deliberate, not
+    # `IS NOT NULL`: DuckDB's `->` returns the JSON scalar `'null'` (a string,
+    # not SQL NULL) for a fact that explicitly recorded no supertype, and only
+    # a genuinely absent key evaluates to SQL NULL — `IS NOT NULL` alone would
+    # keep the explicit-null rows too and hand the engine a supertype to
+    # follow that no fact ever carried.
+    "supertypes": """
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'supertype' AS supertype
+        FROM raw_facts
+        WHERE kind = 'symbol' AND json_type(payload -> 'supertype') NOT IN ('NULL')
+        ORDER BY symbol
+    """,
+    # `implemented_interfaces`: every class symbol's own declared interfaces,
+    # keyed by the type's own (module-prefixed) symbol — Task 10 consumes this
+    # the way `single_call` consumes `supertypes` above. Unlike `supertype`,
+    # whose Python default is `None` (dumped as the JSON scalar `null`),
+    # `interfaces`' default is an empty list — a hand-built or Python-written
+    # fact always carries the key, empty or not, so `json_type(...) <> 'NULL'`
+    # would keep every symbol. `json_array_length(...) > 0` excludes both a
+    # genuinely absent key (SQL NULL propagates through the comparison) and an
+    # explicit empty array the same way, which is what "a class implementing
+    # none" must mean regardless of which writer produced the fact.
+    "implementations": """
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'interfaces' AS interfaces
+        FROM raw_facts
+        WHERE kind = 'symbol' AND json_array_length(payload -> 'interfaces') > 0
+        ORDER BY symbol
+    """,
+    # Every declared method symbol, module-prefixed exactly as the fact wrote
+    # it — what `interface_implementation` joins a receiver back to (D02 §2's
+    # handler rule). A registration's own receiver argument carries only the
+    # BARE descriptor (D00 §5a: a call argument never repeats the module
+    # coordinates), so a handler built by concatenating that descriptor with
+    # the catalog's method name would name no symbol any fact ever emitted;
+    # the engine matches against these instead and writes the row it found,
+    # verbatim. Ordered by symbol so a type declaring two overloads of the
+    # handler method is read the same way twice (NFR-1).
+    "method_symbols": """
+        SELECT symbol FROM symbols WHERE construct_kind = 'method' ORDER BY symbol
+    """,
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
@@ -62,18 +114,28 @@ _NAMED_QUERIES = {
     "facts": "SELECT count(*) AS facts FROM raw_facts",
 }
 
-# The tables a bundle carries (D06 §5). `documents`, `endpoints`, `shapes`
-# and `shape_fields` export through their named query, so the row order is
-# the one NFR-1 already fixed; `symbols` and `annotations` have no named
-# query and export through their own ordered SELECT below, for the same
-# reason. Sorted by name so the manifest's contents list is deterministic too.
-_EXPORTED_TABLES = ("annotations", "documents", "endpoints", "shape_fields", "shapes", "symbols")
+# The tables a bundle carries (D06 §5). `documents`, `endpoints`, `shapes`,
+# `shape_fields` and `call_sites` export through their named query, so the
+# row order is the one NFR-1 already fixed; `symbols` and `annotations` have
+# no named query and export through their own ordered SELECT below, for the
+# same reason. Sorted by name so the manifest's contents list is
+# deterministic too.
+_EXPORTED_TABLES = (
+    "annotations",
+    "call_sites",
+    "documents",
+    "endpoints",
+    "shape_fields",
+    "shapes",
+    "symbols",
+)
 
 _EXPORT_QUERIES = {
     "documents": _NAMED_QUERIES["documents"],
     "endpoints": _NAMED_QUERIES["endpoints"],
     "shapes": _NAMED_QUERIES["shapes"],
     "shape_fields": _NAMED_QUERIES["shape_fields"],
+    "call_sites": _NAMED_QUERIES["call_sites"],
     "symbols": "SELECT * FROM symbols ORDER BY symbol",
     "annotations": (
         "SELECT target, annotation, args, type_path, retention "
@@ -83,6 +145,7 @@ _EXPORT_QUERIES = {
 
 _NAMED_DERIVATIONS = {
     "endpoints": "derive_endpoints.sql",
+    "call_endpoints": "derive_call_endpoints.sql",
     "endpoints_reset": "reset_endpoints.sql",
     "endpoints_merge": "merge_endpoints.sql",
     "endpoint_contracts": "derive_endpoint_contracts.sql",

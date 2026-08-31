@@ -1,0 +1,87 @@
+id: spring-kafka-replying
+displayName: Spring Kafka (ReplyingKafkaTemplate)
+style: single_call
+protocol: kafka
+direction: outbound
+
+detect:
+  coordinates: ["org.springframework.kafka:spring-kafka"]
+
+requires: [call_site, string_constants]
+
+matches:
+  # A separate file from `spring-kafka-template.yml`, not a second owner
+  # section in it: `matches.owner` is single-valued (checkpoint ruling), and
+  # `ReplyingKafkaTemplate` is a distinct owner type from `KafkaTemplate`,
+  # even though both live in the same `spring-kafka` artifact and both
+  # accept a `ProducerRecord`.
+  owner: org.springframework.kafka.requestreply.ReplyingKafkaTemplate
+  # CHECKPOINT FACT: `sendAndReceive(ProducerRecord<K, V>)` is arity 1, the
+  # record wrapper the only source for its channel and payload — exactly
+  # like `KafkaTemplate.send(ProducerRecord)`. `sendAndReceive(Message<?>)`
+  # is ALSO arity 1 — not exercised by the fixture, and not given a second
+  # `sendAndReceive arity: 1` row for the same reason `spring-kafka-
+  # template.yml`'s own `send(Message<?>)` sibling isn't: `_matching_method`
+  # matches by name+arity alone, first row wins, so a second row at the same
+  # arity is unreachable dead data, never a second answer. It shares this
+  # SAME `record_arg` row, degrading honestly to `path` NULL, `resolution:
+  # unresolved` (a `Message` symbol names no `record_wrappers` entry).
+  # `sendAndReceive(ProducerRecord, Duration)`, `(Message, Duration)`,
+  # `(Message, ParameterizedTypeReference<P>)` and `(Message, Duration,
+  # ParameterizedTypeReference<P>)` are the further, arity-2/3 overloads;
+  # none is exercised, so none is declared — undeclared arity simply never
+  # matches at all, the same shape `sendDefault`'s three unused overloads
+  # take. No overload exposes the reply
+  # type at the call site (it lives in the template field's own generics,
+  # never a method argument), so this row declares no `response_arg` at
+  # all — `response_shape` is NULL by design, not a capture failure (D02
+  # §3: "No overload exposes the reply type... stated, not hedged").
+  methods:
+    - { name: sendAndReceive, arity: 1, record_arg: 0 }
+  record_wrappers:
+    - { type: org.apache.kafka.clients.producer.ProducerRecord,
+        channel_ctor_arg: 0, payload_ctor_arg: last }
+
+# Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
+# discipline as spring-kafka-template.yml — see its own comment for the full
+# rationale). `nullability` is harvested from spring-mvc.yml.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

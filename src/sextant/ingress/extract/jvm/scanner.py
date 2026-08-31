@@ -5,12 +5,28 @@ from pathlib import Path
 from sextant.application.ports.scanner import ScanReport, ScanRequest
 
 _LANGUAGES = {"java", "kotlin"}
-_CAPABILITIES = {"annotation_args", "typed_signatures", "type_annotations", "kotlin_metadata"}
+_CAPABILITIES = {
+    "annotation_args",
+    "typed_signatures",
+    "type_annotations",
+    "kotlin_metadata",
+    # Phase 2C: a per-method dataflow pass over every invoke, which is what
+    # makes a call literal a fact and a within-method value join possible.
+    "call_site",
+    "string_constants",
+    "chain_reconstruction",
+    # A class symbol fact's own `interfaces` — the erased interface symbols ASM's
+    # `visit` hands over, in declaration order.
+    "implemented_interfaces",
+}
 
 
 class AsmScanner:
-    """One backend covering every JVM language. Phase 1 declares four
-    capabilities; control flow and chain reconstruction arrive in Phase 2."""
+    """One backend covering every JVM language, declaring eight capabilities:
+    the four Phase 1 read from declarations, the three Phase 2C's per-method
+    dataflow pass added — the call sites themselves, the literals they carry,
+    and the within-method value ids a chain is rebuilt from — plus a class
+    symbol's own declared interfaces."""
 
     def __init__(self, jar: Path) -> None:
         self._jar = jar

@@ -1,0 +1,112 @@
+id: spring-kafka
+displayName: Spring Kafka (listeners)
+style: annotation_driven
+protocol: kafka
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework.kafka:spring-kafka"]
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # No type-level gate: a listener method carries its own `@KafkaListener`
+  # (or, on a class-level, polymorphic listener, `@KafkaHandler`) directly —
+  # there is no marker interface or class annotation every listener shares.
+  request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
+                  fallback: sole_unannotated,
+                  excludes: [org.springframework.kafka.support.Acknowledgment] }
+  mapping:
+    # CHECKPOINT FACT: `@KafkaListener.topics` is always a `String[]` in
+    # bytecode, even for a bare-string source declaration; `topicPattern` is
+    # genuinely scalar. `topics`/`topicPattern` alias one another — a
+    # listener declares only one — so first present wins.
+    path_from: [topics, topicPattern]
+    # CHECKPOINT FACT (class-level `@KafkaListener` + `@KafkaHandler`): a
+    # class-level `@KafkaListener` carries no method of its own to map, so it
+    # doubles as the `prefix_annotation` instead — its own `topics` value (the
+    # known limitation: element 0 only, for a multi-topic class-level
+    # listener) becomes the path prefix for every `@KafkaHandler` method the
+    # class declares.
+    prefix_from: [topics]
+    method_from: method
+    # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
+    all_methods: []
+    prefix_annotation: org.springframework.kafka.annotation.KafkaListener
+    annotations:
+      # A plain, method-level `@KafkaListener` — the ordinary listener shape.
+      - { fqn: org.springframework.kafka.annotation.KafkaListener }
+      # `@KafkaHandler` carries no path attribute of its own (path suffix
+      # ''), and reaches a path only through the class-level prefix above —
+      # the polymorphic, class-level `@KafkaListener` + `@KafkaHandler` shape.
+      - { fqn: org.springframework.kafka.annotation.KafkaHandler }
+  # D02 §2's `reply` block: `@SendTo` derives a second, OUTBOUND row per
+  # listener whose handler carries it, and one path-NULL `unresolved` row for
+  # a value-returning handler that declares no `@SendTo` at all (the reply
+  # destination is resolved at runtime, off the record's own reply-topic
+  # header — a `ReplyingKafkaTemplate` caller, say).
+  reply:
+    annotation: org.springframework.messaging.handler.annotation.SendTo
+    destination_from: value
+    payload: return
+
+# Copied verbatim from spring-resttemplate.yml, for the same reason
+# `nullability` below is copied from spring-mvc.yml: shape (type) expansion
+# is a *global*, insert-if-absent pass keyed on the type symbol alone
+# (`derive_shapes`), so the FIRST catalog to reach a shared payload type is
+# the one that expands it, and every later catalog finds it already there.
+# Whichever catalog that turns out to be, ITS
+# `wrappers`/`serialization`/`known_types` are the rules that describe the
+# type for everyone, regardless of protocol or direction — so a file whose
+# copy disagreed would make the answer depend on catalog sort order (Task 10
+# fix round 1, finding 1). Endpoint-level ownership is a different question
+# and is NOT this reason: `_owns` reads a row's own `catalog_id` (2E-prep
+# design §1a), so a catalog's rules describe only the rows it derived
+# itself.
+# That finding is not hypothetical: it reproduced a `@NonNull` HTTP field
+# silently reading as nullable once `spring-jms.yml` — sorted first among
+# inbound catalogs — reached the same shared type with no nullability rules
+# of its own.
+#
+# The one broker envelope type below is added to this catalog only.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+  - { type: org.apache.kafka.clients.consumer.ConsumerRecord, payload_arg: 1, semantics: envelope }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

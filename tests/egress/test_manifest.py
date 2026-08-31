@@ -14,7 +14,7 @@ def test_the_manifest_carries_provenance_coverage_and_contents(tmp_path: Path):
             "scanners": [{"id": "asm", "version": "9.7"}],
         },
         "coverage": {"documents": 4, "partial_documents": 0},
-        "gaps": ["call_site_clients_not_read"],
+        "gaps": ["reactive_flow_not_traced"],
         "uncovered": [],
         "skipped_catalogs": [],
         "shapes": {"count": 2, "unexpanded_types": []},
@@ -38,5 +38,5 @@ def test_the_manifest_carries_provenance_coverage_and_contents(tmp_path: Path):
         "facts_files": 4,
     }
     assert written["environments"] == []  # nothing resolves profiles yet — honest
-    assert written["gaps"] == ["call_site_clients_not_read"]
+    assert written["gaps"] == ["reactive_flow_not_traced"]
     assert written["coverage"]["partial"] is False
