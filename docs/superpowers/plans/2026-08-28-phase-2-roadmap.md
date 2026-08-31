@@ -38,11 +38,24 @@ messaging) both exist.
 | **2G** | Wire formats | planned | protobuf + Avro: format inference, `generated_descriptor` readers, declared shapes into the same tables, proto3 JSON-name projection | format as an inferred channel property (D02 §2c) |
 | **2H** | HTTP-adjacent protocols | planned | GraphQL (`@QueryMapping` et al.), WebSocket/STOMP (`@MessageMapping`), SSE | operation-as-endpoint identity; `protocol_hint` engine |
 | **2I** | SOAP | planned | JAX-WS + Spring-WS catalogs; WSDL as a declared-shape source | catalog work only, by then |
+| **2K** | Enrich | planned | `sextant module enrich` — LLM-written sections as overlay claims at `evidence: llm` ([2B spec](../specs/2026-08-29-phase-2b-outbound-and-export-design.md) §6); the LLM verification seat D02 §2d reserves for doubtful config joins (2F records the evidence, 2K judges it) | redaction-before-wire; first network dependency |
 | **2J** | Second frameworks | planned | Micronaut, Quarkus/JAX-RS, MicroProfile REST Client — **zero engine changes is the acceptance test**; then the typed-Catalog refactor | none — that is the point |
-| **2K** | Enrich | planned | `sextant module enrich` — LLM-written sections as overlay claims at `evidence: llm` ([2B spec](../specs/2026-08-29-phase-2b-outbound-and-export-design.md) §6) | redaction-before-wire; first network dependency |
 
-L and 2K are not coverage and may be reordered against the later coverage phases by
-priority; the version-bump gate opens after **2J**.
+**The remaining sequence, and its three milestones** (2K deliberately moved ahead of 2J,
+ruled 2026-08-31: a complete end-to-end flow for module-level Java/Spring — coverage,
+enrichment, docs and export together — comes before any second Java framework):
+
+1. After **2I**: Spring Boot module-level *coverage* is complete — every declaration
+   form a Spring service uses derives, modulo the named A-tier catalog rows (RabbitMQ,
+   Pulsar, Micronaut variants — one YAML file each) and the ledgered extractor
+   candidates (vararg constants, batch-listener generics).
+2. After **2K**: the module-level flow is complete *end to end* — analyze → resolve →
+   enrich → render → export, nothing stubbed.
+3. After **2J**: the catalog thesis is proven on second frameworks and the
+   **version-bump gate opens** (unchanged anchor, now the final step).
+
+L is not module-level coverage and may still float against 2G–2I by priority — it is
+sequenced early because links drawn without 2F's real peers are sparse.
 
 ## What each phase is really blocked on
 
