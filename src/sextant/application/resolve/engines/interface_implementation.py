@@ -29,6 +29,7 @@ from sextant.application.resolve.shapes.arguments import (
     linked_channels,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.domain.symbols import bare_descriptor
 
 _REQUIRED_MATCHES = ("interface", "handler_method", "registration")
 _REQUIRED_REGISTRATION = ("owner", "method", "channel_arg", "receiver_arg")
@@ -205,7 +206,7 @@ def _method_symbols(workspace: Workspace) -> dict[str, str]:
     value is the symbol exactly as the fact wrote it, which is what a
     `handler` must be to join `symbols` at all."""
     return {
-        str(row["symbol"]).rpartition(" ")[2]: str(row["symbol"])
+        bare_descriptor(str(row["symbol"])): str(row["symbol"])
         for row in workspace.query("method_symbols")
     }
 
@@ -225,8 +226,8 @@ def _implemented_interfaces(workspace: Workspace) -> dict[str, list[str]]:
     type would never be found to implement the catalog's declared
     interface."""
     return {
-        str(row["symbol"]).rpartition(" ")[2]: [
-            str(entry).rpartition(" ")[2] for entry in json.loads(str(row["interfaces"]))
+        bare_descriptor(str(row["symbol"])): [
+            bare_descriptor(str(entry)) for entry in json.loads(str(row["interfaces"]))
         ]
         for row in workspace.query("implementations")
     }

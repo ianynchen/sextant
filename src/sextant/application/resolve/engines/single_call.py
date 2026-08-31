@@ -33,6 +33,7 @@ from sextant.application.resolve.shapes.arguments import (
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.domain.closed_sets import Direction
+from sextant.domain.symbols import member_name
 
 _DIRECTIONS = sorted(member.value for member in Direction)
 
@@ -508,4 +509,4 @@ def _verb_of(method: dict[str, Any], arguments: list[dict[str, Any]]) -> str | N
     arg = _arg_at(arguments, method.get("method_arg"))
     if arg is None or arg.get("kind") != "enum" or not arg.get("symbol"):
         return None
-    return str(arg["symbol"]).rpartition("#")[2].removesuffix(".")
+    return member_name(str(arg["symbol"]))

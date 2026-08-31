@@ -42,6 +42,13 @@ matches:
 | `requires` | Scanner capabilities. **If unmet, the catalog does not run and the skip is reported.** |
 | `matches` | Style-specific |
 
+**Every type name a catalog writes — `owner`, `fqn`, `type` — is dotted**
+(`reactor.core.publisher.Mono`), never the SCIP symbol form the fact stream uses
+(`reactor/core/publisher/Mono#`). The dotted notation is sugar for the JVM symbol scheme
+specifically: the conversion (`domain/symbols.type_descriptor`) becomes scheme-aware when
+the first non-JVM catalog arrives, so this notation is documented as JVM sugar now rather
+than ossifying as a universal one.
+
 **`requires` is the mechanism that keeps degradation visible.** A catalog needing chain
 reconstruction simply does not run against a scanner that lacks it, and
 [M04](M04-resolver.md) reports which catalogs were skipped and why. Silently finding fewer

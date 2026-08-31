@@ -20,6 +20,7 @@ from typing import Any
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _Rules
+from sextant.domain.symbols import bare_descriptor
 
 _ABSOLUTE_URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://(?P<authority>[^/]*)(?P<path>/.*)?$")
 
@@ -247,7 +248,7 @@ def supertypes_of(workspace: Workspace) -> dict[str, dict[str, Any]]:
     module coordinates then a descriptor, D00 §5a, and only the descriptor is
     ever compared)."""
     return {
-        str(row["symbol"]).rpartition(" ")[2]: json.loads(str(row["supertype"]))
+        bare_descriptor(str(row["symbol"])): json.loads(str(row["supertype"]))
         for row in workspace.query("supertypes")
     }
 

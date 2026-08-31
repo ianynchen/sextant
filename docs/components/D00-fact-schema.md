@@ -256,6 +256,12 @@ capability, [M03](M03-scanner.md)): a receiver registered by its declared type
 `interfaces` is what lets a catalog join that type back to the single method the interface
 declares.
 
+**Interface satisfaction is extractor-computed, not a JVM-only notion.** A structural-interface
+language (Go) has no `implements` keyword to read off the class file — its extractor derives
+the same `interfaces` facts from method-set satisfaction instead. The
+`interface_implementation` engine's join stays unchanged either way: it reads `interfaces`,
+never how the extractor arrived at it.
+
 **Presence and nullability are two independent flags, and both are two-valued.** A field
 either accepts null or it does not; a field either has to appear or it does not. Neither
 carries an `unknown` value — doubt about what we managed to work out is what `resolution` and
@@ -422,6 +428,11 @@ recovered later. Kinds:
 | `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR (§5a) and the one-hop body follow ([D02](D02-catalog-schema.md) §2h). Always carries `source`: the constructed value's id, which is also the `receiver` of that object's own `<init>` call site, so the follow is a join on one number rather than a search for a nearby constructor |
 | `null` | ACONST_NULL | |
 | `unresolved` | anything else | a first-class honest answer, never an omission |
+
+**`<init>` is the canonical constructor call-site name every extractor normalizes to** —
+Python's `__init__` maps in, and a language without constructors (Go has none) simply
+never emits it. Readers already tolerate absence: it is a name compared, not a field
+whose presence is assumed.
 
 Every entry additionally carries an optional **`source`** value id when the argument is
 itself another call's result — the join that makes OkHttp's `build()` → `newCall(request)`

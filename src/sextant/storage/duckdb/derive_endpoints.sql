@@ -144,7 +144,9 @@ derived AS (
     -- type gate, mints one phantom endpoint per method in all_methods
     -- (pre-flight ruling R2). The inbound catalogs were protected only by
     -- their gate's enclosing-join; this names the real rule instead.
-    JOIN symbols s ON s.symbol = m.method_symbol AND s.construct_kind = 'method'
+    -- A handler is a method OR a free function (D00 §4); the JVM extractor
+    -- emits only 'method', which is what keeps this a no-op today.
+    JOIN symbols s ON s.symbol = m.method_symbol AND s.construct_kind IN ('method', 'function')
     LEFT JOIN controllers c ON s.enclosing = c.type_symbol
     LEFT JOIN prefixes p ON p.type_symbol = s.enclosing
     WHERE $type_annotation IS NULL OR c.type_symbol IS NOT NULL

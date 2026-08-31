@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.domain.closed_sets import Protocol
+from sextant.domain.symbols import bare_descriptor
 from sextant.egress.render.diagrams import class_diagram
 from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
 
@@ -131,7 +132,7 @@ def render_module_document(
     if inbound:
         lines += ["| Endpoint | Handler | Resolution |", "|---|---|---|"]
         for endpoint in inbound:
-            handler = str(endpoint["handler"]).rsplit(" ", 1)[-1]
+            handler = bare_descriptor(str(endpoint["handler"]))
             lines.append(
                 f"| `{_wire_identity(endpoint)}` | `{handler}` | {endpoint['resolution']} |"
             )
@@ -155,7 +156,7 @@ def render_module_document(
         lines += ["| Endpoint | Peer | Caller | Resolution |", "|---|---|---|---|"]
         for endpoint in outbound:
             peer = endpoint.get("peer")
-            caller = str(endpoint["caller"]).rsplit(" ", 1)[-1]
+            caller = bare_descriptor(str(endpoint["caller"]))
             lines.append(
                 f"| `{_wire_identity(endpoint)}` | "
                 f"{'unresolved' if peer is None else peer} | "

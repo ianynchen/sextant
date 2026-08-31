@@ -14,6 +14,7 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.nullability import _nullability_of, _scope_prefixes
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, root_type
+from sextant.domain.symbols import bare_descriptor, owner_of
 
 
 @dataclass(frozen=True)
@@ -144,8 +145,11 @@ def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
         symbol = str(row["symbol"])
         # A symbol is module coordinates then a descriptor (D00 §5a); shape ids
         # and type references are both keyed on the descriptor alone.
-        descriptor = symbol.rpartition(" ")[2]
-        owner = descriptor[: descriptor.index("#") + 1]
+        descriptor = bare_descriptor(symbol)
+        owner = owner_of(descriptor)
+        if owner is None:
+            # A field with no owning type belongs to no shape.
+            continue
         owners.setdefault(owner, []).append(
             {
                 "symbol": symbol,
@@ -166,7 +170,7 @@ def _enum_symbols(workspace: Workspace) -> set[str]:
     `_scope_prefixes` is: the answer is on the referenced type's own fact, not
     on the reference that reaches it.
     """
-    return {str(row["symbol"]).rpartition(" ")[2] for row in workspace.query("enum_types")}
+    return {bare_descriptor(str(row["symbol"])) for row in workspace.query("enum_types")}
 
 
 def _rows_of(
