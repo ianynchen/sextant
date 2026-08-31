@@ -1171,16 +1171,24 @@ def test_a_named_messagereceiver_and_a_lambda_receiver_each_derive_their_own_han
     `implemented_interfaces` capability — direct implementers only);
     `withLambdaReceiver`'s own `Subscriber.newBuilder(...,
     (MessageReceiver) (m, c) -> c.ack())` resolves the `lambda` receiver to
-    its own synthetic method symbol verbatim. Both channels read through
+    its own synthetic method symbol. Both channels read through
     the SAME `channel_via` form (`ProjectSubscriptionName.of`'s own
-    `arg: 1`) that reaches every registration in this one caller class."""
+    `arg: 1`) that reaches every registration in this one caller class.
+
+    Both handlers are the FULL method symbols the facts carry, joined out of
+    `symbols` (final review, FIX 1): a receiver argument's own `symbol` is
+    the bare descriptor, so a handler assembled from it named no symbol any
+    document declared and joined to nothing at all."""
     _, report = resolved_fixture
     [named] = _messaging_rows(report, "pubsub", "raw-notify")
     [lambda_row] = _messaging_rows(report, "pubsub", "raw-notify-lambda")
 
     assert named["direction"] == "inbound"
     assert named["caller"] is None
-    assert named["handler"] == "com/acme/orders/messaging/raw/RawPubSubReceiver#receiveMessage"
+    assert named["handler"] == (
+        "sextant-jvm maven com.acme/orders-service 1.0.0 "
+        "com/acme/orders/messaging/raw/RawPubSubReceiver#receiveMessage(sig_bb1c3cf6)."
+    )
     assert named["resolution"] == "resolved"
     assert named["request_shape"] is None
 

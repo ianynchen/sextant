@@ -55,6 +55,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     receiver_arg = registration["receiver_arg"]
     forms = _channel_via_forms(registration)
     implemented = _implemented_interfaces(workspace)
+    method_symbols = _method_symbols(workspace)
 
     # Parsed once, as every other engine does: `call_sites` returns
     # `arguments` as raw JSON text.
@@ -104,7 +105,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         else:
             destinations = [literal]
         receiver_argument = _arg_at(arguments, receiver_arg)
-        handler = _handler_of(receiver_argument, handler_method, interface_symbol, implemented)
+        handler = _handler_of(
+            receiver_argument, handler_method, interface_symbol, implemented, method_symbols
+        )
         for peer, path, resolution in destinations:
             if path is not None:
                 key = (catalog.protocol, catalog.direction, path, handler or "")
@@ -137,18 +140,30 @@ def _handler_of(
     handler_method: str,
     interface_symbol: str,
     implemented: dict[str, list[str]],
+    method_symbols: dict[str, str],
 ) -> str | None:
-    """D02 §2's `interface_implementation` handler rule: a `lambda`-kind receiver resolves to its own
-    synthetic body method symbol (D00 §5a), verbatim — the lambda IS the
-    handler, whatever the declared interface's own method is named. An
-    `instance`-kind receiver (a `NEW`-produced named class) resolves to
-    `<type>#<handler_method>` only when that type's own declared
+    """D02 §2's `interface_implementation` handler rule, resolved against the
+    method symbols the facts actually carry: a `lambda`-kind receiver names
+    its own synthetic body method (D00 §5a), an `instance`-kind receiver (a
+    `NEW`-produced named class) names `<type>#<handler_method>` — but a call
+    argument's own `symbol` is always the BARE descriptor, with no module
+    coordinates, and an instance receiver's is the type's alone, with no
+    signature. Neither is a symbol any fact ever emitted, so **both branches
+    join** `method_symbols` (keyed by that same bare form) and write the
+    module-prefixed symbol they found, verbatim — a `handler` that joined to
+    no `symbols` row would be a column nothing else in the graph could ever
+    follow.
+
+    The instance branch resolves only when that type's own declared
     `interfaces` include the declared interface — **direct implementers
     only**: the fact carries a class's own interface table, never a
     superclass's, so this is a one-hop check by construction, not an
-    explicit walk this function has to refuse. Anything else — no receiver
-    captured, an `unresolved` kind, a registered instance whose type does
-    not implement the interface — resolves to None: the subscription still
+    explicit walk this function has to refuse.
+
+    Anything else — no receiver captured, an `unresolved` kind, a registered
+    instance whose type does not implement the interface, or a receiver whose
+    handler method no scanned document declares (the implementer lives
+    outside the scanned module) — resolves to None: the subscription still
     derives (the row above), only its handler is unread, never fabricated.
     """
     if argument is None:
@@ -156,7 +171,7 @@ def _handler_of(
     kind = argument.get("kind")
     if kind == "lambda":
         symbol = argument.get("symbol")
-        return str(symbol) if symbol is not None else None
+        return method_symbols.get(str(symbol)) if symbol is not None else None
     if kind == "instance":
         symbol = argument.get("symbol")
         if symbol is None:
@@ -164,10 +179,33 @@ def _handler_of(
         symbol = str(symbol)
         if interface_symbol in implemented.get(symbol, []):
             # `symbol` already carries its own trailing `#` (D00 §5a's bare
-            # descriptor form), so this is `<type>#<handler_method>` without
-            # a second separator.
-            return f"{symbol}{handler_method}"
+            # descriptor form), so the descriptor searched for is
+            # `<type>#<handler_method>(` without a second separator — a
+            # prefix, not an equality, because the method symbol ends in the
+            # signature hash the registration site never carries. First match
+            # in the query's own symbol order wins, so a type declaring two
+            # overloads of the handler method reads the same way twice
+            # (NFR-1); the interface declares exactly one, which is what
+            # makes that ordering a tiebreak rather than a choice.
+            prefix = f"{symbol}{handler_method}("
+            return next(
+                (found for bare, found in method_symbols.items() if bare.startswith(prefix)),
+                None,
+            )
     return None
+
+
+def _method_symbols(workspace: Workspace) -> dict[str, str]:
+    """Every declared method symbol, keyed by its bare descriptor — the same
+    module-prefix strip `_implemented_interfaces` applies below, for the same
+    reason: a call argument's own `symbol` never carries the module
+    coordinates, so the bare form is the only key the two sides share. The
+    value is the symbol exactly as the fact wrote it, which is what a
+    `handler` must be to join `symbols` at all."""
+    return {
+        str(row["symbol"]).rpartition(" ")[2]: str(row["symbol"])
+        for row in workspace.query("method_symbols")
+    }
 
 
 def _implemented_interfaces(workspace: Workspace) -> dict[str, list[str]]:

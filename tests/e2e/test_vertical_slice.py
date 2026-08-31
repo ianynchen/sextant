@@ -74,12 +74,15 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # `google-pubsub-subscriber.yml`'s `interface_implementation` style
     # resolves `raw-notify`'s instance receiver to its class's own declared
     # `MessageReceiver#receiveMessage` implementer — the handler renders
-    # verbatim in the SAME row as the identity, no `(sig_...)` suffix (an
-    # implemented-interface match has no call-site signature to anchor).
+    # verbatim in the SAME row as the identity. The `(sig_...)` suffix is
+    # there because the handler is the METHOD SYMBOL the facts carry, joined
+    # out of `symbols` (final review, FIX 1), not a string built from the
+    # receiver's type descriptor and the catalog's method name — the older,
+    # suffix-free form named no symbol at all and joined to nothing.
     assert (
-        "`pubsub raw-notify` | `com/acme/orders/messaging/raw/RawPubSubReceiver#receiveMessage`"
-        in document
-    )
+        "`pubsub raw-notify` | "
+        "`com/acme/orders/messaging/raw/RawPubSubReceiver#receiveMessage(sig_bb1c3cf6).`"
+    ) in document
 
 
 def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_path: Path):

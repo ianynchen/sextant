@@ -384,16 +384,28 @@ anything else is `path` NULL, `unresolved` — the registration was made, only i
 is unread.
 
 **`receiver_arg` is the argument that names the handler**, read one of two ways depending
-on what the compiler resolved it to: a `lambda`-kind argument resolves to its own
-synthetic body method symbol ([D00](D00-fact-schema.md) §5a), verbatim — the lambda IS the
-handler, whatever the declared interface's method is named. An `instance`-kind argument
-(a `NEW`-produced named class) resolves to `<type>#<handler_method>` only when that type's
-own declared `interfaces` include the declared `interface` — **direct implementers only**:
-the fact carries a class's own interface table, never a superclass's, so a subclass of an
-implementing class is a stated one-hop limitation, not a gap to close later. Anything
-else — the receiver uncaptured, an `unresolved` kind, a registered instance whose type does
-not implement the declared interface — resolves `handler` to NULL: the subscription is
-still consumed, only who handles it is unread, never fabricated.
+on what the compiler resolved it to: a `lambda`-kind argument names its own synthetic body
+method ([D00](D00-fact-schema.md) §5a) — the lambda IS the handler, whatever the declared
+interface's method is named. An `instance`-kind argument (a `NEW`-produced named class)
+names `<type>#<handler_method>` only when that type's own declared `interfaces` include the
+declared `interface` — **direct implementers only**: the fact carries a class's own
+interface table, never a superclass's, so a subclass of an implementing class is a stated
+one-hop limitation, not a gap to close later.
+
+**Either way the receiver only names the method; the `handler` written is the method
+*symbol*, joined out of the scanned symbol facts and copied verbatim.** A call argument's
+own `symbol` is always the *bare* descriptor — no module coordinates, and for an `instance`
+receiver no signature either ([D00](D00-fact-schema.md) §5a) — so a `handler` assembled by
+gluing that descriptor to the catalog's `handler_method` would name nothing any fact ever
+emitted, and would join to no `symbols` row: a decorative string in a column the graph is
+supposed to be able to follow. The engine matches the bare form against the declared method
+symbols instead, and writes the one it found.
+
+Anything else — the receiver uncaptured, an `unresolved` kind, a registered instance whose
+type does not implement the declared interface, or a receiver whose handler method no
+scanned document declares (the implementer lives outside this module) — resolves `handler`
+to NULL: the subscription is still consumed, only who handles it is unread, never
+fabricated.
 
 **The registration is the evidence.** A class implementing the declared interface but
 never handed to a matching registration call site derives nothing at all — implementing an

@@ -51,6 +51,14 @@ RECEIVER_TYPE = "com/acme/messaging/raw/RawPubSubReceiver#"
 OTHER_TYPE = "com/acme/messaging/raw/SomeOtherType#"
 CALLER = "com/acme/messaging/raw/RawPubSubSubscribers#withNamedReceiver()."
 LAMBDA_SYMBOL = "com/acme/messaging/raw/RawPubSubSubscribers#lambda$withLambdaReceiver$0(sig_1)."
+# The BARE descriptors of the two receivers' own handler methods. A real
+# emitted method symbol always ends `(sig_…).` (D00 §5a) and always carries
+# the module coordinates — which is exactly why a `handler` has to be JOINED
+# to a symbol fact rather than concatenated from a type descriptor and the
+# catalog's method name (final review, FIX 1): the concatenated form named no
+# symbol any fact ever wrote, so it joined to nothing.
+RECEIVER_HANDLER = RECEIVER_TYPE + "receiveMessage(sig_r1)."
+OTHER_HANDLER = OTHER_TYPE + "receiveMessage(sig_r1)."
 
 
 def _document(document_id: str = "doc_1") -> Document:
@@ -113,8 +121,23 @@ def _symbol_fact(type_symbol: str, interfaces: list[str] | None = None) -> Symbo
     )
 
 
-def _receiver_symbol_fact(interfaces: list[str] | None = None) -> SymbolFact:
-    return _symbol_fact(RECEIVER_TYPE, interfaces)
+def _method_symbol_fact(bare_descriptor: str) -> SymbolFact:
+    """The method symbol fact a `handler` joins back to — module-prefixed
+    exactly as a real one is (D00 §5a). Without it in the workspace there is
+    no such method in any scanned document, and the handler reads NULL."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + bare_descriptor,
+        construct_kind=ConstructKind.METHOD,
+    )
+
+
+def _receiver_symbol_fact(interfaces: list[str] | None = None) -> list[SymbolFact]:
+    """The named receiver's own class fact plus the method fact its handler
+    resolves to — the two always travel together, since a class that
+    implements the interface but declares no such method is case (h), not a
+    handler."""
+    return [_symbol_fact(RECEIVER_TYPE, interfaces), _method_symbol_fact(RECEIVER_HANDLER)]
 
 
 def _catalog(
@@ -192,7 +215,7 @@ def test_a_named_receiver_registration_derives_a_resolved_row_with_its_handler(
             CallArgument(kind="unresolved", source=7),
             CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
         ),
-        _receiver_symbol_fact([_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
+        *_receiver_symbol_fact([_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
     ]
     workspace = _resolve(tmp_path, facts)
     [endpoint] = workspace.query("endpoints")
@@ -202,7 +225,11 @@ def test_a_named_receiver_registration_derives_a_resolved_row_with_its_handler(
     assert endpoint["direction"] == "inbound"
     assert endpoint["method"] is None
     assert endpoint["path"] == "raw-notify"
-    assert endpoint["handler"] == RECEIVER_TYPE + "receiveMessage"
+    # The FULL, module-prefixed method symbol the fact carries, verbatim
+    # (final review, FIX 1) — never the type descriptor with the catalog's
+    # method name glued on, which named no symbol at all. The live probe
+    # below asserts the same handler joins the real `symbols` table.
+    assert endpoint["handler"] == _MODULE + RECEIVER_HANDLER
     assert endpoint["resolution"] == "resolved"
     assert endpoint["caller"] is None
     assert endpoint["peer"] is None
@@ -221,13 +248,17 @@ def test_a_lambda_receiver_registration_derives_the_synthetic_method_symbol(tmp_
             CallArgument(kind="unresolved", source=7),
             CallArgument(kind="lambda", source=8, symbol=LAMBDA_SYMBOL),
         ),
+        _method_symbol_fact(LAMBDA_SYMBOL),
     ]
     workspace = _resolve(tmp_path, facts)
     [endpoint] = workspace.query("endpoints")
     workspace.close()
 
     assert endpoint["path"] == "raw-notify-lambda"
-    assert endpoint["handler"] == LAMBDA_SYMBOL
+    # The lambda argument's own `symbol` is the BARE synthetic body
+    # descriptor; the row carries the module-prefixed symbol the fact wrote
+    # (final review, FIX 1), which is what joins `symbols`.
+    assert endpoint["handler"] == _MODULE + LAMBDA_SYMBOL
     assert endpoint["resolution"] == "resolved"
 
 
@@ -264,7 +295,7 @@ def test_an_unresolvable_channel_derives_a_null_path_unresolved_row(tmp_path: Pa
             CallArgument(kind="unresolved", source=999),
             CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
         ),
-        _receiver_symbol_fact([_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
+        *_receiver_symbol_fact([_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
     ]
     workspace = _resolve(tmp_path, facts)
     [endpoint] = workspace.query("endpoints")
@@ -274,7 +305,7 @@ def test_an_unresolvable_channel_derives_a_null_path_unresolved_row(tmp_path: Pa
     assert endpoint["resolution"] == "unresolved"
     # The receiver was perfectly readable — only the channel failed — so the
     # handler still resolves (D02 §2's unresolved-is-an-answer, per capture).
-    assert endpoint["handler"] == RECEIVER_TYPE + "receiveMessage"
+    assert endpoint["handler"] == _MODULE + RECEIVER_HANDLER
 
 
 # --- (e) an implementing class with NO registration derives nothing --------
@@ -285,7 +316,7 @@ def test_an_implementing_class_never_registered_derives_nothing(tmp_path: Path):
         # The class implements the interface, but no `newBuilder` call site
         # ever hands it to a registration — implementing an interface is not
         # an endpoint (D02 §2's `interface_implementation` style).
-        _receiver_symbol_fact([_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
+        *_receiver_symbol_fact([_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
     ]
     workspace = _resolve(tmp_path, facts)
     endpoints = workspace.query("endpoints")
@@ -336,6 +367,47 @@ def test_a_registered_instance_whose_type_does_not_implement_the_interface_has_a
     assert endpoint["handler"] is None
 
 
+# --- (h) the handler method itself is outside the scanned code -------------
+# Final review, FIX 1: the handler is a JOIN against the method symbols the
+# facts carry, so a receiver whose class implements the interface but whose
+# own `receiveMessage` no scanned document declares (the implementer compiled
+# into a dependency, not this module) resolves to NULL — the honest answer
+# this style already gives every other unread capture, never a symbol built
+# by string concatenation that joins to nothing.
+
+
+@pytest.mark.parametrize(
+    "handler_facts",
+    [
+        pytest.param([], id="no-method-symbol-at-all"),
+        pytest.param(
+            [_method_symbol_fact(RECEIVER_TYPE + "onMessage(sig_r1).")],
+            id="the-class-declares-a-differently-named-method",
+        ),
+    ],
+)
+def test_a_receiver_whose_handler_method_no_document_declares_has_a_null_handler(
+    tmp_path: Path, handler_facts: list
+):
+    facts = [
+        _linked_of_site(CALLER, "raw-notify"),
+        _registration_site(
+            CALLER,
+            CallArgument(kind="unresolved", source=7),
+            CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
+        ),
+        _symbol_fact(RECEIVER_TYPE, [_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
+        *handler_facts,
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["path"] == "raw-notify"
+    assert endpoint["resolution"] == "resolved"
+    assert endpoint["handler"] is None
+
+
 # --- Fix round 1, item 1: `handler` is part of the dedup key ---------------
 # Two DIFFERENT receivers registered on the SAME channel — the
 # `@KafkaHandler`-shaped precedent of two consumer methods sharing one
@@ -356,7 +428,7 @@ def test_two_receivers_registered_on_the_same_channel_both_derive_their_own_row(
             CallArgument(kind="unresolved", source=7),
             CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
         ),
-        _receiver_symbol_fact(interfaces),
+        *_receiver_symbol_fact(interfaces),
         _linked_of_site(other_caller, "raw-notify"),
         _registration_site(
             other_caller,
@@ -364,14 +436,15 @@ def test_two_receivers_registered_on_the_same_channel_both_derive_their_own_row(
             CallArgument(kind="instance", source=8, symbol=OTHER_TYPE),
         ),
         _symbol_fact(OTHER_TYPE, interfaces),
+        _method_symbol_fact(OTHER_HANDLER),
     ]
     workspace = _resolve(tmp_path, facts)
     endpoints = {e["handler"]: e for e in workspace.query("endpoints")}
     workspace.close()
 
     assert set(endpoints) == {
-        RECEIVER_TYPE + "receiveMessage",
-        OTHER_TYPE + "receiveMessage",
+        _MODULE + RECEIVER_HANDLER,
+        _MODULE + OTHER_HANDLER,
     }
     for endpoint in endpoints.values():
         assert endpoint["path"] == "raw-notify"
@@ -393,7 +466,7 @@ def test_a_channel_via_registration_still_resolves_a_plain_string_literal(tmp_pa
             CallArgument(kind="string", value="raw-notify-literal"),
             CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
         ),
-        _receiver_symbol_fact([_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
+        *_receiver_symbol_fact([_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
     ]
     # The default catalog (`_catalog()`) declares `channel_via`.
     workspace = _resolve(tmp_path, facts)
@@ -402,7 +475,7 @@ def test_a_channel_via_registration_still_resolves_a_plain_string_literal(tmp_pa
 
     assert endpoint["path"] == "raw-notify-literal"
     assert endpoint["resolution"] == "resolved"
-    assert endpoint["handler"] == RECEIVER_TYPE + "receiveMessage"
+    assert endpoint["handler"] == _MODULE + RECEIVER_HANDLER
 
 
 # --- (g) malformed matches: CatalogError, naming the file -------------------
@@ -530,15 +603,24 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
     skipped = derive_endpoints(workspace, [real_catalog], capabilities=CAPABILITIES)
     assert skipped == []
     endpoints = {e["path"]: e for e in workspace.query("endpoints")}
+    declared_symbols = {str(row["symbol"]) for row in workspace.query("method_symbols")}
     workspace.close()
 
     assert set(endpoints) == {"raw-notify", "raw-notify-lambda"}
     named = endpoints["raw-notify"]
     assert named["resolution"] == "resolved"
     assert named["handler"] is not None
-    assert named["handler"].endswith("RawPubSubReceiver#receiveMessage")
+    assert named["handler"].endswith("RawPubSubReceiver#receiveMessage(sig_bb1c3cf6).")
 
     lambda_row = endpoints["raw-notify-lambda"]
     assert lambda_row["resolution"] == "resolved"
     assert lambda_row["handler"] is not None
     assert "lambda$withLambdaReceiver" in lambda_row["handler"]
+
+    # The whole point of FIX 1 (final review): a `handler` names a method
+    # symbol some scanned document actually declared. Before the fix BOTH of
+    # these joined nothing — the instance branch glued a bare type descriptor
+    # to a bare method name (no module coordinates, no `(sig_…)`), and the
+    # lambda branch emitted the argument's own bare descriptor. This assertion
+    # is what keeps either from silently regressing to a decorative string.
+    assert {named["handler"], lambda_row["handler"]} <= declared_symbols

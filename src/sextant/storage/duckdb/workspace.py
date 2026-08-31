@@ -92,6 +92,18 @@ _NAMED_QUERIES = {
         WHERE kind = 'symbol' AND json_array_length(payload -> 'interfaces') > 0
         ORDER BY symbol
     """,
+    # Every declared method symbol, module-prefixed exactly as the fact wrote
+    # it — what `interface_implementation` joins a receiver back to (D02 §2's
+    # handler rule). A registration's own receiver argument carries only the
+    # BARE descriptor (D00 §5a: a call argument never repeats the module
+    # coordinates), so a handler built by concatenating that descriptor with
+    # the catalog's method name would name no symbol any fact ever emitted;
+    # the engine matches against these instead and writes the row it found,
+    # verbatim. Ordered by symbol so a type declaring two overloads of the
+    # handler method is read the same way twice (NFR-1).
+    "method_symbols": """
+        SELECT symbol FROM symbols WHERE construct_kind = 'method' ORDER BY symbol
+    """,
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
