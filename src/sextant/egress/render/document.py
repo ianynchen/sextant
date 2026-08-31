@@ -56,8 +56,10 @@ _GAPS = [
     ),
     (
         "Reactive and lambda flow is recorded but not traced: calls inside "
-        "flatMap and map derive endpoints, but the sequence between them "
-        "awaits the call graph."
+        "flatMap and map derive endpoints, and a functional route's handler "
+        "resolves, but the sequence between reactive calls — and the "
+        "payloads read inside a functional handler's body — await the call "
+        "graph."
     ),
 ]
 
@@ -91,6 +93,15 @@ def _wire_identity(endpoint: dict[str, object]) -> str:
     method = endpoint["method"]
     rendered_method = "(unresolved)" if method is None else str(method)
     return f"{rendered_method} {rendered_path}"
+
+
+def _media(value: object) -> str:
+    """One side of the Media column: the JSON list's comma-joined members, or
+    `-` when the side is NULL — never a bare blank cell, so a row with both
+    sides NULL still says so rather than reading as an omission."""
+    if value is None:
+        return "-"
+    return ", ".join(json.loads(str(value)))
 
 
 def render_module_document(
@@ -130,11 +141,12 @@ def render_module_document(
     lines += ["", "## Inbound endpoints", ""]
     inbound = [e for e in report.endpoints if str(e["direction"]) in ("inbound", "both")]
     if inbound:
-        lines += ["| Endpoint | Handler | Resolution |", "|---|---|---|"]
+        lines += ["| Endpoint | Handler | Media | Resolution |", "|---|---|---|---|"]
         for endpoint in inbound:
             handler = bare_descriptor(str(endpoint["handler"]))
+            media = f"{_media(endpoint.get('consumes'))} → {_media(endpoint.get('produces'))}"
             lines.append(
-                f"| `{_wire_identity(endpoint)}` | `{handler}` | {endpoint['resolution']} |"
+                f"| `{_wire_identity(endpoint)}` | `{handler}` | {media} | {endpoint['resolution']} |"
             )
         for endpoint in inbound:
             request = _descriptor_lines("Request", endpoint.get("request_shape"), fields_by_shape)

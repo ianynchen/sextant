@@ -317,7 +317,7 @@ def test_kafka_inbound_row_renders_verbless_with_no_unresolved_marker():
     text = render_module_document(MODULE, report, "a3f91c")
     assert (
         "| `kafka order-events` | "
-        "`com/acme/orders/listeners/OrderEventsListener#onMessage(String).` | resolved |"
+        "`com/acme/orders/listeners/OrderEventsListener#onMessage(String).` | - → - | resolved |"
     ) in text
     assert "(unresolved)" not in text
 
@@ -358,6 +358,72 @@ def test_messaging_gap_retires_and_both_lists_rotate_to_eleven():
     assert len(KNOWN_GAPS) == 11
     assert len(_GAPS) == 11
     assert not any("Messaging endpoints" in gap for gap in _GAPS)
+
+
+def test_inbound_media_column_joins_declared_lists():
+    """The Media column reads `consumes → produces`, each side the JSON
+    list's comma-joined members (Task 10, brief Step 1)."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "POST",
+                "path": "/v1/orders/detailed",
+                "handler": "s maven c 1 com/acme/C#createDetailed().",
+                "resolution": "resolved",
+                "evidence": "compiler",
+                "consumes": '["application/json"]',
+                "produces": '["application/json"]',
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert (
+        "| `POST /v1/orders/detailed` | `com/acme/C#createDetailed().` | "
+        "application/json → application/json | resolved |"
+    ) in text
+
+
+def test_inbound_media_column_shows_a_dash_on_either_or_both_null_sides():
+    """NULL means no declaration derivable, never a guessed default (spec
+    §4) — the column must say `-` rather than silently going blank, on one
+    side or both."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "GET",
+                "path": "/v1/orders/{id}",
+                "handler": "s maven c 1 com/acme/C#get().",
+                "resolution": "resolved",
+                "evidence": "compiler",
+                "consumes": None,
+                "produces": '["application/json"]',
+            },
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "GET",
+                "path": "/v1/orders",
+                "handler": "s maven c 1 com/acme/C#list().",
+                "resolution": "resolved",
+                "evidence": "compiler",
+                "consumes": None,
+                "produces": None,
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert (
+        "| `GET /v1/orders/{id}` | `com/acme/C#get().` | - → application/json | resolved |"
+    ) in text
+    assert "| `GET /v1/orders` | `com/acme/C#list().` | - → - | resolved |" in text
 
 
 def test_structure_and_outbound_sections_state_looked_and_found_nothing():
