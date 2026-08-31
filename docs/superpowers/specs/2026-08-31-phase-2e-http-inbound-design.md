@@ -41,8 +41,9 @@ ad hoc, and one crashes on ownerless symbols:
 `shapes/expansion.py`'s `descriptor.index("#")` (ValueError on a free-function
 symbol, which SCIP spells with no `#`), `engines/single_call.py`'s
 `rpartition("#")`, `shapes/rooting.py`'s `_catalog_symbol` (dotted → `/` + `#`),
-and `egress/render/viewmodel.py`'s `rstrip("#")`. Create
-`src/sextant/domain/symbols.py` as the single seam: safe owner/member split where a
+and `egress/render/viewmodel.py`'s `rstrip("#")`. Extend the existing
+`src/sextant/domain/symbols.py` (home of the `Symbol` SCIP renderer — the natural
+seam) with the parsing half: safe owner/member split where a
 missing owner is `None` — an answer, never an exception — plus the dotted-catalog
 conversion, and rewire all four sites through it. Byte-identical behavior for every
 symbol the JVM extractor emits today.
