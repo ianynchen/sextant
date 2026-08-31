@@ -68,9 +68,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         by_caller.setdefault(str(site["caller"]), []).append(site)
 
     rows: list[dict[str, Any]] = []
-    # Only a resolved wire identity dedups (D02 §2's unresolved-is-an-answer):
-    # two unresolved registrations carry no path to compare, so each stays
-    # its own row. `handler` is PART of that identity, not decoration: two
+    # Only a row whose identity is known dedups (D02 §2's
+    # unresolved-is-an-answer): two registrations whose channels nobody could
+    # read carry nothing to compare, so each stays its own row — the key is
+    # the identity columns, never the `resolution` column. `handler` is PART
+    # of that identity, not decoration: two
     # registrations of the SAME channel by two DIFFERENT receivers — two
     # `@KafkaHandler`-shaped methods sharing one subscription is the real
     # precedent (`test_pipeline.py`) — are two distinct facts, and a key that

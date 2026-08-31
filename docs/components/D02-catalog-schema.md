@@ -238,7 +238,11 @@ literal-string form and a linked-instance form, so a `channel_via`-declared row 
 the captured position directly before ever following the link, and only falls back once
 that direct read is not a resolved string literal. `channel_via` without `channel_arg`/
 `url_arg` on the same row is a `CatalogError`: it says *how* to read a position the row has
-to name first. This same ladder — literal first, linked call as fallback — is what `fluent`
+to name first. **`channel_via` together with `url_arg` is a `CatalogError` too** — it pairs
+with `channel_arg`'s verbatim reader, since a linked call's own argument is read as a
+destination (`peer` always NULL), and a row asking for CP-2's peer/path split as well would
+have one destination read two incompatible ways depending on which rung of the ladder
+answered. This same ladder — literal first, linked call as fallback — is what `fluent`
 and `interface_implementation` (both below) read a `channel`/`channel_arg` position through
 too.
 

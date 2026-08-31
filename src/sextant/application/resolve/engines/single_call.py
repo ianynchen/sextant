@@ -58,6 +58,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # `_matching_method` scans it per call site instead.
     methods = list(matches["methods"])
     _validate_methods(methods, catalog)
+    # `channel_via`'s declared `owner`s converted to the SCIP symbol form
+    # once, at run start, rather than once per matched call site — the
+    # `record_wrapper_args` precedent below, and the same binding-seam
+    # discipline `call_wrappers`/`record_wrappers` keep. A copied row, never
+    # the catalog's own dict: `matches` is the loaded file, and a normalizing
+    # pass must not rewrite it in place.
+    methods = [
+        {**row, "channel_via": _channel_via_forms(row)} if "channel_via" in row else row
+        for row in methods
+    ]
     record_wrappers = list(matches.get("record_wrappers", []))
     _validate_record_wrappers(record_wrappers, catalog)
     carrier_rules = CarrierRules(
@@ -95,9 +105,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # derive_endpoint_shapes keeps for its own `referenced` accumulator.
     referenced: list[str] = []
     rows: list[dict[str, Any]] = []
-    # Only a *resolved* wire identity dedups here: two unresolved calls carry
-    # no path to compare, and SQL's `NULL = NULL` is unknown rather than
-    # true, so each stays its own row (D02 §2's unresolved-is-an-answer).
+    # Only a row whose identity is known dedups here: two calls whose paths
+    # nobody could read carry nothing to compare, and SQL's `NULL = NULL` is
+    # unknown rather than true, so each stays its own row (D02 §2's
+    # unresolved-is-an-answer). The key is the identity columns, never the
+    # `resolution` column — a row can be `unresolved` because some OTHER
+    # declared capture failed (I1) and still dedup on the path it did read.
     seen: set[tuple[str, str, str, str]] = set()
     for site in call_sites:
         if site["owner"] != owner:
@@ -183,7 +196,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         read_destination = channel_of if "channel_arg" in method else url_of
         if "channel_via" in method:
             literal = read_destination(url_argument)
-            forms = _channel_via_forms(method)
+            forms = method["channel_via"]
             if literal[2] != "resolved" and forms:
                 destinations = linked_channels(url_argument, facts, forms)
             else:
@@ -311,10 +324,20 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
     declaring it alongside `url_arg`/`channel_arg`/`body_arg`/`response_arg`
     is contradictory evidence, not a richer row. `channel_via` (Task 7's
     linked-call follow) says HOW to read an instance already named by
-    `channel_arg`/`url_arg` — it is not itself a position, so a row
-    declaring it without either is missing the position it describes; each
-    declared form must be `{owner, method, arg: int|"all_strings"}`, the
-    same shape discipline `record_wrappers` entries keep."""
+    `channel_arg` — it is not itself a position, so a row declaring it
+    without one is missing the position it describes; each declared form
+    must be `{owner, method, arg: int|"all_strings"}`, the same shape
+    discipline `record_wrappers` entries keep.
+
+    `channel_via` alongside `url_arg` is refused too (final review, minor
+    10): `linked_channels` reads a linked call's own argument through
+    `channel_of` — verbatim, `peer` unconditionally NULL — which is
+    `channel_arg`'s reader, while `url_arg` asks for CP-2's peer/path split.
+    A row declaring both asks for one destination to be read two
+    incompatible ways depending on which rung of the ladder answered, and
+    the ladder's own fallback would silently drop the split the row asked
+    for. No shipped catalog declares the pair; this refuses the file rather
+    than letting the contradiction pick a reader at derive time."""
     for row in rows:
         if "url_arg" in row and "channel_arg" in row:
             raise CatalogError(
@@ -327,7 +350,14 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                 f"loading catalog {catalog.source}: `{row['name']}` declares `channel_via` "
                 f"without `channel_arg`/`url_arg` — `channel_via` says how to read an "
                 f"instance already named by one of those, never a destination position on "
-                f"its own (D02 §2h)"
+                f"its own (D02 §2's single_call style)"
+            )
+        if "channel_via" in row and "url_arg" in row:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{row['name']}` declares `channel_via` "
+                f"together with `url_arg` — `channel_via` pairs with `channel_arg`'s "
+                f"verbatim destination reader, and `url_arg`'s CP-2 peer/path splitter "
+                f"cannot be mixed with it on one row (D02 §2's single_call style)"
             )
         for entry in _channel_via_entries(row):
             valid = (
@@ -375,9 +405,8 @@ def _channel_via_entries(method: dict[str, Any]) -> list[Any]:
 
 def _channel_via_forms(method: dict[str, Any]) -> list[dict[str, Any]]:
     """Task 7's `channel_via` entries, each declared `owner` converted to
-    the SCIP symbol form once — the same binding-seam discipline
-    `call_wrappers`/`record_wrappers` keep. Only ever called on a row
-    `_validate_methods` already passed, at `run` start."""
+    the SCIP symbol form once. Only ever called on a row `_validate_methods`
+    already passed, from the `methods` normalization at `run` start."""
     return [
         {"owner": _catalog_symbol(entry["owner"]), "method": entry["method"], "arg": entry["arg"]}
         for entry in _channel_via_entries(method)

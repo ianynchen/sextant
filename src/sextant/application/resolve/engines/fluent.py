@@ -152,11 +152,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # `referenced` accumulator is one.
     referenced: list[str] = []
     rows: list[dict[str, Any]] = []
-    # Only a resolved wire identity dedups here, exactly as single_call:
-    # two unresolved chains carry no path to compare, so each stays its own
-    # row. Required by derive_call_endpoints.sql's own contract — it only
-    # guards against what is already in the table, not against duplicates
-    # arriving in the same `$rows` batch.
+    # Only a row whose identity is known dedups here, exactly as
+    # single_call: two chains whose paths nobody could read carry nothing to
+    # compare, so each stays its own row — the key is the identity columns,
+    # never the `resolution` column. Required by
+    # derive_call_endpoints.sql's own contract — it only guards against what
+    # is already in the table, not against duplicates arriving in the same
+    # `$rows` batch.
     seen: set[tuple[str, str, str, str]] = set()
     for caller, sites in by_caller.items():
         # Chain reconstruction is within-method only (D00 §5): `by_receiver`

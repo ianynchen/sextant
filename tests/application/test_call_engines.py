@@ -1819,6 +1819,35 @@ def test_a_row_declaring_channel_via_without_channel_arg_or_url_arg_is_refused_a
     assert "invented-channel-via-no-position.yml" in str(raised.value)
 
 
+def test_a_row_declaring_channel_via_together_with_url_arg_is_refused_at_run_start(
+    tmp_path: Path,
+):
+    """Final review, minor 10: `channel_via` pairs with `channel_arg`'s
+    reader, not `url_arg`'s. `linked_channels` reads a linked call's own
+    argument through `channel_of` — verbatim, `peer` unconditionally NULL —
+    while `url_arg` asks for CP-2's peer/path split, so a row declaring both
+    would have ONE destination read two incompatible ways depending on which
+    rung of the ladder answered: split when the literal read succeeded,
+    verbatim when the linked call did. That is a contradiction in the file,
+    refused before any call site is matched rather than resolved silently at
+    derive time by whichever rung happened to win."""
+    matches = {
+        "owner": "jakarta.jms.Session",
+        "methods": [{"name": "createProducer", "url_arg": 0, "channel_via": _create_queue_form()}],
+    }
+    catalog = _channel_via_catalog(matches, "invented-channel-via-with-url-arg", "jms")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "invented-channel-via-with-url-arg.yml" in str(raised.value)
+    assert "url_arg" in str(raised.value)
+
+
 @pytest.mark.parametrize(
     "entry",
     [
