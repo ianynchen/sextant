@@ -1141,6 +1141,14 @@ template.** `relaxed` tolerates Spring's own RELAXED binding — kebab-case, cam
 `ENV_VAR` style all matching one canonical key; `exact` requires a literal match. A
 catalog declares which its framework uses; the pass never guesses.
 
+**`remote_prefixes` is an optional list of literal string prefixes** naming a
+config-server or `spring.config.import`-shaped value — Spring's own model declares
+`["configserver:", "optional:configserver:"]`. The pass checks a key's WINNING raw
+value (before any placeholder substitution — an import URL is a literal, never itself a
+`${...}` reference) against this list; a match resolves [D01](D01-graph-schema.md)'s
+`remote_source` reason rather than a value the pass could never truthfully read from
+files alone. A model declaring no `remote_prefixes` simply never emits the reason.
+
 ---
 
 ## 3. Ordering

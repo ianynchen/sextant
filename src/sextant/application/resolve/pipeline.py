@@ -3,6 +3,7 @@ from pathlib import Path
 
 from sextant.application.ports.catalogs import CatalogSource
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.config import resolve_config
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 
@@ -31,6 +32,21 @@ def resolve(
     on names (M04)."""
     loaded = workspace.load_facts(fact_root)
     declared = catalogs.load()
+    # M04 pass 2 (D01, D02 §2i): the generic config-model interpreter, run
+    # before endpoint derivation — the `config_join` engine (2F design §3)
+    # that will consume `resolved_config` runs as an endpoint style, so its
+    # capability has to exist before `derive_endpoints` gates the catalogs.
+    # Unconditional, empty in and empty out (`resolve_config`'s own
+    # contract), so a config-less run still leaves the table's earlier
+    # contents cleared rather than stale.
+    resolve_config(workspace, declared)
+    # The first PIPELINE-declared capability (D02 §1): every capability
+    # above it is scanner-declared, earned once up front by the scanner
+    # that produced a module's facts. This one is earned by the pipeline
+    # itself, once pass 2 has run — a catalog naming it in `requires` is
+    # skipped, visibly, the same as any unmet scanner capability, until this
+    # line has run in THIS resolve.
+    capabilities = capabilities | {"resolved_config"}
     skipped = derive_endpoints(workspace, declared, capabilities)
     # After the endpoints, never beside them: an endpoint's payload types come
     # off its handler's signature, which is a column on the row derive_endpoints

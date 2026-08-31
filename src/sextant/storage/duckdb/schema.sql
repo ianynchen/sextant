@@ -69,6 +69,28 @@ CREATE TABLE IF NOT EXISTS shape_fields (
     item        JSON
 );
 
+-- Pre-declared for the same reason as `endpoints`/`shapes` above: M04 pass 2
+-- (`resolve/config.py`) must answer the "resolved_config" query with an
+-- empty result, not an error, when no catalog declares a config_model or no
+-- config file was read (2F design §2). `resolve_config` replaces it whole
+-- via resolved_config_reset.sql + insert_resolved_config.sql once per
+-- resolve — unconditionally, so an empty resolve still leaves an empty
+-- table rather than a stale previous run's rows.
+CREATE TABLE IF NOT EXISTS resolved_config (
+    key               TEXT,
+    value             TEXT,
+    -- The file that won precedence for this key in this profile's layering
+    -- (D02 §2i's config_model) — NULL only when the key was never declared
+    -- for this environment at all, so no file ever won it (D01).
+    source            TEXT,
+    environment       TEXT,
+    -- NULL exactly when `value` is non-NULL. One of D01's closed five-value
+    -- set (`missing_key`, `environment`, `remote_source`,
+    -- `placeholder_cycle`, `multi_placeholder`) — the last reserved for the
+    -- peer-resolution join, never emitted by this pass.
+    unresolved_reason TEXT
+);
+
 CREATE OR REPLACE VIEW documents AS
 SELECT document_id,
        payload ->> 'relative_path'   AS relative_path,

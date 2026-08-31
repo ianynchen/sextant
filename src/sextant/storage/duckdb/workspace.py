@@ -148,6 +148,19 @@ _NAMED_QUERIES = {
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
         FROM documents
     """,
+    # `resolve/config.py`'s own input: every config_entry, in declaration
+    # order within its document (`config_entries.seq`, D00 §5c) and its
+    # document ahead of that (`document_id`) so a multi-document file's own
+    # documents are read together, `doc_index` breaking the tie between them
+    # — the same NFR-1 ordering role `call_sites`'s `caller, ordinal` plays.
+    "config_entries": "SELECT * FROM config_entries ORDER BY document_id, doc_index, seq",
+    # `resolved_config`'s own export/read shape (D01): ordered by
+    # `environment, key` so "unresolved for prod, resolved for dev" reads as
+    # two adjacent rows rather than an arbitrary interleaving (NFR-1).
+    "resolved_config": """
+        SELECT key, value, source, environment, unresolved_reason
+        FROM resolved_config ORDER BY environment, key
+    """,
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
     "facts": "SELECT count(*) AS facts FROM raw_facts",
@@ -164,6 +177,7 @@ _EXPORTED_TABLES = (
     "call_sites",
     "documents",
     "endpoints",
+    "resolved_config",
     "shape_fields",
     "shapes",
     "symbols",
@@ -172,6 +186,7 @@ _EXPORTED_TABLES = (
 _EXPORT_QUERIES = {
     "documents": _NAMED_QUERIES["documents"],
     "endpoints": _NAMED_QUERIES["endpoints"],
+    "resolved_config": _NAMED_QUERIES["resolved_config"],
     "shapes": _NAMED_QUERIES["shapes"],
     "shape_fields": _NAMED_QUERIES["shape_fields"],
     "call_sites": _NAMED_QUERIES["call_sites"],
@@ -191,6 +206,8 @@ _NAMED_DERIVATIONS = {
     "shapes": "derive_shapes.sql",
     "shape_fields": "derive_shape_fields.sql",
     "shapes_reset": "reset_shapes.sql",
+    "resolved_config_reset": "reset_resolved_config.sql",
+    "resolved_config_insert": "insert_resolved_config.sql",
 }
 
 
