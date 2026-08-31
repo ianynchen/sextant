@@ -164,7 +164,28 @@ class CallSiteFact(BaseModel):
     arguments: list[CallArgument] = Field(default_factory=list)
 
 
+class ConfigEntryFact(BaseModel):
+    """One key read from a configuration file (D00 §5c). Neutral pieces
+    only: a reader never layers, resolves a placeholder, or interprets a
+    profile — that is M04 pass 2's job, reading catalog data this fact
+    knows nothing about."""
+
+    model_config = {"frozen": True}
+    kind: Literal["config_entry"] = "config_entry"
+    document_id: str
+    key_raw: str
+    key_path: str
+    # Verbatim, always a string, never coerced: a value is a claim to
+    # resolve, not a typed answer (D00 §5c).
+    value: str
+    # The source file's document index for a multi-document YAML file
+    # (`---`-separated); always 0 for a single-document format such as
+    # properties. Needed to tell a multi-document file's on-profile
+    # activations apart.
+    doc_index: int = 0
+
+
 Fact = Annotated[
-    ModuleFact | SymbolFact | AnnotationFact | CallSiteFact,
+    ModuleFact | SymbolFact | AnnotationFact | CallSiteFact | ConfigEntryFact,
     Field(discriminator="kind"),
 ]

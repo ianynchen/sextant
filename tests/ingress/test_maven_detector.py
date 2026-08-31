@@ -92,6 +92,23 @@ def test_source_roots_are_empty_when_the_module_has_no_source_directory(tmp_path
     assert module.languages == frozenset()
 
 
+def test_resource_roots_contains_the_conventional_resources_directory_when_it_exists(
+    tmp_path: Path,
+):
+    _module(tmp_path)
+    resources = tmp_path / "src" / "main" / "resources"
+    resources.mkdir(parents=True)
+
+    module = MavenDetector().detect(tmp_path).modules[0]
+
+    assert module.resource_roots == (resources,)
+
+
+def test_resource_roots_is_empty_when_the_module_has_no_resources_directory(tmp_path: Path):
+    module = MavenDetector().detect(_module(tmp_path)).modules[0]
+    assert module.resource_roots == ()
+
+
 def test_a_declared_source_directory_wins_over_the_conventional_layout(tmp_path: Path):
     """M02: the detector reads the build, never a convention."""
     pom = _BARE_POM.replace(

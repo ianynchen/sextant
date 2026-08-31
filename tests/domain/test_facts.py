@@ -11,6 +11,7 @@ from sextant.domain.facts import (
     CallArgument,
     CallSiteFact,
     CallTarget,
+    ConfigEntryFact,
     Document,
     Fact,
     Parameter,
@@ -288,6 +289,40 @@ def test_call_site_fact_survives_a_fact_file_round_trip(tmp_path: Path):
 
     assert document == DOCUMENT
     assert facts == [call_site]
+
+
+def test_config_entry_fact_survives_a_fact_file_round_trip(tmp_path: Path):
+    entry = ConfigEntryFact(
+        document_id="doc_1",
+        key_raw="spring.datasource.url",
+        key_path="spring.datasource.url",
+        value="${DB_URL:jdbc:postgresql://localhost/orders}",
+        doc_index=1,
+    )
+    path = tmp_path / "application.jsonl"
+
+    write_fact_file(path, DOCUMENT, [entry])
+    document, facts = read_fact_file(path)
+
+    assert document == DOCUMENT
+    assert facts == [entry]
+    read_entry = facts[0]
+    assert isinstance(read_entry, ConfigEntryFact)
+    # Never coerced (D00 §5c): the placeholder survives untouched and the
+    # value stays a plain string even though it looks like a URL.
+    assert read_entry.value == "${DB_URL:jdbc:postgresql://localhost/orders}"
+    assert read_entry.doc_index == 1
+
+
+def test_config_entry_fact_doc_index_defaults_to_zero():
+    # A single-document format (properties) never sets it explicitly.
+    entry = ConfigEntryFact(document_id="doc_1", key_raw="a.b.c", key_path="a.b.c", value="v")
+    assert entry.doc_index == 0
+
+
+def test_config_entry_fact_kind_literal_serialises_as_config_entry():
+    entry = ConfigEntryFact(document_id="doc_1", key_raw="a", key_path="a", value="v")
+    assert json.loads(entry.model_dump_json())["kind"] == "config_entry"
 
 
 def test_call_site_fact_kind_literal_serialises_as_call_site():

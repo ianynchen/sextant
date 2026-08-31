@@ -19,6 +19,8 @@ from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.ingress.read.properties import PropertiesReader
+from sextant.ingress.read.yaml_config import YamlConfigReader
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 # The registries the composition root builds (ARCHITECTURE §6). Order is the
@@ -93,6 +95,7 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
             catalogs=YamlCatalogSource(catalogs_dir()),
             fact_root=workspace_dir / "facts",
             progress=progress,
+            readers=[PropertiesReader(), YamlConfigReader()],
         )
         write_metadata(
             workspace_dir / "metadata.json",

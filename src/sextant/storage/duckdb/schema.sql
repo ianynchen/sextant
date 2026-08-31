@@ -117,6 +117,20 @@ SELECT document_id,
        payload ->> 'retention'           AS retention
 FROM raw_facts WHERE kind = 'annotation';
 
+CREATE OR REPLACE VIEW config_entries AS
+-- `seq` is declaration order within the entry's file: a config_entry fact
+-- carries no explicit sequence field of its own (D00 §5c) because a fact
+-- file is written in declaration order (D00 §7) and `rowid` already
+-- reconstructs it losslessly — the same precedent `symbols.seq` states
+-- above, reused rather than re-derived.
+SELECT document_id,
+       payload ->> 'key_raw'              AS key_raw,
+       payload ->> 'key_path'             AS key_path,
+       payload ->> 'value'                AS value,
+       (payload ->> 'doc_index')::INTEGER AS doc_index,
+       rowid                              AS seq
+FROM raw_facts WHERE kind = 'config_entry';
+
 CREATE OR REPLACE VIEW call_sites AS
 SELECT document_id,
        payload ->> 'caller'                    AS caller,
