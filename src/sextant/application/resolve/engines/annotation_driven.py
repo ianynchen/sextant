@@ -3,7 +3,7 @@
 Framework knowledge — which annotation marks a controller, which annotation
 maps to which HTTP method, where the path argument lives — is data, read
 from `matches` and carried, unmodified, through to the derivation as bound
-parameters. No framework name appears in this module.
+parameters. No framework name appears in this module's code.
 """
 
 import json
@@ -56,7 +56,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # change — the HTTP catalogs are the only ones that declare these.
         consumes_from=list(mapping.get("consumes_from", [])),
         produces_from=list(mapping.get("produces_from", [])),
-        # 2E-prep design §2, §3: the effective-annotations pre-pass widens
+        # 2E design §2, §3: the effective-annotations pre-pass widens
         # this catalog's own mapping fqns to every module-local annotation
         # type transitively meta-annotated with one of them PLUS, for a
         # catalog that declares its own type-level gate, every mapping a

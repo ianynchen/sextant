@@ -143,10 +143,13 @@ def render_module_document(
     if inbound:
         lines += ["| Endpoint | Handler | Media | Resolution |", "|---|---|---|---|"]
         for endpoint in inbound:
-            handler = bare_descriptor(str(endpoint["handler"]))
+            handler = endpoint.get("handler")
+            rendered_handler = (
+                "unresolved" if handler is None else f"`{bare_descriptor(str(handler))}`"
+            )
             media = f"{_media(endpoint.get('consumes'))} → {_media(endpoint.get('produces'))}"
             lines.append(
-                f"| `{_wire_identity(endpoint)}` | `{handler}` | {media} | {endpoint['resolution']} |"
+                f"| `{_wire_identity(endpoint)}` | {rendered_handler} | {media} | {endpoint['resolution']} |"
             )
         for endpoint in inbound:
             request = _descriptor_lines("Request", endpoint.get("request_shape"), fields_by_shape)

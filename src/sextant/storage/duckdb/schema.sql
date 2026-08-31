@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
     request_shape     TEXT,
     response_shape    TEXT,
     -- JSON arrays of MIME strings, or NULL where no declaration is
-    -- derivable from any evidence source (2E-prep spec §4): carried data,
+    -- derivable from any evidence source (2E design §4): carried data,
     -- never identity — dedup and merge never compare these two columns.
     consumes          TEXT,
     produces          TEXT

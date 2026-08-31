@@ -28,7 +28,7 @@
 --             per matching call site, already deduplicated on wire identity
 --             by the pass. `catalog_id` (2E-prep design §1a) is the id of
 --             the catalog that built the row — provenance only, never part
---             of wire identity. `consumes`/`produces` (2E-prep spec §4) are
+--             of wire identity. `consumes`/`produces` (2E design §4) are
 --             carried data, never identity — every engine but Task 5's
 --             Spring pass passes NULL for both.
 INSERT INTO endpoints (
