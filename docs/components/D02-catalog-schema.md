@@ -543,9 +543,27 @@ boundary is a stated one, not a gap the evidence left open. `request_shape`/
 calls and their like — which is call-evidence work for a later phase, not a
 signature this style can read.
 
+**Two PATH predicates inside one `and`-chain CONCATENATE rather than poison, and
+the resulting row still emits `resolved`** — the identical fold that composes a
+`nest` prefix onto whatever its subtree contributes, run twice in the same chain.
+This is a deliberate asymmetry from the doubled-verb case above, and it is stated
+openly rather than smoothed over: `and`ing two full path patterns together
+(`path("/a").and(path("/b"))`) is a degenerate input to begin with — no real
+request path satisfies both at once — and the fold has no way to tell a `nest`
+prefix apart from a full path predicate at this point in the merge, so it
+concatenates the one the same way it concatenates the other. Concatenation is the
+2E behavior; poisoning the path here, the way a doubled verb already is, is the
+stated future fix, not the current one.
+
 **Media unions within one batch, exactly `fluent`'s own rule reapplied**: two `or`
 branches differing ONLY in the media they declare are one endpoint, not two, folded
-before the insert ever sees them (spec §4).
+before the insert ever sees them (spec §4). **A row whose path could not be read
+takes part in NEITHER the union nor the dedup key that follows it** — two such rows
+compare equal on every identity column and would collapse into one under a naive
+key, but each is its own distinct "this method declares something unreadable" fact,
+so each stays its own row (`derive_call_endpoints.sql`'s own contract: SQL's
+`NULL = NULL` is unknown, not true, and two unresolved rows are two facts about two
+call sites, never one).
 
 **This style is deliberately language-agnostic, and the engine enforces it: no JVM
 grammar, no framework name, no Kotlin-specific branch anywhere in its code** — the
