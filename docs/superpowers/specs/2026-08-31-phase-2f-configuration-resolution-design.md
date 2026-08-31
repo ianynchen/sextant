@@ -94,8 +94,11 @@ discovered profile resolves beside it.
 
 **Unresolved is an answer, with a reason and an environment**: `missing_key`,
 `environment` (the value comes from an env var or launch flag — universal across
-ecosystems), `remote_source` (config-server/import URLs), `placeholder_cycle`.
-"Unresolved for `prod`, resolved for `dev`" is expressible and meaningful.
+ecosystems), `remote_source` (config-server/import URLs), `placeholder_cycle`, and —
+used only by §3's peer-resolution join, never by this pass — `multi_placeholder` (an
+endpoint expression carrying more than one placeholder, substitutable only piecewise).
+A closed five-reason set; "unresolved for `prod`, resolved for `dev`" is expressible
+and meaningful.
 
 **Inherited unchanged:** endpoints keep expressions; `resolved_config` carries values;
 nothing rewrites an endpoint row per environment.
