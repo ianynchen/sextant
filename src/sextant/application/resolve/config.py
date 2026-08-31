@@ -16,10 +16,17 @@ they are normalized here into one `effective_profile` per (document,
 doc_index): `None` for a base slice that applies to every profile, or a
 profile name for a slice locked to just that one. Resolving one profile
 means picking every slice whose `effective_profile` is `None` or that
-profile, ordering them (source precedence first, a locked variant after its
-own base within the same source, declaration order last), and merging their
-keys forward — later overwrites earlier, so this is Spring's own real
-layering semantics, not a source-specific shortcut.
+profile, ordering them, and merging their keys forward — later overwrites
+earlier.
+
+**Ordering, precisely (fix round 1, controller ruling I-1).** Source
+precedence comes first. WITHIN one source, Spring's own real resource order
+is three tiers, not two: an unlocked base document, THEN a document of that
+SAME base file activated by `from_document_key`, THEN a separate variant
+FILE named by the filename marker — a profile-variant FILE always outranks
+an inline profile-activated document of the base file it varies, at the
+same source, regardless of either one's own `doc_index`. Declaration order
+(`doc_index`) only breaks a tie within one tier.
 
 **Placeholders.** A winning raw value is substituted recursively against
 that SAME layered map for its own profile, `:default` (D02 §2i's
@@ -30,6 +37,17 @@ profile's own layering — never a placeholder failure, just genuinely
 undeclared for that profile — resolves `missing_key` too: D01's own
 "unresolved for prod, resolved for dev" example is exactly this case, not a
 degraded placeholder.
+
+**`key_matching` is scoped to LOOKUPS, never the merge (fix round 1,
+controller ruling I-2).** The layering merge above always keys on a
+`config_entry`'s own exact `key_path` — two different spellings in config
+files are two different keys at merge time, full stop, because relaxed
+binding is Spring's own BINDING-time concept, not a file-reading one.
+`key_matching: relaxed` only widens how a `${...}` REFERENCE is looked up
+against that already-merged, exact-keyed map (and, later, how a catalog's
+own key template is compared against one — D02 §2i, Task 8's field ladder).
+A model declaring `billing.url` and `billing.URL` as separate keys keeps
+BOTH as separate rows, unconditionally.
 
 **What this pass does not do.** `environment` and `remote_source` both need
 a model to declare something pass 2 has nothing to interpret otherwise: an
@@ -43,7 +61,7 @@ ENDPOINT expression, not a config value.
 
 from typing import Any
 
-from sextant.application.ports.catalogs import Catalog
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 
 # D01's closed five-value unresolved-reason set. `multi_placeholder` is
@@ -83,15 +101,36 @@ def resolve_config(workspace: Workspace, catalogs: list[Catalog]) -> None:
     visibly discipline `reset_endpoints.sql`/`reset_shapes.sql` already
     keep."""
     workspace.derive("resolved_config_reset")
-    models = [catalog.config_model for catalog in catalogs if catalog.config_model]
-    if not models:
+    declared = [catalog for catalog in catalogs if catalog.config_model]
+    if not declared:
         return
+    # Every declared model is checked BEFORE anything is resolved — the same
+    # "broken file, not a half-empty table" discipline `derive_endpoints`
+    # keeps for an unrecognised style (`endpoints.py::_engine_for`).
+    for catalog in declared:
+        _validate_model(catalog)
     entries = workspace.query("config_entries")
     documents = {str(row["document_id"]): row for row in workspace.query("documents")}
-    for model in models:
-        rows = _resolve_model(model, entries, documents)
+    for catalog in declared:
+        rows = _resolve_model(catalog.config_model, entries, documents)
         if rows:
             workspace.derive("resolved_config_insert", rows=rows)
+
+
+def _validate_model(catalog: Catalog) -> None:
+    """Refuses a `config_model` naming a profile mechanism this pass does
+    not implement (M-a, fix round 1) — `from_key_prefix` is reserved for a
+    future Quarkus-style catalog (D02 §2i names it, unimplemented, "now").
+    A catalog declaring it must be refused loudly, the same
+    `CatalogError`-names-the-file discipline `yaml_source.py`'s own loader
+    checks keep, rather than silently doing nothing with it."""
+    profiles_cfg = catalog.config_model.get("profiles", {})
+    if "from_key_prefix" in profiles_cfg:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: config_model.profiles.from_key_prefix is "
+            f"reserved for a future model (D02 §2i) — not yet implemented, and never "
+            f"silently ignored"
+        )
 
 
 def _resolve_model(
@@ -102,6 +141,12 @@ def _resolve_model(
     sources = list(model.get("sources", []))
     profiles_cfg = model.get("profiles", {})
     from_document_key = profiles_cfg.get("from_document_key")
+    # M-a (fix round 1): filename splitting is one of D02 §2i's THREE
+    # declared mechanisms — a model that never declares `from_filename`
+    # never gets it, even where a source pattern happens to spell
+    # `{-profile}`/`{profile}`. `_match_source` falls back to a literal,
+    # whole-string match when this is False.
+    allow_filename_profile = bool(profiles_cfg.get("from_filename"))
     default_profile = str(profiles_cfg.get("default_profile", "default"))
     key_matching = model.get("key_matching", "exact")
     placeholders = model.get("placeholders", _DEFAULT_PLACEHOLDERS)
@@ -112,18 +157,21 @@ def _resolve_model(
         doc_index = int(str(entry["doc_index"]))
         by_doc.setdefault((str(entry["document_id"]), doc_index), []).append(entry)
 
-    # (source_index, document_id, doc_index, effective_profile) for every
-    # (source pattern, document) pair that matches at all — `effective_profile`
-    # is `None` for a slice that applies to every profile (a base filename, a
-    # document carrying no `from_document_key` activation), or the one
-    # profile name it is locked to (D02 §2i's two mechanisms, normalized to
-    # one question).
-    matches: list[tuple[int, str, int, str | None]] = []
+    # (source_index, document_id, doc_index, effective_profile, variant_tier)
+    # for every (source pattern, document) pair that matches at all —
+    # `effective_profile` is `None` for a slice that applies to every profile
+    # (a base filename, a document carrying no `from_document_key`
+    # activation), or the one profile name it is locked to (D02 §2i's two
+    # mechanisms, normalized to one question). `variant_tier` keeps the TWO
+    # ways a slice can be locked apart for `_layer`'s own sort (fix round 1,
+    # I-1): 0 = unlocked base, 1 = locked via `from_document_key` (still the
+    # base FILE), 2 = locked via the filename marker (a variant FILE).
+    matches: list[tuple[int, str, int, str | None, int]] = []
     for source_index, source in enumerate(sources):
         pattern = str(source["pattern"])
         for document_id, document in documents.items():
             relative_path = str(document["relative_path"])
-            filename_profile = _match_source(pattern, relative_path)
+            filename_profile = _match_source(pattern, relative_path, allow_filename_profile)
             if filename_profile is None:
                 continue
             doc_indices = sorted({index for (doc, index) in by_doc if doc == document_id})
@@ -132,11 +180,15 @@ def _resolve_model(
             for doc_index in doc_indices or [0]:
                 if filename_profile != "":
                     effective_profile: str | None = filename_profile
+                    variant_tier = 2
                 else:
                     effective_profile = _document_key_profile(
                         by_doc.get((document_id, doc_index), []), from_document_key
                     )
-                matches.append((source_index, document_id, doc_index, effective_profile))
+                    variant_tier = 0 if effective_profile is None else 1
+                matches.append(
+                    (source_index, document_id, doc_index, effective_profile, variant_tier)
+                )
 
     if not matches:
         return []
@@ -145,7 +197,7 @@ def _resolve_model(
     # ever names it explicitly — resolving it then means "the base slices
     # alone", which the merge below already produces for free.
     profiles = {default_profile}
-    for _, _, _, effective_profile in matches:
+    for _, _, _, effective_profile, _ in matches:
         if effective_profile is not None:
             profiles.add(effective_profile)
 
@@ -153,11 +205,18 @@ def _resolve_model(
     # profile — what lets a key present in `default` but absent from `prod`
     # still resolve a `missing_key` row FOR `prod`, rather than silently
     # having no row there at all (D01's "unresolved for prod, resolved for
-    # dev" example).
+    # dev" example). The activation key itself (`from_document_key`) is
+    # excluded (M-c, fix round 1): it is a DIRECTIVE that says which profile
+    # a document belongs to, never configuration a module reads, so it never
+    # earns its own emitted row — it stays usable for `${...}` references
+    # regardless, since it is left in `merged` below, only kept out of the
+    # set that decides which rows get written.
     all_keys: set[str] = set()
-    for _, document_id, doc_index, _ in matches:
+    for _, document_id, doc_index, _, _ in matches:
         for entry in by_doc.get((document_id, doc_index), []):
-            all_keys.add(str(entry["key_path"]))
+            key_path = str(entry["key_path"])
+            if key_path != from_document_key:
+                all_keys.add(key_path)
 
     rows: list[dict[str, object]] = []
     for profile in sorted(profiles):
@@ -196,7 +255,7 @@ def _document_key_profile(
 
 def _layer(
     model: dict[str, Any],
-    matches: list[tuple[int, str, int, str | None]],
+    matches: list[tuple[int, str, int, str | None, int]],
     by_doc: dict[tuple[str, int], list[dict[str, object]]],
     documents: dict[str, dict[str, object]],
     profile: str,
@@ -206,17 +265,23 @@ def _layer(
     `profile`), ordered lowest-precedence first and merged forward so a
     later slice's key overwrites an earlier one's (D02 §2i: "a later source
     in the list, and a profile variant of any source, both win over what
-    came before"). Sort key: source precedence first; within one source, a
-    locked variant after its own base (`is_variant`); `doc_index` last, so
-    a later document in one multi-doc file overrides an earlier one at the
-    same precedence tier — real Spring layering, not a source-list
-    shortcut. `document_id` breaks any remaining tie for total determinism
-    (NFR-1); no two matches share every other key in practice, since one
-    source pattern names at most one base file and one variant per
-    profile."""
+    came before").
+
+    Sort key: source precedence first (`source_index`); WITHIN one source,
+    three precedence tiers, lowest first (fix round 1, I-1 — the controller
+    ruling on Spring's own real resource order): 0 = an unlocked base
+    document, 1 = a document of the BASE FILE activated by
+    `from_document_key`, 2 = a whole variant FILE named by the filename
+    marker — a profile-activated document never outranks a same-profile
+    variant FILE, even when that document's own `doc_index` is numerically
+    higher than the variant file's (which is always `0`, being its own,
+    separate, single/multi-document file). `doc_index` only breaks a tie
+    WITHIN one tier, so a later document in one multi-doc file still
+    overrides an earlier one at the same tier. `document_id` breaks any
+    remaining tie for total determinism (NFR-1)."""
     applicable = [
-        (source_index, document_id, doc_index, 0 if effective_profile is None else 1)
-        for (source_index, document_id, doc_index, effective_profile) in matches
+        (source_index, document_id, doc_index, variant_tier)
+        for (source_index, document_id, doc_index, effective_profile, variant_tier) in matches
         if effective_profile is None or effective_profile == profile
     ]
     applicable.sort(key=lambda row: (row[0], row[3], row[2], row[1]))
@@ -394,7 +459,7 @@ def _resolve_reference(
     )
 
 
-def _match_source(pattern: str, filename: str) -> str | None:
+def _match_source(pattern: str, filename: str, allow_placeholder: bool) -> str | None:
     """Matches one `config_model.sources` pattern against a file's relative
     path (D02 §2i: "a `{profile}` (or `{-profile}`) placeholder may sit
     ANYWHERE in a source pattern... with the empty match naming the base
@@ -402,26 +467,35 @@ def _match_source(pattern: str, filename: str) -> str | None:
     profile name for a variant — or `None` when the file does not match
     this source at all.
 
+    `allow_placeholder` is `profiles.from_filename` having been declared at
+    all (M-a, fix round 1): filename splitting is one of D02 §2i's three
+    named profile mechanisms, not an ambient behaviour of the pattern
+    grammar, so a pattern spelling `{-profile}`/`{profile}` without a
+    declared `from_filename` never splits on it — it falls straight to the
+    literal, whole-string branch below, where such a pattern (containing a
+    brace no real filename ever will) simply matches nothing.
+
     `{-profile}` is Spring's own dashed convention: nothing at all for the
     base file, `-{profile}` for a variant (`application-prod.yml`).
     `{profile}` (reserved for a layout like node-config's whole-filename
     `{profile}.json`) takes the bare match either way, base or not. A
-    pattern with neither placeholder matches only the literal filename, its
-    own profile always the base (`""`) — a source with no variant mechanism
-    of its own."""
-    for placeholder, dashed in (("{-profile}", True), ("{profile}", False)):
-        if placeholder not in pattern:
-            continue
-        prefix, suffix = pattern.split(placeholder, 1)
-        if not filename.startswith(prefix) or not filename.endswith(suffix):
+    pattern with neither placeholder — or `allow_placeholder` False —
+    matches only the literal filename, its own profile always the base
+    (`""`) — a source with no variant mechanism of its own."""
+    if allow_placeholder:
+        for placeholder, dashed in (("{-profile}", True), ("{profile}", False)):
+            if placeholder not in pattern:
+                continue
+            prefix, suffix = pattern.split(placeholder, 1)
+            if not filename.startswith(prefix) or not filename.endswith(suffix):
+                return None
+            end = len(filename) - len(suffix) if suffix else len(filename)
+            middle = filename[len(prefix) : end]
+            if not dashed:
+                return middle
+            if middle == "":
+                return ""
+            if middle.startswith("-"):
+                return middle[1:]
             return None
-        end = len(filename) - len(suffix) if suffix else len(filename)
-        middle = filename[len(prefix) : end]
-        if not dashed:
-            return middle
-        if middle == "":
-            return ""
-        if middle.startswith("-"):
-            return middle[1:]
-        return None
     return "" if pattern == filename else None

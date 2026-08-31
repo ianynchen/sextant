@@ -11,7 +11,9 @@ wiring (the real Spring model, `spring-web.yml`) is covered separately by
 
 from pathlib import Path
 
-from sextant.application.ports.catalogs import Catalog
+import pytest
+
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.config import normalize_key, resolve_config
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -57,7 +59,18 @@ def _resolve(
         _write(tmp_path, relative_path, entries)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
-    catalog = Catalog(
+    resolve_config(workspace, [_catalog(model)])
+    rows = workspace.query("resolved_config")
+    workspace.close()
+    return rows
+
+
+def _row(rows: list[dict[str, object]], key: str, environment: str) -> dict[str, object]:
+    return next(r for r in rows if r["key"] == key and r["environment"] == environment)
+
+
+def _catalog(model: dict) -> Catalog:
+    return Catalog(
         id="test-model",
         style="annotation_driven",
         protocol="http",
@@ -67,14 +80,6 @@ def _resolve(
         source=Path("test-model.yml"),
         config_model=model,
     )
-    resolve_config(workspace, [catalog])
-    rows = workspace.query("resolved_config")
-    workspace.close()
-    return rows
-
-
-def _row(rows: list[dict[str, object]], key: str, environment: str) -> dict[str, object]:
-    return next(r for r in rows if r["key"] == key and r["environment"] == environment)
 
 
 # --- Layering: source precedence and profile-variant-over-base ------------
@@ -96,6 +101,38 @@ def test_a_later_source_wins_and_a_profile_variant_wins_over_its_own_base(tmp_pa
     rows = _resolve(tmp_path, files, model)
     assert _row(rows, "probe", "default")["value"] == "layer-value"
     assert _row(rows, "probe", "prod")["value"] == "layer-prod-value"
+
+
+def test_a_profile_variant_file_wins_over_an_inline_activated_document_of_its_own_base(
+    tmp_path: Path,
+):
+    """Controller ruling I-1 (fix round 1): a `doc_index` comparison ACROSS
+    files is the wrong tiebreak — an inline `on-profile`-activated document
+    inside the base file is not automatically "later" than a same-profile
+    variant FILE just because its own `doc_index` happens to be numerically
+    higher. Spring's own real resource order puts the variant FILE last:
+    both `layer.yml` (an inline `prod`-activated second document) and
+    `layer-prod.yml` (the filename variant) set `probe` for `prod` — the
+    FILE must win, and `source` must name it."""
+    files = {
+        "layer.yml": [
+            ("probe", "inline-prod-value", 1),
+            ("activate", "prod", 1),
+        ],
+        "layer-prod.yml": [("probe", "file-prod-value", 0)],
+    }
+    model = {
+        "sources": [{"pattern": "layer{-profile}.yml"}],
+        "profiles": {
+            "from_filename": "{-profile}",
+            "from_document_key": "activate",
+            "default_profile": "default",
+        },
+    }
+    rows = _resolve(tmp_path, files, model)
+    row = _row(rows, "probe", "prod")
+    assert row["value"] == "file-prod-value"
+    assert row["source"] == "layer-prod.yml"
 
 
 # --- Profile enumeration: filename marker and document-key activation -----
@@ -125,11 +162,13 @@ def test_profiles_enumerate_from_both_the_filename_marker_and_the_document_key(
     }
     rows = _resolve(tmp_path, files, model)
     assert {row["environment"] for row in rows} == {"default", "qa", "stage"}
+    # `probe`'s own value differs per profile — `default` keeps `app.yml`'s
+    # unlocked base value, `stage` gets `app-stage.yml`'s filename-locked
+    # one — proving both profiles a real key can carry are visible.
     assert _row(rows, "probe", "default")["value"] == "base-value"
     assert _row(rows, "probe", "stage")["value"] == "stage-value"
-    # `only.qa` is locked to the `qa` document and never leaks into `default`
-    # or `stage` — each carries its own `probe`, unaffected by the doc-key
-    # activated sibling document sharing its file.
+    # `only.qa` is locked to the `qa` document (`from_document_key`) and
+    # resolves only under the `qa` profile that document activated.
     assert _row(rows, "only.qa", "qa")["value"] == "qa-value"
 
 
@@ -190,6 +229,56 @@ def test_an_undefined_env_shaped_placeholder_is_still_missing_key_not_environmen
     assert row["unresolved_reason"] == "missing_key"
 
 
+# --- key_matching scopes LOOKUPS only, never the layering merge -----------
+
+
+def test_exact_merge_keeps_two_differently_spelled_keys_as_separate_rows(tmp_path: Path):
+    """Controller ruling I-2 (fix round 1): `key_matching: relaxed` widens
+    `${...}` REFERENCE lookups, never the merge itself — a merge keys on a
+    `config_entry`'s own exact `key_path`, always, regardless of
+    `key_matching`. `billing.url` and `billing.URL` are genuinely two
+    different keys in the files, so they stay two different rows even under
+    a `relaxed` model — no case-folding ever collapses them."""
+    files = {"app.yml": [("billing.url", "v1", 0), ("billing.URL", "v2", 0)]}
+    model = {
+        "sources": [{"pattern": "app.yml"}],
+        "profiles": {"default_profile": "default"},
+        "key_matching": "relaxed",
+    }
+    rows = _resolve(tmp_path, files, model)
+    assert _row(rows, "billing.url", "default")["value"] == "v1"
+    assert _row(rows, "billing.URL", "default")["value"] == "v2"
+
+
+# --- Custom placeholder delimiters (D02 §2i's `placeholders` block) -------
+
+
+def test_custom_placeholder_delimiters_are_honored_and_the_default_spelling_is_inert(
+    tmp_path: Path,
+):
+    """The `${...}` grammar is not hardcoded — `placeholders` is catalog
+    data (D02 §2i). A model declaring `<<`/`>>` substitutes through THOSE
+    delimiters, and the ordinary `${...}` spelling — carrying neither — is
+    left untouched, plain literal text."""
+    files = {
+        "app.yml": [
+            ("a", "<<b>>", 0),
+            ("b", "literal-value", 0),
+            ("c", "${b}", 0),
+        ]
+    }
+    model = {
+        "sources": [{"pattern": "app.yml"}],
+        "profiles": {"default_profile": "default"},
+        "placeholders": {"open": "<<", "close": ">>", "default_separator": ":"},
+    }
+    rows = _resolve(tmp_path, files, model)
+    assert _row(rows, "a", "default")["value"] == "literal-value"
+    row_c = _row(rows, "c", "default")
+    assert row_c["value"] == "${b}"
+    assert row_c["unresolved_reason"] is None
+
+
 # --- remote_source: a config-server import URL, never resolved from files -
 
 
@@ -248,7 +337,29 @@ def test_resolve_config_is_a_noop_when_no_catalog_declares_a_model(tmp_path: Pat
     assert rows == []
 
 
-# --- key_matching: relaxed --------------------------------------------------
+def test_running_resolve_config_twice_leaves_the_same_row_count(tmp_path: Path):
+    """Controller ruling I-4 (fix round 1): `resolved_config_reset` runs
+    before EVERY pass, not just the first — a second `resolve_config` call
+    into the SAME workspace must replace, not double, the previous run's
+    rows. Removing the reset would fail this test with `second_count ==
+    2 * first_count`."""
+    files = {"app.yml": [("k", "v", 0)]}
+    model = {"sources": [{"pattern": "app.yml"}], "profiles": {"default_profile": "default"}}
+    for relative_path, entries in files.items():
+        _write(tmp_path, relative_path, entries)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalog = _catalog(model)
+    resolve_config(workspace, [catalog])
+    first_count = len(workspace.query("resolved_config"))
+    resolve_config(workspace, [catalog])
+    second_count = len(workspace.query("resolved_config"))
+    workspace.close()
+    assert first_count > 0
+    assert second_count == first_count
+
+
+# --- key_matching: relaxed and exact ---------------------------------------
 
 
 def test_normalize_key_strips_case_dash_and_underscore():
@@ -269,3 +380,86 @@ def test_relaxed_key_matching_resolves_a_placeholder_spelled_differently(tmp_pat
     row = _row(rows, "ref", "default")
     assert row["value"] == "v1"
     assert row["unresolved_reason"] is None
+
+
+def test_exact_key_matching_rejects_a_relaxed_spelling_placeholder_lookup(tmp_path: Path):
+    """The other half of I-3's pin: `key_matching: exact` (D02 §2i) means
+    exactly that — the SAME `${MY_KEY}` spelling that the relaxed test above
+    resolves must fail here, since `MY_KEY` is not the literal `myKey`."""
+    files = {"app.yml": [("myKey", "v1", 0), ("ref", "${MY_KEY}", 0)]}
+    model = {
+        "sources": [{"pattern": "app.yml"}],
+        "profiles": {"default_profile": "default"},
+        "key_matching": "exact",
+    }
+    rows = _resolve(tmp_path, files, model)
+    row = _row(rows, "ref", "default")
+    assert row["value"] is None
+    assert row["unresolved_reason"] == "missing_key"
+
+
+# --- The filename marker: undashed `{profile}`, and gated by from_filename -
+
+
+def test_an_undashed_profile_placeholder_names_the_whole_filename_component(tmp_path: Path):
+    """D02 §2i reserves `{profile}` (no dash) for a layout like node-config's
+    whole-filename profile, e.g. `{profile}.json` — the bare match names the
+    profile whether or not it is empty, unlike `{-profile}`'s dash
+    convention. `prod.cfg` names profile `prod`; nothing at all is the base,
+    so `k` never resolves for `default`."""
+    files = {"prod.cfg": [("k", "v", 0)]}
+    model = {
+        "sources": [{"pattern": "{profile}.cfg"}],
+        "profiles": {"from_filename": "{profile}", "default_profile": "default"},
+    }
+    rows = _resolve(tmp_path, files, model)
+    assert {row["environment"] for row in rows} == {"default", "prod"}
+    assert _row(rows, "k", "prod")["value"] == "v"
+    assert _row(rows, "k", "default")["unresolved_reason"] == "missing_key"
+
+
+def test_filename_profile_splitting_only_applies_when_from_filename_is_declared(
+    tmp_path: Path,
+):
+    """Controller ruling M-a (fix round 1): filename splitting is one of
+    D02 §2i's three declared profile mechanisms — a model that never
+    declares `profiles.from_filename` never gets it, even where a source
+    pattern spells `{-profile}`. `app-prod.yml` never becomes a `prod`
+    profile here: only `default` ever enumerates, and `app.yml`'s own
+    (literally, exactly matched) value is the only one that wins it."""
+    files = {
+        "app.yml": [("probe", "base-value", 0)],
+        "app-prod.yml": [("probe", "variant-value", 0)],
+    }
+    model = {
+        "sources": [{"pattern": "app.yml"}, {"pattern": "app{-profile}.yml"}],
+        "profiles": {"default_profile": "default"},  # from_filename NOT declared
+    }
+    rows = _resolve(tmp_path, files, model)
+    assert {row["environment"] for row in rows} == {"default"}
+    assert _row(rows, "probe", "default")["value"] == "base-value"
+
+
+# --- from_key_prefix: reserved, refused loudly, never silently ignored ----
+
+
+def test_a_declared_from_key_prefix_mechanism_is_refused_as_reserved_unimplemented(
+    tmp_path: Path,
+):
+    """Controller ruling M-a (fix round 1): `from_key_prefix` (Quarkus's
+    `%dev.` style) is documented in D02 §2i and reserved, not implemented —
+    a model declaring it must be refused loudly, naming the catalog, never
+    silently produce a resolve that quietly ignores the mechanism it
+    claimed to use."""
+    files = {"app.yml": [("k", "v", 0)]}
+    model = {
+        "sources": [{"pattern": "app.yml"}],
+        "profiles": {"default_profile": "default", "from_key_prefix": "%dev."},
+    }
+    for relative_path, entries in files.items():
+        _write(tmp_path, relative_path, entries)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    with pytest.raises(CatalogError, match="from_key_prefix"):
+        resolve_config(workspace, [_catalog(model)])
+    workspace.close()

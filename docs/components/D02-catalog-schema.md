@@ -1119,7 +1119,11 @@ config_model:
 **`sources` is precedence order, lowest first** — a later source in the list, and a
 profile variant of any source, both win over what came before. Each entry's `pattern` is
 matched against files under the module's resource roots; a module missing a listed source
-simply contributes nothing from it.
+simply contributes nothing from it. WITHIN one source, precedence is three tiers, lowest
+first — an unlocked base document, a document of that same base file activated by
+`from_document_key`, then a separate profile-variant FILE named by the filename marker —
+so an inline activated document never outranks a same-profile variant file, Spring's own
+real resource order.
 
 **Profile spelling is a closed three-mechanism vocabulary** — `from_filename`,
 `from_document_key`, and `from_key_prefix` (reserved for Quarkus's `%dev.` prefix style,
@@ -1139,7 +1143,11 @@ surveyed placeholder grammar reduces to.
 `key_path` ([D00](D00-fact-schema.md) §5c) is compared against a catalog-declared key
 template.** `relaxed` tolerates Spring's own RELAXED binding — kebab-case, camelCase and
 `ENV_VAR` style all matching one canonical key; `exact` requires a literal match. A
-catalog declares which its framework uses; the pass never guesses.
+catalog declares which its framework uses; the pass never guesses. It governs LOOKUPS
+only — a `${...}` reference, and later a catalog's own key-template join — never the
+layering merge itself, which always keys on a `config_entry`'s own exact `key_path`:
+relaxed binding is Spring's own binding-time concept, not a file-reading one, so two
+different spellings in config files stay two different keys at merge time regardless.
 
 **`remote_prefixes` is an optional list of literal string prefixes** naming a
 config-server or `spring.config.import`-shaped value — Spring's own model declares
