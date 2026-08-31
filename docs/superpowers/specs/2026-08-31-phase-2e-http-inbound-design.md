@@ -6,12 +6,68 @@ Spring services actually declare them": functional routing in both DSLs (the
 mappings inherited from scanned interfaces and superclasses, and the declared media
 types (`produces`/`consumes`) as two protocol-neutral endpoint columns. Plus the
 ledgered docs carries. Zero extractor changes is the phase bet, checkpoint-verified.
+The phase opens with §0 — a language-neutrality hardening task folding in the
+2026-08-31 four-seam review findings, so the combinator engine is built on a base
+whose neutrality is enforced structurally, not just by word-lists.
 
 User rulings binding this spec: Java `RouterFunctions` AND Kotlin `coRouter` both ship
 this phase; media types land as two endpoint columns with the four-evidence-kind
 semantics of §4 (settled through the cross-language verification — Go/Rust/Python/
 JS/TS surveyed, including Flask/Django/DRF and Express/Koa/Hapi); the engine is
 language-agnostic by construction, with the Java/Kotlin pair as the in-phase proof.
+
+## 0. Language-neutrality hardening — the phase's first task
+
+The 2026-08-31 four-seam review (fact contract, engines, catalog schema,
+storage/shapes) found the architecture held where it was designed to — no framework
+or language name in any engine or SQL file, neutral endpoint/shape schemas, D00's
+SCIP grammar and 14-kind construct vocabulary genuinely cross-language. What it found
+instead were places where the implementation drifted below the contract or where a
+JVM convention never got written down. Four fixes, folded here as Task 1 so nothing
+in this phase builds on top of them:
+
+**(a) Align the construct vocabulary with D00 §4.** `ConstructKind` in
+`src/sextant/domain/closed_sets.py` implements 8 of D00's 14 kinds — no `FUNCTION`,
+`STRUCT`, `TRAIT`, `PROTOCOL`, `ALIAS`, `ACCESSOR` — and
+`derive_endpoints.sql` joins on `construct_kind = 'method'` exactly. A free-function
+handler (Flask `@app.route`, Go `http.HandleFunc`) would fail closed-set validation
+or derive zero endpoints silently. Add the six missing members verbatim from D00 §4
+and widen the SQL join to `IN ('method', 'function')`. The JVM extractor emits none
+of the new kinds, so the frozen 68-row endpoint set and double-run byte-identity are
+the proof of no behavior change.
+
+**(b) One symbol-grammar seam.** Four sites parse the SCIP `owner#member` sub-shape
+ad hoc, and one crashes on ownerless symbols:
+`shapes/expansion.py`'s `descriptor.index("#")` (ValueError on a free-function
+symbol, which SCIP spells with no `#`), `engines/single_call.py`'s
+`rpartition("#")`, `shapes/rooting.py`'s `_catalog_symbol` (dotted → `/` + `#`),
+and `egress/render/viewmodel.py`'s `rstrip("#")`. Create
+`src/sextant/domain/symbols.py` as the single seam: safe owner/member split where a
+missing owner is `None` — an answer, never an exception — plus the dotted-catalog
+conversion, and rewire all four sites through it. Byte-identical behavior for every
+symbol the JVM extractor emits today.
+
+**(c) Contract sentences, not code.** D00 gains two: `<init>` is the canonical
+constructor call-site *name* that every extractor normalizes to (Python `__init__`
+maps in; languages without constructors simply never emit it — the engines already
+tolerate absence), which turns the bare literal compared in three engines from a
+JVM-ism into contract; and interface satisfaction is extractor-computed — a
+structural-interface language (Go) derives the same `interfaces` facts from
+method-set satisfaction, and the `interface_implementation` engine's join is
+unchanged. D02 gains one: the dotted catalog notation is sugar for the JVM symbol
+scheme, and the conversion becomes scheme-aware when the first non-JVM catalog
+arrives (documented now so the notation doesn't ossify as universal).
+
+**(d) A structural neutrality test.** `test_language_confinement.py` and
+`test_source_rules.py` grep for forbidden *words*, so none of (a)–(c) was
+catchable — `<init>` and `index("#")` are not on any word-list. With (b)'s seam in
+place, add the architecture test the word-lists cannot express: symbol-grammar
+string parsing lives only in `domain/symbols.py`.
+
+Adjudicated and *not* in scope: keyword/options-object argument addressing (additive
+catalog vocabulary, already a ledgered open decision), Go struct tags in
+`serialization.name_from` (additive when a Go catalog exists), and `jms` as a
+protocol value (the 2D ruling stands — JMS genuinely hides the broker).
 
 ## 1. The `combinator` engine — the seventh style
 
