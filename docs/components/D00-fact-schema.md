@@ -369,6 +369,13 @@ config file, and nothing more:
 - the source document and `doc_index` — the source file's YAML document index, which a
   multi-document file's `on-profile` activation needs to tell its documents apart.
 
+**Entries are emitted in declaration order within their document, and that order is the
+fact's implicit sequence.** No field carries it explicitly — a fact file is written in
+declaration order (§7), so the load order the workspace already keeps (`rowid`)
+reconstructs it losslessly, the same rowid-carried ordering `symbols` already relies on
+for its own `seq`. This is what lets the layering pass see a file's keys in the order the
+file wrote them, the same NFR-1 role `call_site.ordinal` states for instructions.
+
 **The document's `language` column carries the FORMAT** (`yaml`, `properties`) for a
 config file, never a language name. This is the same discipline that keeps `language`
 itself off individual facts (§2): a field meaning one thing for a config format and
