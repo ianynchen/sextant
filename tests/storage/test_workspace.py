@@ -218,6 +218,10 @@ _TOPIC_ENDPOINT_KWARGS = {
     "prefix_from": [],
     "peer_from": [],
     "method_from": "method",
+    # Task 5: no catalog in this file declares media attributes, so both alias
+    # lists are empty — the "every non-HTTP catalog derives NULL" default.
+    "consumes_from": [],
+    "produces_from": [],
 }
 
 

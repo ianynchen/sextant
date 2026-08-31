@@ -599,6 +599,275 @@ def test_a_mapping_naming_two_paths_and_two_methods_derives_all_four_identities(
     ]
 
 
+# --- Task 5: annotation-declared media (consumes/produces) ---
+
+_MEDIA_CATALOG = Catalog(
+    id="invented-media",
+    style="annotation_driven",
+    protocol="http",
+    direction="inbound",
+    requires=("annotation_args",),
+    source=Path("tests/invented.yml"),
+    matches={
+        "mapping": {
+            "path_from": ["value"],
+            "prefix_from": ["value"],
+            "consumes_from": ["consumes"],
+            "produces_from": ["produces"],
+            "method_from": "method",
+            "all_methods": ["GET"],
+            "prefix_annotation": "com.acme.rest.Mapping",
+            "annotations": [{"fqn": "com.acme.rest.Get", "method": ["GET"]}],
+        },
+    },
+)
+
+
+def _media_reading_facts(root: Path) -> None:
+    """Three handlers exercising the scalar-or-array read and the NULL rule:
+    a scalar `consumes`, an out-of-order array `produces`, and neither
+    attribute at all."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rest/OrderResource.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    resource = "com/acme/rest/OrderResource#"
+    scalar = "com/acme/rest/OrderResource#getScalar(sig_1a2b3c4d)."
+    array = "com/acme/rest/OrderResource#getArray(sig_2b3c4d5e)."
+    neither = "com/acme/rest/OrderResource#getNeither(sig_3c4d5e6f)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=resource, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=scalar,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=resource,
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=array,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=resource,
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=neither,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=resource,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=scalar,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/rest/Get#",
+                args={"value": ["/scalar"], "consumes": "application/json"},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=array,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/rest/Get#",
+                args={"value": ["/array"], "produces": ["b/y", "a/x"]},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=neither,
+            retention="runtime",
+            use=AnnotationUse(annotation="com/acme/rest/Get#", args={"value": ["/neither"]}),
+        ),
+    ]
+    write_fact_file(root / "OrderResource.jsonl", document, facts)
+
+
+def test_media_attributes_are_read_scalar_or_array_order_normalized_and_absence_stays_null(
+    tmp_path: Path,
+):
+    """(i) a scalar `consumes` and an out-of-order array `produces` both read
+    correctly — the same scalar-or-array pattern `path_from` already uses —
+    and normalize to a sorted JSON array; (ii) a mapping declaring neither
+    attribute derives both columns NULL, never a guessed default (D01 §4)."""
+    _media_reading_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    derive_endpoints(workspace, [_MEDIA_CATALOG], capabilities={"annotation_args"})
+    rows = {r["path"]: r for r in workspace.query("endpoints")}
+    workspace.close()
+
+    assert rows["/scalar"]["consumes"] == '["application/json"]'
+    assert rows["/scalar"]["produces"] is None
+    assert rows["/array"]["produces"] == '["a/x","b/y"]'
+    assert rows["/array"]["consumes"] is None
+    assert rows["/neither"]["consumes"] is None
+    assert rows["/neither"]["produces"] is None
+
+
+def _one_method_two_annotations_facts(root: Path) -> None:
+    """One handler, two mapping-annotation uses on it — the same wire
+    identity twice, differing only in `produces`. Contrived as Java source,
+    but a legitimate pair of annotation facts, and exactly what the
+    within-batch union (D01 §4) must fold into one row."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rest/OrderResource.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    resource = "com/acme/rest/OrderResource#"
+    handle = "com/acme/rest/OrderResource#handle(sig_4d5e6f70)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=resource, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handle,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=resource,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handle,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/rest/Get#",
+                args={"value": ["/negotiate"], "produces": "b/y"},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handle,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/rest/Get#",
+                args={"value": ["/negotiate"], "produces": "a/x"},
+            ),
+        ),
+    ]
+    write_fact_file(root / "OrderResource.jsonl", document, facts)
+
+
+def test_two_mapping_annotations_on_one_method_derive_one_row_with_the_media_union(
+    tmp_path: Path,
+):
+    """(iii) two mapping annotations on ONE method — same path/method, rows
+    differing only in media — derive ONE row whose `produces` is the sorted
+    distinct union, not two rows and not either annotation's value alone."""
+    _one_method_two_annotations_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    derive_endpoints(workspace, [_MEDIA_CATALOG], capabilities={"annotation_args"})
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert len(rows) == 1
+    assert rows[0]["produces"] == '["a/x","b/y"]'
+
+
+def _content_negotiation_sibling_facts(root: Path) -> None:
+    """Two DIFFERENT handlers mapped to the same path and method — a
+    content-negotiation pair, distinguished only by their own `produces`.
+    The within-batch union must not fold these together: `handler` is one of
+    the grouped columns, not an aggregate, so it keeps them apart exactly as
+    it did before this task."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rest/OrderResource.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    resource = "com/acme/rest/OrderResource#"
+    get_json = "com/acme/rest/OrderResource#getJson(sig_5e6f7081)."
+    get_xml = "com/acme/rest/OrderResource#getXml(sig_6f708192)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=resource, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=get_json,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=resource,
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=get_xml,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=resource,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=get_json,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/rest/Get#",
+                args={"value": ["/negotiate"], "produces": "application/json"},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=get_xml,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/rest/Get#",
+                args={"value": ["/negotiate"], "produces": "application/xml"},
+            ),
+        ),
+    ]
+    write_fact_file(root / "OrderResource.jsonl", document, facts)
+
+
+def test_content_negotiation_siblings_with_different_handlers_derive_exactly_as_today(
+    tmp_path: Path,
+):
+    """(iv) two mappings on different methods sharing a wire identity still
+    derive their own rows: the union groups on every non-media column, so
+    differing handlers never collapse into one another's media."""
+    _content_negotiation_sibling_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    derive_endpoints(workspace, [_MEDIA_CATALOG], capabilities={"annotation_args"})
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert len(rows) == 2
+    produces_by_handler = {r["handler"]: r["produces"] for r in rows}
+    assert produces_by_handler["com/acme/rest/OrderResource#getJson(sig_5e6f7081)."] == (
+        '["application/json"]'
+    )
+    assert produces_by_handler["com/acme/rest/OrderResource#getXml(sig_6f708192)."] == (
+        '["application/xml"]'
+    )
+
+
 def _client_facts(root: Path, type_args: dict[str, object]) -> None:
     """A client interface in the outbound shape D02 §2 (amended) describes: a
     type-level marker that also carries the service name and address prefix

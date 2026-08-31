@@ -36,6 +36,14 @@
 --   $all_methods         -- the methods a mapping annotation means when it names none
 --   $catalog_id          -- the id of the catalog running this derivation (2E-prep
 --                           design §1a) — provenance only, never part of wire identity
+--   $consumes_from       -- attribute names the mapping annotation's declared
+--                           request media types are read from, scalar-or-array
+--                           (the $path_from pattern), or an empty list where the
+--                           catalog declares none — carried data (D01 §4), never
+--                           identity, and never a guessed default.
+--   $produces_from       -- attribute names the mapping annotation's declared
+--                           response media types are read from; same rules as
+--                           $consumes_from.
 
 -- Named explicitly: `endpoints` also carries request_shape/response_shape
 -- (D01 §3 Contracts), which this engine does not populate — that is the
@@ -83,7 +91,25 @@ declared AS (
             ) END,
             mc.methods,
             $all_methods::VARCHAR[]
-        ) AS methods
+        ) AS methods,
+        -- Task 5: the same scalar-or-array, first-alias-wins read as `paths`
+        -- above, applied to the media attributes instead of the path ones.
+        -- An empty $consumes_from/$produces_from (every non-HTTP catalog
+        -- today) means every alias is absent, so `list_extract` on the
+        -- resulting empty list already yields NULL — no default needed, and
+        -- none is a guessed one (D01 §4).
+        list_extract(list_filter(list_transform(
+            $consumes_from::VARCHAR[],
+            n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
+                      THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
+                                    [a.args ->> n]) END
+        ), v -> v IS NOT NULL), 1) AS consumes_list,
+        list_extract(list_filter(list_transform(
+            $produces_from::VARCHAR[],
+            n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
+                      THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
+                                    [a.args ->> n]) END
+        ), v -> v IS NOT NULL), 1) AS produces_list
     FROM annotations a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
 ),
@@ -113,13 +139,17 @@ mapped_methods AS (
     SELECT d.target AS target,
            UNNEST(CASE WHEN len(d.methods) = 0
                        THEN [CAST(NULL AS VARCHAR)] ELSE d.methods END) AS wire_method,
-           d.paths AS paths
+           d.paths AS paths,
+           d.consumes_list AS consumes_list,
+           d.produces_list AS produces_list
     FROM declared d
 ),
 mappings AS (
     SELECT mm.target AS method_symbol,
            mm.wire_method AS wire_method,
-           UNNEST(mm.paths) AS path_suffix
+           UNNEST(mm.paths) AS path_suffix,
+           mm.consumes_list AS consumes_list,
+           mm.produces_list AS produces_list
     FROM mapped_methods mm
 ),
 derived AS (
@@ -137,10 +167,11 @@ derived AS (
         'resolved'  AS resolution,
         'compiler'  AS evidence,
         $catalog_id AS catalog_id,
-        -- Task 5 replaces these literals with mapping-attribute media
-        -- (spec §4 evidence kind (a)); every other engine passes NULL too.
-        NULL        AS consumes,
-        NULL        AS produces
+        -- Raw per-row lists (evidence kind (a): mapping attributes) — still
+        -- to be unioned and JSON-normalized below, per row group sharing a
+        -- wire identity plus handler/caller/resolution/evidence/catalog_id.
+        m.consumes_list AS consumes_list,
+        m.produces_list AS produces_list
     FROM mappings m
     -- A handler or caller is always a method. Without this, a TYPE-level
     -- mapping annotation (a prefix-carrying @HttpExchange, a class-level
@@ -154,8 +185,30 @@ derived AS (
     LEFT JOIN controllers c ON s.enclosing = c.type_symbol
     LEFT JOIN prefixes p ON p.type_symbol = s.enclosing
     WHERE $type_annotation IS NULL OR c.type_symbol IS NOT NULL
+),
+-- Within-batch union (D01 §4, spec §4): rows differing ONLY in declared
+-- media are one endpoint, so this groups on every OTHER column derived
+-- above and folds consumes/produces into the sorted-distinct union of
+-- whatever each grouped row declared. Everything else — including
+-- content-negotiation siblings, which differ in `handler` — stays apart,
+-- since `handler` (or `caller`) is one of the grouped columns, not an
+-- aggregate. `GROUP BY ALL` groups on every non-aggregated select-list
+-- column, verified empirically against the CASE aggregates below; listed
+-- explicitly would be these same eleven: protocol, direction, method, path,
+-- handler, caller, peer, handler_signature, resolution, evidence, catalog_id.
+unioned AS (
+    SELECT protocol, direction, method, path, handler, caller, peer,
+           handler_signature, resolution, evidence, catalog_id,
+           CASE WHEN count(consumes_list) = 0 THEN NULL
+                ELSE to_json(list_sort(list_distinct(flatten(list(consumes_list)
+                     FILTER (WHERE consumes_list IS NOT NULL))))) END AS consumes,
+           CASE WHEN count(produces_list) = 0 THEN NULL
+                ELSE to_json(list_sort(list_distinct(flatten(list(produces_list)
+                     FILTER (WHERE produces_list IS NOT NULL))))) END AS produces
+    FROM derived
+    GROUP BY ALL
 )
-SELECT * FROM derived d
+SELECT * FROM unioned d
 WHERE NOT EXISTS (
     SELECT 1 FROM endpoints existing
     WHERE existing.protocol  = d.protocol

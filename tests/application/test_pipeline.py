@@ -399,6 +399,19 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     ]
     assert "lambda$reserveAfterLevels$" in reserve_row["caller"]
 
+    # Task 5: OrderController's two media-declaring routes fill consumes/
+    # produces off their own `@GetMapping`/`@PostMapping` attributes (spec §4
+    # evidence kind (a)); every other row in the fixture — `create`'s own
+    # bare `@PostMapping` among them — derives both NULL, the fixture's own
+    # NULL-stays-NULL pin (no declaration is a guessed default, D01 §4).
+    media = {(e["method"], e["path"]): (e["consumes"], e["produces"]) for e in report.endpoints}
+    assert media[("GET", "/v1/orders/{id}")] == (None, '["application/json"]')
+    assert media[("POST", "/v1/orders/detailed")] == (
+        '["application/json"]',
+        '["application/json"]',
+    )
+    assert media[("POST", "/v1/orders")] == (None, None)
+
 
 # --- Task 10: the three listener catalogs, end to end, on real bytecode ---
 

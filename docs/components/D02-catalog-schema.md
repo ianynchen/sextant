@@ -187,6 +187,38 @@ would honestly find none; naming `Acknowledgment` there lets the fallback see th
 payload. This lives under `request_body` rather than as a separate top-level
 `payload_excludes`, because it is the same fallback rule this key already governs.
 
+**`mapping` gains `consumes_from`/`produces_from`, two more alias lists reading declared
+media types (`endpoints.consumes`/`endpoints.produces`, [D01](D01-graph-schema.md) §4's
+evidence kind (a)).**
+
+```yaml
+mapping:
+  consumes_from: [consumes]
+  produces_from: [produces]
+```
+
+- **Same scalar-or-array read as `path_from`, first present alias wins.** A mapping
+  annotation whose `produces()` is a plain `String` and one whose `produces()` is a
+  `String[]` both read correctly; the values that survive are sorted and de-duplicated
+  before landing in the column ([D01](D01-graph-schema.md) §4's order-normalisation, NFR-1)
+  — a catalog author never orders these by hand.
+- **A catalog declaring neither key reads nothing.** `consumes_from`/`produces_from` both
+  default to an empty alias list, and an empty list matches no attribute, so the column is
+  `NULL` — absence is not a licence to invent a default. This is why every catalog that
+  predates this key keeps deriving `NULL` with zero YAML change.
+- **`default_consumes`/`default_produces` are specified here, not yet used**: a
+  catalog-declared framework-contract default ([D01](D01-graph-schema.md) §4's evidence kind
+  (b)) — a media type the framework enforces whenever a mapping declares none itself, rather
+  than one read off any single annotation attribute. `spring-web.yml` and `spring-mvc.yml`
+  deliberately declare neither key: Spring negotiates an undeclared mapping at runtime rather
+  than enforcing a contract default, so filling one in here would misrepresent an undeclared
+  mapping as a declared one. Left for the catalogs that do carry a real framework-contract
+  default to declare when they are added.
+- **Type-level media attributes are not read in 2E.** A class-level
+  `@RequestMapping(produces = ...)` — Spring's own equivalent of `prefix_from` for media —
+  is out of scope for this phase; only the method-level mapping annotation's own attributes
+  fill `consumes`/`produces`.
+
 ### `single_call`
 
 One call carries the whole declaration. Arguments are addressed by position or name.

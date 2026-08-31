@@ -46,6 +46,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         method_from=mapping["method_from"],
         all_methods=list(mapping["all_methods"]),
         catalog_id=catalog.id,
+        # Optional (media evidence kind (a), spec §4): absent on every
+        # catalog that declares neither, so it derives NULL with zero YAML
+        # change — the HTTP catalogs are the only ones that declare these.
+        consumes_from=list(mapping.get("consumes_from", [])),
+        produces_from=list(mapping.get("produces_from", [])),
     )
     # Optional (D02 §2, amended): a catalog with no `reply` block declares no
     # second-row rule at all — the HTTP catalogs, which never see @SendTo.
