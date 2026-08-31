@@ -251,8 +251,8 @@ This also pre-feeds `inherits` edges ([D01](D01-graph-schema.md)).
 
 **A class symbol fact also carries the erased symbols of every interface it implements, in
 declaration order, as `interfaces` — emitted only when non-empty** (the `implemented_interfaces`
-capability, [M03](M03-scanner.md)): a receiver registered by its declared type (`new
-PubSubReceiver(subscription, new RawPubSubReceiver())`) names no method by itself, and
+capability, [M03](M03-scanner.md)): a receiver registered by its declared type
+(`Subscriber.newBuilder(subscription, new RawPubSubReceiver())`) names no method by itself, and
 `interfaces` is what lets a catalog join that type back to the single method the interface
 declares.
 

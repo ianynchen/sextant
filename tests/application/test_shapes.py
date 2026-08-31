@@ -1586,8 +1586,9 @@ def test_the_producer_catalogs_wrappers_are_the_harvested_baseline_verbatim():
     """Unlike the three Task 10 listener catalogs (`spring-kafka.yml` adds a
     `ConsumerRecord` envelope entry on top of the baseline, for the one
     listener parameter shape that needs unwrapping), none of the six Task 11
-    producer catalogs, nor 2E-prep Task 11's three raw-client catalogs, add a
-    broker-specific `wrappers` entry: a `single_call`/`fluent` row's payload
+    producer catalogs, nor 2E-prep Task 11's three raw-client catalogs, nor
+    2E-prep Task 12's four (the Pub/Sub trio plus `spring-kafka-message`),
+    add a broker-specific `wrappers` entry: a `single_call`/`fluent` row's payload
     comes from its own declared position (`body_arg`/a step's own `body`
     capture) or a `record_wrappers` constructor hop, never through an
     envelope type a `wrappers` rule would need to unwrap. So each of these

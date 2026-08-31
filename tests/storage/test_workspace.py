@@ -323,7 +323,7 @@ def test_null_method_rows_dedup_and_merge_on_the_same_identity(tmp_path: Path):
 
 
 def test_endpoints_carry_the_catalog_id_that_derived_them(tmp_path: Path):
-    """D02D-prep spec §1a, Task 1: every endpoints row is stamped with the id
+    """2E-prep spec §1a, Task 1: every endpoints row is stamped with the id
     of the catalog that derived it — an inbound row via `derive("endpoints",
     catalog_id=...)`, an outbound row via `derive("call_endpoints",
     rows=[{..., "catalog_id": ...}])`."""
@@ -364,7 +364,7 @@ def test_endpoints_carry_the_catalog_id_that_derived_them(tmp_path: Path):
 
 
 def test_merge_keeps_the_inbound_rows_catalog_id(tmp_path: Path):
-    """D02D-prep spec §1a: `merge_endpoints.sql` UPDATEs the inbound row in
+    """2E-prep spec §1a: `merge_endpoints.sql` UPDATEs the inbound row in
     place and only DELETEs the outbound one, so a `both` row keeps the
     INBOUND side's `catalog_id` even though the outbound side was derived by
     a different catalog."""
@@ -400,6 +400,53 @@ def test_merge_keeps_the_inbound_rows_catalog_id(tmp_path: Path):
     workspace.close()
 
     assert [(r["direction"], r["catalog_id"]) for r in rows] == [("both", "cat-in")]
+
+
+def test_the_endpoints_ordering_breaks_a_full_tie_on_caller(tmp_path: Path):
+    """NFR-1: the `endpoints` query orders by protocol, method, path, handler
+    and finally `caller`, and `caller` is the tiebreak that turns an ordering
+    with ties into an ordering at all. Two outbound rows can tie on every
+    earlier column — a messaging destination nobody could read leaves
+    `method`/`path`/`handler` all NULL, which `sendDefault` and a `@SendTo`
+    naming nothing both produce — leaving only the calling method to tell
+    them apart. Inserted here in REVERSE caller order, so an ORDER BY that
+    stopped before `caller` would hand back insert order and the query's
+    answer would depend on which call site the resolver reached first.
+
+    Pinned directly rather than through the whole pipeline: the resolve
+    fixture's rows already reach the table caller-sorted, so the two-run
+    agreement test in `test_pipeline.py` passes with or without this
+    tiebreak. Mutation-checked — dropping `caller` from the ORDER BY turns
+    this red."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    def _unreadable_destination(caller: str) -> dict:
+        return {
+            "protocol": "kafka",
+            "direction": "outbound",
+            "method": None,
+            "path": None,
+            "handler": None,
+            "caller": caller,
+            "peer": None,
+            "handler_signature": None,
+            "resolution": "unresolved",
+            "evidence": "compiler",
+            "request_shape": None,
+            "response_shape": None,
+            "catalog_id": "cat-out",
+        }
+
+    zulu = "com/acme/notify/ZuluPublisher#publish(sig_1a2b3c4d)."
+    alpha = "com/acme/notify/AlphaPublisher#publish(sig_1a2b3c4d)."
+    workspace.derive("call_endpoints", rows=[_unreadable_destination(zulu)])
+    workspace.derive("call_endpoints", rows=[_unreadable_destination(alpha)])
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [r["caller"] for r in rows] == [alpha, zulu]
 
 
 def test_load_facts_reports_the_row_count_when_a_fact_tree_is_ingested(tmp_path: Path):

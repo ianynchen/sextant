@@ -120,7 +120,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # Phase 2D (Task 12): metadata.json's own direction/protocol buckets
     # (written by analyze, D05 §3) count every messaging protocol too, a
     # `both` row counting on both sides (metadata.py's own rule) — the same
-    # 62-endpoint fixture as the endpoints.parquet check below, viewed
+    # 68-endpoint fixture as the endpoints.parquet check below, viewed
     # through the other artifact. (2E-prep Task 6, checkpoint ruling
     # 2026-08-30: kafka outbound is 8, not 7 — `RawKafkaMessageSender#send`'s
     # `kafkaTemplate.send(Message<?>)` derives its own unresolved NULL-path
