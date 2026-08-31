@@ -14,6 +14,7 @@ from sextant.domain.facts import (
     ConfigEntryFact,
     Document,
     Fact,
+    FieldWriteFact,
     Parameter,
     Signature,
     SymbolFact,
@@ -323,6 +324,58 @@ def test_config_entry_fact_doc_index_defaults_to_zero():
 def test_config_entry_fact_kind_literal_serialises_as_config_entry():
     entry = ConfigEntryFact(document_id="doc_1", key_raw="a", key_path="a", value="v")
     assert json.loads(entry.model_dump_json())["kind"] == "config_entry"
+
+
+def test_call_site_fact_accepts_a_field_kind_argument():
+    # D00 §5's `field` kind: strictly additive, joins the existing set beside
+    # `enum` rather than replacing anything it used to resolve to.
+    call_site = CallSiteFact(
+        document_id="doc_1",
+        caller="sextant-jvm maven com.acme/orders 1.0 com/acme/OrdersRestClient#submit().",
+        target=CallTarget(
+            owner="org/springframework/web/client/RestClient$RequestBodyUriSpec#",
+            name="uri",
+            descriptor="(Ljava/lang/String;)Lorg/springframework/web/client/RestClient$RequestBodySpec;",
+        ),
+        invoke_kind="interface",
+        ordinal=0,
+        arguments=[
+            CallArgument(kind="field", symbol="com/acme/OrdersRestClient#url."),
+        ],
+    )
+
+    dumped = call_site.model_dump(mode="json")
+    reloaded = TypeAdapter(Fact).validate_python(dumped)
+
+    assert reloaded == call_site
+    assert reloaded.arguments[0].kind == "field"
+    assert reloaded.arguments[0].symbol == "com/acme/OrdersRestClient#url."
+
+
+def test_field_write_fact_survives_a_fact_file_round_trip(tmp_path: Path):
+    write = FieldWriteFact(
+        document_id="doc_1",
+        field="com/acme/OrdersRestClient#url.",
+        from_parameter=0,
+    )
+    path = tmp_path / "OrdersRestClient.jsonl"
+
+    write_fact_file(path, DOCUMENT, [write])
+    document, facts = read_fact_file(path)
+
+    assert document == DOCUMENT
+    assert facts == [write]
+    read_write = facts[0]
+    assert isinstance(read_write, FieldWriteFact)
+    assert read_write.field == "com/acme/OrdersRestClient#url."
+    assert read_write.from_parameter == 0
+
+
+def test_field_write_fact_kind_literal_serialises_as_field_write():
+    write = FieldWriteFact(
+        document_id="doc_1", field="com/acme/OrdersRestClient#url.", from_parameter=0
+    )
+    assert json.loads(write.model_dump_json())["kind"] == "field_write"
 
 
 def test_call_site_fact_kind_literal_serialises_as_call_site():

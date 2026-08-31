@@ -63,6 +63,12 @@ _NAMED_QUERIES = {
     # the ordering total, the same reason `shape_fields` orders by
     # `shape_id, ordinal` rather than `ordinal` alone (NFR-1).
     "call_sites": "SELECT * FROM call_sites ORDER BY caller, ordinal",
+    # D00 §5's field_write: constructors only, direct traces only — the field
+    # resolution ladder's (2F) second rung, joining a `field`-kind argument's
+    # symbol back to the parameter it was assigned from. Ordered by `field`
+    # so a field written by more than one constructor overload reads its
+    # candidates together, `from_parameter` breaking the tie (NFR-1).
+    "field_writes": "SELECT field, from_parameter FROM field_writes ORDER BY field, from_parameter",
     # D00 §5a's PTR carrier: every declared type's own generic supertype
     # reference, keyed by the type's own (module-prefixed) symbol — the
     # `single_call` engine strips the prefix itself, the same way

@@ -165,3 +165,12 @@ SELECT document_id,
        (payload ->> 'result')::INTEGER         AS result,
        payload ->  'arguments'                 AS arguments
 FROM raw_facts WHERE kind = 'call_site';
+
+CREATE OR REPLACE VIEW field_writes AS
+-- D00 §5's field_write: a constructor assigning parameter N straight to
+-- field F, constructors only, direct traces only. The field resolution
+-- ladder (2F) is its only consumer so far.
+SELECT document_id,
+       payload ->> 'field'                     AS field,
+       (payload ->> 'from_parameter')::INTEGER AS from_parameter
+FROM raw_facts WHERE kind = 'field_write';

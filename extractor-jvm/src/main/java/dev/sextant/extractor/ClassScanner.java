@@ -223,6 +223,11 @@ public final class ClassScanner {
                     // After the method's own symbol, never before: a call site
                     // names its caller, and a fact file reads top-down.
                     lines.addAll(MethodFlow.callSites(documentId, methodSymbol, this));
+                    // D00 §5's field_write: constructors only. MethodFlow does
+                    // its own "<init>" gate, the same way it does its own
+                    // per-instruction scan for call sites, so this call is
+                    // unconditional here and a no-op on every other method.
+                    lines.addAll(MethodFlow.fieldWrites(documentId, this));
                 }
             };
         }

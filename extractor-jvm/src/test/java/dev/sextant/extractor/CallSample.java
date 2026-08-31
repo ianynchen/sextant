@@ -19,6 +19,10 @@ public final class CallSample {
 
     enum Mode { FAST, SLOW }
 
+    /** An instance field: not a constant of its own type, so it must miss the
+     *  enum-constant shape and land in {@code field} instead. */
+    String url;
+
     public void stringLiteral() {
         sink("/billing/invoices");
     }
@@ -33,6 +37,21 @@ public final class CallSample {
 
     public void enumConstant() {
         mode(Mode.FAST);
+    }
+
+    /** {@code BigDecimal.ZERO} is a GETSTATIC of a field typed as its own
+     *  owner — exactly the enum-constant shape, on a class that carries no
+     *  {@code ACC_ENUM} at all. The ordering pin: the enum check runs first,
+     *  so this must still read {@code enum}, never fall through to the
+     *  {@code field} branch beside it. */
+    public void bigDecimalZeroArgument() {
+        amount(java.math.BigDecimal.ZERO);
+    }
+
+    /** {@code this.url}: a GETFIELD that is not the enum-constant shape —
+     *  D00 §5's {@code field} kind. */
+    public void fieldArgument() {
+        sink(this.url);
     }
 
     public void classLiteral() {
@@ -175,6 +194,10 @@ public final class CallSample {
 
     void mode(Mode value) {
         record(value.name());
+    }
+
+    void amount(java.math.BigDecimal value) {
+        record(value.toString());
     }
 
     void type(Class<?> value) {
