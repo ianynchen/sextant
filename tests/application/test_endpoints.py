@@ -1193,6 +1193,91 @@ def test_a_catalog_with_no_type_gate_matches_on_method_annotations_alone(tmp_pat
     workspace.close()
 
 
+def _gateless_implementer_facts(root: Path) -> None:
+    """The Task 7 review's own repro (Critical finding C1, style modelled
+    on the Task 6 prefix-leak regression in `test_effective_annotations.py`):
+    a gateless (Retrofit-shaped) interface method carrying the mapping,
+    IMPLEMENTED by a second, unrelated class whose own override repeats no
+    annotation of its own. A gated HTTP catalog would legitimately inherit
+    the mapping onto that implementer (Task 7's own fixture); a gateless
+    catalog must not — the interface method IS the client identity, and an
+    implementer here is not a controller a mapping could plausibly belong
+    to."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/legacy/ClientIface.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    iface = "com/acme/legacy/ClientIface#"
+    iface_fetch = "com/acme/legacy/ClientIface#fetch(sig_2a77e410)."
+    impl = "com/acme/legacy/ClientImpl#"
+    impl_fetch = "com/acme/legacy/ClientImpl#fetch(sig_2a77e410)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=iface, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=iface_fetch,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=iface,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void")),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=iface_fetch,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/legacy/annotation/GET#",
+                args={"value": "legacy/invoices"},
+            ),
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=impl,
+            construct_kind=ConstructKind.CLASS,
+            interfaces=[iface],
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=impl_fetch,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=impl,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void")),
+        ),
+    ]
+    write_fact_file(root / "ClientIface.jsonl", document, facts)
+
+
+def test_a_gateless_catalog_never_synthesizes_onto_an_implementing_class(tmp_path):
+    """Task 7 review, Critical finding C1: an interface method's mapping
+    under a GATELESS catalog must derive exactly the one row the interface
+    method itself already carries — never a second, synthesized row for a
+    class that merely implements that interface. Before the fix,
+    `annotation_driven.run` ran `inherited_rows` unconditionally, so this
+    exact fixture minted a second row for `ClientImpl#fetch` with no
+    annotation of its own."""
+    _gateless_implementer_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [_UNGATED_CATALOG], capabilities={"annotation_args"})
+    assert skipped == []
+    rows = [e for e in workspace.query("endpoints") if e["direction"] == "outbound"]
+    workspace.close()
+
+    assert len(rows) == 1
+    [row] = rows
+    assert row["path"] == "legacy/invoices"
+    assert row["caller"] == "com/acme/legacy/ClientIface#fetch(sig_2a77e410)."
+
+
 def test_the_service_name_never_leaks_into_the_path(tmp_path):
     """@FeignClient(name=…) with NO path attribute: the prefix is empty, not
     the name — the exact bug the prefix_from/peer_from split exists for."""

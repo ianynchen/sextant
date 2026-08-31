@@ -127,6 +127,14 @@ _NAMED_QUERIES = {
     # (`resolve/effective_annotations.py`'s `inherited_rows`) compares a
     # same-name sibling's parameter/return types against. Ordered by symbol
     # for the same reason `method_symbols` is.
+    #
+    # `construct_kind = 'method'`, deliberately not `'function'` too (unlike
+    # `method_symbols` above, which is a plain call-registration lookup a
+    # free function could equally satisfy): inheritance needs `enclosing` to
+    # place a candidate within a declaring type at all, and a free function
+    # has none — there is no hierarchy for it to inherit through, so
+    # widening this query to `IN ('method', 'function')` would only ever add
+    # rows this pass's own `enclosing IS NULL` guard immediately drops.
     "method_declarations": """
         SELECT symbol, enclosing, signature FROM symbols
         WHERE construct_kind = 'method' ORDER BY symbol

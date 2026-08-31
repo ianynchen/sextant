@@ -187,9 +187,19 @@ def inherited_rows(
     available discriminator is structural: within one class, a candidate
     whose name and parameter types match another of that class's own
     methods but whose return type does not is a bridge, and neither method
-    in that pair is ever a synthesis target (`_is_bridge`) — the real
-    override was never going to match anyway (its descriptor differs), so
-    this only ever suppresses the bridge itself, honestly.
+    in that pair is ever a synthesis target (`_is_bridge`). This is an
+    honest miss for the fixture's own single-ancestor case (the real
+    override's descriptor never matched the interface's anyway), but it is
+    a real, checkpoint-mandated boundary, not merely a defensive no-op: a
+    class that inherits the SAME-named method from both a mapped interface
+    AND a generic superclass can grow two bridges (one exact-matching each
+    ancestor's own descriptor) plus one real override, all three sharing
+    one name and one parameter list — `_is_bridge` cannot tell which
+    ancestor a given bridge belongs to, so it excludes all three, and BOTH
+    ancestors' mappings are silently lost, not just the honest single one.
+    See `_is_bridge`'s own docstring; documented as a COVERAGE boundary
+    (Task 7 review, Important finding I1), not fixed — the structural rule
+    is the only signal bytecode carries at all.
     """
     methods_by_type: dict[str, dict[str, str]] = {}
     signature_by_symbol: dict[str, dict[str, Any] | None] = {}
@@ -254,6 +264,12 @@ def inherited_rows(
             if found is not None:
                 annotation, args = found
                 rows.append({"target": candidate, "annotation": annotation, "args": args})
+        # Computed once per class, independent of the per-method loop above:
+        # a class's inherited prefix applies to EVERY one of its methods
+        # that ends up mapped, whether that mapping is itself inherited or
+        # the class's own real `@GetMapping` — Spring resolves a
+        # `@RequestMapping` prefix at the type level, once, never
+        # separately per method (Task 7 review, M2).
         if (
             prefix_fqn is not None
             and _own_mapping(type_symbol, {prefix_fqn}, annotations_by_target) is None
@@ -410,7 +426,23 @@ def _is_bridge(
     whose return type does not is the compiler-generated bridge (or, from
     that method's own perspective, `candidate` is). Bytecode carries no
     other marker — no `modifiers`, no `access`, identical `visibility` — so
-    this is the only signal there is."""
+    this is the only signal there is.
+
+    Boundary (Task 7 review, Important finding I1 — NOT "this only ever
+    suppresses the bridge itself"): the rule is purely structural and
+    per-class, blind to WHICH ancestor relationship produced a given
+    same-name sibling. A class overriding one method that is simultaneously
+    covariant against a mapped interface AND a generic superclass can carry
+    two bridges (one exact-matching each ancestor's own descriptor) plus one
+    real override — three methods sharing a name and parameter list. Every
+    pairing among the three trips this rule, so ALL three are excluded, not
+    only the genuine bridge(s): the real override, even where its own
+    descriptor happens to equal one ancestor's exactly (a direct match, not
+    a covariant one), never gets the chance to synthesize that ancestor's
+    mapping. `inherited_rows`'s own docstring carries the same note; this is
+    shipped as-is (checkpoint-mandated, and bytecode gives no richer
+    signal), recorded as a COVERAGE boundary rather than silently assumed
+    away."""
     name = method_name(bare_descriptor(candidate))
     params = _parameter_types(signature_by_symbol.get(candidate))
     returns = _return_type(signature_by_symbol.get(candidate))

@@ -259,6 +259,7 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
 
 _I = _MODULE + "com/acme/orders/inherit/OrdersApi#"
 _I2 = _MODULE + "com/acme/orders/inherit/OtherApi#"
+_IX = _MODULE + "com/acme/orders/inherit/BaseApi#"
 _C = _MODULE + "com/acme/orders/inherit/OrdersApiController#"
 _B = _MODULE + "com/acme/orders/inherit/BaseController#"
 _A = _MODULE + "com/acme/orders/inherit/RootController#"
@@ -346,6 +347,38 @@ def test_two_interfaces_mapping_the_same_method_resolve_to_declaration_order():
     ]
 
 
+def test_a_direct_interfaces_own_ancestor_is_reached_before_the_next_direct_interface():
+    """(M1, Task 7 review): `_C` implements `[_I, _I2]`, and `_I` itself
+    extends `_IX` (`_I`'s own `interfaces_of` entry). `_I` declares no own
+    `list`, so its own sub-walk descends into `_IX` — which IS mapped —
+    BEFORE `_I2`, also mapped, is ever consulted. A shallow "check every
+    direct interface's own annotation first, then descend" reading of spec
+    §3 would resolve `_I2`'s value instead, since `_I` alone contributes
+    nothing at its own level; depth-first, matching Spring's own
+    hierarchy-scan order, resolves `_IX`'s."""
+    ix_method = _IX + "list()."
+    i2_method = _I2 + "list()."
+    class_method = _C + "list()."
+    annotation_rows = [
+        {"target": ix_method, "annotation": _GET_MAPPING, "args": {"value": ["/from-ix"]}},
+        {"target": i2_method, "annotation": _GET_MAPPING, "args": {"value": ["/from-i2"]}},
+    ]
+    method_rows = [
+        _method(ix_method, _IX),
+        _method(i2_method, _I2),
+        _method(class_method, _C),
+    ]
+    implementation_rows = [_implements(_C, [_I, _I2]), _implements(_I, [_IX])]
+
+    result = inherited_rows(
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == [
+        {"target": class_method, "annotation": _GET_MAPPING, "args": {"value": ["/from-ix"]}}
+    ]
+
+
 def test_superclass_resolution_loses_to_interfaces_and_reaches_transitively():
     """(iv), both halves: `_C` implements `_I` and extends `_B`, which
     itself extends `_A` (spec §3's "applied transitively up scanned
@@ -430,6 +463,41 @@ def test_a_type_level_prefix_is_not_inherited_when_the_class_carries_its_own():
     assert result == []
 
 
+def test_a_type_level_prefix_applies_to_both_an_inherited_and_an_own_mapped_method():
+    """(M2, Task 7 review): `_C` declares TWO methods — `list` carries its
+    own `@GetMapping` directly, `composed` carries none and inherits `_I`'s.
+    `_I`'s own class-level `@RequestMapping("/api")` prefix must synthesize
+    onto `_C` regardless — Spring resolves a `@RequestMapping` prefix once,
+    at the type level, never separately per method, so the SAME prefix
+    row applies whether a given method's own mapping is real or inherited."""
+    interface_method = _I + "composed()."
+    class_method = _C + "composed()."
+    own_method = _C + "list()."
+    annotation_rows = [
+        {"target": _I, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api"]}},
+        {"target": interface_method, "annotation": _GET_MAPPING, "args": {"value": ["/composed"]}},
+        {"target": own_method, "annotation": _GET_MAPPING, "args": {"value": ["/orders"]}},
+    ]
+    method_rows = [
+        _method(interface_method, _I),
+        _method(class_method, _C),
+        _method(own_method, _C),
+    ]
+    implementation_rows = [_implements(_C, [_I])]
+
+    result = inherited_rows(
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    # `_C`'s own `list` is left alone (its own real mapping already covers
+    # it — no row) — only `composed`'s inherited mapping and the class-level
+    # prefix synthesize, sorted by (target, annotation).
+    assert result == [
+        {"target": _C, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api"]}},
+        {"target": class_method, "annotation": _GET_MAPPING, "args": {"value": ["/composed"]}},
+    ]
+
+
 def test_a_covariant_override_and_its_bridge_both_miss_honestly():
     """(vi): checkpoint item (4)'s frozen bytecode shape — the bridge
     (`find(sig_a)`, the interface's exact descriptor) and the real override
@@ -477,6 +545,46 @@ def test_a_covariant_override_and_its_bridge_both_miss_honestly():
     )
 
     assert result == []
+
+
+def test_a_same_name_overload_with_different_parameters_is_not_a_bridge():
+    """(M3, Task 7 review): `_C` declares two real, legitimate overloads —
+    `list()` (no params, its own unrelated method, no mapping) and
+    `list(String)` (one param, matching `_I`'s own mapped `list(String)`
+    exactly, also no own mapping). `_is_bridge` must not confuse this with
+    the covariant-bridge shape: the two share a name but NOT a parameter
+    list, so `list(String)` is a genuine synthesis candidate and must
+    resolve `_I`'s mapping — a same-name sibling alone is never enough to
+    exclude a candidate; the parameter lists have to match too."""
+    interface_method = _I + "list(sig_b)."
+    no_arg_method = _C + "list(sig_a)."
+    candidate_method = _C + "list(sig_b)."
+    string_param = [{"type": {"symbol": "java/lang/String#"}}]
+    annotation_rows = [
+        {"target": interface_method, "annotation": _GET_MAPPING, "args": {"value": ["/orders"]}}
+    ]
+    method_rows = [
+        _method(
+            interface_method,
+            _I,
+            {"parameters": string_param, "returns": {"symbol": "void#"}},
+        ),
+        _method(no_arg_method, _C, {"parameters": [], "returns": {"symbol": "void#"}}),
+        _method(
+            candidate_method,
+            _C,
+            {"parameters": string_param, "returns": {"symbol": "void#"}},
+        ),
+    ]
+    implementation_rows = [_implements(_C, [_I])]
+
+    result = inherited_rows(
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == [
+        {"target": candidate_method, "annotation": _GET_MAPPING, "args": {"value": ["/orders"]}}
+    ]
 
 
 def test_a_composed_interface_side_row_inherits_onto_the_implementation():

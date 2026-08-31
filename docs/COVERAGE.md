@@ -517,15 +517,27 @@ is, what it costs.
 | Swift | iOS apps | apps are not servers | — | — |
 
 **Phase 2E Task 7** ships the interface/superclass row above (`@RequestMapping` inherited
-mapping resolution, `annotation` + `hierarchy`), with three boundaries drawn deliberately
-rather than left implicit: a **jar-defined interface is never scanned**, so its own mappings
-never derive onto an implementer — the standing compiled-library boundary that gates every
-form until dependency scanning exists (D02 §7); a class **directly implementing two
-interfaces that map the same method** resolves to declaration order — recorded as the
-implementer's own read of the ambiguity, never rendered as one; and inheritance folds
-attributes through the same same-name-attribute subset of `@AliasFor` the meta-annotation
-pass already commits to, never its full cross-name aliasing or `@AliasFor(annotation=...)`
-re-targeting generality.
+mapping resolution, `annotation` + `hierarchy`), gated to catalogs that declare their own
+`type_annotation` — spec §3's own scope is the handler-side OpenAPI-generator pattern
+(mappings on an interface, `@RestController` on the class that implements it); a gateless
+catalog (Retrofit, `spring-http-interface`, `spring-jms`, `spring-kafka`, `spring-sqs`) never
+runs the inheritance walk at all, since its annotated interface method already IS the
+client/listener identity and an unrelated implementing class is never a plausible mapping
+target (Task 7 review, Critical finding C1). Four boundaries are drawn deliberately rather
+than left implicit: a **jar-defined interface is never scanned**, so its own mappings never
+derive onto an implementer — the standing compiled-library boundary that gates every form
+until dependency scanning exists (D02 §7); a class **directly implementing two interfaces
+that map the same method** resolves to declaration order, **depth-first** — the first
+interface's own ancestor chain is walked to exhaustion before the second interface is ever
+consulted, matching Spring's own hierarchy-scan order — recorded as the implementer's own
+read of the ambiguity, never rendered as one; inheritance folds attributes through the same
+same-name-attribute subset of `@AliasFor` the meta-annotation pass already commits to, never
+its full cross-name aliasing or `@AliasFor(annotation=...)` re-targeting generality; and a
+class that inherits the SAME-named method from both a mapped interface AND a generic
+superclass together **loses that mapping entirely** — the compiler's bridge-exclusion rule
+(checkpoint item (4)) is purely structural, per class, and cannot tell which ancestor a given
+bridge belongs to, so every bridge AND the real override are excluded together rather than
+only the genuine bridge (Task 7 review, Important finding I1).
 
 ### 5.2 REST outbound
 

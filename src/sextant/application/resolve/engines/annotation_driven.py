@@ -27,6 +27,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     forwards what the catalog declares."""
     mapping = catalog.matches["mapping"]
     type_annotation = catalog.matches.get("type_annotation")
+    type_annotation_fqn = None if type_annotation is None else _catalog_symbol(type_annotation)
     prefix_annotation = mapping["prefix_annotation"]
     # Optional too (Retrofit, spring-jms): no class-level prefix shape.
     prefix_fqn = None if prefix_annotation is None else _catalog_symbol(prefix_annotation)
@@ -39,7 +40,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         protocol=catalog.protocol,
         direction=catalog.direction,
         # Optional (D02 §2, amended): absence means "no type-level gate".
-        type_annotation=None if type_annotation is None else _catalog_symbol(type_annotation),
+        type_annotation=type_annotation_fqn,
         prefix_annotation=prefix_fqn,
         # `method` is absent for an annotation that pre-sets none, and the
         # derivation reads that absence as "every method in all_methods".
@@ -57,14 +58,17 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         produces_from=list(mapping.get("produces_from", [])),
         # 2E-prep design §2, §3: the effective-annotations pre-pass widens
         # this catalog's own mapping fqns to every module-local annotation
-        # type transitively meta-annotated with one of them PLUS every
-        # mapping a scanned interface/superclass method declares that an
-        # implementing method doesn't repeat (Task 7, spec §3), computed
-        # once per catalog (its own mapping fqns seed a different closure
-        # and a different inheritance walk each time) and handed to the SQL
-        # as synthetic `annotations` rows rather than as a second code path
-        # there.
-        synthetic_annotations=_synthetic_annotations(workspace, mapping_annotations, prefix_fqn),
+        # type transitively meta-annotated with one of them PLUS, for a
+        # catalog that declares its own type-level gate, every mapping a
+        # scanned interface/superclass method declares that an implementing
+        # method doesn't repeat (Task 7, spec §3 — see `_synthetic_annotations`
+        # for why the inheritance half is gated), computed once per catalog
+        # (its own mapping fqns seed a different closure and a different
+        # inheritance walk each time) and handed to the SQL as synthetic
+        # `annotations` rows rather than as a second code path there.
+        synthetic_annotations=_synthetic_annotations(
+            workspace, mapping_annotations, prefix_fqn, type_annotation_fqn is not None
+        ),
     )
     # Optional (D02 §2, amended): a catalog with no `reply` block declares no
     # second-row rule at all — the HTTP catalogs, which never see @SendTo.
@@ -76,20 +80,42 @@ def _synthetic_annotations(
     workspace: Workspace,
     mapping_annotations: list[dict[str, object]],
     prefix_fqn: str | None,
+    run_inheritance: bool,
 ) -> list[dict[str, str]]:
     """The bound-parameter form `derive_endpoints.sql`'s `annotations_effective`
-    CTE expects (D02 §2, §3): every row `composed_mapping_rows` and
-    `inherited_rows` derive, `args` re-serialized to JSON text — DuckDB's
-    `STRUCT(... VARCHAR)` binding shape carries a string, not a nested JSON
-    value, the same way every other JSON-typed bound parameter in this
-    engine already does.
+    CTE expects (D02 §2, §3): every row `composed_mapping_rows` and, where
+    `run_inheritance`, `inherited_rows` derive, `args` re-serialized to JSON
+    text — DuckDB's `STRUCT(... VARCHAR)` binding shape carries a string,
+    not a nested JSON value, the same way every other JSON-typed bound
+    parameter in this engine already does.
 
     Task 7's inheritance walk runs over the COMPOSED universe (real rows
     plus Task 6's own synthetic ones), not just the real `annotations`
     table — the fixture's composed-and-inherited case
     (`OrdersApi#composed`'s `@ApiGet`) only has anything to inherit once §2
     has already turned it into a real `@RequestMapping` on the interface
-    method."""
+    method.
+
+    `run_inheritance` is `True` exactly when the catalog declares its own
+    `type_annotation` (Task 7 review, Critical finding C1). Spec §3's own
+    scope is the handler-side OpenAPI-generator pattern — mappings on an
+    interface, `@RestController` on the class that implements it — and
+    every gated HTTP catalog matches that shape. A GATELESS catalog
+    (Retrofit, `spring-http-interface`, `spring-jms`, `spring-kafka`,
+    `spring-sqs`) has no such implementer role at all: the annotated
+    interface method IS the client call or the listener identity `mappings`
+    already joins on directly, so synthesizing a row onto some OTHER class
+    that merely happens to implement that interface mints a caller/handler
+    for a type nobody declared as a client — a Retrofit interface is itself
+    the client, not a contract some unrelated implementer fulfills, and a
+    messaging listener annotation is never interface-inherited by its own
+    framework either. Left ungated, one declared route produced three rows
+    (the real interface row plus a synthesized row per implementer in the
+    hierarchy) in the reviewer's own repro; `test_a_gateless_catalog_never_
+    synthesizes_onto_an_implementing_class` (`test_endpoints.py`) pins the
+    fix. `composed_mapping_rows` carries no such scope limit — meta-annotation
+    composition is a same-target rewrite, never a cross-type join, so it
+    still runs for every catalog regardless of `run_inheritance`."""
     annotation_rows = [
         {
             "target": row["target"],
@@ -101,13 +127,17 @@ def _synthetic_annotations(
     scanned_targets = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
     mapping_fqns = {str(m["fqn"]) for m in mapping_annotations}
     composed = composed_mapping_rows(annotation_rows, scanned_targets, mapping_fqns)
-    inherited = inherited_rows(
-        [*annotation_rows, *composed],
-        _implementation_rows(workspace),
-        _supertype_rows(workspace),
-        _method_declaration_rows(workspace),
-        mapping_fqns,
-        prefix_fqn,
+    inherited = (
+        inherited_rows(
+            [*annotation_rows, *composed],
+            _implementation_rows(workspace),
+            _supertype_rows(workspace),
+            _method_declaration_rows(workspace),
+            mapping_fqns,
+            prefix_fqn,
+        )
+        if run_inheritance
+        else []
     )
     return [
         {"target": row["target"], "annotation": row["annotation"], "args": json.dumps(row["args"])}
