@@ -6,12 +6,13 @@
 billing:
   url: http://billing.prod.internal
 
-# Repeats application.yml's kafka serializer keys with the SAME value, so
-# the media stamp sees agreement across every resolved environment (2F
-# design §3, job 2).
+# Repeats application.yml's kafka serializer keys with the SAME values, so
+# both the media stamp (2F design §3, job 2) and the format ladder's rung 3
+# (2G design §5) see agreement across every resolved environment. A key that
+# resolved differently here would say nothing either could carry.
 spring:
   kafka:
     producer:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     consumer:
-      value-deserializer: org.springframework.kafka.support.serializer.JsonSerializer
+      value-deserializer: io.confluent.kafka.serializers.protobuf.KafkaProtobufDeserializer

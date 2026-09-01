@@ -42,3 +42,28 @@ def read_fact_file(path: Path) -> tuple[Document, list[Fact]]:
     document = Document.model_validate_json(raw[0])
     facts = [_FACT_ADAPTER.validate_json(line) for line in raw[1:] if line]
     return document, facts
+
+
+def schema_fact_target(fact_root: Path, relative_path: str) -> Path:
+    """Where a schema document's facts live under `fact_root/schema` — the
+    same append-the-full-path, keep-the-source-extension discipline
+    `config_fact_target` keeps for a config document, in its own subtree so a
+    schema file never competes with a same-named config file for one target
+    (2F's collision rule, generalized)."""
+    return fact_root / "schema" / (relative_path + ".jsonl")
+
+
+def read_fact_tree(fact_root: Path) -> list[tuple[Path, Document, list[Fact]]]:
+    """Every fact file already written under `fact_root`, read back — the
+    path included, not only its content: a later stage that adds facts to a
+    document already on disk (`analyze`'s descriptor interpretation) must
+    write them back into that SAME file, never mint a second one — D00 §7
+    permits exactly one document record per source file, and a second file
+    carrying the identical `Document` would double-count it wherever the
+    workspace counts documents. The means by which that stage can read the
+    fact tree at all without touching the filesystem itself (ARCHITECTURE
+    §10's application-reads-no-files rule, `test_application_reads_no_files`).
+    Sorted by path for NFR-1: two runs over the same tree read facts in the
+    same order regardless of the filesystem's own directory-entry order."""
+    paths = sorted(fact_root.rglob("*.jsonl"))
+    return [(path, *read_fact_file(path)) for path in paths]

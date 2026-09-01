@@ -109,6 +109,28 @@
       <artifactId>google-cloud-pubsub</artifactId>
       <version>1.129.3</version>
     </dependency>
+    <dependency>
+      <groupId>com.google.protobuf</groupId>
+      <artifactId>protobuf-java</artifactId>
+      <version>4.36.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+      <version>1.12.2</version>
+    </dependency>
+    <!-- Jackson 3, whose whole relocation is the package rename
+         `com.fasterxml.jackson` -> `tools.jackson` (2G design §7). Here so
+         the `parse_calls` row for the relocated `readValue` is exercised
+         against real bytecode rather than only against an invented owner in
+         a unit test: the catalog claim is that a new generation of a parse
+         library costs catalog rows and no code, and only a compiled call
+         site proves it. -->
+    <dependency>
+      <groupId>tools.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>3.1.4</version>
+    </dependency>
   </dependencies>
   <build>
     <plugins>
@@ -126,6 +148,43 @@
                 <sourceDir>${project.basedir}/src/main/kotlin</sourceDir>
                 <sourceDir>${project.basedir}/src/main/java</sourceDir>
               </sourceDirs>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>io.github.ascopes</groupId>
+        <artifactId>protobuf-maven-plugin</artifactId>
+        <version>5.1.8</version>
+        <configuration>
+          <protoc>4.36.1</protoc>
+        </configuration>
+        <executions>
+          <execution>
+            <goals><goal>generate</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.avro</groupId>
+        <artifactId>avro-maven-plugin</artifactId>
+        <version>1.12.2</version>
+        <executions>
+          <execution>
+            <phase>generate-sources</phase>
+            <goals><goal>schema</goal></goals>
+            <configuration>
+              <sourceDirectory>${project.basedir}/src/main/avro</sourceDirectory>
+              <outputDirectory>${project.basedir}/target/generated-sources/avro</outputDirectory>
+              <!-- receipt.avsc is Task 4's source-only fixture: a schema the
+                   build never compiles, so it reaches the graph only through
+                   the .avsc reader, never the extractor's embedded-descriptor
+                   harvest — the one identity in this fixture where DR-4's
+                   compiled-beats-source precedence has no compiled side to
+                   prefer. -->
+              <excludes>
+                <exclude>receipt.avsc</exclude>
+              </excludes>
             </configuration>
           </execution>
         </executions>

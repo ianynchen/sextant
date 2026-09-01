@@ -12,9 +12,13 @@ review discipline.
 response contracts field by field, in both directions, with `required` and `nullable`
 resolved; Feign, Retrofit and `@HttpExchange` outbound clients are read (a path a module
 both exposes and calls merges into one endpoint), and a module's analysis exports as a D06
-bundle. The version bump is gated on the full program below (user decision, twice
-reaffirmed): no version moves until Java + Spring Boot and the listed protocols and
-frameworks are done.
+bundle. **2G moved none of those rows, and the count is re-derived rather than carried**:
+its flips land in COVERAGE §4 — the format-detection regimes, the protobuf and Avro
+spec-binding rows, the Kafka serializer table now live as `format_from`, and a new parser
+table carrying Jackson 3 — because §5's checklist is one library per row and wire format is
+not a library. Every §5 row it touches was already ✅. The version bump is gated on the full
+program below (user decision, twice reaffirmed): no version moves until Java + Spring Boot
+and the listed protocols and frameworks are done.
 
 ## Why this order
 
@@ -34,7 +38,7 @@ messaging) both exist.
 | **2E-prep** | Hardening + raw messaging drivers | delivered | `catalog_id` provenance on every `endpoints` row; `channel_via`/`when` catalog vocabulary; six surfaces (seven catalog files) of raw drivers — direct jakarta.jms, AWS SDK v2 `SqsClient`, `KafkaConsumer.subscribe`, Google `Publisher`, `Subscriber`+`MessageReceiver`, `KafkaTemplate.send(Message)`; the session-scoped pipeline fixture (suite ~140s → ~50s) | the sixth engine style, `interface_implementation`, gated by a new `implemented_interfaces` capability |
 | **2E** | Spring HTTP inbound completeness | delivered | WebFlux functional routing (`RouterFunctions`, `coRouter`, Java and Kotlin), module-local meta-annotations, inherited `@RequestMapping`, `produces`/`consumes` — GraphQL, WebSocket and SSE deferred to 2H; SOAP to 2I | the `combinator` engine, on 2C's indy groundwork |
 | **2F** | Configuration resolution | delivered | `application.yml`/properties into `resolved_config`, every profile, environment expressions; declared outbound HTTP bases (a field, a constructor-injected value, `@ConfigurationProperties`) become real peers through the field ladder; Spring Cloud Stream's functional bindings resolve their destination through `config_join` — spring-cloud-aws's own channel-adapter bindings and Spring Integration ride the same engine once catalogued, not yet shipped | the `config_join` engine; D02 §2d made real |
-| **2G** | Wire formats | planned | protobuf + Avro: format inference, `generated_descriptor` readers, declared shapes into the same tables, proto3 JSON-name projection | format as an inferred channel property (D02 §2c) |
+| **2G** | Wire formats | delivered — [spec](../specs/2026-08-31-phase-2g-wire-formats-design.md) | `format`/`format_resolution` on every endpoint row from a six-rung catalog-driven ladder; protobuf and Avro schemas — embedded descriptors and `.proto`/`.avsc` sources, compiled winning per DR-4 — landing in 2A's own `shapes`/`shape_fields` with `field_number` and `json_name` wire names; parse-call payload binding at the handler and one hop; the `open_questions` ledger (table, bundle artifact, document section) for what no pass could answer | format as an inferred channel property, stamped by one late pass rather than per match (D02 §2c) |
 | **2H** | HTTP-adjacent protocols | planned | GraphQL (`@QueryMapping` et al.), WebSocket/STOMP (`@MessageMapping`), SSE | operation-as-endpoint identity; `protocol_hint` engine |
 | **2I** | SOAP | planned | JAX-WS + Spring-WS catalogs; WSDL as a declared-shape source | catalog work only, by then |
 | **2K** | Enrich | planned | `sextant module enrich` — LLM-written sections as overlay claims at `evidence: llm` ([2B spec](../specs/2026-08-29-phase-2b-outbound-and-export-design.md) §6); the LLM verification seat D02 §2d reserves for doubtful config joins (2F records the evidence, 2K judges it) | redaction-before-wire; first network dependency |
@@ -97,7 +101,12 @@ real peers are sparse, and links drawn with them are dense.
 projected into the other — proto3's JSON mapping renames `total_amount` to `totalAmount`,
 so a service defined by a `.proto` but exposed over REST carries different field names
 than its own schema states (D02 §2c). Declared shapes land in the same `shapes` tables 2A
-built; no second schema.
+built; no second schema. It shipped that way, and the projection is **read, not
+reimplemented**: `json_name` comes off the descriptor. Two design points moved during the
+build, both recorded in the spec: format is stamped by one late pass over the finished
+table rather than resolved per match, and a payload the code parses further out than one
+delegation hop is **refused and ledgered** rather than followed — `open_questions` is the
+hand-off that makes 2K's seat an inbox rather than a re-analysis.
 
 **2J** is the payoff proof of the catalog thesis: if Micronaut and Quarkus need engine
 changes, the architecture failed its own test. It also marks the point where the catalog

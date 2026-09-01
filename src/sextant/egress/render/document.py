@@ -66,6 +66,18 @@ _GAPS = [
         "payloads read inside a functional handler's body — await the call "
         "graph."
     ),
+    (
+        "A bytes-only channel whose payload is parsed further than one "
+        "delegation hop from its handler is not bound: the parse is found "
+        "and listed as an open question instead, because a flow followed "
+        "further than it was observed is an assumption, not a fact."
+    ),
+    (
+        "A bytes-only channel whose payload reaches two different parses "
+        "binds neither: two answers about one wire is a question for a "
+        "reader, and picking the one that sorts first would publish a "
+        "coin toss as a contract."
+    ),
 ]
 
 # D00 §4 closed-set protocol names whose wire identity has no verb: a Kafka
@@ -109,6 +121,53 @@ def _media(value: object) -> str:
     return ", ".join(json.loads(str(value)))
 
 
+def _format(endpoint: dict[str, object]) -> str:
+    """The Format column beside Media: `protobuf` at `resolved`, `protobuf
+    (assumed)` at anything else, `unresolved` where the ladder left `format`
+    NULL — the same NULL-renders-`unresolved` rule `rendered_handler` already
+    keeps below (2E precedent).
+
+    `format_resolution` is the authority on trust (schema.sql's own comment),
+    and this column is the ONLY place a reader sees it — the rendered
+    document carries no separate trust column. So `resolved` is the only
+    marker that ever prints unhedged; every other non-NULL marker hedges,
+    including `narrowed` and a value schema-valid but off today's live
+    surface like `partial`, and including the `merge_endpoints.sql` exception
+    where a merged row keeps a non-NULL format beside the WEAKER of its two
+    halves' markers (schema.sql's own note) — a merged row may read
+    `(protobuf, unresolved)`. Printing that plain would make an
+    unresolved-trust value typographically identical to a resolved one,
+    which is exactly what "an assumed format must never look observed" (2G
+    design §5) forbids (task 8 review round 1)."""
+    value = endpoint.get("format")
+    if value is None:
+        return "unresolved"
+    if endpoint.get("format_resolution") != "resolved":
+        return f"{value} (assumed)"
+    return str(value)
+
+
+def _candidate_line(question: str, candidate: dict[str, object]) -> str:
+    """One open question's candidate, in the same prose the writing pass
+    already puts in its own `evidence` trail (`resolve/format.py`,
+    `resolve/shapes/parse_binding.py`) — so the fact reads the same way in
+    the trail and in this list. `payload_binding` and `format_conflict`
+    candidates carry different keys (2G design §6), so this switches on
+    `question` rather than guessing a common shape out of the JSON — the same
+    discipline `open_questions.py`'s own docstring asks of "the renderer"."""
+    if question == "format_conflict":
+        return f"{candidate['format']} from {candidate['seen_in']} ({candidate['why']})"
+    if question == "payload_binding":
+        return (
+            f"{candidate['payload_type']} in {candidate['seen_in']} "
+            f"via {candidate['why']} at {candidate['hops']} hop(s)"
+        )
+    # Unreached while `open_questions.py`'s QUESTIONS stays the two-kind
+    # closed set it enforces at write time — a new kind is a schema change,
+    # never a rendering guess (NFR-5).
+    raise ValueError(f"open question `{question!r}` has no rendering rule")
+
+
 def render_module_document(
     module: ModuleModel,
     report: ResolveReport,
@@ -116,6 +175,7 @@ def render_module_document(
     uncovered: tuple[str, ...] = (),
     shape_fields: Sequence[dict[str, object]] = (),
     resolved_config: Sequence[dict[str, object]] = (),
+    open_questions: Sequence[dict[str, object]] = (),
 ) -> str:
     """Adds no information. Every row comes from the graph, and every omission
     is stated (M07). Rendering the same report twice is byte-identical
@@ -160,7 +220,7 @@ def render_module_document(
     lines += ["", "## Inbound endpoints", ""]
     inbound = [e for e in report.endpoints if str(e["direction"]) in ("inbound", "both")]
     if inbound:
-        lines += ["| Endpoint | Handler | Media | Resolution |", "|---|---|---|---|"]
+        lines += ["| Endpoint | Handler | Media | Format | Resolution |", "|---|---|---|---|---|"]
         for endpoint in inbound:
             handler = endpoint.get("handler")
             rendered_handler = (
@@ -168,7 +228,8 @@ def render_module_document(
             )
             media = f"{_media(endpoint.get('consumes'))} → {_media(endpoint.get('produces'))}"
             lines.append(
-                f"| `{_wire_identity(endpoint)}` | {rendered_handler} | {media} | {endpoint['resolution']} |"
+                f"| `{_wire_identity(endpoint)}` | {rendered_handler} | {media} | "
+                f"{_format(endpoint)} | {endpoint['resolution']} |"
             )
         for endpoint in inbound:
             request = _descriptor_lines("Request", endpoint.get("request_shape"), fields_by_shape)
@@ -187,17 +248,29 @@ def render_module_document(
     lines += ["", "## Outbound endpoints", ""]
     outbound = [e for e in report.endpoints if str(e["direction"]) in ("outbound", "both")]
     if outbound:
-        lines += ["| Endpoint | Peer | Caller | Resolution |", "|---|---|---|---|"]
+        lines += ["| Endpoint | Peer | Caller | Format | Resolution |", "|---|---|---|---|---|"]
         for endpoint in outbound:
             peer = endpoint.get("peer")
             caller = bare_descriptor(str(endpoint["caller"]))
             lines.append(
                 f"| `{_wire_identity(endpoint)}` | "
                 f"{'unresolved' if peer is None else peer} | "
-                f"`{caller}` | {endpoint['resolution']} |"
+                f"`{caller}` | {_format(endpoint)} | {endpoint['resolution']} |"
             )
     else:
         lines.append("None found.")
+
+    # Rendered only when the ledger holds rows (2G design §8): a run with
+    # nothing to ask leaves the section absent, the `## Catalogs skipped`
+    # precedent below rather than the NFR-7 "looked and found nothing" one —
+    # this is a hand-off inbox for 2K, and an empty inbox is not a finding.
+    if open_questions:
+        lines += ["", "## Open questions", ""]
+        for row in open_questions:
+            question = str(row["question"])
+            candidates = json.loads(str(row["candidates"]))
+            rendered = "; ".join(_candidate_line(question, c) for c in candidates)
+            lines.append(f"- `{_wire_identity(row)}` — {question}: {rendered}")
 
     lines += ["", "## Known gaps", ""]
     lines += [f"- {gap}" for gap in _GAPS]
@@ -359,9 +432,19 @@ def _descriptor_lines(
         "    |---|---|---|---|",
     ]
     for row in fields_by_shape.get(str(shape_id), []):
+        # The schema's own field number (protobuf), shown the same
+        # unobtrusive way `wire_format` already rides beside `wire_type` —
+        # NULL for Avro and every annotation-derived field, which render
+        # unchanged (2G design §8, Task 5).
+        field_number = row.get("field_number")
+        wire_name = (
+            f"{row['wire_name']} ({field_number})"
+            if field_number is not None
+            else str(row["wire_name"])
+        )
         wire_format = row.get("wire_format")
         field_type = f"{row['wire_type']} ({wire_format})" if wire_format else str(row["wire_type"])
         required = "yes" if row["required"] else "no"
         nullable = "yes" if row["nullable"] else "no"
-        lines.append(f"    | {row['wire_name']} | {field_type} | {required} | {nullable} |")
+        lines.append(f"    | {wire_name} | {field_type} | {required} | {nullable} |")
     return lines

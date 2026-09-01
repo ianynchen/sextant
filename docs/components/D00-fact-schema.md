@@ -168,6 +168,14 @@ a Kafka topic can never be answered by an SQS queue.
 
 **`control_flow_kind`** — `sequential`, `conditional`, `alternative`, `loop`, `handler`
 
+**`format`** — `json`, `protobuf`, `avro`, `xml`, `string`, `bytes`. What is on a
+channel's wire ([D01](D01-graph-schema.md) §3's `endpoints.format`), inferred and never
+a property of a payload *type*. `json_schema` is **reserved**: the value is named here
+so a catalog cannot quietly claim it, and a catalog that writes it is refused by name
+rather than read as something adjacent — JSON Schema and XSD are out of scope, and the
+refusal is what keeps "we do not do this yet" from arriving as a silent `json`.
+`format_resolution` beside it takes no set of its own: it reuses `resolution` above.
+
 **Two values have no version-1 fact producer, deliberately.** `syntax` is the day-one
 on-ramp for a second language's tree-sitter tier; `llm` is required by
 [M01](M01-overlay.md)'s claim machinery even though model overlays never become facts. Both
@@ -178,7 +186,7 @@ removed.
 
 ## 5. Fact kinds
 
-Fourteen. Every one exists because a stated requirement consumes it (NFR-6).
+Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 
 | Kind | Carries | Consumed by |
 |---|---|---|
@@ -196,7 +204,9 @@ Fourteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `dependency` | Coordinates, scope, tier | Classpath tiering, library identity |
 | `deployment` | Service name, ports, kind, source | System linking |
 | `declared_contract` | Protocol, wire identity, references to `declared_shape` facts, **whether the build consumes it** | Endpoint catalog, drift |
+| `embedded_descriptor` | The schema holder's symbol, the schema format, and the payload **verbatim and unparsed** (§5d) | The descriptor interpreter, which is the only thing that reads it |
 | `declared_shape` | Shape identity, owning contract, fields — wire name, **field number where the format has one**, wire type, required, default | Drift comparison, gRPC and message matching, DR-4's embedded-descriptor check |
+| — | **Interpreter-emitted, never extractor-emitted** (§5d): the one place that understands a schema format turns `embedded_descriptor` payloads and schema files into these, so no scanner in any language links a schema runtime. | — |
 
 ### 5a. Typed signatures and type references
 
@@ -387,6 +397,60 @@ Which files matter, in what order, and what a placeholder means, is the resoluti
 question, answered from catalog data ([D02](D02-catalog-schema.md)) — ingestion only
 reads what is on disk into these fields.
 
+### 5d. Embedded descriptors, and the one interpreter that reads them
+
+```json
+{"kind": "embedded_descriptor", "symbol": "com/example/orders/proto/OrderProtos#",
+ "schema_format": "protobuf", "payload": "Cgtvcm…", "origin": "compiled"}
+```
+
+**The fact says one thing: "this artifact embeds this schema payload, verbatim."** The
+emitter never parses it, which is what keeps schema-format knowledge out of every
+scanner: a Go scanner emits it from a generated `rawDesc` literal, a Python scanner from
+`serialized_pb`, a TypeScript scanner from protobufjs static output, and none of them
+links a schema runtime to do it.
+
+- **`symbol`** names the **holder** — the generated class a compiled payload was found
+  in, the record's own name for one read off a schema file — in the bare type-descriptor
+  grammar (§1). It is what a gap names when a payload cannot be interpreted, and one
+  holder emits one fact: a protobuf file's messages all share their file's descriptor, so
+  a fact per message would be one payload copied once per type.
+- **`schema_format`** is `protobuf` or `avro`.
+- **`payload`** is base64 for a binary format and the text itself for a textual one — a
+  protobuf `FileDescriptorProto`'s bytes are base64; an Avro schema is JSON that was
+  always JSON and travels verbatim, because re-encoding readable text costs a reader
+  something and buys nothing.
+- **`origin`** is `compiled` (the default, and what an extractor always emits) or
+  `source` (a schema file in the repository). Where both declare the same shape, the
+  compiled one wins: the artifact that runs is the authority (DR-4).
+
+**`declared_shape` is the interpreter's output, never a scanner's.** One component reads
+these payloads, and it is the only code in the system that understands a schema format —
+so a format's rules are stated once, and a new language's extractor gains schema support
+by emitting `embedded_descriptor` and nothing else.
+
+Each such fact carries, beside its `fields`:
+
+- **`symbol`** — the name the shape is *joined* by: the generated class a compiled
+  payload travels as, so a payload type reference in any other fact meets it; the
+  schema's own full name for a source-origin shape, which compiles to no class.
+- **`schema_name`** — the schema's own full name (`sextant.orders.OrderRequest`),
+  written for **both** origins, because `symbol` cannot be the identity across them.
+  It is the one field on which a compiled and a source shape can meet, and therefore
+  what DR-4's compiled-beats-source precedence compares.
+- **`schema_format`** and **`origin`** — as on the `embedded_descriptor` this came
+  from.
+- **`evidence`** — `compiler` for a compiled origin, `declared` for a source one. The
+  shape's whole field list carries the one tier; a schema does not state some of its
+  fields more confidently than others.
+
+Per field: the schema's own `name` and the encoded `wire_name` (a protobuf `json_name`,
+**read from the descriptor, never computed** — protoc puts the computed default and an
+explicit override in the same place), `field_number` where the format numbers its fields
+and NULL where it does not, the [§5b](#5b-the-wire-type-vocabulary) wire type and format,
+`required`, `nullable`, the declared `default`, and the `item`/`shape_ref` references
+that reach other shapes.
+
 ### Why `module` is a fact and not a passing argument
 
 [M02](M02-detector.md) works out the module inventory and the classpath tiering, and
@@ -459,6 +523,7 @@ recovered later. Kinds:
 | `lambda` | invokedynamic via `LambdaMetafactory` | symbol reference to the lambda's synthetic body method — method references resolve the same way |
 | `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR (§5a) and the one-hop body follow ([D02](D02-catalog-schema.md) §2h). Always carries `source`: the constructed value's id, which is also the `receiver` of that object's own `<init>` call site, so the follow is a join on one number rather than a search for a nearby constructor |
 | `field` | GETFIELD/GETSTATIC that is not the enum-constant shape | symbol reference — the field's own bare descriptor |
+| `parameter` | a load of the caller's own parameter | `value` is the parameter's **index**, never the local slot holding it |
 | `null` | ACONST_NULL | |
 | `unresolved` | anything else | a first-class honest answer, never an omission |
 
@@ -480,6 +545,18 @@ above) becomes `{kind: field, symbol: <the field's bare descriptor>}` instead of
 `unresolved`; a Python attribute read or a Go struct-field read normalizes into the same
 kind. Strictly additive: an engine that does not consult `field` treats it exactly as it
 always treated `unresolved`.
+
+**`parameter` is the canonical cross-language kind for "the argument is the caller's
+parameter N, any language"** — the value was handed to this method, so it is knowable
+only where the method was called, and `value` carries the index every language numbers
+its parameters by. The JVM mapping: a load of a parameter's own starting slot becomes
+`{kind: parameter, value: N}` instead of `unresolved`, joinable to the same index
+`field_write.from_parameter` uses and to that position in the method's own signature
+(§5a). It carries no `source` — a parameter is produced by no call in this method — and
+it is deliberately **not** the local slot: a `long` parameter occupies two slots, so
+index and slot diverge, and a slot is a JVM detail no other language shares. Strictly
+additive: an engine that does not consult `parameter` must treat it exactly as it always
+treated `unresolved` — the value is still unread, only its origin is now stated.
 
 **`field_write` is a fact of its own, constructors only, direct traces only** — a
 constructor assigns parameter N directly to field F. The JVM mapping: a PUTFIELD inside

@@ -111,10 +111,14 @@ def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
 
 
 # The D00 §5 argument kinds that name no value a capture could have read:
-# the compiler's own honest read failure, and a field read whose value lives
+# the compiler's own honest read failure, a field read whose value lives
 # wherever the field was assigned (2F design §4's ladder is the only thing
-# that can answer it).
-_UNREAD_KINDS = ("unresolved", "field")
+# that can answer it), and a parameter, whose value lives in whatever called
+# this method (2G). `parameter` joined this set the day the kind existed: it
+# is the same fact `unresolved` used to state less precisely, so a row it
+# feeds must keep the resolution it has always had rather than start claiming
+# `resolved` over a NULL payload column.
+_UNREAD_KINDS = ("unresolved", "field", "parameter")
 
 
 def channel_of(argument: dict[str, Any] | None) -> tuple[None, str | None, str]:

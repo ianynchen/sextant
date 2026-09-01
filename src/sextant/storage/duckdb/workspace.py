@@ -101,6 +101,32 @@ _NAMED_QUERIES = {
         WHERE kind = 'symbol' AND json_array_length(payload -> 'interfaces') > 0
         ORDER BY symbol
     """,
+    # Every `declared_shape` fact (2G design §3), keyed by its own `symbol` —
+    # the generated class a compiled schema type travels as, or the schema's
+    # own full name for a source-origin one — with its `fields` JSON array
+    # carried through verbatim for the expansion pass to project. Only the
+    # columns expansion actually reads: `schema_name`/`schema_format`/`origin`
+    # are DR-4 precedence's own concern, already settled upstream (`analyze`'s
+    # `_prefer_compiled`) before a fact ever reaches this table — reselecting
+    # `origin` here would read as if precedence lived in this query too.
+    # Ordered by `(symbol, document_id)`, the same tiebreak the interpreter's
+    # own sort uses for a symbol that legitimately arrives twice (a shared
+    # nested type inlined into more than one schema payload), so which
+    # occurrence wins a dict keyed on `symbol` never depends on read order
+    # (NFR-1).
+    # `schema_format` is the format ladder's rung 4 (2G design §5): the
+    # schema that described this shape is the only thing that can say which
+    # wire format the payload's own TYPE suggests. `schema_name`/`origin`
+    # stay unselected — DR-4 precedence is settled upstream, in `analyze`'s
+    # `_prefer_compiled`, before a fact reaches this table.
+    "declared_shapes": """
+        SELECT payload ->> 'symbol'        AS symbol,
+               payload ->> 'evidence'      AS evidence,
+               payload ->> 'schema_format' AS schema_format,
+               payload ->  'fields'        AS fields
+        FROM raw_facts WHERE kind = 'declared_shape'
+        ORDER BY symbol, document_id
+    """,
     # Every declared method symbol, module-prefixed exactly as the fact wrote
     # it — what `interface_implementation` joins a receiver back to (D02 §2's
     # handler rule). A registration's own receiver argument carries only the
@@ -260,22 +286,42 @@ _NAMED_QUERIES = {
         FROM joined
         ORDER BY environment, protocol, method, path, peer, caller
     """,
+    # The 2K hand-off ledger (2G design §6). Ordered by the wire identity the
+    # row carries, `question` breaking a tie where one endpoint raises both
+    # kinds — "rows are ordered by wire identity for NFR-1 determinism", and
+    # an ordering with ties is one that can change between runs.
+    #
+    # Wire identity plus `question` is NOT total, which is why the row's own
+    # content closes it: two listeners on one destination are two rows sharing
+    # every one of those four columns (`endpoints` itself orders by
+    # `handler, caller` for exactly this reason), and their order would
+    # otherwise be the insert order rather than an ordering. `candidates` is
+    # cast to text because it is the answer that differs between two such
+    # rows, and `evidence` is the last tie-break — two rows agreeing on all
+    # six are the same question asked twice and may appear in either order
+    # without changing a byte.
+    "open_questions": """
+        SELECT protocol, method, path, question, candidates, evidence
+        FROM open_questions
+        ORDER BY protocol, method, path, question, candidates::VARCHAR, evidence
+    """,
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
     "facts": "SELECT count(*) AS facts FROM raw_facts",
 }
 
 # The tables a bundle carries (D06 §5). `documents`, `endpoints`,
-# `resolved_config`, `shapes`, `shape_fields` and `call_sites` export through
-# their named query, so the row order is the one NFR-1 already fixed;
-# `symbols` and `annotations` have no named query and export through their
-# own ordered SELECT below, for the same reason. Sorted by name so the
-# manifest's contents list is deterministic too.
+# `resolved_config`, `shapes`, `shape_fields`, `call_sites` and
+# `open_questions` (2G Task 8) export through their named query, so the row
+# order is the one NFR-1 already fixed; `symbols` and `annotations` have no
+# named query and export through their own ordered SELECT below, for the same
+# reason. Sorted by name so the manifest's contents list is deterministic too.
 _EXPORTED_TABLES = (
     "annotations",
     "call_sites",
     "documents",
     "endpoints",
+    "open_questions",
     "resolved_config",
     "shape_fields",
     "shapes",
@@ -285,6 +331,7 @@ _EXPORTED_TABLES = (
 _EXPORT_QUERIES = {
     "documents": _NAMED_QUERIES["documents"],
     "endpoints": _NAMED_QUERIES["endpoints"],
+    "open_questions": _NAMED_QUERIES["open_questions"],
     "resolved_config": _NAMED_QUERIES["resolved_config"],
     "shapes": _NAMED_QUERIES["shapes"],
     "shape_fields": _NAMED_QUERIES["shape_fields"],
@@ -308,6 +355,10 @@ _NAMED_DERIVATIONS = {
     "resolved_config_reset": "reset_resolved_config.sql",
     "resolved_config_insert": "insert_resolved_config.sql",
     "stamp_media": "stamp_media.sql",
+    "stamp_format": "stamp_format.sql",
+    "bind_request_shape": "bind_request_shape.sql",
+    "open_questions_reset": "reset_open_questions.sql",
+    "open_questions_insert": "insert_open_questions.sql",
 }
 
 

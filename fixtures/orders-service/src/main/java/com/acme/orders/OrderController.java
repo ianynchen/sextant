@@ -2,7 +2,9 @@ package com.acme.orders;
 
 import com.acme.orders.contracts.OrderRequest;
 import com.acme.orders.contracts.OrderView;
+import com.example.orders.proto.OrderProtos;
 import java.util.List;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -46,5 +48,14 @@ public class OrderController {
     @PostMapping(value = "/detailed", consumes = "application/json", produces = "application/json")
     public ResponseEntity<OrderView> createDetailed(@RequestBody OrderRequest request) {
         return ResponseEntity.ok(new OrderView());
+    }
+
+    // 2G Task 5: a generated protobuf payload reaching a handler signature —
+    // OrderProtos.OrderRequest/OrderReply own a declared_shape (Task 2/4),
+    // so their expansion must come from the schema, never from the
+    // generated class's own bytecode fields.
+    @PostMapping(value = "/proto-orders", produces = MediaType.APPLICATION_JSON_VALUE)
+    public OrderProtos.OrderReply createProtoOrder(@RequestBody OrderProtos.OrderRequest request) {
+        return OrderProtos.OrderReply.newBuilder().build();
     }
 }

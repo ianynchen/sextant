@@ -16,9 +16,11 @@
 --   * it prefers a real answer to a NULL one, which is what makes carrying
 --     worth doing at all: an independent min() over each column would be
 --     equally non-NULL-seeking but could reorder differently per column;
---   * it MAY therefore pair the chosen caller with a different caller's peer
---     or media, where several callers reach one exposed path and only some of
---     them answered that column. A row that says "some client of this path
+--   * it MAY therefore pair the chosen caller with a different caller's peer,
+--     media or format, where several callers reach one exposed path and only
+--     some of them answered that column — including, for the two format
+--     columns below, a `format` from one caller beside a `format_resolution`
+--     from another. A row that says "some client of this path
 --     declared this peer" is the honest reading, and the alternative — the
 --     chosen caller's own NULL — would discard a real observation to preserve
 --     a per-row consistency nothing downstream relies on.
@@ -33,18 +35,48 @@
 -- the outbound half of a path the module both exposes and calls vanished into
 -- the merge, leaving a `both` row that read as "no producer declared" —
 -- indistinguishable from a module that declares none.
+--
+-- The two FORMAT columns are carried for the same reason and by two
+-- different rules (2G design §4). `format` coalesces exactly as the media
+-- columns do — the surviving row's own answer, else the twin's.
+-- `format_resolution` does NOT: it takes the WEAKER of the two markers that
+-- are present, ordering `unresolved` < `narrowed` < `resolved`, so a half
+-- that only guessed can never launder into an observation by being merged
+-- with a half that knew. Where only one half carries a marker, that one is
+-- the answer; where neither does, the result stays NULL.
+--
+-- **What this delivers TODAY, stated plainly** (the honesty bar the media
+-- comment above sets): nothing. `resolve/format.py` is the LAST pass of a
+-- resolve and this merge is the last statement of `derive_endpoints`, so
+-- both format columns are still NULL on every row when this runs, and every
+-- branch below evaluates to NULL. It is written because the columns are part
+-- of the row and the merge deletes the twin: the day anything stamps a
+-- format before the merge — a derivation that reads it off a declaration, a
+-- reordered pipeline — a silently discarded half would be the failure mode,
+-- and it would look exactly like a module that declared no format.
 UPDATE endpoints e
 SET direction = 'both',
     caller = twins.caller,
     peer   = coalesce(e.peer, twins.peer),
     consumes = coalesce(e.consumes, twins.consumes),
-    produces = coalesce(e.produces, twins.produces)
+    produces = coalesce(e.produces, twins.produces),
+    format = coalesce(e.format, twins.format),
+    format_resolution = CASE
+        WHEN e.format_resolution IS NULL THEN twins.format_resolution
+        WHEN twins.format_resolution IS NULL THEN e.format_resolution
+        WHEN 'unresolved' IN (e.format_resolution, twins.format_resolution)
+            THEN 'unresolved'
+        WHEN 'narrowed' IN (e.format_resolution, twins.format_resolution)
+            THEN 'narrowed'
+        ELSE e.format_resolution END
 FROM (
     SELECT protocol, method, path,
            arg_min(caller, caller) AS caller,
            arg_min(peer, caller) AS peer,
            arg_min(consumes, caller) AS consumes,
-           arg_min(produces, caller) AS produces
+           arg_min(produces, caller) AS produces,
+           arg_min(format, caller) AS format,
+           arg_min(format_resolution, caller) AS format_resolution
     FROM endpoints
     WHERE direction = 'outbound'
     GROUP BY protocol, method, path

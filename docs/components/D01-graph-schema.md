@@ -95,9 +95,10 @@ call, and does not rank candidates against one another.
 | Table | Holds |
 |---|---|
 | `shapes` | `shape_id`, content hash, whether open |
-| `shape_fields` | Shape, ordinal, **wire name**, wire type and format, required, nullable, trust fields, tags, item descriptor |
-| `endpoints` | Direction, protocol, wire identity, handler and/or caller, peer, request and response payload descriptors, declared media types, trust fields |
+| `shape_fields` | Shape, ordinal, **wire name**, **field number**, wire type and format, required, nullable, trust fields, tags, item descriptor |
+| `endpoints` | Direction, protocol, wire identity, handler and/or caller, peer, request and response payload descriptors, declared media types, **wire format and its resolution**, trust fields |
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
+| `open_questions` | One question a programmatic pass refused to guess at: wire identity, question kind, the candidate answers, the trail that reached the impasse |
 
 **A `both` row keeps both `handler` and `caller`.** A wire identity a module both exposes and
 calls merges into one endpoint row rather than two — `handler` names the server method,
@@ -126,8 +127,8 @@ silent loss.
 expansion. One representation downstream means the drift report and the stitcher compare
 field lists without caring which side came from code.
 
-**`shape_fields`'s columns are `shape_id`, `ordinal`, `wire_name`, `wire_type`, `wire_format`,
-`required`, `nullable`, `resolution`, `evidence`, `tags`, `item`.** An earlier draft of this
+**`shape_fields`'s columns are `shape_id`, `ordinal`, `wire_name`, `field_number`, `wire_type`,
+`wire_format`, `required`, `nullable`, `resolution`, `evidence`, `tags`, `item`.** An earlier draft of this
 table said "type" where the vocabulary ([D00](D00-fact-schema.md) §5b) actually carries two
 parts — a base type plus an optional qualifier, `integer` and `int64` answering different
 questions — so `wire_type` and `wire_format` are separate columns rather than one string a
@@ -159,6 +160,12 @@ column.
 strategy or an explicit serialisation annotation, `customerId` and `customer_id` may be the
 same field. For formats where a number is the identity, the number is stored and the name
 is decoration.
+
+**`shape_fields.field_number` is that number, and it is NULL wherever the format has
+none.** A protobuf field carries it; an Avro field does not (Avro matches by name against
+the writer's schema), and neither does any bytecode-derived field — an annotation-derived
+shape has no schema to number it. So a NULL here is "this format does not number fields",
+never "the number was not read": only a `declared_shape`'s own fields ever populate it.
 
 **`endpoints.request_shape` and `endpoints.response_shape` hold the same recursive
 descriptor** (`{wire_type, wire_format, nullable, shape_id?, item?}`) rather than a bare
@@ -192,6 +199,39 @@ wire identity is `(protocol, direction, method, path)` regardless of what either
 Rows that differ only in declared media are one endpoint: the union of their lists happens
 engine-side, within a single derivation batch, order-normalised (NFR-1); across batches the
 existing first-writer dedup stands unchanged.
+
+**`endpoints.format` and `endpoints.format_resolution` hold what is on this channel's
+wire, and how much that answer is worth.** `format` is one of [D00](D00-fact-schema.md)
+§4's format values or NULL; `format_resolution` is the same `resolution` set every other
+column uses. Both are stamped by **one late pass over every row** — the six-rung ladder
+([D02](D02-catalog-schema.md) §2c) — never by a derivation: a mapping annotation declares
+a MEDIA type, and turning one into a wire format is a question about the whole finished
+row. `resolved` means declared evidence named the wire outright (a protocol whose format
+is constant, a declared MIME string, a configured serializer); `narrowed` means only a
+framework default or the payload's own type suggested it; `unresolved` means nothing did.
+
+**`format_resolution` is the authority on trust, and `format` is an answer that may be
+worth showing beside it.** As the ladder writes them the two are paired: `format` is NULL
+exactly when `format_resolution` is `unresolved`. **One statement breaks that pair on
+purpose.** The inbound/outbound merge ([D02](D02-catalog-schema.md) §3) carries `format`
+the way it carries the media columns — the surviving row's own answer, else the twin's —
+but `format_resolution` takes the **weaker** of the two halves' markers, ordering
+`unresolved` < `narrowed` < `resolved`, so a half that only guessed can never launder
+into an observation by being merged with a half that knew. A merged row may therefore
+read `(protobuf, unresolved)`: *this is the format one direction declared, and this
+identity as a whole is not settled*. A reader must consult `format_resolution` before
+believing `format`, and a renderer must not print a non-`resolved` format unhedged
+([D06](D06-bundle-format.md) §5a).
+
+**The exception is shipped semantics with no live surface today**, and both halves of that
+matter. The merge is the last statement of the endpoint derivation and the ladder is the
+last pass of a resolve, so both format columns are still NULL when the merge runs and every
+row is answered afterwards — on every live row the pair holds, `format` NULL exactly when
+`format_resolution` is `unresolved`. The rule is written down, and readers and renderers
+must honour it, because the branch becomes reachable the day anything stamps a format
+before the merge — a derivation that reads one off a declaration, or a reordered pipeline —
+and the failure mode then is a silently discarded half, indistinguishable from a module
+that declared no format.
 
 **Inbound and outbound share one `endpoints` table** with a `direction` column taking
 `inbound`, `outbound` or `both`. Two near-identical tables were the alternative, and were
@@ -316,10 +356,47 @@ query time** fails with a message naming it, never a shorter answer.
 | Table | Holds |
 |---|---|
 | `findings` | Kind, subject, severity, evidence sites |
-| `open_questions` | Kind, the claims that disagreed, their sources and ranks |
+| `open_questions` | The endpoint's wire identity, the question kind, the candidate answers, the evidence trail |
 
 `open_questions` is not an error log. It is output: a recorded disagreement a person should
 settle.
+
+**As built it is the hand-off ledger for the enrichment tier** — one row per question a
+programmatic pass could not answer and refused to guess at. Columns: `protocol`, `method`,
+`path` (the wire identity, **carried rather than joined** — the row is an artifact a human
+and the enrichment tier read, and a foreign key into a table rebuilt every resolve would
+name nothing outside this run); `question`; `candidates`, a JSON array; and `evidence`.
+
+`question` is a **closed two-value set — `payload_binding` and `format_conflict`** —
+checked by the single writing module before any row is inserted, because the value is
+bound straight into a published artifact where a typo is indistinguishable from a kind of
+question nobody implemented. Adding a kind is a schema change (NFR-5): both the renderer
+and the export switch on it.
+
+`candidates` carries the answers that were on the table, and its keys depend on the kind:
+a `payload_binding` candidate holds `payload_type`, `hops`, `seen_in` and `why` (the
+matched call); a `format_conflict` candidate holds `format`, `seen_in` and `why`. Each
+array is sorted by the pass that writes it, so two runs produce the same bytes.
+
+`evidence` here is **deliberately not one of [D00](D00-fact-schema.md) §4's evidence
+tiers.** It is the trail in prose — which columns and configuration keys were actually
+read to reach the impasse. An unanswered question has no tier, and the reader of this
+table needs to know where to look, not how much to trust an answer nobody gave.
+
+**The table is replaced whole per resolve, and emptied once per resolve rather than by
+either writer** — more than one pass contributes rows, so a reset owned by one would erase
+the other's depending on which ran first, and a ledger merely shorter than it should be
+reads exactly like a run with fewer questions. It is pre-declared empty for the same reason
+`endpoints` and `shapes` are: the query answers with an empty result, never an error.
+
+**Programmatic passes never read it.** It is a hand-off, not an input; a pass that read its
+own unanswered questions back would be answering them.
+
+**Ordering is total, because "ordered by wire identity" is not** (NFR-1): rows sort by
+`protocol, method, path`, then `question` where one endpoint raises both kinds, then
+`candidates` as text — two listeners on one destination share all four leading columns and
+differ only in their answers — and finally `evidence`. Two rows agreeing on all six are the
+same question asked twice and may appear in either order without changing a byte.
 
 ---
 

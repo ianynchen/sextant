@@ -35,7 +35,32 @@ CREATE TABLE IF NOT EXISTS endpoints (
     -- derivable from any evidence source (2E design §4): carried data,
     -- never identity — dedup and merge never compare these two columns.
     consumes          TEXT,
-    produces          TEXT
+    produces          TEXT,
+    -- What is on this channel's wire, and how much the answer is worth (2G
+    -- design §4, §5). Both are stamped by one late pass over every row
+    -- (`resolve/format.py`), never by a derivation: `format` is one of D00's
+    -- format values or NULL, and `format_resolution` is the same resolution
+    -- set every other column uses — `resolved` where declared evidence named
+    -- the wire outright, `narrowed` where only a framework default or the
+    -- payload's own type suggested it, `unresolved` where nothing did.
+    -- As the ladder writes them, `format` is NULL exactly when
+    -- `format_resolution` is `unresolved`. **One statement breaks that pair
+    -- on purpose**: merge_endpoints.sql keeps the surviving row's format
+    -- while taking the WEAKER of the two halves' markers, so a merged row
+    -- may read (`protobuf`, `unresolved`) — "this is the format one
+    -- direction declared, and this identity as a whole is not settled",
+    -- which is the honest reading of one wire whose two halves were not
+    -- equally observable. A reader must therefore treat
+    -- `format_resolution` as the authority on trust and `format` as an
+    -- answer that may still be worth showing beside it. **That branch has
+    -- no live surface today** (merge_endpoints.sql's own header): the merge
+    -- is the last statement of `derive_endpoints` and the ladder is the last
+    -- pass of a resolve, so both columns are still NULL when the merge runs
+    -- and the ladder answers every row afterwards — the pair holds on every
+    -- live row, and the exception becomes reachable only if a later phase
+    -- stamps a format before the merge.
+    format            TEXT,
+    format_resolution TEXT
 );
 
 -- Pre-declared for the same reason as `endpoints` above: a scanner too weak
@@ -53,6 +78,10 @@ CREATE TABLE IF NOT EXISTS shape_fields (
     shape_id    TEXT,
     ordinal     INTEGER,
     wire_name   TEXT,
+    -- The schema's own field number (protobuf) — NULL for a format with none
+    -- (Avro) and for every bytecode-derived (annotation/reflection) shape,
+    -- which never carries one at all (2G design §3, Task 5).
+    field_number INTEGER,
     wire_type   TEXT,
     wire_format TEXT,
     required    BOOLEAN,
@@ -89,6 +118,46 @@ CREATE TABLE IF NOT EXISTS resolved_config (
     -- `placeholder_cycle`, `multi_placeholder`) — the last reserved for the
     -- peer-resolution join, never emitted by this pass.
     unresolved_reason TEXT
+);
+
+-- The 2K hand-off ledger (2G design §6): one row per question a programmatic
+-- pass could not answer and refused to guess at. Pre-declared empty for the
+-- same reason `endpoints`/`shapes`/`resolved_config` above are — the
+-- "open_questions" query must answer with an empty result, never an error,
+-- on a run where no pass had anything to ask.
+--
+-- Replaced WHOLE per resolve through reset_open_questions.sql +
+-- insert_open_questions.sql, and the reset runs once, in the pipeline, ahead
+-- of every writer rather than inside one of them: MORE THAN ONE pass writes
+-- here (the format ladder's `format_conflict`, the parse-binding pass's
+-- `payload_binding`), so a reset owned by either would erase the other's
+-- rows depending on which ran first.
+--
+-- Programmatic passes never READ this table (2G design §6): it is a hand-off
+-- to 2K's enrichment seat, not an input, and a pass that read its own
+-- unanswered questions back would be answering them.
+CREATE TABLE IF NOT EXISTS open_questions (
+    -- The endpoint's wire identity (D01 §3), carried rather than joined: the
+    -- row is an artifact a human and 2K read, and a foreign key into a table
+    -- that is rebuilt every resolve would name nothing outside this run.
+    protocol   TEXT,
+    method     TEXT,
+    path       TEXT,
+    -- One of the closed two-value set `payload_binding`, `format_conflict`
+    -- (2G design §6) — checked in `resolve/open_questions.py`, which is the
+    -- only writer.
+    question   TEXT,
+    -- The answers that were on the table, as a JSON array — each carrying
+    -- what it would have made the format or payload type, where it was seen,
+    -- and why no rung could choose it. Sorted by the pass that writes it, so
+    -- two runs produce the same bytes (NFR-1).
+    candidates JSON,
+    -- The evidence TRAIL, in prose: which columns and configuration keys the
+    -- pass actually read to reach the impasse. Deliberately NOT one of D00's
+    -- closed evidence tiers — an unanswered question has no tier, and the
+    -- reader of this table needs to know where to look, not how much to
+    -- trust an answer nobody gave.
+    evidence   TEXT
 );
 
 CREATE OR REPLACE VIEW documents AS

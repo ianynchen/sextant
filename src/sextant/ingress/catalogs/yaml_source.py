@@ -51,6 +51,15 @@ class YamlCatalogSource:
                     known_types=raw.get("known_types", []),
                     # D02 §2i — optional, one per framework family.
                     config_model=raw.get("config_model", {}),
+                    # 2G design §7 — optional format vocabulary, carried
+                    # through unread here for the same reason `matches` is:
+                    # the values are checked against D00's format set where
+                    # the ladder reads them (`resolve/format.py`), which is
+                    # also where the reserved value is refused.
+                    format_fixed=raw.get("format_fixed", {}),
+                    media_formats=raw.get("media_formats", {}),
+                    json_default_markers=raw.get("json_default_markers", []),
+                    parse_calls=raw.get("parse_calls", {}),
                 )
             )
         return catalogs

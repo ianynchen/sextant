@@ -46,3 +46,36 @@ matches:
       org.apache.kafka.common.serialization.StringDeserializer: text/plain
       org.apache.kafka.common.serialization.ByteArraySerializer: application/octet-stream
       org.apache.kafka.common.serialization.ByteArrayDeserializer: application/octet-stream
+    # 2G design §7, rung 3: the SAME configured classes, answering the other
+    # question — not what MIME type they imply, but what is actually on the
+    # wire. Read by `resolve/format.py`, which reuses the `rules` above (they
+    # already say which key holds a serializer and which rows it covers)
+    # rather than declaring a second copy of that machinery.
+    #
+    # `values` and `format_from` are deliberately not the same key set. A
+    # schema-registry serializer has no MIME string anyone registered, so it
+    # appears here and NOT above: it stamps no media and answers rung 3
+    # instead, which is the more honest of the two answers — a serializer
+    # states the wire outright, where a MIME type for it would be invented.
+    # The reverse also holds: a class whose wire format this table cannot
+    # name still contributes its media type.
+    format_from:
+      org.springframework.kafka.support.serializer.JsonSerializer: json
+      org.springframework.kafka.support.serializer.JsonDeserializer: json
+      org.apache.kafka.common.serialization.StringSerializer: string
+      org.apache.kafka.common.serialization.StringDeserializer: string
+      org.apache.kafka.common.serialization.ByteArraySerializer: bytes
+      org.apache.kafka.common.serialization.ByteArrayDeserializer: bytes
+      io.confluent.kafka.serializers.KafkaAvroSerializer: avro
+      io.confluent.kafka.serializers.KafkaAvroDeserializer: avro
+      io.confluent.kafka.serializers.protobuf.KafkaProtobufSerializer: protobuf
+      io.confluent.kafka.serializers.protobuf.KafkaProtobufDeserializer: protobuf
+      # Confluent's JSON-Schema serializer puts plain JSON on the wire and
+      # carries the schema out of band. `json` is what it means HERE; the
+      # `json_schema` value the design reserves (2G design §4) is about the
+      # SCHEMA language, is implemented by nothing, and is refused if a
+      # catalog writes it.
+      io.confluent.kafka.serializers.json.KafkaJsonSchemaSerializer: json
+      io.confluent.kafka.serializers.json.KafkaJsonSchemaDeserializer: json
+      io.confluent.kafka.serializers.KafkaJsonSerializer: json
+      io.confluent.kafka.serializers.KafkaJsonDeserializer: json

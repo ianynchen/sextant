@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
@@ -13,18 +14,40 @@ from sextant.application.resolve.pipeline import ResolveReport
 from sextant.application.stages.analyze import analyze
 from sextant.cli.progress import RichProgress
 from sextant.cli.resources import catalogs_dir, extractor_jar
+from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
 from sextant.egress.export.manifest import write_manifest
 from sextant.egress.render.document import render_module_document
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
+from sextant.ingress.extract.jvm.generated_naming import JvmGeneratedNaming
 from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.ingress.interpret.descriptors import interpret_descriptors
+from sextant.ingress.read.avsc import AvscReader
 from sextant.ingress.read.properties import PropertiesReader
+from sextant.ingress.read.proto_source import ProtoSourceReader
 from sextant.ingress.read.yaml_config import YamlConfigReader
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 # The registries the composition root builds (ARCHITECTURE §6). Order is the
 # statement of precedence where two adapters could both accept.
+
+
+class _JvmDescriptorInterpreter:
+    """The `DescriptorInterpreter` port (application/ports/descriptors.py),
+    adapted: binds the JVM's own generated-class naming — constructed only
+    here, per ARCHITECTURE §10's JVM-confinement rule — into
+    `interpret_descriptors`, so `analyze` never has to import either. An
+    object with a named method, like every other adapter this composition
+    root wires in, never a bare callable."""
+
+    def __init__(self) -> None:
+        self._naming = JvmGeneratedNaming()
+
+    def interpret(
+        self, descriptors: Sequence[EmbeddedDescriptorFact]
+    ) -> tuple[list[DeclaredShapeFact], list[str]]:
+        return interpret_descriptors(descriptors, self._naming)
 
 
 def _commit_of(path: Path) -> str:
@@ -95,7 +118,13 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
             catalogs=YamlCatalogSource(catalogs_dir()),
             fact_root=workspace_dir / "facts",
             progress=progress,
-            readers=[PropertiesReader(), YamlConfigReader()],
+            readers=[
+                PropertiesReader(),
+                YamlConfigReader(),
+                AvscReader(),
+                ProtoSourceReader(),
+            ],
+            interpret=_JvmDescriptorInterpreter(),
         )
         write_metadata(
             workspace_dir / "metadata.json",
@@ -106,6 +135,8 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
             _commit_of(path),
             result.uncovered,
             resolved_config=workspace.query("resolved_config"),
+            schema_sources_not_compiled=result.schema_sources_not_compiled,
+            descriptors_not_interpreted=result.descriptors_not_interpreted,
         )
     finally:
         workspace.close()
@@ -169,6 +200,7 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             tuple(metadata.get("uncovered", [])),
             shape_fields=workspace.query("shape_fields"),
             resolved_config=workspace.query("resolved_config"),
+            open_questions=workspace.query("open_questions"),
         )
         target = workspace_dir / "render" / "architecture.md"
         target.parent.mkdir(parents=True, exist_ok=True)

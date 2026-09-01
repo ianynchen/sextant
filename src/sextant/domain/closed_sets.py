@@ -60,6 +60,32 @@ class Direction(StrEnum):
     BOTH = "both"
 
 
+class Format(StrEnum):
+    """What is on a channel's wire (2G design §4). A property of the channel,
+    inferred, never a protocol and never a property of a payload *type*: a
+    protobuf-typed payload under a JSON media declaration is `JSON`.
+
+    `endpoints.format` holds one of these or NULL, and NULL is an answer —
+    the ladder (2G design §5) reached no rung, and `format_resolution` says
+    `unresolved` beside it.
+    """
+
+    JSON = "json"
+    PROTOBUF = "protobuf"
+    AVRO = "avro"
+    XML = "xml"
+    STRING = "string"
+    BYTES = "bytes"
+
+
+# Reserved: named by the design so a catalog cannot quietly claim it, and
+# refused where a catalog writes it (2G design §4, §11 — JSON Schema and XSD
+# are out of scope this phase). The 2F `from_key_prefix` precedent: a value
+# the design names but nothing implements must fail loudly rather than be
+# silently read as something else.
+RESERVED_FORMATS = frozenset({"json_schema"})
+
+
 _RANKS = {Evidence.HUMAN: 90, Evidence.LLM: 10}
 _CODE_DERIVED_RANK = 50
 

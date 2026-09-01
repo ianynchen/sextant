@@ -64,6 +64,14 @@ def method_name(descriptor: str) -> str:
     return head if paren else name
 
 
+# D00 §5a: an array's symbol is its ELEMENT's descriptor with this suffix
+# appended — `byte#[]`, never `byte[]#`. Written here because this is the seam
+# that converts the catalogs' notation, and a catalog naming an array type
+# (2G's bytes-shaped payload parameters) has to reach the very string the
+# facts carry.
+_ARRAY_SUFFIX = "[]"
+
+
 def type_descriptor(dotted: str) -> str:
     """Converts a catalog's dotted type name to the SCIP symbol form the facts
     use.
@@ -76,8 +84,32 @@ def type_descriptor(dotted: str) -> str:
     change to suit the other — the catalog stays readable in its source
     notation, the facts stay one grammar — so the conversion happens once,
     here, at the point of comparison.
+
+    A trailing `[]` (repeated for a nested array) is carried past the
+    descriptor marker rather than into it: the facts spell `byte[]` as
+    `byte#[]`, so a catalog writing `byte[]` and a scanned parameter of that
+    type must compare equal. Inert for every name without one, which is
+    every catalog value written before 2G.
     """
-    return dotted.replace(".", "/") + "#"
+    depth = 0
+    while dotted.endswith(_ARRAY_SUFFIX):
+        dotted = dotted[: -len(_ARRAY_SUFFIX)]
+        depth += 1
+    return dotted.replace(".", "/") + "#" + _ARRAY_SUFFIX * depth
+
+
+def package_path(dotted: str) -> str:
+    """Converts a catalog's dotted PACKAGE name to the path form the facts
+    use — `type_descriptor`'s prefix-only sibling.
+
+    A package is not a type: it has no descriptor suffix, so a caller
+    matching one (2G design §5's `json_default_markers`, which ask whether
+    anything from a package family appears at all) cannot use
+    `type_descriptor` without also asserting that the prefix names a type.
+    Here rather than at the call site for the reason `type_descriptor` is:
+    the two notations meet in one seam, never in every pass that compares
+    them."""
+    return dotted.replace(".", "/")
 
 
 def simple_name(symbol: str) -> str:

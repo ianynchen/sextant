@@ -109,6 +109,44 @@ def test_resource_roots_is_empty_when_the_module_has_no_resources_directory(tmp_
     assert module.resource_roots == ()
 
 
+def test_schema_roots_reports_proto_then_avro_when_both_exist(tmp_path: Path):
+    _module(tmp_path)
+    proto = tmp_path / "src" / "main" / "proto"
+    avro = tmp_path / "src" / "main" / "avro"
+    # Reverse mkdir order, so a passing test cannot be an accident of
+    # directory-listing order rather than the detector's own fixed sequence.
+    avro.mkdir(parents=True)
+    proto.mkdir(parents=True)
+
+    module = MavenDetector().detect(tmp_path).modules[0]
+
+    assert module.schema_roots == (proto, avro)
+
+
+def test_schema_roots_names_only_the_directories_that_exist(tmp_path: Path):
+    _module(tmp_path)
+    avro = tmp_path / "src" / "main" / "avro"
+    avro.mkdir(parents=True)
+
+    module = MavenDetector().detect(tmp_path).modules[0]
+
+    assert module.schema_roots == (avro,)
+
+
+def test_schema_roots_is_empty_when_the_module_has_no_schema_directory(tmp_path: Path):
+    module = MavenDetector().detect(_module(tmp_path)).modules[0]
+    assert module.schema_roots == ()
+
+
+def test_schema_roots_reports_both_of_the_real_fixtures_schema_directories():
+    module = MavenDetector().detect(FIXTURE).modules[0]
+
+    assert module.schema_roots == (
+        FIXTURE / "src" / "main" / "proto",
+        FIXTURE / "src" / "main" / "avro",
+    )
+
+
 def test_a_declared_source_directory_wins_over_the_conventional_layout(tmp_path: Path):
     """M02: the detector reads the build, never a convention."""
     pom = _BARE_POM.replace(

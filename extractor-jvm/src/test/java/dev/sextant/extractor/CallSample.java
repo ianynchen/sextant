@@ -66,6 +66,61 @@ public final class CallSample {
         sink(supplied);
     }
 
+    /** A static method has no {@code this}, so its first parameter is local
+     *  slot 0 — the one place where the instance rule (slot 0 is the receiver)
+     *  would report the wrong index, or none at all. */
+    public static void staticVariableArgument(String supplied) {
+        helper(supplied);
+    }
+
+    /** {@code long} occupies two slots, so {@code label} — parameter 1 —
+     *  starts at slot 3. The fact must name the parameter's own index, never
+     *  its slot, the same distinction {@code field_write} already pins. */
+    public void wideLeadingParameter(long id, String label) {
+        sink(label);
+    }
+
+    /** A parameter parked in a local and read back: the store and the reload
+     *  relocate the value without producing it, so it is still the parameter
+     *  that reached the call — the ordinary way a method spells this. */
+    public void parameterThroughLocal(String supplied) {
+        String local = supplied;
+        sink(local);
+    }
+
+    /** Two *different* parameters merged on a branch: two producers, so the
+     *  answer is the same honest silence a merge of two literals gets. Naming
+     *  either one would be a fact about a path that may never run — the
+     *  parameter kind must not weaken the merge rule it rides on. */
+    public void mergedParameters(boolean fast, String left, String right) {
+        sink(fast ? left : right);
+    }
+
+    /** A parameter and a literal merged on a branch. This is the arity change
+     *  the parameter kind makes, stated as a test rather than discovered
+     *  downstream: while a parameter contributed <em>no</em> producer, this
+     *  merge had exactly one and the pass reported {@code /default} as though
+     *  the argument were always that — one branch's value asserted for both.
+     *  The parameter is a producer of its own now, so the slot is honestly
+     *  {@code unresolved}: less recall, and the only answer that is true on
+     *  every path. */
+    public void mergedParameterAndLiteral(boolean fast, String supplied) {
+        sink(fast ? supplied : "/default");
+    }
+
+    /** {@code this} is in slot 0 of an instance method and is a parameter of
+     *  no descriptor: it names no index, so it stays {@code unresolved}.
+     *
+     *  <p>The parameter beside it is what gives the case teeth: with no
+     *  parameters declared there are no slots to be off by one against, and an
+     *  implementation reading the slot number as the index would pass. Here
+     *  {@code supplied} occupies slot 1 as parameter 0, so that implementation
+     *  would call {@code this} parameter 0 too. */
+    public void selfArgument(String supplied) {
+        consumeSelf(this);
+        sink(supplied);
+    }
+
     public void callResult() {
         sink(source());
     }
@@ -213,6 +268,10 @@ public final class CallSample {
     }
 
     void consume(Link value) {
+        record(String.valueOf(value));
+    }
+
+    void consumeSelf(CallSample value) {
         record(String.valueOf(value));
     }
 

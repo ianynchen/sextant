@@ -134,6 +134,9 @@ class CallArgument(BaseModel):
         "lambda",
         "instance",
         "field",
+        # The caller's own parameter N — `value` is that index, never the
+        # local slot a JVM happens to keep it in (D00 §5).
+        "parameter",
         "null",
         "unresolved",
     ]
@@ -200,7 +203,86 @@ class ConfigEntryFact(BaseModel):
     doc_index: int = 0
 
 
+class EmbeddedDescriptorFact(BaseModel):
+    """One schema payload an artifact carries verbatim (2G design §1). The
+    emitter never parses it: a protobuf descriptor arrives base64-encoded and
+    an Avro schema as its JSON text, exactly as the class embedded it, so no
+    extractor in any language has to link a schema runtime to produce this.
+
+    `symbol` is the schema holder — the generated class for a compiled
+    payload, the record's own name for one read off a source file — and it is
+    what a gap names when the payload cannot be interpreted."""
+
+    model_config = {"frozen": True}
+    kind: Literal["embedded_descriptor"] = "embedded_descriptor"
+    document_id: str
+    symbol: str
+    schema_format: Literal["protobuf", "avro"]
+    payload: str
+    # Compiled unless a source-file reader says otherwise: the artifact that
+    # runs is the authority (DR-4), and it is also the common case.
+    origin: Literal["compiled", "source"] = "compiled"
+
+
+class DeclaredFieldFact(BaseModel):
+    """One field of a declared shape, already in D00 §5b's wire vocabulary —
+    which is what schema formats natively say, so nothing is projected here
+    that the schema did not state.
+
+    `name` is the schema's own spelling and `wire_name` the encoded one (a
+    protobuf `json_name`); they differ, so both are kept. `item` is D01 §5's
+    recursive `{wire_type, wire_format, nullable, shape_id?, item?}`
+    descriptor for what a collection holds, and `shape_ref` the shape a
+    singular object field points at."""
+
+    model_config = {"frozen": True}
+    name: str
+    wire_name: str
+    # NULL for a format with no field numbers — Avro, and every
+    # annotation-derived shape.
+    field_number: int | None = None
+    wire_type: str
+    wire_format: str | None = None
+    required: bool
+    nullable: bool
+    default: str | None = None
+    item: dict[str, object] | None = None
+    shape_ref: str | None = None
+    enum_symbols: list[str] | None = None
+
+
+class DeclaredShapeFact(BaseModel):
+    """One message or record type, as its schema declares it (D00 §5,
+    D01 §3). Never emitted by an extractor: it is the interpreter's output,
+    which keeps schema-format knowledge in one place (2G design §3)."""
+
+    model_config = {"frozen": True}
+    kind: Literal["declared_shape"] = "declared_shape"
+    document_id: str
+    symbol: str
+    # The schema's own full name (`sextant.orders.OrderRequest`), written for
+    # both origins. `symbol` cannot serve as the identity across them — a
+    # compiled shape is named by the class it travels as and a source shape by
+    # the schema — so this is what DR-4's compiled-beats-source precedence
+    # compares, and the one field on which the two origins can meet.
+    schema_name: str
+    schema_format: Literal["protobuf", "avro"]
+    origin: Literal["compiled", "source"]
+    # A schema compiled into the artifact is compiler evidence (COVERAGE
+    # §4.1's strongest tier); a schema file in the repository is a
+    # declaration, and says nothing about what the build actually shipped.
+    evidence: Literal["compiler", "declared"]
+    fields: list[DeclaredFieldFact] = Field(default_factory=list)
+
+
 Fact = Annotated[
-    ModuleFact | SymbolFact | AnnotationFact | CallSiteFact | FieldWriteFact | ConfigEntryFact,
+    ModuleFact
+    | SymbolFact
+    | AnnotationFact
+    | CallSiteFact
+    | FieldWriteFact
+    | ConfigEntryFact
+    | EmbeddedDescriptorFact
+    | DeclaredShapeFact,
     Field(discriminator="kind"),
 ]

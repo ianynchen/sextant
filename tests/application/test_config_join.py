@@ -926,6 +926,115 @@ def test_the_merge_keeps_the_surviving_rows_own_media_over_the_twins(
     assert row["produces"] == '["text/csv"]'
 
 
+# --- 2G Task 6: the merge's format carry ---------------------------------
+
+
+def _stamp_format(
+    workspace: DuckDbWorkspace, direction: str, caller: str | None, answer: tuple
+) -> None:
+    """One row's format pair, applied through the shipped `stamp_format`
+    derive rather than a hand-written UPDATE — the columns the merge below
+    carries have to arrive the way the format pass actually writes them."""
+    workspace.derive(
+        "stamp_format",
+        rows=[
+            {
+                "protocol": "kafka",
+                "direction": direction,
+                "method": None,
+                "path": "shared",
+                "handler": None,
+                "caller": caller,
+                "consumes": None,
+                "produces": None,
+                "request_shape": None,
+                "response_shape": None,
+                "format": answer[0],
+                "format_resolution": answer[1],
+            }
+        ],
+    )
+
+
+def test_the_merge_carries_a_deleted_twins_format_onto_the_surviving_row(tmp_path: Path):
+    """The two format columns (2G design §4) are carried for the same reason
+    the media columns above are: the twin is about to be DELETED, so anything
+    it alone answered goes with it unless the surviving row takes it.
+
+    **Inert in the live pipeline today, deliberately tested anyway.**
+    `resolve/format.py` is the LAST pass of a resolve and this merge is the
+    last statement of `derive_endpoints`, so both columns are still NULL on
+    every row when the merge runs live. The carry exists because the day
+    anything stamps a format before the merge — a derivation reading one off
+    a declaration, a reordered pipeline — a silently discarded half would
+    look exactly like a module that declared no format. Stamping the rows
+    here first is what makes the rule observable at all."""
+    workspace = _workspace(tmp_path)
+    _seed(
+        workspace,
+        {"direction": "inbound", "path": "shared"},
+        {"direction": "outbound", "path": "shared", "caller": "c"},
+    )
+    _stamp_format(workspace, "inbound", None, (None, None))
+    _stamp_format(workspace, "outbound", "c", ("json", "resolved"))
+    workspace.derive("endpoints_merge")
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert row["direction"] == "both"
+    assert (row["format"], row["format_resolution"]) == ("json", "resolved")
+
+
+def test_the_merge_takes_the_weaker_of_the_two_format_resolutions(tmp_path: Path):
+    """`format` coalesces (the surviving row's own answer first, the media
+    precedent); `format_resolution` does NOT — it takes the WEAKER of the two
+    markers present, ordering `unresolved` < `narrowed` < `resolved`.
+
+    The rule exists so a half that only GUESSED cannot launder into an
+    observation by being merged with a half that knew. Here the inbound half
+    says `json` at the observed tier and the outbound half says `json` at the
+    assumed one: the surviving row keeps `json` — both halves agree on it —
+    but must report it as assumed, because one of the two directions of this
+    single wire identity was never actually observed."""
+    workspace = _workspace(tmp_path)
+    _seed(
+        workspace,
+        {"direction": "inbound", "path": "shared"},
+        {"direction": "outbound", "path": "shared", "caller": "c"},
+    )
+    _stamp_format(workspace, "inbound", None, ("json", "resolved"))
+    _stamp_format(workspace, "outbound", "c", ("json", "narrowed"))
+    workspace.derive("endpoints_merge")
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["format"], row["format_resolution"]) == ("json", "narrowed")
+
+
+def test_the_merge_lets_an_unresolved_half_weaken_the_whole_row(tmp_path: Path):
+    """`unresolved` is the weakest of the three markers, so a half that could
+    not be answered drags the merged row down to it — even though `format`
+    itself still coalesces to the answer the other half had.
+
+    That pair reads oddly on purpose: "this is the format one direction
+    declared, and this row as a whole is not settled" is exactly the honest
+    reading of one wire identity whose two halves were not equally
+    observable."""
+    workspace = _workspace(tmp_path)
+    _seed(
+        workspace,
+        {"direction": "inbound", "path": "shared"},
+        {"direction": "outbound", "path": "shared", "caller": "c"},
+    )
+    _stamp_format(workspace, "inbound", None, (None, "unresolved"))
+    _stamp_format(workspace, "outbound", "c", ("protobuf", "resolved"))
+    workspace.derive("endpoints_merge")
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["format"], row["format_resolution"]) == ("protobuf", "unresolved")
+
+
 # --- job 3: the peer join ------------------------------------------------
 
 

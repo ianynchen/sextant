@@ -144,13 +144,85 @@ class MethodFlowTest {
         assertTrue(line.contains("\"arguments\":[{\"kind\":\"null\"}]"), line);
     }
 
-    /** An argument the pass cannot resolve is `unresolved` with nothing else —
-     *  never an omitted slot, which would silently renumber every argument
-     *  after it. A method parameter has no producing call, so no `source`. */
+    /** The caller was handed this value: D00 §5's `parameter` kind, carrying
+     *  the parameter's own index.
+     *
+     *  <p>It read `unresolved` until 2G, which made it indistinguishable from a
+     *  slot the pass genuinely could not read — javac's synthesized varargs
+     *  array is the neighbour it sat beside, spelled identically — and a
+     *  payload the caller supplies is exactly the case a parse-call binding has
+     *  to follow. No `source`: a parameter is produced by no call in this
+     *  method, and that stays true. */
     @Test
-    void reports_a_variable_argument_as_unresolved_with_no_source() throws Exception {
+    void names_the_parameter_an_argument_was_handed_straight_from() throws Exception {
         String line = callSites("variableArgument").get(0);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"parameter\",\"value\":0}]"), line);
+    }
+
+    /** A static method's parameter 0 is local slot 0 — where an instance
+     *  method keeps `this`. Reading the slot as the index (or assuming the
+     *  instance offset) misnames every argument of every static call. */
+    @Test
+    void counts_a_static_methods_parameters_from_slot_zero() throws Exception {
+        String line = callSites("staticVariableArgument").get(0);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"parameter\",\"value\":0}]"), line);
+    }
+
+    /** `long id` occupies slots 1 and 2, so `label` starts at slot 3 while
+     *  being parameter 1. The fact names the index — the same slot/index
+     *  distinction `field_write` pins, and the one a consumer joins on. */
+    @Test
+    void maps_a_two_slot_leading_parameter_to_the_right_parameter_index() throws Exception {
+        String line = callSites("wideLeadingParameter").get(0);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"parameter\",\"value\":1}]"), line);
+    }
+
+    /** A parameter parked in a local and read back is still the parameter: the
+     *  store and the reload relocate a value without producing one, so the
+     *  answer must not depend on whether a method wrote the argument inline. */
+    @Test
+    void keeps_naming_the_parameter_across_a_store_and_a_reload() throws Exception {
+        String line = callSites("parameterThroughLocal").get(0);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"parameter\",\"value\":0}]"), line);
+    }
+
+    /** Two different parameters merged on a branch are two producers, and the
+     *  merge rule outranks the new kind: naming either would be a fact about a
+     *  path that may never run, exactly as it would for two literals. */
+    @Test
+    void reports_two_merged_parameters_as_unresolved() throws Exception {
+        String line = callSites("mergedParameters").get(0);
         assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+    }
+
+    /** A parameter merged with a literal is two producers, so it is
+     *  `unresolved` — the arity the new kind changes, pinned deliberately.
+     *  9.8 reported `/default` here, because a parameter contributed no
+     *  producer at all and the literal was left standing alone: a fact about
+     *  the else-branch, asserted for an argument that is the parameter
+     *  whenever the condition holds. Recall drops; honesty is the trade the
+     *  whole pass is built on (D00 §5). */
+    @Test
+    void reports_a_parameter_merged_with_a_literal_as_unresolved() throws Exception {
+        String line = callSites("mergedParameterAndLiteral").get(0);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+    }
+
+    /** `this` sits in slot 0 of an instance method and is a parameter of no
+     *  descriptor, so it names no index and stays the honest `unresolved` —
+     *  never parameter 0, which belongs to the first declared parameter.
+     *
+     *  <p>Both calls are asserted together because one without the other
+     *  proves nothing: the parameter's own call fixes slot 1 as index 0, so a
+     *  pass reading slots as indices would have to call `this` parameter 0 to
+     *  satisfy the second assertion and fail the first. */
+    @Test
+    void reports_this_as_unresolved_beside_the_parameter_that_occupies_slot_one()
+            throws Exception {
+        List<String> lines = callSites("selfArgument");
+        assertTrue(lines.get(0).contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), lines.get(0));
+        assertTrue(lines.get(1).contains("\"arguments\":[{\"kind\":\"parameter\",\"value\":0}]"),
+                   lines.get(1));
     }
 
     /** The rule the whole choice of {@code SourceInterpreter} rests on: after a

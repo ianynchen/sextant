@@ -37,6 +37,29 @@ class Catalog:
     # `resolve/config.py`'s pass 2 collects every catalog's own non-empty
     # block; every other catalog's default `{}` means it contributes none.
     config_model: dict[str, Any] = field(default_factory=dict)
+    # 2G design §7's format vocabulary, three optional top-level blocks read
+    # only by `resolve/format.py`'s ladder. Each is shipped by the catalog
+    # that OWNS the knowledge — a protocol's constant format by the catalog
+    # declaring that protocol, the MIME table and the default-converter
+    # markers by the family's HTTP catalogs — so no format name is ever an
+    # engine's to know. Every catalog that declares none contributes none.
+    #
+    # `format_fixed`  -- protocol -> format, for a protocol whose wire is
+    #                    constant by definition (rung 1).
+    # `media_formats` -- MIME string -> format (rung 2).
+    # `json_default_markers` -- package prefixes whose presence anywhere in a
+    #                    module is evidence that a JSON default converter is
+    #                    on the classpath (rung 5).
+    format_fixed: dict[str, str] = field(default_factory=dict)
+    media_formats: dict[str, str] = field(default_factory=dict)
+    json_default_markers: list[str] = field(default_factory=list)
+    # 2G design §7's fourth format vocabulary, read only by
+    # `resolve/shapes/parse_binding.py`: `{bytes_payloads: [...], calls:
+    # [...]}` — which payload parameter types mean "this channel carries the
+    # wire's bytes, not a decoded object", and which calls turn those bytes
+    # into a typed payload. Carried through unread here, like every block
+    # above; the pass that reads it refuses a malformed one.
+    parse_calls: dict[str, Any] = field(default_factory=dict)
 
 
 class CatalogError(ValueError):

@@ -1,0 +1,10 @@
+{
+  "type": "record",
+  "name": "AuditEvent",
+  "namespace": "com.example.orders.avro",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "actor", "type": ["null", "string"], "default": null},
+    {"name": "amount", "type": "long", "default": 0}
+  ]
+}

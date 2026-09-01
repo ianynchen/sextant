@@ -99,8 +99,10 @@ would report "1 endpoint" for both and the system tier would have nothing to mat
 `Flux<ServerSentEvent<T>>` is SSE. `@ServerEndpoint` is WebSocket. The declaration is
 identical and the **return type** decides. This generalises a gap recorded for
 `@HttpExchange`, where the *direction* depends on use rather than on the catalog. Both are
-now resolved per match against a catalog-level default, along with `format` —
-[D02](components/D02-catalog-schema.md) §2c.
+resolved per match against a catalog-level default —
+[D02](components/D02-catalog-schema.md) §2c. **`format` is not**: it turned out not to be
+answerable at match time at all, and is stamped instead by one late pass over the finished
+endpoint table (§4.1, and the same §2c).
 
 ### Verification
 
@@ -169,6 +171,21 @@ environment instead of standing `unresolved`. Both land as expressions, not valu
 `resolved_peers` (a join, never a write) answers each per environment, so a bundle serves
 every environment and the system tier selects (D06 §3).
 
+**Phase 2G then made the wire format an answered question.** Every `endpoints` row now
+carries `format` and `format_resolution`, stamped by a six-rung ladder over the finished
+table (§4.1, [D02](components/D02-catalog-schema.md) §2c) whose whole vocabulary — the MIME
+table, the serializer-to-format table, the default-converter package families, the parse
+calls — is catalog data. Protobuf and Avro schemas reach the same `shapes`/`shape_fields`
+tables 2A built, from **both** origins: the descriptor a generated class embeds (harvested
+by the extractor as string constants and handed on unparsed) and the repository's own
+`.proto`/`.avsc` files, compiled and read by the one component in the core that understands
+a schema format — compiled wins where both declare the same schema (DR-4). Fields carry
+their `field_number` and protobuf's own `json_name` as the wire name. Bytes-only channels
+bind their payload from the parse call in the code, at the handler or one delegation hop
+out; a parse further out, or two parses of one payload, binds nothing and becomes a row in
+the new `open_questions` ledger — a workspace table, a bundle artifact and a section of the
+rendered document, handing the undecidable to the enrichment tier instead of guessing.
+
 **Everything else in both matrices remains a gap** — including, inside the cells Phase 2D and
 2E-prep touched, Spring Integration's channel adapters and spring-cloud-aws's own
 channel-adapter bindings (`config_join`'s shape, not yet catalogued — Spring Cloud Stream's
@@ -210,14 +227,27 @@ module today produces:
   environment, with a reason where it could not be; and, per environment, every outbound
   expression's own substituted address — a join over the two, never a write, so a bundle
   serves every environment and a consumer selects (D06 §3).
+- **A format on every endpoint row, and an `open_questions` ledger** (Phase 2G) — `format`
+  and `format_resolution` on every row, `resolved` where a protocol, a declared MIME type or
+  a configured serializer named the wire and `narrowed` where only the payload's own type or
+  a framework default suggested it, NULL and `unresolved` where nothing did; declared shapes
+  from embedded descriptors and repository schema files in the same `shapes`/`shape_fields`
+  tables, with `field_number` and `json_name` wire names; and one row per question no pass
+  could answer, carried into the bundle and rendered in the document.
 - **`architecture.md`** — coverage (environments resolved, every unresolved configuration key
   named with its reason and environment, every unresolved endpoint derivation named by catalog
   and site), a Mermaid contract class diagram, per-endpoint contract tables for inbound, an
-  outbound table with peers, and a Known-gaps section naming every omission below.
+  outbound table with peers, a **Format column beside Media on both endpoint tables** —
+  hedged as `(assumed)` for anything below `resolved`, `unresolved` where nothing answered —
+  an **Open questions** section where the ledger holds rows, and a Known-gaps section naming
+  every omission below.
 - **`metadata.json` and a D06 bundle** — the machine-readable summary, and a portable
   directory of Parquet tables plus a manifest carrying versions, catalog hash, coverage,
   the profiles resolved (`environments`, Phase 2F) and the same gaps, byte-identical on
-  every re-run of the same inputs.
+  every re-run of the same inputs. Since Phase 2G the summary also names, in full rather
+  than counted, any schema source `protoc` refused to compile (`schema_sources_not_compiled`)
+  and any embedded payload the interpreter could not read (`descriptors_not_interpreted`);
+  and `open_questions` is one of the bundle's tables.
 
 What a run does **not** give you, each entry named in the output's own gap list rather
 than silently absent:
@@ -236,6 +266,8 @@ than silently absent:
 | `@RequestMapping` inherited from a non-generic superclass | the `supertype` edge exists only for a generic superclass — the extractor reads it from the Signature attribute alone | undecided |
 | A handler symbol for a Kotlin WebFlux functional route | Kotlin compiles every DSL handler to an `instance`-kind argument naming a generated class, never a method | undecided |
 | Trustworthy analysis of a POM using parents/profiles/interpolation | the detector reads `pom.xml` raw (`maven_parent_and_profile_resolution_not_implemented`) | undecided |
+| A payload bound from a parse more than one delegation hop from its handler | a flow followed further than it was observed is an assumption; the parse is found at hop two and ledgered as an open question instead, and past hop two it is not found at all (`payload_parsed_beyond_horizon`, §4.2) | the enrichment tier |
+| A payload bound where one channel's bytes reach two different parses | two answers about one wire is a question for a reader, not a coin toss to publish (`payload_parse_ambiguous`) | the enrichment tier |
 
 Two honesty caveats also ride every output: a merged `both` endpoint keeps only the
 handler's declared contract (`merged_endpoints_keep_only_the_handlers_contract`), and —
@@ -452,58 +484,163 @@ necessarily true, and worse, is not currently recorded as an assumption.
 
 ### 4.1 Detecting the format
 
-Evidence quality varies enormously by protocol. Three regimes:
+Evidence quality varies enormously by protocol. Three regimes — and since **Phase 2G**,
+`endpoints.format` and `endpoints.format_resolution` carry the answer for every row, from
+the six-rung ladder ([D02](components/D02-catalog-schema.md) §2c). The last column says how
+far that reaches today:
 
-| Protocol | How the format is declared | Evidence | If nothing is declared |
-|---|---|---|---|
-| **gRPC** | **Fixed by the protocol** | `compiler` | Protobuf, always. The only certain cell in this table. |
-| SOAP | Fixed | `compiler` | XML |
-| GraphQL | Fixed | `compiler` | JSON |
-| **REST in** | `produces` / `consumes`, JAX-RS `@Produces` / `@Consumes`, or a return type that is itself a generated message | `declared` | **Assumed** from the framework's default converter (Jackson → JSON) |
-| **REST out** | `Content-Type` / `Accept` set somewhere in the client chain | `syntax` | **Assumed** JSON |
-| **Kafka** | **Serializer configuration** — `key.serializer` / `value.serializer`, or the generic parameters of `KafkaTemplate<K,V>` and the `@KafkaListener` payload type | `config_join` | Unknown. Kafka carries anything. |
-| SSE | `text/event-stream` framing; the payload inside each event is separate | `declared` | Assumed JSON per event |
-| WebSocket | A negotiated subprotocol, or nothing — usually only the parse call | `syntax` | Unknown |
-| **Pub/Sub** | Nothing. The message is `bytes`. Only the **parse call** reveals it — `Order.parseFrom(data)` versus `objectMapper.readValue(data, Order.class)` | `syntax` | Unknown |
-| **SQS** | Nothing. The body is a string; same as Pub/Sub | `syntax` | Unknown |
-| JMS | `TextMessage` / `BytesMessage` / `ObjectMessage`, then the parse call | `syntax` | Unknown |
+| Protocol | How the format is declared | Evidence | If nothing is declared | Shipped today |
+|---|---|---|---|---|
+| **gRPC** | **Fixed by the protocol** | `compiler` | Protobuf, always. The only certain cell in this table. | Rung 1 is built; **no shipped catalog owns gRPC**, so nothing declares `format_fixed` — **A**, one catalog entry once a gRPC catalog exists |
+| SOAP | Fixed | `compiler` | XML | as gRPC — **A**, with the catalog (§5.3, 2I) |
+| GraphQL | Fixed | `compiler` | JSON | as gRPC — **A**, with the catalog (2H) |
+| **REST in** | `produces` / `consumes`, JAX-RS `@Produces` / `@Consumes`, or a return type that is itself a generated message | `declared` | **Assumed** from the framework's default converter (Jackson → JSON) | ◐ **rung 2** off Spring's own `produces`/`consumes` (2E), `resolved`; an undeclared route falls to **rung 5** — `json` at `narrowed` — where it carries a declared payload type at all, and to rung 6 where it carries none. JAX-RS `@Produces` is **A**, with that catalog |
+| **REST out** | `Content-Type` / `Accept` set somewhere in the client chain | `syntax` | **Assumed** JSON | **not read** — no client chain's `Content-Type` reaches `consumes`/`produces`, so outbound rows answer at rung 5 (`json`, `narrowed`) or rung 6 |
+| **Kafka** | **Serializer configuration** — `key.serializer` / `value.serializer`, or the generic parameters of `KafkaTemplate<K,V>` and the `@KafkaListener` payload type | `config_join` | Unknown. Kafka carries anything. | ✅ **rung 3**, from the serializer table below as catalog data (`format_from`), `resolved` — off the **value** serializer/deserializer keys the shipped rules name. The record **key**'s own serializer and the **generic parameters** of `KafkaTemplate<K,V>` are not read: configuration, and the value side of it, is the whole of it |
+| SSE | `text/event-stream` framing; the payload inside each event is separate | `declared` | Assumed JSON per event | with the protocol (2H) |
+| WebSocket | A negotiated subprotocol, or nothing — usually only the parse call | `syntax` | Unknown | with the protocol (2H) |
+| **Pub/Sub** | Nothing. The message is `bytes`. Only the **parse call** reveals it — `Order.parseFrom(data)` versus `objectMapper.readValue(data, Order.class)` | `syntax` | Unknown | the parse-call binding is built and protocol-neutral, but **not reached here**: the shipped bytes-payload vocabulary is `String` and `byte[]` only, and a `MessageReceiver`'s payload parameter is a `PubsubMessage` envelope |
+| **SQS** | Nothing. The body is a string; same as Pub/Sub | `syntax` | Unknown | ✅ **the parse call**, binding the payload type — which, where that type is schema-described, then answers **rung 4** at `narrowed`, and otherwise makes the row an ordinary rung-5 one |
+| JMS | `TextMessage` / `BytesMessage` / `ObjectMessage`, then the parse call | `syntax` | Unknown | ✅ as SQS, for a `String`/`byte[]` payload parameter. The **message-type distinction** (`TextMessage` versus `BytesMessage`) is not read |
 
 Kafka is the interesting one, because the answer sits in configuration rather than code —
-`config_join` again (§7), the same shape as Spring Cloud Stream destinations:
+`config_join` again (§7), the same shape as Spring Cloud Stream destinations. **Since Phase
+2G this table is live, as data**: it is the `format_from` block of `spring-kafka-media.yml`
+([D02](components/D02-catalog-schema.md) §2c), read by the ladder's rung 3, and each
+serializer's matching deserializer is catalogued beside it.
 
-| Serializer | Format | Schema registry |
-|---|---|---|
-| `org.apache.kafka.common.serialization.StringSerializer` | string | no |
-| `…serialization.ByteArraySerializer` | opaque bytes | no |
-| `io.confluent.kafka.serializers.KafkaAvroSerializer` | Avro | **yes** — subject `<topic>-value` |
-| `io.confluent.kafka.serializers.protobuf.KafkaProtobufSerializer` | Protobuf | yes |
-| `io.confluent.kafka.serializers.json.KafkaJsonSchemaSerializer` | JSON Schema | yes |
-| `io.confluent.kafka.serializers.KafkaJsonSerializer` | JSON | no — **note the package: no `.json` segment, and no registry** |
-| `org.springframework.kafka.support.serializer.JsonSerializer` | JSON | no |
+| Serializer | Format | Schema registry | In `format_from` |
+|---|---|---|---|
+| `org.apache.kafka.common.serialization.StringSerializer` | string | no | ✅ `string` |
+| `…serialization.ByteArraySerializer` | opaque bytes | no | ✅ `bytes` |
+| `io.confluent.kafka.serializers.KafkaAvroSerializer` | Avro | **yes** — subject `<topic>-value` | ✅ `avro` |
+| `io.confluent.kafka.serializers.protobuf.KafkaProtobufSerializer` | Protobuf | yes | ✅ `protobuf` |
+| `io.confluent.kafka.serializers.json.KafkaJsonSchemaSerializer` | JSON Schema | yes | ✅ `json` — **plain JSON is what it puts on the wire**; the schema travels out of band, and `json_schema` (the schema *language*) is a reserved value nothing writes |
+| `io.confluent.kafka.serializers.KafkaJsonSerializer` | JSON | no — **note the package: no `.json` segment, and no registry** | ✅ `json` |
+| `org.springframework.kafka.support.serializer.JsonSerializer` | JSON | no | ✅ `json` |
+
+**The registry column is knowledge, not behaviour**: no subject name is derived from any of
+these rows today (§4.3, §11 of the 2G design — re-derivable later from the topic and the
+serializer, both of which are already kept).
+
+**The rung fires on the wire pair, not the listener.** `format_from`'s
+`on: {protocol: kafka, direction: inbound}` selector is 2F's own coverage-rule shape,
+reused rather than narrowed for rung 3: it stamps every inbound Kafka row the config's
+environment agreement reaches, whichever engine minted that row — a raw
+`KafkaConsumer.subscribe` listener that never reads `spring.kafka.consumer.value-deserializer`
+at all is stamped the same as a Spring-managed `@KafkaListener`. A fixture's count of rows
+landing `protobuf`/`resolved` this way is evidence of the stamp's *reach*, never evidence
+that each row's own listener was individually checked against the configured deserializer.
 
 ### 4.2 Binding the spec
 
-| Format | Spec artifact | Where it lives | Binds by |
-|---|---|---|---|
-| **Protobuf** | `.proto`, or the `FileDescriptorProto` embedded in generated code | repository **and** compiled output | message type name |
-| **Avro** | `.avsc`, or `SCHEMA$` on a `SpecificRecordBase` subclass | repository **and** compiled output | record full name; on Kafka, the **subject** `<topic>-value` |
-| **JSON** | Usually none — **the DTO type declaration is the spec** | code | type reference |
-| JSON Schema | Fastify route options, OpenAPI `components`, `zod` | code or artifact | `$ref` / type reference |
-| XML | XSD, WSDL | repository | namespace + element name |
+| Format | Spec artifact | Where it lives | Binds by | Shipped today |
+|---|---|---|---|---|
+| **Protobuf** | `.proto`, or the `FileDescriptorProto` embedded in generated code | repository **and** compiled output | message type name | ✅ **both origins.** The embedded descriptor is harvested from the generated holder class and the `.proto` compiled with a bundled `protoc`; both feed one interpreter, and where both declare the same schema the **compiled one wins** (DR-4) |
+| **Avro** | `.avsc`, or `SCHEMA$` on a `SpecificRecordBase` subclass | repository **and** compiled output | record full name; on Kafka, the **subject** `<topic>-value` | ◐ **both origins**, with two limits: only the Avro-1.12 `SCHEMA$` shape is harvested (below), and **no subject is derived** |
+| **JSON** | Usually none — **the DTO type declaration is the spec** | code | type reference | ✅ since Phase 2A — the shape tables *are* this row |
+| JSON Schema | Fastify route options, OpenAPI `components`, `zod` | code or artifact | `$ref` / type reference | **out of scope.** `json_schema` is a reserved format value: a catalog that writes it is refused by name rather than read as something adjacent |
+| XML | XSD, WSDL | repository | namespace + element name | with SOAP (§5.3, 2I) |
 
 Protobuf and Avro share a property nothing else here has: **the schema survives into the
 compiled artifact**, so it is recoverable from a jar with no source present. That is the same
 mechanism in every language — `generated_descriptor` — which is why it needs saying once
-rather than seven times.
+rather than seven times. Phase 2G is that mechanism: an extractor harvests the embedded
+payload **without parsing it**, and one component in the Python core turns it into the same
+`shapes`/`shape_fields` rows a Java DTO produces — so a second language's scanner gains
+schema support by emitting one more fact and linking no schema runtime.
+
+**Where a declared shape's two namings go.** A protobuf field carries both its schema name
+with its `field_number` and its JSON-encoded `wire_name` (protobuf's own `json_name`, read
+from the descriptor, never computed). `wire_name` is what `shape_fields` stores as the
+identity and `field_number` rides beside it, so the `total_amount` → `totalAmount` rename
+below is recorded rather than reconstructed.
+
+#### Parser libraries, as catalogue rows
+
+What turns a bytes-only channel's payload into a typed one is library knowledge, so it is
+catalog vocabulary (`parse_calls`), never engine knowledge. Shipped:
+
+| Library | Call | The payload type is | Shipped today |
+|---|---|---|---|
+| **protobuf** | `parseFrom` on a generated message | the call's **receiver** | ✅ matched by the receiver's **hierarchy**, never by a name pattern — a rule keyed on a generated class's spelling would have to know how the code generator names its output |
+| **Jackson 2** — `com.fasterxml.jackson` | `ObjectMapper#readValue` | the `Class<T>` literal argument | ✅ |
+| **Jackson 3** — `tools.jackson` | `ObjectMapper#readValue`, `JsonMapper#readValue` | the `Class<T>` literal argument | ✅ — the whole relocation between the two generations is a package rename, so it cost **three catalog rows and no code**, and both package families are also listed as `json_default_markers` for the framework-default rung. Pinned against real compiled `tools.jackson` bytecode in the fixture, not only against an invented owner in a unit test |
+| Avro | `SpecificDatumReader` construction | the `Class<T>` literal argument | catalogued and **inert** — see below |
+
+#### What 2G deliberately does not do
+
+Each of these is a boundary of a shipped mechanism, stated so it cannot be mistaken for
+coverage:
+
+- **Parse tracing stops at one hop.** A bytes-only channel binds its payload from a parse
+  in the handler's own body, or in one module-local method the handler hands the bytes to.
+  A parse further out is refused, not followed: a flow followed further than it was
+  observed is an assumption.
+- **And the beyond-horizon ledger itself sees only hop two.** The refusal is *recorded* —
+  as an `open_questions` row of kind `payload_binding`, naming the parse it would not bind
+  — but only for a parse found at exactly two hops, because that is as far as the walk
+  looks. A three-hop chain is indistinguishable from nobody parsing at all: no binding, no
+  ledger row, `unresolved`. `payload_parsed_beyond_horizon` and `payload_parse_ambiguous`
+  are named in every run's gap list, and the rows themselves are in `open_questions`.
+- **Avro's `SpecificDatumReader` entry binds nothing.** It is catalogued, and it names the
+  payload type — but the bytes reach a separately built decoder, never that constructor, so
+  no rung can prove the channel's bytes get there. The entry declares no bytes argument and
+  is inert by construction: it is where the type will already be the day a decoder-tracing
+  rung exists.
+- **An Avro `SCHEMA$` built the pre-1.12 way is not read.** Avro 1.12's generated code
+  assembles the schema from a `String[]`, which is what the harvest recognises; older
+  generators wrote `new Schema.Parser().parse("…")` with a single constant and no array. A
+  module on that generator records **no schema** rather than a wrong one — silent, and
+  never wrong.
+- **`GeneratedMessageLite` is untested.** A lite-runtime message carries no
+  `FileDescriptor` in its generated code at all, so a lite-only artifact harvests nothing —
+  a gap, never a guess — and the lite marker in the parse-call vocabulary is a name nothing
+  in any fixture reaches.
+- **Embedded-versus-source drift is not compared.** Both origins are recorded, with the
+  compiled one winning where they declare the same schema; whether they *disagree* is a
+  future DR-4 check that needs no new data, because both were kept.
+- **Registry subjects are not derived** (§4.1 above): re-derivable from the topic and the
+  serializer, both already kept.
+- **gRPC service extraction from descriptors is deferred.** A descriptor names services and
+  methods; reading them is a protocol phase, not a format phase.
+- **JSON Schema and XSD are out** — `json_schema` reserved and refused (§4.2 above).
+- **Rung 5's presence test is annotation-only.** The framework-default rung fires when an
+  annotation from a declared converter package family appears anywhere in the module. A
+  module that uses a JSON converter through code alone — no annotation from its package
+  family anywhere — reads `unresolved` where the converter is in fact on the classpath.
+  Presence evidence, honestly narrow.
+- **A merged `both` row carries ONE format column, and it can hide a per-direction split.**
+  Wire identity is one row; format is one column on it. Where a module both consumes and
+  produces one destination with different serializers configured per direction, the ladder's
+  rung order decides what that single column says — and a higher rung answering first (a
+  media type carried through the merge, say) settles it before the serializer rung is ever
+  consulted, so the other direction's configured format never appears. That is the rung
+  order working as specified, not a defect, but a reader must not read a merged row's
+  `format` as a statement about both directions.
+- **A source-origin declared shape is a fact, and stays one until something references
+  it.** A `.avsc` the build never compiles produces its shape keyed by the schema's own full
+  name; an endpoint payload is keyed by the generated class it travels as. Nothing joins the
+  two today, so such a shape is recorded and unreferenced — the `schema_name` → symbol join
+  is reserved, not built.
+- **Protobuf well-known types expand as ordinary object shapes.** A `google.protobuf.Timestamp`
+  field is a message field, so it becomes an `object` referring to a shape; no catalog maps
+  the well-known types to the wire scalars their JSON encoding actually uses, and
+  `known_types` ([D02](components/D02-catalog-schema.md) §2g) is consulted only on the
+  bytecode-derived path, never on a declared shape's own fields.
+- **Schema roots are the two conventional directories only** — `src/main/proto` and
+  `src/main/avro`, each read when it exists. A `.proto` or `.avsc` elsewhere in the source
+  tree is not swept up.
 
 ### 4.3 What this changes in the model
 
 **An assumed format must not look like an observed one.** If a REST endpoint declares no
 `produces` and we record JSON because Jackson is the default, that is an *inference from
-framework configuration*, not an observation. It belongs at `evidence: declared` with
-`resolution: narrowed` at best — never at the same trust level as a `produces` attribute or a
-Kafka serializer setting. Today we would record nothing at all, which is arguably more honest
-and definitely less useful.
+framework configuration*, not an observation. It belongs at `resolution: narrowed` at
+best — never at the same trust level as a `produces` attribute or a Kafka serializer
+setting. **Shipped in Phase 2G, and as its own column rather than as an evidence tier**:
+`endpoints.format_resolution` says `narrowed` for exactly these rows, and the rendered
+document prints such a value as `json (assumed)` — only `resolved` ever prints unhedged.
 
 **Protobuf-over-REST silently renames every field.** The proto3 JSON mapping converts field
 names to lowerCamelCase by default, so a proto field `total_amount` appears on a JSON wire as
@@ -516,7 +653,10 @@ first. This is a concrete correctness bug waiting in the matching rule.
 **But the descriptor answers it for us.** Reading a generated message through protobuf's own
 reflection exposes each field's `JSONName()` — verified against protobuf-go — so the mapping
 is **data we read, not an algorithm we implement**, and any `json_name` override comes with
-it. That turns a subtle rule we could get wrong into a field lookup.
+it. That turns a subtle rule we could get wrong into a field lookup. **Shipped in Phase
+2G**: the descriptor's `json_name` lands in `shape_fields.wire_name` for every declared
+protobuf field, computed default and explicit override alike, beside the schema's own
+`field_number`.
 
 **Comparison is only valid within a format, or across a known mapping.** DR-5's directional
 structural compatibility assumes both sides describe the same wire. A Protobuf request

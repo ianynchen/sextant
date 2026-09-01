@@ -1,0 +1,11 @@
+-- Clears the 2K hand-off ledger for one resolve. Mirrors
+-- reset_resolved_config.sql: the table itself is never dropped (schema.sql
+-- pre-declares it), and this runs exactly once per resolve,
+-- unconditionally — so a resolve in which every pass could answer every
+-- question still leaves an empty table rather than the previous run's rows.
+--
+-- Unlike the resolved_config reset, this one runs from the PIPELINE rather
+-- than from inside the pass that writes: two passes write these rows (2G
+-- design §6's two question kinds), and a reset owned by either would erase
+-- the other's.
+DELETE FROM open_questions;

@@ -5,7 +5,10 @@ from sextant.application.ports.catalogs import CatalogSource
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.config import resolve_config
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
+from sextant.application.resolve.format import resolve_format
+from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.shapes import derive_endpoint_shapes
+from sextant.application.resolve.shapes.parse_binding import bind_parse_calls
 
 
 @dataclass(frozen=True)
@@ -52,11 +55,39 @@ def resolve(
     # off its handler's signature, which is a column on the row derive_endpoints
     # just wrote.
     expanded = derive_endpoint_shapes(workspace, declared, capabilities)
+    # The 2K hand-off ledger (2G design §6) is emptied once, here, ahead of
+    # every pass that writes to it rather than inside one of them — the
+    # `resolved_config` reset discipline, lifted out of the writing pass
+    # because more than one pass writes these rows. A resolve whose passes
+    # had nothing to ask still leaves an empty table rather than the previous
+    # run's rows.
+    reset_open_questions(workspace)
+    # Above the ladder and below the reset, which is exactly where the
+    # comment on that line asks a payload-binding pass to go (2G design §6):
+    # it WRITES `open_questions` rows, so it must run after the reset, and
+    # the format ladder's rung 4 READS the payload column it binds — a bound
+    # schema-described parse is what lifts a NULL format to that schema's own
+    # format at `narrowed`.
+    bound = bind_parse_calls(workspace, declared)
+    # LAST, and the ordering is a property of the pass, not a preference (the
+    # `_RUNS_LAST` precedent in `resolve/endpoints.py`): every rung of the
+    # format ladder reads something an earlier pass wrote — the media columns
+    # the config stamp filled, the payload columns the shape pass bound — so
+    # a format stamped before them would be answered from a table that was
+    # still being written. Anything that BINDS a payload belongs above this
+    # line and below the reset.
+    resolve_format(workspace, declared)
     return ResolveReport(
         facts_loaded=loaded,
         endpoints=workspace.query("endpoints"),
         skipped_catalogs=skipped,
         coverage=workspace.query("coverage")[0],
         shapes=workspace.query("shapes"),
-        unexpanded_types=expanded.unexpanded_types,
+        # Both passes root payload types and both expand what they root, so
+        # both can meet a type nothing opens. Reported as one list, deduped:
+        # the gap is in the type, not in how many passes walked into it —
+        # the same rule `derive_endpoint_shapes` applies across catalogs.
+        unexpanded_types=tuple(
+            dict.fromkeys([*expanded.unexpanded_types, *bound.unexpanded_types])
+        ),
     )

@@ -31,7 +31,7 @@ from sextant.application.resolve.shapes.expansion import _rules_of
 from sextant.application.resolve.shapes.nullability import _scope_nullable
 from sextant.cli.resources import catalogs_dir
 from sextant.domain.closed_sets import OriginTier
-from sextant.domain.facts import Document
+from sextant.domain.facts import DeclaredFieldFact, DeclaredShapeFact, Document
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -662,6 +662,321 @@ def test_a_type_that_refers_to_itself_terminates(tmp_path):
     derive_shapes(workspace, _CATALOG, [node])
 
     assert [s["shape_id"] for s in workspace.query("shapes")] == [node]
+    assert json.loads(field_of(workspace, node, "parent")["item"])["shape_id"] == node
+
+
+# --- Declared shapes (2G Task 5) ----------------------------------------------
+
+# Bare descriptors in the generated-class grammar `JvmGeneratedNaming` builds
+# (2G design §3) — a `declared_shape` fact's own `symbol`, and the lookup key
+# expansion meets when a payload type reference names one. Mirrors the real
+# fixture's `order.proto`/`common.proto` (OrderRequest.total_amount/count/
+# price/lines, Money's cross-file reference, Line nested one level in).
+PROTO_ORDER_REQUEST = "com/acme/orders/proto/OrderProtos$OrderRequest#"
+PROTO_MONEY = "com/acme/orders/proto/CommonProtos$Money#"
+PROTO_LINE = "com/acme/orders/proto/OrderProtos$OrderRequest$Line#"
+
+# A type the scanner also reaches (bytecode fields exist for it, unlike the
+# three symbols above) — the never-a-blend fixture: expansion must take only
+# the declared shape's own field, never `internal`.
+BLEND_TYPE = "com/acme/orders/proto/BlendType#"
+
+
+def _declared_shape_facts(root: Path) -> None:
+    """A hand-built `declared_shape`/`declared_field` universe standing in
+    for the descriptor interpreter's own output (Task 2/4) — the same
+    relationship `_contract_facts` bears to the real scanner."""
+    order_fields = [
+        DeclaredFieldFact(
+            name="total_amount",
+            wire_name="totalAmount",
+            field_number=1,
+            wire_type="string",
+            required=True,
+            nullable=False,
+        ),
+        DeclaredFieldFact(
+            name="count",
+            wire_name="explicitCount",
+            field_number=2,
+            wire_type="integer",
+            wire_format="int32",
+            required=True,
+            nullable=False,
+        ),
+        # A cross-file reference (`price` is declared in order.proto, `Money`
+        # in common.proto): `shape_ref` already carries Money's own symbol
+        # (2G design §3, Task 2 decision 5), not the schema's full name — no
+        # translation belongs in expansion.
+        DeclaredFieldFact(
+            name="price",
+            wire_name="price",
+            field_number=3,
+            wire_type="object",
+            required=False,
+            nullable=True,
+            shape_ref=PROTO_MONEY,
+        ),
+        DeclaredFieldFact(
+            name="lines",
+            wire_name="lines",
+            field_number=4,
+            wire_type="array",
+            required=True,
+            nullable=False,
+            item={
+                "wire_type": "object",
+                "wire_format": None,
+                "nullable": False,
+                "shape_id": PROTO_LINE,
+            },
+        ),
+    ]
+    _write(
+        root / "OrderProtos.jsonl",
+        _document("doc_proto_order", "com/acme/orders/proto/OrderProtos.java"),
+        [
+            DeclaredShapeFact(
+                document_id="doc_proto_order",
+                symbol=PROTO_ORDER_REQUEST,
+                schema_name="sextant.orders.OrderRequest",
+                schema_format="protobuf",
+                origin="compiled",
+                evidence="compiler",
+                fields=order_fields,
+            ).model_dump(mode="json")
+        ],
+    )
+    _write(
+        root / "CommonProtos.jsonl",
+        _document("doc_proto_money", "com/acme/orders/proto/CommonProtos.java"),
+        [
+            DeclaredShapeFact(
+                document_id="doc_proto_money",
+                symbol=PROTO_MONEY,
+                schema_name="sextant.orders.Money",
+                schema_format="protobuf",
+                origin="compiled",
+                evidence="compiler",
+                fields=[
+                    DeclaredFieldFact(
+                        name="currency",
+                        wire_name="currency",
+                        field_number=1,
+                        wire_type="string",
+                        required=True,
+                        nullable=False,
+                    ),
+                    DeclaredFieldFact(
+                        name="amount_minor",
+                        wire_name="amountMinor",
+                        field_number=2,
+                        wire_type="integer",
+                        wire_format="int64",
+                        required=True,
+                        nullable=False,
+                    ),
+                ],
+            ).model_dump(mode="json")
+        ],
+    )
+    _write(
+        root / "OrderProtosLine.jsonl",
+        _document("doc_proto_line", "com/acme/orders/proto/OrderProtos$Line.java"),
+        [
+            DeclaredShapeFact(
+                document_id="doc_proto_line",
+                symbol=PROTO_LINE,
+                schema_name="sextant.orders.OrderRequest.Line",
+                schema_format="protobuf",
+                origin="compiled",
+                evidence="compiler",
+                fields=[
+                    DeclaredFieldFact(
+                        name="sku",
+                        wire_name="sku",
+                        field_number=1,
+                        wire_type="string",
+                        required=True,
+                        nullable=False,
+                    )
+                ],
+            ).model_dump(mode="json")
+        ],
+    )
+    _write(
+        root / "BlendType.jsonl",
+        _document("doc_blend", "com/acme/orders/proto/BlendType.java"),
+        [
+            # Bytecode fields — a real scanned class the descriptor interpreter
+            # ALSO reached (a compiled schema class is a real compiled class).
+            _type("doc_blend", BLEND_TYPE),
+            _field("doc_blend", BLEND_TYPE, "internal", _string()),
+            DeclaredShapeFact(
+                document_id="doc_blend",
+                symbol=BLEND_TYPE,
+                schema_name="sextant.orders.BlendType",
+                schema_format="protobuf",
+                origin="compiled",
+                evidence="compiler",
+                fields=[
+                    DeclaredFieldFact(
+                        name="declaredOnly",
+                        wire_name="declaredOnly",
+                        field_number=1,
+                        wire_type="string",
+                        required=True,
+                        nullable=False,
+                    )
+                ],
+            ).model_dump(mode="json"),
+        ],
+    )
+
+
+def _declared_workspace(tmp_path: Path, roots: list[str]) -> DuckDbWorkspace:
+    root = tmp_path / "facts"
+    _declared_shape_facts(root)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_shapes(workspace, _CATALOG, roots)
+    return workspace
+
+
+def test_a_declared_shape_expands_to_exactly_its_own_fields(tmp_path):
+    """D01 §5's `declared_shape` promise: `wire_name`, `field_number` and the
+    wire vocabulary ride straight from the schema, never re-derived by the
+    bytecode rules (naming strategy, nullability annotations) this catalog
+    also declares."""
+    ws = _declared_workspace(tmp_path, roots=[PROTO_ORDER_REQUEST])
+
+    assert [f["wire_name"] for f in shape_fields_of(ws, PROTO_ORDER_REQUEST)] == [
+        "totalAmount",
+        "explicitCount",
+        "price",
+        "lines",
+    ]
+    total = field_of(ws, PROTO_ORDER_REQUEST, "totalAmount")
+    assert total["field_number"] == 1
+    assert total["wire_type"] == "string"
+    count = field_of(ws, PROTO_ORDER_REQUEST, "explicitCount")
+    assert count["field_number"] == 2
+    assert count["wire_format"] == "int32"
+    assert shape_of(ws, PROTO_ORDER_REQUEST)["open"] is False
+
+
+def test_a_declared_shapes_cross_file_reference_resolves_to_a_shape_id(tmp_path):
+    """`price`'s `Money` lives in a different schema file (`common.proto`);
+    its own `declared_shape` still reaches the same expansion queue and
+    settles as an ordinary, closed shape."""
+    ws = _declared_workspace(tmp_path, roots=[PROTO_ORDER_REQUEST])
+    price = field_of(ws, PROTO_ORDER_REQUEST, "price")
+
+    assert json.loads(price["item"]) == {
+        "wire_type": "object",
+        "wire_format": None,
+        "nullable": True,
+        "shape_id": PROTO_MONEY,
+    }
+    assert shape_of(ws, PROTO_MONEY)["open"] is False
+    assert [f["wire_name"] for f in shape_fields_of(ws, PROTO_MONEY)] == ["currency", "amountMinor"]
+    assert field_of(ws, PROTO_MONEY, "amountMinor")["field_number"] == 2
+
+
+def test_a_declared_shapes_nested_message_becomes_its_own_shape(tmp_path):
+    """`Line` is declared inside `OrderRequest` in the schema, but it is still
+    its own payload — its own shape row, reached through `lines`' `item`."""
+    ws = _declared_workspace(tmp_path, roots=[PROTO_ORDER_REQUEST])
+    lines = field_of(ws, PROTO_ORDER_REQUEST, "lines")
+
+    assert json.loads(lines["item"]) == {
+        "wire_type": "object",
+        "wire_format": None,
+        "nullable": False,
+        "shape_id": PROTO_LINE,
+    }
+    assert shape_of(ws, PROTO_LINE)["open"] is False
+    assert [f["wire_name"] for f in shape_fields_of(ws, PROTO_LINE)] == ["sku"]
+
+
+def test_a_type_owning_a_declared_shape_never_blends_in_bytecode_fields(tmp_path):
+    """The never-a-blend rule (2G design §3, Task 5 brief): a compiled schema
+    class's own bytecode fields are serializer machinery, not the wire
+    contract, even though the scanner reached the same class and produced
+    ordinary field facts for it."""
+    ws = _declared_workspace(tmp_path, roots=[BLEND_TYPE])
+    names = [f["wire_name"] for f in shape_fields_of(ws, BLEND_TYPE)]
+
+    assert names == ["declaredOnly"]
+    assert "internal" not in names
+
+
+def test_a_plain_dto_still_expands_from_bytecode_exactly_as_before(tmp_path):
+    """No `declared_shape` fact touches `ORDER_REQUEST` in this scenario, so
+    it must expand exactly as the pre-2G rules already do — the fixture other
+    Task-10/11 tests pin stays whole."""
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _declared_shape_facts(root)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_shapes(workspace, _CATALOG, [ORDER_REQUEST])
+
+    names = [f["wire_name"] for f in shape_fields_of(workspace, ORDER_REQUEST)]
+    assert names == [
+        "reference",
+        "note",
+        "customer_id",
+        "note2",
+        "customer",
+        "alternates",
+        "total",
+        "total_amount",
+        "status",
+    ]
+    assert field_of(workspace, ORDER_REQUEST, "reference")["field_number"] is None
+
+
+def test_a_declared_shape_that_refers_to_itself_terminates(tmp_path):
+    """Protobuf permits recursive messages (`message Node { Node parent = 1;
+    }`) — mirrors `test_a_type_that_refers_to_itself_terminates` above for
+    the declared-shape path: `object` is a reference to another shape, never
+    an inlining (ruling F1), so a declared shape's own recursion needs no
+    depth counter either, only the same each-shape-expanded-once discipline
+    `derive_shapes`'s `expanded` set already provides."""
+    node = "com/acme/orders/proto/NodeProtos$Node#"
+    root = tmp_path / "facts"
+    _write(
+        root / "NodeProtos.jsonl",
+        _document("doc_proto_node", "com/acme/orders/proto/NodeProtos.java"),
+        [
+            DeclaredShapeFact(
+                document_id="doc_proto_node",
+                symbol=node,
+                schema_name="sextant.orders.Node",
+                schema_format="protobuf",
+                origin="compiled",
+                evidence="compiler",
+                fields=[
+                    DeclaredFieldFact(
+                        name="parent",
+                        wire_name="parent",
+                        field_number=1,
+                        wire_type="object",
+                        required=False,
+                        nullable=True,
+                        shape_ref=node,
+                    )
+                ],
+            ).model_dump(mode="json")
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_shapes(workspace, _CATALOG, [node])
+
+    assert [s["shape_id"] for s in workspace.query("shapes")] == [node]
+    assert shape_of(workspace, node)["open"] is False
     assert json.loads(field_of(workspace, node, "parent")["item"])["shape_id"] == node
 
 

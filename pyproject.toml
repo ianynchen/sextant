@@ -12,6 +12,8 @@ dependencies = [
   "rich>=13.7",
   "pydantic>=2.7",
   "pyyaml>=6.0",
+  "protobuf>=7.36.1",
+  "grpcio-tools>=1.83.1",
 ]
 
 [project.optional-dependencies]
@@ -50,6 +52,14 @@ files = ["src"]
 
 [[tool.mypy.overrides]]
 module = "yaml"
+ignore_missing_imports = true
+
+# The protobuf runtime ships no inline types and its stubs are a separate
+# distribution (`types-protobuf`) — a third dependency for one module's
+# annotations. Same treatment as `yaml`: the import is untyped, and
+# `descriptors.py` annotates its own surface.
+[[tool.mypy.overrides]]
+module = "google.protobuf.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
