@@ -36,6 +36,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ApiGet.jsonl",
         "AuditJmsListener.jsonl",
         "BillingClient.jsonl",
+        "BillingClients$BillingProperties.jsonl",
+        "BillingClients.jsonl",
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
         "ClassLevelListener.jsonl",
@@ -66,6 +68,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderRoutes.jsonl",
         "OrderService.jsonl",
         "OrderStatus.jsonl",
+        "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
         "OrderView.jsonl",
         "OrdersApi.jsonl",
@@ -85,7 +88,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]
-    assert report.documents == 51
+    assert report.documents == 54
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -109,6 +112,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "ApiGet.jsonl",
         "AuditJmsListener.jsonl",
         "BillingClient.jsonl",
+        "BillingClients$BillingProperties.jsonl",
+        "BillingClients.jsonl",
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
         "ClassLevelListener.jsonl",
@@ -139,6 +144,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderRoutes.jsonl",
         "OrderService.jsonl",
         "OrderStatus.jsonl",
+        "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
         "OrderView.jsonl",
         "OrdersApi.jsonl",
@@ -209,6 +215,29 @@ def test_a_nested_class_is_scanned_under_the_outer_sources_path_and_its_own_id(
 
     facts = (tmp_path / "com" / "acme" / "orders" / "OrderResult$Detail.jsonl").read_text()
     assert "com/acme/orders/OrderResult$Detail#getNote(" in facts
+
+
+def test_scan_emits_a_field_write_fact_for_a_real_constructor_injected_client(tmp_path: Path):
+    """`OrdersRestClient(RestClient restClient) { this.restClient = restClient; }`
+    is real fixture bytecode, not a hand-built pin — the exact {@code ALOAD 0;
+    ALOAD 1; PUTFIELD} shape D00 §5's `field_write` names. Task 8's field
+    resolution ladder is the eventual consumer; this only proves the extractor
+    half of the additive amendment reaches a real class file."""
+    AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=CLASSES,
+            out_dir=tmp_path,
+        )
+    )
+    facts = (tmp_path / "com" / "acme" / "orders" / "clients" / "OrdersRestClient.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert '"kind":"field_write"' in facts
+    assert '"field":"com/acme/orders/clients/OrdersRestClient#restClient."' in facts
+    assert '"from_parameter":0' in facts
 
 
 def test_scanner_declares_the_capabilities_phase_2a_implements():

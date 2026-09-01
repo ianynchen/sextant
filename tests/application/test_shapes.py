@@ -1508,6 +1508,14 @@ _MESSAGING_CATALOG_IDS = (
     "google-pubsub-client",
     "google-pubsub-subscriber",
     "spring-kafka-message",
+    # 2F Task 7 (the `config_join` engine): `spring-cloud-stream.yml` copies
+    # the same baseline, and it matters as much as `aws-sqs-sdk.yml` does
+    # above — it sorts ahead of every `spring-*` catalog, so it is now the
+    # first to reach the messaging payload types this fixture shares, and a
+    # fork here would silently redescribe them for every catalog behind it.
+    # (`spring-kafka-media.yml` declares none of these blocks at all: it
+    # derives no rows, so it expands no shapes.)
+    "spring-cloud-stream",
 )
 
 
@@ -1614,6 +1622,14 @@ def test_the_producer_catalogs_wrappers_are_the_harvested_baseline_verbatim():
         "google-pubsub-client",
         "google-pubsub-subscriber",
         "spring-kafka-message",
+        # 2F Task 7: `spring-cloud-stream.yml` adds no broker entry either —
+        # a binding row's payload comes from the functional type's own type
+        # ARGUMENT, read at the declared `payload_arg` position, never
+        # through an envelope a `wrappers` rule would unwrap. It matters as
+        # much here as in the `known_types` sweep above: it sorts ahead of
+        # every `spring-*` catalog, so it is the first to reach the shared
+        # messaging payload types.
+        "spring-cloud-stream",
     ):
         assert catalogs[catalog_id].wrappers == baseline, catalog_id
 

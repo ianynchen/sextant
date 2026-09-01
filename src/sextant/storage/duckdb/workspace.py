@@ -63,6 +63,12 @@ _NAMED_QUERIES = {
     # the ordering total, the same reason `shape_fields` orders by
     # `shape_id, ordinal` rather than `ordinal` alone (NFR-1).
     "call_sites": "SELECT * FROM call_sites ORDER BY caller, ordinal",
+    # D00 §5's field_write: constructors only, direct traces only — the field
+    # resolution ladder's (2F) second rung, joining a `field`-kind argument's
+    # symbol back to the parameter it was assigned from. Ordered by `field`
+    # so a field written by more than one constructor overload reads its
+    # candidates together, `from_parameter` breaking the tie (NFR-1).
+    "field_writes": "SELECT field, from_parameter FROM field_writes ORDER BY field, from_parameter",
     # D00 §5a's PTR carrier: every declared type's own generic supertype
     # reference, keyed by the type's own (module-prefixed) symbol — the
     # `single_call` engine strips the prefix itself, the same way
@@ -143,27 +149,134 @@ _NAMED_QUERIES = {
         SELECT symbol, enclosing, signature FROM symbols
         WHERE construct_kind = 'method' ORDER BY symbol
     """,
+    # Every declared constructor's own enclosing type and signature JSON —
+    # the field ladder's rung 2 (2F design §4). A `field_write` fact names
+    # the parameter INDEX a field was assigned from and nothing else, and a
+    # constructor PARAMETER's own annotations live only inside this
+    # signature: they are never emitted as their own `annotation` fact (Task
+    # 6 checkpoint item (3)), so the `annotations` view cannot serve this and
+    # `method_declarations` above never sees a constructor at all. Ordered by
+    # symbol so a type declaring two overloads reads its candidates in the
+    # same order twice (NFR-1).
+    "constructor_declarations": """
+        SELECT symbol, enclosing, signature FROM symbols
+        WHERE construct_kind = 'constructor' ORDER BY symbol
+    """,
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
         FROM documents
+    """,
+    # `resolve/config.py`'s own input: every config_entry, in declaration
+    # order within its document (`config_entries.seq`, D00 §5c) and its
+    # document ahead of that (`document_id`) so a multi-document file's own
+    # documents are read together, `doc_index` breaking the tie between them
+    # — the same NFR-1 ordering role `call_sites`'s `caller, ordinal` plays.
+    "config_entries": "SELECT * FROM config_entries ORDER BY document_id, doc_index, seq",
+    # `resolved_config`'s own export/read shape (D01): ordered by
+    # `environment, key` so "unresolved for prod, resolved for dev" reads as
+    # two adjacent rows rather than an arbitrary interleaving (NFR-1).
+    "resolved_config": """
+        SELECT key, value, source, environment, unresolved_reason
+        FROM resolved_config ORDER BY environment, key
+    """,
+    # The per-environment answer for every address expression a client-side
+    # row carries — a JOIN, never a write (2F design §3, job 3): endpoint
+    # rows keep their expressions, `resolved_config` keeps the values, and
+    # nothing rewrites a row per environment. One row per (client-side
+    # endpoint, environment).
+    #
+    # `direction <> 'inbound'` rather than `= 'outbound'`: a `both` row is a
+    # path the module both exposes and CALLS (D02 §3's merge), so it carries
+    # a caller's address expression exactly as an outbound row does — an
+    # equality test would silently drop every merged one.
+    #
+    # A placeholder count, not a regex alternation, decides the three cases:
+    # `${` occurs zero times (a literal, which passes straight through with
+    # its own value), once (substituted from `resolved_config` for this
+    # environment), or more (`multi_placeholder` — D01's own reason for an
+    # expression that is substitutable only piecewise, the one reason M04's
+    # pass 2 never emits because it belongs to this join alone). `length`
+    # minus the length with the opening delimiter removed, over the
+    # delimiter's own length, IS that count.
+    #
+    # `path` and `peer` are resolved independently — a row may carry an
+    # expression in either or both (D01 §3: `peer` is the target hint,
+    # `path` the address, and 2F's base composition puts a whole unsplit
+    # expression in `path` with `peer` NULL). The single `unresolved_reason`
+    # column reports `path`'s answer first, `peer`'s only when `path` had
+    # nothing to say, so one column still names why a row did not resolve
+    # for an environment.
+    #
+    # With no resolved environments at all the join is empty and so is this
+    # answer: "the same rows, unresolved" and "no environments to resolve
+    # against" are different claims, and only the first one would be a lie.
+    "resolved_peers": """
+        WITH environments AS (SELECT DISTINCT environment FROM resolved_config),
+        candidates AS (
+            SELECT protocol, direction, method, path, peer, caller, catalog_id
+            FROM endpoints
+            WHERE direction <> 'inbound'
+        ),
+        paired AS (
+            SELECT c.*, e.environment,
+                   ((length(coalesce(c.path, '')) -
+                     length(replace(coalesce(c.path, ''), '${', ''))) / 2)::INTEGER
+                       AS path_placeholders,
+                   ((length(coalesce(c.peer, '')) -
+                     length(replace(coalesce(c.peer, ''), '${', ''))) / 2)::INTEGER
+                       AS peer_placeholders,
+                   regexp_extract(coalesce(c.path, ''), '\\$\\{([^}]*)\\}', 1) AS path_key,
+                   regexp_extract(coalesce(c.peer, ''), '\\$\\{([^}]*)\\}', 1) AS peer_key
+            FROM candidates c CROSS JOIN environments e
+        ),
+        joined AS (
+            SELECT p.*,
+                   pk.value AS path_value, pk.unresolved_reason AS path_reason,
+                   qk.value AS peer_value, qk.unresolved_reason AS peer_reason
+            FROM paired p
+            LEFT JOIN resolved_config pk
+                   ON pk.key = p.path_key AND pk.environment = p.environment
+            LEFT JOIN resolved_config qk
+                   ON qk.key = p.peer_key AND qk.environment = p.environment
+        )
+        SELECT protocol, direction, method, path, peer, caller, catalog_id, environment,
+               CASE WHEN path_placeholders = 0 THEN path
+                    WHEN path_placeholders > 1 THEN NULL
+                    WHEN path_value IS NULL THEN NULL
+                    ELSE replace(path, '${' || path_key || '}', path_value) END AS resolved_path,
+               CASE WHEN peer_placeholders = 0 THEN peer
+                    WHEN peer_placeholders > 1 THEN NULL
+                    WHEN peer_value IS NULL THEN NULL
+                    ELSE replace(peer, '${' || peer_key || '}', peer_value) END AS resolved_peer,
+               coalesce(
+                   CASE WHEN path_placeholders > 1 THEN 'multi_placeholder'
+                        WHEN path_placeholders = 1 AND path_value IS NULL
+                            THEN coalesce(path_reason, 'missing_key') END,
+                   CASE WHEN peer_placeholders > 1 THEN 'multi_placeholder'
+                        WHEN peer_placeholders = 1 AND peer_value IS NULL
+                            THEN coalesce(peer_reason, 'missing_key') END
+               ) AS unresolved_reason
+        FROM joined
+        ORDER BY environment, protocol, method, path, peer, caller
     """,
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
     "facts": "SELECT count(*) AS facts FROM raw_facts",
 }
 
-# The tables a bundle carries (D06 §5). `documents`, `endpoints`, `shapes`,
-# `shape_fields` and `call_sites` export through their named query, so the
-# row order is the one NFR-1 already fixed; `symbols` and `annotations` have
-# no named query and export through their own ordered SELECT below, for the
-# same reason. Sorted by name so the manifest's contents list is
-# deterministic too.
+# The tables a bundle carries (D06 §5). `documents`, `endpoints`,
+# `resolved_config`, `shapes`, `shape_fields` and `call_sites` export through
+# their named query, so the row order is the one NFR-1 already fixed;
+# `symbols` and `annotations` have no named query and export through their
+# own ordered SELECT below, for the same reason. Sorted by name so the
+# manifest's contents list is deterministic too.
 _EXPORTED_TABLES = (
     "annotations",
     "call_sites",
     "documents",
     "endpoints",
+    "resolved_config",
     "shape_fields",
     "shapes",
     "symbols",
@@ -172,6 +285,7 @@ _EXPORTED_TABLES = (
 _EXPORT_QUERIES = {
     "documents": _NAMED_QUERIES["documents"],
     "endpoints": _NAMED_QUERIES["endpoints"],
+    "resolved_config": _NAMED_QUERIES["resolved_config"],
     "shapes": _NAMED_QUERIES["shapes"],
     "shape_fields": _NAMED_QUERIES["shape_fields"],
     "call_sites": _NAMED_QUERIES["call_sites"],
@@ -191,6 +305,9 @@ _NAMED_DERIVATIONS = {
     "shapes": "derive_shapes.sql",
     "shape_fields": "derive_shape_fields.sql",
     "shapes_reset": "reset_shapes.sql",
+    "resolved_config_reset": "reset_resolved_config.sql",
+    "resolved_config_insert": "insert_resolved_config.sql",
+    "stamp_media": "stamp_media.sql",
 }
 
 

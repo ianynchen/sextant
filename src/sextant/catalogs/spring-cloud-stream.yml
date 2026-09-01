@@ -1,0 +1,105 @@
+id: spring-cloud-stream
+displayName: Spring Cloud Stream (functional bindings)
+style: config_join
+# The default protocol, used whenever the binder configuration does not name
+# one this catalog maps (D02 §2c: a match may resolve `protocol` differently
+# from the file's default — `binder_protocols` below is that resolution).
+protocol: kafka
+# The default direction, used by a suffix rule that declares none of its own
+# and by the composition-degrade row, which names no bean and therefore has
+# no functional shape to read a direction from.
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework.cloud:spring-cloud-stream"]
+
+# The first PIPELINE-declared capability (D02 §1): the pipeline adds it once
+# M04's pass 2 has produced `resolved_config` in THIS run, so a config-less
+# run skips this catalog visibly rather than silently deriving nothing. The
+# capability gates on the pass having RUN, never on the table having rows —
+# an empty table is a real answer (no configuration declared these bindings),
+# and a skip is a different claim (nobody looked).
+requires: [resolved_config, typed_signatures, implemented_interfaces]
+
+matches:
+  # D02 §2d: the code carries a name — a bean's own method name — and
+  # configuration says what the name means.
+  address_from_config:
+    key: "spring.cloud.stream.bindings.{binding}.destination"
+    binding:
+      from: bean_name
+      # The key that narrows the candidate set. Absent from configuration,
+      # every candidate binds (the framework's own default); present, only
+      # the beans it names do.
+      selected_by: spring.cloud.function.definition
+      # `definition` lists bindings separated by `;`, and ONE entry may
+      # itself compose several functions with `|`. A composed entry derives
+      # one unresolved row naming no bean at all — there is no single
+      # method to call the handler, and picking one would be a guess.
+      selection_separator: ";"
+      composition_separator: "|"
+      suffix:
+        - { when: { implements: java.util.function.Consumer }, then: "-in-0",
+            direction: inbound, payload_arg: 0 }
+        - { when: { implements: java.util.function.Supplier }, then: "-out-0",
+            direction: outbound, payload_arg: 0 }
+        # Both halves at once: one bean, two rows, each through the same key
+        # template. `direction` and `payload_arg` are parallel lists — the
+        # input half is inbound and carries type argument 0, the output half
+        # is outbound and carries type argument 1 — because neither is
+        # derivable from the suffix string without the engine learning this
+        # framework's own naming convention.
+        - { when: { implements: java.util.function.Function }, then: ["-in-0", "-out-0"],
+            direction: [inbound, outbound], payload_arg: [0, 1] }
+    # Where the binder is configured, and what each configured name speaks.
+    # Most specific first: the binding's own declaration, then the module
+    # default. A name absent from `binder_protocols` leaves the row on this
+    # catalog's own declared protocol — a gap to grow this map from, never a
+    # guessed protocol.
+    binder_key: "spring.cloud.stream.bindings.{binding}.binder"
+    default_binder_key: spring.cloud.stream.default-binder
+    binder_protocols:
+      kafka: kafka
+      rabbit: jms
+      sqs: sqs
+      pubsub: pubsub
+
+# Copied verbatim from spring-kafka.yml, for the reason that file's own
+# comment states: shape expansion is a global, insert-if-absent pass keyed on
+# the type symbol alone, so the FIRST catalog to reach a shared payload type
+# describes it for everyone — and this catalog sorts ahead of that one. A
+# copy that disagreed would make a payload's fields depend on catalog sort
+# order. The broker-envelope wrapper is deliberately NOT copied: it belongs
+# to the catalog whose own rows carry it.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

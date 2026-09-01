@@ -4,6 +4,7 @@ regardless of whether anyone renders (M07): the file exists if and only if
 the workspace does, and it always describes the graph beside it."""
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 from sextant.application.ports.detector import ModuleModel
@@ -17,7 +18,8 @@ from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SE
 # as complete (M07 "Honesty obligations").
 KNOWN_GAPS = [
     "http_exchange_inbound_use_not_detected",
-    "client_base_addresses_not_resolved",
+    "computed_base_addresses_not_traced",
+    "config_as_code_not_read",
     "sequence_diagrams_pending_call_graph",
     "structure_diagram_limited_to_contracts",
     "call_graph_not_implemented",
@@ -38,6 +40,7 @@ def write_metadata(
     scanner_version: str,
     commit: str,
     uncovered: tuple[str, ...] = (),
+    resolved_config: Sequence[dict[str, object]] = (),
 ) -> None:
     """Written as the final act of analyze (D05 §3), so it exists whenever the
     workspace does and always describes the graph beside it."""
@@ -68,6 +71,12 @@ def write_metadata(
             "scanners": [{"id": scanner_id, "version": scanner_version}],
         },
         "coverage": report.coverage,
+        # The profiles this module resolved (D06 §3 "environments" — the
+        # sibling field the bundle manifest carries), sorted rather than
+        # left in `resolved_config`'s own environment-then-key order: this
+        # is a set of names, not a row sequence, and a sorted list is
+        # deterministic without depending on the query's own ORDER BY.
+        "environments": sorted({str(row["environment"]) for row in resolved_config}),
         "gaps": KNOWN_GAPS,
         # Which compiled sources the facts do not account for (FR-17). Listed
         # in full rather than counted: a count cannot be acted on.

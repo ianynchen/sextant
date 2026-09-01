@@ -43,6 +43,7 @@ class MavenDetector:
         artifact = self._text(pom, "artifactId")
         version = self._text(pom, "version")
         source_roots = self._source_roots(path, pom)
+        resources = path / "src" / "main" / "resources"
         module = ModuleModel(
             module_id=f"{group}:{artifact}",
             coordinates=f"{group}/{artifact}",
@@ -55,6 +56,12 @@ class MavenDetector:
             languages=frozenset(root.name for root in source_roots),
             source_roots=source_roots,
             output_dirs=(path / "target" / "classes",),
+            # Conventional, unlike source_roots: Maven has no
+            # `<resourceDirectory>` override worth reading yet, so this
+            # stays the one layout it recognises. Present only when it
+            # actually exists — the same "no guess" discipline source_roots
+            # already follows.
+            resource_roots=(resources,) if resources.is_dir() else (),
         )
         return RepositoryModel(root=path, modules=(module,))
 

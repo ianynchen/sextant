@@ -233,6 +233,25 @@ The cost is real and lands on rendering rather than on the schema — a service 
 GraphQL fields has two hundred endpoints, and [M07](M07-renderer.md) must group them by `path`
 unless asked otherwise, or every diagram of such a service is unreadable.
 
+**`resolved_config` is one row per key per environment.** A resolved row carries `key`,
+`value`, `source` — the file that won precedence for that key in that profile's layering
+([D02](D02-catalog-schema.md)'s `config_model`) — and `environment`. An unresolved row
+carries the same `key` and `environment` with `value` NULL and a `reason` from a closed
+five-value set: `missing_key`, `environment` (the value comes from an environment variable
+or a launch flag — universal across ecosystems, and never resolvable from files alone),
+`remote_source` (a config-server or `spring.config.import` URL), `placeholder_cycle`, and
+`multi_placeholder` — used only by the peer-resolution join below, never by the resolution
+pass itself, for an outbound expression carrying more than one placeholder, substitutable
+only piecewise. "Unresolved for `prod`, resolved for `dev`" is expressible and meaningful:
+the same key carries a resolved row in one environment and an unresolved one in another,
+never one row forced to answer for both.
+
+**Peer resolution is a join, never a write.** A named query joins outbound endpoint rows'
+`${...}`-bearing `peer`/`path` expressions against `resolved_config`, per environment,
+substituting single-placeholder expressions and answering `multi_placeholder` for the rest.
+Endpoint rows are untouched — `resolved_config` carries values, endpoints keep expressions,
+and nothing rewrites an endpoint row per environment.
+
 ### Traces — a named query, not a table
 
 A trace is everything reachable from one inbound endpoint. Storing it would copy every

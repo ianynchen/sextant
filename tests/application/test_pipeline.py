@@ -4,16 +4,20 @@ from pathlib import Path
 
 from shape_helpers import ORDER_REQUEST, ORDER_STATUS, shape_fields_of
 
+from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
 from sextant.application.ports.catalogs import Catalog, CatalogSource
 from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport, resolve
 from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.domain.closed_sets import OriginTier
-from sextant.domain.factfile import write_fact_file
+from sextant.domain.factfile import config_fact_target, write_fact_file
 from sextant.domain.facts import Document
+from sextant.domain.resource_files import list_files
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.ingress.read.properties import PropertiesReader
+from sextant.ingress.read.yaml_config import YamlConfigReader
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
@@ -37,9 +41,20 @@ class _Catalogs:
 def _resolved_fixture(
     tmp_path: Path, catalogs: CatalogSource | None = None
 ) -> tuple[DuckDbWorkspace, ResolveReport]:
-    """Compile, scan and resolve the fixture — the whole path, on real
-    bytecode. The workspace is handed back open: the rows the report points at
-    are read from it, and closing it here would take them with it."""
+    """Compile, scan, READ and resolve the fixture — the whole path, on real
+    bytecode and the fixture's own real configuration files. The workspace is
+    handed back open: the rows the report points at are read from it, and
+    closing it here would take them with it.
+
+    2F Task 7: the read half is not decoration. `resolve()` runs M04's pass 2
+    over whatever `config_entry` facts the workspace holds, and a
+    `config_join` catalog then reads the `resolved_config` rows that pass
+    produced — so a fixture resolved WITHOUT its configuration answers a
+    genuinely different question ("this module declares no bindings at all"),
+    and every row-level pin below would describe a pipeline nobody runs. The
+    two lines mirror `stages/analyze.py`'s own read step exactly, with the
+    resource root written out rather than re-detected (this helper already
+    hard-codes the module's coordinates for the same reason)."""
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     facts = tmp_path / "facts"
     AsmScanner(JAR).scan(
@@ -51,6 +66,16 @@ def _resolved_fixture(
             out_dir=facts,
         )
     )
+    root = FIXTURE / "src" / "main" / "resources"
+    for reader, owned in group_files_by_reader(
+        list_files(root), [PropertiesReader(), YamlConfigReader()]
+    ):
+        request = ReadRequest(
+            module_id="com.acme:orders-service", version="1.0.0", files=owned, root=root
+        )
+        for document, config_facts in reader.read(request):
+            target = config_fact_target(facts, document.relative_path)
+            write_fact_file(target, document, config_facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     report = resolve(
         workspace,
@@ -347,6 +372,51 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `record_arg` row for this SAME call, which shares the existing
         # `(None, None)` tuple, so the SET gains only this one new entry.
         (None, "raw-messages"),
+        # 2F Task 3 (the configuration surface fixture): `AuditJmsListener
+        # #onAudit`'s destination literal moves to the placeholder
+        # `${orders.audit.topic}` (application.yml supplies the value) —
+        # `@JmsListener.destination` is read as a string literal regardless
+        # of its placeholder content, so the row still resolves, only under
+        # a new identity. `(None, "audit.queue")` above stays in the set too
+        # — `EventProducers#sendAuditMessage`'s own send no longer shares an
+        # identity with the listener, so it now stands unmerged (asserted
+        # below) rather than disappearing into `direction: both`.
+        (None, "${orders.audit.topic}"),
+        # 2F Task 8 (the field ladder and base composition, re-freezing Task
+        # 3's own four rows exactly as that pin promised): `baseUrl` is now a
+        # declared `base` capture, so each `BillingClients` chain composes
+        # the address it really calls — the base its argument names plus its
+        # own `.uri()` literal. Three rungs of the ladder answer, one per
+        # caller, and each returns the SAME expression from a different
+        # fact path: `fieldFedInvoice` off the field's own `@Value`,
+        # `constructorFedInvoice` off the `field_write` back to the
+        # annotated constructor parameter, `propertiesFedInvoice` off the
+        # `@ConfigurationProperties(prefix)` bean read through its getter.
+        # The whole expression stays in `path` with `peer` NULL —
+        # unsplittable until `resolved_peers` substitutes it per environment
+        # (asserted below). `computedBaseInvoice`'s concatenated base
+        # defeats every rung, and its row FLIPS from Task 3's `resolved`
+        # `/adjustments` to path NULL, `unresolved` (checkpoint D-4): a
+        # captured base nobody could read poisons the address rather than
+        # letting a relative path stand in for the whole URL.
+        ("GET", "${billing.url}/invoices"),
+        ("GET", "${billing.url}/refunds"),
+        ("GET", "${billing.url}/statements"),
+        # 2F Task 7 (the `config_join` engine): the two binding rows whose
+        # destination the configuration actually names. `handleOrder`'s
+        # `Consumer<OrderEvent>` binds `-in-0` (inbound) to `stream-orders`,
+        # `auditTap`'s `Supplier<OrderEvent>` binds `-out-0` (outbound) to
+        # `audit-tap`; neither destination is named by any other catalog in
+        # this fixture, so neither merges and neither is suppressed by the
+        # wire-identity guard. The other two selected entries —
+        # `orphanConsumer` (no binding key declared anywhere) and the
+        # composed `pipeA|pipeB` entry — both land on the existing
+        # `(None, None)` tuple, so the SET gains nothing for them even
+        # though the count does. `unselectedBean`, whose facts are
+        # identical to `handleOrder`'s, derives NO row at all: only
+        # selection excludes it, asserted explicitly below.
+        (None, "stream-orders"),
+        (None, "audit-tap"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -460,7 +530,46 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # `GET /kt/rich`, handler NULL on all three). 72 + 10 = 82 — exactly the
     # checkpoint's own frozen target (checkpoint item (5)). Verified live
     # against real bytecode, not computed from the brief alone.
-    assert len(report.endpoints) == 82
+    #
+    # 2F Task 3 (the configuration surface fixture) adds 5 more. Four are
+    # `BillingClients`' own half-2 WebClient chains (`fieldFedInvoice`/
+    # `constructorFedInvoice`/`propertiesFedInvoice`/`computedBaseInvoice`),
+    # each feeding its base address through `WebClient.builder().baseUrl(...)`
+    # imperatively — a field, a constructor-injected `@Value` parameter, a
+    # bound `@ConfigurationProperties` object, and a computed concatenation
+    # respectively (fix round 1, review ruling: `baseUrl()` is NOT a
+    # declared step in the shipped `spring-webclient.yml` catalog, so it is
+    # never consulted — each row derives off its own DISTINCT `.uri()`
+    # literal alone, `resolved`, peer NULL, four new tuples in the route
+    # SET above). `OrderStreamBindings`' four `@Bean Consumer<OrderEvent>`/
+    # `Supplier<OrderEvent>` methods derive nothing at all under the shipped
+    # engines (no `single_call`/`fluent` root inside a trivial lambda body)
+    # — `config_join` (Task 7) is what eventually reads them. The fifth new
+    # row is `AuditJmsListener#onAudit` moving to `${orders.audit.topic}`:
+    # its previous merge with `EventProducers#sendAuditMessage`'s own
+    # `"audit.queue"` send no longer fires (different literal strings), so
+    # the send stands unmerged — `(None, "audit.queue")` keeps its existing
+    # tuple in the SET, but the table itself gains a genuine second row
+    # (`onAudit`'s inbound row moves to its own new identity;
+    # `sendAuditMessage`'s outbound row survives standalone rather than
+    # being deleted by the merge). 82 + 5 = 87. Verified live against real
+    # bytecode, not computed from the brief alone — this is Task 3's own
+    # frozen baseline for Tasks 4-8. The four `BillingClients` rows are
+    # expected to change again once Task 8's `base` capture lands
+    # (re-freezing, not a bug) — see the review ruling above.
+    #
+    # 2F Task 7 (`config_join`, the eighth style) adds 4, exactly the
+    # checkpoint's own frozen delta (item (5), as amended by its
+    # falsification F-3): `spring.cloud.function.definition` selects four
+    # entries, and each derives one row — `handleOrder` → `stream-orders`
+    # (kafka inbound, resolved), `auditTap` → `audit-tap` (kafka outbound,
+    # resolved), `orphanConsumer` → path NULL (the key is declared nowhere,
+    # so the binding is recorded unresolved rather than dropped), and
+    # `pipeA|pipeB` → path NULL with no bean named at all (the composition
+    # degrade). None of the four merges: the two resolved destinations are
+    # named by nothing else in the fixture, and a NULL path never dedups
+    # (SQL's `NULL = NULL` is unknown). 87 + 4 = 91.
+    assert len(report.endpoints) == 91
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
@@ -769,9 +878,13 @@ def test_a_jms_listener_resolves_its_converted_payload(
 ):
     """`onAudit(OrderEvent event)`: `@JmsListener.destination` is genuinely
     scalar in bytecode (unlike Kafka's `topics`), and the sole bare
-    parameter resolves as the payload."""
+    parameter resolves as the payload. 2F Task 3: the destination literal
+    is now the placeholder `${orders.audit.topic}` — a `JmsListener`
+    destination is always read as a string literal regardless of its
+    placeholder content, so the row still resolves and its own identity is
+    the expression verbatim (M04's rule: nothing here interprets it)."""
     _, report = resolved_fixture
-    [audit] = _messaging_rows(report, "jms", "audit.queue")
+    [audit] = _messaging_rows(report, "jms", "${orders.audit.topic}")
 
     assert json.loads(audit["request_shape"])["shape_id"] == (
         "com/acme/orders/contracts/OrderEvent#"
@@ -993,19 +1106,29 @@ def test_a_kafka_templates_message_send_derives_a_second_distinct_unresolved_row
     assert row["request_shape"] is None
 
 
-def test_a_jms_templates_destination_derives_and_merges_with_its_listener(
+def test_a_jms_templates_destination_no_longer_merges_once_its_listener_moves_to_a_placeholder(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """`jmsTemplate.convertAndSend("audit.queue", event)` merges with Task
-    10's own `AuditJmsListener#onAudit` inbound row into `direction: both`,
-    keeping the handler's own converted-payload contract."""
+    """`jmsTemplate.convertAndSend("audit.queue", event)` used to merge with
+    Task 10's own `AuditJmsListener#onAudit` inbound row into `direction:
+    both`. 2F Task 3 moves `onAudit`'s own destination to the placeholder
+    `${orders.audit.topic}` (application.yml supplies the value) — a
+    different literal string from this call's own `"audit.queue"`, so the
+    wire-identity merge no longer fires: this row now stands on its own,
+    unmerged, `direction: outbound`. Its own `event` argument is a bare,
+    pass-through parameter of `sendAuditMessage(OrderEvent event)` — D00
+    §5's `unresolved` kind, the same capture failure Task 11's `order-raw`
+    row already pins — so `resolution` reads `unresolved` even though the
+    destination literal itself resolves the `path` cleanly; this was always
+    true, just invisible under the merge before this task."""
     _, report = resolved_fixture
     [row] = _messaging_rows(report, "jms", "audit.queue")
 
-    assert row["direction"] == "both"
-    assert row["handler"].endswith("AuditJmsListener#onAudit(sig_b2a754d9).")
+    assert row["direction"] == "outbound"
+    assert row["handler"] is None
     assert row["caller"].endswith("EventProducers#sendAuditMessage(sig_b2a754d9).")
-    assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
+    assert row["resolution"] == "unresolved"
+    assert row["request_shape"] is None
 
 
 def test_a_destination_less_jms_send_derives_an_unresolved_null_path_row(
@@ -1444,6 +1567,323 @@ def test_the_messagebuilder_kafka_chain_resolves_its_topic_but_not_its_bare_payl
     assert template_row["resolution"] == "unresolved"
 
 
+# --- 2F Task 7: the `config_join` engine, live ---------------------------
+#
+# Every assertion below is pinned from the live run this task froze —
+# `uv run sextant module analyze fixtures/orders-service`, 91 endpoints,
+# extractor 9.8 — not computed from the plan.
+
+BEANS = "com/acme/orders/streams/OrderStreamBindings#"
+ORDER_EVENT_PAYLOAD = {
+    "nullable": True,
+    "shape_id": "com/acme/orders/contracts/OrderEvent#",
+    "wire_format": "",
+    "wire_type": "object",
+}
+
+
+def _binding_rows(report: ResolveReport) -> list[dict]:
+    return [e for e in report.endpoints if e["catalog_id"] == "spring-cloud-stream"]
+
+
+def test_a_consumer_bean_binds_inbound_to_the_destination_its_key_names(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`@Bean Consumer<OrderEvent> handleOrder()` — the style's whole point in
+    one row: nothing in the bytecode names a destination at all. The bean's
+    own RETURN type picks the `-in-0` suffix and `inbound` direction from the
+    catalog's suffix rules, its own method name is the binding name, and
+    `spring.cloud.stream.bindings.handleOrder-in-0.destination` (both
+    environments agreeing on `stream-orders`) supplies the address.
+
+    `handler`, not `caller`: D01 §3's direction rule, so an inbound binding
+    reads like every other inbound row in this table. The payload roots from
+    the functional interface's own type ARGUMENT (checkpoint item (1)) — the
+    `Consumer` itself is machinery and never reaches a shape column."""
+    _, report = resolved_fixture
+    [row] = _messaging_rows(report, "kafka", "stream-orders")
+
+    assert row["direction"] == "inbound"
+    assert row["method"] is None
+    assert row["handler"].endswith(BEANS + "handleOrder(sig_b4c25d22).")
+    assert row["caller"] is None
+    assert row["peer"] is None
+    assert row["resolution"] == "resolved"
+    assert row["evidence"] == "compiler"
+    assert row["catalog_id"] == "spring-cloud-stream"
+    assert json.loads(row["request_shape"]) == ORDER_EVENT_PAYLOAD
+    assert row["response_shape"] is None
+    # `handler_signature` stays NULL, exactly as every other pass-computed
+    # row's does (`single_call`, `fluent`, `reply`): the row's payload is
+    # already decided here, and `derive_endpoint_contracts.sql`'s owner-keyed
+    # update is guarded on this column precisely so a row that answered for
+    # itself is not answered again from its declared signature — which here
+    # would root at `Consumer` and report the machinery as the wire payload.
+    assert row["handler_signature"] is None
+
+
+def test_a_supplier_bean_binds_outbound_with_its_bean_method_as_the_caller(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`@Bean Supplier<OrderEvent> auditTap()` — the same mechanism through
+    the other suffix rule: `-out-0`, `outbound`, and therefore `caller` set
+    with `handler` NULL (D01 §3's direction rule again, which spec §3's own
+    "handler is the bean's method symbol" wording predates). `audit-tap` has
+    no inbound twin in this fixture, so the row stays outbound rather than
+    merging."""
+    _, report = resolved_fixture
+    [row] = _messaging_rows(report, "kafka", "audit-tap")
+
+    assert row["direction"] == "outbound"
+    assert row["handler"] is None
+    assert row["caller"].endswith(BEANS + "auditTap(sig_6898d13c).")
+    assert row["resolution"] == "resolved"
+    assert json.loads(row["request_shape"]) == ORDER_EVENT_PAYLOAD
+
+
+def test_a_selected_bean_whose_binding_key_is_never_declared_still_derives_a_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`orphanConsumer` is selected and its facts are identical to
+    `handleOrder`'s, but `application.yml` declares no
+    `…bindings.orphanConsumer-in-0.destination` — and none of the 20
+    `resolved_config` rows carries that key in either environment.
+
+    D02 §2d: "an unresolved address is not an absent endpoint". The bean
+    exists and the binding was declared, so the row is recorded with its
+    path NULL and `resolution: unresolved`; the handler is still named,
+    because the bean method is a fact regardless of what configuration
+    forgot."""
+    _, report = resolved_fixture
+    [row] = [
+        e
+        for e in _binding_rows(report)
+        if e["handler"] and e["handler"].endswith("orphanConsumer(sig_b4c25d22).")
+    ]
+
+    assert row["direction"] == "inbound"
+    assert row["path"] is None
+    assert row["resolution"] == "unresolved"
+    assert row["caller"] is None
+    # The payload is read from the bean's own type argument regardless: the
+    # destination is what configuration failed to name, not the contract.
+    assert json.loads(row["request_shape"]) == ORDER_EVENT_PAYLOAD
+
+
+def test_a_composed_definition_entry_derives_one_row_naming_nobody(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`pipeA|pipeB` — the composition degrade (D02 §2d: the vocabulary
+    "records the whole expression rather than guessing which function
+    contributed which half"). ONE row, `path` NULL, `handler` AND `caller`
+    NULL: there is no single bean to name, and no shape either, since no
+    functional type was read. It is the first endpoint row in this repo that
+    names no symbol at all — pinned here so a renderer or export that cannot
+    tolerate that fails loudly rather than silently dropping it.
+
+    It shares `(kafka, inbound, NULL, NULL)` with the orphan row above and
+    stays a SECOND row: `derive_call_endpoints.sql` never dedups a NULL path
+    (SQL's `NULL = NULL` is unknown), and this pass's own dedup follows the
+    same rule."""
+    _, report = resolved_fixture
+    [row] = [e for e in _binding_rows(report) if e["handler"] is None and e["caller"] is None]
+
+    assert row["protocol"] == "kafka"
+    assert row["direction"] == "inbound"
+    assert row["path"] is None
+    assert row["resolution"] == "unresolved"
+    assert row["request_shape"] is None
+
+
+def test_a_bean_the_definition_does_not_select_derives_no_row_at_all(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`unselectedBean`'s facts are byte-identical in shape to
+    `handleOrder`'s — same annotation, same `Consumer<OrderEvent>` return
+    type, same enclosing class — so ONLY selection can exclude it. Asserted
+    as an absence rather than merely omitted from the route set: a
+    selection that quietly stopped filtering would add a row this fixture's
+    totals would absorb without any set comparison noticing which one was
+    extra.
+
+    The four binding rows are pinned as a whole for the same reason."""
+    _, report = resolved_fixture
+
+    assert not [e for e in report.endpoints if e["handler"] and "unselectedBean" in e["handler"]]
+    assert not [e for e in report.endpoints if e["caller"] and "unselectedBean" in e["caller"]]
+    assert len(_binding_rows(report)) == 4
+
+
+def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`media_from_config`, live and whole. Both serializer keys resolve to
+    the same class in BOTH environments (the agreement the stamp requires),
+    and the class is in the catalog's `values` map, so one MIME string is
+    computed per rule and applied to every row the rule's `(protocol,
+    direction)` pair names.
+
+    The whole stamped picture is pinned, not a sample: this is a
+    module-level default reaching rows six other catalogs derived, and the
+    only way to see that it stopped where it should is to assert where it
+    did not land. Three things it must NOT do: touch a non-kafka row, touch
+    a row that already declared its own media (the two `spring-web` HTTP
+    rows), or fill the opposite direction's column.
+
+    The `both` rows carry BOTH columns — the merge now coalesces the
+    outbound twin's media onto the surviving row before deleting it
+    (checkpoint falsification F-4). Without that, three stamps applied
+    moments earlier would have been destroyed by the merge, leaving a
+    `both` row that reads as "no producer declared"."""
+    _, report = resolved_fixture
+    kafka = [e for e in report.endpoints if e["protocol"] == "kafka"]
+    json_media = '["application/json"]'
+
+    # Every kafka row that consumes carries the consumer-side stamp, and
+    # every one that produces carries the producer-side one — direction by
+    # direction, with `both` counted on both sides.
+    assert {e["consumes"] for e in kafka if e["direction"] in ("inbound", "both")} == {json_media}
+    assert {e["produces"] for e in kafka if e["direction"] in ("outbound", "both")} == {json_media}
+    # And nothing bled across: an inbound-only row declares nothing it
+    # produces, an outbound-only row nothing it consumes.
+    assert {e["produces"] for e in kafka if e["direction"] == "inbound"} == {None}
+    assert {e["consumes"] for e in kafka if e["direction"] == "outbound"} == {None}
+    # 15 rows consume (12 inbound + 3 both), 10 produce (7 outbound + 3
+    # both) — the checkpoint's own frozen kafka metadata counts.
+    assert len([e for e in kafka if e["consumes"] == json_media]) == 15
+    assert len([e for e in kafka if e["produces"] == json_media]) == 10
+
+    # Untouched: every non-kafka row, including the two HTTP rows that
+    # declare their own media through the annotations (first-writer
+    # discipline — a stamp never overwrites, and these two are the only
+    # pre-existing non-NULL media in the table).
+    declared = {
+        (e["protocol"], e["path"], e["consumes"], e["produces"])
+        for e in report.endpoints
+        if e["protocol"] != "kafka" and (e["consumes"] or e["produces"])
+    }
+    assert declared == {
+        ("http", "/v1/orders/{id}", None, json_media),
+        ("http", "/v1/orders/detailed", json_media, json_media),
+    }
+
+
+# --- 2F Task 8: the field ladder and base composition, live --------------
+#
+# Pinned from the live run this task froze — `uv run sextant module analyze
+# fixtures/orders-service`, still 91 endpoints (these four rows CHANGE; none
+# is added or removed), extractor 9.8.
+
+BILLING_CLIENTS = "com/acme/orders/config/BillingClients#"
+
+
+def _billing_row(report: ResolveReport, method: str) -> dict:
+    [row] = [
+        e
+        for e in report.endpoints
+        if e["caller"] is not None and f"{BILLING_CLIENTS}{method}(" in str(e["caller"])
+    ]
+    return row
+
+
+def test_each_ladder_rung_composes_the_same_base_expression_off_a_different_fact_path(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """The three real `BillingClients` chains, one per rung — every one of
+    them feeding `WebClient.builder().baseUrl(...)` a value no literal at the
+    call site names, and every one of them deriving the SAME expression from
+    a different set of facts:
+
+    - `fieldFedInvoice` — rung 1: the `field`-kind argument's own field
+      carries the `@Value` expression, returned verbatim;
+    - `constructorFedInvoice` — rung 2: the field carries no annotation at
+      all, and a `field_write` fact traces it to constructor parameter 0,
+      whose annotation lives only inside the `<init>` signature;
+    - `propertiesFedInvoice` — rung 3: the argument is not a field read but
+      the RESULT of `billingProperties.getUrl()`, followed one hop to that
+      call site, whose owner carries `@ConfigurationProperties(prefix =
+      "billing")`; `getUrl` de-prefixes to `url` and relaxed-binds to the
+      properties type's own declared `url` field.
+
+    The expression is composed with each chain's own `.uri()` literal and
+    kept WHOLE in `path`, `peer` NULL: `${billing.url}` matches no scheme,
+    so there is no authority to split off until the per-environment join
+    resolves it (the next test)."""
+    _, report = resolved_fixture
+
+    assert {
+        (row["path"], row["peer"], row["resolution"], row["catalog_id"])
+        for row in (
+            _billing_row(report, name)
+            for name in ("fieldFedInvoice", "constructorFedInvoice", "propertiesFedInvoice")
+        )
+    } == {
+        ("${billing.url}/invoices", None, "resolved", "spring-webclient"),
+        ("${billing.url}/refunds", None, "resolved", "spring-webclient"),
+        ("${billing.url}/statements", None, "resolved", "spring-webclient"),
+    }
+
+
+def test_a_computed_base_poisons_its_row_rather_than_reporting_the_path_alone(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`computedBaseInvoice`'s base is `this.fieldUrl + "/v2"` — a
+    concatenation whose argument reaches the call site as `unresolved` with
+    no property getter behind it, so every rung misses and the ladder answers
+    nothing (rung 4).
+
+    The row FLIPS from what Task 3 froze (`resolved`, path `/adjustments`):
+    before this task `baseUrl` was captured by nobody, so the `.uri()`
+    literal was the whole answer and the row read confident. Now the base IS
+    a declared capture, and one that failed — path NULL, `unresolved`
+    (checkpoint D-4). Reporting `/adjustments` as the address would state a
+    URL the module never calls; the row still says "this method calls
+    something over HTTP", which is true."""
+    _, report = resolved_fixture
+    row = _billing_row(report, "computedBaseInvoice")
+
+    assert (row["path"], row["peer"], row["resolution"]) == (None, None, "unresolved")
+    assert row["method"] == "GET"
+    assert row["catalog_id"] == "spring-webclient"
+
+
+def test_the_peer_join_answers_every_client_row_per_environment(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`resolved_peers` — job 3, a join and never a write. Two environments
+    resolve in this fixture, so every client-side row (outbound and `both`)
+    is answered twice, and the endpoint rows themselves are untouched.
+
+    Both halves are live now that Task 8's ladder puts real expressions in
+    `path`: a literal address passes through unchanged in every environment,
+    and the three `${billing.url}` rows substitute per environment — the
+    same row, two answers, which is the whole reason peers resolve as a join
+    rather than a write. `multi_placeholder` stays unit-tested
+    (`test_config_join.py`): no live row carries two placeholders."""
+    workspace, report = resolved_fixture
+    rows = workspace.query("resolved_peers")
+    client_side = [e for e in report.endpoints if e["direction"] != "inbound"]
+
+    assert {row["environment"] for row in rows} == {"default", "prod"}
+    assert len(rows) == len(client_side) * 2
+    assert {row["unresolved_reason"] for row in rows} == {None}
+    # A literal passes through unchanged, both halves of it.
+    okhttp = [row for row in rows if row["path"] == "/legacy/exports"]
+    assert {(row["resolved_peer"], row["resolved_path"]) for row in okhttp} == {
+        ("legacy.acme.internal", "/legacy/exports")
+    }
+    # An expression resolves to a different real URL per environment.
+    billing = [row for row in rows if str(row["path"]).startswith("${billing.url}")]
+    assert {(row["environment"], row["resolved_path"]) for row in billing} == {
+        ("default", "http://billing.internal/invoices"),
+        ("default", "http://billing.internal/refunds"),
+        ("default", "http://billing.internal/statements"),
+        ("prod", "http://billing.prod.internal/invoices"),
+        ("prod", "http://billing.prod.internal/refunds"),
+        ("prod", "http://billing.prod.internal/statements"),
+    }
+
+
 def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
@@ -1764,3 +2204,46 @@ def test_resolve_reports_the_skip_instead_of_crashing_when_no_catalog_is_satisfi
         SkippedCatalog("spring-web", ("annotation_args", "type_annotations"))
         in report.skipped_catalogs
     )
+
+
+def test_config_documents_with_colliding_basenames_both_survive_to_the_workspace(
+    tmp_path: Path,
+):
+    """`application.properties` and `application.yml` — the exact pair
+    spring-web.yml's `config_model.sources` declares side by side, and the
+    most common real Spring layout — must not collide onto one fact-file
+    target. Before `config_fact_target` appended `.jsonl` to the full
+    relative path, `Path(...).with_suffix(".jsonl")` mapped both to
+    `application.jsonl`; whichever document's `write_fact_file` ran second
+    silently discarded the other's document record and every config entry
+    it carried. This mirrors `stages/analyze.py`'s own read loop directly
+    against a synthetic resource root, without the mvn/AsmScanner fixture
+    the other config-read tests here need — cheap coverage for a bug that
+    lives entirely in the read step's own path arithmetic."""
+    root = tmp_path / "resources"
+    root.mkdir()
+    (root / "application.properties").write_text("server.port=8080\n", encoding="utf-8")
+    (root / "application.yml").write_text("server:\n  host: localhost\n", encoding="utf-8")
+
+    facts = tmp_path / "facts"
+    for reader, owned in group_files_by_reader(
+        list_files(root), [PropertiesReader(), YamlConfigReader()]
+    ):
+        request = ReadRequest(
+            module_id="com.acme:orders-service", version="1.0.0", files=owned, root=root
+        )
+        for document, config_facts in reader.read(request):
+            target = config_fact_target(facts, document.relative_path)
+            write_fact_file(target, document, config_facts)
+
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    documents = workspace.query("documents")
+    entries = workspace.query("config_entries")
+    workspace.close()
+
+    assert {d["relative_path"] for d in documents} == {
+        "application.properties",
+        "application.yml",
+    }
+    assert {e["key_raw"] for e in entries} == {"server.port", "server.host"}

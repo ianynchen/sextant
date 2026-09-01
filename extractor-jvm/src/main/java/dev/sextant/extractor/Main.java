@@ -76,7 +76,7 @@ public final class Main {
         document.put("sextant_version", JsonOut.string(options.getOrDefault("sextant-version", "0.1.0")));
         document.put("fact_schema_version", JsonOut.string("1.0.0"));
         document.put("scanner_id", JsonOut.string("asm"));
-        document.put("scanner_version", JsonOut.string("9.7"));
+        document.put("scanner_version", JsonOut.string("9.8"));
         document.put("content_hash", JsonOut.string("sha256:" + contentHash));
         document.put("origin_entry", JsonOut.string(options.get("classes")));
         document.put("origin_tier", JsonOut.string("module_output"));
@@ -134,7 +134,7 @@ public final class Main {
         fields.put("documents", String.valueOf(documents));
         fields.put("facts", String.valueOf(facts));
         fields.put("scanner_id", JsonOut.string("asm"));
-        fields.put("scanner_version", JsonOut.string("9.7"));
+        fields.put("scanner_version", JsonOut.string("9.8"));
         fields.put("uncovered", JsonOut.array(quoted));
         return JsonOut.object(fields);
     }

@@ -32,6 +32,11 @@ class Catalog:
     nullability: dict[str, Any] = field(default_factory=dict)
     serialization: dict[str, Any] = field(default_factory=dict)
     known_types: list[dict[str, Any]] = field(default_factory=list)
+    # D02 §2i: a new top-level, optional block, one per framework family —
+    # the family's base catalog carries it (Spring's ships on spring-web.yml).
+    # `resolve/config.py`'s pass 2 collects every catalog's own non-empty
+    # block; every other catalog's default `{}` means it contributes none.
+    config_model: dict[str, Any] = field(default_factory=dict)
 
 
 class CatalogError(ValueError):

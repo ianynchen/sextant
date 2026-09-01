@@ -23,11 +23,30 @@ matches:
   # `owner` (D02 §4's amendment). `retrieve` alone is the terminal: no
   # `exchange` on this synchronous surface.
   steps:
+    # `baseUrl` sits BEFORE the verb root in a real chain
+    # (`RestClient.builder().baseUrl(...).build().get()`), which is why the
+    # engine folds a chain's pre-root captures too; `base` composes with
+    # `uri`'s own `url` at derive time into the one address the row carries
+    # (2F design §4). The `owner` is REQUIRED, not decoration: only an
+    # owner-declared step folds backward, because the pre-root prefix is the
+    # part of a chain no root has vouched for yet (fix round 1).
+    - { method: baseUrl, owner: org.springframework.web.client.RestClient$Builder, captures: { base: arg0 } }
     - { method: uri, captures: { url: arg0 } }
     - { method: body, owner: org.springframework.web.client.RestClient$RequestBodySpec, captures: { body: arg0 } }
     - { method: body, owner: org.springframework.web.client.RestClient$ResponseSpec,     captures: { response: arg0 } }
   terminal: [retrieve]
   type_carriers: [org.springframework.core.ParameterizedTypeReference]
+  # Which annotations carry configuration onto a field, a constructor
+  # parameter or a whole properties type — the field ladder's own vocabulary
+  # (2F design §4), so no framework name reaches the engine. `getter_prefixes`
+  # is the accessor convention the properties rung de-prefixes with
+  # (`getUrl` → `url`) before relaxed-binding the name against the type's own
+  # declared fields.
+  field_sources:
+    value_annotation: org.springframework.beans.factory.annotation.Value
+    properties_annotation: org.springframework.boot.context.properties.ConfigurationProperties
+    prefix_from: prefix
+    getter_prefixes: [get, is]
 
 # Shared verbatim across every outbound catalog on purpose (not just these
 # three plus RestTemplate), for the same reason `nullability` is copied from

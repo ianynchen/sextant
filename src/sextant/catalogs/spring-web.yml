@@ -62,3 +62,23 @@ known_types:
   - { type: java.time.LocalDate,  wire: string, format: date }
   - { type: java.math.BigDecimal, wire: number }
   - { type: java.util.UUID,       wire: string, format: uuid }
+
+# D02 §2i: the family's own configuration model — carried on the family's
+# base catalog, one per framework family, read by resolve/config.py's M04
+# pass 2 rather than assumed by any engine.
+config_model:
+  sources:                      # precedence order, lowest first
+    - { pattern: "bootstrap{-profile}.properties" }
+    - { pattern: "bootstrap{-profile}.yml" }
+    - { pattern: "application{-profile}.properties" }
+    - { pattern: "application{-profile}.yml" }
+  profiles:
+    from_filename: "{-profile}"
+    from_document_key: spring.config.activate.on-profile
+    default_profile: default
+  placeholders: { open: "${", close: "}", default_separator: ":" }
+  key_matching: relaxed          # relaxed | exact
+  # `spring.config.import`-shaped prefixes (2F design §2's `remote_source`
+  # reason): a winning value starting with one of these names a config-server
+  # import, not a value this pass can ever resolve from files alone.
+  remote_prefixes: ["configserver:", "optional:configserver:"]

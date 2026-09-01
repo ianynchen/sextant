@@ -1,0 +1,79 @@
+# application.yml — the base source. Later than bootstrap{-profile}.* in
+# config_model.sources, so this document's `boot.layer.probe` wins the
+# layering-order pin. Applies to every profile (default and prod both):
+# keys with no per-environment behaviour of their own live here, once.
+
+# AuditJmsListener.onAudit's `${orders.audit.topic}` placeholder resolves
+# here — the config_entry the M04 pass reads to fill in the expression's
+# value.
+orders:
+  audit:
+    topic: audit-events
+
+# billing.url — read by all three BillingClients half-2 clients (field
+# @Value, constructor @Value, @ConfigurationProperties). This is the
+# default-environment value; application-prod.yml overrides it for prod.
+billing:
+  url: http://billing.internal
+
+# Overrides bootstrap.yml's value for the same key — the layering-order pin.
+boot:
+  layer:
+    probe: application-value
+
+# Stream bindings + function selection (2F design §3, job 1). `definition`
+# selects handleOrder, auditTap and orphanConsumer — OrderStreamBindings'
+# unselectedBean is deliberately absent, the selection pin; pipeA|pipeB is
+# the composition-degrade pin (one unresolved row, never decomposed).
+# orphanConsumer-in-0 has no binding key at all below — the
+# missing-binding-key pin (Task 7).
+spring:
+  cloud:
+    function:
+      definition: "handleOrder;auditTap;orphanConsumer;pipeA|pipeB"
+    stream:
+      bindings:
+        # A destination no other catalog in this fixture derives. Task 6's
+        # checkpoint (F-3) proved why it has to be: wire identity is
+        # (protocol, direction, method, path) and excludes the handler, and
+        # `config_join` runs last, so a binding pointing at a topic an
+        # existing listener already claims is dropped by
+        # derive_call_endpoints.sql's insert-if-absent guard — the binding
+        # derivation's only fully-resolved happy path would never be
+        # observable in a live run.
+        handleOrder-in-0:
+          destination: stream-orders
+        auditTap-out-0:
+          destination: audit-tap
+  # Serializer media (2F design §3, job 2). Repeated with the identical
+  # value in application-prod.yml so every resolved environment agrees —
+  # the agreement the media stamp requires.
+  kafka:
+    producer:
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      value-deserializer: org.springframework.kafka.support.serializer.JsonSerializer
+---
+# Document-key profile activation (config_model.profiles.from_document_key),
+# scoped to the "default" profile explicitly — only.in.default must NOT
+# survive into prod's own resolution (the per-env unresolved pin), and the
+# base document above applies to every profile, so this key is carried in
+# its own default-only document rather than the unscoped one.
+spring:
+  config:
+    activate:
+      on-profile: default
+only:
+  in:
+    default: yes
+---
+# Document-key profile activation, scoped to "prod" — the multi-doc
+# on-profile pin, distinct from the filename mechanism application-prod.yml
+# already exercises.
+spring:
+  config:
+    activate:
+      on-profile: prod
+extra:
+  prod:
+    key: prod-only-value

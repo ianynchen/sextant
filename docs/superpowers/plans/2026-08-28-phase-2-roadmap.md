@@ -7,8 +7,8 @@ the linking tier that turns per-service analyses into a system. Each phase is it
 plan, ships one *capability* and the frameworks that ride it, and ends with the same
 review discipline.
 
-**Where we actually are.** Twenty-seven of the seventy-six Java rows in
-[COVERAGE.md](../../COVERAGE.md) §5 are shipped — about 36%. An endpoint carries request and
+**Where we actually are.** Twenty-eight of the seventy-six Java rows in
+[COVERAGE.md](../../COVERAGE.md) §5 are shipped — about 37%. An endpoint carries request and
 response contracts field by field, in both directions, with `required` and `nullable`
 resolved; Feign, Retrofit and `@HttpExchange` outbound clients are read (a path a module
 both exposes and calls merges into one endpoint), and a module's analysis exports as a D06
@@ -33,16 +33,35 @@ messaging) both exist.
 | **2D** | Messaging | delivered | `@KafkaListener` (class-level + `@KafkaHandler` included), `@JmsListener`, `@SqsListener`, Pub/Sub `subscribeAndConvert`; `KafkaTemplate`/`ReplyingKafkaTemplate`/raw `KafkaProducer`/`JmsTemplate`/`SqsTemplate`/`PubSubTemplate` producers riding 2C's `single_call` engine unchanged; `@SendTo` replies | non-HTTP **wire identity**: NULL method + the path column carrying the destination, no new `endpoints` column |
 | **2E-prep** | Hardening + raw messaging drivers | delivered | `catalog_id` provenance on every `endpoints` row; `channel_via`/`when` catalog vocabulary; six surfaces (seven catalog files) of raw drivers — direct jakarta.jms, AWS SDK v2 `SqsClient`, `KafkaConsumer.subscribe`, Google `Publisher`, `Subscriber`+`MessageReceiver`, `KafkaTemplate.send(Message)`; the session-scoped pipeline fixture (suite ~140s → ~50s) | the sixth engine style, `interface_implementation`, gated by a new `implemented_interfaces` capability |
 | **2E** | Spring HTTP inbound completeness | delivered | WebFlux functional routing (`RouterFunctions`, `coRouter`, Java and Kotlin), module-local meta-annotations, inherited `@RequestMapping`, `produces`/`consumes` — GraphQL, WebSocket and SSE deferred to 2H; SOAP to 2I | the `combinator` engine, on 2C's indy groundwork |
-| **2F** | Configuration resolution | planned | `application.yml`/properties into `resolved_config`; environment expressions; **base URLs become real peers**; Spring Cloud Stream and spring-cloud-aws bindings | the `config_join` engine; D02 §2d made real |
-| **L** | Linking and system scope | planned | `participants`, `links`, DR-5 over bundles; the system document; shape provenance fixed structurally | M05/M06 over federated Parquet |
+| **2F** | Configuration resolution | delivered | `application.yml`/properties into `resolved_config`, every profile, environment expressions; declared outbound HTTP bases (a field, a constructor-injected value, `@ConfigurationProperties`) become real peers through the field ladder; Spring Cloud Stream's functional bindings resolve their destination through `config_join` — spring-cloud-aws's own channel-adapter bindings and Spring Integration ride the same engine once catalogued, not yet shipped | the `config_join` engine; D02 §2d made real |
 | **2G** | Wire formats | planned | protobuf + Avro: format inference, `generated_descriptor` readers, declared shapes into the same tables, proto3 JSON-name projection | format as an inferred channel property (D02 §2c) |
 | **2H** | HTTP-adjacent protocols | planned | GraphQL (`@QueryMapping` et al.), WebSocket/STOMP (`@MessageMapping`), SSE | operation-as-endpoint identity; `protocol_hint` engine |
 | **2I** | SOAP | planned | JAX-WS + Spring-WS catalogs; WSDL as a declared-shape source | catalog work only, by then |
+| **2K** | Enrich | planned | `sextant module enrich` — LLM-written sections as overlay claims at `evidence: llm` ([2B spec](../specs/2026-08-29-phase-2b-outbound-and-export-design.md) §6); the LLM verification seat D02 §2d reserves for doubtful config joins (2F records the evidence, 2K judges it) | redaction-before-wire; first network dependency |
 | **2J** | Second frameworks | planned | Micronaut, Quarkus/JAX-RS, MicroProfile REST Client — **zero engine changes is the acceptance test**; then the typed-Catalog refactor | none — that is the point |
-| **2K** | Enrich | planned | `sextant module enrich` — LLM-written sections as overlay claims at `evidence: llm` ([2B spec](../specs/2026-08-29-phase-2b-outbound-and-export-design.md) §6) | redaction-before-wire; first network dependency |
+| **L** | Linking and system scope | planned | `participants`, `links`, DR-5 over bundles; the system document; shape provenance fixed structurally | M05/M06 over federated Parquet |
 
-L and 2K are not coverage and may be reordered against the later coverage phases by
-priority; the version-bump gate opens after **2J**.
+**The remaining sequence, and its three milestones** (2K deliberately moved ahead of 2J,
+ruled 2026-08-31: a complete end-to-end flow for module-level Java/Spring — coverage,
+enrichment, docs and export together — comes before any second Java framework; L moved
+after 2J, ruled 2026-08-31 post-2F: everything module-level for Java lands first, then
+linking services into a system-level architecture begins):
+
+1. After **2I**: Spring Boot module-level *coverage* is complete — every declaration
+   form a Spring service uses derives, modulo the named A-tier catalog rows (RabbitMQ,
+   Pulsar, Micronaut variants — one YAML file each) and the ledgered extractor
+   candidates (vararg constants, batch-listener generics).
+2. After **2K**: the module-level flow is complete *end to end* — analyze → resolve →
+   enrich → render → export, nothing stubbed.
+3. After **2J**: the catalog thesis is proven on second frameworks and the
+   **version-bump gate opens** (unchanged anchor — the gate is about Java coverage,
+   which linking is not part of).
+
+L now comes last, after the gate: linking services into a system-level architecture
+starts only once everything module-level for Java is built. Its precondition never
+weakens by waiting — 2F's real peers are already in the bundles, and every phase
+between here and L only makes the links denser (wire formats make payloads
+comparable, 2H/2I add edge kinds, 2J adds frameworks emitting the same tables).
 
 ## What each phase is really blocked on
 
@@ -63,12 +82,16 @@ change: `method` reads NULL on a messaging row and the rendered identity drops t
 destination. 2D's producers rode 2C's `single_call` engine pointed at `send`-shaped methods,
 unmodified.
 
-**2F** is the phase that unlocks three stuck things at once: outbound peers
-(`client_base_addresses_not_resolved` retires), Spring Cloud Stream and the
-spring-cloud-aws bindings (`config_join` — code names a key, the value lives in
-configuration), and the environment expressions D06 already reserves a manifest field
-for. It is deliberately placed before **L**, because links drawn without real peers are
-sparse and links drawn with them are dense.
+**2F** is the phase that unlocks three stuck things at once: outbound peers for a
+DECLARED base address (`client_base_addresses_not_resolved` retires into two narrower
+gaps — a base built by computation, `computed_base_addresses_not_traced`, and
+configuration constructed in code, `config_as_code_not_read`), Spring Cloud Stream's
+functional bindings (`config_join` — code names a key, the value lives in
+configuration; spring-cloud-aws's own bindings and Spring Integration ride the same
+engine once catalogued), and the environment expressions D06 already reserves a
+manifest field for, now populated live from `resolved_config`'s own distinct
+environments. It is also what makes **L** viable whenever L runs: links drawn without
+real peers are sparse, and links drawn with them are dense.
 
 **2G** exists because two contracts in different formats are not comparable until one is
 projected into the other — proto3's JSON mapping renames `total_amount` to `totalAmount`,

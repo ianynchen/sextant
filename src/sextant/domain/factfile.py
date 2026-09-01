@@ -17,6 +17,18 @@ def _line(model: Document | Fact) -> str:
     return json.dumps(model.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
 
 
+def config_fact_target(fact_root: Path, relative_path: str) -> Path:
+    """Where a config document's fact file lives under `fact_root/config`.
+
+    Appends `.jsonl` to the document's full relative path rather than
+    swapping its suffix (`Path.with_suffix`): two source files that differ
+    only in extension — `application.properties` and `application.yml`, the
+    exact pair spring-web.yml's `config_model.sources` declares side by side
+    — must not collapse onto one `application.jsonl` target, silently
+    dropping whichever document `write_fact_file` wrote second."""
+    return fact_root / "config" / (relative_path + ".jsonl")
+
+
 def write_fact_file(path: Path, document: Document, facts: Iterable[Fact]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [_line(document)] + [_line(fact) for fact in facts]

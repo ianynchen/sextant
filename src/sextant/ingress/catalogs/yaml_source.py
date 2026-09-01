@@ -49,6 +49,8 @@ class YamlCatalogSource:
                     nullability=raw.get("nullability", {}),
                     serialization=raw.get("serialization", {}),
                     known_types=raw.get("known_types", []),
+                    # D02 §2i — optional, one per framework family.
+                    config_model=raw.get("config_model", {}),
                 )
             )
         return catalogs

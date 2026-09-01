@@ -69,6 +69,28 @@ CREATE TABLE IF NOT EXISTS shape_fields (
     item        JSON
 );
 
+-- Pre-declared for the same reason as `endpoints`/`shapes` above: M04 pass 2
+-- (`resolve/config.py`) must answer the "resolved_config" query with an
+-- empty result, not an error, when no catalog declares a config_model or no
+-- config file was read (2F design §2). `resolve_config` replaces it whole
+-- via resolved_config_reset.sql + insert_resolved_config.sql once per
+-- resolve — unconditionally, so an empty resolve still leaves an empty
+-- table rather than a stale previous run's rows.
+CREATE TABLE IF NOT EXISTS resolved_config (
+    key               TEXT,
+    value             TEXT,
+    -- The file that won precedence for this key in this profile's layering
+    -- (D02 §2i's config_model) — NULL only when the key was never declared
+    -- for this environment at all, so no file ever won it (D01).
+    source            TEXT,
+    environment       TEXT,
+    -- NULL exactly when `value` is non-NULL. One of D01's closed five-value
+    -- set (`missing_key`, `environment`, `remote_source`,
+    -- `placeholder_cycle`, `multi_placeholder`) — the last reserved for the
+    -- peer-resolution join, never emitted by this pass.
+    unresolved_reason TEXT
+);
+
 CREATE OR REPLACE VIEW documents AS
 SELECT document_id,
        payload ->> 'relative_path'   AS relative_path,
@@ -117,6 +139,20 @@ SELECT document_id,
        payload ->> 'retention'           AS retention
 FROM raw_facts WHERE kind = 'annotation';
 
+CREATE OR REPLACE VIEW config_entries AS
+-- `seq` is declaration order within the entry's file: a config_entry fact
+-- carries no explicit sequence field of its own (D00 §5c) because a fact
+-- file is written in declaration order (D00 §7) and `rowid` already
+-- reconstructs it losslessly — the same precedent `symbols.seq` states
+-- above, reused rather than re-derived.
+SELECT document_id,
+       payload ->> 'key_raw'              AS key_raw,
+       payload ->> 'key_path'             AS key_path,
+       payload ->> 'value'                AS value,
+       (payload ->> 'doc_index')::INTEGER AS doc_index,
+       rowid                              AS seq
+FROM raw_facts WHERE kind = 'config_entry';
+
 CREATE OR REPLACE VIEW call_sites AS
 SELECT document_id,
        payload ->> 'caller'                    AS caller,
@@ -129,3 +165,12 @@ SELECT document_id,
        (payload ->> 'result')::INTEGER         AS result,
        payload ->  'arguments'                 AS arguments
 FROM raw_facts WHERE kind = 'call_site';
+
+CREATE OR REPLACE VIEW field_writes AS
+-- D00 §5's field_write: a constructor assigning parameter N straight to
+-- field F, constructors only, direct traces only. The field resolution
+-- ladder (2F) is its only consumer so far.
+SELECT document_id,
+       payload ->> 'field'                     AS field,
+       (payload ->> 'from_parameter')::INTEGER AS from_parameter
+FROM raw_facts WHERE kind = 'field_write';

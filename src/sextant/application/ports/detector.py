@@ -20,6 +20,11 @@ class ModuleModel:
     languages: frozenset[str]
     source_roots: tuple[Path, ...]
     output_dirs: tuple[Path, ...]
+    # Where the ArtifactReader port (M03's second port) looks for config
+    # files — `src/main/resources` for Maven. Defaulted so every existing
+    # construction site keeps working; a build system that names none
+    # reports the empty tuple, never a guess.
+    resource_roots: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -42,6 +42,34 @@ def test_metadata_records_the_commit_so_staleness_is_visible(tmp_path: Path):
     assert written["coverage"]["documents"] == 4
 
 
+def test_metadata_environments_are_resolved_configs_own_distinct_set(tmp_path: Path):
+    """D06 §3 "environments" (2F Task 9): sibling data to the bundle
+    manifest's own field, sorted rather than left in `resolved_config`'s
+    row order — a set of profile names, not a row sequence."""
+    resolved_config = [
+        {"key": "billing.url", "value": "http://billing.internal", "environment": "default"},
+        {"key": "billing.url", "value": "http://billing.prod.internal", "environment": "prod"},
+        {"key": "only.in.default", "value": None, "environment": "prod"},
+    ]
+    write_metadata(
+        tmp_path / "metadata.json",
+        MODULE,
+        REPORT,
+        "asm",
+        "9.7",
+        "a3f91c",
+        resolved_config=resolved_config,
+    )
+    written = json.loads((tmp_path / "metadata.json").read_text())
+    assert written["environments"] == ["default", "prod"]
+
+
+def test_metadata_environments_are_empty_when_pass_2_resolved_nothing(tmp_path: Path):
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+    assert written["environments"] == []
+
+
 def test_metadata_names_every_type_expansion_could_not_open(tmp_path: Path):
     """The count says how much was expanded; only the names say what was not,
     and a count cannot be acted on (FR-17, the same rule as `uncovered`)."""
@@ -374,16 +402,32 @@ def test_inbound_row_with_no_handler_renders_unresolved_in_the_handler_column():
     assert "| `GET /v1/orders` | unresolved | - → - | unresolved |" in text
 
 
-def test_messaging_gap_retires_and_both_lists_rotate_to_eleven():
+def test_messaging_gap_retires_and_both_lists_rotate_together():
     """The messaging-not-read gap closes now that annotation_driven reads
     Kafka/JMS/SQS/pub-sub catalogs: it drops from both lists at the same
     position (spec ruling I3), so the equal-length pairing in
     `test_every_machine_readable_gap_has_a_sentence_a_person_can_read` never
     masks a key that lost its sentence."""
     assert "messaging_endpoints_not_read" not in KNOWN_GAPS
-    assert len(KNOWN_GAPS) == 11
-    assert len(_GAPS) == 11
+    assert len(KNOWN_GAPS) == 12
+    assert len(_GAPS) == 12
     assert not any("Messaging endpoints" in gap for gap in _GAPS)
+
+
+def test_the_base_address_gap_retires_into_the_two_boundaries_that_remain():
+    """2F Task 8: `client_base_addresses_not_resolved` retires — an
+    imperatively-fed base address now climbs the field ladder to the
+    configuration key behind it, so "base addresses are not resolved" would
+    read as a gap where there is a capability. What is left is narrower and
+    is named rather than allowed to vanish (spec §4's rotation): a base built
+    by COMPUTATION reaches no key, and configuration written as code reaches
+    no reader at all. Eleven becomes twelve because one key retires and two
+    arrive, each with its own sentence in the same position."""
+    assert "client_base_addresses_not_resolved" not in KNOWN_GAPS
+    assert KNOWN_GAPS[1:3] == ["computed_base_addresses_not_traced", "config_as_code_not_read"]
+    assert _GAPS[1].startswith("Base addresses built by computation")
+    assert _GAPS[2].startswith("Configuration constructed in code")
+    assert not any("configured in builder code" in gap for gap in _GAPS)
 
 
 def test_inbound_media_column_joins_declared_lists():
@@ -450,6 +494,104 @@ def test_inbound_media_column_shows_a_dash_on_either_or_both_null_sides():
         "| `GET /v1/orders/{id}` | `com/acme/C#get().` | - → application/json | resolved |"
     ) in text
     assert "| `GET /v1/orders` | `com/acme/C#list().` | - → - | resolved |" in text
+
+
+def test_coverage_section_names_environments_and_the_unresolved_key_with_its_reason():
+    """2F Task 9, the renderer half of I-1's ledgered carry: the fixture's own
+    `only.in.default` key resolves in `default` and reads `missing_key` in
+    `prod` — D01's own "unresolved for prod, resolved for dev" example
+    (`resolve/config.py`), so the line has to name the reason AND the
+    environment, never a bare "unresolved"."""
+    resolved_config = [
+        {
+            "key": "billing.url",
+            "value": "http://billing.internal",
+            "environment": "default",
+            "unresolved_reason": None,
+        },
+        {
+            "key": "only.in.default",
+            "value": "yes",
+            "environment": "default",
+            "unresolved_reason": None,
+        },
+        {
+            "key": "only.in.default",
+            "value": None,
+            "environment": "prod",
+            "unresolved_reason": "missing_key",
+        },
+    ]
+    text = render_module_document(MODULE, REPORT, "a3f91c", resolved_config=resolved_config)
+    assert "Environments resolved: `default`, `prod`." in text
+    assert "only.in.default — missing_key in prod" in text
+    # The row that DID resolve must not also read as unresolved.
+    assert "billing.url" not in text.split("## Coverage", 1)[1].split("## Structure", 1)[0]
+
+
+def test_coverage_section_is_honest_about_no_environments_and_no_unresolved_keys():
+    text = render_module_document(MODULE, REPORT, "a3f91c")
+    assert "Environments resolved: none." in text
+    assert "Configuration keys unresolved: none." in text
+    # The lead-in (F2, review round 1) always renders, even where the list
+    # under it is empty — the same NFR-7 "looked and found nothing" rule
+    # every other section in this document follows.
+    assert (
+        "Unresolved endpoint derivations — across every engine, whatever "
+        "their evidence, not configuration alone:\n- None."
+    ) in text
+
+
+def test_coverage_section_names_an_unresolved_config_join_derivation_by_catalog_and_site():
+    """2F Task 9 / I-1: a config_join engine's own unresolved rows — a
+    missing binding key (a bean method exists, no key names it) and a
+    composed `pipeA|pipeB` selection (no single bean at all) — are named by
+    the catalog that derived them, since neither the key nor the composed
+    expression is a column any row carries (Task 7 review's own finding:
+    there is no engine-to-report channel)."""
+    report = ResolveReport(
+        facts_loaded=2,
+        endpoints=[
+            {
+                "protocol": "kafka",
+                "direction": "inbound",
+                "method": None,
+                "path": None,
+                "handler": "s maven c 1 com/acme/orders/Bindings#orphanConsumer(sig_1).",
+                "caller": None,
+                "resolution": "unresolved",
+                "evidence": "compiler",
+                "catalog_id": "spring-cloud-stream",
+            },
+            {
+                "protocol": "kafka",
+                "direction": "inbound",
+                "method": None,
+                "path": None,
+                "handler": None,
+                "caller": None,
+                "resolution": "unresolved",
+                "evidence": "compiler",
+                "catalog_id": "spring-cloud-stream",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    # F2, review round 1: the list is a disclosed superset — every engine's
+    # own unresolved rows land here, not config_join's alone — and the page
+    # itself says so, not only the docstring.
+    assert (
+        "Unresolved endpoint derivations — across every engine, whatever "
+        "their evidence, not configuration alone:"
+    ) in text
+    assert (
+        "Unresolved endpoint derivation: `spring-cloud-stream` — "
+        "handler `com/acme/orders/Bindings#orphanConsumer(sig_1).`."
+    ) in text
+    assert (
+        "Unresolved endpoint derivation: `spring-cloud-stream` — a composed selection expression."
+    ) in text
 
 
 def test_structure_and_outbound_sections_state_looked_and_found_nothing():

@@ -20,6 +20,16 @@ matches:
   # `bodyToMono`/`bodyToFlux` follow `retrieve` in every real chain, so the
   # engine keeps folding step captures past a terminal (D02 §4, Task 11).
   steps:
+    # `baseUrl` sits BEFORE the verb root in a real chain
+    # (`WebClient.builder().baseUrl(...).build().get()`), which is why the
+    # engine folds a chain's pre-root captures too; `base` composes with
+    # `uri`'s own `url` at derive time into the one address the row carries
+    # (2F design §4). The `owner` is REQUIRED, not decoration: only an
+    # owner-declared step folds backward, because the pre-root prefix is the
+    # part of a chain no root has vouched for yet (fix round 1). The type is
+    # the one the facts carry — `WebClient$Builder`, `$`-dotted exactly as
+    # OkHttp's own `Request$Builder`.
+    - { method: baseUrl,    owner: org.springframework.web.reactive.function.client.WebClient$Builder, captures: { base: arg0 } }
     - { method: uri,        captures: { url: arg0 } }
     - { method: bodyValue,  captures: { body: arg0 } }
     - { method: body,       captures: { body: arg0 } }
@@ -27,6 +37,17 @@ matches:
     - { method: bodyToFlux, captures: { response: arg0, response_is: array } }
   terminal: [retrieve, exchange]
   type_carriers: [org.springframework.core.ParameterizedTypeReference]
+  # Which annotations carry configuration onto a field, a constructor
+  # parameter or a whole properties type — the field ladder's own vocabulary
+  # (2F design §4), so no framework name reaches the engine. `getter_prefixes`
+  # is the accessor convention the properties rung de-prefixes with
+  # (`getUrl` → `url`) before relaxed-binding the name against the type's own
+  # declared fields.
+  field_sources:
+    value_annotation: org.springframework.beans.factory.annotation.Value
+    properties_annotation: org.springframework.boot.context.properties.ConfigurationProperties
+    prefix_from: prefix
+    getter_prefixes: [get, is]
 
 # Shared verbatim across every outbound catalog on purpose (not just these
 # three plus RestTemplate), for the same reason `nullability` is copied from

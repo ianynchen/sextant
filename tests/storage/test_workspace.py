@@ -632,6 +632,7 @@ def test_exported_tables_read_back_equal_to_the_workspace_query(tmp_path: Path):
         "call_sites",
         "documents",
         "endpoints",
+        "resolved_config",
         "shape_fields",
         "shapes",
         "symbols",

@@ -1,0 +1,48 @@
+id: spring-kafka-media
+displayName: Spring Kafka (serializer-configured media)
+style: config_join
+# Top-level defaults only. This catalog derives no rows of its own — it
+# stamps rows other engines minted — and each rule below carries the
+# `(protocol, direction)` pair of rows it applies to, so neither of these two
+# fields ever reaches an endpoint. They are declared because D02 §1 makes
+# them mandatory on every catalog, and they name what this file is about.
+protocol: kafka
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework.kafka:spring-kafka"]
+
+requires: [resolved_config]
+
+matches:
+  # D02 §2d's second vocabulary: the same resolved configuration read for a
+  # media type rather than an address — the config-declared evidence kind
+  # D01 §3 already reserves a place for. A rule names the key, which of the
+  # two media columns it fills, and the rows it applies to; `values` says
+  # what each configured class means on the wire.
+  #
+  # A stamp lands only where every resolved environment agrees, and never
+  # over a non-NULL column: a declaration read off the code itself always
+  # wins over a module-level default. An unresolved or unknown class stamps
+  # nothing — the class name is in `resolved_config` regardless, which is
+  # what a later format-inference pass reads.
+  media_from_config:
+    rules:
+      # `on` is QUOTED deliberately: YAML 1.1 reads a bare `on` as the
+      # boolean true, so an unquoted key here would never reach the
+      # engine under the name D02 §2d gives it.
+      - { key: spring.kafka.producer.value-serializer,   fills: produces,
+          "on": { protocol: kafka, direction: outbound } }
+      - { key: spring.kafka.consumer.value-deserializer, fills: consumes,
+          "on": { protocol: kafka, direction: inbound } }
+    values:
+      # The producer side's own three classes. A deserializer key normally
+      # names a *Deserializer class, so those spellings are declared beside
+      # them: one map serves both rules, and a class absent from it stamps
+      # nothing rather than guessing.
+      org.springframework.kafka.support.serializer.JsonSerializer: application/json
+      org.springframework.kafka.support.serializer.JsonDeserializer: application/json
+      org.apache.kafka.common.serialization.StringSerializer: text/plain
+      org.apache.kafka.common.serialization.StringDeserializer: text/plain
+      org.apache.kafka.common.serialization.ByteArraySerializer: application/octet-stream
+      org.apache.kafka.common.serialization.ByteArrayDeserializer: application/octet-stream

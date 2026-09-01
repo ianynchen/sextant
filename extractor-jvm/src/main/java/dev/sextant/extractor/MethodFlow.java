@@ -15,6 +15,7 @@ import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
+import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
 import org.objectweb.asm.tree.analysis.AnalyzerException;
 import org.objectweb.asm.tree.analysis.Frame;
@@ -85,6 +86,89 @@ public final class MethodFlow {
                                    arguments));
         }
         return lines;
+    }
+
+    /** D00 §5's {@code field_write}: constructors only, direct traces only. A
+     *  {@code <init>} body's {@code ALOAD 0; xLOAD k; PUTFIELD} — with nothing
+     *  in between — assigns parameter N straight to a field, and that triple
+     *  is the whole rule. No dataflow pass is needed for it, unlike {@link
+     *  #callSites}: the shape is syntactic, and a computed assignment
+     *  (concatenation, a default expression, anything but the bare load)
+     *  simply never presents the triple, so it emits nothing and the
+     *  resolution that would have followed it degrades honestly rather than
+     *  guessing a source.
+     *
+     *  <p>Scanned against the instruction list with label/line-number/frame
+     *  pseudo-instructions filtered out first — they carry no opcode and are
+     *  not computation, so their presence between the three real instructions
+     *  must not count as "something intervened". */
+    public static List<String> fieldWrites(String documentId, MethodNode method) {
+        if (!"<init>".equals(method.name)) return List.of();
+        int[] parameterSlots = parameterSlotsOf(method.desc);
+        List<AbstractInsnNode> real = new ArrayList<>();
+        for (AbstractInsnNode insn : method.instructions) {
+            if (insn.getOpcode() >= 0) real.add(insn);
+        }
+        List<String> lines = new ArrayList<>();
+        for (int i = 0; i + 2 < real.size(); i++) {
+            if (!(real.get(i) instanceof VarInsnNode receiverLoad)
+                    || receiverLoad.getOpcode() != Opcodes.ALOAD || receiverLoad.var != 0) {
+                continue;
+            }
+            if (!(real.get(i + 1) instanceof VarInsnNode valueLoad) || !isLoad(valueLoad.getOpcode())) {
+                continue;
+            }
+            if (!(real.get(i + 2) instanceof FieldInsnNode put) || put.getOpcode() != Opcodes.PUTFIELD) {
+                continue;
+            }
+            int parameterIndex = indexOfSlot(parameterSlots, valueLoad.var);
+            if (parameterIndex < 0) continue;
+            lines.add(fieldWriteJson(documentId, put, parameterIndex));
+        }
+        return lines;
+    }
+
+    /** One of the five {@code xLOAD} opcodes — {@code ILOAD} through {@code
+     *  ALOAD} are contiguous in the JVM's own numbering. */
+    private static boolean isLoad(int opcode) {
+        return opcode >= Opcodes.ILOAD && opcode <= Opcodes.ALOAD;
+    }
+
+    /** The local slot each declared parameter starts at, slot 0 being {@code
+     *  this} (a constructor is never static). {@code long}/{@code double}
+     *  occupy two slots, so a parameter's own index and its starting slot
+     *  agree only up to the first wide one — the mapping the two-slot fixture
+     *  case pins. */
+    private static int[] parameterSlotsOf(String descriptor) {
+        Type[] parameterTypes = Type.getArgumentTypes(descriptor);
+        int[] slots = new int[parameterTypes.length];
+        int slot = 1;
+        for (int i = 0; i < parameterTypes.length; i++) {
+            slots[i] = slot;
+            slot += parameterTypes[i].getSize();
+        }
+        return slots;
+    }
+
+    /** The parameter index whose slot this is, or -1 when the loaded slot is
+     *  not a parameter's own starting slot at all — {@code this} itself, a
+     *  local declared inside the constructor body, or the second slot of a
+     *  wide parameter loaded on its own (which no real bytecode does, since a
+     *  {@code long}/{@code double} load always names the first slot). */
+    private static int indexOfSlot(int[] parameterSlots, int slot) {
+        for (int i = 0; i < parameterSlots.length; i++) {
+            if (parameterSlots[i] == slot) return i;
+        }
+        return -1;
+    }
+
+    private static String fieldWriteJson(String documentId, FieldInsnNode field, int fromParameter) {
+        TreeMap<String, String> fact = new TreeMap<>();
+        fact.put("kind", JsonOut.string("field_write"));
+        fact.put("document_id", JsonOut.string(documentId));
+        fact.put("field", JsonOut.string(field.owner + "#" + field.name + "."));
+        fact.put("from_parameter", String.valueOf(fromParameter));
+        return JsonOut.object(fact);
     }
 
     /** {@code SourceInterpreter}, except that **moving or re-typing a value is
@@ -269,6 +353,16 @@ public final class MethodFlow {
                 && Type.getType(field.desc).getSort() == Type.OBJECT
                 && Type.getType(field.desc).getInternalName().equals(field.owner)) {
             return argument("enum", null, JsonOut.string(field.owner + "#" + field.name + "."), null);
+        }
+        // Any remaining GETFIELD/GETSTATIC producer — the enum-constant shape
+        // above always wins first, so this is everything that shape rejected:
+        // an instance field read, or a static field whose type is not its own
+        // owner. D00 §5's `field` kind, the cross-language "this argument
+        // reads a declared field" contract; the JVM mapping is a symbol
+        // reference to the field itself, the same bare-descriptor grammar the
+        // `enum` branch above already uses.
+        if (producer instanceof FieldInsnNode field) {
+            return argument("field", null, JsonOut.string(field.owner + "#" + field.name + "."), null);
         }
         // `NEW Type; DUP; INVOKESPECIAL <init>` — and the value that reaches an
         // argument slot is the one the NEW pushed, never the constructor's:

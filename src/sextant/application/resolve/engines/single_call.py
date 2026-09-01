@@ -24,8 +24,10 @@ from sextant.application.resolve.shapes.arguments import (
     _arg_at,
     _capture_resolved,
     _linked_constructor,
+    address_argument,
     argument_descriptor,
     channel_of,
+    field_facts,
     linked_channels,
     supertypes_of,
     url_of,
@@ -88,6 +90,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         for wrapper in record_wrappers
     }
     supertypes = supertypes_of(workspace)
+    # Read once per run, the same `_rules_of`/`_enum_symbols` precedent (2F
+    # design §4) — None for a catalog declaring no `field_sources` block, in
+    # which case no address argument ever consults the field ladder.
+    field_sources = field_facts(workspace, catalog)
     # `arguments` is parsed once, here, rather than once per reader: the
     # `call_sites` query returns it as raw JSON text, and both the matching
     # loop below and the `call_wrappers` one-hop (over a *different* call
@@ -193,6 +199,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # own `channel_arg` positions are never themselves string literals
         # (a `Queue`/`Collection` instance, always linked), so the ladder's
         # first rung never fires there and every frozen row is unchanged.
+        #
+        # An address argument the scanner read as a FIELD (D00 §5, 2F) climbs
+        # the field ladder first (`address_argument`, 2F design §4): where the
+        # catalog's own `field_sources` block lets it name the configuration
+        # expression behind that field, the argument is replaced by that
+        # expression as a string literal, and every rung below — the literal
+        # read, `channel_via`, CP-2's split — behaves exactly as it does for a
+        # url written at the call site. Where it cannot, the argument is
+        # untouched and this is the pre-2F path unchanged.
+        url_argument = address_argument(url_argument, field_sources, facts)
         destinations: Sequence[tuple[str | None, str | None, str]]
         read_destination = channel_of if "channel_arg" in method else url_of
         if "channel_via" in method:

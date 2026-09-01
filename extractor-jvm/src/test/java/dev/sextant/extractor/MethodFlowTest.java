@@ -106,6 +106,31 @@ class MethodFlowTest {
             + "\"symbol\":\"" + OWNER + "$Mode#FAST.\"}]"), line);
     }
 
+    /** The ordering pin: {@code BigDecimal.ZERO} takes the exact enum-constant
+     *  shape (a GETSTATIC of a field typed as its own owner) on a class that
+     *  declares no {@code ACC_ENUM} at all, so it must still read {@code enum}
+     *  rather than fall through to the {@code field} branch that follows it —
+     *  the enum check has to run first, and this is what would break first if
+     *  it did not. */
+    @Test
+    void keeps_reading_big_decimal_zero_as_enum_even_though_it_is_not_a_language_enum()
+            throws Exception {
+        String line = callSites("bigDecimalZeroArgument").get(0);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"enum\","
+            + "\"symbol\":\"java/math/BigDecimal#ZERO.\"}]"), line);
+    }
+
+    /** A GETFIELD that is not the enum-constant shape — D00 §5's {@code field}
+     *  kind, the cross-language "this argument reads a declared field"
+     *  contract. Strictly additive: before this, the slot read as {@code
+     *  unresolved}. */
+    @Test
+    void captures_a_field_read_as_a_symbol_reference() throws Exception {
+        String line = callSites("fieldArgument").get(0);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"field\","
+            + "\"symbol\":\"" + OWNER + "#url.\"}]"), line);
+    }
+
     @Test
     void captures_a_class_literal_as_a_symbol_reference() throws Exception {
         String line = callSites("classLiteral").get(0);
