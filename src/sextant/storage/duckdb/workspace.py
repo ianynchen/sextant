@@ -311,16 +311,17 @@ _NAMED_QUERIES = {
 }
 
 # The tables a bundle carries (D06 §5). `documents`, `endpoints`,
-# `resolved_config`, `shapes`, `shape_fields` and `call_sites` export through
-# their named query, so the row order is the one NFR-1 already fixed;
-# `symbols` and `annotations` have no named query and export through their
-# own ordered SELECT below, for the same reason. Sorted by name so the
-# manifest's contents list is deterministic too.
+# `resolved_config`, `shapes`, `shape_fields`, `call_sites` and
+# `open_questions` (2G Task 8) export through their named query, so the row
+# order is the one NFR-1 already fixed; `symbols` and `annotations` have no
+# named query and export through their own ordered SELECT below, for the same
+# reason. Sorted by name so the manifest's contents list is deterministic too.
 _EXPORTED_TABLES = (
     "annotations",
     "call_sites",
     "documents",
     "endpoints",
+    "open_questions",
     "resolved_config",
     "shape_fields",
     "shapes",
@@ -330,6 +331,7 @@ _EXPORTED_TABLES = (
 _EXPORT_QUERIES = {
     "documents": _NAMED_QUERIES["documents"],
     "endpoints": _NAMED_QUERIES["endpoints"],
+    "open_questions": _NAMED_QUERIES["open_questions"],
     "resolved_config": _NAMED_QUERIES["resolved_config"],
     "shapes": _NAMED_QUERIES["shapes"],
     "shape_fields": _NAMED_QUERIES["shape_fields"],

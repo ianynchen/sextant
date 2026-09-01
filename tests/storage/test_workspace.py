@@ -632,6 +632,7 @@ def test_exported_tables_read_back_equal_to_the_workspace_query(tmp_path: Path):
         "call_sites",
         "documents",
         "endpoints",
+        "open_questions",
         "resolved_config",
         "shape_fields",
         "shapes",
@@ -644,6 +645,36 @@ def test_exported_tables_read_back_equal_to_the_workspace_query(tmp_path: Path):
     assert len(back) == workspace_count
     assert workspace_count > 0
     workspace.close()
+
+
+def test_exported_tables_include_open_questions(tmp_path: Path):
+    """2G Task 8: `open_questions` joins the D06 bundle the same way every
+    other resolve-owned table does — Parquet beside its siblings, read back
+    through the same named query the ledger's own row shape already fixes
+    (2G design §6)."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    workspace.derive(
+        "open_questions_insert",
+        rows=[
+            {
+                "protocol": "kafka",
+                "method": None,
+                "path": "order-events",
+                "question": "format_conflict",
+                "candidates": json.dumps(
+                    [{"format": "json", "seen_in": "consumes", "why": "application/json"}]
+                ),
+                "evidence": "rung 2 (declared media): json from consumes (application/json)",
+            }
+        ],
+    )
+    written = workspace.export_tables(tmp_path / "bundle")
+    workspace.close()
+    assert "open_questions" in written
+    back = duckdb.sql(
+        f"SELECT * FROM read_parquet('{tmp_path / 'bundle' / 'graph' / 'open_questions.parquet'}')"
+    ).fetchall()
+    assert len(back) == 1
 
 
 def test_two_exports_of_one_workspace_are_byte_identical(tmp_path: Path):

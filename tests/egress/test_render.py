@@ -289,7 +289,8 @@ def test_outbound_row_with_no_path_renders_unresolved_in_the_endpoint_column():
     text = render_module_document(MODULE, report, "a3f91c")
     assert (
         "| `GET (unresolved)` | unresolved | "
-        "`com/acme/orders/clients/InventoryWebClient#search(String).` | unresolved |"
+        "`com/acme/orders/clients/InventoryWebClient#search(String).` | "
+        "unresolved | unresolved |"
     ) in text
 
 
@@ -319,7 +320,8 @@ def test_outbound_row_with_no_method_renders_unresolved_in_the_endpoint_column()
     text = render_module_document(MODULE, report, "a3f91c")
     assert (
         "| `(unresolved) /billing/passed-verb` | unresolved | "
-        "`com/acme/orders/clients/BillingRestTemplate#relay(String).` | unresolved |"
+        "`com/acme/orders/clients/BillingRestTemplate#relay(String).` | "
+        "unresolved | unresolved |"
     ) in text
 
 
@@ -345,7 +347,8 @@ def test_kafka_inbound_row_renders_verbless_with_no_unresolved_marker():
     text = render_module_document(MODULE, report, "a3f91c")
     assert (
         "| `kafka order-events` | "
-        "`com/acme/orders/listeners/OrderEventsListener#onMessage(String).` | - → - | resolved |"
+        "`com/acme/orders/listeners/OrderEventsListener#onMessage(String).` | - → - | "
+        "unresolved | resolved |"
     ) in text
     assert "(unresolved)" not in text
 
@@ -372,7 +375,7 @@ def test_kafka_row_with_null_path_renders_unresolved_identity():
     text = render_module_document(MODULE, report, "a3f91c")
     assert (
         "| `kafka (unresolved)` | unresolved | "
-        "`com/acme/orders/OrderEventsProducer#send(Order).` | unresolved |"
+        "`com/acme/orders/OrderEventsProducer#send(Order).` | unresolved | unresolved |"
     ) in text
 
 
@@ -399,7 +402,7 @@ def test_inbound_row_with_no_handler_renders_unresolved_in_the_handler_column():
         coverage={"documents": 1, "partial_documents": 0},
     )
     text = render_module_document(MODULE, report, "a3f91c")
-    assert "| `GET /v1/orders` | unresolved | - → - | unresolved |" in text
+    assert "| `GET /v1/orders` | unresolved | - → - | unresolved | unresolved |" in text
 
 
 def test_messaging_gap_retires_and_both_lists_rotate_together():
@@ -457,7 +460,7 @@ def test_inbound_media_column_joins_declared_lists():
     text = render_module_document(MODULE, report, "a3f91c")
     assert (
         "| `POST /v1/orders/detailed` | `com/acme/C#createDetailed().` | "
-        "application/json → application/json | resolved |"
+        "application/json → application/json | unresolved | resolved |"
     ) in text
 
 
@@ -495,9 +498,10 @@ def test_inbound_media_column_shows_a_dash_on_either_or_both_null_sides():
     )
     text = render_module_document(MODULE, report, "a3f91c")
     assert (
-        "| `GET /v1/orders/{id}` | `com/acme/C#get().` | - → application/json | resolved |"
+        "| `GET /v1/orders/{id}` | `com/acme/C#get().` | - → application/json | "
+        "unresolved | resolved |"
     ) in text
-    assert "| `GET /v1/orders` | `com/acme/C#list().` | - → - | resolved |" in text
+    assert "| `GET /v1/orders` | `com/acme/C#list().` | - → - | unresolved | resolved |" in text
 
 
 def test_coverage_section_names_environments_and_the_unresolved_key_with_its_reason():

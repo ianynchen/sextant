@@ -135,6 +135,8 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
             _commit_of(path),
             result.uncovered,
             resolved_config=workspace.query("resolved_config"),
+            schema_sources_not_compiled=result.schema_sources_not_compiled,
+            descriptors_not_interpreted=result.descriptors_not_interpreted,
         )
     finally:
         workspace.close()
@@ -198,6 +200,7 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             tuple(metadata.get("uncovered", [])),
             shape_fields=workspace.query("shape_fields"),
             resolved_config=workspace.query("resolved_config"),
+            open_questions=workspace.query("open_questions"),
         )
         target = workspace_dir / "render" / "architecture.md"
         target.parent.mkdir(parents=True, exist_ok=True)

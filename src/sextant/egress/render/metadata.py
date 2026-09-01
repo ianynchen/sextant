@@ -43,6 +43,8 @@ def write_metadata(
     commit: str,
     uncovered: tuple[str, ...] = (),
     resolved_config: Sequence[dict[str, object]] = (),
+    schema_sources_not_compiled: tuple[str, ...] = (),
+    descriptors_not_interpreted: tuple[str, ...] = (),
 ) -> None:
     """Written as the final act of analyze (D05 §3), so it exists whenever the
     workspace does and always describes the graph beside it."""
@@ -83,6 +85,12 @@ def write_metadata(
         # Which compiled sources the facts do not account for (FR-17). Listed
         # in full rather than counted: a count cannot be acted on.
         "uncovered": list(uncovered),
+        # Task 4's own two analyze-side gap fields, carried the same way
+        # `uncovered` is (FR-17): named in full, never counted, so a `.proto`
+        # root protoc refused to compile or an embedded schema the
+        # interpreter could not turn into a shape can be acted on by name.
+        "schema_sources_not_compiled": list(schema_sources_not_compiled),
+        "descriptors_not_interpreted": list(descriptors_not_interpreted),
         "endpoints": {"inbound": inbound, "outbound": outbound},
         # The count says how much was expanded; the list says what was not, by
         # name. Both, because a reader who only knows how many shapes exist
