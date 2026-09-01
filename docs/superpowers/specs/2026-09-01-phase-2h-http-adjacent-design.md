@@ -38,14 +38,14 @@ default-to-method-name vocabulary and an existing `{a}.{b}` path composition; th
 checkpoint proved live that neither exists (all three frameworks declare their field
 attribute `default ""`, which never materializes into bytecode, so an absent value
 derived `path: ''` at `resolved`/`compiler` — four actively wrong rows; and a
-method-level `typeName` can never reach the class-prefix CTE). The ruling: two
-**framework-neutral vocabulary additions** to `annotation_driven` — (1) a declared
-name that falls back to the annotated construct's own name when the attribute is
-absent, and (2) a dotted composition of two attribute values where the second falls
-back per (1) — the `channel_via`/`field_sources` precedent: vocabulary grows for a
-genuinely new declaration pattern; framework names stay in catalogs. **The
-zero-engine-change acceptance test moves to where it is meaningful: Netflix DGS and
-MicroProfile GraphQL must ride the two new forms with zero further engine change.**
+method-level `typeName` can never reach the class-prefix CTE). The ruling: four
+**framework-neutral vocabulary keys** in two forms to `annotation_driven` — fallback
+naming (`path_fallback`) and qualified composition with its guard (`qualifier_from`,
+`qualifier_separator`, `requires_qualifier`), confirmed in checkpoint amendment
+(2026-09-01, ledger + D02) — the `channel_via`/`field_sources` precedent: vocabulary
+grows for a genuinely new declaration pattern; framework names stay in catalogs.
+**The zero-engine-change acceptance test moves to where it is meaningful: Netflix DGS
+and MicroProfile GraphQL must ride the four new keys with zero further engine change.**
 
 - **`spring-graphql.yml`**: `@QueryMapping` → `method: query`, `@MutationMapping` →
   `mutation`, `@SubscriptionMapping` → `subscription`; field name from the annotation

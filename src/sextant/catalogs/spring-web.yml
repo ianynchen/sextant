@@ -85,8 +85,8 @@ known_types:
 #
 # Two evidence kinds, media first:
 #
-# `hint_media` — the row's own `consumes`/`produces` names the envelope. An
-#   HTTP media declaration, so it is duplicated on `spring-mvc.yml` exactly as
+# `hint_media` — reads the row's `produces` only, in every direction (consumes means
+#   "accepts event-stream request bodies", never stream-serving evidence). An HTTP media declaration, so it is duplicated on `spring-mvc.yml` exactly as
 #   `media_formats` below is, and for the same reason: this family ships two
 #   catalogs that each own the HTTP protocol, and a module pulling in only one
 #   of them must still get the vocabulary. The pass UNIONS the two lists (and

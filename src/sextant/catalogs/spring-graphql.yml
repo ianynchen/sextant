@@ -89,7 +89,7 @@ matches:
 # is negotiable but the payload envelope is not — so the format is a property
 # of the protocol rather than of anything a handler declares. Every catalog
 # owning this protocol carries the identical entry; the ladder refuses a
-# contradiction between two catalogs rather than picking one, so the three
+# contradiction between two catalogs rather than picking one, so the four
 # copies cannot drift silently.
 format_fixed:
   graphql: json
