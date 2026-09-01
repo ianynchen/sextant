@@ -1480,6 +1480,33 @@ matches: {{}}
     assert [c.protocol for c in loaded] == ["jms", "kafka", "pubsub", "sqs"]
 
 
+def test_the_http_adjacent_protocols_load(tmp_path):
+    """2H design §1's closed-set line: D00's protocol set gains `graphql`,
+    `websocket` and `sse`, declared once and used across the phase.
+
+    All three are added together even though only `graphql` has a catalog in
+    this task. The set is closed on purpose (NFR-5) — a value outside it is a
+    typo, not a new kind of endpoint — so the cost of a member the phase has
+    not reached yet is one enum line, while the cost of adding them one task
+    at a time is three schema changes to the same closed set. Loading order is
+    by filename (NFR-1), which is why the assertion is a list rather than a
+    set."""
+    _minimal_catalog = """id: {id}
+style: annotation_driven
+protocol: {protocol}
+direction: inbound
+matches: {{}}
+"""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    for protocol in ("graphql", "websocket", "sse"):
+        filename = f"x-{protocol}.yml"
+        content = _minimal_catalog.format(id=filename.replace(".yml", ""), protocol=protocol)
+        (tmp_path / filename).write_text(content, encoding="utf-8")
+
+    loaded = YamlCatalogSource(tmp_path).load()
+    assert [c.protocol for c in loaded] == ["graphql", "sse", "websocket"]
+
+
 def test_message_is_no_longer_a_protocol(tmp_path):
     """The 'message' protocol value is rejected as a closed-set violation.
 

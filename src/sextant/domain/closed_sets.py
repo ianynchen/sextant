@@ -52,6 +52,21 @@ class Protocol(StrEnum):
     JMS = "jms"
     SQS = "sqs"
     PUBSUB = "pubsub"
+    # 2H design §1. The three HTTP-adjacent protocols, added in one edit
+    # because the set is closed (NFR-5): a member the phase has not reached
+    # yet costs one line here, while adding them one task at a time costs
+    # three schema changes to the same set. `graphql` is consumed this task;
+    # `websocket` and `sse` by later ones.
+    #
+    # Each is its own protocol rather than a flavour of `http` because D01's
+    # wire identity is protocol-scoped and none of the three IS an HTTP route:
+    # a GraphQL schema is N boundaries behind one POST path, a WebSocket
+    # connection fans into N destinations, and an SSE stream is a route whose
+    # return type turned it into something a request/response comparison
+    # cannot match against.
+    GRAPHQL = "graphql"
+    WEBSOCKET = "websocket"
+    SSE = "sse"
 
 
 class Direction(StrEnum):
