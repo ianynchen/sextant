@@ -937,6 +937,49 @@ def test_a_plain_dto_still_expands_from_bytecode_exactly_as_before(tmp_path):
     assert field_of(workspace, ORDER_REQUEST, "reference")["field_number"] is None
 
 
+def test_a_declared_shape_that_refers_to_itself_terminates(tmp_path):
+    """Protobuf permits recursive messages (`message Node { Node parent = 1;
+    }`) — mirrors `test_a_type_that_refers_to_itself_terminates` above for
+    the declared-shape path: `object` is a reference to another shape, never
+    an inlining (ruling F1), so a declared shape's own recursion needs no
+    depth counter either, only the same each-shape-expanded-once discipline
+    `derive_shapes`'s `expanded` set already provides."""
+    node = "com/acme/orders/proto/NodeProtos$Node#"
+    root = tmp_path / "facts"
+    _write(
+        root / "NodeProtos.jsonl",
+        _document("doc_proto_node", "com/acme/orders/proto/NodeProtos.java"),
+        [
+            DeclaredShapeFact(
+                document_id="doc_proto_node",
+                symbol=node,
+                schema_name="sextant.orders.Node",
+                schema_format="protobuf",
+                origin="compiled",
+                evidence="compiler",
+                fields=[
+                    DeclaredFieldFact(
+                        name="parent",
+                        wire_name="parent",
+                        field_number=1,
+                        wire_type="object",
+                        required=False,
+                        nullable=True,
+                        shape_ref=node,
+                    )
+                ],
+            ).model_dump(mode="json")
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_shapes(workspace, _CATALOG, [node])
+
+    assert [s["shape_id"] for s in workspace.query("shapes")] == [node]
+    assert shape_of(workspace, node)["open"] is False
+    assert json.loads(field_of(workspace, node, "parent")["item"])["shape_id"] == node
+
+
 # --- Nullability and presence (Task 11) --------------------------------------
 
 

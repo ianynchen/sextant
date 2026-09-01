@@ -178,10 +178,14 @@ def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
 
 def _declared_shapes(workspace: Workspace) -> dict[str, dict[str, Any]]:
     """Every `declared_shape` fact (2G design §3), keyed by its own `symbol` —
-    the lookup a payload type reference meets once expansion reaches it. A
-    compiled shape's symbol is the generated class it travels as, so this is
-    the same grammar `_declared_fields` above keys bytecode owners on, and a
-    `shape_id` this pass reaches through a field reference joins either map.
+    the lookup a payload type reference meets once expansion reaches it.
+    `bare_descriptor` normalizes the key the same way `_declared_fields`
+    above normalizes its owners: a compiled shape's symbol is the generated
+    class it travels as (bare today, since that is what `JvmGeneratedNaming`
+    emits), but nothing here should depend on a naming implementation never
+    prefixing one with module coordinates — normalizing both maps the same
+    way is what makes "either map" below actually true rather than true by
+    accident.
 
     A symbol may legitimately arrive more than once — a shared nested type is
     declared once per schema payload that inlines it (2G design §3's own
@@ -190,7 +194,7 @@ def _declared_shapes(workspace: Workspace) -> dict[str, dict[str, Any]]:
     never depends on read order (NFR-1).
     """
     return {
-        str(row["symbol"]): {
+        bare_descriptor(str(row["symbol"])): {
             "evidence": str(row["evidence"]),
             "fields": json.loads(str(row["fields"])),
         }

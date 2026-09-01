@@ -104,18 +104,20 @@ _NAMED_QUERIES = {
     # Every `declared_shape` fact (2G design §3), keyed by its own `symbol` —
     # the generated class a compiled schema type travels as, or the schema's
     # own full name for a source-origin one — with its `fields` JSON array
-    # carried through verbatim for the expansion pass to project. Ordered by
-    # `(symbol, document_id)`, the same tiebreak the interpreter's own sort
-    # uses for a symbol that legitimately arrives twice (a shared nested type
-    # inlined into more than one schema payload), so which occurrence wins a
-    # dict keyed on `symbol` never depends on read order (NFR-1).
+    # carried through verbatim for the expansion pass to project. Only the
+    # columns expansion actually reads: `schema_name`/`schema_format`/`origin`
+    # are DR-4 precedence's own concern, already settled upstream (`analyze`'s
+    # `_prefer_compiled`) before a fact ever reaches this table — reselecting
+    # `origin` here would read as if precedence lived in this query too.
+    # Ordered by `(symbol, document_id)`, the same tiebreak the interpreter's
+    # own sort uses for a symbol that legitimately arrives twice (a shared
+    # nested type inlined into more than one schema payload), so which
+    # occurrence wins a dict keyed on `symbol` never depends on read order
+    # (NFR-1).
     "declared_shapes": """
-        SELECT payload ->> 'symbol'        AS symbol,
-               payload ->> 'schema_name'   AS schema_name,
-               payload ->> 'schema_format' AS schema_format,
-               payload ->> 'origin'        AS origin,
-               payload ->> 'evidence'      AS evidence,
-               payload ->  'fields'        AS fields
+        SELECT payload ->> 'symbol'   AS symbol,
+               payload ->> 'evidence' AS evidence,
+               payload ->  'fields'   AS fields
         FROM raw_facts WHERE kind = 'declared_shape'
         ORDER BY symbol, document_id
     """,
