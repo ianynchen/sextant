@@ -223,6 +223,16 @@ identity as a whole is not settled*. A reader must consult `format_resolution` b
 believing `format`, and a renderer must not print a non-`resolved` format unhedged
 ([D06](D06-bundle-format.md) §5a).
 
+**The exception is shipped semantics with no live surface today**, and both halves of that
+matter. The merge is the last statement of the endpoint derivation and the ladder is the
+last pass of a resolve, so both format columns are still NULL when the merge runs and every
+row is answered afterwards — on every live row the pair holds, `format` NULL exactly when
+`format_resolution` is `unresolved`. The rule is written down, and readers and renderers
+must honour it, because the branch becomes reachable the day anything stamps a format
+before the merge — a derivation that reads one off a declaration, or a reordered pipeline —
+and the failure mode then is a silently discarded half, indistinguishable from a module
+that declared no format.
+
 **Inbound and outbound share one `endpoints` table** with a `direction` column taking
 `inbound`, `outbound` or `both`. Two near-identical tables were the alternative, and were
 measured as a mistake.

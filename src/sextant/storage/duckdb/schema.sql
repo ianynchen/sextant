@@ -52,7 +52,13 @@ CREATE TABLE IF NOT EXISTS endpoints (
     -- which is the honest reading of one wire whose two halves were not
     -- equally observable. A reader must therefore treat
     -- `format_resolution` as the authority on trust and `format` as an
-    -- answer that may still be worth showing beside it.
+    -- answer that may still be worth showing beside it. **That branch has
+    -- no live surface today** (merge_endpoints.sql's own header): the merge
+    -- is the last statement of `derive_endpoints` and the ladder is the last
+    -- pass of a resolve, so both columns are still NULL when the merge runs
+    -- and the ladder answers every row afterwards — the pair holds on every
+    -- live row, and the exception becomes reachable only if a later phase
+    -- stamps a format before the merge.
     format            TEXT,
     format_resolution TEXT
 );

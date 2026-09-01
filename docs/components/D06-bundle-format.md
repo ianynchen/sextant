@@ -176,7 +176,10 @@ The hedge covers the merge exception too ([D01](D01-graph-schema.md) §3): a mer
 keeping a non-NULL `format` beside the weaker of its two halves' markers reads
 `protobuf (assumed)`, never plain. Printing it plain would make an unsettled value
 typographically identical to an observed one, which is exactly what "an assumed format must
-never look observed" forbids.
+never look observed" forbids. **No row reaches the renderer that way today** — the ladder
+runs after the merge and answers every row, so the pair holds live — but the rendering rule
+is written against the column's contract rather than against today's data, which is what
+makes it still correct on the day a format is stamped before the merge.
 
 **Declared shapes render through the existing shape tables unchanged**, with one addition:
 a field's `field_number` rides beside its wire name as `totalAmount (1)` where the format
