@@ -1160,6 +1160,213 @@ def test_a_value_returning_stomp_handler_with_no_sendto_derives_an_unresolved_re
     assert json.loads(reply["request_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
 
 
+# --- 2H Task 6: `protocol_hint`, live on real bytecode -------------------
+#
+# Pinned from the live run this task froze: still 115 endpoints, extractor
+# 9.9. Nothing here adds a row — every assertion below is about rows that
+# already existed reading a different protocol.
+
+
+def _route(report: ResolveReport, path: str) -> dict:
+    [row] = [e for e in report.endpoints if e["path"] == path and e["handler"] is not None]
+    return row
+
+
+def test_the_two_sse_routes_reclassify_one_by_each_evidence_kind(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """2H design §6, live. Both of `OrderEventsController`'s `@GetMapping`
+    routes derive as ordinary HTTP rows — nothing in the annotation says SSE —
+    and the `protocol_hint` pass moves both, each on a DIFFERENT evidence
+    kind, which is exactly why the fixture carries two:
+
+    * `/events/stream` declares `produces = TEXT_EVENT_STREAM_VALUE`, so the
+      MEDIA rung answers it off the row's own `produces` column. Its return
+      type would have answered too — but the media rung runs first, and the
+      column is there to be read.
+    * `/events/emitter` declares NO `produces` at all. Its media column is
+      NULL, so the media rung has nothing, and only the RETURN-TYPE rung can
+      reach it. Without this row the return-type rung would have no live
+      surface at all.
+
+    The two return types are also the two ends of the "marker anywhere in the
+    chain" rule (checkpoint answer 6, frozen off this same bytecode):
+    `emitterEvents` returns `SseEmitter` FLAT — no type arguments, the marker
+    IS the outer symbol — while `streamEvents` returns
+    `Flux<ServerSentEvent<OrderView>>`, whose outer symbol is an ordinary
+    reactive wrapper and whose marker sits in the MIDDLE link. A rule reading
+    only `returns.symbol` would answer the first and miss the second.
+
+    Everything else about both rows is untouched: same direction, same verb,
+    same path, same handler, same catalog, same `resolution`. This pass
+    writes one column."""
+    _, report = resolved_fixture
+    emitter, stream = _route(report, "/events/emitter"), _route(report, "/events/stream")
+
+    assert (emitter["protocol"], stream["protocol"]) == ("sse", "sse")
+    # Which evidence answered which, read off the rows' own columns.
+    assert emitter["produces"] is None and emitter["consumes"] is None
+    assert stream["produces"] == '["text/event-stream"]'
+    assert (
+        json.loads(emitter["handler_signature"])["returns"]["symbol"]
+        == "org/springframework/web/servlet/mvc/method/annotation/SseEmitter#"
+    )
+    returns = json.loads(stream["handler_signature"])["returns"]
+    assert returns["symbol"] == "reactor/core/publisher/Flux#"
+    assert returns["arguments"][0]["symbol"] == "org/springframework/http/codec/ServerSentEvent#"
+
+    for row in (emitter, stream):
+        assert row["direction"] == "inbound"
+        assert row["method"] == "GET"
+        assert row["resolution"] == "resolved"
+        # The catalog that DERIVED the row, unchanged: this pass reclassifies
+        # a row, it does not re-attribute it, and `spring-web.yml` is both the
+        # deriving catalog and the one whose `protocol_hint` block moved it.
+        assert row["catalog_id"] == "spring-web"
+    assert emitter["handler"].endswith("OrderEventsController#emitterEvents(sig_6e650372).")
+    assert stream["handler"].endswith("OrderEventsController#streamEvents(sig_ed469b30).")
+
+
+def test_nothing_but_the_two_sse_routes_moves(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """The pass's three promises, read off the whole live table rather than
+    off the two rows it touched.
+
+    *Scoped.* Only `spring-mvc.yml`/`spring-web.yml` declare a
+    `protocol_hint`, and both are `protocol: http`, so an http row is the only
+    thing that CAN move — the graphql, websocket and messaging rows are
+    untouchable rather than merely untouched. Their counts are the same
+    numbers their own tasks froze.
+
+    *No row created or removed.* 115 before, 115 after: the two rows left the
+    http bucket and arrived in the sse one, and nothing else changed size.
+
+    *Every other http row stayed.* The http bucket is exactly two smaller,
+    and the identities it lost are exactly the two SSE paths — pinned by
+    subtracting them rather than by re-listing 30-odd routes, so a row moving
+    for the wrong reason shows up as a missing identity here."""
+    _, report = resolved_fixture
+    counts: dict[object, int] = {}
+    for row in report.endpoints:
+        counts[row["protocol"]] = counts.get(row["protocol"], 0) + 1
+
+    assert counts == {
+        "graphql": 11,
+        "http": 54,
+        "jms": 8,
+        "kafka": 22,
+        "pubsub": 6,
+        "sqs": 7,
+        "sse": 2,
+        "websocket": 5,
+    }
+    assert sum(counts.values()) == len(report.endpoints) == 115
+    assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
+        "/events/emitter",
+        "/events/stream",
+    }
+    # The http rows the reclassification did NOT take, by wire identity: every
+    # inbound route the fixture still exposes over plain HTTP.
+    assert not {e["path"] for e in report.endpoints if e["protocol"] == "http"} & {
+        "/events/emitter",
+        "/events/stream",
+    }
+
+
+def test_the_websocket_frame_row_is_untouched_by_the_reclassification(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`/live` is the nearest neighbour this pass has — another streaming,
+    long-lived, HTTP-adjacent channel — and it is out of reach: its protocol
+    is `websocket`, which no catalog names as a hint SOURCE, so no evidence on
+    it could move it even if it carried some.
+
+    Re-pinned whole rather than by protocol alone (Task 5 froze these same
+    values): a raw frame stays untyped and its format stays `unresolved`,
+    which is the one live row in this fixture proving the SSE work put nothing
+    new into the ladder's weakest rung."""
+    _, report = resolved_fixture
+    row = _websocket_row(report, "inbound", "/live")
+
+    assert row["protocol"] == "websocket"
+    assert (row["format"], row["format_resolution"]) == (None, "unresolved")
+    assert row["request_shape"] is None and row["response_shape"] is None
+
+
+def test_an_sse_rows_format_is_assumed_never_read_off_the_envelope(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """The format-honesty half of 2H design §6, live.
+
+    `text/event-stream` is deliberately absent from `media_formats` — it is
+    the ENVELOPE, not the payload — so `/events/stream` carries a declared
+    MIME string that the format ladder's rung 2 maps to nothing at all, and
+    falls past it. Both rows land on rung 5's framework default instead:
+    `json`, at `narrowed`, because Jackson is on this module's classpath and
+    NOTHING on either row states the wire.
+
+    `narrowed` is the whole point. An SSE event's `data:` line is JSON in
+    practice and by nobody's declaration, and `resolved` here would make that
+    convention look like an observation. The rendered document says `json
+    (assumed)`.
+
+    Rung 1 is NOT what answers these: `sse` has no `format_fixed` entry on any
+    catalog, because SSE's fixedness is the envelope only. The graphql rows
+    beside them, which DO have one, are re-pinned here as the contrast — the
+    same `(json, resolved)` Task 2 froze, unmoved by this pass."""
+    _, report = resolved_fixture
+
+    assert {
+        (e["path"], e["format"], e["format_resolution"])
+        for e in report.endpoints
+        if e["protocol"] == "sse"
+    } == {
+        ("/events/emitter", "json", "narrowed"),
+        ("/events/stream", "json", "narrowed"),
+    }
+    assert {
+        (e["format"], e["format_resolution"])
+        for e in report.endpoints
+        if e["protocol"] == "graphql"
+    } == {("json", "resolved")}
+
+
+def test_an_sse_rows_payload_stops_at_the_undeclared_envelope_type(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """**A gap, pinned as it really is.** 2H design §6 expects
+    `ServerSentEvent<T>` to unwrap through the existing PTR/generic machinery
+    so that `/events/stream`'s response shape reads `OrderView`. Live, it does
+    not: the shape pass unwraps `Flux` — `spring-web.yml`'s `wrappers` block
+    declares it — and then stops, because `ServerSentEvent` is declared in no
+    catalog's `wrappers` block at all, so it is treated as an ordinary payload
+    TYPE rather than an envelope to look through.
+
+    `SseEmitter` is the same shape for a different reason: it is a callback
+    handle, not a generic container, so nothing in a signature ever names the
+    events it will push and no unwrapping rule could reach a payload here.
+
+    Both types are third-party, so no field facts exist for them either and
+    both shapes are `open` — which is what keeps this honest rather than
+    wrong: the rendered document names them under "Not expanded, so the shapes
+    referring to it are open" rather than publishing an empty contract as a
+    complete one. This pass changes none of that; the pinned values are what
+    2H Task 1 already produced, now read under the true protocol."""
+    _, report = resolved_fixture
+    emitter, stream = _route(report, "/events/emitter"), _route(report, "/events/stream")
+
+    assert emitter["request_shape"] is None and stream["request_shape"] is None
+    assert (
+        json.loads(emitter["response_shape"])["shape_id"]
+        == "org/springframework/web/servlet/mvc/method/annotation/SseEmitter#"
+    )
+    assert (
+        json.loads(stream["response_shape"])["shape_id"]
+        == "org/springframework/http/codec/ServerSentEvent#"
+    )
+
+
 # --- Task 10: the three listener catalogs, end to end, on real bytecode ---
 
 
@@ -2237,6 +2444,13 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
     # media, `consumes` NULL. `emitterEvents` declares neither (no
     # `produces` on its own `@GetMapping`), so it carries no row here at
     # all.
+    #
+    # That fourth row reads `sse` as of 2H Task 6, and the MEDIA is why: the
+    # `protocol_hint` pass reclassified it off this very column. The MIME
+    # string it kept is unchanged — a stamp that never fired here still never
+    # fires — and it names a protocol, never a format (`spring-web.yml`'s
+    # `media_formats` says at length why `text/event-stream` is absent from
+    # that table).
     declared = {
         (e["protocol"], e["path"], e["consumes"], e["produces"])
         for e in report.endpoints
@@ -2246,7 +2460,7 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
         ("http", "/v1/orders/{id}", None, json_media),
         ("http", "/v1/orders/detailed", json_media, json_media),
         ("http", "/v1/orders/proto-orders", None, json_media),
-        ("http", "/events/stream", None, '["text/event-stream"]'),
+        ("sse", "/events/stream", None, '["text/event-stream"]'),
     }
 
 

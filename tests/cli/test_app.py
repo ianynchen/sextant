@@ -61,9 +61,13 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # endpoint). 2H Task 1: +2 more (`GET /events/emitter`, `GET
     # /events/stream` — `OrderEventsController`'s already-shipped
     # `@GetMapping` annotations derive as ordinary http endpoints today; a
-    # later 2H task reclassifies them to SSE) — see test_pipeline.py's own
+    # later 2H task reclassifies them to SSE). 2H Task 6 IS that task: -2,
+    # back to 32, and the two rows reappear under `sse` — the
+    # `protocol_hint` pass moves a row between buckets and never adds or
+    # removes one, so the TOTAL is untouched. See test_pipeline.py's own
     # dedicated row-level test for the full breakdown.
-    assert metadata["endpoints"]["inbound"]["http"] == 34
+    assert metadata["endpoints"]["inbound"]["http"] == 32
+    assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
 def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_path: Path):

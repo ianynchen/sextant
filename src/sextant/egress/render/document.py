@@ -80,6 +80,18 @@ _GAPS = [
     ),
 ]
 
+# The protocols whose verb is not an HTTP method, so the protocol name is
+# itself part of the identity a reader needs (D06, 2H design §1): `graphql
+# query orders` names an operation, while a bare `query orders` names nothing
+# in particular — `query` is not a word that implies its own protocol the way
+# `GET` does. `sse` is qualified for the mirror-image reason (2H design §6):
+# its verb IS an HTTP method, because an SSE stream is a route a client GETs,
+# and a bare `GET /events/stream` therefore reads as an ordinary REST route
+# and loses the one thing the reclassification established. HTTP, SOAP and
+# gRPC read correctly without the prefix, which is also what every pin
+# written before this expects.
+_PROTOCOL_QUALIFIED = frozenset({"graphql", "sse"})
+
 # D00 §4 closed-set protocol names whose wire identity has no verb: a Kafka
 # topic, a JMS destination, an SQS queue or a Pub/Sub topic is addressed, not
 # called, so there is no method to render beside the path.
@@ -93,17 +105,22 @@ _GAPS = [
 # protocol was never going to have one. The verbed half is also the stable
 # half: growth in D00's set is broker families, not new request-response
 # verbs.
-_VERBED_PROTOCOLS = frozenset({"http", "soap", "grpc", "graphql"})
+#
+# The qualified set is UNIONED in rather than repeated, so "every qualified
+# protocol is a verbed one" is structural. Stating it twice is what let `sse`
+# be added to one list and silently fall out of the other — a GET route
+# reclassified into the verbless half renders `sse /events/stream` and drops
+# the verb it does have.
+_VERBED_PROTOCOLS = frozenset({"http", "soap", "grpc"}) | _PROTOCOL_QUALIFIED
 _VERBLESS_PROTOCOLS = frozenset(p.value for p in Protocol) - _VERBED_PROTOCOLS
 
-# Of the verbed protocols, the ones whose verb is not an HTTP method, so the
-# protocol name is itself part of the identity a reader needs (D06, 2H design
-# §1): `graphql query orders` names an operation, while a bare `query orders`
-# names nothing in particular — `query` is not a word that implies its own
-# protocol the way `GET` does. HTTP, SOAP and gRPC all speak HTTP verbs and
-# read correctly without the prefix, which is also what every pin written
-# before this expects.
-_PROTOCOL_QUALIFIED = frozenset({"graphql"})
+# The verbed protocols whose rows may legitimately carry NO verb. A GraphQL
+# resolver is addressed by `Type.field` alone — it implements a field, it does
+# not answer an operation — so its NULL method is an absence rather than a
+# verb the analysis failed to read. Its own set, deliberately not
+# `_PROTOCOL_QUALIFIED` reused: an SSE row is qualified and its verb is still
+# an HTTP method, so a NULL there genuinely is unread and must render as such.
+_VERB_OPTIONAL_PROTOCOLS = frozenset({"graphql"})
 
 
 def _wire_identity(endpoint: dict[str, object]) -> str:
@@ -119,13 +136,12 @@ def _wire_identity(endpoint: dict[str, object]) -> str:
     if protocol in _VERBLESS_PROTOCOLS:
         return f"{protocol} {rendered_path}"
     method = endpoint["method"]
-    # A verbed protocol whose row carries no verb *by design*: a GraphQL
-    # resolver is addressed by `Type.field` alone — it implements a field, it
-    # does not answer an operation — so its NULL method is an absence, not a
-    # verb the analysis failed to read. Rendering `(unresolved)` there would
-    # report a gap that does not exist. Only a protocol-qualified protocol can
-    # reach this: an HTTP row with no method genuinely is unread.
-    if method is None and protocol in _PROTOCOL_QUALIFIED:
+    # A verbed protocol whose row carries no verb *by design*
+    # (`_VERB_OPTIONAL_PROTOCOLS`, above): rendering `(unresolved)` there
+    # would report a gap that does not exist. Every other verbed protocol —
+    # HTTP and the SSE routes reclassified out of it alike — has a method it
+    # was supposed to read, so a NULL genuinely is unread.
+    if method is None and protocol in _VERB_OPTIONAL_PROTOCOLS:
         return f"{protocol} {rendered_path}"
     rendered_method = "(unresolved)" if method is None else str(method)
     prefix = f"{protocol} " if protocol in _PROTOCOL_QUALIFIED else ""

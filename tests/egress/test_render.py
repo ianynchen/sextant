@@ -411,6 +411,61 @@ def test_a_graphql_resolver_renders_verbless_without_an_unresolved_marker():
     assert "(unresolved)" not in text
 
 
+def test_an_sse_row_renders_its_protocol_and_its_http_verb():
+    """2H design §6 / D06: `sse GET /events/stream`.
+
+    An SSE stream is a route a client GETs, so unlike every other protocol
+    added this phase it is VERBED with an ordinary HTTP method — falling into
+    the derived verbless half would silently drop a verb the row really has.
+    It is also protocol-QUALIFIED, for the mirror image of GraphQL's reason:
+    `query orders` names nothing without its protocol, while `GET
+    /events/stream` names something *wrong* without it — an ordinary REST
+    route, which is exactly the reading the reclassification exists to
+    correct."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "sse",
+                "direction": "inbound",
+                "method": "GET",
+                "path": "/events/stream",
+                "handler": "s maven c 1 com/acme/orders/sse/OrderEventsController#stream().",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "`sse GET /events/stream`" in text
+    assert "(unresolved)" not in text
+
+
+def test_an_sse_row_with_no_verb_still_reports_the_gap():
+    """The half that separates `sse` from `graphql` in the qualified set: a
+    GraphQL resolver's NULL verb is an absence by design, an SSE row's is a
+    verb the analysis failed to read. Reusing one set for both questions would
+    have made this row quietly claim it was never supposed to have a method."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "sse",
+                "direction": "inbound",
+                "method": None,
+                "path": "/events/stream",
+                "handler": "s maven c 1 com/acme/orders/sse/OrderEventsController#stream().",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "`sse (unresolved) /events/stream`" in text
+
+
 def test_kafka_row_with_null_path_renders_unresolved_identity():
     """The path half of a verbless identity is unresolved the same way an
     HTTP row's method or path is: named, never a bare `None`."""

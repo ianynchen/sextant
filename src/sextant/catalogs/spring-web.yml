@@ -63,6 +63,43 @@ known_types:
   - { type: java.math.BigDecimal, wire: number }
   - { type: java.util.UUID,       wire: string, format: uuid }
 
+# 2H design §6: what turns one of THIS catalog's own rows (`protocol: http`,
+# above) into a row of another protocol. `resolve/protocol_hint.py` runs it
+# after the engines' merge and before the format ladder; it changes protocol,
+# never direction, and never creates an endpoint.
+#
+# The source protocol is this catalog's own `protocol` field and is never
+# named here — that is what scopes the pass to HTTP rows without the pass
+# knowing what HTTP is. `protocol:` below is the TARGET.
+#
+# Two evidence kinds, media first:
+#
+# `hint_media` — the row's own `consumes`/`produces` names the envelope. An
+#   HTTP media declaration, so it is duplicated on `spring-mvc.yml` exactly as
+#   `media_formats` below is, and for the same reason: this family ships two
+#   catalogs that each own the HTTP protocol, and a module pulling in only one
+#   of them must still get the vocabulary. The pass UNIONS the two lists (and
+#   refuses a contradiction on `protocol`), so a copy that drifted can only
+#   widen one file's evidence — never silently change what the other reads.
+#
+# `hint_returns` — a marker type appears ANYWHERE in the handler's return
+#   type: as the returned type itself, or as any type argument nested inside
+#   it, to any depth. Both halves of that rule are load-bearing, because the
+#   two real shapes sit at opposite ends of it — `ServerSentEvent<T>` arrives
+#   as the MIDDLE link of `Flux<ServerSentEvent<T>>`, whose outer symbol is an
+#   ordinary reactive type that says nothing about SSE, while `SseEmitter`
+#   (spring-webmvc's, declared on `spring-mvc.yml`) is the outer symbol of a
+#   flat return with no arguments at all. Unlike `hint_media` these are
+#   LIBRARY types, so each is declared once by the catalog whose own artifact
+#   declares it — the `parse_calls` rule, not the `media_formats` one: two
+#   lists of type names that drifted apart could not be caught the way two
+#   contradicting map keys are.
+protocol_hint:
+  protocol: sse
+  hint_media: [text/event-stream]
+  hint_returns:
+    - org.springframework.http.codec.ServerSentEvent
+
 # 2G design §7, rung 2: what a declared MIME string means on the wire. Shipped
 # on the catalogs that own the HTTP protocol, because a `consumes`/`produces`
 # attribute is an HTTP declaration; the table itself is protocol-neutral and
@@ -72,6 +109,16 @@ known_types:
 # A MIME string absent from this table maps to nothing — the row then falls to
 # a lower rung rather than being guessed at, exactly as an unmapped serializer
 # class stamps no media.
+#
+# **`text/event-stream` is deliberately NOT here, and its absence is a rule
+# rather than an omission** (2H design §6). It is the ENVELOPE, not the
+# payload: SSE frames the wire, and what each event's `data:` line carries is
+# a separate question the MIME string does not answer. Mapping it to anything
+# would state a format nobody declared — so an SSE row falls past rung 2 and
+# is answered by whatever really describes its payload, which in this module
+# is rung 5's assumed JSON default. The MIME string is read, by
+# `protocol_hint` above: it names the PROTOCOL, which is a different column
+# and a different claim.
 media_formats:
   application/json: json
   application/x-protobuf: protobuf

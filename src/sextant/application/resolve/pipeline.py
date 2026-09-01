@@ -7,6 +7,7 @@ from sextant.application.resolve.config import resolve_config
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 from sextant.application.resolve.format import resolve_format
 from sextant.application.resolve.open_questions import reset_open_questions
+from sextant.application.resolve.protocol_hint import apply_protocol_hints
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.parse_binding import bind_parse_calls
 
@@ -69,6 +70,14 @@ def resolve(
     # schema-described parse is what lifts a NULL format to that schema's own
     # format at `narrowed`.
     bound = bind_parse_calls(workspace, declared)
+    # Between the binding and the ladder, and both sides of that are the
+    # pass's own contract (2H design §6). AFTER every engine and its merge:
+    # this pass reclassifies rows others minted, so they must all exist, and
+    # a merged `both` row must already be one row to move wholesale. BEFORE
+    # `resolve_format`: the ladder's rung 1 reads `protocol` directly, so a
+    # row answered before it was reclassified would carry the format of a
+    # protocol it no longer has.
+    apply_protocol_hints(workspace, declared)
     # LAST, and the ordering is a property of the pass, not a preference (the
     # `_RUNS_LAST` precedent in `resolve/endpoints.py`): every rung of the
     # format ladder reads something an earlier pass wrote — the media columns

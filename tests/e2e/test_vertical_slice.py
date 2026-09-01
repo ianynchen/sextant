@@ -146,6 +146,41 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
         "Unresolved endpoint derivation: `spring-stomp` — caller "
         "`com/example/orders/ws/OrderStompController#board(sig_26be7569).`."
     ) in document
+    # 2H Task 6: an SSE row is the first VERBED, protocol-qualified row whose
+    # verb is an ordinary HTTP method — `sse GET /events/stream`, not the
+    # verbless `sse /events/stream` a derived-set membership would have given
+    # it, and not the unqualified `GET /events/stream` that reads as an
+    # ordinary REST route. Both halves of that identity are load-bearing, and
+    # both rows are pinned because they arrive by different evidence (media
+    # for `/stream`, return type for `/emitter`).
+    #
+    # `- → text/event-stream` is the Media column: the MIME string is still
+    # there and still declared, and the Format column beside it reads `json
+    # (assumed)` rather than anything derived from it — the envelope names the
+    # protocol, never the format.
+    assert (
+        "`sse GET /events/emitter` | `com/example/orders/sse/OrderEventsController#emitterEvents(sig_6e650372).` | - → - | json (assumed) | resolved |"
+        in document
+    )
+    assert (
+        "`sse GET /events/stream` | `com/example/orders/sse/OrderEventsController#streamEvents(sig_ed469b30).` | - → text/event-stream | json (assumed) | resolved |"
+        in document
+    )
+    # The payload gap, disclosed rather than hidden (2H design §6 expects
+    # `ServerSentEvent<T>` to unwrap to `OrderView`; live it stops at the
+    # envelope type, which no catalog's `wrappers` block declares — see
+    # `test_pipeline.py::test_an_sse_rows_payload_stops_at_the_undeclared_
+    # envelope_type`). Both envelope types are third-party and carry no field
+    # facts, so the document names them open instead of publishing an empty
+    # contract as a complete one.
+    assert (
+        "Not expanded, so the shapes referring to it are open: "
+        "`org/springframework/http/codec/ServerSentEvent#`."
+    ) in document
+    assert (
+        "Not expanded, so the shapes referring to it are open: "
+        "`org/springframework/web/servlet/mvc/method/annotation/SseEmitter#`."
+    ) in document
 
 
 def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_path: Path):
@@ -294,14 +329,23 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # row regardless of `resolution`). A NEW protocol bucket, the third the
     # 2H phase adds (`graphql`, then `sse` at Task 6, now `websocket`); no
     # existing bucket moves. `111 + 5 = 116` total.
+    # 2H Task 6 (`protocol_hint`): the FIRST change here that adds no row at
+    # all. `GET /events/emitter` and `GET /events/stream` MOVE out of `http`
+    # into a new `sse` bucket — 34 becomes 32, `sse` becomes 2 — and the
+    # total is unchanged at 116, which is the pass's own second promise
+    # (it reclassifies; it never creates or removes an endpoint) read off
+    # the published metadata rather than asserted in a comment. Nothing
+    # outbound moves: the two rows are inbound routes, and this pass never
+    # touches direction.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "graphql": 12,
-        "http": 34,
+        "http": 32,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
         "sqs": 4,
+        "sse": 2,
         "websocket": 3,
     }
     assert metadata["endpoints"]["outbound"] == {
