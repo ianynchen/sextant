@@ -96,10 +96,29 @@ public final class CallSample {
         sink(fast ? left : right);
     }
 
+    /** A parameter and a literal merged on a branch. This is the arity change
+     *  the parameter kind makes, stated as a test rather than discovered
+     *  downstream: while a parameter contributed <em>no</em> producer, this
+     *  merge had exactly one and the pass reported {@code /default} as though
+     *  the argument were always that — one branch's value asserted for both.
+     *  The parameter is a producer of its own now, so the slot is honestly
+     *  {@code unresolved}: less recall, and the only answer that is true on
+     *  every path. */
+    public void mergedParameterAndLiteral(boolean fast, String supplied) {
+        sink(fast ? supplied : "/default");
+    }
+
     /** {@code this} is in slot 0 of an instance method and is a parameter of
-     *  no descriptor: it names no index, so it stays {@code unresolved}. */
-    public void selfArgument() {
+     *  no descriptor: it names no index, so it stays {@code unresolved}.
+     *
+     *  <p>The parameter beside it is what gives the case teeth: with no
+     *  parameters declared there are no slots to be off by one against, and an
+     *  implementation reading the slot number as the index would pass. Here
+     *  {@code supplied} occupies slot 1 as parameter 0, so that implementation
+     *  would call {@code this} parameter 0 too. */
+    public void selfArgument(String supplied) {
         consumeSelf(this);
+        sink(supplied);
     }
 
     public void callResult() {

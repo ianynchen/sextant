@@ -338,11 +338,12 @@ public final class MethodFlow {
         AbstractInsnNode producer = singleSource(value);
         if (producer == null) return argument("unresolved", null, null, null);
 
-        // The only VarInsnNode that can ever be a producer is {@link
-        // ParameterNamingAnalyzer}'s marker: a real load moves a value without
-        // producing it. The slot it names is a parameter's own starting slot,
-        // or `this` / the second half of a wide parameter — neither of which is
-        // a parameter D00 §5 numbers, so those stay the honest `unresolved`.
+        // The only VarInsnNode that can ever be a producer is the parameter
+        // marker CopyTransparentSourceInterpreter.newParameterValue mints: a
+        // real load moves a value without producing it. The slot it names is a
+        // parameter's own starting slot, or `this` / the second half of a wide
+        // parameter — neither of which is a parameter D00 §5 numbers, so those
+        // stay the honest `unresolved`.
         if (producer instanceof VarInsnNode parameter) {
             int index = indexOfSlot(parameterSlots, parameter.var);
             return index < 0
@@ -515,8 +516,13 @@ public final class MethodFlow {
     }
 
     private static AbstractInsnNode singleSource(SourceValue value) {
-        // A method parameter's initial value has no producing instruction at
-        // all, which reads as an empty set here.
+        // Exactly one producer, or nothing. A parameter counts as one of them
+        // — it carries the marker CopyTransparentSourceInterpreter gave its
+        // initial value — so a slot merged from a parameter and a literal is
+        // two producers and reads as none, exactly as two literals do. That
+        // costs recall against the empty set a parameter used to contribute,
+        // and it is the point: reporting the literal there asserted one
+        // branch's value as the whole argument.
         if (value == null || value.insns.size() != 1) return null;
         return value.insns.iterator().next();
     }

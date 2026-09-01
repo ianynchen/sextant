@@ -195,13 +195,34 @@ class MethodFlowTest {
         assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
     }
 
+    /** A parameter merged with a literal is two producers, so it is
+     *  `unresolved` — the arity the new kind changes, pinned deliberately.
+     *  9.8 reported `/default` here, because a parameter contributed no
+     *  producer at all and the literal was left standing alone: a fact about
+     *  the else-branch, asserted for an argument that is the parameter
+     *  whenever the condition holds. Recall drops; honesty is the trade the
+     *  whole pass is built on (D00 §5). */
+    @Test
+    void reports_a_parameter_merged_with_a_literal_as_unresolved() throws Exception {
+        String line = callSites("mergedParameterAndLiteral").get(0);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+    }
+
     /** `this` sits in slot 0 of an instance method and is a parameter of no
      *  descriptor, so it names no index and stays the honest `unresolved` —
-     *  never parameter 0, which belongs to the first declared parameter. */
+     *  never parameter 0, which belongs to the first declared parameter.
+     *
+     *  <p>Both calls are asserted together because one without the other
+     *  proves nothing: the parameter's own call fixes slot 1 as index 0, so a
+     *  pass reading slots as indices would have to call `this` parameter 0 to
+     *  satisfy the second assertion and fail the first. */
     @Test
-    void reports_this_as_unresolved_rather_than_as_a_parameter() throws Exception {
-        String line = callSites("selfArgument").get(0);
-        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+    void reports_this_as_unresolved_beside_the_parameter_that_occupies_slot_one()
+            throws Exception {
+        List<String> lines = callSites("selfArgument");
+        assertTrue(lines.get(0).contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), lines.get(0));
+        assertTrue(lines.get(1).contains("\"arguments\":[{\"kind\":\"parameter\",\"value\":0}]"),
+                   lines.get(1));
     }
 
     /** The rule the whole choice of {@code SourceInterpreter} rests on: after a
