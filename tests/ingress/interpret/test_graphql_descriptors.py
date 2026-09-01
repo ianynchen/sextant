@@ -316,6 +316,47 @@ def test_the_default_root_names_carry_their_roles_when_no_schema_block_binds_the
     assert _shape(shapes, "Order").role is None
 
 
+def test_an_extend_schema_binds_a_root_the_same_way_a_schema_block_does():
+    """`extend schema` is how a second file adds a root to a schema declared
+    in the first — the operation-root twin of `extend type`, and the runtime
+    merges it in just the same."""
+    shapes, failed = _interpret(
+        [
+            _sdl(
+                "extend schema { mutation: MyMutation }\n"
+                "type MyMutation { b: String }\n"
+                "type Query { c: String }\n"
+            )
+        ]
+    )
+
+    assert failed == []
+    assert _shape(shapes, "MyMutation").role == "mutation"
+    # A binding anywhere turns the default names off, extension or not.
+    assert _shape(shapes, "Query").role is None
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_two_bindings_of_one_operation_to_different_types_fail_both_files(reverse: bool):
+    """The same ambiguity a duplicate type name is, and the same answer: no
+    winner. Folding the bindings instead would let whichever file the artifact
+    walk happened to hand over last decide which type is the root — an answer
+    that depends on input order, which is no answer at all (NFR-1)."""
+    first = _sdl(
+        "schema { query: A }\ntype A { x: String }\n", symbol="a.graphqls", document_id="doc:a"
+    )
+    second = _sdl(
+        "schema { query: B }\ntype B { y: String }\n", symbol="b.graphqls", document_id="doc:b"
+    )
+    unrelated = _sdl(AUDIT_SDL, symbol="audit.graphqls", document_id="doc:audit")
+    descriptors = [first, second, unrelated]
+
+    shapes, failed = _interpret(list(reversed(descriptors)) if reverse else descriptors)
+
+    assert failed == ["a.graphqls", "b.graphqls"]
+    assert [shape.symbol for shape in shapes] == ["AuditEntry"]
+
+
 def test_the_naming_hook_is_never_consulted():
     """SDL compiles into no class, so a source-origin symbol IS the schema's
     own type name. `_RefusingNaming` raising is the assertion."""
@@ -440,6 +481,30 @@ def test_an_unreadable_file_takes_the_types_it_declared_with_it():
 
     assert failed == ["ghost.graphqls", "haunted.graphqls"]
     assert "Order" in {shape.symbol for shape in shapes}
+
+
+def test_a_file_that_parsed_leaves_its_names_behind_even_when_it_publishes_nothing():
+    """The other half of the boundary, and deliberately NOT a cascade: a file
+    that parsed declared its names into the merged schema, so a sibling naming
+    one of them is naming a type the schema really does contain. The reference
+    stays an ordinary open `shape_ref` — a shape this run published nothing
+    for, which reads downstream as an unclosed reference — and the sibling is
+    no gap of its own. One broken file is one gap; the module keeps working."""
+    unprojectable = _sdl(
+        "type Cart { id: ID! }\ntype Basket { missing: Ghost! }\n",
+        symbol="cart.graphqls",
+        document_id="doc:cart",
+    )
+    referring = _sdl(
+        "type Holder { cart: Cart }\n", symbol="holder.graphqls", document_id="doc:holder"
+    )
+
+    shapes, failed = _interpret([unprojectable, referring])
+
+    assert failed == ["cart.graphqls"]
+    assert [shape.symbol for shape in shapes] == ["Holder"]
+    cart = _fields(_shape(shapes, "Holder"))["cart"]
+    assert (cart.wire_type, cart.shape_ref, cart.item) == ("object", "Cart", None)
 
 
 # --- determinism (NFR-1) -------------------------------------------------
