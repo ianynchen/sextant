@@ -35,9 +35,9 @@ declaration, made in the source. The return-type read exists because a
 handler may declare no media at all and still be a stream — the return type
 is then the only statement there is.
 
-The media read is DIRECTION-AWARE, and deliberately narrower than the format
-ladder's (`_MEDIA_COLUMNS` states the rule): an inbound row's `consumes` is
-what the route ACCEPTS, and a channel is not renamed after its input.
+The media read is `produces` ONLY, on every row, and deliberately narrower
+than the format ladder's (`_MEDIA_COLUMNS` states the rule): `consumes` says
+what a channel ACCEPTS, and a channel is not named after what it eats.
 
 **One thing outside `endpoints` moves with a row**: its `open_questions`. The
 2K ledger snapshots a wire identity rather than joining to it, and the
@@ -65,7 +65,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.domain.closed_sets import Direction, Protocol
+from sextant.domain.closed_sets import Protocol
 from sextant.domain.symbols import type_descriptor
 
 # The block, and the three keys it may carry. Closed on purpose: a key this
@@ -79,30 +79,34 @@ _MEDIA = "hint_media"
 _RETURNS = "hint_returns"
 _KEYS = (_TARGET, _MEDIA, _RETURNS)
 
-# Which media column may carry protocol evidence, BY DIRECTION — and this is
-# the one place this pass deliberately does NOT follow the format ladder's
-# rung 2, which folds both columns into one answer.
+# The ONE media column that may carry protocol evidence — `produces`, on every
+# row, whatever its direction. This is the one place this pass deliberately
+# does NOT follow the format ladder's rung 2, which folds both columns into one
+# answer.
 #
 # `format` describes one wire and both columns describe it, so rung 2 is right
-# to read both. A PROTOCOL hint is a different claim: `consumes` is the
-# REQUEST-body media, and on an inbound row that is what the route ACCEPTS,
-# never what it streams back. An inbound route declaring `consumes:
-# text/event-stream` is a handler being handed an event stream by its caller —
-# a real, if unusual, thing to write — and reclassifying it would rename the
-# channel after its input.
+# to read both. A PROTOCOL hint is a narrower claim — "this channel IS an event
+# stream" — and only one of the two columns can ever evidence it:
 #
-# So: an inbound row's evidence is `produces` alone, what the server sends. A
-# row with a client side — outbound, and the merged `both` that carries a
-# caller's own declaration — reads both, because there `consumes` is what the
-# client RECEIVES off the wire, which is exactly the envelope. The default
-# covers a NULL direction the same way inbound is covered: the narrower read.
-_SERVER_SENT = ("produces",)
-_EITHER_SIDE = ("consumes", "produces")
-_MEDIA_COLUMNS = {
-    str(Direction.INBOUND): _SERVER_SENT,
-    str(Direction.OUTBOUND): _EITHER_SIDE,
-    str(Direction.BOTH): _EITHER_SIDE,
-}
+# - `produces` on an INBOUND row is what the route streams back. Evidence.
+# - `produces` carried onto a merged `both` row from the outbound twin the
+#   merge deleted is what a CALLER expects to receive. Also evidence: the
+#   thing on the wire is an event stream either way.
+# - `consumes`, on ANY row, means "this accepts event-stream REQUEST BODIES".
+#   That is a statement about input and is never evidence that anything serves
+#   a stream. A route declaring it is a handler being HANDED an event stream —
+#   a real, if unusual, thing to write — and reclassifying it would rename the
+#   channel after what it eats.
+#
+# Reading `consumes` on a client-side row was tempting (there it is what the
+# client RECEIVES) and is refused anyway, because after the merge the column's
+# PROVENANCE is gone: `merge_endpoints.sql` coalesces, keeping the surviving
+# inbound row's own `consumes` first, so a `both` row's `consumes` may be the
+# inbound half's "accepts" declaration or the outbound half's "receives" one
+# and nothing on the row says which. One column, one meaning, no direction
+# table — a rule that cannot be read two ways is worth more than the outbound
+# case it gives up, which no shipped catalog produces today.
+_MEDIA_COLUMNS = ("produces",)
 
 # The row identity a reclassification is matched back onto — the same six
 # columns `stamp_format.sql` and `bind_request_shape.sql` use, for the same
@@ -149,12 +153,10 @@ def _declares_media(endpoint: dict[str, Any], hint: "_Hint") -> bool:
     envelope. The channel said so, in the source, which is why this is read
     first — and why a row carrying it needs no return type at all.
 
-    WHICH columns count depends on the row's direction (`_MEDIA_COLUMNS`
-    states why): an inbound row's `consumes` is what it ACCEPTS, and a channel
-    is not renamed after its input."""
-    columns = _MEDIA_COLUMNS.get(str(endpoint.get("direction")), _SERVER_SENT)
+    Only `produces` counts (`_MEDIA_COLUMNS` states why): `consumes` says what
+    a channel ACCEPTS, and a channel is not named after what it eats."""
     return any(
-        mime in hint.media for column in columns for mime in _mime_list(endpoint.get(column))
+        mime in hint.media for column in _MEDIA_COLUMNS for mime in _mime_list(endpoint.get(column))
     )
 
 

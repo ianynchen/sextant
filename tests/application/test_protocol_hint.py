@@ -205,50 +205,68 @@ def test_media_answers_a_row_whose_return_type_says_nothing(tmp_path: Path):
     assert answers == {"/stream": TARGET}
 
 
-def test_an_inbound_rows_consumes_is_never_protocol_evidence(tmp_path: Path):
-    """Review fix round 1. `consumes` is the REQUEST-body media, so on an
-    INBOUND row it says what the route ACCEPTS — a handler being HANDED an
-    event stream by its caller, not one streaming anything back. Reclassifying
-    on it would rename the channel after its input.
+def test_consumes_is_never_protocol_evidence_in_any_direction(tmp_path: Path):
+    """Review fix round 2. `hint_media` reads `produces` and nothing else, on
+    every row, whatever its direction.
 
-    This is the one place the pass deliberately diverges from the format
-    ladder's rung 2, which folds both columns into one answer: `format`
-    describes one wire and both columns describe it, while a protocol hint is
-    a claim about what the channel IS.
+    `consumes` means "this accepts event-stream REQUEST BODIES" — a statement
+    about input, never evidence that anything SERVES a stream. A route
+    declaring it is a handler being HANDED an event stream, and reclassifying
+    it would name the channel after what it eats. This is the one place the
+    pass deliberately diverges from the format ladder's rung 2, which folds
+    both columns into one answer: `format` describes one wire and both columns
+    describe it, while a protocol hint is the narrower claim that the channel
+    IS a stream.
 
-    `/accepts` declares the envelope in `consumes` and nothing in `produces`,
-    and must not move. `/emits` is the control — the same MIME string in the
-    column that does count."""
+    **The `both` row is the case round 1 got wrong**, and it is here because a
+    direction-aware rule looked safe and was not: `merge_endpoints.sql`
+    coalesces, keeping the surviving INBOUND row's own `consumes` first, so a
+    merged row's `consumes` may be the inbound half's "accepts" declaration
+    rather than the outbound half's "receives" one — and nothing on the row
+    says which. One column, one meaning, no provenance to reconstruct.
+
+    Every direction is pinned in one place because the rule is now
+    direction-blind and a per-direction test would imply otherwise. `/emits` is
+    the control: the same MIME string in the column that does count."""
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     _seed(
         workspace,
         {"path": "/accepts", "consumes": json.dumps([STREAM_MIME])},
+        {"path": "/calls", "direction": "outbound", "consumes": json.dumps([STREAM_MIME])},
+        {"path": "/merged", "direction": "both", "consumes": json.dumps([STREAM_MIME])},
         {"path": "/emits", "produces": json.dumps([STREAM_MIME])},
     )
     apply_protocol_hints(workspace, [_catalog()])
     answers = _protocols(workspace)
     workspace.close()
 
-    assert answers == {"/accepts": SOURCE, "/emits": TARGET}
+    assert answers == {
+        "/accepts": SOURCE,
+        "/calls": SOURCE,
+        "/merged": SOURCE,
+        "/emits": TARGET,
+    }
 
 
-def test_a_client_side_rows_consumes_is_protocol_evidence(tmp_path: Path):
-    """The other half of the same rule. On an OUTBOUND row — and on the merged
-    `both` row that carries a caller's own declaration — `consumes` is what the
-    client RECEIVES off the wire, which is exactly the envelope. Both sides
-    count there, so the narrowing above is about direction and not about the
-    column."""
+def test_produces_carried_through_the_merge_is_still_protocol_evidence(tmp_path: Path):
+    """The half `produces`-only KEEPS. A merged `both` row's `produces` may be
+    the outbound twin's, carried across by the merge before this pass ever
+    sees the row — and that is what a CALLER expects to receive, which is an
+    event stream on the wire exactly as an inbound route's own `produces` is.
+
+    So the narrowing is about the COLUMN, not about direction: no row is
+    exempt from the media rung, and no row reads two columns."""
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     _seed(
         workspace,
-        {"path": "/calls", "direction": "outbound", "consumes": json.dumps([STREAM_MIME])},
-        {"path": "/merged", "direction": "both", "consumes": json.dumps([STREAM_MIME])},
+        {"path": "/merged", "direction": "both", "produces": json.dumps([STREAM_MIME])},
+        {"path": "/calls", "direction": "outbound", "produces": json.dumps([STREAM_MIME])},
     )
     apply_protocol_hints(workspace, [_catalog()])
     answers = _protocols(workspace)
     workspace.close()
 
-    assert answers == {"/calls": TARGET, "/merged": TARGET}
+    assert answers == {"/merged": TARGET, "/calls": TARGET}
 
 
 # --- the three promises ---------------------------------------------------
