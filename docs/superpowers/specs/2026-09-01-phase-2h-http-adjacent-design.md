@@ -51,7 +51,9 @@ MicroProfile GraphQL must ride the two new forms with zero further engine change
   `mutation`, `@SubscriptionMapping` → `subscription`; field name from the annotation
   value (`name`/`value`), falling back to the method name — Spring's own rule, and the
   fallback is statically resolvable (an absent annotation value reads as absent in
-  bytecode; the catalog's existing default-to-method-name vocabulary applies).
+  bytecode; **execution amendment**: the vocabulary is the NEW `path_fallback:
+  construct_name` the paragraph above rules in, not an existing one — the checkpoint
+  proved none existed).
   `@SchemaMapping(typeName = "Order", field = "lines")` → `method` NULL, path
   `Order.lines` (field falls back to method name here too). Class-level
   `@SchemaMapping(typeName = ...)` composes with method-level annotations through the
@@ -93,8 +95,13 @@ The `.graphqls` file is 2H's descriptor. Same layering as 2G, nothing new invent
   `!` → `required: true` / `nullable: false` (absent `!` → nullable), `[T]` → array
   with `item` (inner `!` on the item), object references → `shape_ref`, enums with
   their symbols, `field_number` NULL (the format has none — 2G's column contract
-  allows it). Interfaces and unions land as shapes carrying their member fields;
-  input types project the same as object types. A construct the branch cannot project
+  allows it). Interfaces land as shapes carrying their own fields;
+  input types project the same as object types. **Execution amendment (Task 3
+  review): a UNION does not land as a shape.** A union is one of several types and
+  this wire vocabulary has no word for that — it declares no field of its own, so a
+  shape for it would be an empty payload nobody sends — so a file declaring one (or an
+  `extend union`) becomes that file's gap, which is the sentence below applied rather
+  than an exception to it. A construct the branch cannot project
   (a directive-bearing edge case, a malformed document) records
   `descriptors_not_interpreted` for that file and moves on — never a crash, and the
   failure boundary follows 2G's Avro fix (partial reads discarded, not half-published).
@@ -120,10 +127,16 @@ own small catalog-declared style, stated here as a mechanism rather than hidden 
   existing dedup folds them and the annotation row's answers survive where present
   (first-writer; the handler symbol only the annotation knows, the declared response
   shape only the SDL row carries — coalesce, the merge-carry precedent).
-- **Vocabulary:** the style block ships on `spring-graphql.yml` (root-type defaults +
-  rename handling); DGS and MicroProfile modules resolve through the same block when
-  their schema files sit in catalog-named roots. Catalog-declared, engine reads
-  vocabulary only.
+- **Vocabulary (execution amendment, Task 4):** the style ships as its own file,
+  `graphql-schema.yml`, not as a block on `spring-graphql.yml` — one file is one
+  catalog is one style (`spring-kafka-media.yml`'s precedent), and what this reads is a
+  schema, which belongs to no framework: the same SDL serves the Spring, DGS and
+  MicroProfile modules and a schema-first service with no annotation library at all.
+  It declares `matches.schema_operations: {schema_format, operations}` and **no
+  root-type table**: which type is the query root is a FACT
+  (`DeclaredShapeFact.role`), because a `schema { query: MyQuery }` block renames it
+  and nothing outside the interpreter may read a schema format. Catalog-declared,
+  engine reads vocabulary only.
 
 ## 4. Shapes: the honest rule (no class↔type guessing)
 
@@ -154,8 +167,13 @@ expansion) and SDL types (declared). The rule, replacing the withdrawn
 - **STOMP**: `@MessageMapping("/order.place")` and `@SubscribeMapping` →
   `(websocket, NULL, <destination>)` — the destination is what a peer addresses.
   Class-level `@MessageMapping` prefixes compose exactly as `@RequestMapping` paths
-  do. `@SendTo`/`@SendToUser` on a STOMP handler derive outbound rows to the reply
-  destination — 2D's vocabulary pointed at a new protocol, no new mechanism. Payload
+  do. `@SendTo` on a STOMP handler derives outbound rows to the reply
+  destination — 2D's vocabulary pointed at a new protocol, no new mechanism.
+  **Execution amendment (Task 5, fix round 1): `@SendToUser` does not.** 2D's `reply`
+  block is SINGLE-valued (`reply.annotation` is one fqn, and widening it is an engine
+  change this phase's own acceptance rule forbids), so a `@SendToUser`-only handler
+  falls into the branch an unannotated value-returning handler already takes — the
+  honest `path` NULL, `resolution: unresolved` reply row, never a wrong destination. Payload
   shape from the handler's payload parameter; format via the ladder (rung 5 assumed
   JSON when Jackson is present — Spring STOMP's default converter, so
   `json (assumed)` is the true reading).
@@ -189,7 +207,9 @@ contract: **it reclassifies rows other engines already produced; it changes
   (`json (assumed)` with Jackson present) or stays `unresolved` — COVERAGE §4.1's
   "Assumed JSON per event" finally carries its trust marker. Payload shape:
   `ServerSentEvent<T>`/`Flux<T>` unwrap through existing PTR/generic machinery.
-- **Rung 1 goes live**: `format_fixed: json` on the three GraphQL catalogs — the
+- **Rung 1 goes live**: `format_fixed: json` on the GraphQL catalogs — four of them
+  once `graphql-schema.yml` (§3's amendment) is counted, since every catalog owning the
+  protocol carries the identical entry and the ladder refuses a contradiction — the
   first live surface for 2G's rung 1, closing that documented dead branch. WebSocket
   declares no fixed format (frames are anything); SSE's fixedness is the envelope
   only, so neither gets a `format_fixed`.
@@ -235,7 +255,13 @@ touched table.
   orders`, verbless `Type.field`, STOMP destinations as path). D02: `protocol_hint`
   rewritten reserved→real with the execution amendment; `schema_operations` style;
   `hint_returns` vocabulary; `format_fixed` now live. D06: rendered identities drop
-  the verb exactly as messaging rows do where method is NULL.
+  the verb exactly as messaging rows do where method is NULL. **Execution amendment
+  (Task 6/7):** two protocols are also PREFIXED with their own name, because their verb
+  does not imply one — `graphql query orders` (a bare `query orders` names nothing in
+  particular) and `sse GET /events/stream`, which is VERBED with an ordinary HTTP verb
+  because an SSE stream is a route a client GETs, and unqualified would read as an
+  ordinary REST route. A GraphQL resolver's NULL verb renders `graphql Order.lines`
+  rather than `(unresolved)`; an SSE row's would not, because there it really is unread.
 - COVERAGE: §5.4/5.5/5.6 Java flips; §4.1 GraphQL + SSE regime rows live; boundaries —
   raw WebSocket frames untyped; negotiated subprotocols unread; body-string SSE
   (Go/Express style) stays unshipped; DGS/MicroProfile client sides out;

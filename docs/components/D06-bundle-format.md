@@ -188,6 +188,48 @@ exactly as before.
 
 ---
 
+## 5b. How a wire identity is rendered
+
+The endpoint tables print one string per row, and the shape of that string is decided by
+the row's `protocol` — never by the catalog that derived it.
+
+| Row | Renders | Why |
+|---|---|---|
+| `http` / `soap` / `grpc` | `GET /v1/orders` | the verb implies its own protocol |
+| `kafka` / `jms` / `sqs` / `pubsub` / `websocket` | `kafka order-events`, `websocket /orders/place` | verbless: the protocol defines no verb, so there is none to print |
+| `graphql` root operation | `graphql query orders` | verbed, and PREFIXED — a bare `query orders` names nothing in particular |
+| `graphql` resolver (`method` NULL) | `graphql Order.lines` | the NULL is an absence by design, not an unread verb |
+| `sse` | `sse GET /events/stream` | verbed with a real HTTP verb, and prefixed so it does not read as an ordinary REST route |
+| any half unread | `(unresolved)` in that half | never a bare `None` |
+
+**The verbless set is DERIVED — every protocol minus the verbed ones — so a protocol added
+to [D00](D00-fact-schema.md)'s closed set renders verblessly by default.** That is right for
+a broker family and it is why `websocket` needed no renderer change at all; it is wrong for
+a route that really has a verb, which is why `sse` is named in the verbed half explicitly.
+The protocol-qualified set is UNIONED into the verbed set rather than listed twice, so
+"every qualified protocol is a verbed one" is structural: stating it in two places is what
+would let a protocol be added to one list and fall silently out of the other, rendering
+`sse /events/stream` and dropping a verb the row does have.
+
+**A NULL verb is only excusable for the protocols that say so.** `graphql` is the one such
+protocol today: a resolver implements a FIELD and answers no operation. An HTTP row with no
+method genuinely is unread and must still say `(unresolved)`, and so must an SSE row —
+which is exactly why the verb-optional set is its own set rather than the qualified one
+reused.
+
+**The Handler column tells apart two different NULLs.** Until Phase 2H every inbound row
+with no handler was one whose address could not be read either, so one word covered both.
+`schema_operations` ([D02](D02-catalog-schema.md) §2) makes the second case real: a schema
+declares an operation outright — `resolution` is `resolved`, the identity is complete — and
+names no code at all, because a schema never does and the wiring that would is explicitly
+not read. Such a row renders **`none recorded`**, not `unresolved`, which would report a gap
+that does not exist. `none recorded` rather than `none`: the claim is about what this
+evidence carries, never that the service implements nothing. The discriminator is the row's
+own columns — neither a handler nor a caller, and an address that resolved — not its
+protocol or its catalog.
+
+---
+
 ## 6. Naming and location
 
 `<module-id>@<commit>` — sanitised for a filesystem. The commit is in the name so that two

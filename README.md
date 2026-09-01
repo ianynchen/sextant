@@ -36,7 +36,7 @@ core, and never to any extractor.
 Runtime dependencies are pinned in `pyproject.toml`; `uv sync` installs them, and the
 `dev` extra adds the test and lint tools. Requires Python 3.12 or newer. Beside DuckDB
 (the workspace), Click and Rich (the command surface), Pydantic (the fact models) and
-PyYAML (catalogs and configuration files), two exist for wire-format support:
+PyYAML (catalogs and configuration files), three exist for schema and wire-format support:
 
 - **`protobuf`** — parsing schema descriptors. It is also the **authority for wire
   names**: `FieldDescriptor.json_name` gives protobuf's JSON encoding of a field, whether
@@ -48,6 +48,13 @@ PyYAML (catalogs and configuration files), two exist for wire-format support:
   `protoc`, so a repository's own schema files can be read with nothing installed by
   hand. There is no hand-written `.proto` text parser anywhere in the codebase, and there
   will not be one.
+- **`graphql-core`** — parsing GraphQL SDL (`.graphqls`). The reference implementation of
+  the GraphQL specification, used for the same reason as the two above: a schema language
+  is **data we read, never an algorithm we reimplement**, and an SDL parser written by
+  hand would be a second opinion about what a `!` or an `extend type` means. Only the same
+  single descriptor interpreter imports it — the architecture test that confines
+  `protobuf` confines this too, and the SDL *reader* hands the file's text on verbatim
+  without importing a GraphQL runtime at all.
 
 ### JVM extractor — no new dependency, on purpose
 
@@ -57,6 +64,8 @@ class already embeds, as string constants, and hands it on unparsed. That is the
 layering argument in one line — no extractor in any language links a schema runtime,
 because exactly one component in the Python core understands schema formats, so a second
 language's scanner gains schema support by emitting the same fact and nothing else.
+GraphQL added nothing either, and for a stronger reason: its schema is a repository file,
+so the Python reader emits it verbatim and the extractor never sees it.
 
 ### Fixture toolchain — nothing installed by hand
 

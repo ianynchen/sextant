@@ -244,10 +244,13 @@ def test_a_protocol_with_a_fixed_format_answers_before_anything_else(tmp_path: P
     it — the media declaration below is deliberately present and deliberately
     ignored.
 
-    Exercised synthetically because NO catalog Sextant ships declares
-    `format_fixed` today: none of them declares a fixed-format protocol
-    (2G design §7 names gRPC and SOAP; the shipped set covers neither). The
-    mechanism is validated and reachable the moment one does."""
+    Exercised synthetically on an INVENTED pairing (`kafka` is not a
+    fixed-format protocol), because the rung's own precedence is what this
+    test is about and a synthetic catalog is the only way to put a media
+    declaration underneath it that must lose. The rung is no longer without a
+    live surface: since 2H the four catalogs owning `graphql` each declare
+    `format_fixed: {graphql: json}`, and the live GraphQL rows answering
+    `json`/`resolved` are pinned end to end in `tests/e2e/`."""
     workspace = _workspace(tmp_path)
     _seed(workspace, {"path": "a", "produces": json.dumps([SCROLL_MIME])})
     rows = _run(

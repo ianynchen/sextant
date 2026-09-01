@@ -186,6 +186,25 @@ out; a parse further out, or two parses of one payload, binds nothing and become
 the new `open_questions` ledger — a workspace table, a bundle artifact and a section of the
 rendered document, handing the undecidable to the enrichment tier instead of guessing.
 
+**Phase 2H closed the three HTTP-adjacent columns of §2a.** GraphQL, WebSocket and SSE
+join [D00](components/D00-fact-schema.md)'s protocol set, and each gets the wire identity
+it actually has: a GraphQL FIELD is the endpoint (`graphql query orders`, `graphql
+Order.lines`), a WebSocket destination is verbless like a topic (`websocket
+/orders/place`), and an SSE route keeps its HTTP verb under a new protocol (`sse GET
+/events/stream`). Six catalogs and one SDL reader ship it. The phase delivered the two
+mechanisms the roadmap had reserved: **`schema_operations`**, the ninth engine style and
+the first to read a schema file as a statement of operations — a schema-first service with
+no annotation anywhere now derives its roots, at `declared` with a NULL handler — and
+**`protocol_hint`**, which is not an engine at all but a post-merge resolve pass that
+RECLASSIFIES rows other engines minted, changing `protocol` and never `direction`, never
+the row count, and never anything outside the source protocol its own catalog declares.
+Two framework-neutral naming forms on `annotation_driven` (a name that falls back to the
+annotated construct's own, and a scope composed onto it) carried all three GraphQL
+frameworks, with **DGS and MicroProfile riding them with zero further engine change** — a
+deliberate early run of 2J's acceptance test. `graphql-core` joined the core dependencies,
+confined to the one descriptor interpreter like `protobuf` before it, and the format
+ladder's rung 1 got its first live surface.
+
 **Everything else in both matrices remains a gap** — including, inside the cells Phase 2D and
 2E-prep touched, Spring Integration's channel adapters and spring-cloud-aws's own
 channel-adapter bindings (`config_join`'s shape, not yet catalogued — Spring Cloud Stream's
@@ -261,6 +280,8 @@ than silently absent:
 | Sequencing between reactive/lambda calls (`flatMap`, `map`) | calls inside them derive endpoints, but the sequence between those calls awaits the call graph (`reactive_flow_not_traced`) | call-graph phases |
 | Sequence diagrams, traces, a call graph | no `call_site`/control-flow facts (`sequence_diagrams_pending_call_graph`, `call_graph_not_implemented`) | call-graph phases |
 | A full class diagram (inheritance) | only contract types are drawn (`structure_diagram_limited_to_contracts`) | with the `edges` table |
+| A link between a Java class and the SDL type of the same name | two shape universes now describe one GraphQL service, and matching them by simple name is a guess; both are recorded and the cross-link is comparison work with its own evidence (§5.4) | the phase that earns it |
+| The HTTP address a GraphQL or STOMP service listens on | the `path` column carries the OPERATION, because that is what the identity is; no engine derives `/graphql` or the STOMP endpoint registration ([D01](components/D01-graph-schema.md) §3) | undecided |
 | Cross-service links or a system document | linking is a system-scope pass over bundles; no `participants`/`links` exist yet | linking phase |
 | `consumes`/`produces` on a predicate-derived WebFlux functional route | `accept(...)`/`contentType(...)`'s `MediaType` vararg constants compile through an `ANEWARRAY` the extractor cannot read | a later extractor candidate |
 | `@RequestMapping` inherited from a non-generic superclass | the `supertype` edge exists only for a generic superclass — the extractor reads it from the Signature attribute alone | undecided |
@@ -325,7 +346,7 @@ the gap list:
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ 5A 3B 5C | ◐ 2A 2B | 2A | 4A | 2A 1B | 1A 2B |
+| **Java / Kotlin** | ✅ ASM | ◐ 5A 3B 5C | ◐ 2A 2B | 2A | ✅ | ✅ | ◐ 1A |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -493,12 +514,12 @@ far that reaches today:
 |---|---|---|---|---|
 | **gRPC** | **Fixed by the protocol** | `compiler` | Protobuf, always. The only certain cell in this table. | Rung 1 is built; **no shipped catalog owns gRPC**, so nothing declares `format_fixed` — **A**, one catalog entry once a gRPC catalog exists |
 | SOAP | Fixed | `compiler` | XML | as gRPC — **A**, with the catalog (§5.3, 2I) |
-| GraphQL | Fixed | `compiler` | JSON | as gRPC — **A**, with the catalog (2H) |
+| GraphQL | Fixed | `compiler` | JSON | ✅ **rung 1, and its first live surface** (2H). `format_fixed: {graphql: json}` ships on all four catalogs owning the protocol, so every GraphQL row answers `json`/`resolved` before any other rung is consulted |
 | **REST in** | `produces` / `consumes`, JAX-RS `@Produces` / `@Consumes`, or a return type that is itself a generated message | `declared` | **Assumed** from the framework's default converter (Jackson → JSON) | ◐ **rung 2** off Spring's own `produces`/`consumes` (2E), `resolved`; an undeclared route falls to **rung 5** — `json` at `narrowed` — where it carries a declared payload type at all, and to rung 6 where it carries none. JAX-RS `@Produces` is **A**, with that catalog |
 | **REST out** | `Content-Type` / `Accept` set somewhere in the client chain | `syntax` | **Assumed** JSON | **not read** — no client chain's `Content-Type` reaches `consumes`/`produces`, so outbound rows answer at rung 5 (`json`, `narrowed`) or rung 6 |
 | **Kafka** | **Serializer configuration** — `key.serializer` / `value.serializer`, or the generic parameters of `KafkaTemplate<K,V>` and the `@KafkaListener` payload type | `config_join` | Unknown. Kafka carries anything. | ✅ **rung 3**, from the serializer table below as catalog data (`format_from`), `resolved` — off the **value** serializer/deserializer keys the shipped rules name. The record **key**'s own serializer and the **generic parameters** of `KafkaTemplate<K,V>` are not read: configuration, and the value side of it, is the whole of it |
-| SSE | `text/event-stream` framing; the payload inside each event is separate | `declared` | Assumed JSON per event | with the protocol (2H) |
-| WebSocket | A negotiated subprotocol, or nothing — usually only the parse call | `syntax` | Unknown | with the protocol (2H) |
+| SSE | `text/event-stream` framing; the payload inside each event is separate | `declared` | Assumed JSON per event | ✅ **shipped, and the framing answers nothing** (2H). `text/event-stream` is deliberately absent from `media_formats` — it is the envelope, so it names the PROTOCOL (`protocol_hint`) and never the format. The per-event payload lands at **rung 5**, `json` at `narrowed`: the "assumed" in the column to the left, finally carrying its marker |
+| WebSocket | A negotiated subprotocol, or nothing — usually only the parse call | `syntax` | Unknown | ◐ **the protocol shipped, the format did not** (2H). A raw frame is untyped by declaration, so a `@ServerEndpoint` row reads `unresolved` rather than guessing; a STOMP row carries a real payload parameter and answers **rung 5** (`json`, `narrowed`). No subprotocol is read, and no parse-call rung reaches a frame |
 | **Pub/Sub** | Nothing. The message is `bytes`. Only the **parse call** reveals it — `Order.parseFrom(data)` versus `objectMapper.readValue(data, Order.class)` | `syntax` | Unknown | the parse-call binding is built and protocol-neutral, but **not reached here**: the shipped bytes-payload vocabulary is `String` and `byte[]` only, and a `MessageReceiver`'s payload parameter is a `PubsubMessage` envelope |
 | **SQS** | Nothing. The body is a string; same as Pub/Sub | `syntax` | Unknown | ✅ **the parse call**, binding the payload type — which, where that type is schema-described, then answers **rung 4** at `narrowed`, and otherwise makes the row an ordinary rung-5 one |
 | JMS | `TextMessage` / `BytesMessage` / `ObjectMessage`, then the parse call | `syntax` | Unknown | ✅ as SQS, for a `String`/`byte[]` payload parameter. The **message-type distinction** (`TextMessage` versus `BytesMessage`) is not read |
@@ -541,6 +562,7 @@ that each row's own listener was individually checked against the configured des
 | **JSON** | Usually none — **the DTO type declaration is the spec** | code | type reference | ✅ since Phase 2A — the shape tables *are* this row |
 | JSON Schema | Fastify route options, OpenAPI `components`, `zod` | code or artifact | `$ref` / type reference | **out of scope.** `json_schema` is a reserved format value: a catalog that writes it is refused by name rather than read as something adjacent |
 | XML | XSD, WSDL | repository | namespace + element name | with SOAP (§5.3, 2I) |
+| **GraphQL SDL** | `.graphqls` / `.graphql` under `src/main/resources/graphql` | repository **only** — SDL compiles into no class, so there is no second origin | the type's own name, which is both its `symbol` and its `schema_name` | ✅ since Phase 2H, at `declared`. The reader emits each file verbatim and the interpreter merges every file in the module into one type universe before projecting (the protobuf-pool precedent, because the runtime merges them too). Object, interface, input and enum types become shapes; **`field_number` is NULL — the format numbers nothing** |
 
 Protobuf and Avro share a property nothing else here has: **the schema survives into the
 compiled artifact**, so it is recoverable from a jar with no source present. That is the same
@@ -834,10 +856,10 @@ one HTTP route.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
-| Java | Spring GraphQL `@QueryMapping`, `@MutationMapping`, `@SubscriptionMapping`, `@SchemaMapping`, `@BatchMapping` | code-first | `annotation` | A |
-| Java | Netflix DGS `com.netflix.graphql.dgs.{DgsComponent, DgsData, DgsQuery, DgsMutation, DgsSubscription}` | code-first; the shorthands are equivalent to `@DgsData` | `annotation` | A |
-| Java | MicroProfile GraphQL `org.eclipse.microprofile.graphql.{GraphQLApi, Query, Mutation}` (Quarkus) | code-first | `annotation` | A |
-| Java | `graphql-java` schema-first — `.graphqls` + `RuntimeWiring` | **the SDL file is the contract** | artifact + `registration_call` | A |
+| Java | Spring GraphQL `@QueryMapping`, `@MutationMapping`, `@SubscriptionMapping`, `@SchemaMapping`, `@BatchMapping` | code-first | `annotation` | ✅ shipped — all five, plus a class-level `@SchemaMapping(typeName)` scope the methods inherit (the method's own value winning) |
+| Java | Netflix DGS `com.netflix.graphql.dgs.{DgsComponent, DgsData, DgsQuery, DgsMutation, DgsSubscription}` | code-first; the shorthands are equivalent to `@DgsData` | `annotation` | ✅ shipped, including `@DgsData(parentType, field)` |
+| Java | MicroProfile GraphQL `org.eclipse.microprofile.graphql.{GraphQLApi, Query, Mutation}` (Quarkus) | code-first | `annotation` | ✅ shipped — `@Query`/`@Mutation` under the `@GraphQLApi` gate |
+| Java | `graphql-java` schema-first — `.graphqls` + `RuntimeWiring` | **the SDL file is the contract** | artifact + `registration_call` | ✅ shipped — the SDL half. A root field no annotation implements derives at `declared` with a NULL handler; `RuntimeWiring` itself is not read |
 | Go | `gqlgen` — schema-first, resolvers generated from `.graphql` | SDL is authoritative | artifact | A |
 | TS | NestJS `@Resolver()` + `@Query()` / `@Mutation()` | code-first | `annotation` | A |
 | TS | Apollo Server `typeDefs` (SDL) + a `resolvers` object; TypeGraphQL, Pothos | schema- or code-first | artifact / `annotation` | A |
@@ -850,6 +872,70 @@ one HTTP route.
 schema-first, the entire contract — every operation, every field, every type, nullability
 included — sits in one readable file that is a build input. Prefer it over code inspection.
 
+**Phase 2H ships all four Java rows: three annotation catalogs and the SDL reader.** A
+root operation is `(graphql, query|mutation|subscription, <field>)` and a non-root
+resolver is `(graphql, NULL, Type.field)` ([D01](components/D01-graph-schema.md) §3) — the
+endpoint is the field, so the fixture's GraphQL surface yields twelve endpoint rows from
+four controllers, two SDL files and four catalogs — eleven derived from annotations, one
+from a root field the SDL declares that no annotation implements. Two
+framework-neutral vocabulary forms carried it: a declared name that falls back to the
+annotated construct's own name (all three frameworks declare their field attribute
+`default ""`, which never reaches the class file), and a dotted composition of a scope and
+that name. **DGS and MicroProfile rode both forms with zero further engine change**, which
+is the phase's own acceptance test. `format_fixed: {graphql: json}` on all four catalogs
+made the format ladder's rung 1 live for the first time.
+
+The boundaries, each verified against the shipped code rather than assumed:
+
+- **Every GraphQL row is inbound.** All four catalogs declare `direction: inbound`; no
+  GraphQL client side is read in any language, DGS's and MicroProfile's included.
+- **No Java-class↔SDL-type join is ever made.** Two shape universes now describe one
+  service — Java classes from bytecode, SDL types from the schema — and matching them by
+  simple name is a guess. An annotation-derived operation keeps its Java types (in a
+  code-first service that IS the wire), an SDL-derived one carries SDL-type references,
+  and where a schema names an identity an annotation also derived, the declared response
+  is stamped and then re-answered by the handler's own signature. Cross-linking the two
+  universes is comparison work with its own evidence — 2G's reserved `schema_name`→symbol
+  seam, now with a second customer — and is left for the phase that earns it.
+- **`RuntimeWiring`'s programmatic field registration is not read.** The SDL is taken as
+  the contract; a field wired only in code and declared in no schema derives nothing.
+- **A schema root is `src/main/resources/graphql` and nothing else** — Spring GraphQL's
+  own convention, contributed beside `proto`/`avro`. Conventional directories only; a
+  configured or non-standard location is invisible.
+- **A resolver whose scope no annotation states derives NO row.** Spring infers a parent
+  type from the resolver's parameter, which is a fact no annotation carries, so
+  `@SchemaMapping(field = "orphan")` on a class with no `typeName` is refused rather than
+  derived as the bare `orphan` — which would claim a root-operation-shaped identity.
+- **`@DgsData(parentType = "Query")` renders verbless**, as `Query.field` rather than the
+  root `(query, field)` its shorthand `@DgsQuery` derives. Saying "this parent type IS a
+  root" needs a fourth vocabulary form nobody has asked for; a correctly-addressed
+  verbless row is visible and honest, where a guessed root would not be.
+- **MicroProfile `@Source` resolvers derive nothing.** MicroProfile names a non-root
+  resolver's parent through a PARAMETER's own type, not through an attribute on the
+  operation annotation — a genuinely different declaration shape that no shipped form
+  reads.
+- **A `@BatchMapping`'s shape columns carry the batching envelope, not the schema field's
+  contract.** Its declared `Map<Parent, Value>` return and `List<Parent>` parameter are
+  what root, because neither is a declared wrapper; the schema field it implements returns
+  the value type, and the map is how one call answers many parents. Modelling a resolver's
+  real contract (parent object in, field value out) is not attempted.
+- **A custom SDL scalar stays open**: `scalar Long` states a name and nothing about the
+  wire — its encoding lives in a coercer in the service's own code — so a field of that
+  type is `object` with no shape reference, reported open rather than guessed as `string`.
+- **A union type is a gap, not a shape.** A union is one of several types and this wire
+  vocabulary has no word for that, so the file declaring one publishes nothing and is
+  reported (`descriptors_not_interpreted`) rather than half-published. `extend union`,
+  `extend enum` and `extend scalar` take the same answer.
+- **An operations document is ignored outright** — neither shape nor gap. `.graphql` also
+  spells the queries a client sends, and those are not a schema; a gap would report a file
+  that is not missing anything, permanently, for as long as it sits beside the schema.
+- **Federation directives are parsed as data and never interpreted.** No directive of any
+  kind reaches a shape, a field or an endpoint; federation's meaning is deferred to the
+  linking era.
+- **Subscription transport is not resolved.** A `subscription` row's protocol is `graphql`;
+  whether the service serves it over WebSocket or SSE is not read, and the operation is
+  the identity either way.
+
 ### 5.5 WebSocket
 
 The boundary is the **event name**, not the connection path. `socket.on("orderCreated")` is
@@ -857,9 +943,9 @@ matchable exactly like a Kafka topic; `/ws` on its own tells us nothing.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
-| Java | Jakarta WebSocket `jakarta.websocket.server.ServerEndpoint("/ws")` (was `javax.websocket.*` — **match both**) | annotation on the class; the value is a URI template | `annotation` | A |
-| Java | Spring STOMP `@MessageMapping("/topic/x")`, `@SubscribeMapping` | annotation | `annotation` | A |
-| Java | Spring `registerWebSocketHandlers(registry).addHandler(h, "/ws")` | programmatic | `fluent_chain` | B |
+| Java | Jakarta WebSocket `jakarta.websocket.server.ServerEndpoint("/ws")` (was `javax.websocket.*` — **match both**) | annotation on the class; the value is a URI template | `annotation` | ✅ shipped for the **jakarta** spelling; javax is detection-only (below) |
+| Java | Spring STOMP `@MessageMapping("/topic/x")`, `@SubscribeMapping` | annotation | `annotation` | ✅ shipped — class-level prefix composition, `@SubscribeMapping`, and `@SendTo` reply rows |
+| Java | Spring `registerWebSocketHandlers(registry).addHandler(h, "/ws")` | programmatic — the path is a literal argument, not a chain | `registration_call` | ✅ shipped as a catalog, with **no live fixture surface** (below) |
 | Go | `gorilla/websocket` `upgrader.Upgrade(w, r, nil)` | **the protocol is decided by a call *inside* the HTTP handler**, not by the route registration | `registration_call` in a body | B |
 | TS | NestJS `@WebSocketGateway()` + `@SubscribeMessage("event")` | annotation | `annotation` | A |
 | TS | `socket.io` `io.on("connection", s => s.on("event", cb))`, `socket.emit("event", d)` | string event names | `registration_call` | A |
@@ -871,6 +957,45 @@ matchable exactly like a Kafka topic; `/ws` on its own tells us nothing.
 | Rust | `tokio-tungstenite` | manual | `registration_call` | B |
 | Swift | `URLSessionWebSocketTask` | client only | `fluent_chain` | B |
 
+**Phase 2H ships all three Java rows**, verbless like every messaging row —
+`(websocket, NULL, <path-or-destination>)`, `method` NULL, the destination in `path`
+([D01](components/D01-graph-schema.md) §3). `@ServerEndpoint` on the class is both the
+marker and the path prefix, with `@OnMessage` supplying the handler symbol; a STOMP
+class-level `@MessageMapping("/orders")` composes with a method's `@MessageMapping("/place")`
+or `@SubscribeMapping("/board")` exactly as `@RequestMapping` paths do; and a `@SendTo`
+handler derives its reply as a second, outbound row. STOMP payloads answer the format
+ladder at rung 5 (`json`, `narrowed` — Spring's default converter with Jackson present).
+
+Boundaries, each verified against the shipped code:
+
+- **A raw WebSocket frame is untyped, and the row says so.** `jakarta-websocket.yml`
+  deliberately declares no `request_body` block: `@OnMessage(String frame)`'s parameter is
+  an opaque frame, not a declared contract, and the protocol offers no `@Payload`-shaped
+  marker to tell one from the other. Shapes stay NULL and the format reads `unresolved`.
+- **A negotiated subprotocol is not read** in any form, so nothing narrows that
+  `unresolved`.
+- **`javax.websocket` is detection-only.** The pre-Jakarta-EE-9 spelling is a package
+  rename and nothing else, but `mapping.prefix_annotation` is SINGLE-valued and widening it
+  is an engine change. `detect.coordinates` still names the javax artifact, so such a module
+  is recognised as WebSocket-shaped; a `javax.websocket.server.ServerEndpoint` class in it
+  derives no endpoint. Naming the javax `@OnMessage` without a matching javax prefix would
+  not fail honestly — it would derive a *wrong* address, an empty prefix on a resolved row.
+- **`@SendToUser` is not read as a reply destination.** The `reply` block's `annotation` is
+  single-valued for the same reason. A `@SendToUser`-only handler falls into the branch an
+  unannotated value-returning handler already takes — the honest `path` NULL, `unresolved`
+  reply row — never a wrong destination. Proved over synthetic facts; no fixture surface.
+- **A class-level array-valued prefix contributes element 0 only.** `@MessageMapping({"/a",
+  "/b"})` on a class composes every method under `/a`; the second value is silently
+  unavailable as a prefix. The same limitation `@KafkaListener` already carries, not a new
+  one, and not exercised by the fixture.
+- **`@MessageMapping` and `@SubscribeMapping` on ONE method is unexercised.** Nothing
+  refuses it and nothing pins it; the fixture declares each separately.
+- **The programmatic `addHandler` catalog has no live fixture surface.** It is proved over
+  synthetic call facts only. Its `arity: 2` assumes the single-path call form compiles to
+  exactly two call-site arguments, unverified against real bytecode, and a multi-path
+  `.addHandler(h, "/a", "/b")` is a three-argument call the row does not match at all — no
+  row rather than a wrong one.
+
 ### 5.6 Server-Sent Events
 
 **The worst column in either matrix.** Nothing declares SSE. It is inferred from a return
@@ -880,8 +1005,8 @@ property — see §8.
 
 | Language | Library | How it is actually detected | Shape | Tier |
 |---|---|---|---|---|
-| Java | Spring MVC — returns `org.springframework.web.servlet.mvc.method.annotation.SseEmitter` | **return type**; present since 4.2 and still in 7.x | return-type read | B |
-| Java | WebFlux — returns `Flux<ServerSentEvent<T>>`, or `produces = MediaType.TEXT_EVENT_STREAM_VALUE` | return type **or** a `produces` string | return-type read | B |
+| Java | Spring MVC — returns `org.springframework.web.servlet.mvc.method.annotation.SseEmitter` | **return type**; present since 4.2 and still in 7.x | return-type read | ✅ shipped — `hint_returns`, matched as the flat outer symbol |
+| Java | WebFlux — returns `Flux<ServerSentEvent<T>>`, or `produces = MediaType.TEXT_EVENT_STREAM_VALUE` | return type **or** a `produces` string | return-type read | ✅ shipped — **both** evidence kinds; the marker is matched mid-chain |
 | Java | JAX-RS — `@Produces(MediaType.SERVER_SENT_EVENTS)` + `SseEventSink` | **an annotation argument** — the one good case | `annotation` | A |
 | Go | manual — `w.Header().Set("Content-Type", "text/event-stream")` then flush in a loop | **a bare string in the handler body.** No library, pure convention | `runtime_dynamic`-adjacent | **C** |
 | TS | Express — `res.setHeader("Content-Type", "text/event-stream")` | string in the body | — | C |
@@ -895,6 +1020,36 @@ property — see §8.
 are annotation arguments we can already read. That catches a real share of JVM SSE endpoints
 for the cost of a catalog entry, and is worth doing even though the return-type route is the
 complete answer.
+
+**Phase 2H took that win and the return-type route together.** Nothing declares SSE, so no
+engine derives an `sse` row: an HTTP row is derived as HTTP and RECLASSIFIED, by the
+`protocol_hint` pass ([D02](components/D02-catalog-schema.md) §2) running after the
+engines' merge and before the format ladder. Two evidence kinds, media first — the row's
+own `produces` naming `text/event-stream`, else a marker type appearing anywhere in the
+handler's return-type generic chain. The pass changes `protocol` only: never `direction`,
+never the row count, and only rows of the source protocol the declaring catalog owns.
+The rendered identity keeps the HTTP verb and gains the protocol name —
+`sse GET /events/stream` ([D06](components/D06-bundle-format.md) §5b).
+
+Boundaries, each verified against the shipped code:
+
+- **`text/event-stream` names the protocol and never the format.** It is the envelope, not
+  the payload, so it is deliberately absent from `media_formats` and rung 2 passes it by.
+  The per-event payload falls to rung 5 — `json`, `narrowed`, rendered `json (assumed)` —
+  which is COVERAGE §4.1's "Assumed JSON per event" finally carrying its trust marker.
+- **`ServerSentEvent<T>` unwraps to `T`.** It is the per-event envelope, declared as a
+  wrapper, so `Flux<ServerSentEvent<OrderView>>` publishes `OrderView` as the contract and
+  the envelope type appears nowhere in the document.
+- **`SseEmitter`'s payload is unreachable, honestly.** It is a callback handle with no type
+  argument to unwrap — the events are pushed through it at runtime — so the row is
+  disclosed as an unexpanded open type rather than published as an empty contract.
+- **Body-string SSE stays unshipped**, as §10 of the design states: the Go and Express form
+  writes `Content-Type: text/event-stream` as a bare string inside the handler body, which
+  needs `runtime_dynamic`-adjacent reading no engine has. C-tier, deliberately.
+- **JAX-RS's `@Produces(SERVER_SENT_EVENTS)` is still A**, with that catalog. The
+  mechanism is done; a JAX-RS catalog would carry its own `protocol_hint` block, since the
+  block is scoped by the declaring catalog's protocol and a Quarkus module loads no Spring
+  catalog to inherit one from. One YAML entry, no code.
 
 ### 5.7 gRPC
 
@@ -1306,10 +1461,16 @@ lands, §5 becomes generated and the essays stay hand-written.
 
 **Q9 — Can `protocol`, `direction` and `format` stay properties of the catalog? resolved — no, they become per-match with a catalog default.**
 Recorded in [D02](components/D02-catalog-schema.md) §2c. Reading D02 to make the change
-corrected part of the question: **`protocol` was already handled.** The `protocol_hint` style
-reclassifies endpoints other engines produced, and `wrappers` with `semantics: streaming` is
-named as its trigger — so a `@GetMapping` returning `Flux<ServerSentEvent<T>>` was always
-going to be reclassified as SSE.
+corrected part of the question: **`protocol` was already handled.** The reserved
+`protocol_hint` reclassifies endpoints other engines produced, so a `@GetMapping` returning
+`Flux<ServerSentEvent<T>>` was always going to be reclassified as SSE. **Phase 2H built it
+and corrected the trigger this answer named**: `wrappers`' `semantics: streaming` is not it,
+because `Flux` carries that on every reactive route in a WebFlux service and reclassifying
+all of them would rename ordinary REST as SSE. The real triggers are a declared
+`text/event-stream` in `produces` and a named marker type anywhere in the return type's
+generic chain (`hint_media`/`hint_returns`, [D02](components/D02-catalog-schema.md) §2). It
+also shipped as a resolve pass rather than an engine — after the merge, before the format
+ladder — not "last with `config_join`".
 
 Two things genuinely needed the change, and one part of the original proposal was wrong.
 **`direction` cannot be a later pass.** D02 §3 runs inbound before outbound so a path a module
