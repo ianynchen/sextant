@@ -1,0 +1,9 @@
+{
+  "type": "record",
+  "name": "Receipt",
+  "namespace": "com.example.orders.avro",
+  "fields": [
+    {"name": "receipt_id", "type": "string"},
+    {"name": "issued_at", "type": "long"}
+  ]
+}

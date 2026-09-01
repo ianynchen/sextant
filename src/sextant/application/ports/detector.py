@@ -25,6 +25,14 @@ class ModuleModel:
     # construction site keeps working; a build system that names none
     # reports the empty tuple, never a guess.
     resource_roots: tuple[Path, ...] = ()
+    # Where the ArtifactReader port looks for schema source files — Maven's
+    # protobuf-maven-plugin/avro-maven-plugin convention, `src/main/proto`
+    # then `src/main/avro` when present (2G design §2). A schema root is
+    # never a source root (`MavenDetector` already excludes these directory
+    # names from `languages`, Task 1) — the code these plugins generate is
+    # what the real source roots compile, not the schema files themselves.
+    # Defaulted for the same reason `resource_roots` is.
+    schema_roots: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)

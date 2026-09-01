@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import subprocess
+from functools import partial
 from pathlib import Path
 from typing import cast
 
@@ -18,8 +19,12 @@ from sextant.egress.render.document import render_module_document
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
+from sextant.ingress.extract.jvm.generated_naming import JvmGeneratedNaming
 from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.ingress.interpret.descriptors import interpret_descriptors
+from sextant.ingress.read.avsc import AvscReader
 from sextant.ingress.read.properties import PropertiesReader
+from sextant.ingress.read.proto_source import ProtoSourceReader
 from sextant.ingress.read.yaml_config import YamlConfigReader
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -95,7 +100,18 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
             catalogs=YamlCatalogSource(catalogs_dir()),
             fact_root=workspace_dir / "facts",
             progress=progress,
-            readers=[PropertiesReader(), YamlConfigReader()],
+            readers=[
+                PropertiesReader(),
+                YamlConfigReader(),
+                AvscReader(),
+                ProtoSourceReader(),
+            ],
+            # `JvmGeneratedNaming` constructed only here (ARCHITECTURE §10's
+            # JVM-confinement rule) and bound into `interpret_descriptors`
+            # before it ever reaches `analyze`, which never imports either
+            # (`sextant.application.ports.descriptors.DescriptorInterpreter`
+            # is the seam it accepts instead).
+            interpret=partial(interpret_descriptors, naming=JvmGeneratedNaming()),
         )
         write_metadata(
             workspace_dir / "metadata.json",

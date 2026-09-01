@@ -164,6 +164,15 @@
             <configuration>
               <sourceDirectory>${project.basedir}/src/main/avro</sourceDirectory>
               <outputDirectory>${project.basedir}/target/generated-sources/avro</outputDirectory>
+              <!-- receipt.avsc is Task 4's source-only fixture: a schema the
+                   build never compiles, so it reaches the graph only through
+                   the .avsc reader, never the extractor's embedded-descriptor
+                   harvest — the one identity in this fixture where DR-4's
+                   compiled-beats-source precedence has no compiled side to
+                   prefer. -->
+              <excludes>
+                <exclude>receipt.avsc</exclude>
+              </excludes>
             </configuration>
           </execution>
         </executions>

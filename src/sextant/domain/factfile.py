@@ -42,3 +42,38 @@ def read_fact_file(path: Path) -> tuple[Document, list[Fact]]:
     document = Document.model_validate_json(raw[0])
     facts = [_FACT_ADAPTER.validate_json(line) for line in raw[1:] if line]
     return document, facts
+
+
+def schema_fact_target(fact_root: Path, relative_path: str) -> Path:
+    """Where a schema document's facts live under `fact_root/schema` — the
+    same append-the-full-path, keep-the-source-extension discipline
+    `config_fact_target` keeps for a config document, in its own subtree so a
+    schema file never competes with a same-named config file for one target
+    (2F's collision rule, generalized)."""
+    return fact_root / "schema" / (relative_path + ".jsonl")
+
+
+def read_fact_tree(fact_root: Path) -> list[tuple[Document, list[Fact]]]:
+    """Every fact file already written under `fact_root`, read back. The
+    means by which a later stage — `analyze`'s descriptor interpretation,
+    which needs to see the `embedded_descriptor` facts a scanner already
+    wrote to disk before it ever calls this — can read the fact tree without
+    touching the filesystem itself (ARCHITECTURE §10's application-reads-no-
+    files rule, `test_application_reads_no_files`). Sorted by path for
+    NFR-1: two runs over the same tree read facts in the same order
+    regardless of the filesystem's own directory-entry order."""
+    return [read_fact_file(path) for path in sorted(fact_root.rglob("*.jsonl"))]
+
+
+def append_fact_file(path: Path, document: Document, facts: Iterable[Fact]) -> None:
+    """Adds `facts` to the fact file at `path`, which may already carry some
+    (a schema reader's own document, given `declared_shape` facts later in
+    the same `analyze` run) or may not exist yet at all (a compiled
+    document's facts live wherever the scanner wrote them, never under this
+    path, so the first write here creates it). Either way the result keeps
+    `write_fact_file`'s self-describing invariant: `document` first, every
+    fact — old and new — after it."""
+    existing: list[Fact] = []
+    if path.is_file():
+        _, existing = read_fact_file(path)
+    write_fact_file(path, document, [*existing, *facts])

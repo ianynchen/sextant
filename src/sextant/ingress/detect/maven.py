@@ -15,9 +15,11 @@ _NON_SOURCE_DIRECTORIES = frozenset({"resources", "webapp", "filters"})
 
 # Schema-source directory names (protobuf-maven-plugin / avro-maven-plugin
 # convention): schema dirs are not languages, so this detector must not
-# report one from them — a later task formalizes them as declared schema
-# roots instead.
-_SCHEMA_DIRECTORIES = frozenset({"proto", "avro"})
+# report one from them. Ordered, unlike a set, because `schema_roots` reports
+# them in this fixed order (protobuf before Avro) rather than whatever order
+# a directory listing would give.
+_SCHEMA_ROOT_NAMES = ("proto", "avro")
+_SCHEMA_DIRECTORIES = frozenset(_SCHEMA_ROOT_NAMES)
 
 _CONTAINER_FILES = (
     "Dockerfile",
@@ -68,6 +70,14 @@ class MavenDetector:
             # actually exists — the same "no guess" discipline source_roots
             # already follows.
             resource_roots=(resources,) if resources.is_dir() else (),
+            # Task 4: the protobuf-maven-plugin/avro-maven-plugin convention,
+            # present only when it actually exists — the same "no guess"
+            # discipline `resource_roots` keeps.
+            schema_roots=tuple(
+                root
+                for name in _SCHEMA_ROOT_NAMES
+                if (root := path / "src" / "main" / name).is_dir()
+            ),
         )
         return RepositoryModel(root=path, modules=(module,))
 
