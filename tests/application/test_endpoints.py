@@ -134,19 +134,33 @@ def test_catalog_leaves_request_mapping_without_a_preset_method():
 def test_every_graphql_catalog_declares_the_protocols_fixed_format():
     """2G design §7, rung 1, owned by the catalogs that declare the protocol.
 
-    All THREE declare it, not one: the ladder unions the blocks across
+    All FOUR declare it, not one: the ladder unions the blocks across
     catalogs, so a module pulling in only DGS must still get the answer. The
     entries are identical by construction and a contradiction between two
-    would be refused rather than resolved, which is what keeps three copies
+    would be refused rather than resolved, which is what keeps four copies
     from drifting silently — the same rule `media_formats` already lives
-    under on `spring-web.yml`/`spring-mvc.yml`."""
+    under on `spring-web.yml`/`spring-mvc.yml`.
+
+    `graphql-schema` (2H Task 4) is the fourth, and the one that makes the
+    rule bite rather than repeat: a schema-first module pulls in NONE of the
+    three annotation libraries, so without its own copy its rows would reach
+    rung 1 with nothing declared and fall to rung 4, where the declared
+    shape's own `schema_format` would stamp `graphql` — a value D00's format
+    set does not contain — into the column. It is also the only one of the
+    four that is not `annotation_driven`: a schema belongs to no framework."""
     catalogs = YamlCatalogSource(CATALOGS).load()
     graphql = [c for c in catalogs if c.protocol == "graphql"]
 
-    assert {c.id for c in graphql} == {"spring-graphql", "netflix-dgs", "microprofile-graphql"}
+    assert {c.id for c in graphql} == {
+        "spring-graphql",
+        "netflix-dgs",
+        "microprofile-graphql",
+        "graphql-schema",
+    }
     assert all(c.format_fixed == {"graphql": "json"} for c in graphql)
-    assert all(c.style == "annotation_driven" for c in graphql)
     assert all(c.direction == "inbound" for c in graphql)
+    assert {c.style for c in graphql} == {"annotation_driven", "schema_operations"}
+    assert next(c for c in graphql if c.style == "schema_operations").id == "graphql-schema"
 
 
 def test_only_spring_graphql_needed_the_qualifier_form():

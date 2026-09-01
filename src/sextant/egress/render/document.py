@@ -132,6 +132,34 @@ def _wire_identity(endpoint: dict[str, object]) -> str:
     return f"{prefix}{rendered_method} {rendered_path}"
 
 
+def _handler(endpoint: dict[str, object]) -> str:
+    """The Handler column: the owner's bare descriptor, or one of the two
+    different things a NULL `handler` can mean.
+
+    Until 2H every inbound row with no handler was a row whose address could
+    not be read either, so one word covered both. `schema_operations` (2H
+    design §3) makes the second case real: a schema declares an operation
+    outright — `resolution` is `resolved`, the identity is complete — and
+    names no code at all, because a schema never does and the wiring that
+    would is explicitly not read (COVERAGE). Printing `unresolved` there would
+    report a gap that does not exist, the same mistake `_wire_identity`
+    already refuses to make for a GraphQL resolver's NULL verb.
+
+    `none recorded` rather than `none`: the claim is about what this evidence
+    carries, never that the service implements nothing — that would be a
+    statement about code this analysis deliberately did not read. The
+    discriminator is the row's own two columns, not its protocol or catalog: a
+    row that names neither a handler nor a caller and still resolved its
+    address is one whose evidence had no symbol to give.
+    """
+    handler = endpoint.get("handler")
+    if handler is not None:
+        return f"`{bare_descriptor(str(handler))}`"
+    if endpoint.get("caller") is None and endpoint.get("resolution") == "resolved":
+        return "none recorded"
+    return "unresolved"
+
+
 def _media(value: object) -> str:
     """One side of the Media column: the JSON list's comma-joined members, or
     `-` when the side is NULL — never a bare blank cell, so a row with both
@@ -242,13 +270,9 @@ def render_module_document(
     if inbound:
         lines += ["| Endpoint | Handler | Media | Format | Resolution |", "|---|---|---|---|---|"]
         for endpoint in inbound:
-            handler = endpoint.get("handler")
-            rendered_handler = (
-                "unresolved" if handler is None else f"`{bare_descriptor(str(handler))}`"
-            )
             media = f"{_media(endpoint.get('consumes'))} → {_media(endpoint.get('produces'))}"
             lines.append(
-                f"| `{_wire_identity(endpoint)}` | {rendered_handler} | {media} | "
+                f"| `{_wire_identity(endpoint)}` | {_handler(endpoint)} | {media} | "
                 f"{_format(endpoint)} | {endpoint['resolution']} |"
             )
         for endpoint in inbound:

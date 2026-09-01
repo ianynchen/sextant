@@ -116,13 +116,18 @@ _NAMED_QUERIES = {
     # (NFR-1).
     # `schema_format` is the format ladder's rung 4 (2G design §5): the
     # schema that described this shape is the only thing that can say which
-    # wire format the payload's own TYPE suggests. `schema_name`/`origin`
-    # stay unselected — DR-4 precedence is settled upstream, in `analyze`'s
-    # `_prefer_compiled`, before a fact reaches this table.
+    # wire format the payload's own TYPE suggests. `role` is 2H's
+    # `schema_operations` engine (D02 §2, 2H design §3): the operation root a
+    # type serves, where its schema names one — re-added here WITH a consumer,
+    # which is the rule the 2G trim enforced, and read by nothing else.
+    # `schema_name`/`origin` stay unselected — DR-4 precedence is settled
+    # upstream, in `analyze`'s `_prefer_compiled`, before a fact reaches this
+    # table.
     "declared_shapes": """
         SELECT payload ->> 'symbol'        AS symbol,
                payload ->> 'evidence'      AS evidence,
                payload ->> 'schema_format' AS schema_format,
+               payload ->> 'role'          AS role,
                payload ->  'fields'        AS fields
         FROM raw_facts WHERE kind = 'declared_shape'
         ORDER BY symbol, document_id
@@ -355,6 +360,7 @@ _NAMED_DERIVATIONS = {
     "resolved_config_reset": "reset_resolved_config.sql",
     "resolved_config_insert": "insert_resolved_config.sql",
     "stamp_media": "stamp_media.sql",
+    "stamp_declared_response": "stamp_declared_response.sql",
     "stamp_format": "stamp_format.sql",
     "bind_request_shape": "bind_request_shape.sql",
     "open_questions_reset": "reset_open_questions.sql",

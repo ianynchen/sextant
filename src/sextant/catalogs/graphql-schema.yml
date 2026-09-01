@@ -1,0 +1,69 @@
+id: graphql-schema
+displayName: GraphQL schema (SDL root operations)
+style: schema_operations
+protocol: graphql
+direction: inbound
+
+# Framework-neutral on purpose, and its own file rather than a block on
+# `spring-graphql.yml` (`spring-kafka-media.yml`'s precedent: one file is one
+# catalog is one style, so a second style for a family is a second file).
+# What this catalog reads is a schema, and a schema belongs to no framework:
+# the same SDL serves the Spring, DGS and MicroProfile modules, and a
+# schema-first service serves it with no GraphQL annotation library at all —
+# which is exactly the case that derives nothing without this style
+# (2H design §3).
+#
+# No `detect.coordinates`: the evidence is a schema file in the repository,
+# not a dependency the build declares. A module with no schema files derives
+# no rows here, which is the same answer a coordinate gate would give and the
+# only one this catalog can honestly state.
+detect:
+  coordinates: []
+
+# Nothing scanner-produced is read — the input is the `declared_shape` facts
+# the descriptor interpreter emits, which every scan produces or does not
+# regardless of its capabilities. A capability naming that would be a gate
+# with nothing behind it.
+requires: []
+
+matches:
+  # D02 §2's `schema_operations` vocabulary, and all of it. Root NAMING is
+  # deliberately absent: which type is the query root is a FACT
+  # (`DeclaredShapeFact.role`, D00 §5), because a schema can rename its roots
+  # and nothing downstream may parse a schema format to find out. A
+  # `root_types: {query: Query, ...}` table here would be this file guessing
+  # at something the interpreter already read.
+  schema_operations:
+    # Which declared shapes this catalog speaks for. `role` is neutral across
+    # formats, and this is what ties the rows below to the `protocol` above:
+    # a root declared by some other schema format is some other protocol's
+    # operation, not a graphql one.
+    schema_format: graphql
+    # The `method` column value each operation root derives — D01's
+    # root-operation identity, `(graphql, query|mutation|subscription,
+    # <field>)`. The two sides read alike here because GraphQL's own words
+    # for its roots are also what the wire identity spells; they are still
+    # two different things, and the mapping is what says so.
+    operations:
+      query: query
+      mutation: mutation
+      subscription: subscription
+
+# 2G design §7, rung 1, and the fourth identical copy for the reason the
+# other three state: every catalog OWNING this protocol carries it, because
+# the ladder unions the blocks across catalogs and a module may pull in only
+# one of them. This file is the one that makes that rule matter rather than
+# repeat it — a schema-first service has no GraphQL annotation library at all,
+# so without this entry its rows would reach rung 1 with nothing declared and
+# fall through to rung 4, where a declared shape's own `schema_format` would
+# stamp `graphql` into a column D00 closes at six format values. Three copies
+# cannot drift silently and neither can four: the ladder refuses a
+# contradiction between two catalogs rather than picking one.
+format_fixed:
+  graphql: json
+
+# No `wrappers`/`nullability`/`serialization`/`known_types`, and their
+# absence is not an oversight: those blocks describe how a JVM type reaches
+# the wire, and every shape this catalog's rows point at is a declared one,
+# expanded from the schema's own field declarations (`_declared_rows_of`)
+# without consulting a single rule of theirs.

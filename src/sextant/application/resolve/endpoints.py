@@ -15,6 +15,7 @@ from sextant.application.resolve.engines import (
     config_join,
     fluent,
     interface_implementation,
+    schema_operations,
     single_call,
 )
 
@@ -24,7 +25,15 @@ from sextant.application.resolve.engines import (
 # a declared media type onto one — cannot run before the rows exist, so its
 # position is a property of the style, never a request the catalog file
 # makes. `config_join` is the first of them to ship.
-_RUNS_LAST = frozenset({"config_join"})
+#
+# `schema_operations` (2H design §3) is the second, for the same reason twice
+# over. It stamps a declared response shape onto rows other engines minted, so
+# it cannot precede them; and its own rows meet the insert-if-absent guard
+# LAST on purpose — a schema states an operation, an annotation states the
+# operation AND the code serving it, and running afterwards is the whole of
+# what makes the annotation row the one that survives. First-writer agreement
+# by ordering, with no second rule to keep in step.
+_RUNS_LAST = frozenset({"config_join", "schema_operations"})
 
 # Within the runs-last group, the same reason applies once more, one level
 # down (fix round 1, M-3): a style whose catalogs may EITHER derive rows or
@@ -132,4 +141,5 @@ _ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
     "interface_implementation": interface_implementation.run,
     "combinator": combinator.run,
     "config_join": config_join.run,
+    "schema_operations": schema_operations.run,
 }

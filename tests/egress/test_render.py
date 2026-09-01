@@ -463,6 +463,40 @@ def test_inbound_row_with_no_handler_renders_unresolved_in_the_handler_column():
     assert "| `GET /v1/orders` | unresolved | - → - | unresolved | unresolved |" in text
 
 
+def test_a_schema_declared_row_with_no_handler_says_so_rather_than_unresolved():
+    """2H Task 4's other half of the same column. `schema_operations` derives a
+    row whose address the schema stated OUTRIGHT — `resolution: resolved` — and
+    which names no code at all, because a schema never does and the wiring that
+    would is deliberately not read.
+
+    `unresolved` beside `resolved` would report a gap that does not exist, the
+    same mistake `_wire_identity` already refuses to make for a GraphQL
+    resolver's NULL verb. `none recorded` rather than `none`: the claim is
+    about what this evidence carries, never that the service implements
+    nothing. The row above keeps `unresolved` because its address really was
+    unread — the two cases are told apart by the row's own columns, not by its
+    protocol.
+    """
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "graphql",
+                "direction": "inbound",
+                "method": "query",
+                "path": "auditTrail",
+                "handler": None,
+                "caller": None,
+                "resolution": "resolved",
+                "evidence": "declared",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| `graphql query auditTrail` | none recorded | - → - | unresolved | resolved |" in text
+
+
 def test_messaging_gap_retires_and_both_lists_rotate_together():
     """The messaging-not-read gap closes now that annotation_driven reads
     Kafka/JMS/SQS/pub-sub catalogs: it drops from both lists at the same

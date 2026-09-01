@@ -238,9 +238,17 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # existing bucket moves. TWELVE annotated methods produce those 11 rows:
     # `orphanField` names a field of a type nothing states, so it derives none
     # at all rather than a bare, wrongly-shaped `orphan`. `99 + 11 = 110`.
+    # 2H Task 4 (`schema_operations`): +1 graphql inbound — `query auditTrail`,
+    # the ONE root field in `schema.graphqls` that no annotation implements
+    # (the RuntimeWiring pin, 2H design §3). The schema declares seven root
+    # fields in all; the other six share a wire identity with an annotation row
+    # that already exists when this style runs, and the insert-if-absent guard
+    # keeps that row — which is the whole of how first-writer agreement works
+    # here. Still nothing outbound, and no existing bucket moves.
+    # `110 + 1 = 111` total.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
-        "graphql": 11,
+        "graphql": 12,
         "http": 34,
         "jms": 5,
         "kafka": 15,
@@ -344,7 +352,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # GraphQL operation is served, never called, by the module that declares
     # it), so `both` and `outbound` are both untouched: inbound 56 + 11 = 67 —
     # the 110-endpoint total (5 + 67 + 38 = 110).
-    assert rows == [("both", 5), ("inbound", 67), ("outbound", 38)]
+    # 2H Task 4: +1 inbound, the schema-first `query auditTrail` — inbound
+    # 67 + 1 = 68, the 111-endpoint total (5 + 68 + 38 = 111). It is inbound
+    # and unmerged for the same reason every other GraphQL row is.
+    assert rows == [("both", 5), ("inbound", 68), ("outbound", 38)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -439,6 +450,120 @@ def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze
             "why": "com/example/orders/proto/OrderProtos$OrderRequest#parseFrom",
         }
     ]
+
+
+def test_the_schemas_own_root_operations_reach_the_endpoint_table_in_a_full_analyze(
+    tmp_path: Path,
+):
+    """2H Task 4 (`schema_operations`), live and whole, through the REAL
+    command — the only path that reads `src/main/resources/graphql` at all.
+
+    Four claims, and each is a different half of the mechanism:
+
+    * the RuntimeWiring pin — `auditTrail` is the one root field in the
+      fixture's schema that no annotation implements, so it is the one new
+      row, at `declared` with no handler and no caller;
+    * first-writer agreement — the other six root fields already had
+      annotation rows when this style ran, and the insert-if-absent guard kept
+      them, handler and all. Six annotation twins, not six duplicates;
+    * the shape universes stay apart (2H design §4) — `orders` keeps the
+      compiled type its handler really serializes, and `auditTrail` points at
+      a schema NAME that resolves inside the declared universe, with its own
+      shape and fields expanded from the schema's field declarations. No
+      simple-name join is made in either direction;
+    * the format ladder's rung 1 outranks its rung 4 — the row's payload is a
+      schema-described shape, which rung 4 would report as the schema's own
+      format at `narrowed`; `format_fixed` answers first, so the row reads
+      `json`/`resolved` and the column never receives a value D00's format set
+      does not contain.
+    """
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    try:
+        roots = {
+            str(row["path"]): row
+            for row in workspace.query("endpoints")
+            if row["protocol"] == "graphql" and row["method"] is not None
+        }
+        shapes = {str(row["shape_id"]): row for row in workspace.query("shapes")}
+        audit_fields = [
+            (str(row["wire_name"]), row["wire_type"], row["nullable"], row["evidence"])
+            for row in workspace.query("shape_fields")
+            if row["shape_id"] == "AuditEntry"
+        ]
+    finally:
+        workspace.close()
+
+    # The schema declares seven root fields; six of them are also annotated.
+    assert set(roots) == {
+        "orderById",
+        "orders",
+        "dgsOrders",
+        "mpOrders",
+        "auditTrail",
+        "placeOrder",
+        "orderUpdates",
+    }
+    schema_first = [path for path, row in roots.items() if row["catalog_id"] == "graphql-schema"]
+    assert schema_first == ["auditTrail"]
+
+    audit = roots["auditTrail"]
+    assert (audit["method"], audit["direction"]) == ("query", "inbound")
+    assert (audit["evidence"], audit["resolution"]) == ("declared", "resolved")
+    assert audit["handler"] is None and audit["caller"] is None
+    # A root field's ARGUMENTS are what the operation takes, and the
+    # interpreter does not project them — so there is nothing to carry, and
+    # NULL says exactly that. `auditTrail(id: ID!)` really does take one.
+    assert audit["request_shape"] is None
+    assert (audit["format"], audit["format_resolution"]) == ("json", "resolved")
+    # `[AuditEntry!]` — the declared universe's own name, reached through the
+    # `item` chain, never a compiled class.
+    assert json.loads(str(audit["response_shape"])) == {
+        "wire_type": "array",
+        "wire_format": None,
+        "nullable": True,
+        "item": {
+            "wire_type": "object",
+            "wire_format": None,
+            "nullable": False,
+            "shape_id": "AuditEntry",
+        },
+    }
+    assert shapes["AuditEntry"]["open"] is False
+    assert audit_fields == [
+        ("at", "string", False, "declared"),
+        ("actor", "string", True, "declared"),
+    ]
+
+    # The six annotated ones kept the annotation's row — the handler symbol is
+    # the thing only that side knows — and `orders` kept the compiled response
+    # type its handler declares, never overwritten by the schema's own.
+    assert all(
+        roots[path]["handler"] is not None and roots[path]["evidence"] == "compiler"
+        for path in set(roots) - {"auditTrail"}
+    )
+    assert roots["orders"]["catalog_id"] == "spring-graphql"
+    assert (
+        json.loads(str(roots["orders"]["response_shape"]))["item"]["shape_id"]
+        == "com/acme/orders/contracts/OrderView#"
+    )
+
+
+def test_a_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
+    """The same row at the document a reader actually sees. `none recorded`
+    rather than `unresolved`: the schema addressed this operation outright and
+    names no code, which is an absence rather than a failed read — and the
+    response the reader gets is the schema's own type, by its schema name."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)  # analyze + render + export
+    document = (tmp_path / "render" / "architecture.md").read_text()
+
+    assert "| `graphql query auditTrail` | none recorded | - → - | json | resolved |" in document
+    assert "- `graphql query auditTrail`\n  - Response: array of object AuditEntry" in document
 
 
 def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_path: Path):
