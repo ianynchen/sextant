@@ -59,7 +59,20 @@ without `@WebMethod` in a `@WebService` class IS exposed by JAX-WS's own rules, 
 class gate derives every public method, `operationName` falling back to the method
 name via 2H's `path_fallback: construct_name`.
 
-Two vocabulary additions, both closed words, both refused-when-meaningless per the 2H
+**Execution amendment (checkpoint falsification, 2026-09-01):** the brainstorm assumed
+the `@ServerEndpoint`/`@OnMessage` class-gate mechanism could express "every public
+method" and that a `when`-style attribute filter existed in `annotation_driven`; the
+checkpoint proved neither (the 2H mechanism requires a method-level annotation, and
+the attribute filter exists only in other engines — with today's words
+`@WebMethod(exclude = true)` would derive a confidently wrong row). The ruling: TWO
+further framework-neutral vocabulary words join the four below — (3) a class-gate
+member rule, `members: public_methods` (the framework exposes the construct's public
+members; method-level rules override per member), and (4) a per-rule attribute
+exclusion filter, `unless: {attribute: <name>, equals: <value>}` (a declaration the
+framework itself withdraws derives nothing). The 2H precedent: vocabulary grows for a
+genuinely new declaration pattern; framework names stay in catalogs.
+
+Four vocabulary additions in all, closed words, refused-when-meaningless per the 2H
 validation pattern, no SOAP word in engine code:
 
 1. **`qualifier_format: qname`** — joins two attributes as `{a}b`. 2H's
