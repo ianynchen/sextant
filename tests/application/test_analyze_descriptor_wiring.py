@@ -21,7 +21,9 @@ from sextant.domain.factfile import read_fact_tree, write_fact_file
 from sextant.domain.facts import DeclaredShapeFact, Document, EmbeddedDescriptorFact
 from sextant.ingress.interpret.descriptors import SchemaLocation, interpret_descriptors
 from sextant.ingress.read.avsc import AvscReader
+from sextant.ingress.read.graphql_sdl import GraphqlSdlReader
 from sextant.ingress.read.proto_source import ProtoSourceReader
+from sextant.ingress.read.yaml_config import YamlConfigReader
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
@@ -317,6 +319,95 @@ def test_an_uninterpretable_descriptor_is_recorded_as_descriptors_not_interprete
         workspace.close()
 
     assert result.descriptors_not_interpreted == ("pkg.Widget",)
+
+
+def _sdl_module(root: Path) -> ModuleModel:
+    """Maven's real GraphQL layout: the SDL directory is a schema root that
+    sits INSIDE the resource root, which is why this module declares both."""
+    return ModuleModel(
+        module_id="com.acme:widgets",
+        coordinates="com.acme/widgets",
+        version="1.0.0",
+        root=root,
+        kind="library",
+        languages=frozenset(),
+        source_roots=(),
+        output_dirs=(root / "target" / "classes",),
+        resource_roots=(root / "src" / "main" / "resources",),
+        schema_roots=(root / "src" / "main" / "resources" / "graphql",),
+    )
+
+
+def _write_sdl_module(root: Path) -> None:
+    schema_root = root / "src" / "main" / "resources" / "graphql"
+    schema_root.mkdir(parents=True)
+    (schema_root / "schema.graphqls").write_text(
+        "type Query { auditTrail: [AuditEntry!] }\n", encoding="utf-8"
+    )
+    (schema_root / "audit.graphqls").write_text(
+        "type AuditEntry { at: String! }\n", encoding="utf-8"
+    )
+
+
+def _analyze_sdl_module(root: Path) -> None:
+    workspace = DuckDbWorkspace(root / "ws.duckdb")
+    try:
+        analyze(
+            path=root,
+            workspace=workspace,
+            detectors=[_FakeDetector(_sdl_module(root))],
+            scanners=[_NoOpScanner()],
+            catalogs=_EmptyCatalogs(),
+            fact_root=root / "facts",
+            progress=NullProgress(),
+            readers=[YamlConfigReader(), GraphqlSdlReader()],
+            interpret=_FakeInterpreter(),
+        )
+    finally:
+        workspace.close()
+
+
+def test_the_sdl_reader_and_the_graphql_branch_reach_declared_shapes_through_analyze(
+    tmp_path: Path,
+):
+    """The whole path in one run: the detector's schema root, the registry's
+    reader, and the interpreter's module-wide merge — `Query.auditTrail`
+    resolving to the OTHER file's type is the proof the merge happened here
+    and not per file."""
+    _write_sdl_module(tmp_path)
+
+    _analyze_sdl_module(tmp_path)
+
+    shapes = {
+        fact.symbol: fact
+        for _, _, facts in read_fact_tree(tmp_path / "facts")
+        for fact in facts
+        if fact.kind == "declared_shape"
+    }
+    assert set(shapes) == {"Query", "AuditEntry"}
+    assert shapes["Query"].schema_format == "graphql"
+    assert shapes["Query"].evidence == "declared"
+    [audit_trail] = shapes["Query"].fields
+    assert audit_trail.item is not None
+    assert audit_trail.item["shape_id"] == "AuditEntry"
+
+
+def test_an_sdl_file_inside_the_resource_root_is_read_once_not_twice(tmp_path: Path):
+    """The SDL directory lives UNDER `src/main/resources`, and the resource
+    walk is recursive, so one registry serving both loops would hand the same
+    file to the same reader twice — two documents for one file (D00 §7's
+    one-record-per-source-file rule), two descriptors, and every graphql type
+    declared twice, which the interpreter would then report as a duplicate
+    and drop entirely."""
+    _write_sdl_module(tmp_path)
+
+    _analyze_sdl_module(tmp_path)
+
+    documents = [document for _, document, _ in read_fact_tree(tmp_path / "facts")]
+    assert sorted(document.relative_path for document in documents) == [
+        "audit.graphqls",
+        "schema.graphqls",
+    ]
 
 
 def test_the_ingress_import_contract_still_holds():

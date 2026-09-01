@@ -21,6 +21,14 @@ _NON_SOURCE_DIRECTORIES = frozenset({"resources", "webapp", "filters"})
 _SCHEMA_ROOT_NAMES = ("proto", "avro")
 _SCHEMA_DIRECTORIES = frozenset(_SCHEMA_ROOT_NAMES)
 
+# Every schema root, as its path segments under `src/main`, in the order
+# `schema_roots` reports them. Spring GraphQL's SDL directory is the one that
+# is not a sibling of the source roots: SDL ships on the classpath, so it
+# lives UNDER `src/main/resources`. It needs no entry in _SCHEMA_DIRECTORIES
+# for that reason — `resources` is already a non-source directory, so no
+# language was ever going to be reported from under it.
+_SCHEMA_ROOT_PATHS = (*((name,) for name in _SCHEMA_ROOT_NAMES), ("resources", "graphql"))
+
 _CONTAINER_FILES = (
     "Dockerfile",
     "Containerfile",
@@ -75,8 +83,8 @@ class MavenDetector:
             # discipline `resource_roots` keeps.
             schema_roots=tuple(
                 root
-                for name in _SCHEMA_ROOT_NAMES
-                if (root := path / "src" / "main" / name).is_dir()
+                for parts in _SCHEMA_ROOT_PATHS
+                if (root := path.joinpath("src", "main", *parts)).is_dir()
             ),
         )
         return RepositoryModel(root=path, modules=(module,))

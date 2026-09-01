@@ -24,6 +24,7 @@ from sextant.ingress.extract.jvm.generated_naming import JvmGeneratedNaming
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
 from sextant.ingress.read.avsc import AvscReader
+from sextant.ingress.read.graphql_sdl import GraphqlSdlReader
 from sextant.ingress.read.properties import PropertiesReader
 from sextant.ingress.read.proto_source import ProtoSourceReader
 from sextant.ingress.read.yaml_config import YamlConfigReader
@@ -123,6 +124,7 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
                 YamlConfigReader(),
                 AvscReader(),
                 ProtoSourceReader(),
+                GraphqlSdlReader(),
             ],
             interpret=_JvmDescriptorInterpreter(),
         )

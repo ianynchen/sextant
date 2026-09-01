@@ -86,14 +86,17 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # document each — a real source counted once, which is exactly what this
     # test exists to keep true.
     # + 6: 2H Task 1's GraphQL, WebSocket/STOMP and SSE surfaces compile to
-    # six more class files, one document each. The two new `.graphqls`
-    # resources under src/main/resources are NOT claimed by any reader yet
-    # (readers claim by extension, and nothing in this task adds one), so
-    # they add no documents here.
+    # six more class files, one document each.
     # + 1: 2H Task 2's `CustomerGraphqlController` — one more class file, one
     # more document. It is the class-level-scope resolver shape, which needed
     # its own type to carry the class-level annotation.
-    assert metadata["coverage"]["documents"] == 94
+    # + 2: 2H Task 3's SDL reader now claims Task 1's two `.graphqls` files
+    # under `src/main/resources/graphql`, one document each. TWO, not four:
+    # that directory is a schema root INSIDE the resource root, and `analyze`
+    # reads it in the schema loop only (`_config_files`) — a file read by both
+    # loops would mint a second Document for one source file, the very fault
+    # this test exists to catch.
+    assert metadata["coverage"]["documents"] == 96
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

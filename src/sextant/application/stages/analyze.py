@@ -31,6 +31,25 @@ from sextant.domain.facts import DeclaredShapeFact, Document, EmbeddedDescriptor
 from sextant.domain.resource_files import list_files
 
 
+def _config_files(module: ModuleModel, root: Path) -> tuple[Path, ...]:
+    """Everything under a resource root that the schema loop below is not
+    already reading.
+
+    One schema root genuinely lives INSIDE a resource root — Spring GraphQL's
+    SDL ships on the classpath, so the build puts it under
+    `src/main/resources/graphql` — and the resource walk is recursive. One
+    registry serves both loops, so without this the same reader would be
+    handed the same file twice: two `Document` records for one source file
+    (D00 §7), and two identical descriptors for the interpreter to read as a
+    schema that declares every one of its types twice.
+    """
+    return tuple(
+        file
+        for file in list_files(root)
+        if not any(file.is_relative_to(schema_root) for schema_root in module.schema_roots)
+    )
+
+
 @dataclass(frozen=True)
 class AnalyzeResult:
     module: ModuleModel
@@ -106,7 +125,7 @@ def analyze(
     progress.start("read")
     entries = 0
     for root in module.resource_roots:
-        for reader, owned in group_files_by_reader(list_files(root), readers):
+        for reader, owned in group_files_by_reader(_config_files(module, root), readers):
             request = ReadRequest(
                 module_id=module.module_id, version=module.version, files=owned, root=root
             )

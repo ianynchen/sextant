@@ -138,12 +138,30 @@ def test_schema_roots_is_empty_when_the_module_has_no_schema_directory(tmp_path:
     assert module.schema_roots == ()
 
 
-def test_schema_roots_reports_both_of_the_real_fixtures_schema_directories():
+def test_schema_roots_reports_the_sdl_directory_under_resources(tmp_path: Path):
+    """Spring GraphQL's own convention puts SDL on the classpath, so this one
+    schema root sits UNDER `src/main/resources` rather than beside the source
+    roots — the detector reads a build layout, and this is the layout the
+    build actually has."""
+    _module(tmp_path)
+    graphql = tmp_path / "src" / "main" / "resources" / "graphql"
+    graphql.mkdir(parents=True)
+
+    module = MavenDetector().detect(tmp_path).modules[0]
+
+    assert module.schema_roots == (graphql,)
+    # `resources` is a non-source directory, so nothing under it was ever
+    # going to be reported as a language.
+    assert module.languages == frozenset()
+
+
+def test_schema_roots_reports_every_one_of_the_real_fixtures_schema_directories():
     module = MavenDetector().detect(FIXTURE).modules[0]
 
     assert module.schema_roots == (
         FIXTURE / "src" / "main" / "proto",
         FIXTURE / "src" / "main" / "avro",
+        FIXTURE / "src" / "main" / "resources" / "graphql",
     )
 
 

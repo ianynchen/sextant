@@ -11,6 +11,11 @@ would then need adding twice.
 `grpc_tools` is confined the same way for the same reason, one step earlier —
 compiling `.proto` text is the source-file reader's job, not the
 interpreter's, and not anybody else's.
+
+`graphql` is the third entry and the rule's first real test: 2H added a
+schema format, and it added it by extending this one module and this
+allowlist — the SDL reader (`ingress/read/graphql_sdl.py`) emits its file
+verbatim and never imports a GraphQL runtime at all.
 """
 
 import ast
@@ -62,6 +67,13 @@ def test_the_protobuf_runtime_is_imported_only_by_the_interpreter():
     assert _offenders("google.protobuf", INTERPRETER) == []
 
 
+def test_the_graphql_runtime_is_imported_only_by_the_interpreter():
+    """The SDL reader is the module this would catch first: it hands the
+    interpreter the file's text verbatim, and a `parse` call there would be a
+    second place that knows what SDL means."""
+    assert _offenders("graphql", INTERPRETER) == []
+
+
 def test_the_schema_compiler_is_imported_only_by_the_proto_reader():
     assert _offenders("grpc_tools", PROTO_READER) == []
 
@@ -71,6 +83,12 @@ def test_the_check_finds_the_protobuf_runtime_where_one_is_allowed_to_be():
     reason. The interpreter is the one module that must read descriptors, so
     the check must see the import there."""
     assert INTERPRETER in _importers("google.protobuf")
+
+
+def test_the_check_finds_the_graphql_runtime_where_one_is_allowed_to_be():
+    """The same positive control, for the same reason: an empty offender list
+    proves nothing unless the walk can be shown to see this import."""
+    assert INTERPRETER in _importers("graphql")
 
 
 def test_the_check_would_catch_a_module_that_imports_the_schema_compiler(tmp_path, monkeypatch):
