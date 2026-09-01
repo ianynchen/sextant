@@ -1,0 +1,10 @@
+// common types — imported by order.proto
+syntax = "proto3";
+package sextant.orders;
+option java_package = "com.example.orders.proto";
+option java_outer_classname = "CommonProtos";
+
+message Money {
+  string currency = 1;
+  int64 amount_minor = 2;  // renames to amountMinor on the JSON wire
+}

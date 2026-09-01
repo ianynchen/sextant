@@ -1,0 +1,38 @@
+// Leading file comment — with unicode: héllo, 中文, emoji 🚀
+/* Block comment
+   spanning lines with weird chars: <>&"'\x00-ish \n literal */
+syntax = "proto3";
+
+package sextant.orders;  // trailing comment
+
+import "common.proto";
+
+option java_package = "com.example.orders.proto";  /* another trailing */
+option java_outer_classname = "OrderProtos";
+
+// Comment on the message
+// with a second line — and a fake directive: option java_package = "evil";
+message OrderRequest {
+  // comment on a field, containing */ almost-terminators and // nested
+  string total_amount = 1;  // trailing: renames to totalAmount on JSON wire
+  /* block on field */
+  int32 count = 2 [json_name = "explicitCount"];  // explicit override
+  sextant.orders.Money price = 3;  // cross-file reference (two-phase pool pin)
+  // comment before a nested message
+  message Line {
+    string sku = 1;  // sku comment
+  }
+  repeated Line lines = 4;
+  map<string, string> tags = 5;
+  // enum comment
+  enum Status {
+    STATUS_UNSPECIFIED = 0;  // zero
+    STATUS_OPEN = 1;
+  }
+  Status status = 6;
+  optional string note = 7;  // proto3 optional: nullable
+}
+
+message OrderReply {
+  string order_id = 1;
+}

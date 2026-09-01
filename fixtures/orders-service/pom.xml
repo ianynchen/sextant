@@ -109,6 +109,16 @@
       <artifactId>google-cloud-pubsub</artifactId>
       <version>1.129.3</version>
     </dependency>
+    <dependency>
+      <groupId>com.google.protobuf</groupId>
+      <artifactId>protobuf-java</artifactId>
+      <version>4.36.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+      <version>1.12.2</version>
+    </dependency>
   </dependencies>
   <build>
     <plugins>
@@ -126,6 +136,34 @@
                 <sourceDir>${project.basedir}/src/main/kotlin</sourceDir>
                 <sourceDir>${project.basedir}/src/main/java</sourceDir>
               </sourceDirs>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>io.github.ascopes</groupId>
+        <artifactId>protobuf-maven-plugin</artifactId>
+        <version>5.1.8</version>
+        <configuration>
+          <protoc>4.36.1</protoc>
+        </configuration>
+        <executions>
+          <execution>
+            <goals><goal>generate</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.avro</groupId>
+        <artifactId>avro-maven-plugin</artifactId>
+        <version>1.12.2</version>
+        <executions>
+          <execution>
+            <phase>generate-sources</phase>
+            <goals><goal>schema</goal></goals>
+            <configuration>
+              <sourceDirectory>${project.basedir}/src/main/avro</sourceDirectory>
+              <outputDirectory>${project.basedir}/target/generated-sources/avro</outputDirectory>
             </configuration>
           </execution>
         </executions>
