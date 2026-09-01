@@ -78,6 +78,11 @@ public final class ClassScanner {
         private final String documentId;
         private final Consumer<String> onKotlinMetadataUnsupported;
         private String typeSymbol;
+        // ASM's internal name for the class's own direct supertype, kept from
+        // `visit` because a method visitor sees no class-level context: it is
+        // what tells a generated Avro record apart from any other class whose
+        // <clinit> parses a schema (DescriptorHarvest).
+        private String superName;
         // Populated from @Metadata before any field is visited (ASM visits class-level
         // annotations before fields — see visitAnnotation below); empty for every
         // non-Kotlin class, which leaves Java's rule as the only source.
@@ -93,6 +98,7 @@ public final class ClassScanner {
         @Override
         public void visit(int v, int access, String name, String sig, String superName, String[] ifaces) {
             typeSymbol = symbolOf(name + "#");
+            this.superName = superName;
             // D00 §5a's PTR carrier. `superName` says only "extends
             // ParameterizedTypeReference"; the Signature attribute is the only
             // place its argument is written down, and for an anonymous subclass
@@ -228,6 +234,14 @@ public final class ClassScanner {
                     // per-instruction scan for call sites, so this call is
                     // unconditional here and a no-op on every other method.
                     lines.addAll(MethodFlow.fieldWrites(documentId, this));
+                    // D00 §5's embedded_descriptor: static initializers only,
+                    // gated inside DescriptorHarvest for the same reason. The
+                    // fact names the class, not the method, so it is emitted
+                    // where the constants are read rather than beside the
+                    // class's own symbol — which ASM visits before any method
+                    // body exists to read.
+                    lines.addAll(
+                        DescriptorHarvest.embeddedDescriptors(documentId, owner, superName, this));
                 }
             };
         }

@@ -178,7 +178,7 @@ removed.
 
 ## 5. Fact kinds
 
-Fourteen. Every one exists because a stated requirement consumes it (NFR-6).
+Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 
 | Kind | Carries | Consumed by |
 |---|---|---|
@@ -196,7 +196,9 @@ Fourteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `dependency` | Coordinates, scope, tier | Classpath tiering, library identity |
 | `deployment` | Service name, ports, kind, source | System linking |
 | `declared_contract` | Protocol, wire identity, references to `declared_shape` facts, **whether the build consumes it** | Endpoint catalog, drift |
+| `embedded_descriptor` | The schema holder's symbol, the schema format, and the payload **verbatim and unparsed** (§5d) | The descriptor interpreter, which is the only thing that reads it |
 | `declared_shape` | Shape identity, owning contract, fields — wire name, **field number where the format has one**, wire type, required, default | Drift comparison, gRPC and message matching, DR-4's embedded-descriptor check |
+| — | **Interpreter-emitted, never extractor-emitted** (§5d): the one place that understands a schema format turns `embedded_descriptor` payloads and schema files into these, so no scanner in any language links a schema runtime. | — |
 
 ### 5a. Typed signatures and type references
 
@@ -386,6 +388,38 @@ format reuses the one column rather than earning a field of its own.
 Which files matter, in what order, and what a placeholder means, is the resolution side's
 question, answered from catalog data ([D02](D02-catalog-schema.md)) — ingestion only
 reads what is on disk into these fields.
+
+### 5d. Embedded descriptors, and the one interpreter that reads them
+
+```json
+{"kind": "embedded_descriptor", "symbol": "com/example/orders/proto/OrderProtos#",
+ "schema_format": "protobuf", "payload": "Cgtvcm…", "origin": "compiled"}
+```
+
+**The fact says one thing: "this artifact embeds this schema payload, verbatim."** The
+emitter never parses it, which is what keeps schema-format knowledge out of every
+scanner: a Go scanner emits it from a generated `rawDesc` literal, a Python scanner from
+`serialized_pb`, a TypeScript scanner from protobufjs static output, and none of them
+links a schema runtime to do it.
+
+- **`symbol`** names the **holder** — the generated class a compiled payload was found
+  in, the record's own name for one read off a schema file — in the bare type-descriptor
+  grammar (§1). It is what a gap names when a payload cannot be interpreted, and one
+  holder emits one fact: a protobuf file's messages all share their file's descriptor, so
+  a fact per message would be one payload copied once per type.
+- **`schema_format`** is `protobuf` or `avro`.
+- **`payload`** is base64 for a binary format and the text itself for a textual one — a
+  protobuf `FileDescriptorProto`'s bytes are base64; an Avro schema is JSON that was
+  always JSON and travels verbatim, because re-encoding readable text costs a reader
+  something and buys nothing.
+- **`origin`** is `compiled` (the default, and what an extractor always emits) or
+  `source` (a schema file in the repository). Where both declare the same shape, the
+  compiled one wins: the artifact that runs is the authority (DR-4).
+
+**`declared_shape` is the interpreter's output, never a scanner's.** One component reads
+these payloads, and it is the only code in the system that understands a schema format —
+so a format's rules are stated once, and a new language's extractor gains schema support
+by emitting `embedded_descriptor` and nothing else.
 
 ### Why `module` is a fact and not a passing argument
 
