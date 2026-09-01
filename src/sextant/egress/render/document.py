@@ -260,11 +260,18 @@ def _unresolved_derivation_lines(endpoints: Sequence[dict[str, object]]) -> list
     The same filter also catches an unresolved row from any OTHER engine
     (a computed base address, Task 8 D-4): the row carries no marker naming
     its deriving STYLE, only its catalog, so this is deliberately a superset
-    rather than a filter this data cannot make honestly."""
+    rather than a filter this data cannot make honestly — and the lead-in
+    line below says so on the page itself, not only in this docstring."""
     rows = [e for e in endpoints if e.get("path") is None and e.get("resolution") == "unresolved"]
+    lines = [
+        (
+            "- Unresolved endpoint derivations — across every engine, whatever "
+            "their evidence, not configuration alone:"
+        )
+    ]
     if not rows:
-        return ["- Unresolved endpoint derivations: none."]
-    lines = []
+        lines.append("- None.")
+        return lines
     for row in rows:
         catalog_id = row.get("catalog_id")
         catalog = "unresolved" if catalog_id is None else str(catalog_id)

@@ -533,6 +533,13 @@ def test_coverage_section_is_honest_about_no_environments_and_no_unresolved_keys
     text = render_module_document(MODULE, REPORT, "a3f91c")
     assert "Environments resolved: none." in text
     assert "Configuration keys unresolved: none." in text
+    # The lead-in (F2, review round 1) always renders, even where the list
+    # under it is empty — the same NFR-7 "looked and found nothing" rule
+    # every other section in this document follows.
+    assert (
+        "Unresolved endpoint derivations — across every engine, whatever "
+        "their evidence, not configuration alone:\n- None."
+    ) in text
 
 
 def test_coverage_section_names_an_unresolved_config_join_derivation_by_catalog_and_site():
@@ -571,6 +578,13 @@ def test_coverage_section_names_an_unresolved_config_join_derivation_by_catalog_
         coverage={"documents": 1, "partial_documents": 0},
     )
     text = render_module_document(MODULE, report, "a3f91c")
+    # F2, review round 1: the list is a disclosed superset — every engine's
+    # own unresolved rows land here, not config_join's alone — and the page
+    # itself says so, not only the docstring.
+    assert (
+        "Unresolved endpoint derivations — across every engine, whatever "
+        "their evidence, not configuration alone:"
+    ) in text
     assert (
         "Unresolved endpoint derivation: `spring-cloud-stream` — "
         "handler `com/acme/orders/Bindings#orphanConsumer(sig_1).`."

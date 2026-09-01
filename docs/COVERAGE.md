@@ -257,6 +257,13 @@ the gap list:
   up exactly like a real bean, and where `spring.cloud.function.definition` is absent
   (every candidate binds, the framework's own default) it derives its own row, unresolved
   when nothing in configuration names a destination for it.
+- **A binding key absent from every configuration file is visible as its unresolved
+  endpoint row, not as a named key.** Only a key some file actually declares reaches
+  `resolved_config` at all — a key nobody wrote has no row to be missing FROM, so there is
+  nothing for the coverage report to name it by. The report instead names the row itself:
+  by its `catalog_id` and by its `handler` (the bean method exists even where its binding
+  key does not) — the honest boundary discovered when Task 7's review found no
+  engine-to-report channel carrying a config_join row's own key.
 - **`@ConfigurationProperties` binds through the `prefix` argument only; the `value`
   alias is not read.** A class annotated `@ConfigurationProperties(value = "billing")`
   never climbs the field ladder — only `prefix =` does.

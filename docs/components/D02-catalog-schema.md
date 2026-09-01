@@ -1091,8 +1091,13 @@ inherits that precedence and renders as unconfirmed.
 
 **An unresolved address is not an absent endpoint.** If the key is missing from every
 configuration source, the endpoint is still recorded with its address as the unresolved
-expression, and the coverage report names the key that was not found. Dropping it would make
-a partially-configured module look like a module with fewer boundaries.
+expression. The coverage report names the DERIVATION — by its `catalog_id` and its
+`handler`/`caller`, since the bean method exists even where its binding key does not — and
+names a missing KEY only where some configuration file actually declared it: a key nobody
+wrote leaves no `resolved_config` row to be missing FROM, so there is nothing for the
+report to name it by (the no-channel boundary Task 7's review discovered, recorded in
+[COVERAGE.md](../COVERAGE.md)). Dropping the row would make a partially-configured module
+look like a module with fewer boundaries.
 
 **`media_from_config` stamps declared media onto messaging endpoints from the same resolved
 keys, rather than deriving an address:**

@@ -94,6 +94,13 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # any row carries.
     assert "Environments resolved: `default`, `prod`." in document
     assert "only.in.default — missing_key in prod" in document
+    # F2, review round 1: the disclosed lead-in — the list below spans
+    # every engine's own unresolved rows (the fixture's own live proof:
+    # non-config_join catalogs appear in it too), not config_join alone.
+    assert (
+        "Unresolved endpoint derivations — across every engine, whatever "
+        "their evidence, not configuration alone:"
+    ) in document
     assert (
         "Unresolved endpoint derivation: `spring-cloud-stream` — handler "
         "`com/acme/orders/streams/OrderStreamBindings#orphanConsumer(sig_b4c25d22).`."
