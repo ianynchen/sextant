@@ -526,6 +526,35 @@ threshold: a thin shape simply survives against several candidates and is record
 `narrowed` with all of them listed. This is more expensive than path matching and would
 look like a candidate for simplification, which is why it is recorded.
 
+### DR-6 — Predicted behaviour mirrors the framework, exactly
+
+Sextant does not do error handling of its own over the code it analyses — it predicts
+what the language and framework under analysis will do. Wherever the framework repairs a
+declaration, Sextant repairs it identically; wherever the framework raises, Sextant
+records the declaration as an error. No deviation: a path Spring would serve after
+normalising is derived normalised, and never in a spelling Spring would not serve.
+A catalog supporting one framework mirrors that framework. Where two supported
+frameworks behave differently on the same declaration shape, the behaviours live in
+separate per-framework units — separate catalogs carrying the difference as data
+(a separator, a default, a refusal), or separate adapter modules where data cannot
+express it — never one unit approximating both.
+
+**Considered options.** Doing our own "sensible" handling — normalising nothing, or
+normalising by our own rules — is simpler and produces confidently wrong identities:
+bare prefix-concatenation once derived `/api/gatewayowners/{ownerId}` at `resolved`
+evidence for a route Spring serves as `/api/gateway/owners/{ownerId}`. A wire identity
+that differs from what the runtime serves fails DR-5's linking silently, which is
+fabrication's quiet twin: a real dependency that can never match.
+
+**Consequences.** Framework behaviour becomes catalog data wherever possible (the path
+separator, Maven's parent-coordinate inheritance), so mirroring a second framework's
+divergent rule is a data change, not a code branch. This rule governs *predicted*
+behaviour only: errors in Sextant's own inputs — a malformed catalog, an unreadable
+schema — remain refusals and recorded gaps under the unresolved-is-an-answer rule,
+because there is no framework whose behaviour they predict. When a framework's repair
+behaviour is unknown, the honest output is `unresolved`, never a guess at what the
+repair might be.
+
 ---
 
 ## 12. Open decisions
