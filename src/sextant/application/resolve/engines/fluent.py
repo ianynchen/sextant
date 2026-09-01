@@ -20,6 +20,11 @@ chain key — a constructor row's key is its `receiver` (its `result` is void,
 checkpoint ruling CP-3), every other row's key is its own `result`. A chain
 that never reaches a terminal derives nothing (D02 §4's "the true answer").
 
+The same link is followed BACKWARD once, from each root, to fold whatever
+the chain already captured before it (2F design §4): a builder states its
+base address before the call that carries the verb, so a forward-only walk
+could never see it.
+
 Shares `argument_descriptor`, `url_of` and `supertypes_of` verbatim with
 `single_call` (`shapes.arguments`) — the same D00 §5 argument grammar,
 resolved here off a captured step argument rather than a `methods` row's
@@ -38,10 +43,13 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.arguments import (
     CallFacts,
     CarrierRules,
+    FieldFacts,
     _arg_at,
     _capture_resolved,
+    address_argument,
     argument_descriptor,
     channel_of,
+    field_facts,
     linked_channels,
     supertypes_of,
     url_of,
@@ -49,15 +57,22 @@ from sextant.application.resolve.shapes.arguments import (
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 
-# The four capture fields whose declared value is an `argN` reference into
+# The capture fields whose declared value is an `argN` reference into
 # the matched call site's own arguments, rather than a literal already known
 # from the catalog (`http_method`, `response_is`). `channel` (Task 12,
 # 2E-prep) is `url`'s destination-shaped counterpart, exactly as
 # `single_call`'s own `channel_arg` is `url_arg`'s — never split into a peer
 # (D02 §2's `fluent` style), and resolved through the SAME literal-first,
 # `channel_via`-fallback ladder `single_call`/`interface_implementation`
-# already use, rather than `url_of`'s CP-2 split.
-_ARGUMENT_FIELDS = ("url", "body", "response", "channel")
+# already use, rather than `url_of`'s CP-2 split. `base` (2F design §4) is
+# the other half of ONE address: a builder's own base address, composed with
+# the `url` capture at derive time rather than read as an address of its own.
+_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")
+
+# The two captures that are halves of one address (2F design §4's base
+# composition) — `channel`'s alternative, and what
+# `_validate_url_channel_exclusivity` weighs against it as a group.
+_ADDRESS_FIELDS = ("base", "url")
 
 _ARG_REFERENCE = re.compile(r"^arg(\d+)$")
 
@@ -137,6 +152,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         },
     )
     supertypes = supertypes_of(workspace)
+    # Read once per run, the same `_rules_of`/`_enum_symbols` precedent —
+    # None for a catalog declaring no `field_sources` block, which is exactly
+    # what keeps such a catalog's rows what they were before 2F.
+    field_sources = field_facts(workspace, catalog)
     # Parsed once, as single_call does, for the same reason: both the root
     # scan below and the shared `argument_descriptor`'s `call_wrappers`
     # one-hop need the parsed list, never the raw JSON text.
@@ -179,6 +198,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             catalog=catalog,
             facts=facts,
             carrier_rules=carrier_rules,
+            field_sources=field_sources,
             rows=rows,
             seen=seen,
         )
@@ -189,7 +209,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             root = _matching_root(site, roots)
             if root is None:
                 continue
-            captures = _resolve_captures(root["captures"], site)
+            # A root's own captures fold ON TOP of whatever the chain already
+            # carried before reaching it — the root is later in the chain, so
+            # last-wins holds exactly as it does forward of here.
+            captures = {
+                **_prefix_captures(site, context),
+                **_resolve_captures(root["captures"], site),
+            }
             _walk(site, captures, reached_terminal=False, context=context)
 
     workspace.derive("call_endpoints", rows=rows)
@@ -211,8 +237,53 @@ class _ChainContext:
     catalog: Catalog
     facts: CallFacts
     carrier_rules: CarrierRules
+    field_sources: FieldFacts | None
     rows: list[dict[str, Any]]
     seen: set[tuple[str, str, str, str]]
+
+
+def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[str, Any]:
+    """The captures the chain already carried BEFORE its root — the same
+    `result → receiver` link `_walk` follows forward, followed backward from
+    the root instead (Task 6 checkpoint: "a pre-root backward walk is
+    well-defined", and 2F design §4's `base` capture is why one is needed at
+    all: `WebClient.builder().baseUrl(…).build().get()` puts the base address
+    two calls BEFORE the row that roots the chain, where a forward-only walk
+    can never see it).
+
+    Unambiguous by construction: a row's `receiver` is one value id, and the
+    row that produced it is the one whose own chain key (CP-3) IS that id —
+    never a search by proximity. Ties are broken by the caller's own ordinal
+    order (the `call_sites` query, NFR-1), and a value id already visited ends
+    the walk rather than looping. Captures fold in real chain order —
+    outermost producer first — so last-wins reads the same backward as
+    forward."""
+    producers: list[dict[str, Any]] = []
+    visited: set[Any] = set()
+    current = root_site
+    while True:
+        receiver = current.get("receiver")
+        if receiver is None or receiver in visited:
+            break
+        visited.add(receiver)
+        producer = next(
+            (
+                site
+                for site in context.sites
+                if site is not current and _chain_key(site) == receiver
+            ),
+            None,
+        )
+        if producer is None:
+            break
+        producers.append(producer)
+        current = producer
+    captures: dict[str, Any] = {}
+    for producer in reversed(producers):
+        step = _matching_step(producer, context.steps)
+        if step is not None:
+            captures.update(_step_captures(step, producer))
+    return captures
 
 
 def _walk(
@@ -279,8 +350,9 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     verbless = "http_method" not in captures
     body_argument = captures.get("body")
     response_argument = captures.get("response")
-    # A chain's own identity comes from EITHER a `url` capture (CP-2's
-    # peer/path split, `aws-sqs-sdk.yml`'s absolute queue URL) OR a
+    # A chain's own identity comes from EITHER an address capture — `url`
+    # (CP-2's peer/path split, `aws-sqs-sdk.yml`'s absolute queue URL) and
+    # 2F's `base`, composed into one address by `_composed_address` — OR a
     # `channel` capture (Task 12: an opaque destination, never split into a
     # peer — D02 §2's `fluent` style, the same rule `single_call`'s own
     # `channel_arg` keeps) — `_validate_url_channel_exclusivity` refuses a catalog whose
@@ -298,7 +370,7 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     # case builds by hand.
     destinations: Sequence[tuple[str | None, str | None, str]]
     if "channel" in captures:
-        channel_argument = captures.get("channel")
+        channel_argument = _address_read(captures.get("channel"), context)
         literal = channel_of(channel_argument)
         channel_via_forms = captures.get("channel_via") or []
         if literal[2] != "resolved" and channel_via_forms:
@@ -306,7 +378,7 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
         else:
             destinations = [literal]
     else:
-        destinations = [url_of(captures.get("url"))]
+        destinations = [_composed_address(captures, context)]
     # Computed once, outside the destinations loop — the same
     # `single_call` reasoning: neither depends on peer/path/resolution, and
     # `argument_descriptor` appends to the shared `referenced` accumulator,
@@ -379,6 +451,62 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
                 "produces": None,
             }
         )
+
+
+def _address_read(argument: dict[str, Any] | None, context: _ChainContext) -> dict[str, Any] | None:
+    """One address-position argument as it should be READ (2F design §4): a
+    `field`-kind argument — or a getter's own result — that the field ladder
+    can name a configuration expression for is replaced by that expression as
+    a string literal BEFORE any existing resolution path sees it, so an
+    imperatively-fed address behaves downstream exactly as a written one."""
+    return address_argument(argument, context.field_sources, context.facts)
+
+
+def _composed_address(
+    captures: dict[str, Any], context: _ChainContext
+) -> tuple[str | None, str | None, str]:
+    """One chain's peer/path/resolution from its `base` and `url` captures
+    together (2F design §4's base composition).
+
+    A chain declaring no `base` at all is exactly what it was before 2F: the
+    `url` capture alone, through `url_of` (which answers `unresolved` for a
+    chain that never reached a url step either). A `base` that WAS captured
+    and could not be read poisons the whole address — path NULL, `unresolved`
+    — rather than reporting the path alone as if it were the address: a
+    relative path presented as the row's whole identity would misstate the URL
+    the module actually calls, which is the one thing an address column must
+    never do. A base with no url capture stands alone through `url_of`; the
+    two together compose by concatenation and go through that same reader, so
+    CP-2 splits a composed absolute literal into peer and path exactly as it
+    splits a written one, while a composition carrying a `${…}` expression
+    matches no scheme and stays whole as `path` with `peer` NULL —
+    unsplittable until the per-environment join resolves it."""
+    url_argument = _address_read(captures.get("url"), context) if "url" in captures else None
+    if "base" not in captures:
+        return url_of(url_argument)
+    base_argument = _address_read(captures.get("base"), context)
+    base = _string_value(base_argument)
+    if base is None:
+        return None, None, "unresolved"
+    if "url" not in captures:
+        return url_of(base_argument)
+    path = _string_value(url_argument)
+    if path is None:
+        return None, None, "unresolved"
+    return url_of({"kind": "string", "value": base + path})
+
+
+def _string_value(argument: dict[str, Any] | None) -> str | None:
+    """A captured argument's own string literal, or None for anything else —
+    `url_of`'s own test, needed on its own here because composition works on
+    the two halves' TEXT before either is read as an address."""
+    if (
+        argument is not None
+        and argument.get("kind") == "string"
+        and isinstance(argument.get("value"), str)
+    ):
+        return str(argument["value"])
+    return None
 
 
 def _response_descriptor(
@@ -518,7 +646,8 @@ def _validate_url_channel_exclusivity(
     roots: list[dict[str, Any]], steps: list[dict[str, Any]], catalog: Catalog
 ) -> None:
     """Refuses a catalog whose `roots`/`steps`, TAKEN TOGETHER, declare both
-    a `url` capture and a `channel` capture anywhere — the two are
+    an address capture (`url`, or 2F's `base` half of one) and a `channel`
+    capture anywhere — the two are
     different readings of the same identity position (D02 §2's `fluent` style, mirroring
     `single_call`'s own `url_arg`/`channel_arg` exclusivity), and `_derive`
     only ever reads one of the two (`"channel" in captures` wins outright,
@@ -535,12 +664,13 @@ def _validate_url_channel_exclusivity(
     fields: set[str] = set()
     for entry in (*roots, *steps):
         fields.update(entry["captures"])
-    if "url" in fields and "channel" in fields:
+    address = sorted(field for field in _ADDRESS_FIELDS if field in fields)
+    if address and "channel" in fields:
         raise CatalogError(
             f"loading catalog {catalog.source}: this catalog's roots/steps declare both "
-            f"`url` and `channel` captures — they are two different readings of the same "
-            f"identity position (D02 §2's `fluent` style, mirroring single_call's own "
-            f"`url_arg`/`channel_arg` exclusivity)"
+            f"`{'`/`'.join(address)}` and `channel` captures — they are two different "
+            f"readings of the same identity position (D02 §2's `fluent` style, mirroring "
+            f"single_call's own `url_arg`/`channel_arg` exclusivity)"
         )
 
 

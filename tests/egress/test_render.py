@@ -374,16 +374,32 @@ def test_inbound_row_with_no_handler_renders_unresolved_in_the_handler_column():
     assert "| `GET /v1/orders` | unresolved | - → - | unresolved |" in text
 
 
-def test_messaging_gap_retires_and_both_lists_rotate_to_eleven():
+def test_messaging_gap_retires_and_both_lists_rotate_together():
     """The messaging-not-read gap closes now that annotation_driven reads
     Kafka/JMS/SQS/pub-sub catalogs: it drops from both lists at the same
     position (spec ruling I3), so the equal-length pairing in
     `test_every_machine_readable_gap_has_a_sentence_a_person_can_read` never
     masks a key that lost its sentence."""
     assert "messaging_endpoints_not_read" not in KNOWN_GAPS
-    assert len(KNOWN_GAPS) == 11
-    assert len(_GAPS) == 11
+    assert len(KNOWN_GAPS) == 12
+    assert len(_GAPS) == 12
     assert not any("Messaging endpoints" in gap for gap in _GAPS)
+
+
+def test_the_base_address_gap_retires_into_the_two_boundaries_that_remain():
+    """2F Task 8: `client_base_addresses_not_resolved` retires — an
+    imperatively-fed base address now climbs the field ladder to the
+    configuration key behind it, so "base addresses are not resolved" would
+    read as a gap where there is a capability. What is left is narrower and
+    is named rather than allowed to vanish (spec §4's rotation): a base built
+    by COMPUTATION reaches no key, and configuration written as code reaches
+    no reader at all. Eleven becomes twelve because one key retires and two
+    arrive, each with its own sentence in the same position."""
+    assert "client_base_addresses_not_resolved" not in KNOWN_GAPS
+    assert KNOWN_GAPS[1:3] == ["computed_base_addresses_not_traced", "config_as_code_not_read"]
+    assert _GAPS[1].startswith("Base addresses built by computation")
+    assert _GAPS[2].startswith("Configuration constructed in code")
+    assert not any("configured in builder code" in gap for gap in _GAPS)
 
 
 def test_inbound_media_column_joins_declared_lists():

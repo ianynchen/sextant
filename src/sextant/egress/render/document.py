@@ -17,8 +17,13 @@ from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
 _GAPS = [
     "An @HttpExchange interface implemented server-side is still reported outbound.",
     (
-        "Outbound base addresses configured in builder code are not resolved: "
-        "those endpoints carry no peer."
+        "Base addresses built by computation — concatenation, setter injection, "
+        "a method's return value — are not traced; only a directly-read field or "
+        "property reaches configuration."
+    ),
+    (
+        "Configuration constructed in code — a settings module, a config "
+        "factory — is not read; only configuration files reach resolution."
     ),
     "Sequence diagrams await the call graph.",
     "The structure diagram covers contract types only: inheritance edges are not extracted.",

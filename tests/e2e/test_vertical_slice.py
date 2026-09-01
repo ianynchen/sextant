@@ -168,10 +168,14 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # per-row breakdown.
     #
     # 2F Task 3 (the configuration surface fixture): +4 http outbound —
-    # `BillingClients`' own four half-2 WebClient chains, each an
-    # unresolved `(None, None)` row (a field read, a properties-getter call
-    # result, or a computed concatenation at `.uri()`'s own position, never
-    # a string literal). jms/kafka/pubsub/sqs are unchanged: `onAudit`'s own
+    # `BillingClients`' own four half-2 WebClient chains, each feeding
+    # `baseUrl(...)` a value no call-site literal names (a field read, a
+    # properties-getter call result, a computed concatenation) and each
+    # carrying its own distinct `.uri()` literal. Task 8's field ladder then
+    # composed base and path: three now carry `${billing.url}/...`, the
+    # computed one carries path NULL and reads `unresolved` (checkpoint D-4)
+    # — four rows either way, which is why this count is unchanged by it.
+    # jms/kafka/pubsub/sqs are unchanged: `onAudit`'s own
     # move to `${orders.audit.topic}` splits its previous `both`-direction
     # merge with `sendAuditMessage`'s send into two standalone rows (one
     # inbound, one outbound) rather than changing either bucket's total —

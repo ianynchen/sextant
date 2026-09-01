@@ -382,23 +382,26 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # identity with the listener, so it now stands unmerged (asserted
         # below) rather than disappearing into `direction: both`.
         (None, "${orders.audit.topic}"),
-        # 2F Task 3 fix round 1 (review ruling, spec §4 amended at commit
-        # 461d35d): `BillingClients`' four half-2 chains feed their base
-        # address through `WebClient.builder().baseUrl(...)` after all (a
-        # `base` capture with base+path composition is Task 8's own
-        # amendment, not yet shipped). TODAY, `baseUrl()` is not a declared
-        # step in `spring-webclient.yml`, so each chain derives off its own
-        # `.uri()` literal alone — resolved, peer NULL (a relative path) —
-        # regardless of what feeds `baseUrl()`. Each method's own literal is
-        # deliberately distinct so all three real cases (plus the computed
-        # miss) survive `fluent.py`'s cross-caller wire-identity dedup as
-        # four separate rows rather than collapsing into one. These four
-        # rows are expected to change again once Task 8 lands (re-freezing,
-        # not a bug) — pinned exactly as this live run emits them.
-        ("GET", "/invoices"),
-        ("GET", "/refunds"),
-        ("GET", "/statements"),
-        ("GET", "/adjustments"),
+        # 2F Task 8 (the field ladder and base composition, re-freezing Task
+        # 3's own four rows exactly as that pin promised): `baseUrl` is now a
+        # declared `base` capture, so each `BillingClients` chain composes
+        # the address it really calls — the base its argument names plus its
+        # own `.uri()` literal. Three rungs of the ladder answer, one per
+        # caller, and each returns the SAME expression from a different
+        # fact path: `fieldFedInvoice` off the field's own `@Value`,
+        # `constructorFedInvoice` off the `field_write` back to the
+        # annotated constructor parameter, `propertiesFedInvoice` off the
+        # `@ConfigurationProperties(prefix)` bean read through its getter.
+        # The whole expression stays in `path` with `peer` NULL —
+        # unsplittable until `resolved_peers` substitutes it per environment
+        # (asserted below). `computedBaseInvoice`'s concatenated base
+        # defeats every rung, and its row FLIPS from Task 3's `resolved`
+        # `/adjustments` to path NULL, `unresolved` (checkpoint D-4): a
+        # captured base nobody could read poisons the address rather than
+        # letting a relative path stand in for the whole URL.
+        ("GET", "${billing.url}/invoices"),
+        ("GET", "${billing.url}/refunds"),
+        ("GET", "${billing.url}/statements"),
         # 2F Task 7 (the `config_join` engine): the two binding rows whose
         # destination the configuration actually names. `handleOrder`'s
         # `Consumer<OrderEvent>` binds `-in-0` (inbound) to `stream-orders`,
@@ -1765,6 +1768,85 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
     }
 
 
+# --- 2F Task 8: the field ladder and base composition, live --------------
+#
+# Pinned from the live run this task froze — `uv run sextant module analyze
+# fixtures/orders-service`, still 91 endpoints (these four rows CHANGE; none
+# is added or removed), extractor 9.8.
+
+BILLING_CLIENTS = "com/acme/orders/config/BillingClients#"
+
+
+def _billing_row(report: ResolveReport, method: str) -> dict:
+    [row] = [
+        e
+        for e in report.endpoints
+        if e["caller"] is not None and f"{BILLING_CLIENTS}{method}(" in str(e["caller"])
+    ]
+    return row
+
+
+def test_each_ladder_rung_composes_the_same_base_expression_off_a_different_fact_path(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """The three real `BillingClients` chains, one per rung — every one of
+    them feeding `WebClient.builder().baseUrl(...)` a value no literal at the
+    call site names, and every one of them deriving the SAME expression from
+    a different set of facts:
+
+    - `fieldFedInvoice` — rung 1: the `field`-kind argument's own field
+      carries the `@Value` expression, returned verbatim;
+    - `constructorFedInvoice` — rung 2: the field carries no annotation at
+      all, and a `field_write` fact traces it to constructor parameter 0,
+      whose annotation lives only inside the `<init>` signature;
+    - `propertiesFedInvoice` — rung 3: the argument is not a field read but
+      the RESULT of `billingProperties.getUrl()`, followed one hop to that
+      call site, whose owner carries `@ConfigurationProperties(prefix =
+      "billing")`; `getUrl` de-prefixes to `url` and relaxed-binds to the
+      properties type's own declared `url` field.
+
+    The expression is composed with each chain's own `.uri()` literal and
+    kept WHOLE in `path`, `peer` NULL: `${billing.url}` matches no scheme,
+    so there is no authority to split off until the per-environment join
+    resolves it (the next test)."""
+    _, report = resolved_fixture
+
+    assert {
+        (row["path"], row["peer"], row["resolution"], row["catalog_id"])
+        for row in (
+            _billing_row(report, name)
+            for name in ("fieldFedInvoice", "constructorFedInvoice", "propertiesFedInvoice")
+        )
+    } == {
+        ("${billing.url}/invoices", None, "resolved", "spring-webclient"),
+        ("${billing.url}/refunds", None, "resolved", "spring-webclient"),
+        ("${billing.url}/statements", None, "resolved", "spring-webclient"),
+    }
+
+
+def test_a_computed_base_poisons_its_row_rather_than_reporting_the_path_alone(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`computedBaseInvoice`'s base is `this.fieldUrl + "/v2"` — a
+    concatenation whose argument reaches the call site as `unresolved` with
+    no property getter behind it, so every rung misses and the ladder answers
+    nothing (rung 4).
+
+    The row FLIPS from what Task 3 froze (`resolved`, path `/adjustments`):
+    before this task `baseUrl` was captured by nobody, so the `.uri()`
+    literal was the whole answer and the row read confident. Now the base IS
+    a declared capture, and one that failed — path NULL, `unresolved`
+    (checkpoint D-4). Reporting `/adjustments` as the address would state a
+    URL the module never calls; the row still says "this method calls
+    something over HTTP", which is true."""
+    _, report = resolved_fixture
+    row = _billing_row(report, "computedBaseInvoice")
+
+    assert (row["path"], row["peer"], row["resolution"]) == (None, None, "unresolved")
+    assert row["method"] == "GET"
+    assert row["catalog_id"] == "spring-webclient"
+
+
 def test_the_peer_join_answers_every_client_row_per_environment(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
@@ -1772,12 +1854,12 @@ def test_the_peer_join_answers_every_client_row_per_environment(
     resolve in this fixture, so every client-side row (outbound and `both`)
     is answered twice, and the endpoint rows themselves are untouched.
 
-    No fixture row carries a `${...}` address yet — the placeholder-bearing
-    base addresses arrive with Task 8's field ladder — so what this pins
-    today is the pass-through half: a literal address resolves to itself in
-    every environment, with no reason attached. The substitution and
-    `multi_placeholder` halves are unit-tested (`test_config_join.py`)
-    until that lands."""
+    Both halves are live now that Task 8's ladder puts real expressions in
+    `path`: a literal address passes through unchanged in every environment,
+    and the three `${billing.url}` rows substitute per environment — the
+    same row, two answers, which is the whole reason peers resolve as a join
+    rather than a write. `multi_placeholder` stays unit-tested
+    (`test_config_join.py`): no live row carries two placeholders."""
     workspace, report = resolved_fixture
     rows = workspace.query("resolved_peers")
     client_side = [e for e in report.endpoints if e["direction"] != "inbound"]
@@ -1789,6 +1871,16 @@ def test_the_peer_join_answers_every_client_row_per_environment(
     okhttp = [row for row in rows if row["path"] == "/legacy/exports"]
     assert {(row["resolved_peer"], row["resolved_path"]) for row in okhttp} == {
         ("legacy.acme.internal", "/legacy/exports")
+    }
+    # An expression resolves to a different real URL per environment.
+    billing = [row for row in rows if str(row["path"]).startswith("${billing.url}")]
+    assert {(row["environment"], row["resolved_path"]) for row in billing} == {
+        ("default", "http://billing.internal/invoices"),
+        ("default", "http://billing.internal/refunds"),
+        ("default", "http://billing.internal/statements"),
+        ("prod", "http://billing.prod.internal/invoices"),
+        ("prod", "http://billing.prod.internal/refunds"),
+        ("prod", "http://billing.prod.internal/statements"),
     }
 
 

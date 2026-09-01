@@ -6,7 +6,9 @@ signature, and both need the very same answers: how a captured url splits
 into peer and path and what that says about the row's own resolution, how
 one D00 §5 argument roots at a payload descriptor, the one-hop D02 §2h
 follow through a `call_wrappers` constructor or a `type_carriers`
-supertype, and which declared type carries a PTR supertype. Shared here
+supertype, which declared type carries a PTR supertype, and — 2F design
+§4 — how an address argument that is a FIELD read rather than a literal
+climbs the field ladder to the configuration expression behind it. Shared here
 rather than duplicated per style — and, since it depends on nothing in
 Catalog orchestration, born in its own module rather than riding along
 inside `contracts.py` (2E-prep design §1e).
@@ -17,10 +19,13 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.config import normalize_key
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _Rules
-from sextant.domain.symbols import bare_descriptor
+from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
 _ABSOLUTE_URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://(?P<authority>[^/]*)(?P<path>/.*)?$")
 
@@ -90,10 +95,26 @@ def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
     asks whether its `methods` row named a position at all (`body_arg` is
     optional); `fluent` asks whether the chain ever reached a step naming
     the capture (a chain declares one by *reaching* it, not by a positional
-    slot) — both collapse to this one bool before reaching here."""
+    slot) — both collapse to this one bool before reaching here.
+
+    `field` (D00 §5, 2F) counts as unread here exactly as `unresolved` does
+    (Task 6 checkpoint F-2): a field argument names the field, never the
+    value behind it, and only the ladder below can turn one into an answer.
+    Where the ladder fires, the engine has already replaced the argument
+    with the string literal its expression names, so a resolved field never
+    reaches this test as a `field` at all; where it does not, a payload
+    column would stay NULL on a row still claiming `resolved` — the one
+    thing D01 §3's amended disambiguation exists to prevent."""
     if not declared:
         return True
-    return argument is not None and argument.get("kind") != "unresolved"
+    return argument is not None and argument.get("kind") not in _UNREAD_KINDS
+
+
+# The D00 §5 argument kinds that name no value a capture could have read:
+# the compiler's own honest read failure, and a field read whose value lives
+# wherever the field was assigned (2F design §4's ladder is the only thing
+# that can answer it).
+_UNREAD_KINDS = ("unresolved", "field")
 
 
 def channel_of(argument: dict[str, Any] | None) -> tuple[None, str | None, str]:
@@ -157,6 +178,322 @@ class CallFacts:
     supertypes: dict[str, dict[str, Any]]
     caller_call_sites: list[dict[str, Any]]
     referenced: list[str]
+
+
+@dataclass(frozen=True)
+class FieldSources:
+    """The catalog data the field ladder reads (2F design §4's `field_sources`
+    block): which annotation carries a placeholder expression on a field or a
+    constructor parameter, which annotation binds a whole type to a
+    configuration prefix, which of THAT annotation's own arguments spells the
+    prefix, and the accessor prefixes a property getter is written with. Every
+    dotted type name already converted to the symbol grammar — the same
+    binding-seam discipline `CarrierRules` keeps, so no rung has to remember
+    which notation it is holding."""
+
+    value_annotation: str
+    properties_annotation: str
+    prefix_from: str
+    getter_prefixes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FieldFacts:
+    """The workspace facts the field ladder joins through, read ONCE per
+    engine run (the `_rules_of`/`_enum_symbols` precedent) rather than once
+    per address argument:
+
+    - `value_expressions` — the expression the `value_annotation` carries on
+      one field (rung 1);
+    - `written_from_parameter` — D00 §5's `field_write`, the constructor
+      parameter index a field was assigned straight from (rung 2);
+    - `constructor_parameters` — each type's constructors' own parameter
+      lists, where a parameter's annotations live and nowhere else (Task 6
+      checkpoint (3): the `annotations` view never carries them);
+    - `prefixes` — the configuration prefix the `properties_annotation` binds
+      a type to (rung 3);
+    - `declared_fields` — each type's own field names, what a getter relaxed-
+      binds against so the expression carries the property's DECLARED
+      spelling rather than the accessor's.
+
+    Every key is a BARE descriptor (Task 6 checkpoint (2)'s join note): a
+    `field` argument's own `symbol` and a `field_write`'s own `field` carry no
+    module coordinates, while a symbol fact and an annotation `target` do, and
+    only the descriptor is ever compared (D00 §5a)."""
+
+    sources: FieldSources
+    value_expressions: dict[str, str]
+    written_from_parameter: dict[str, int]
+    constructor_parameters: dict[str, list[list[dict[str, Any]]]]
+    prefixes: dict[str, str]
+    declared_fields: dict[str, list[str]]
+
+
+# The annotation argument a single-valued annotation's own value arrives
+# under (D00 §5's annotation `args` map). Not a framework name and not a
+# catalog concern: it is the fact grammar's own spelling for "the argument
+# written without naming it", which is how every `@Value("${…}")`-shaped
+# expression reaches the facts.
+_ANNOTATION_VALUE_ARG = "value"
+
+# D01's own placeholder form — the expression an endpoint row carries until
+# the per-environment join resolves it (`resolved_peers`, whose SQL matches on
+# exactly this delimiter pair). Rungs 1 and 2 return an expression the facts
+# already spell; rung 3 SYNTHESISES one from a prefix and a property name, so
+# it is the one rung that has to write the delimiters itself.
+_PLACEHOLDER = ("${", "}")
+
+
+def field_facts(workspace: Workspace, catalog: Catalog) -> FieldFacts | None:
+    """The field ladder's own facts for one catalog, or None where the
+    catalog declares no `field_sources` block at all — the gate: a catalog
+    that never names which annotations carry configuration never consults the
+    ladder, and every row it derives is exactly what it was before 2F."""
+    declared = catalog.matches.get("field_sources")
+    if not declared:
+        return None
+    sources = _field_sources(declared, catalog)
+    value_expressions: dict[str, str] = {}
+    prefixes: dict[str, str] = {}
+    for row in workspace.query("annotations"):
+        annotation = str(row["annotation"])
+        if annotation not in (sources.value_annotation, sources.properties_annotation):
+            continue
+        args = json.loads(str(row["args"] or "{}"))
+        key = (
+            _ANNOTATION_VALUE_ARG if annotation == sources.value_annotation else sources.prefix_from
+        )
+        value = args.get(key)
+        if not isinstance(value, str):
+            continue
+        target = bare_descriptor(str(row["target"]))
+        if annotation == sources.value_annotation:
+            value_expressions.setdefault(target, value)
+        else:
+            prefixes.setdefault(target, value)
+    written_from_parameter: dict[str, int] = {}
+    for row in workspace.query("field_writes"):
+        # First write wins, in the query's own (field, from_parameter) order:
+        # two constructors assigning one field from different positions are
+        # two candidate answers, and a deterministic first is the only honest
+        # pick without a fact linking a write to its constructor.
+        written_from_parameter.setdefault(str(row["field"]), int(str(row["from_parameter"])))
+    constructor_parameters: dict[str, list[list[dict[str, Any]]]] = {}
+    for row in workspace.query("constructor_declarations"):
+        enclosing = row["enclosing"]
+        if enclosing is None:
+            continue
+        signature = json.loads(str(row["signature"] or "{}")) or {}
+        constructor_parameters.setdefault(bare_descriptor(str(enclosing)), []).append(
+            list(signature.get("parameters") or [])
+        )
+    declared_fields: dict[str, list[str]] = {}
+    for row in workspace.query("fields"):
+        descriptor = bare_descriptor(str(row["symbol"]))
+        owner = owner_of(descriptor)
+        if owner is None:
+            continue
+        declared_fields.setdefault(owner, []).append(member_name(descriptor))
+    return FieldFacts(
+        sources=sources,
+        value_expressions=value_expressions,
+        written_from_parameter=written_from_parameter,
+        constructor_parameters=constructor_parameters,
+        prefixes=prefixes,
+        declared_fields=declared_fields,
+    )
+
+
+def _field_sources(declared: Any, catalog: Catalog) -> FieldSources:
+    """Refuses a malformed `field_sources` block at run start, the
+    `_validate_methods`/`_validate_steps` discipline (`ports/catalogs.py`: an
+    unchecked value does not stay in the file) — a block naming no annotation,
+    or naming one as something other than a dotted type, would make the whole
+    ladder a silent no-op, which is indistinguishable from the gate above."""
+    valid = (
+        isinstance(declared, dict)
+        and isinstance(declared.get("value_annotation"), str)
+        and isinstance(declared.get("properties_annotation"), str)
+        and isinstance(declared.get("prefix_from"), str)
+        and isinstance(declared.get("getter_prefixes", []), list)
+        and all(isinstance(prefix, str) for prefix in declared.get("getter_prefixes", []))
+    )
+    if not valid:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `field_sources` must be "
+            f"`{{value_annotation, properties_annotation, prefix_from, "
+            f"getter_prefixes?}}` with dotted type names and string keys, got {declared!r}"
+        )
+    return FieldSources(
+        value_annotation=_catalog_symbol(str(declared["value_annotation"])),
+        properties_annotation=_catalog_symbol(str(declared["properties_annotation"])),
+        prefix_from=str(declared["prefix_from"]),
+        getter_prefixes=tuple(declared.get("getter_prefixes", [])),
+    )
+
+
+def address_argument(
+    argument: dict[str, Any] | None,
+    facts: FieldFacts | None,
+    workspace_types: CallFacts,
+) -> dict[str, Any] | None:
+    """The argument a `base`/`url`/`channel` capture should be READ as: the
+    argument itself, unless the field ladder could name the configuration
+    expression behind it, in which case the synthetic string literal that
+    expression spells (2F design §4). Everything downstream — CP-2's split,
+    the verbless rules, dedup, `_capture_resolved` — then behaves for a
+    resolved field exactly as it does for a url written as a literal, which
+    is the whole point of returning an expression from every rung."""
+    expression = field_expression(argument, facts, workspace_types)
+    if expression is None:
+        return argument
+    return {"kind": "string", "value": expression}
+
+
+def field_expression(
+    argument: dict[str, Any] | None,
+    facts: FieldFacts | None,
+    workspace_types: CallFacts,
+) -> str | None:
+    """2F design §4's four-rung ladder, in order, for an address argument the
+    scanner read as a field (or as the result of a property getter):
+
+    1. the field's own `value_annotation` expression, verbatim;
+    2. the constructor parameter the field was assigned from (D00 §5's
+       `field_write`) and ITS own `value_annotation` expression;
+    3. a `properties_annotation` prefix plus the relaxed-bound property name —
+       either the field's own name, where the address argument reads a
+       properties field directly, or the name a zero-argument getter binds to,
+       where the argument is that getter's own result (Task 6 checkpoint F-1:
+       the realistic idiom is an injected properties bean read through its
+       accessor, so the rung follows the D02 §2h one-hop precedent from the
+       argument's `source` to the call site that produced it, within this same
+       caller's own sites);
+    4. nothing matches — None, and the argument stays exactly what it was.
+
+    None too whenever the catalog declared no `field_sources` at all, which is
+    what keeps every pre-2F catalog's rows byte-identical."""
+    if facts is None or argument is None:
+        return None
+    kind = argument.get("kind")
+    if kind == "field":
+        symbol = argument.get("symbol")
+        if symbol is None:
+            return None
+        field = bare_descriptor(str(symbol))
+        return (
+            facts.value_expressions.get(field)
+            or _constructor_expression(field, facts)
+            or _properties_field_expression(field, facts)
+        )
+    if kind == "unresolved":
+        return _properties_getter_expression(argument.get("source"), facts, workspace_types)
+    return None
+
+
+def _constructor_expression(field: str, facts: FieldFacts) -> str | None:
+    """Rung 2: the field was assigned straight from constructor parameter N
+    (D00 §5's `field_write`), and that parameter carries the expression. The
+    `field_write` fact names the position but not WHICH constructor wrote it,
+    so every constructor the owning type declares is tried in symbol order and
+    the first carrying the annotation at that position answers — deterministic
+    (NFR-1), and silent rather than a guess where none does."""
+    index = facts.written_from_parameter.get(field)
+    owner = owner_of(field)
+    if index is None or owner is None:
+        return None
+    for parameters in facts.constructor_parameters.get(owner, []):
+        if index >= len(parameters):
+            continue
+        for use in parameters[index].get("annotations") or []:
+            if use.get("annotation") != facts.sources.value_annotation:
+                continue
+            expression = (use.get("args") or {}).get(_ANNOTATION_VALUE_ARG)
+            if isinstance(expression, str):
+                return expression
+    return None
+
+
+def _properties_field_expression(field: str, facts: FieldFacts) -> str | None:
+    """Rung 3, the direct form: the address argument reads a field of a type
+    the `properties_annotation` binds to a prefix, so the key is that prefix
+    and the field's own declared name."""
+    owner = owner_of(field)
+    prefix = facts.prefixes.get(owner) if owner is not None else None
+    if prefix is None:
+        return None
+    return _placeholder(prefix, member_name(field))
+
+
+def _properties_getter_expression(
+    source: Any, facts: FieldFacts, workspace_types: CallFacts
+) -> str | None:
+    """Rung 3, the getter form (Task 6 checkpoint F-1): the address argument
+    is the RESULT of a zero-argument call — `baseUrl(properties.getUrl())` —
+    so the one hop D02 §2h already sanctions follows `source` to the call site
+    that produced it, within this same caller's own sites (value ids are
+    meaningless across methods, D00 §5). Where that call's own owner is a type
+    bound to a prefix, the key is that prefix plus the property the accessor
+    names.
+
+    Zero-argument only: an accessor takes none, and a call that does is not
+    reading a property, whatever it is named."""
+    if source is None:
+        return None
+    site = next(
+        (
+            candidate
+            for candidate in workspace_types.caller_call_sites
+            if candidate.get("result") == source and not (candidate.get("arguments") or [])
+        ),
+        None,
+    )
+    if site is None:
+        return None
+    owner = str(site["owner"])
+    prefix = facts.prefixes.get(owner)
+    if prefix is None:
+        return None
+    return _placeholder(prefix, _bound_property(str(site["name"]), owner, facts))
+
+
+def _bound_property(accessor: str, owner: str, facts: FieldFacts) -> str:
+    """The property name an accessor binds to: its own name with a declared
+    getter prefix removed, matched against the owning type's DECLARED field
+    names through the catalog's own relaxed-binding rule (`resolve/config.py`'s
+    `normalize_key`, the very function §2i's `${...}` lookups use — reused,
+    never a second copy of the same grammar), so the expression carries the
+    spelling the configuration key itself is written in. The de-prefixed name
+    stands on its own where the type declares no matching field: an accessor
+    is evidence of a property either way, and a key spelled from it is a
+    better answer than none."""
+    name = _without_getter_prefix(accessor, facts.sources.getter_prefixes)
+    normalized = normalize_key(name)
+    for declared in facts.declared_fields.get(owner, []):
+        if normalize_key(declared) == normalized:
+            return declared
+    return name
+
+
+def _without_getter_prefix(accessor: str, prefixes: tuple[str, ...]) -> str:
+    """An accessor name with the first declared prefix it carries removed, its
+    now-leading character lowercased (`getUrl` → `url`) — the accessor-naming
+    convention completed, with the prefixes themselves arriving as catalog
+    data so no language's own spelling of them enters this module. Returned
+    unchanged where it carries none: not every ecosystem prefixes accessors."""
+    for prefix in prefixes:
+        if accessor.startswith(prefix) and len(accessor) > len(prefix):
+            rest = accessor[len(prefix) :]
+            return rest[0].lower() + rest[1:]
+    return accessor
+
+
+def _placeholder(prefix: str, name: str) -> str:
+    """The D01 placeholder expression one configuration key reads as — rung
+    3's synthesised answer, so that EVERY rung yields an expression and
+    everything downstream stays uniform (plan Task 8 Step 1's ruling)."""
+    open_, close = _PLACEHOLDER
+    return f"{open_}{prefix}.{name}{close}"
 
 
 def linked_channels(

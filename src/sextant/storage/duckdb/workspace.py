@@ -149,6 +149,19 @@ _NAMED_QUERIES = {
         SELECT symbol, enclosing, signature FROM symbols
         WHERE construct_kind = 'method' ORDER BY symbol
     """,
+    # Every declared constructor's own enclosing type and signature JSON —
+    # the field ladder's rung 2 (2F design §4). A `field_write` fact names
+    # the parameter INDEX a field was assigned from and nothing else, and a
+    # constructor PARAMETER's own annotations live only inside this
+    # signature: they are never emitted as their own `annotation` fact (Task
+    # 6 checkpoint item (3)), so the `annotations` view cannot serve this and
+    # `method_declarations` above never sees a constructor at all. Ordered by
+    # symbol so a type declaring two overloads reads its candidates in the
+    # same order twice (NFR-1).
+    "constructor_declarations": """
+        SELECT symbol, enclosing, signature FROM symbols
+        WHERE construct_kind = 'constructor' ORDER BY symbol
+    """,
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents

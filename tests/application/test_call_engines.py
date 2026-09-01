@@ -18,10 +18,14 @@ from sextant.application.resolve.shapes.arguments import split_url
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
+    AnnotationFact,
+    AnnotationUse,
     CallArgument,
     CallSiteFact,
     CallTarget,
     Document,
+    FieldWriteFact,
+    Parameter,
     Signature,
     SymbolFact,
     TypeRef,
@@ -3653,3 +3657,479 @@ def test_a_url_on_one_step_and_a_channel_on_a_different_step_is_refused_at_run_s
     workspace.close()
 
     assert "invented-url-and-channel-different-steps.yml" in str(raised.value)
+
+
+# --- Task 8 (2F): the field ladder and base composition -------------------
+#
+# The annotations below are INVENTED, exactly as the catalogs in this file
+# are: the ladder reads which annotation carries configuration from the
+# catalog's own `field_sources` block (2F design §4), so a test proving the
+# rungs must not need the real framework's names to make them fire.
+
+VALUE_ANNOTATION = "com/acme/config/Value#"
+PROPERTIES_ANNOTATION = "com/acme/config/ConfigurationProperties#"
+FIELD_SOURCES = {
+    "value_annotation": "com.acme.config.Value",
+    "properties_annotation": "com.acme.config.ConfigurationProperties",
+    "prefix_from": "prefix",
+    "getter_prefixes": ["get", "is"],
+}
+
+CLIENT = "com/acme/http/Client#"
+PROPERTIES = "com/acme/config/BillingProperties#"
+BUILDER_SPEC = "com/acme/http/WebClient$Builder#"
+
+_BASE_MATCHES = {
+    "roots": [
+        {"owner": "com.acme.http.WebClient", "method": "get", "captures": {"http_method": "GET"}}
+    ],
+    "steps": [
+        {"method": "baseUrl", "captures": {"base": "arg0"}},
+        {"method": "uri", "captures": {"url": "arg0"}},
+        {"method": "bodyValue", "captures": {"body": "arg0"}},
+    ],
+    "terminal": ["retrieve"],
+    "field_sources": FIELD_SOURCES,
+}
+
+
+def _base_chain(caller: str, base: CallArgument, path: str | None = "/invoices") -> list:
+    """The real emitted shape of `WebClient.builder().baseUrl(x).build()
+    .get().uri("/invoices").retrieve()` (Task 6 checkpoint (2), verbatim):
+    the base sits TWO calls before the row that roots the chain, so only the
+    pre-root backward walk can ever see it."""
+    calls = [
+        _call(caller, WEBCLIENT, "builder", 0, receiver=None, result=2, invoke_kind="static"),
+        _call(caller, BUILDER_SPEC, "baseUrl", 1, receiver=2, result=7, arguments=[base]),
+        _call(caller, BUILDER_SPEC, "build", 2, receiver=7, result=10),
+        _call(caller, WEBCLIENT, "get", 3, receiver=10, result=11),
+    ]
+    if path is not None:
+        calls.append(
+            _call(
+                caller,
+                URI_SPEC,
+                "uri",
+                4,
+                receiver=11,
+                result=12,
+                arguments=[CallArgument(kind="string", value=path)],
+            )
+        )
+    calls.append(_call(caller, URI_SPEC, "retrieve", 5, receiver=12 if path else 11, result=13))
+    return calls
+
+
+def _annotated_field(field: str, expression: str) -> list:
+    """A field carrying the catalog's own value annotation — rung 1's whole
+    input, as an `annotation` fact on the module-prefixed field symbol
+    (checkpoint (3): the field's target carries module coordinates, the
+    `field`-kind argument's own symbol does not)."""
+    return [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + field, construct_kind="field"),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_MODULE + field,
+            retention="runtime",
+            use=AnnotationUse(annotation=VALUE_ANNOTATION, args={"value": expression}),
+        ),
+    ]
+
+
+def _endpoint_of(workspace, caller: str) -> dict:
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    return endpoint
+
+
+def test_rung_one_returns_the_fields_own_value_expression_verbatim(tmp_path: Path):
+    """Rung 1: the base argument reads a field, and that field's own value
+    annotation already spells the expression — returned as written, never
+    reinterpreted, and composed with the chain's own path."""
+    caller = "com/acme/http/Client#fieldFed()."
+    facts = [
+        *_base_chain(caller, CallArgument(kind="field", symbol=CLIENT + "fieldUrl.")),
+        *_annotated_field(CLIENT + "fieldUrl.", "${billing.url}"),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["peer"]) == ("${billing.url}/invoices", None)
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_rung_two_follows_a_field_write_to_the_annotated_constructor_parameter(
+    tmp_path: Path,
+):
+    """Rung 2: the field itself carries nothing. A `field_write` fact says it
+    was assigned straight from constructor parameter 0, and THAT parameter's
+    annotation — which lives only inside the `<init>` signature, never as an
+    `annotation` fact of its own (checkpoint (3)) — carries the expression."""
+    caller = "com/acme/http/Client#constructorFed()."
+    facts = [
+        *_base_chain(caller, CallArgument(kind="field", symbol=CLIENT + "constructorUrl.")),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + CLIENT + "constructorUrl.",
+            construct_kind="field",
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + CLIENT + "<init>(sig_96735f85).",
+            construct_kind="constructor",
+            enclosing=_MODULE + CLIENT,
+            signature=Signature(
+                parameters=[
+                    Parameter(
+                        name="url",
+                        type=TypeRef(symbol="java/lang/String#"),
+                        annotations=[
+                            AnnotationUse(
+                                annotation=VALUE_ANNOTATION, args={"value": "${billing.url}"}
+                            )
+                        ],
+                    )
+                ]
+            ),
+        ),
+        FieldWriteFact(document_id="doc_1", field=CLIENT + "constructorUrl.", from_parameter=0),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert endpoint["path"] == "${billing.url}/invoices"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_rung_three_synthesises_the_key_from_a_properties_field_read_directly(
+    tmp_path: Path,
+):
+    """Rung 3, the direct form: the base argument reads a field of a type the
+    properties annotation binds to a prefix, so the key is that prefix and
+    the field's own declared name — synthesised into a placeholder
+    expression, so every rung's answer has the one shape downstream reads."""
+    caller = "com/acme/http/Client#propertiesFieldFed()."
+    facts = [
+        *_base_chain(caller, CallArgument(kind="field", symbol=PROPERTIES + "url.")),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + PROPERTIES + "url.", construct_kind="field"
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_MODULE + PROPERTIES,
+            retention="runtime",
+            use=AnnotationUse(annotation=PROPERTIES_ANNOTATION, args={"prefix": "billing"}),
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert endpoint["path"] == "${billing.url}/invoices"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_rung_three_follows_a_getter_result_to_the_property_it_binds(tmp_path: Path):
+    """Rung 3, the getter form (checkpoint F-1, the realistic idiom): the
+    argument is not a field read at all — it is the `unresolved` RESULT of
+    `properties.getUrl()`. One hop from its `source` to the call site that
+    produced it (D02 §2h's precedent, within this caller's own sites) names
+    the owner; the owner carries the prefix; `getUrl` de-prefixes to `url`
+    and relaxed-binds to the type's own declared `url` field, whose spelling
+    the key then uses."""
+    caller = "com/acme/http/Client#propertiesGetterFed()."
+    facts = [
+        _call(
+            caller,
+            PROPERTIES,
+            "getUrl",
+            0,
+            receiver=4,
+            result=20,
+        ),
+        *_base_chain(caller, CallArgument(kind="unresolved", source=20)),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + PROPERTIES + "url.", construct_kind="field"
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_MODULE + PROPERTIES,
+            retention="runtime",
+            use=AnnotationUse(annotation=PROPERTIES_ANNOTATION, args={"prefix": "billing"}),
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert endpoint["path"] == "${billing.url}/invoices"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_rung_three_relaxed_binds_a_getter_onto_the_fields_own_spelling(tmp_path: Path):
+    """The relaxed binding is the point of the rung, not decoration: the
+    accessor is `getBaseUrl` and the declared field is `base_url`, one key
+    written two ways (`resolve/config.py`'s `normalize_key`, the very rule
+    §2i's own `${...}` lookups use). The expression carries the field's
+    spelling, which is what the configuration key is written as."""
+    caller = "com/acme/http/Client#relaxedGetterFed()."
+    facts = [
+        _call(caller, PROPERTIES, "getBaseUrl", 0, receiver=4, result=20),
+        *_base_chain(caller, CallArgument(kind="unresolved", source=20)),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + PROPERTIES + "base_url.", construct_kind="field"
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_MODULE + PROPERTIES,
+            retention="runtime",
+            use=AnnotationUse(annotation=PROPERTIES_ANNOTATION, args={"prefix": "billing"}),
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert endpoint["path"] == "${billing.base_url}/invoices"
+
+
+def test_rung_four_leaves_a_field_nothing_explains_exactly_as_it_was(tmp_path: Path):
+    """Rung 4: a field carrying no annotation, written by no constructor, on
+    a type bound to no prefix. The ladder answers nothing and the row is
+    today's honest answer — path NULL, `unresolved` — never a guess."""
+    caller = "com/acme/http/Client#unexplainedFed()."
+    facts = [
+        *_base_chain(caller, CallArgument(kind="field", symbol=CLIENT + "mysteryUrl.")),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + CLIENT + "mysteryUrl.", construct_kind="field"
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["peer"]) == (None, None)
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_catalog_declaring_no_field_sources_never_consults_the_ladder(tmp_path: Path):
+    """The gate: the very facts rung 1 resolves from, under a catalog that
+    declares no `field_sources` block at all. The ladder is never consulted,
+    so the base is a field nobody read and the row is exactly what it was
+    before 2F — which is what keeps every catalog that names no
+    configuration vocabulary byte-identical."""
+    caller = "com/acme/http/Client#fieldFed()."
+    matches = {**_BASE_MATCHES}
+    del matches["field_sources"]
+    facts = [
+        *_base_chain(caller, CallArgument(kind="field", symbol=CLIENT + "fieldUrl.")),
+        *_annotated_field(CLIENT + "fieldUrl.", "${billing.url}"),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(matches, "invented-no-sources"))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")
+
+
+def test_a_literal_base_and_a_literal_path_compose_and_split_by_cp_two(tmp_path: Path):
+    """Base composition's plain case: two literals concatenate into the one
+    address the call really makes, and CP-2 splits THAT — the authority is
+    the peer, the remainder the path. Before this task the base was captured
+    by nobody and the row carried the relative path alone."""
+    caller = "com/acme/http/Client#literalBase()."
+    facts = _base_chain(
+        caller, CallArgument(kind="string", value="https://billing.internal"), path="/invoices"
+    )
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["peer"], endpoint["path"]) == ("billing.internal", "/invoices")
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_a_base_with_no_path_capture_stands_alone_as_the_address(tmp_path: Path):
+    """A chain that never reaches a url step: the base IS the whole address,
+    read exactly as a url capture would be."""
+    caller = "com/acme/http/Client#baseOnly()."
+    facts = _base_chain(
+        caller, CallArgument(kind="string", value="https://billing.internal/root"), path=None
+    )
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["peer"], endpoint["path"]) == ("billing.internal", "/root")
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_an_expression_bearing_composition_keeps_the_whole_expression_as_the_path(
+    tmp_path: Path,
+):
+    """A composed address beginning `${` matches no scheme, so there is no
+    authority to split off: the WHOLE expression is the path and `peer` stays
+    NULL, unsplittable until the per-environment join resolves it."""
+    caller = "com/acme/http/Client#fieldFed()."
+    facts = [
+        *_base_chain(caller, CallArgument(kind="field", symbol=CLIENT + "fieldUrl.")),
+        *_annotated_field(CLIENT + "fieldUrl.", "${billing.url}"),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert endpoint["peer"] is None
+    assert endpoint["path"] == "${billing.url}/invoices"
+
+
+def test_a_poisoned_base_never_reports_the_path_alone_as_the_address(tmp_path: Path):
+    """Checkpoint D-4: a base that WAS captured and could not be read poisons
+    the row — path NULL, `unresolved` — rather than letting the relative path
+    stand in for an address it is only half of. `/invoices` presented as the
+    whole answer would state a URL the module never calls."""
+    caller = "com/acme/http/Client#poisonedBase()."
+    facts = _base_chain(caller, CallArgument(kind="unresolved"), path="/invoices")
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["peer"], endpoint["path"]) == (None, None)
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_field_kind_body_capture_drops_the_rows_resolution(tmp_path: Path):
+    """Checkpoint F-2, the one place `field` did NOT already degrade like
+    `unresolved`: a DECLARED payload capture holding a field argument names
+    the field, never a payload type, so `request_shape` stays NULL — and a
+    row claiming `resolved` beside a NULL payload column is exactly the
+    ambiguity D01 §3's amendment exists to remove. The url still carries
+    what it read (I1 narrows the row, never the column)."""
+    caller = "com/acme/http/Client#fieldBody()."
+    facts = [
+        *_base_chain(
+            caller, CallArgument(kind="string", value="https://billing.internal"), path="/invoices"
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "bodyValue",
+            6,
+            receiver=13,
+            result=14,
+            arguments=[CallArgument(kind="field", symbol=CLIENT + "payload.")],
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["peer"], endpoint["path"]) == ("billing.internal", "/invoices")
+    assert endpoint["request_shape"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_base_capture_and_a_channel_capture_together_are_refused_at_run_start(
+    tmp_path: Path,
+):
+    """`base` is half of an address, so it collides with `channel` for the
+    same reason `url` does — the two are different readings of one identity
+    position, and `_derive` only ever reads one of them. Refused by name at
+    load rather than silently discarding the base."""
+    matches = {
+        "roots": [{"owner": "com.acme.http.WebClient", "method": "get", "captures": {}}],
+        "steps": [
+            {"method": "baseUrl", "captures": {"base": "arg0"}},
+            {"method": "topic", "captures": {"channel": "arg0"}},
+        ],
+        "terminal": ["retrieve"],
+    }
+    catalog = _fluent_catalog(matches, "invented-base-and-channel")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-base-and-channel.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {
+            "properties_annotation": "com.acme.config.ConfigurationProperties",
+            "prefix_from": "prefix",
+        },
+        {
+            "value_annotation": "com.acme.config.Value",
+            "properties_annotation": "com.acme.config.ConfigurationProperties",
+            "prefix_from": 7,
+        },
+        {
+            "value_annotation": "com.acme.config.Value",
+            "properties_annotation": "com.acme.config.ConfigurationProperties",
+            "prefix_from": "prefix",
+            "getter_prefixes": "get",
+        },
+    ],
+)
+def test_a_malformed_field_sources_block_is_refused_at_run_start(tmp_path: Path, block: dict):
+    """An unchecked value does not stay in the file: a `field_sources` block
+    missing an annotation, or spelling one as something other than a name,
+    would make the whole ladder a silent no-op — indistinguishable from a
+    catalog that deliberately declares none."""
+    catalog = _fluent_catalog(
+        {**_BASE_MATCHES, "field_sources": block}, "invented-bad-field-sources"
+    )
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-bad-field-sources.yml" in str(raised.value)
+
+
+def test_a_single_call_url_argument_climbs_the_same_ladder(tmp_path: Path):
+    """The ladder is shared, not a fluent-only rung: a `single_call` row's own
+    `url_arg` reading a `@Value`-fed field resolves the same expression, and
+    CP-2 splits it exactly as it would a literal at that position."""
+    caller = "com/acme/http/Client#getBalance()."
+    catalog = _single_call_catalog(
+        {
+            "owner": "com.acme.http.Client",
+            "methods": [{"name": "getForObject", "http_method": "GET", "url_arg": 0}],
+            "field_sources": FIELD_SOURCES,
+        },
+        catalog_id="invented-single-call-ladder",
+        protocol="http",
+    )
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=CLIENT,
+                name="getForObject",
+                descriptor="(Ljava/lang/String;)Ljava/lang/Object;",
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=12,
+            arguments=[CallArgument(kind="field", symbol=CLIENT + "fieldUrl.")],
+        ),
+        *_annotated_field(CLIENT + "fieldUrl.", "${billing.url}/balances"),
+    ]
+    workspace = _resolve(tmp_path, facts, catalog)
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert endpoint["path"] == "${billing.url}/balances"
+    assert endpoint["resolution"] == "resolved"

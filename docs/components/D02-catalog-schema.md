@@ -383,6 +383,24 @@ consumer — `Request r = builder.build(); log.debug("…", r);` alongside the r
 the join narrows to that one declared call; every other consumer of the same value no longer
 counts.
 
+**A step's own `captures` may also name `base`** — the other half of ONE address, not a
+second address (2F). A builder states its base address once
+(`WebClient.builder().baseUrl(…).build().get().uri("/invoices")`) and every request off
+that builder appends its own path, so `base` and `url` compose at derive time: base plus
+path where a chain captures both, the base alone where it captures no `url`, and the
+composed string then read exactly as a written url is — CP-2 splits an absolute literal
+into peer and path, while a composition carrying a `${…}` expression matches no scheme and
+stays whole as `path` with `peer` NULL, unsplittable until the per-environment peer join
+resolves it. **A `base` that was captured and could not be read makes the row unresolved
+with `path` NULL**, never the path alone: half an address presented as the whole one names
+a URL the module never calls.
+
+`baseUrl` sits BEFORE the row that roots the chain, so a chain's captures are folded from
+its PRE-ROOT prefix too — the same `result → receiver` link followed backward from the
+root, outermost producer first, so last-wins reads the same in both directions. A row's
+`receiver` is one value id and the row that produced it is the one whose own chain key IS
+that id; nothing here is a search by proximity.
+
 **A root's or a step's own `captures` may also name `channel`** — `url`'s
 destination-shaped counterpart, exactly the distinction `single_call`'s own `url_arg`/
 `channel_arg` pair keeps (§2, above): a `url` capture is an address CP-2 may split into
@@ -1316,6 +1334,55 @@ value (before any placeholder substitution — an import URL is a literal, never
 `${...}` reference) against this list; a match resolves [D01](D01-graph-schema.md)'s
 `remote_source` reason rather than a value the pass could never truthfully read from
 files alone. A model declaring no `remote_prefixes` simply never emits the reason.
+
+---
+
+## 2j. Field sources — the imperative address ladder
+
+An address is as often fed to a client imperatively — a field, a constructor parameter, a
+bound properties object — as written at the call site. Which annotations carry
+configuration onto those is framework knowledge, so it is catalog data too: an OPTIONAL
+`matches`-level block on any client catalog, read by the shared argument ladder that
+`single_call` and `fluent` both use (2F design §4).
+
+```yaml
+matches:
+  field_sources:
+    value_annotation: org.springframework.beans.factory.annotation.Value
+    properties_annotation: org.springframework.boot.context.properties.ConfigurationProperties
+    prefix_from: prefix
+    getter_prefixes: [get, is]
+```
+
+**A catalog declaring no `field_sources` never consults the ladder at all** — its rows are
+exactly what they were without it. Where one does, an address argument the scanner read as
+a `field` ([D00](D00-fact-schema.md) §5) climbs four rungs, in order:
+
+1. the field's own `value_annotation` expression, returned verbatim;
+2. the constructor parameter the field was assigned from
+   ([D00](D00-fact-schema.md) §5's `field_write`) and ITS own `value_annotation`
+   expression — a parameter's annotations live only inside the constructor's signature,
+   never as an annotation fact of their own;
+3. a `properties_annotation` prefix (read from the annotation argument `prefix_from`
+   names) plus the relaxed-bound property name — §2i's own `key_matching` rule, reused
+   rather than re-implemented. The property is read either from a properties FIELD the
+   argument reads directly, or — the realistic idiom — from a zero-argument accessor
+   whose result the address argument is, followed exactly one hop through
+   [D00](D00-fact-schema.md) §5's `arguments[].source` within the same caller. An
+   accessor name is de-prefixed by `getter_prefixes` (declared, so no language's own
+   accessor spelling enters the engine) and then relaxed-bound against the type's own
+   declared field names, so the expression carries the spelling the configuration key is
+   written in;
+4. nothing matches — the argument stays exactly what it was, and the row is the same
+   honest `unresolved` it was before.
+
+**Every rung yields an EXPRESSION, never a value** — rungs 1 and 2 return the one the
+facts already carry, rung 3 synthesises `${prefix.name}` — so the engine reads the
+argument as that expression exactly as if it had been a literal at the call site, and
+everything downstream (CP-2's split, composition with a `base`, dedup) behaves identically
+for both. Values stay in `resolved_config`, and the per-environment answer stays a join
+([D01](D01-graph-schema.md)). A base built by computation — a concatenation, a setter, a
+method's return value — reaches no rung and is a named gap, not a guess.
 
 ---
 

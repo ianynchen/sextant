@@ -17,7 +17,8 @@ from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SE
 # as complete (M07 "Honesty obligations").
 KNOWN_GAPS = [
     "http_exchange_inbound_use_not_detected",
-    "client_base_addresses_not_resolved",
+    "computed_base_addresses_not_traced",
+    "config_as_code_not_read",
     "sequence_diagrams_pending_call_graph",
     "structure_diagram_limited_to_contracts",
     "call_graph_not_implemented",
