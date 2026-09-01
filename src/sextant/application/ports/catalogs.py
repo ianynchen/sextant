@@ -60,6 +60,12 @@ class Catalog:
     # into a typed payload. Carried through unread here, like every block
     # above; the pass that reads it refuses a malformed one.
     parse_calls: dict[str, Any] = field(default_factory=dict)
+    # 2H design §6's `protocol_hint` vocabulary, read only by
+    # `resolve/protocol_hint.py`: `{protocol: <target>, hint_media: [...],
+    # hint_returns: [...]}` — what evidence turns a row of THIS catalog's own
+    # protocol into a row of another one. Carried through unread here, like
+    # every block above; the pass that reads it refuses a malformed one.
+    protocol_hint: dict[str, Any] = field(default_factory=dict)
 
 
 class CatalogError(ValueError):

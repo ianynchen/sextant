@@ -225,6 +225,19 @@ _TOPIC_ENDPOINT_KWARGS = {
     # Task 6: no fixture in this file composes an annotation, so the
     # effective-annotations pre-pass always resolves to nothing here.
     "synthetic_annotations": [],
+    # 2H Task 2: the two naming forms, declared at their INERT values — no
+    # catalog in this file names a fallback or a qualifier, which is the
+    # shape every catalog written before those forms has. Present rather
+    # than omitted because a bound parameter has no default; that they are
+    # here at all is what keeps the assertions below pinning the ORIGINAL
+    # composition (`prefix || suffix`) rather than a new one.
+    "path_fallback": None,
+    "qualifier_from": [],
+    "qualifier_separator": None,
+    # The prefix seam, at its inert value too: no catalog in this file
+    # composes a segmented address, so the seam stays the bare concatenation
+    # every assertion below already pins.
+    "path_separator": None,
 }
 
 

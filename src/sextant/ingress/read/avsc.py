@@ -15,6 +15,8 @@ from sextant.ingress.read import build_document
 class AvscReader:
     """Keyed by extension `avsc` (M03)."""
 
+    reads_schema_sources = True
+
     def accepts(self, file_kind: str) -> bool:
         return file_kind == "avsc"
 

@@ -60,6 +60,10 @@ class YamlCatalogSource:
                     media_formats=raw.get("media_formats", {}),
                     json_default_markers=raw.get("json_default_markers", []),
                     parse_calls=raw.get("parse_calls", {}),
+                    # 2H design §6 — optional, checked where the pass reads it
+                    # (`resolve/protocol_hint.py`), which is also where the
+                    # target protocol is checked against D00's closed set.
+                    protocol_hint=raw.get("protocol_hint", {}),
                 )
             )
         return catalogs

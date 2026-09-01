@@ -1,0 +1,152 @@
+id: spring-stomp
+displayName: Spring STOMP messaging (@MessageMapping)
+style: annotation_driven
+protocol: websocket
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework:spring-messaging"]
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # `@Payload`'s the same `org.springframework.messaging.handler.annotation`
+  # package spring-kafka.yml/spring-jms.yml already read a `@Payload` off —
+  # one library, one attribute, regardless of which transport carries it.
+  # `place(OrderView order)`'s one bare parameter reaches this through the
+  # `sole_unannotated` fallback exactly as an unannotated Kafka listener
+  # parameter does; `board()` declares no parameter at all, so neither rung
+  # ever fires for it and it derives no request shape.
+  request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
+                  fallback: sole_unannotated }
+  mapping:
+    # CHECKPOINT FACT (Phase 2H Task 2, checkpoint answer 5): class-level
+    # `@MessageMapping("/orders")`, method-level `@MessageMapping("/place")`
+    # and `@SubscribeMapping("/board")` are ALL array-valued in bytecode
+    # (`{"value": ["/orders"]}` etc.) — unlike jakarta WebSocket's scalar
+    # `@ServerEndpoint`, but the same scalar-or-array read already handles
+    # either shape with no new vocabulary.
+    path_from: [value]
+    # CHECKPOINT FACT (spring-kafka.yml's own precedent, `@KafkaListener` +
+    # `@KafkaHandler`): reading an array-valued class-level annotation's
+    # `value` as the prefix carries the SAME known limitation —
+    # `list_extract(..., 1)` (`derive_endpoints.sql`'s own scalar-or-array
+    # read) takes element 0 only, so a class-level `@MessageMapping({"/orders",
+    # "/legacy-orders"})` would compose every method under `/orders` alone;
+    # the second array element is silently unavailable as a prefix. Not
+    # exercised by the fixture (`OrderStompController`'s own class-level
+    # `@MessageMapping("/orders")` is single-valued) — the same documented
+    # gap, not a new one.
+    prefix_from: [value]
+    # A STOMP destination is segmented exactly as an HTTP path is, and Spring
+    # composes a class-level `@MessageMapping` onto a method-level one through
+    # the same `AntPathMatcher` separator — `/` by default — so the seam
+    # dedupes here for the same reason it does on spring-web.yml. Already the
+    # live answer for the fixture's own destinations, whose halves are all
+    # slash-leading (`"/orders"` + `"/place"` composed `/orders/place` under
+    # the bare concatenation too); declared so a class prefix written WITHOUT
+    # a trailing slash, or a `"/"` prefix, composes what the broker serves
+    # rather than `/ordersplace` or `//place`.
+    #
+    # Not a claim about every websocket catalog: `path_separator` is declared
+    # per catalog because composition is the FRAMEWORK's convention, and a
+    # protocol name is not evidence of one.
+    path_separator: "/"
+    # Neither mapping annotation declares a `method` attribute; the name is
+    # borrowed and never populated (spring-jms.yml/spring-kafka.yml
+    # precedent), which is what keeps every row verbless below.
+    method_from: method
+    # Verbless (D02 §2, amended): a STOMP destination declares no
+    # HTTP-style verb.
+    all_methods: []
+    # `@MessageMapping` plays both roles in this one catalog — the
+    # `prefix_annotation` role at class level (`OrderStompController`'s own
+    # `@MessageMapping("/orders")`) and an ordinary `mapping.annotations`
+    # entry at method level (`place`'s own `@MessageMapping("/place")`) —
+    # exactly the double duty spring-kafka.yml's class-level, polymorphic
+    # `@KafkaListener` already plays for `@KafkaHandler`. `annotations_effective`
+    # (`derive_endpoints.sql`) and `prefixes` join on different roles
+    # (`construct_kind IN ('method','function')` vs a type target), so the
+    # one fqn cannot collide with itself here either (checkpoint answer 5).
+    prefix_annotation: org.springframework.messaging.handler.annotation.MessageMapping
+    annotations:
+      - { fqn: org.springframework.messaging.handler.annotation.MessageMapping }
+      # `@SubscribeMapping("/board")` carries no class-level shape of its
+      # own — it composes under whatever `@MessageMapping` prefix the
+      # enclosing class already declares, the same class-level join every
+      # method-level mapping annotation shares (checkpoint answer 5:
+      # `"/orders"` + `"/board"` = `"/orders/board"`).
+      - { fqn: org.springframework.messaging.simp.annotation.SubscribeMapping }
+  # D02 §2's `reply` block (spring-kafka.yml's own precedent, the ONLY
+  # shipped catalog with one before this task): `@SendTo` derives a second,
+  # OUTBOUND row per listed destination — `place`'s own
+  # `@SendTo("/topic/order-placed")` — plus a path-NULL `unresolved` row for
+  # any value-returning STOMP handler this catalog's own rows produced that
+  # declares no `@SendTo` at all (none in the fixture: `board`'s own
+  # `@SubscribeMapping` handler also returns `OrderView`, so it gets one too
+  # — the reply block runs over every handler `spring-stomp`'s own rows
+  # named, not only `@MessageMapping` ones).
+  #
+  # COVERAGE boundary (Task 5 review, fix round 1): `reply.annotation` is
+  # SINGLE-valued — `annotation_driven.py::_derive_replies` reads one fqn,
+  # never a list, the same forced constraint `mapping.prefix_annotation`
+  # runs into for jakarta/javax (this catalog's own sibling,
+  # `jakarta-websocket.yml`). Spring STOMP ships a SECOND reply annotation,
+  # `org.springframework.messaging.handler.annotation.SendToUser`
+  # (user-destination replies), which this block cannot ALSO name without an
+  # engine change (forbidden this task). A `@SendToUser`-only handler is not
+  # silently dropped and not silently mis-addressed: `_derive_replies`'s own
+  # equality check (`use["annotation"] == reply_annotation`) simply never
+  # matches it, so it falls into the SAME branch a completely unannotated
+  # value-returning handler already takes — the honest path-NULL
+  # `unresolved` reply row, never a wrong destination (proved over synthetic
+  # facts, no live fixture surface: `tests/application/test_endpoints.py::
+  # test_an_sendtouser_handler_derives_the_same_honest_unresolved_reply_row_
+  # as_no_annotation`). Not fixture-exercised — the brief's own fixture
+  # (Task 1) never declares a `@SendToUser` handler — so this is catalog
+  # data, not shipped destination-reading behaviour, exactly the javax
+  # boundary's own shape.
+  reply:
+    annotation: org.springframework.messaging.handler.annotation.SendTo
+    destination_from: value
+
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

@@ -1,0 +1,97 @@
+id: netflix-dgs
+displayName: Netflix DGS
+style: annotation_driven
+protocol: graphql
+direction: inbound
+
+detect:
+  coordinates: ["com.netflix.graphql.dgs:graphql-dgs"]
+
+requires: [annotation_args, type_annotations]
+
+matches:
+  type_annotation: com.netflix.graphql.dgs.DgsComponent
+  request_body: { annotation: com.netflix.graphql.dgs.InputArgument,
+                  fallback: sole_unannotated }
+  mapping:
+    # CHECKPOINT FACT: the three shorthands declare `field()` and NOTHING
+    # else — there is no `value` to alias, unlike Spring's pair — and
+    # `@DgsData` adds `parentType()`. All arrive SCALAR.
+    path_from: [field]
+    # CHECKPOINT FACT: `@DgsQuery.field()` is declared `default ""`, which
+    # never reaches the class file — the same absent-means-method-name shape
+    # Spring GraphQL and MicroProfile both have. This catalog rides the form
+    # `spring-graphql.yml` introduced with no engine change of its own, which
+    # is 2H design §1's amended acceptance test.
+    path_fallback: construct_name
+    # `@DgsData(parentType = "Order", field = "lines")` — the parent type sits
+    # on the same annotation as the field, exactly like Spring's `typeName`.
+    qualifier_from: [parentType]
+    qualifier_separator: "."
+    prefix_from: []
+    peer_from: []
+    method_from: method
+    all_methods: []
+    prefix_annotation: null
+    annotations:
+      - { fqn: com.netflix.graphql.dgs.DgsQuery,        method: [query] }
+      - { fqn: com.netflix.graphql.dgs.DgsMutation,     method: [mutation] }
+      - { fqn: com.netflix.graphql.dgs.DgsSubscription, method: [subscription] }
+      # The long form. It pre-sets no operation, so it derives the verbless
+      # `Parent.field` identity every non-root resolver has, and it names a
+      # field OF a type — so `requires_qualifier`, for the reason
+      # `spring-graphql.yml` states on its own two resolver annotations.
+      #
+      # KNOWN LIMITATION, stated rather than guessed: `@DgsData(parentType =
+      # "Query")` is the long spelling of `@DgsQuery`, and this row renders it
+      # `Query.field` verbless instead of `(query, field)`. Expressing "this
+      # parent type IS a root operation" needs a fourth vocabulary form
+      # nobody has asked for, and the honest verbless row is a visible,
+      # correctly-addressed identity rather than a wrong one. Recorded in
+      # COVERAGE by Task 7.
+      - { fqn: com.netflix.graphql.dgs.DgsData, requires_qualifier: true }
+
+format_fixed:
+  graphql: json
+
+# Copied verbatim from spring-graphql.yml — see the block comment there for
+# why every catalog reaching a shared payload type must agree, and why these
+# three files in particular are the ones that reach `OrderView` first.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: reactor.core.publisher.Mono,             payload_arg: 0, semantics: async }
+  - { type: reactor.core.publisher.Flux,             payload_arg: 0, semantics: streaming }
+  # 2H Task 6 fix round 1. `ServerSentEvent<T>` is the per-EVENT envelope an
+  # SSE stream carries — `id`/`event`/`retry` metadata wrapped around `data:
+  # T` — so the payload on that wire is `T`, exactly as `ResponseEntity`'s is.
+  # Without this line `Flux<ServerSentEvent<OrderView>>` peeled its outer
+  # `Flux` and then stopped, publishing the envelope TYPE as the contract;
+  # `rooting.py` peels recursively, so one entry is the whole remedy.
+  # `http_envelope`, not `streaming`: the stream is the `Flux` around it, and
+  # `semantics` only ever gates `optional`, so the value is a label for a
+  # reader rather than a branch.
+  - { type: org.springframework.http.codec.ServerSentEvent,
+      payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.time.LocalDate,  wire: string, format: date }
+  - { type: java.math.BigDecimal, wire: number }
+  - { type: java.util.UUID,       wire: string, format: uuid }

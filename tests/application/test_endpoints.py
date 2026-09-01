@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,11 @@ def test_catalog_declares_wrappers_nullability_serialization_and_known_types():
             "reactor.core.publisher.Flux",
             "java.util.concurrent.CompletableFuture",
             "java.util.Optional",
+            # 2H Task 6 (fix round 1): `ServerSentEvent<T>` is the per-EVENT
+            # envelope an SSE stream carries, so the payload on that wire is
+            # `T`. Without it `Flux<ServerSentEvent<OrderView>>` peeled its
+            # outer `Flux` and published the envelope TYPE as the contract.
+            "org.springframework.http.codec.ServerSentEvent",
         }
 
         # The JetBrains entries are not redundant with JSpecify/Spring: the
@@ -96,6 +102,38 @@ def test_catalog_declares_wrappers_nullability_serialization_and_known_types():
             "java.math.BigDecimal",
             "java.util.UUID",
         }
+
+
+def test_every_catalog_carrying_the_reactive_wrapper_family_carries_it_verbatim():
+    """The Spring/reactive `wrappers` family is duplicated VERBATIM by
+    contract, and until now nothing enforced it (2H Task 6, fix round 1 — the
+    `ServerSentEvent` entry is the second thing that has to be kept in step
+    across six files).
+
+    `spring-graphql.yml`'s own comment states the stakes: shape expansion is a
+    GLOBAL, insert-if-absent pass keyed on the type symbol alone, so the first
+    catalog to reach a shared payload type is the one that describes it for
+    everyone — and these files are read in filename order. A copy that
+    disagreed would not be a cosmetic difference; it would silently change what
+    the OTHER catalogs' endpoints publish, depending only on which file sorts
+    first.
+
+    Scoped by MEMBERSHIP, not by a filename list: a catalog belongs to this
+    family exactly when it declares the family's own marker entry, so a seventh
+    catalog copying the block in is covered the day it is written. Catalogs
+    with wrappers of their own and no reactive family — `retrofit.yml`'s
+    `Call`, for one — are a different vocabulary and are correctly excluded."""
+    marker = "reactor.core.publisher.Flux"
+    blocks = {}
+    for path in sorted(CATALOGS.glob("*.yml")):
+        declared = yaml.safe_load(path.read_text(encoding="utf-8")).get("wrappers") or []
+        if any(wrapper["type"] == marker for wrapper in declared):
+            blocks[path.name] = declared
+
+    assert len(blocks) > 1, "the pin is vacuous unless more than one catalog carries the family"
+    assert len({json.dumps(block, sort_keys=True) for block in blocks.values()}) == 1, (
+        f"catalogs disagree about the reactive `wrappers` family: {sorted(blocks)}"
+    )
 
 
 def test_catalog_requires_type_annotations_for_nullability():
@@ -129,6 +167,68 @@ def test_catalog_leaves_request_mapping_without_a_preset_method():
         if m["fqn"] == "org.springframework.web.bind.annotation.RequestMapping"
     )
     assert "method" not in request_mapping
+
+
+def test_every_graphql_catalog_declares_the_protocols_fixed_format():
+    """2G design §7, rung 1, owned by the catalogs that declare the protocol.
+
+    All FOUR declare it, not one: the ladder unions the blocks across
+    catalogs, so a module pulling in only DGS must still get the answer. The
+    entries are identical by construction and a contradiction between two
+    would be refused rather than resolved, which is what keeps four copies
+    from drifting silently — the same rule `media_formats` already lives
+    under on `spring-web.yml`/`spring-mvc.yml`.
+
+    `graphql-schema` (2H Task 4) is the fourth, and the one that makes the
+    rule bite rather than repeat: a schema-first module pulls in NONE of the
+    three annotation libraries, so without its own copy its rows would reach
+    rung 1 with nothing declared and fall to rung 4, where the declared
+    shape's own `schema_format` would stamp `graphql` — a value D00's format
+    set does not contain — into the column. It is also the only one of the
+    four that is not `annotation_driven`: a schema belongs to no framework."""
+    catalogs = YamlCatalogSource(CATALOGS).load()
+    graphql = [c for c in catalogs if c.protocol == "graphql"]
+
+    assert {c.id for c in graphql} == {
+        "spring-graphql",
+        "netflix-dgs",
+        "microprofile-graphql",
+        "graphql-schema",
+    }
+    assert all(c.format_fixed == {"graphql": "json"} for c in graphql)
+    assert all(c.direction == "inbound" for c in graphql)
+    assert {c.style for c in graphql} == {"annotation_driven", "schema_operations"}
+    assert next(c for c in graphql if c.style == "schema_operations").id == "graphql-schema"
+
+
+def test_only_spring_graphql_needed_the_qualifier_form():
+    """2H design §1's amended acceptance test, read off the catalogs
+    themselves rather than off the derived rows.
+
+    MicroProfile's non-root resolver is `@Source` on a PARAMETER — a
+    genuinely different declaration shape that no shipped form reads — so it
+    declares no qualifier and derives no resolver rows, which is silence
+    rather than a wrong answer. DGS spells its scope on the operation
+    annotation exactly as Spring does, so it rides the same form with a
+    different attribute name and no engine change at all."""
+    catalogs = {c.id: c for c in YamlCatalogSource(CATALOGS).load()}
+    qualifiers = {
+        catalog_id: catalogs[catalog_id].matches["mapping"].get("qualifier_from")
+        for catalog_id in ("spring-graphql", "netflix-dgs", "microprofile-graphql")
+    }
+
+    assert qualifiers == {
+        "spring-graphql": ["typeName"],
+        "netflix-dgs": ["parentType"],
+        "microprofile-graphql": None,
+    }
+    # All three share form 1 — every one of the three frameworks defaults its
+    # name attribute to the method name (checkpoint answers 1, 2, 3), which is
+    # what made it engine vocabulary instead of three catalog workarounds.
+    assert all(
+        catalogs[catalog_id].matches["mapping"]["path_fallback"] == "construct_name"
+        for catalog_id in qualifiers
+    )
 
 
 def _controller_facts(root: Path) -> None:
@@ -305,6 +405,516 @@ def _invented_listener_facts(root: Path) -> None:
         ),
     ]
     write_fact_file(root / "OrderListener.jsonl", document, facts)
+
+
+# --- 2H design §1: the two naming forms, on an invented framework ---------
+#
+# Deliberately NOT GraphQL, and deliberately not Spring: the forms are engine
+# vocabulary, so a test that could only be written with `@QueryMapping` in it
+# would be pinning a framework rather than a mechanism. The fixture below
+# declares an annotation with a `scope` attribute and a `value` attribute and
+# nothing else, which is the shape Spring GraphQL, Netflix DGS and
+# MicroProfile all happen to share.
+
+
+def _naming_forms_catalog(**mapping: object) -> Catalog:
+    """A gateless catalog over the invented annotation below, with whatever
+    naming vocabulary a test wants layered on."""
+    return Catalog(
+        id="invented-naming",
+        style="annotation_driven",
+        protocol="kafka",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-naming.yml"),
+        matches={
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": [],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": None,
+                "annotations": [{"fqn": "com.acme.messaging.annotation.OnMessage"}],
+                **mapping,
+            }
+        },
+    )
+
+
+def _naming_forms_facts(root: Path, type_scope: str | None = None) -> None:
+    """Four declarations covering every combination the two forms produce: a
+    name spelled out, a name left to the construct, a scope with a spelled
+    name, and a scope with a defaulted one.
+
+    `type_scope` puts the same annotation on the enclosing TYPE carrying only
+    a scope — the class-level shape, where a type states the scope once for
+    every declaration it holds.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/notify/NamedHandlers.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    owner = "com/acme/notify/NamedHandlers#"
+    facts: list[object] = [
+        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS)
+    ]
+    if type_scope is not None:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/messaging/annotation/OnMessage#",
+                    args={"scope": type_scope},
+                ),
+            )
+        )
+    # `args` mirrors what a real extractor emits: an ABSENT attribute is
+    # absent from the map entirely — an annotation's declared default is
+    # never written into the class file (2H checkpoint answer 1).
+    declarations = {
+        "explicit": {"value": ["named"]},
+        "defaulted": {},
+        "scoped": {"scope": "Parent", "value": ["member"]},
+        "scopedDefaulted": {"scope": "Parent"},
+    }
+    for name, args in declarations.items():
+        symbol = f"{owner}{name}(sig_3d92af60)."
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=symbol,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+            )
+        )
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=symbol,
+                retention="runtime",
+                use=AnnotationUse(annotation="com/acme/messaging/annotation/OnMessage#", args=args),
+            )
+        )
+    write_fact_file(root / "NamedHandlers.jsonl", document, facts)
+
+
+def _paths_of(tmp_path: Path, catalog: Catalog, type_scope: str | None = None) -> set[str]:
+    _naming_forms_facts(tmp_path / "facts", type_scope)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+    return paths
+
+
+def test_a_catalog_declaring_no_naming_forms_derives_exactly_what_it_always_did(
+    tmp_path: Path,
+):
+    """The inertness pin. Both forms are optional, and a catalog that declares
+    neither must compose `prefix || suffix` and nothing else — which is what
+    lets them ship without touching the behaviour of every catalog written
+    before them.
+
+    The empty paths below are the PRE-2H behaviour, recorded here rather than
+    quietly fixed: an absent attribute defaulted to `''`. That is the bug the
+    next test removes, and it is only reachable by a catalog that asks for
+    none of the vocabulary that removes it.
+    """
+    assert _paths_of(tmp_path, _naming_forms_catalog()) == {"named", "member", ""}
+
+
+def test_an_absent_name_attribute_falls_back_to_the_constructs_own_name(
+    tmp_path: Path,
+):
+    """Form 1. `defaulted` and `scopedDefaulted` carry the annotation with no
+    `value` at all, and each takes the name of the method it sits on.
+
+    The two spelled names are asserted UNCHANGED in the same breath: the
+    fallback fires on absence only, never as a rename of something declared.
+    """
+    paths = _paths_of(tmp_path, _naming_forms_catalog(path_fallback="construct_name"))
+
+    assert paths == {"named", "member", "defaulted", "scopedDefaulted"}
+
+
+def test_a_scope_attribute_composes_in_front_of_the_name_it_qualifies(
+    tmp_path: Path,
+):
+    """Form 2, composing with form 1.
+
+    `scoped` spells both halves; `scopedDefaulted` spells the scope and takes
+    the name from the method — the two forms meeting, which is the case that
+    would need its own bespoke rule if they were not separable. The two
+    declarations carrying NO scope compose no separator either: a qualifier
+    that is absent contributes nothing rather than a leading `.`.
+    """
+    paths = _paths_of(
+        tmp_path,
+        _naming_forms_catalog(
+            path_fallback="construct_name",
+            qualifier_from=["scope"],
+            qualifier_separator=".",
+        ),
+    )
+
+    assert paths == {"named", "defaulted", "Parent.member", "Parent.scopedDefaulted"}
+
+
+def test_the_separator_is_catalog_data_rather_than_a_punctuation_the_engine_picked(
+    tmp_path: Path,
+):
+    """Which character joins a scope to a member is a framework's convention —
+    GraphQL's `.`, another framework's `#` or `/`. An engine that baked one in
+    would be naming a framework in code, which D02 §2 forbids for exactly the
+    reasons it forbids naming an annotation there.
+
+    Asserts the WHOLE set, not membership: a membership check passes happily
+    over a wrong row sitting beside the right one, which is how the dangling
+    separator below survived the first round of this file.
+    """
+    paths = _paths_of(
+        tmp_path,
+        _naming_forms_catalog(
+            path_fallback="construct_name",
+            qualifier_from=["scope"],
+            qualifier_separator="#",
+        ),
+    )
+
+    assert paths == {"named", "defaulted", "Parent#member", "Parent#scopedDefaulted"}
+
+
+def test_a_qualifier_without_a_name_fallback_is_refused_rather_than_left_dangling(
+    tmp_path: Path,
+):
+    """A scope with no fallback composes the scope and the separator onto an
+    EMPTY name — `Parent#` — published at `resolved`/`compiler`. That is the
+    same confidently-wrong-address class the empty path was, one step along,
+    so the two forms are declared together or not at all.
+
+    Refused at validation rather than filtered at derivation: the catalog is
+    the thing that is wrong, and a run that silently dropped those rows would
+    leave a framework half-described with nothing saying so.
+    """
+    with pytest.raises(CatalogError) as raised:
+        _paths_of(
+            tmp_path,
+            _naming_forms_catalog(qualifier_from=["scope"], qualifier_separator="#"),
+        )
+
+    assert "path_fallback" in str(raised.value)
+    assert "invented-naming.yml" in str(raised.value)
+
+
+def test_an_explicitly_empty_separator_is_refused_like_a_missing_one(tmp_path: Path):
+    """`qualifier_separator: ""` passes an `is None` check and then composes
+    `Parentmember` — precisely what the missing-separator refusal exists to
+    prevent, reached by spelling the key rather than omitting it.
+
+    An empty separator has no honest use: a framework that runs the two halves
+    together has no composition to declare in the first place.
+    """
+    with pytest.raises(CatalogError) as raised:
+        _paths_of(
+            tmp_path,
+            _naming_forms_catalog(
+                path_fallback="construct_name",
+                qualifier_from=["scope"],
+                qualifier_separator="",
+            ),
+        )
+
+    assert "qualifier_separator" in str(raised.value)
+    assert "invented-naming.yml" in str(raised.value)
+
+
+def test_a_scope_stated_on_the_enclosing_type_reaches_a_declaration_that_names_none(
+    tmp_path: Path,
+):
+    """The class-level scope shape (2H design §1): a type states the scope once
+    and its declarations name only their own member.
+
+    Reads the SAME attribute one level out, through a join that mirrors the
+    existing class-level prefix exactly — so a catalog spends no extra
+    vocabulary on it. The declaration's own scope still wins where both are
+    present: the nearer declaration is the more specific, which is the
+    precedence every framework offering both levels keeps.
+    """
+    paths = _paths_of(
+        tmp_path,
+        _naming_forms_catalog(
+            path_fallback="construct_name",
+            qualifier_from=["scope"],
+            qualifier_separator=".",
+        ),
+        type_scope="Enclosing",
+    )
+
+    assert paths == {
+        # No scope of their own — they take the type's.
+        "Enclosing.named",
+        "Enclosing.defaulted",
+        # Their own scope wins over the type's.
+        "Parent.member",
+        "Parent.scopedDefaulted",
+    }
+
+
+def test_a_scoped_annotation_with_no_scope_anywhere_derives_no_row_at_all(
+    tmp_path: Path,
+):
+    """`requires_qualifier` — the rule that keeps a missing scope silent
+    instead of wrong.
+
+    An annotation that names a member OF something has no address until the
+    something is known. Emitting the bare member name would publish a
+    top-level identity for a declaration that is not one — a DIFFERENT
+    endpoint from the one the code declares — at `resolved`/`compiler`, where
+    nothing downstream could tell it from an observation. Silence is the
+    honest answer: the declaration is real, but what it belongs to is stated
+    somewhere these facts do not reach.
+    """
+    paths = _paths_of(
+        tmp_path,
+        _naming_forms_catalog(
+            path_fallback="construct_name",
+            qualifier_from=["scope"],
+            qualifier_separator=".",
+            annotations=[
+                {
+                    "fqn": "com.acme.messaging.annotation.OnMessage",
+                    "requires_qualifier": True,
+                }
+            ],
+        ),
+    )
+
+    # `named` and `defaulted` state no scope and no type states one for them,
+    # so they derive NOTHING — not `named`, not `defaulted`.
+    assert paths == {"Parent.member", "Parent.scopedDefaulted"}
+
+
+def test_a_catalog_naming_an_unknown_name_fallback_is_refused_by_file(tmp_path: Path):
+    """An unrecognised word must fail loudly rather than fall through to the
+    empty default — a silent fall-through would restore the very empty-path
+    row the form exists to remove, and nothing downstream could tell that
+    address from an observed one (NFR-5)."""
+    with pytest.raises(CatalogError) as raised:
+        _paths_of(tmp_path, _naming_forms_catalog(path_fallback="parameter_name"))
+
+    assert "parameter_name" in str(raised.value)
+    assert "invented-naming.yml" in str(raised.value)
+
+
+def test_a_qualifier_with_no_separator_is_refused_by_file(tmp_path: Path):
+    """Declaring a scope but no separator would concatenate `Parent` onto
+    `member` with nothing between them — a plausible-looking address that
+    matches no caller."""
+    with pytest.raises(CatalogError) as raised:
+        _paths_of(tmp_path, _naming_forms_catalog(qualifier_from=["scope"]))
+
+    assert "qualifier_separator" in str(raised.value)
+    assert "invented-naming.yml" in str(raised.value)
+
+
+# --- The prefix seam: `mapping.path_separator` ----------------------------
+#
+# Deliberately NOT Spring, for the reason the naming forms above are not
+# GraphQL: how a TYPE-level prefix joins the address it prefixes is engine
+# vocabulary driven by catalog data, and a test spelled with `@RequestMapping`
+# in it would pin a framework rather than the mechanism. The live failure the
+# mechanism closes IS Spring, and is pinned where a live failure belongs — on
+# the fixture, through `spring-web.yml` (`tests/e2e/test_vertical_slice.py`).
+
+
+def _seam_catalog(**mapping: object) -> Catalog:
+    """A gated catalog whose type-level annotation carries a prefix and whose
+    method-level annotation carries a suffix — the two halves of one seam,
+    with whatever composition vocabulary a test layers on."""
+    return Catalog(
+        id="invented-seam",
+        style="annotation_driven",
+        protocol="http",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-seam.yml"),
+        matches={
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": ["value"],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": "com.acme.rest.annotation.Resource",
+                "annotations": [{"fqn": "com.acme.rest.annotation.Route"}],
+                **mapping,
+            }
+        },
+    )
+
+
+def _seam_facts(root: Path, prefix: str, suffix: str) -> None:
+    """One type carrying `prefix`, one method on it carrying `suffix`."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rest/Seam.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    owner = "com/acme/rest/Seam#"
+    route = f"{owner}route(sig_3d92af60)."
+    write_fact_file(
+        root / "Seam.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=route,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/rest/annotation/Resource#", args={"value": [prefix]}
+                ),
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=route,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/rest/annotation/Route#", args={"value": [suffix]}
+                ),
+            ),
+        ],
+    )
+
+
+def _seam_path(tmp_path: Path, catalog: Catalog, prefix: str, suffix: str) -> str:
+    _seam_facts(tmp_path / "facts", prefix, suffix)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    [row] = workspace.query("endpoints")
+    workspace.close()
+    return str(row["path"])
+
+
+@pytest.mark.parametrize(
+    ("prefix", "suffix", "composed"),
+    [
+        # Neither half spells the separator: one is inserted. The live
+        # failure — spring-petclinic-microservices' api-gateway writes
+        # `@RequestMapping("/api/gateway")` + `@GetMapping("owners/{ownerId}")`
+        # and is served at `/api/gateway/owners/{ownerId}`; the bare
+        # concatenation published `/api/gatewayowners/{ownerId}`.
+        ("/api/gateway", "owners/{id}", "/api/gateway/owners/{id}"),
+        # Both halves spell it: the seam is deduped to one, never doubled.
+        ("/api/gateway", "/owners/{id}", "/api/gateway/owners/{id}"),
+        # One half spells it — the shape every catalogued fixture path
+        # already had, which is why the bug hid: unchanged by the fix.
+        ("/api/gateway/", "owners/{id}", "/api/gateway/owners/{id}"),
+        # A `"/"` prefix contributes nothing but the leading slash. The
+        # second live failure — genai-service's `@RequestMapping("/")` +
+        # `@PostMapping("/chatclient")` is served at `/chatclient`; the bare
+        # concatenation published `//chatclient`.
+        ("/", "/chatclient", "/chatclient"),
+        ("/", "chatclient", "/chatclient"),
+    ],
+)
+def test_a_declared_separator_joins_the_two_halves_of_a_seam_with_exactly_one(
+    tmp_path: Path, prefix: str, suffix: str, composed: str
+):
+    """Whichever half spelled the separator, the composed address carries one.
+    A doubled or missing separator is an address nobody serves, published at
+    `resolved`/`compiler` where nothing downstream can tell it from something
+    observed — the same confidently-wrong-address class `path_fallback` closes
+    from the other direction."""
+    assert _seam_path(tmp_path, _seam_catalog(path_separator="/"), prefix, suffix) == composed
+
+
+def test_an_empty_half_takes_no_separator_with_it(tmp_path: Path):
+    """An absent prefix leaves the suffix exactly as written — a slashless
+    name does NOT gain a leading `/` this engine would be inventing — and an
+    empty suffix (a `@KafkaHandler`, an `@OnMessage`) leaves the prefix
+    alone. Both halves are real: the catalogs riding the seam include ones
+    whose method annotation carries no path attribute at all."""
+    catalog = _seam_catalog(path_separator="/")
+
+    assert _seam_path(tmp_path, catalog, "", "owners") == "owners"
+    assert _seam_path(tmp_path / "b", catalog, "/v1/orders", "") == "/v1/orders"
+
+
+def test_a_catalog_declaring_no_separator_concatenates_exactly_as_it_always_did(
+    tmp_path: Path,
+):
+    """The inertness pin, and the reason the separator is catalog data rather
+    than an engine default: `spring-kafka.yml`'s prefix is a class-level
+    `@KafkaListener`'s TOPIC, and a topic name has no segments to join. A `/`
+    inserted between two halves of one would invent a destination no broker
+    carries, so a catalog that declares no separator keeps the bare
+    concatenation every catalog had before this vocabulary existed."""
+    assert _seam_path(tmp_path, _seam_catalog(), "orders", "-retry") == "orders-retry"
+
+
+def test_a_multi_character_separator_is_refused_by_file(tmp_path: Path):
+    """The seam is deduped with `rtrim`/`ltrim`, which trim a SET of
+    characters: a two-character separator would strip each of its characters
+    individually from either half and compose an address the framework does
+    not serve. Refused at load rather than read as something it is not — the
+    same edge check `qualifier_separator` gets, for the same reason."""
+    with pytest.raises(CatalogError) as raised:
+        _seam_path(tmp_path, _seam_catalog(path_separator="::"), "/a", "/b")
+
+    assert "path_separator" in str(raised.value)
+    assert "invented-seam.yml" in str(raised.value)
+
+
+def test_the_qualifier_seam_keeps_its_own_separator_when_a_path_separator_is_declared(
+    tmp_path: Path,
+):
+    """The two seams are separate rules and must not blend. A scope and a
+    member are written by ONE author on ONE annotation, so neither half ever
+    spells the separator and there is nothing to dedupe; a prefix and a path
+    are written by two authors who each decide independently. A catalog
+    declaring both composes `.` between scope and member and `/` at the
+    prefix seam — and the GraphQL catalogs, which declare only the former,
+    are untouched by the latter existing."""
+    paths = _paths_of(
+        tmp_path,
+        _naming_forms_catalog(
+            path_fallback="construct_name",
+            qualifier_from=["scope"],
+            qualifier_separator=".",
+            path_separator="/",
+        ),
+    )
+
+    assert paths == {"named", "defaulted", "Parent.member", "Parent.scopedDefaulted"}
 
 
 def test_derive_endpoints_carries_the_catalogs_own_protocol_and_direction_when_non_http(
@@ -1389,6 +1999,120 @@ def test_a_type_level_mapping_annotation_mints_no_endpoint_of_its_own(tmp_path):
     workspace.close()
 
 
+# --- 2H Task 5 review, fix round 1: `spring-stomp.yml`'s `reply` block is
+# @SendTo-only — `annotation_driven.py::_derive_replies` reads a single
+# `reply.annotation` fqn (D02 §2's block, never a list), the same forced
+# single-valued constraint the catalog's own `prefix_annotation` runs into
+# for jakarta/javax. `@SendToUser` is a DIFFERENT annotation
+# (`org.springframework.messaging.handler.annotation.SendToUser`), so a
+# handler carrying it instead of `@SendTo` is annotated but invisible to
+# `reply_annotation`'s own equality check — this probes what that produces:
+# not nothing, and not a wrong destination, but the same honest unresolved
+# row a completely UNannotated value-returning handler already gets
+# (`_derive_replies`'s own no-reply-annotation branch, the `board`/`escalate`
+# precedent). No live fixture surface exists for this shape (Task 1 built
+# none), so it is proved here over synthetic facts, on the REAL shipped
+# catalog, the same discipline `single_call`'s own `addHandler` probe keeps.
+def _sendtouser_facts(root: Path) -> None:
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/ws/StompUserHandler.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    handler_type = "com/acme/ws/StompUserHandler#"
+    notify = "com/acme/ws/StompUserHandler#notify(sig_11112222)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=handler_type, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=notify,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=handler_type,
+            signature=Signature(
+                parameters=[],
+                returns=TypeRef(symbol="java/lang/String#", wire_type="string"),
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=notify,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/messaging/handler/annotation/MessageMapping#",
+                args={"value": ["/notify"]},
+            ),
+        ),
+        # NOT `@SendTo` — `@SendToUser`, a different fqn `reply.annotation`
+        # never names.
+        AnnotationFact(
+            document_id="doc_1",
+            target=notify,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/messaging/handler/annotation/SendToUser#",
+                args={"value": ["/queue/notify"]},
+            ),
+        ),
+    ]
+    write_fact_file(root / "StompUserHandler.jsonl", document, facts)
+
+
+def _spring_stomp_catalog() -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-stomp")
+
+
+def test_an_sendtouser_handler_derives_the_same_honest_unresolved_reply_row_as_no_annotation(
+    tmp_path: Path,
+):
+    _sendtouser_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(
+        workspace,
+        [_spring_stomp_catalog()],
+        capabilities={"annotation_args", "typed_signatures"},
+    )
+    assert skipped == []
+    rows = list(workspace.query("endpoints"))
+    workspace.close()
+
+    # The inbound row derives normally — `@SendToUser` plays no role in
+    # identity, only in the reply.
+    [inbound] = [e for e in rows if e["direction"] == "inbound"]
+    assert (inbound["method"], inbound["path"]) == (None, "/notify")
+    assert inbound["resolution"] == "resolved"
+
+    # Exactly ONE outbound reply row — never two (a wrongly-matched extra
+    # row) and never zero (a silently dropped one): `_derive_replies` walks
+    # every handler this catalog's own rows named exactly once, and
+    # `notify`'s return type is a real payload (`String`), so it always
+    # gets a reply decision, resolved or not.
+    outbound = [e for e in rows if e["direction"] == "outbound"]
+    assert len(outbound) == 1
+    [reply] = outbound
+    assert reply["catalog_id"] == "spring-stomp"
+    assert reply["caller"] == "com/acme/ws/StompUserHandler#notify(sig_11112222)."
+    # The honest answer: NOT the wrong destination (`/queue/notify` never
+    # appears anywhere on this row — nothing in `reply.annotation`'s
+    # single-valued equality check could have read it), and NOT no row at
+    # all — `path` NULL, `unresolved`, the same tuple a completely bare
+    # value-returning handler derives (`board`'s own live row, `escalate`'s
+    # kafka precedent).
+    assert reply["path"] is None
+    assert reply["method"] is None
+    assert reply["resolution"] == "unresolved"
+    assert reply["request_shape"] is not None
+
+
 _UNKNOWN_STYLE_CATALOG = """id: invented
 style: protocol_hint
 protocol: http
@@ -1478,6 +2202,33 @@ matches: {{}}
 
     loaded = YamlCatalogSource(tmp_path).load()
     assert [c.protocol for c in loaded] == ["jms", "kafka", "pubsub", "sqs"]
+
+
+def test_the_http_adjacent_protocols_load(tmp_path):
+    """2H design §1's closed-set line: D00's protocol set gains `graphql`,
+    `websocket` and `sse`, declared once and used across the phase.
+
+    All three are added together even though only `graphql` has a catalog in
+    this task. The set is closed on purpose (NFR-5) — a value outside it is a
+    typo, not a new kind of endpoint — so the cost of a member the phase has
+    not reached yet is one enum line, while the cost of adding them one task
+    at a time is three schema changes to the same closed set. Loading order is
+    by filename (NFR-1), which is why the assertion is a list rather than a
+    set."""
+    _minimal_catalog = """id: {id}
+style: annotation_driven
+protocol: {protocol}
+direction: inbound
+matches: {{}}
+"""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    for protocol in ("graphql", "websocket", "sse"):
+        filename = f"x-{protocol}.yml"
+        content = _minimal_catalog.format(id=filename.replace(".yml", ""), protocol=protocol)
+        (tmp_path / filename).write_text(content, encoding="utf-8")
+
+    loaded = YamlCatalogSource(tmp_path).load()
+    assert [c.protocol for c in loaded] == ["graphql", "sse", "websocket"]
 
 
 def test_message_is_no_longer_a_protocol(tmp_path):

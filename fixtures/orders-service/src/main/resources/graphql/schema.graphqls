@@ -1,0 +1,20 @@
+type Query {
+  orderById(id: ID!): Order
+  orders: [Order!]!
+  dgsOrders: [Order!]!
+  mpOrders: [Order!]!
+  auditTrail(id: ID!): [AuditEntry!]
+}
+type Mutation { placeOrder(sku: String!): Order }
+type Subscription { orderUpdates: Order }
+
+type Order implements Node {
+  id: ID!
+  lines: [String!]
+  totals: Long
+  status: OrderStatus!
+}
+interface Node { id: ID! }
+enum OrderStatus { OPEN CLOSED }
+input OrderFilter { sku: String, open: Boolean! }
+scalar Long

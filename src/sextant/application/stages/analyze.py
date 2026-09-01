@@ -13,7 +13,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from sextant.application.ports.artifacts import ArtifactReader, ReadRequest, group_files_by_reader
+from sextant.application.ports.artifacts import (
+    ArtifactReader,
+    ReadRequest,
+    file_kind,
+    group_files_by_reader,
+)
 from sextant.application.ports.catalogs import CatalogSource
 from sextant.application.ports.descriptors import DescriptorInterpreter
 from sextant.application.ports.detector import Detector, ModuleModel, select_detector
@@ -29,6 +34,36 @@ from sextant.domain.factfile import (
 )
 from sextant.domain.facts import DeclaredShapeFact, Document, EmbeddedDescriptorFact, Fact
 from sextant.domain.resource_files import list_files
+
+
+def _config_files(
+    module: ModuleModel, root: Path, schema_readers: Sequence[ArtifactReader]
+) -> tuple[Path, ...]:
+    """Everything under a resource root that the schema loop below is not
+    already reading.
+
+    One schema root genuinely lives INSIDE a resource root — Spring GraphQL's
+    SDL ships on the classpath, so the build puts it under
+    `src/main/resources/graphql` — and the resource walk is recursive. One
+    registry serves both loops, so without this the same reader would be
+    handed the same file twice: two `Document` records for one source file
+    (D00 §7), and two identical descriptors for the interpreter to read as a
+    schema that declares every one of its types twice.
+
+    The partition is per FILE, not per directory: a schema root is a
+    directory, and an ordinary resource sitting in one (a `messages.properties`
+    beside the SDL) is still an ordinary resource. Only a file a schema reader
+    actually claims belongs to the other loop — everything else keeps the
+    resource-root-relative identity its fact file is targeted by.
+    """
+    return tuple(
+        file
+        for file in list_files(root)
+        if not (
+            any(file.is_relative_to(schema_root) for schema_root in module.schema_roots)
+            and any(reader.accepts(file_kind(file)) for reader in schema_readers)
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -105,8 +140,15 @@ def analyze(
     # Readers never see the Workspace port — this stage is the write.
     progress.start("read")
     entries = 0
+    # Which loop a reader serves is the reader's own declaration (the
+    # `ArtifactReader` port's `reads_schema_sources`), never a guess from the
+    # root a file was found under: since 2H one schema root lives inside a
+    # resource root, so the root no longer tells the two apart.
+    schema_readers = [reader for reader in readers if reader.reads_schema_sources]
     for root in module.resource_roots:
-        for reader, owned in group_files_by_reader(list_files(root), readers):
+        for reader, owned in group_files_by_reader(
+            _config_files(module, root, schema_readers), readers
+        ):
             request = ReadRequest(
                 module_id=module.module_id, version=module.version, files=owned, root=root
             )
@@ -115,15 +157,16 @@ def analyze(
                 write_fact_file(target, document, config_facts)
                 entries += len(config_facts)
     # Schema roots are read the same way, through the same registry — a
-    # reader claims its own extension (`avsc`/`proto`) regardless of which
-    # root it is handed, so nothing here has to know which readers are
-    # schema readers versus config readers. Kept as its own loop rather than
+    # reader claims its own extension (`avsc`/`proto`/`graphqls`) regardless
+    # of which root it is handed, and only the schema readers are offered
+    # these files, so an ordinary resource that happens to sit in a schema
+    # directory stays with the loop above. Kept as its own loop rather than
     # folded into the one above only because its target is `schema_fact_target`,
     # not `config_fact_target` (2F's collision rule: a schema document must
     # never compete with a same-named config file for one fact-file target).
     schema_sources_not_compiled: list[str] = []
     for root in module.schema_roots:
-        for reader, owned in group_files_by_reader(list_files(root), readers):
+        for reader, owned in group_files_by_reader(list_files(root), schema_readers):
             request = ReadRequest(
                 module_id=module.module_id, version=module.version, files=owned, root=root
             )

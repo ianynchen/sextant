@@ -50,8 +50,10 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "CommonProtos.jsonl",
         "ComposedController.jsonl",
         "ComposedListener.jsonl",
+        "CustomerGraphqlController.jsonl",
         "CustomerRef.jsonl",
         "DetailedOrderResult.jsonl",
+        "DgsOrderFetcher.jsonl",
         "EventProducers.jsonl",
         "InventoryExchange.jsonl",
         "InventoryWebClient.jsonl",
@@ -63,11 +65,15 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "LegacyBillingApi.jsonl",
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
+        "LiveEndpoint.jsonl",
+        "MpOrderApi.jsonl",
         "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
         "OrderEvent.jsonl",
+        "OrderEventsController.jsonl",
         "OrderEventsListener.jsonl",
+        "OrderGraphqlController.jsonl",
         "OrderIngest.jsonl",
         "OrderPageController.jsonl",
         "OrderProtos$OrderReply$1.jsonl",
@@ -93,6 +99,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderRoutes.jsonl",
         "OrderService.jsonl",
         "OrderStatus.jsonl",
+        "OrderStompController.jsonl",
         "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
         "OrderView.jsonl",
@@ -109,14 +116,23 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "RawPubSubSubscribers.jsonl",
         "RawSqsClientSender.jsonl",
         "ReceiptView.jsonl",
+        "RootSeamController.jsonl",
         "RouteHandlers.jsonl",
         "ScopedRequest.jsonl",
+        "SeamController.jsonl",
         "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]
     # 77 + 3: 2G Task 7's `messaging/parse` package — the listeners plus the
     # two delegation targets its rungs follow.
-    assert report.documents == 80
+    # + 6: 2H Task 1's GraphQL, WebSocket/STOMP and SSE surfaces.
+    # + 1: 2H Task 2's `CustomerGraphqlController`, the class-level-scope
+    # resolver shape (2H design §1's class-level bullet).
+    # + 2: the prefix-seam controllers (`SeamController`, `RootSeamController`)
+    # — two class files, one document each. Two types rather than one because
+    # a class states its prefix once, and the two seam forms need two
+    # different prefixes.
+    assert report.documents == 89
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -154,8 +170,10 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "CommonProtos.jsonl",
         "ComposedController.jsonl",
         "ComposedListener.jsonl",
+        "CustomerGraphqlController.jsonl",
         "CustomerRef.jsonl",
         "DetailedOrderResult.jsonl",
+        "DgsOrderFetcher.jsonl",
         "EventProducers.jsonl",
         "InventoryExchange.jsonl",
         "InventoryWebClient.jsonl",
@@ -167,11 +185,15 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "LegacyBillingApi.jsonl",
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
+        "LiveEndpoint.jsonl",
+        "MpOrderApi.jsonl",
         "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
         "OrderEvent.jsonl",
+        "OrderEventsController.jsonl",
         "OrderEventsListener.jsonl",
+        "OrderGraphqlController.jsonl",
         "OrderIngest.jsonl",
         "OrderPageController.jsonl",
         "OrderProtos$OrderReply$1.jsonl",
@@ -197,6 +219,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderRoutes.jsonl",
         "OrderService.jsonl",
         "OrderStatus.jsonl",
+        "OrderStompController.jsonl",
         "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
         "OrderView.jsonl",
@@ -213,8 +236,10 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "RawPubSubSubscribers.jsonl",
         "RawSqsClientSender.jsonl",
         "ReceiptView.jsonl",
+        "RootSeamController.jsonl",
         "RouteHandlers.jsonl",
         "ScopedRequest.jsonl",
+        "SeamController.jsonl",
         "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]

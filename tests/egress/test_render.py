@@ -353,6 +353,119 @@ def test_kafka_inbound_row_renders_verbless_with_no_unresolved_marker():
     assert "(unresolved)" not in text
 
 
+def test_a_graphql_root_operation_renders_protocol_verb_and_field():
+    """2H design §1 / D06: `graphql query orders`.
+
+    GraphQL is VERBED — its operation type is part of the wire identity, and a
+    caller sending a mutation must not match a query — but its verb is not an
+    HTTP method, so the protocol name has to be rendered too. A bare
+    `query orders` names nothing in particular; `GET /v1/orders` does, which
+    is why HTTP still renders without the prefix.
+    """
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "graphql",
+                "direction": "inbound",
+                "method": "query",
+                "path": "orders",
+                "handler": "s maven c 1 com/acme/orders/graphql/OrderController#orders().",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "`graphql query orders`" in text
+    assert "(unresolved)" not in text
+
+
+def test_a_graphql_resolver_renders_verbless_without_an_unresolved_marker():
+    """The other half of the same rule. A resolver implements a FIELD — it
+    answers no operation — so its NULL method is an absence by design, not a
+    verb the analysis failed to read, and `Type.field` is the whole identity.
+
+    This is the case that makes `graphql` different from simply joining the
+    verbed set: an HTTP row with no method genuinely is unread and must still
+    say so (pinned by the test above this block), while this row must not.
+    """
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "graphql",
+                "direction": "inbound",
+                "method": None,
+                "path": "Order.lines",
+                "handler": "s maven c 1 com/acme/orders/graphql/OrderController#lines(Order).",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "`graphql Order.lines`" in text
+    assert "(unresolved)" not in text
+
+
+def test_an_sse_row_renders_its_protocol_and_its_http_verb():
+    """2H design §6 / D06: `sse GET /events/stream`.
+
+    An SSE stream is a route a client GETs, so unlike every other protocol
+    added this phase it is VERBED with an ordinary HTTP method — falling into
+    the derived verbless half would silently drop a verb the row really has.
+    It is also protocol-QUALIFIED, for the mirror image of GraphQL's reason:
+    `query orders` names nothing without its protocol, while `GET
+    /events/stream` names something *wrong* without it — an ordinary REST
+    route, which is exactly the reading the reclassification exists to
+    correct."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "sse",
+                "direction": "inbound",
+                "method": "GET",
+                "path": "/events/stream",
+                "handler": "s maven c 1 com/acme/orders/sse/OrderEventsController#stream().",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "`sse GET /events/stream`" in text
+    assert "(unresolved)" not in text
+
+
+def test_an_sse_row_with_no_verb_still_reports_the_gap():
+    """The half that separates `sse` from `graphql` in the qualified set: a
+    GraphQL resolver's NULL verb is an absence by design, an SSE row's is a
+    verb the analysis failed to read. Reusing one set for both questions would
+    have made this row quietly claim it was never supposed to have a method."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "sse",
+                "direction": "inbound",
+                "method": None,
+                "path": "/events/stream",
+                "handler": "s maven c 1 com/acme/orders/sse/OrderEventsController#stream().",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "`sse (unresolved) /events/stream`" in text
+
+
 def test_kafka_row_with_null_path_renders_unresolved_identity():
     """The path half of a verbless identity is unresolved the same way an
     HTTP row's method or path is: named, never a bare `None`."""
@@ -403,6 +516,40 @@ def test_inbound_row_with_no_handler_renders_unresolved_in_the_handler_column():
     )
     text = render_module_document(MODULE, report, "a3f91c")
     assert "| `GET /v1/orders` | unresolved | - → - | unresolved | unresolved |" in text
+
+
+def test_a_schema_declared_row_with_no_handler_says_so_rather_than_unresolved():
+    """2H Task 4's other half of the same column. `schema_operations` derives a
+    row whose address the schema stated OUTRIGHT — `resolution: resolved` — and
+    which names no code at all, because a schema never does and the wiring that
+    would is deliberately not read.
+
+    `unresolved` beside `resolved` would report a gap that does not exist, the
+    same mistake `_wire_identity` already refuses to make for a GraphQL
+    resolver's NULL verb. `none recorded` rather than `none`: the claim is
+    about what this evidence carries, never that the service implements
+    nothing. The row above keeps `unresolved` because its address really was
+    unread — the two cases are told apart by the row's own columns, not by its
+    protocol.
+    """
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "graphql",
+                "direction": "inbound",
+                "method": "query",
+                "path": "auditTrail",
+                "handler": None,
+                "caller": None,
+                "resolution": "resolved",
+                "evidence": "declared",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| `graphql query auditTrail` | none recorded | - → - | unresolved | resolved |" in text
 
 
 def test_messaging_gap_retires_and_both_lists_rotate_together():

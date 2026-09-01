@@ -1,0 +1,122 @@
+id: jakarta-websocket
+displayName: Jakarta WebSocket (annotated endpoints)
+style: annotation_driven
+protocol: websocket
+direction: inbound
+
+detect:
+  coordinates: ["jakarta.websocket:jakarta.websocket-api", "javax.websocket:javax.websocket-api"]
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # No type-level gate distinct from the prefix (spring-jms.yml/spring-kafka.yml
+  # precedent): `@ServerEndpoint` on the class IS both the marker and the path
+  # prefix, so it plays only the `prefix_annotation` role below — the same
+  # double duty a class-level, polymorphic `@KafkaListener` plays for
+  # `@KafkaHandler` in spring-kafka.yml.
+  #
+  # Deliberately NO `request_body` block (unlike every other catalog here):
+  # checkpoint answer 5 (Phase 2H Task 2) rules that a WebSocket frame is
+  # untyped by definition — `@OnMessage`'s own parameter (`onFrame(String
+  # frame)`) is an opaque frame, never a declared contract, and there is no
+  # `@Payload`-shaped marker this protocol offers to tell a real payload
+  # parameter apart from the frame itself. Omitting the block (rather than
+  # writing one that would still capture `String`) is what keeps
+  # `request_shape` NULL regardless of the frame parameter's own type
+  # (`shapes/contracts.py::_body_parameter`: "A catalog declaring neither
+  # contributes no request shapes").
+  mapping:
+    # CHECKPOINT FACT (Phase 2H Task 2, checkpoint answer 5): `@OnMessage`
+    # carries NO attribute at all in bytecode — a bare `#…()` entry, zero
+    # element-value pairs. `value` is never present, so every `@OnMessage`
+    # method's own path suffix reads as '' — the same `@KafkaHandler`
+    # precedent (`path_from: [topics, topicPattern]` on a row that carries
+    # neither); naming an attribute here that is never populated is what
+    # keeps the suffix empty rather than the whole row silently absent.
+    path_from: [value]
+    # `@ServerEndpoint`'s own `value` is a SCALAR string in bytecode
+    # (checkpoint answer 5) — `#…(#value=s#"/live")`, not a `String[]` like
+    # every Spring mapping annotation — but the same scalar-or-array read
+    # (`path_from`/`prefix_from` share one) already handles a scalar with no
+    # new vocabulary.
+    prefix_from: [value]
+    # `@ServerEndpoint("/live")`'s value is a URI path, so its seam joins with
+    # `/` like every other path-addressed catalog here. Inert in practice
+    # rather than dormant-and-wrong: `@OnMessage` carries no attribute at all
+    # (above), so the suffix is always '' and an empty half takes no separator
+    # with it — the prefix reaches `path` exactly as written either way.
+    path_separator: "/"
+    # Neither generation's annotations declare a `method` attribute; the name
+    # is borrowed and never populated (spring-jms.yml/spring-kafka.yml
+    # precedent), which is what keeps every row verbless below.
+    method_from: method
+    # Verbless (D02 §2, amended): a WebSocket frame handler declares no
+    # HTTP-style verb.
+    all_methods: []
+    prefix_annotation: jakarta.websocket.server.ServerEndpoint
+    annotations:
+      - { fqn: jakarta.websocket.OnMessage }
+
+# COVERAGE boundary (Task 5, carried to Task 7's docs pass): `javax.websocket.
+# server.ServerEndpoint`/`javax.websocket.OnMessage` are the pre-Jakarta-EE-9
+# spelling of the exact same annotations — a package rename and nothing else,
+# the Jackson-2/3 precedent spring-web.yml's `json_default_markers` keeps
+# ("two rows here, zero code"). Unlike that vocabulary, though,
+# `mapping.prefix_annotation` above is SINGLE-valued
+# (`annotation_driven.py::run` reads `mapping["prefix_annotation"]` as one
+# fqn, never a list) and this task's own acceptance rule refuses an engine
+# change that would widen it — so only the jakarta spelling is wired into
+# `mapping` above. `detect.coordinates` still names the javax artifact, so a
+# javax-only module is still recognised as WebSocket-shaped, but a
+# `javax.websocket.server.ServerEndpoint` class in that module derives no
+# endpoint from this catalog today: adding `javax.websocket.OnMessage` to
+# `mapping.annotations` without a matching javax `prefix_annotation` would
+# not fail honestly, it would derive a *wrong* one — `coalesce(prefix, '')`
+# reading '' for the unmatched class, publishing a resolved-but-addressless
+# row (exactly the failure `annotation_driven.py::_validate_naming` and
+# `derive_endpoints.sql`'s own `path_fallback` comment both call out: "wrong
+# output rather than a missing one"). Only jakarta is fixture-exercised
+# (Task 1's `LiveEndpoint`); the javax gap is catalog data, not shipped
+# behaviour.
+
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

@@ -131,6 +131,59 @@
       <artifactId>jackson-databind</artifactId>
       <version>3.1.4</version>
     </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-graphql</artifactId>
+      <version>3.2.5</version>
+    </dependency>
+    <!-- graphql-dgs: no separate annotations-only artifact exists on Maven
+         Central — @DgsComponent/@DgsQuery/@DgsData live in this module
+         itself, so it is already the smallest DGS artifact carrying them.
+         Pinned to 8.7.1, the last line whose transitive spring-web/
+         spring-context match this fixture's own 6.1.6 pin exactly. -->
+    <dependency>
+      <groupId>com.netflix.graphql.dgs</groupId>
+      <artifactId>graphql-dgs</artifactId>
+      <version>8.7.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.microprofile.graphql</groupId>
+      <artifactId>microprofile-graphql-api</artifactId>
+      <version>2.0</version>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.websocket</groupId>
+      <artifactId>jakarta.websocket-api</artifactId>
+      <version>2.2.0</version>
+    </dependency>
+    <!-- jakarta.websocket-api depends on jakarta.websocket-client-api at
+         "provided" scope, which Maven does not propagate transitively; the
+         base annotations shared by client and server endpoints (including
+         @OnMessage) live only in the client-api jar, so it must be declared
+         directly to compile LiveEndpoint. -->
+    <dependency>
+      <groupId>jakarta.websocket</groupId>
+      <artifactId>jakarta.websocket-client-api</artifactId>
+      <version>2.2.0</version>
+    </dependency>
+    <!-- Not in the brief's dependency list, but OrderStompController's
+         @MessageMapping/@SendTo/@SubscribeMapping (spec Step 5) live in
+         org.springframework.messaging, which nothing else here pulls in.
+         Pinned to this fixture's existing Spring version. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-messaging</artifactId>
+      <version>6.1.6</version>
+    </dependency>
+    <!-- Not in the brief's dependency list either: OrderEventsController's
+         SseEmitter (spec Step 5) is org.springframework.web.servlet.mvc.
+         method.annotation.SseEmitter, which lives in spring-webmvc — absent
+         from this fixture until now. Pinned to match spring-web/-context. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-webmvc</artifactId>
+      <version>6.1.6</version>
+    </dependency>
   </dependencies>
   <build>
     <plugins>

@@ -110,6 +110,8 @@ class ProtoSourceReader:
     caused it, because a batch invocation's imports mean every file in it
     shares one fate (module docstring)."""
 
+    reads_schema_sources = True
+
     def accepts(self, file_kind: str) -> bool:
         return file_kind == "proto"
 

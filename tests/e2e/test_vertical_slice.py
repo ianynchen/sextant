@@ -44,6 +44,17 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     document = (tmp_path / "render" / "architecture.md").read_text()
     for route in ("POST", "GET", "/v1/orders", "/v1/orders/{id}"):
         assert route in document
+    # The prefix seam, live through `spring-web.yml` (`mapping.path_separator`).
+    # Both forms are ordinary Spring, both derived a wrong address while the
+    # seam was a bare concatenation, and both were found live against
+    # spring-petclinic-microservices before they were fixtures here:
+    # `SeamController`'s prefix spells no trailing slash and its method path no
+    # leading one (was `/v1/seamowners/{ownerId}`), and `RootSeamController`'s
+    # `"/"` prefix meets a slash-leading method path (was `//chat`). Pinned
+    # with the surrounding backticks so the doubled-slash form cannot pass as
+    # a substring of the fixed one.
+    assert "`GET /v1/seam/owners/{ownerId}`" in document
+    assert "`POST /chat`" in document
     assert "Known gaps" in document
     assert "## Outbound endpoints" in document
     assert "/billing/invoices" in document
@@ -108,6 +119,80 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     ) in document
     assert (
         "Unresolved endpoint derivation: `spring-cloud-stream` — a composed selection expression."
+    ) in document
+    # 2H Task 5: websocket rows ride the verbless, messaging-style rendering
+    # (kafka precedent) — `_VERBLESS_PROTOCOLS` derives from D00's whole
+    # protocol set minus the verbed ones, so `websocket` lands in it with no
+    # renderer change at all (only `graphql` joined the verbed/qualified
+    # sets in this phase). `/live`'s frame is untyped, so its own format
+    # column reads `unresolved`, never a guess; `/orders/place` and
+    # `/orders/board` both read `json (assumed)` — rung 5's framework
+    # default, the ladder's own live answer today (Task 6 re-pins this if
+    # its own work moves it, per the checkpoint).
+    assert (
+        "`websocket /live` | `com/example/orders/ws/LiveEndpoint#onFrame(sig_a7421bf5).` | - → - | unresolved | resolved |"
+        in document
+    )
+    assert (
+        "`websocket /orders/place` | `com/example/orders/ws/OrderStompController#place(sig_961974f8).` | - → - | json (assumed) | resolved |"
+        in document
+    )
+    assert (
+        "`websocket /orders/board` | `com/example/orders/ws/OrderStompController#board(sig_26be7569).` | - → - | json (assumed) | resolved |"
+        in document
+    )
+    # `place`'s own resolved `@SendTo` reply, and `board`'s own dynamic
+    # reply — the SAME `escalate`-shaped unresolved row (D02 §2's reply
+    # block), rendered `websocket (unresolved)` exactly as every other
+    # path-NULL outbound row already is.
+    assert (
+        "`websocket /topic/order-placed` | unresolved | `com/example/orders/ws/OrderStompController#place(sig_961974f8).` | json (assumed) | resolved |"
+        in document
+    )
+    assert (
+        "`websocket (unresolved)` | unresolved | `com/example/orders/ws/OrderStompController#board(sig_26be7569).` | json (assumed) | unresolved |"
+        in document
+    )
+    assert (
+        "Unresolved endpoint derivation: `spring-stomp` — caller "
+        "`com/example/orders/ws/OrderStompController#board(sig_26be7569).`."
+    ) in document
+    # 2H Task 6: an SSE row is the first VERBED, protocol-qualified row whose
+    # verb is an ordinary HTTP method — `sse GET /events/stream`, not the
+    # verbless `sse /events/stream` a derived-set membership would have given
+    # it, and not the unqualified `GET /events/stream` that reads as an
+    # ordinary REST route. Both halves of that identity are load-bearing, and
+    # both rows are pinned because they arrive by different evidence (media
+    # for `/stream`, return type for `/emitter`).
+    #
+    # `- → text/event-stream` is the Media column: the MIME string is still
+    # there and still declared, and the Format column beside it reads `json
+    # (assumed)` rather than anything derived from it — the envelope names the
+    # protocol, never the format.
+    assert (
+        "`sse GET /events/emitter` | `com/example/orders/sse/OrderEventsController#emitterEvents(sig_6e650372).` | - → - | json (assumed) | resolved |"
+        in document
+    )
+    assert (
+        "`sse GET /events/stream` | `com/example/orders/sse/OrderEventsController#streamEvents(sig_ed469b30).` | - → text/event-stream | json (assumed) | resolved |"
+        in document
+    )
+    # The per-event payload unwraps through BOTH envelopes (2H design §6's
+    # payload sentence; `rooting.py` peels recursively, so the one
+    # `ServerSentEvent` `wrappers` entry reaches `OrderView` under `Flux`).
+    # `OrderView`'s own two fields are what the row publishes — its
+    # `HttpHeaders` field is third-party, so the shape stays open, which the
+    # fixture's own source comment says outright.
+    assert "| id | string | yes | yes |" in document
+    # And the envelope type is gone from the open-type disclosure entirely:
+    # nothing references it any more, so nothing rooted it.
+    assert "org/springframework/http/codec/ServerSentEvent#" not in document
+    # `/events/emitter` is the half that cannot follow and says so.
+    # `SseEmitter` is a callback handle with no type argument to unwrap, so it
+    # is disclosed open rather than published as an empty contract.
+    assert (
+        "Not expanded, so the shapes referring to it are open: "
+        "`org/springframework/web/servlet/mvc/method/annotation/SseEmitter#`."
     ) in document
 
 
@@ -224,13 +309,61 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # unique to that file and merge with nothing. The pass binds a payload
     # onto three of them and refuses two; both outcomes are still endpoint
     # rows, so all five count. `92 + 5 = 97` total.
+    # 2H Task 1 (GraphQL, WebSocket/STOMP and SSE surfaces): +2 http inbound —
+    # `GET /events/emitter`, `GET /events/stream`. `OrderEventsController`
+    # uses the already-shipped `@GetMapping`/`@RestController` annotations,
+    # so both derive as ordinary http endpoints today (a later 2H task
+    # reclassifies them to SSE); neither merges with anything. The GraphQL,
+    # WebSocket and STOMP surfaces this task also adds derive NO rows at
+    # all — nothing catalogs those annotations yet. `97 + 2 = 99` total.
+    # 2H Task 2 (the three GraphQL catalogs): +11 graphql inbound — a NEW
+    # protocol bucket, which is the visible half of D00's closed set gaining
+    # `graphql`. Nothing outbound: a GraphQL operation is served by this
+    # module, never called by it, so the outbound map is untouched and no
+    # existing bucket moves. TWELVE annotated methods produce those 11 rows:
+    # `orphanField` names a field of a type nothing states, so it derives none
+    # at all rather than a bare, wrongly-shaped `orphan`. `99 + 11 = 110`.
+    # 2H Task 4 (`schema_operations`): +1 graphql inbound — `query auditTrail`,
+    # the ONE root field in `schema.graphqls` that no annotation implements
+    # (the RuntimeWiring pin, 2H design §3). The schema declares seven root
+    # fields in all; the other six share a wire identity with an annotation row
+    # that already exists when this style runs, and the insert-if-absent guard
+    # keeps that row — which is the whole of how first-writer agreement works
+    # here. Still nothing outbound, and no existing bucket moves.
+    # `110 + 1 = 111` total.
+    # 2H Task 5 (WebSocket/STOMP catalogs): +3 websocket inbound —
+    # `jakarta-websocket.yml`'s `/live` (checkpoint answer 5's
+    # `@KafkaHandler` prefix shape) and `spring-stomp.yml`'s
+    # `/orders/place`/`/orders/board` (class-level `@MessageMapping` prefix
+    # composition) — and +2 websocket outbound — `place`'s own resolved
+    # `@SendTo("/topic/order-placed")` reply, and `board`'s own dynamic
+    # reply (value-returning, no `@SendTo`, the `escalate` shape again —
+    # `path` NULL, `unresolved`, still counted here: metadata buckets every
+    # row regardless of `resolution`). A NEW protocol bucket, the third the
+    # 2H phase adds (`graphql`, then `sse` at Task 6, now `websocket`); no
+    # existing bucket moves. `111 + 5 = 116` total.
+    # 2H Task 6 (`protocol_hint`): the FIRST change here that adds no row at
+    # all. `GET /events/emitter` and `GET /events/stream` MOVE out of `http`
+    # into a new `sse` bucket — 34 becomes 32, `sse` becomes 2 — and the
+    # total is unchanged at 116, which is the pass's own second promise
+    # (it reclassifies; it never creates or removes an endpoint) read off
+    # the published metadata rather than asserted in a comment. Nothing
+    # outbound moves: the two rows are inbound routes, and this pass never
+    # touches direction.
+    # The prefix-seam controllers add 2 inbound http rows (`GET
+    # /v1/seam/owners/{ownerId}`, `POST /chat`) — 32 becomes 34. The
+    # `path_separator` fix itself moved no row between buckets and created
+    # none; it changed the ADDRESS two rows carry.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
-        "http": 32,
+        "graphql": 12,
+        "http": 34,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
         "sqs": 4,
+        "sse": 2,
+        "websocket": 3,
     }
     assert metadata["endpoints"]["outbound"] == {
         "http": 23,
@@ -238,6 +371,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "kafka": 10,
         "pubsub": 4,
         "sqs": 3,
+        "websocket": 2,
     }
     # 2F Task 9: metadata.json's own "environments" (D06 §3), populated from
     # `resolved_config`'s distinct environments — the fixture's own
@@ -321,7 +455,27 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # 2G Task 7 (parse binding): +5 inbound, all unmerged — the bytes-only
     # listeners in `messaging/parse`: inbound 49 + 5 = 54 — the 97-endpoint
     # total (5 + 54 + 38 = 97).
-    assert rows == [("both", 5), ("inbound", 54), ("outbound", 38)]
+    # 2H Task 1: +2 inbound, unmerged — `GET /events/emitter`,
+    # `GET /events/stream`: inbound 54 + 2 = 56 — the 99-endpoint total
+    # (5 + 56 + 38 = 99).
+    # 2H Task 2: +11 inbound, all unmerged — the GraphQL surface. Every one is
+    # inbound and none has an outbound twin anywhere in the fixture (a
+    # GraphQL operation is served, never called, by the module that declares
+    # it), so `both` and `outbound` are both untouched: inbound 56 + 11 = 67 —
+    # the 110-endpoint total (5 + 67 + 38 = 110).
+    # 2H Task 4: +1 inbound, the schema-first `query auditTrail` — inbound
+    # 67 + 1 = 68, the 111-endpoint total (5 + 68 + 38 = 111). It is inbound
+    # and unmerged for the same reason every other GraphQL row is.
+    # 2H Task 5: +3 inbound (`/live`, `/orders/place`, `/orders/board`) and
+    # +2 outbound (`place`'s resolved `@SendTo` reply, `board`'s own
+    # unresolved dynamic reply) — inbound 68 + 3 = 71, outbound 38 + 2 = 40,
+    # `both` untouched (a `direction: inbound` catalog's own rows never meet
+    # an outbound row on any protocol nothing else in the fixture names) —
+    # the 116-endpoint total (5 + 71 + 40 = 116).
+    # The prefix-seam controllers: +2 inbound (`GET /v1/seam/owners/{ownerId}`,
+    # `POST /chat`) — inbound 71 + 2 = 73 — the 118-endpoint total
+    # (5 + 73 + 40 = 118).
+    assert rows == [("both", 5), ("inbound", 73), ("outbound", 40)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -416,6 +570,120 @@ def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze
             "why": "com/example/orders/proto/OrderProtos$OrderRequest#parseFrom",
         }
     ]
+
+
+def test_the_schemas_own_root_operations_reach_the_endpoint_table_in_a_full_analyze(
+    tmp_path: Path,
+):
+    """2H Task 4 (`schema_operations`), live and whole, through the REAL
+    command — the only path that reads `src/main/resources/graphql` at all.
+
+    Four claims, and each is a different half of the mechanism:
+
+    * the RuntimeWiring pin — `auditTrail` is the one root field in the
+      fixture's schema that no annotation implements, so it is the one new
+      row, at `declared` with no handler and no caller;
+    * first-writer agreement — the other six root fields already had
+      annotation rows when this style ran, and the insert-if-absent guard kept
+      them, handler and all. Six annotation twins, not six duplicates;
+    * the shape universes stay apart (2H design §4) — `orders` keeps the
+      compiled type its handler really serializes, and `auditTrail` points at
+      a schema NAME that resolves inside the declared universe, with its own
+      shape and fields expanded from the schema's field declarations. No
+      simple-name join is made in either direction;
+    * the format ladder's rung 1 outranks its rung 4 — the row's payload is a
+      schema-described shape, which rung 4 would report as the schema's own
+      format at `narrowed`; `format_fixed` answers first, so the row reads
+      `json`/`resolved` and the column never receives a value D00's format set
+      does not contain.
+    """
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    try:
+        roots = {
+            str(row["path"]): row
+            for row in workspace.query("endpoints")
+            if row["protocol"] == "graphql" and row["method"] is not None
+        }
+        shapes = {str(row["shape_id"]): row for row in workspace.query("shapes")}
+        audit_fields = [
+            (str(row["wire_name"]), row["wire_type"], row["nullable"], row["evidence"])
+            for row in workspace.query("shape_fields")
+            if row["shape_id"] == "AuditEntry"
+        ]
+    finally:
+        workspace.close()
+
+    # The schema declares seven root fields; six of them are also annotated.
+    assert set(roots) == {
+        "orderById",
+        "orders",
+        "dgsOrders",
+        "mpOrders",
+        "auditTrail",
+        "placeOrder",
+        "orderUpdates",
+    }
+    schema_first = [path for path, row in roots.items() if row["catalog_id"] == "graphql-schema"]
+    assert schema_first == ["auditTrail"]
+
+    audit = roots["auditTrail"]
+    assert (audit["method"], audit["direction"]) == ("query", "inbound")
+    assert (audit["evidence"], audit["resolution"]) == ("declared", "resolved")
+    assert audit["handler"] is None and audit["caller"] is None
+    # A root field's ARGUMENTS are what the operation takes, and the
+    # interpreter does not project them — so there is nothing to carry, and
+    # NULL says exactly that. `auditTrail(id: ID!)` really does take one.
+    assert audit["request_shape"] is None
+    assert (audit["format"], audit["format_resolution"]) == ("json", "resolved")
+    # `[AuditEntry!]` — the declared universe's own name, reached through the
+    # `item` chain, never a compiled class.
+    assert json.loads(str(audit["response_shape"])) == {
+        "wire_type": "array",
+        "wire_format": None,
+        "nullable": True,
+        "item": {
+            "wire_type": "object",
+            "wire_format": None,
+            "nullable": False,
+            "shape_id": "AuditEntry",
+        },
+    }
+    assert shapes["AuditEntry"]["open"] is False
+    assert audit_fields == [
+        ("at", "string", False, "declared"),
+        ("actor", "string", True, "declared"),
+    ]
+
+    # The six annotated ones kept the annotation's row — the handler symbol is
+    # the thing only that side knows — and `orders` kept the compiled response
+    # type its handler declares, never overwritten by the schema's own.
+    assert all(
+        roots[path]["handler"] is not None and roots[path]["evidence"] == "compiler"
+        for path in set(roots) - {"auditTrail"}
+    )
+    assert roots["orders"]["catalog_id"] == "spring-graphql"
+    assert (
+        json.loads(str(roots["orders"]["response_shape"]))["item"]["shape_id"]
+        == "com/acme/orders/contracts/OrderView#"
+    )
+
+
+def test_a_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
+    """The same row at the document a reader actually sees. `none recorded`
+    rather than `unresolved`: the schema addressed this operation outright and
+    names no code, which is an absence rather than a failed read — and the
+    response the reader gets is the schema's own type, by its schema name."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)  # analyze + render + export
+    document = (tmp_path / "render" / "architecture.md").read_text()
+
+    assert "| `graphql query auditTrail` | none recorded | - → - | json | resolved |" in document
+    assert "- `graphql query auditTrail`\n  - Response: array of object AuditEntry" in document
 
 
 def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_path: Path):

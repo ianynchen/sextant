@@ -1882,6 +1882,131 @@ def test_a_malformed_channel_via_entry_is_refused_at_run_start(tmp_path: Path, e
     assert "invented-bad-channel-via.yml" in str(raised.value)
 
 
+# --- 2H Task 5: `spring-websocket.yml`'s own `WebSocketHandlerRegistry.
+# addHandler` entry (D02 §2's `single_call` style). No live fixture surface
+# exists for it — Task 1 built none, the 2H Task 5 brief's own explicit
+# COVERAGE boundary — so it is proved here, over synthetic call facts, the
+# same way every invented catalog earlier in this file already is, but
+# against the REAL shipped file rather than one this test builds by hand.
+
+WEBSOCKET_HANDLER_REGISTRY = (
+    "org/springframework/web/socket/config/annotation/WebSocketHandlerRegistry#"
+)
+
+
+def _spring_websocket_catalog() -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-websocket")
+
+
+def test_addhandler_derives_a_verbless_inbound_row_off_its_literal_path(tmp_path: Path):
+    """`WebSocketConfigurer#registerWebSocketHandlers`'s own
+    `registry.addHandler(handler, "/ws")` — a `channel_arg` destination
+    identity (D02 §2), never a `url_arg` for CP-2 to split: a dispatch path
+    here is a registration target the same way a topic name is, not a
+    peer+path URL (`spring-websocket.yml`'s own catalog comment)."""
+    caller = "com/acme/ws/WebSocketConfig#registerWebSocketHandlers()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=WEBSOCKET_HANDLER_REGISTRY, name="addHandler", descriptor="()V"
+            ),
+            invoke_kind="interface",
+            ordinal=0,
+            receiver=1,
+            result=None,
+            arguments=[
+                CallArgument(kind="instance", symbol="com/acme/ws/LiveHandler#"),
+                CallArgument(kind="string", value="/ws"),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _spring_websocket_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["handler"] == caller]
+    workspace.close()
+
+    assert endpoint["protocol"] == "websocket"
+    assert endpoint["direction"] == "inbound"
+    assert endpoint["method"] is None
+    assert endpoint["path"] == "/ws"
+    # Inbound (D02 §2, D01 §3, amended): the registering method lands in
+    # `handler`, not `caller` — the row's own `direction: inbound` (the
+    # catalog's declared direction, unoverridden) means the deriving method
+    # is treated as the consumer of the registration, the same rule
+    # `single_call.py::run` already applies to every other inbound row a
+    # `single_call` catalog derives.
+    assert endpoint["handler"] == caller
+    assert endpoint["caller"] is None
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_addhandler_with_a_non_literal_path_derives_an_unresolved_row(tmp_path: Path):
+    """The brief's own boundary case: a non-literal path still derives the
+    row — I1's "unresolved is an answer" discipline — path NULL,
+    `unresolved`, never a guess and never a dropped row."""
+    caller = "com/acme/ws/WebSocketConfig#registerDynamicHandler()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=WEBSOCKET_HANDLER_REGISTRY, name="addHandler", descriptor="()V"
+            ),
+            invoke_kind="interface",
+            ordinal=0,
+            receiver=1,
+            result=None,
+            arguments=[
+                CallArgument(kind="instance", symbol="com/acme/ws/LiveHandler#"),
+                CallArgument(kind="unresolved"),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _spring_websocket_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["handler"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_addhandler_with_a_second_path_argument_never_matches_the_two_arg_row(tmp_path: Path):
+    """The catalog's own documented known limitation: `arity: 2` matches
+    only the single-path call form. A three-argument call
+    (`.addHandler(handler, "/ws", "/ws2")`) matches no declared row at all,
+    so it derives NOTHING — a known gap, never a wrong row (the same
+    "silence over a confident wrong answer" discipline `spring-kafka.yml`'s
+    own class-level `@KafkaListener` "element 0 only" comment keeps for a
+    different multi-value case)."""
+    caller = "com/acme/ws/WebSocketConfig#registerMultiPathHandler()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=WEBSOCKET_HANDLER_REGISTRY, name="addHandler", descriptor="()V"
+            ),
+            invoke_kind="interface",
+            ordinal=0,
+            receiver=1,
+            result=None,
+            arguments=[
+                CallArgument(kind="instance", symbol="com/acme/ws/LiveHandler#"),
+                CallArgument(kind="string", value="/ws"),
+                CallArgument(kind="string", value="/ws2"),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _spring_websocket_catalog())
+    endpoints = [
+        e for e in workspace.query("endpoints") if e["caller"] == caller or e["handler"] == caller
+    ]
+    workspace.close()
+
+    assert endpoints == []
+
+
 # --- The `fluent` engine (Task 11): chains reassembled from value links ----
 #
 # No catalog ships with this task (Task 12 writes the real spring-webclient/

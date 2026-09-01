@@ -9,7 +9,7 @@ parameters. No framework name appears in this module's code.
 import json
 from typing import Any
 
-from sextant.application.ports.catalogs import Catalog
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_annotations import (
     composed_mapping_rows,
@@ -26,13 +26,22 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     engine here is generic: it never names a framework or a protocol, only
     forwards what the catalog declares."""
     mapping = catalog.matches["mapping"]
+    _validate_naming(catalog, mapping)
     type_annotation = catalog.matches.get("type_annotation")
     type_annotation_fqn = None if type_annotation is None else _catalog_symbol(type_annotation)
     prefix_annotation = mapping["prefix_annotation"]
     # Optional too (Retrofit, spring-jms): no class-level prefix shape.
     prefix_fqn = None if prefix_annotation is None else _catalog_symbol(prefix_annotation)
     mapping_annotations = [
-        {"fqn": _catalog_symbol(m["fqn"]), "methods": m.get("method")}
+        {
+            "fqn": _catalog_symbol(m["fqn"]),
+            "methods": m.get("method"),
+            # 2H design §1: this annotation names a member of a scope, so a
+            # declaration under it has no address at all until the scope is
+            # found. Absent (the default) on every annotation that names a
+            # top-level identity, which is every annotation shipped before it.
+            "requires_qualifier": bool(m.get("requires_qualifier", False)),
+        }
         for m in mapping["annotations"]
     ]
     workspace.derive(
@@ -56,6 +65,20 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # change — the HTTP catalogs are the only ones that declare these.
         consumes_from=list(mapping.get("consumes_from", [])),
         produces_from=list(mapping.get("produces_from", [])),
+        # 2H design §1's two naming forms, both optional and both inert
+        # unless declared. `path_fallback` says what the declared name is when
+        # every `path_from` alias is absent; `qualifier_from`/
+        # `qualifier_separator` compose a scope named on the SAME annotation
+        # in front of that name. Absent on every catalog written before them,
+        # which is what keeps their derivations byte-identical.
+        path_fallback=mapping.get("path_fallback"),
+        qualifier_from=list(mapping.get("qualifier_from", [])),
+        qualifier_separator=mapping.get("qualifier_separator"),
+        # What joins a TYPE-level prefix to the address it prefixes, and the
+        # character deduped where both halves already spell it. Optional and
+        # inert while absent, so a catalog composing a Kafka topic — which has
+        # no segments to join — keeps the bare concatenation it always had.
+        path_separator=mapping.get("path_separator"),
         # 2E design §2, §3: the effective-annotations pre-pass widens
         # this catalog's own mapping fqns to every module-local annotation
         # type transitively meta-annotated with one of them PLUS, for a
@@ -74,6 +97,72 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # second-row rule at all — the HTTP catalogs, which never see @SendTo.
     if "reply" in catalog.matches:
         _derive_replies(workspace, catalog)
+
+
+# The sources a declared name may fall back to when the annotation carries
+# none (2H design §1, form 1). A closed vocabulary rather than a boolean, so
+# a second source is a new word here instead of a second catalog key — and so
+# a typo is refused rather than read as "no fallback", which would silently
+# restore the empty path this form exists to remove.
+_PATH_FALLBACKS = frozenset({"construct_name"})
+
+
+def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
+    """Refuses a mapping block whose naming vocabulary cannot be honoured.
+
+    Every check here catches a file that would otherwise derive a quietly
+    WRONG address rather than fail — and a wrong address is worse than a
+    missing one, because it is published at `resolved`/`compiler` where
+    nothing downstream can tell it from something observed. That is the same
+    reason the loader checks `protocol`/`direction` at the edge (NFR-5).
+    """
+    separator = mapping.get("path_separator")
+    # `derive_endpoints.sql` dedupes the prefix seam with `rtrim`/`ltrim`,
+    # which trim a SET of characters: a two-character separator would strip
+    # each of its characters individually from either half, composing an
+    # address the framework does not serve. An explicitly EMPTY one declares a
+    # composition with nothing between the halves, which is what a catalog
+    # declaring no separator at all already gets. Both are refused here rather
+    # than read as something they are not.
+    if separator is not None and len(str(separator)) != 1:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.path_separator: {separator!r}` is not a "
+            f"single character — the prefix seam is deduped character-wise, so a longer "
+            f"separator would compose an address the framework does not serve"
+        )
+    fallback = mapping.get("path_fallback")
+    if fallback is not None and fallback not in _PATH_FALLBACKS:
+        # An unrecognised word would fall through to the empty default,
+        # silently restoring the empty path the form exists to remove.
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.path_fallback: {fallback}` is not one "
+            f"of {', '.join(sorted(_PATH_FALLBACKS))} (2H design §1)"
+        )
+    if not mapping.get("qualifier_from"):
+        return
+    separator = mapping.get("qualifier_separator")
+    # An ABSENT separator joins a scope to a name with nothing between them
+    # (`Parentmember`); an explicitly EMPTY one does exactly the same thing
+    # while passing an `is None` check, so both are refused by one test. An
+    # empty separator has no honest use: a framework that concatenates the two
+    # halves with nothing between them has no composition to declare.
+    if not separator:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.qualifier_from` is declared with no "
+            f"usable `mapping.qualifier_separator` (got {separator!r}) — what joins a scope to "
+            f"the name it qualifies is catalog data, and this engine names no punctuation of "
+            f"its own (2H design §1)"
+        )
+    # Without a fallback, an annotation carrying a scope and no name composes
+    # the scope and the separator onto nothing — a dangling `Parent.`, which
+    # is the confidently-wrong-address class again. The two forms are declared
+    # together or not at all.
+    if mapping.get("path_fallback") is None:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.qualifier_from` is declared with no "
+            f"`mapping.path_fallback` — a scoped declaration that names no member would compose "
+            f"a scope and a separator onto an empty name (2H design §1)"
+        )
 
 
 def _synthetic_annotations(

@@ -22,6 +22,10 @@ matches:
     # reads only `path` and the peer reads the name (spec ruling I2).
     prefix_from: [path]
     peer_from: [name, value]
+    # Feign's Spring-flavoured contract composes `@FeignClient(path = …)` onto
+    # each method's own mapping the way Spring MVC composes a class prefix —
+    # exactly one `/` at the seam, whichever half spelled it (spring-web.yml).
+    path_separator: "/"
     annotations:
       - { fqn: org.springframework.web.bind.annotation.RequestMapping }
       - { fqn: org.springframework.web.bind.annotation.GetMapping,    method: [GET] }

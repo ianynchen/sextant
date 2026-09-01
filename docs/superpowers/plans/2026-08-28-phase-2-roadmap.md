@@ -7,8 +7,8 @@ the linking tier that turns per-service analyses into a system. Each phase is it
 plan, ships one *capability* and the frameworks that ride it, and ends with the same
 review discipline.
 
-**Where we actually are.** Twenty-eight of the seventy-six Java rows in
-[COVERAGE.md](../../COVERAGE.md) §5 are shipped — about 37%. An endpoint carries request and
+**Where we actually are.** Thirty-seven of the seventy-six Java rows in
+[COVERAGE.md](../../COVERAGE.md) §5 are shipped — about 49%. An endpoint carries request and
 response contracts field by field, in both directions, with `required` and `nullable`
 resolved; Feign, Retrofit and `@HttpExchange` outbound clients are read (a path a module
 both exposes and calls merges into one endpoint), and a module's analysis exports as a D06
@@ -16,7 +16,12 @@ bundle. **2G moved none of those rows, and the count is re-derived rather than c
 its flips land in COVERAGE §4 — the format-detection regimes, the protobuf and Avro
 spec-binding rows, the Kafka serializer table now live as `format_from`, and a new parser
 table carrying Jackson 3 — because §5's checklist is one library per row and wire format is
-not a library. Every §5 row it touches was already ✅. The version bump is gated on the full
+not a library. Every §5 row it touches was already ✅. **2H then moved nine of them**, and
+the headline count is re-derived from those flips rather than carried: four in §5.4 (all
+three GraphQL annotation frameworks plus the `graphql-java` SDL row), three in §5.5
+(jakarta `@ServerEndpoint`, Spring STOMP, the programmatic `addHandler`) and two in §5.6
+(Spring MVC's `SseEmitter` and WebFlux's `Flux<ServerSentEvent<T>>`) — 28 + 9 = 37. The
+version bump is gated on the full
 program below (user decision, twice reaffirmed): no version moves until Java + Spring Boot
 and the listed protocols and frameworks are done.
 
@@ -39,7 +44,7 @@ messaging) both exist.
 | **2E** | Spring HTTP inbound completeness | delivered | WebFlux functional routing (`RouterFunctions`, `coRouter`, Java and Kotlin), module-local meta-annotations, inherited `@RequestMapping`, `produces`/`consumes` — GraphQL, WebSocket and SSE deferred to 2H; SOAP to 2I | the `combinator` engine, on 2C's indy groundwork |
 | **2F** | Configuration resolution | delivered | `application.yml`/properties into `resolved_config`, every profile, environment expressions; declared outbound HTTP bases (a field, a constructor-injected value, `@ConfigurationProperties`) become real peers through the field ladder; Spring Cloud Stream's functional bindings resolve their destination through `config_join` — spring-cloud-aws's own channel-adapter bindings and Spring Integration ride the same engine once catalogued, not yet shipped | the `config_join` engine; D02 §2d made real |
 | **2G** | Wire formats | delivered — [spec](../specs/2026-08-31-phase-2g-wire-formats-design.md) | `format`/`format_resolution` on every endpoint row from a six-rung catalog-driven ladder; protobuf and Avro schemas — embedded descriptors and `.proto`/`.avsc` sources, compiled winning per DR-4 — landing in 2A's own `shapes`/`shape_fields` with `field_number` and `json_name` wire names; parse-call payload binding at the handler and one hop; the `open_questions` ledger (table, bundle artifact, document section) for what no pass could answer | format as an inferred channel property, stamped by one late pass rather than per match (D02 §2c) |
-| **2H** | HTTP-adjacent protocols | planned | GraphQL (`@QueryMapping` et al.), WebSocket/STOMP (`@MessageMapping`), SSE | operation-as-endpoint identity; `protocol_hint` engine |
+| **2H** | HTTP-adjacent protocols | delivered — [spec](../specs/2026-09-01-phase-2h-http-adjacent-design.md) | GraphQL inbound across Spring GraphQL, Netflix DGS and MicroProfile plus the `.graphqls` SDL reader (the field is the endpoint); WebSocket/STOMP `@ServerEndpoint`/`@MessageMapping`/`@SubscribeMapping`/`@SendTo` and the programmatic `addHandler`; SSE by reclassification from a `produces` string or a return-type marker — nine §5 rows flipped | both reserved mechanisms, and neither landed as sketched: operation-as-endpoint identity became the `schema_operations` engine style (the ninth), and `protocol_hint` became a post-merge **resolve pass** rather than an engine |
 | **2I** | SOAP | planned | JAX-WS + Spring-WS catalogs; WSDL as a declared-shape source | catalog work only, by then |
 | **2K** | Enrich | planned | `sextant module enrich` — LLM-written sections as overlay claims at `evidence: llm` ([2B spec](../specs/2026-08-29-phase-2b-outbound-and-export-design.md) §6); the LLM verification seat D02 §2d reserves for doubtful config joins (2F records the evidence, 2K judges it) | redaction-before-wire; first network dependency |
 | **2J** | Second frameworks | planned | Micronaut, Quarkus/JAX-RS, MicroProfile REST Client — **zero engine changes is the acceptance test**; then the typed-Catalog refactor | none — that is the point |

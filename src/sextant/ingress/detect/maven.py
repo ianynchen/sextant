@@ -21,6 +21,14 @@ _NON_SOURCE_DIRECTORIES = frozenset({"resources", "webapp", "filters"})
 _SCHEMA_ROOT_NAMES = ("proto", "avro")
 _SCHEMA_DIRECTORIES = frozenset(_SCHEMA_ROOT_NAMES)
 
+# Every schema root, as its path segments under `src/main`, in the order
+# `schema_roots` reports them. Spring GraphQL's SDL directory is the one that
+# is not a sibling of the source roots: SDL ships on the classpath, so it
+# lives UNDER `src/main/resources`. It needs no entry in _SCHEMA_DIRECTORIES
+# for that reason — `resources` is already a non-source directory, so no
+# language was ever going to be reported from under it.
+_SCHEMA_ROOT_PATHS = (*((name,) for name in _SCHEMA_ROOT_NAMES), ("resources", "graphql"))
+
 _CONTAINER_FILES = (
     "Dockerfile",
     "Containerfile",
@@ -47,9 +55,13 @@ class MavenDetector:
 
     def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
         pom = ElementTree.parse(path / "pom.xml").getroot()
-        group = self._text(pom, "groupId")
+        # A reactor child inherits groupId and version from <parent> and may
+        # omit its own elements entirely (Maven's inheritance rule) —
+        # artifactId alone is never inherited. Reading the parent's value is
+        # Maven convention data, not a guess.
+        group = self._text(pom, "groupId", inherited=True)
         artifact = self._text(pom, "artifactId")
-        version = self._text(pom, "version")
+        version = self._text(pom, "version", inherited=True)
         source_roots = self._source_roots(path, pom)
         resources = path / "src" / "main" / "resources"
         module = ModuleModel(
@@ -75,8 +87,8 @@ class MavenDetector:
             # discipline `resource_roots` keeps.
             schema_roots=tuple(
                 root
-                for name in _SCHEMA_ROOT_NAMES
-                if (root := path / "src" / "main" / name).is_dir()
+                for parts in _SCHEMA_ROOT_PATHS
+                if (root := path.joinpath("src", "main", *parts)).is_dir()
             ),
         )
         return RepositoryModel(root=path, modules=(module,))
@@ -143,8 +155,10 @@ class MavenDetector:
         return "undetermined"
 
     @staticmethod
-    def _text(pom: ElementTree.Element, tag: str) -> str:
+    def _text(pom: ElementTree.Element, tag: str, inherited: bool = False) -> str:
         node = pom.find(f"m:{tag}", _POM_NS)
+        if node is None and inherited:
+            node = pom.find(f"m:parent/m:{tag}", _POM_NS)
         if node is None or node.text is None:
             raise ValueError(f"pom.xml has no <{tag}>")
         return node.text.strip()

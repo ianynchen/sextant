@@ -65,7 +65,7 @@ scanner capability above.
 
 ---
 
-## 2. The eight styles
+## 2. The nine styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
 genuinely new shape needs a new engine.
@@ -173,6 +173,54 @@ matches:
   separately, so `@RequestMapping` declares `prefix_from: [value, path]`, `@FeignClient`
   declares `prefix_from: [path]` and `peer_from: [name, value]`, and `@HttpExchange`
   declares `prefix_from: [value, url]`.
+- **`path_separator` says what joins the prefix to the address it prefixes**, and it is
+  the character deduped at that seam. Optional; a catalog declaring none concatenates the
+  two halves bare, which is what every catalog did before the key existed.
+
+  ```yaml
+  mapping:
+    prefix_from: [value, path]
+    path_separator: "/"   # the seam joins with exactly one, whichever half spelled it
+  ```
+
+  It is **catalog data for the same reason `qualifier_separator` is**: whether two address
+  fragments join with a separator, and which, is the framework's convention. A path-addressed
+  framework composes a class prefix and a method path into a sequence of segments, and the two
+  halves are written by two different authors who each decide independently whether to spell
+  the separator — Spring joins them with **exactly one `/` however they were written**. A
+  broker-destination catalog has no such composition: `spring-kafka.yml`'s prefix is a
+  class-level `@KafkaListener`'s *topic name*, which has no segments, and a `/` inserted into
+  one would invent a destination no broker carries. So the key is **opt-in, never an engine
+  default**, and `spring-kafka.yml` says in place why it declares none.
+
+  Two forms were derived wrong while the seam was a bare concatenation, both ordinary Spring
+  and both found live against `spring-petclinic-microservices`:
+  `@RequestMapping("/api/gateway")` + `@GetMapping("owners/{ownerId}")` published
+  `/api/gatewayowners/{ownerId}` where Spring serves `/api/gateway/owners/{ownerId}`, and
+  `@RequestMapping("/")` + `@PostMapping("/chatclient")` published `//chatclient` where Spring
+  serves `/chatclient`. An address nobody serves, emitted at `resolved`/`compiler` where
+  nothing downstream can tell it from something observed, is the **same
+  confidently-wrong-address class `path_fallback` closes from the other direction**.
+
+  **An empty half takes no separator with it.** An absent prefix leaves the address exactly as
+  written — a slashless name does not gain a leading `/` the engine would be inventing — and
+  an empty suffix (`@KafkaHandler`, `@OnMessage`: annotations carrying no path attribute at
+  all) leaves the prefix alone. **The separator is a single character**, refused at load
+  otherwise: the dedupe is `rtrim`/`ltrim`, which trim a *set* of characters, so a longer
+  separator would strip each of its characters individually.
+
+  **It is not the qualifier seam, and does not touch it.** `qualifier_separator` joins a scope
+  to the member it qualifies and dedupes nothing, because both halves are written by one author
+  on one annotation and neither ever spells the separator. The two remain separate rules; a
+  catalog may declare both, and the GraphQL catalogs — which declare only the qualifier one —
+  are unchanged by this key existing.
+
+  Declared today by every catalog whose addresses are URI-style paths and whose type-level
+  annotation can carry a prefix: `spring-web.yml`, `spring-mvc.yml`,
+  `spring-cloud-openfeign.yml`, `spring-http-interface.yml`, `spring-stomp.yml` (a STOMP
+  destination composes through the same `AntPathMatcher` separator, `/` by default) and
+  `jakarta-websocket.yml`. `retrofit.yml` declares none because it declares no
+  `prefix_annotation` either — it has no seam to rule on.
 
 Covers Spring Web, JAX-RS, Spring Kafka, JMS listeners, and JAX-WS — inbound; Spring Cloud
 OpenFeign, Spring 6 `@HttpExchange`, and Retrofit — outbound.
@@ -234,6 +282,67 @@ mapping:
   `@RequestMapping(produces = ...)` — Spring's own equivalent of `prefix_from` for media —
   is out of scope for this phase; only the method-level mapping annotation's own attributes
   fill `consumes`/`produces`.
+
+**Phase 2H generalises the vocabulary a fourth time, for a declaration whose name is
+DEFAULTED and whose scope sits on the annotation itself.** Four keys, every one of them
+optional and inert unless declared, so every catalog written before them derives
+byte-identically:
+
+```yaml
+mapping:
+  path_fallback: construct_name        # the declared name when every path_from alias is absent
+  qualifier_from: [typeName]           # the SCOPE, read off the SAME annotation
+  qualifier_separator: "."             # what joins a scope to the name it qualifies
+  annotations:
+    - { fqn: "…annotation.SchemaMapping", requires_qualifier: true }
+```
+
+- **`path_fallback` says what the declared name is when every `path_from` alias is
+  absent.** Today's one word is `construct_name` — the annotated construct's own name —
+  and it is a closed vocabulary rather than a boolean, so a second source is a new word
+  here and an unrecognised one is refused. It exists because **an annotation's declared
+  default is not written into the class file**: Spring GraphQL, DGS and MicroProfile all
+  declare their field attribute `default ""` and all three mean "the method's name", so
+  an absent attribute read as an empty string published a `resolved` endpoint addressing
+  nothing — `path_from`'s own "wrong output rather than a missing one" failure reached by
+  a second route. The fallback fires only on an empty suffix, which is the same fact as
+  "every alias was absent".
+- **`qualifier_from` reads a SCOPE off the same annotation that carries the name**, first
+  present alias wins, scalar-or-array like every other read here, and
+  `qualifier_separator` states what joins the two. It is deliberately not `prefix_from`:
+  that reads a TYPE-level annotation through an entirely different join and composes under
+  a separator rule of its own (`path_separator`, above), which dedupes the seam where this
+  one does not. `@SchemaMapping(typeName = "Order", field = "lines")` composes
+  `Order.lines`; a `@QueryMapping` carrying no `typeName` composes nothing. **The
+  separator is catalog data and never a literal in the engine** — which punctuation
+  separates a scope from a member is a framework's convention — so `qualifier_from`
+  declared without a usable separator is refused, an explicitly EMPTY separator with it
+  (`Parentmember` is not a composition anyone declared), and `qualifier_from` without
+  `path_fallback` too, since a scoped declaration naming no member would compose a
+  dangling `Parent.`.
+- **`requires_qualifier: true` on one annotation entry says the annotation names a member
+  OF a scope**, so a declaration under it has no address at all until the scope is found.
+  Where neither the annotation nor its enclosing type states one, **the row is not
+  derived**: the bare member name would read as a top-level identity, which is a
+  different endpoint from the one the code declares, and `resolved`/`compiler` beside it
+  would present that as observed. Silence is the honest answer — Spring can infer a
+  resolver's parent type from a parameter, and that is a fact no annotation carries.
+  Absent (false) on every annotation shipped before it.
+- **A class-level annotation may state the qualifier once for every method the type
+  declares**, read one level out through the same attribute list and the same join
+  `prefix_from` uses. **The method's own value wins where both are present** — the nearer
+  declaration is the more specific, which is the precedence every framework carrying both
+  levels keeps. A type-level annotation still mints no row of its own, which is what lets
+  one annotation play both roles without colliding with itself (the `prefix_annotation`
+  precedent, unchanged).
+
+**Three catalogs, one engine change.** The forms are stated in framework-neutral words for
+a reason that was tested rather than asserted: `spring-graphql.yml` introduced them, and
+`netflix-dgs.yml` and `microprofile-graphql.yml` then rode them with **zero further engine
+change** — DGS spells the scope `parentType` where Spring spells it `typeName`, and
+MicroProfile has no scope at all, and all three differences are one line of YAML each.
+That is §4's acceptance test run early, on one protocol, which is why the vocabulary grew
+here instead of three framework special cases growing in the engine.
 
 ### `single_call`
 
@@ -839,7 +948,8 @@ entries are taken in environment order, so a bean selected in production binds i
 production. An endpoint row says a boundary exists, never which profile it exists under.
 
 **Ordering: `config_join` runs LAST**, after every call-site and annotation style,
-whatever its own declared direction (§3) — the `protocol_hint` precedent below. A style
+whatever its own declared direction (§3) — it was the first style to need that, and
+`schema_operations` later joined it. A style
 that enriches rows other engines minted cannot run before those rows exist. The
 consequence is real and not an accident: its rows are also the last to face §5's
 insert-if-absent guard, so a wire identity another catalog already recorded stays that
@@ -856,18 +966,147 @@ exactly which key produced which address. §2d's second authority layer — an L
 to a later phase: the seat is deferred, never the evidence, and nothing here is ever the
 sole source of an address an LLM invented.
 
+### `schema_operations`
+
+The ninth style, and the first whose evidence is neither a call site, an annotation nor a
+configuration key: **a schema file states the operations outright**. A schema-first
+service — a hand-built runtime wiring, no mapping annotation anywhere — derives nothing
+at all without it, and the schema is the contract that service publishes.
+
+```yaml
+style: schema_operations
+protocol: graphql
+direction: inbound
+detect: { coordinates: [] }     # the evidence is a file in the repository, not a dependency
+requires: []                    # nothing scanner-produced is read
+matches:
+  schema_operations:
+    schema_format: graphql      # which declared shapes this catalog speaks for
+    operations: { query: query, mutation: mutation, subscription: subscription }
+```
+
+**What it reads is the module's `declared_shape` universe** — the facts the one
+descriptor interpreter emits — and one field of one of those facts answers the whole root
+question: `DeclaredShapeFact.role` ([D00](D00-fact-schema.md) §5) names the operation root
+a type serves. **So this style parses no schema and re-derives no root name.** Which type
+is the query root is a fact because a schema can *rename* its roots (`schema { query:
+MyQuery }`), and no pass outside that one interpreter may learn a schema format. That is
+also why there is no `root_types` table here: it would be a catalog guessing at something
+already read. `schema_format` is the gate that makes the catalog's declared `protocol`
+true of the rows — `role` is neutral across formats, and a root declared by some other
+schema language is some other protocol's operation. A role the `operations` map does not
+name derives nothing, the same "an unmapped value is a gap, never a column value to
+invent" answer `config_join` gives an unknown binder.
+
+**What it derives** is one row per field of a root type, at [D01](D01-graph-schema.md)
+§3's root-operation identity — `method` from the `operations` map, `path` the field's own
+`wire_name`. `resolution` is `resolved` (the schema states the operation outright, and
+nothing about the address was left unread); `evidence` is the DECLARING SHAPE's own tier,
+carried rather than restated, so a repository schema is `declared` and one the build
+embedded would be `compiler`; `handler` and `caller` are both NULL, because a schema names
+no code and the wiring that would is explicitly not read (a COVERAGE boundary).
+`request_shape` is NULL for the same kind of reason — a root field's ARGUMENTS are what
+the operation takes, and the interpreter deliberately does not project them.
+
+**Agreement with the annotation catalogs rides two existing mechanics, not a new rule.**
+The style runs in the §3 runs-last group, so its rows meet the same insert-if-absent guard
+every call-site style meets, LAST — an operation an annotation already derived keeps
+THAT row, with the handler symbol only the annotation knows. A second statement then
+stamps `response_shape` onto every matching identity that still has none, which reaches
+the style's own rows and any annotation twin alike. **That stamp is deliberately transient
+on an annotated row**: the shape pass runs after every engine and re-answers both payload
+columns for any row still carrying a `handler_signature`, so an annotated operation ends
+up publishing the types its own handler really serializes and the schema's declared type
+is what a row with nothing else to say keeps. That is the no-class↔type-join rule arriving
+by ordering rather than by a second guard. The declared response is a SCHEMA-NAME reference
+within the declared universe; no join to a bytecode-derived class is attempted anywhere on
+this path.
+
 ### `protocol_hint`
 
-Runs last with `config_join` (§3), and **reclassifies endpoints other engines already
-produced** — a streaming
-response, a long-poll. It changes protocol, never direction, and it never creates an
-endpoint.
+**Reclassifies endpoints other engines already produced** — a streaming response, a
+long-poll. It changes protocol, never direction, and it never creates an endpoint.
 
-**It must not touch direction, and the reason is §3's ordering.** Inbound runs before
-outbound so that a path a module both exposes and calls merges into one endpoint with
-direction `both`. A later pass that changed direction would arrive after that merge has
-already happened, silently corrupting it. Direction is therefore resolved **at match
-time** — §2c — never afterwards.
+**Execution amendment (Phase 2H): it is not an engine in the §3 runs-last group, and it
+does not "run last with `config_join`".** That sentence predates resolve passes. It ships
+as a post-merge resolve pass (`resolve/protocol_hint.py`, the 2G `format.py` precedent),
+and the pipeline order is: engines including their merge → `parse_binding` →
+**`protocol_hint`** → the format ladder. Both sides of that position are the pass's own
+contract. AFTER the merge, because every row must exist and a merged `both` row must
+already BE one row, so it reclassifies wholesale — one identity in, one identity out.
+BEFORE the ladder, because rung 1 reads `protocol` directly, so a row answered before it
+was reclassified would carry the format of a protocol it no longer has. It stays
+catalog-declared: the vocabulary below is the whole of what it knows.
+
+```yaml
+protocol: http                 # the catalog's own protocol — the SOURCE, never named in the block
+protocol_hint:
+  protocol: sse                # the TARGET
+  hint_media: [text/event-stream]
+  hint_returns: ["…annotation.SseEmitter"]
+```
+
+**Three promises, and they are the whole contract.** (1) It changes `protocol`, never
+`direction` — direction is resolved at match time (§2c) and the inbound/outbound merge has
+already run, so a pass that moved direction afterwards would silently corrupt a `both` row
+the merge had already built. (2) It never creates or deletes an endpoint; the row count is
+identical before and after. (3) It only ever moves a row of the SOURCE protocol its own
+catalog declares — the block is scoped by the catalog's own `protocol` field, so an HTTP
+catalog can only reclassify HTTP rows and the graphql, websocket and messaging rows no
+catalog names as a source are untouchable rather than merely untouched.
+
+**Two evidence kinds, media first**, because a row whose own declared media names the
+protocol's envelope is the cheaper and stronger read — it is the channel's own
+declaration, made in the source. The return-type read exists because a handler may declare
+no media at all and still be a stream.
+
+- **`hint_media` reads `produces` ONLY, on every row, whatever its direction** — and this
+  is deliberately narrower than the format ladder's rung 2, which folds both media columns
+  into one answer. `format` describes one wire and both columns describe it; a PROTOCOL
+  hint is the narrower claim *this channel IS an event stream*, and only `produces` can
+  evidence it. On an inbound row it is what the route streams back; carried onto a merged
+  `both` row from the outbound twin the merge deleted, it is what a caller expects to
+  receive — evidence either way. `consumes`, on ANY row, means "this accepts event-stream
+  REQUEST BODIES", and a channel is not named after what it eats. Reading `consumes` on a
+  client-side row was tempting and is refused anyway: after the merge the column's
+  PROVENANCE is gone (the merge coalesces, keeping the surviving inbound row's own value
+  first), so a `both` row's `consumes` may be either half's and nothing on the row says
+  which. One column, one meaning.
+- **`hint_returns` matches a marker type appearing ANYWHERE in the handler's return
+  type** — the outer symbol, or any symbol reachable through nested type arguments, to any
+  depth. Both halves of that rule are load-bearing because the two real shapes sit at
+  opposite ends of it: `SseEmitter` is a flat return whose own symbol IS the marker, while
+  `Flux<ServerSentEvent<T>>` carries the marker in the MIDDLE of a two-level chain under
+  an ordinary reactive outer type. Matching only the outer symbol catches the first and
+  misses the second entirely; matching only nested arguments does the reverse. A row with
+  no handler declares no return type and is answered by its media or not at all.
+
+**How the two lists merge across catalogs differs, and on purpose.** The target protocol
+is single-valued per source, so two catalogs of a family disagreeing about it is REFUSED
+rather than resolved (picking either side would make the answer depend on filename order).
+The evidence lists are UNIONED, because they are additive — a family's two catalogs each
+name the markers their own artifact declares, and a module pulling in one of them must
+still get that one's. `hint_media` is an HTTP media declaration and is therefore
+duplicated across the family exactly as `media_formats` is; `hint_returns` names LIBRARY
+types and each is declared once, by the catalog whose artifact declares it.
+
+**A malformed block is refused at run start**, four ways, each a case where reading on
+would make a broken catalog look like an absent one: an unknown key; a target outside
+[D00](D00-fact-schema.md)'s protocol set or equal to the catalog's own; an evidence list
+that is not a list of strings; and a block naming no evidence at all, which is exactly what
+declaring no block already means.
+
+**One thing outside `endpoints` moves with a row: its `open_questions`.** The ledger
+snapshots a wire identity rather than joining to it ([D01](D01-graph-schema.md) §3), and
+the payload-binding pass took that snapshot before this one ran — so without the follow-up
+a reclassified row's question would publish one protocol while the endpoint published
+another. (A `format_conflict` question cannot go stale: the ladder runs afterwards.)
+**The ledger match is WIDER than the endpoint match, and that is a stated limitation**: a
+question carries three of the six identity columns — no `direction`, `handler` or
+`caller` — because a question is about a wire identity, not a symbol. Where two endpoint
+rows share `(protocol, method, path)` and only one reclassifies, a question belonging to
+the other moves too. Moving is still the right side to err on; a future ledger carrying the
+handler could tighten it.
 
 ### `filesystem`
 
@@ -936,9 +1175,15 @@ wrappers:
 consumed where it is produced, never stored on the endpoint: `optional` semantics feed
 `required`, `async` and `streaming` feed the flags below, and nothing records the chain
 itself on the endpoint row — a second copy could only ever disagree with the columns that
-already hold what it decided. `semantics` is a closed set, and it earns its keep twice
-over: `streaming` is evidence for `protocol_hint` reclassification, and `async` marks the
-endpoint's path for the blocking-call-on-async-path finding (FR-14). An unfamiliar generic
+already hold what it decided. `semantics` is a closed set. **`streaming` is NOT what feeds
+`protocol_hint`** — an earlier draft of this paragraph said it was, and Phase 2H's
+implementation shows why it cannot be: `Flux` is `streaming` on every reactive route in a
+WebFlux service, and reclassifying all of them would rename ordinary REST as SSE. The pass
+matches a named MARKER TYPE (`hint_returns`, §2's `protocol_hint`) instead. Of the set,
+**`optional` is the only value any shipped pass branches on** — it is what makes a rooted
+payload's `required` false. `async` stays specified as the marker for the
+blocking-call-on-async-path finding (FR-14), which no pass computes yet; `streaming` and
+`http_envelope` are labels for a reader. An unfamiliar generic
 wrapper with no declaration is **not unwrapped** — the shape roots at the wrapper and the
 endpoint records that no wrapper rule matched, so an incomplete catalog degrades visibly
 rather than guessing.
@@ -987,8 +1232,12 @@ most catalogs they are constant. Three cases break that, and all three are real:
 - **`@HttpExchange` is inbound or outbound depending on use.** It normally declares an
   outbound client; Spring 6.1+ also allows *implementing* the interface server-side, which
   makes the same annotation inbound.
-- **A `@GetMapping` returning `SseEmitter` is not REST.** Handled already by `wrappers` with
-  `semantics: streaming` feeding `protocol_hint` — recorded here for completeness.
+- **A `@GetMapping` returning `SseEmitter` is not REST.** Shipped in Phase 2H, and **not
+  the way this bullet originally sketched it**: not through `wrappers`' `semantics:
+  streaming`, which every reactive route carries, but through `protocol_hint`'s own
+  `hint_returns` marker list plus a `produces: text/event-stream` read — and as a
+  post-merge pass rather than at match time, because a protocol may be rewritten
+  afterwards where a direction may not (§2's `protocol_hint`).
 - **Format is rarely constant.** `produces = "application/x-protobuf"` changes the wire; a
   payload type extending a generated message says the same thing; a Kafka `value.serializer`
   says it in configuration rather than code.
@@ -1065,6 +1314,19 @@ where the proto3 rename above makes the mistake most expensive. Rung 4 is theref
 `narrowed` at best: negotiation the pass cannot see may still put the JSON encoding on the
 wire.
 
+**Rung 4 is silent for a schema language that is not also a wire format** (added in Phase
+2H, when the first such language arrived). A `declared_shape`'s `schema_format` names the
+schema LANGUAGE that described the payload ([D00](D00-fact-schema.md) §5): protobuf and
+Avro define an encoding, so "described by this schema" really does suggest bytes; GraphQL
+states a type system and leaves the transport to say how it is written, so it suggests
+nothing this column can hold. Since `endpoints.format` is closed at
+[D00](D00-fact-schema.md) §4's six values (NFR-5) and the stamp applies rather than
+decides, a rung 4 that published its input verbatim would put a non-member straight into a
+closed column, where a reader cannot tell it from an observation. Such a shape therefore
+contributes no candidate and the row falls to a weaker rung or to `unresolved`, which is
+the honest answer. Rung 1's `format_fixed` masks this on today's live GraphQL rows — and a
+mask is not a rule, which is why the guard is stated and tested rather than left to it.
+
 **A rung that answers with more than one format answers with none.** Two MIME types
 meaning different formats, a merged row whose two halves' configured serializers disagree,
 a request described by one schema format and a response by another: the row records
@@ -1082,13 +1344,19 @@ ladder itself.
 
 ```yaml
 # Rung 1 — a protocol whose wire is constant by definition. Shipped by the
-# catalog that owns the protocol, never hardcoded. NO SHIPPED CATALOG
-# DECLARES ONE TODAY: gRPC, SOAP and GraphQL have no catalog yet, so rung 1
-# is read and validated but has no live surface.
+# catalog that owns the protocol, never hardcoded. LIVE SINCE PHASE 2H:
+# `format_fixed: {graphql: json}` ships on all four catalogs that own the
+# graphql protocol (the three annotation catalogs and `graphql-schema.yml`),
+# which closed this branch's documented dead end. gRPC and SOAP still have no
+# catalog, so `grpc: protobuf` remains an illustration.
 format_fixed:
-  grpc: protobuf
+  graphql: json
 
-# Rung 2 — what a declared MIME string means on the wire.
+# Rung 2 — what a declared MIME string means on the wire. `text/event-stream`
+# is deliberately ABSENT, and its absence is a rule rather than an omission:
+# it is the ENVELOPE, not the payload, so mapping it to anything would state a
+# format nobody declared. It IS read — by `protocol_hint` (§2), which names a
+# PROTOCOL from it, a different column and a different claim.
 media_formats:
   application/json: json
   application/x-protobuf: protobuf
@@ -1578,11 +1846,24 @@ method's return value — reaches no rung and is a named gap, not a guess.
 
 Engines run in a fixed order because later passes depend on earlier ones: inbound first,
 then outbound, then the styles that ENRICH what those produced — `config_join` and
-`protocol_hint`. Inbound precedes outbound so that a path a module both
+`schema_operations`. Inbound precedes outbound so that a path a module both
 exposes and calls merges into one endpoint with direction `both` rather than appearing
 twice. The enriching styles come after both, whatever direction their own catalog file
-declares, because a stamp cannot reach a row that does not exist yet and a
-reclassification cannot rewrite one.
+declares, because a stamp cannot reach a row that does not exist yet.
+
+`schema_operations` is in that group for the same reason twice over: it stamps a declared
+response shape onto rows other engines minted, and its OWN rows meet §5's insert-if-absent
+guard last on purpose — a schema states an operation, an annotation states the operation
+AND the code serving it, so running afterwards is the whole of what makes the annotation
+row the one that survives. First-writer agreement by ordering, with no second rule to keep
+in step. **Within the runs-last group the same reason applies one level down**: a style
+whose catalogs may either DERIVE rows or only stamp them runs every deriving catalog
+first, or a stamp arrives before the rows it was meant to enrich. Direction and filename
+remain the tiebreaks after both ranks.
+
+**`protocol_hint` is no longer in this list** (Phase 2H). It ships as a resolve pass
+rather than an engine, and its position is stated where it runs: after the engines' merge
+and before the format ladder (§2's `protocol_hint`).
 
 **The order is a property of the engine style, not of the catalog file.** A catalog cannot
 request a position.
@@ -1597,6 +1878,26 @@ endpoint list expected from it. The fixture runs in CI.
 Without this, a catalog is an assertion. With it, a catalog is tested — and adding a
 framework stays *one YAML file and one fixture, with no engine change and no existing test
 modified*.
+
+**One narrow exception, and it is stated rather than taken quietly (Phase 2H).** A catalog
+whose only surface is a **programmatic registration call** may ship fixture-less, on three
+conditions together: the rows are pinned over synthetic `call_site` facts against the
+**real loaded catalog** (never an invented one, so the shipped file's own arities and
+argument positions are what the test exercises), every assumption the fixture would have
+settled is written down as a limitation, and the boundary is recorded in
+[COVERAGE](../COVERAGE.md) rather than left to the catalog file. The reason is that such a
+fixture is not small: registering a handler programmatically means a configuration class,
+a framework's own registry interface on the compile classpath and a callback body, all to
+pin one literal argument.
+
+`spring-websocket.yml` (`WebSocketHandlerRegistry.addHandler`) is the first instance, and
+it carries the cost the exception implies: its `arity: 2` assumes a single-path call
+compiles to exactly two call-site arguments, which no bytecode has confirmed, and a
+multi-path call matches no row at all. A catalog under this exception is weaker evidence
+than one with a fixture, and the sentence above — "without this, a catalog is an
+assertion" — is exactly what it trades
+against, so the exception is for this one shape and does not generalise to an
+annotation or configuration catalog, where the fixture is cheap.
 
 ---
 

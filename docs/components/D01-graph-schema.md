@@ -262,16 +262,39 @@ in the envelope; WebSocket puts them behind one connection with the name in each
 already works this way and set the precedent — its wire identity is `package.Service/Method`,
 not the HTTP/2 path.
 
-The address is **not** discarded: it stays on the endpoint as `path`, which for REST coincides
-with the wire identity and for these protocols does not. So `/graphql` is where the operation
-is reachable, and `Query.getOrder` is what it is.
-
 The reason is that aggregation is possible and disaggregation is not. Recording operations
-still allows one arrow per service by grouping on `path`; recording only the address can never
+still allows one arrow per service by grouping on the operation's own scope; recording only
+the address can never
 answer *who calls `getOrder`* without a second matching mechanism built alongside the first.
 The cost is real and lands on rendering rather than on the schema — a service with two hundred
-GraphQL fields has two hundred endpoints, and [M07](M07-renderer.md) must group them by `path`
-unless asked otherwise, or every diagram of such a service is unreadable.
+GraphQL fields has two hundred endpoints, and [M07](M07-renderer.md) must group them
+before drawing, or every diagram of such a service is unreadable.
+
+**The operation identity forms, as built (Phase 2H).** An earlier draft of this section
+said the transport address stays on the row as `path` (`/graphql`) with the operation
+recorded beside it. **That is not what shipped, and the `path` column carries the
+OPERATION.** There is nowhere else for it: `path` is the identity column, the merge and
+the dedup key are `(protocol, direction, method, path)`, and parking the transport
+address there would collapse every field of a schema into one endpoint — the exact
+aggregation this section refuses. The HTTP address a GraphQL or STOMP service listens
+on is not derived at all today, by any engine; where a phase needs it, it is a new
+column with its own evidence, never this one.
+
+| Form | `protocol` | `method` | `path` | Derived by |
+|---|---|---|---|---|
+| GraphQL root operation | `graphql` | `query` / `mutation` / `subscription` | the field name (`orders`) | the annotation catalogs, and `schema_operations` from the SDL |
+| GraphQL non-root resolver | `graphql` | NULL | `Type.field` (`Order.lines`) | the annotation catalogs |
+| WebSocket / STOMP | `websocket` | NULL | the connection path or destination (`/live`, `/orders/place`) | the WebSocket and STOMP catalogs |
+| SSE | `sse` | the HTTP verb (`GET`) | the route path (`/events/stream`) | an HTTP row, reclassified ([D02](D02-catalog-schema.md) §2's `protocol_hint`) |
+
+Three things follow, and each is a real distinction rather than a shading of one rule.
+**A GraphQL row's `method` is an OPERATION TYPE, not a verb** — a caller sending a
+mutation must not match a query, so it is part of the identity exactly as `GET` is — and
+a resolver's NULL there is an ABSENCE BY DESIGN: it implements a field, it answers no
+operation, and `Type.field` is the whole address. **A WebSocket row is verbless
+outright**, the 2D messaging precedent unchanged. **An SSE row keeps its HTTP verb**,
+because an SSE stream really is a route a client GETs; only its protocol changed.
+[D06](D06-bundle-format.md) §5b renders each of these.
 
 **`resolved_config` is one row per key per environment.** A resolved row carries `key`,
 `value`, `source` — the file that won precedence for that key in that profile's layering

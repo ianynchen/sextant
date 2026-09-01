@@ -80,6 +80,18 @@ _GAPS = [
     ),
 ]
 
+# The protocols whose verb is not an HTTP method, so the protocol name is
+# itself part of the identity a reader needs (D06, 2H design §1): `graphql
+# query orders` names an operation, while a bare `query orders` names nothing
+# in particular — `query` is not a word that implies its own protocol the way
+# `GET` does. `sse` is qualified for the mirror-image reason (2H design §6):
+# its verb IS an HTTP method, because an SSE stream is a route a client GETs,
+# and a bare `GET /events/stream` therefore reads as an ordinary REST route
+# and loses the one thing the reclassification established. HTTP, SOAP and
+# gRPC read correctly without the prefix, which is also what every pin
+# written before this expects.
+_PROTOCOL_QUALIFIED = frozenset({"graphql", "sse"})
+
 # D00 §4 closed-set protocol names whose wire identity has no verb: a Kafka
 # topic, a JMS destination, an SQS queue or a Pub/Sub topic is addressed, not
 # called, so there is no method to render beside the path.
@@ -93,23 +105,75 @@ _GAPS = [
 # protocol was never going to have one. The verbed half is also the stable
 # half: growth in D00's set is broker families, not new request-response
 # verbs.
-_VERBED_PROTOCOLS = frozenset({"http", "soap", "grpc"})
+#
+# The qualified set is UNIONED in rather than repeated, so "every qualified
+# protocol is a verbed one" is structural. Stating it twice is what let `sse`
+# be added to one list and silently fall out of the other — a GET route
+# reclassified into the verbless half renders `sse /events/stream` and drops
+# the verb it does have.
+_VERBED_PROTOCOLS = frozenset({"http", "soap", "grpc"}) | _PROTOCOL_QUALIFIED
 _VERBLESS_PROTOCOLS = frozenset(p.value for p in Protocol) - _VERBED_PROTOCOLS
+
+# The verbed protocols whose rows may legitimately carry NO verb. A GraphQL
+# resolver is addressed by `Type.field` alone — it implements a field, it does
+# not answer an operation — so its NULL method is an absence rather than a
+# verb the analysis failed to read. Its own set, deliberately not
+# `_PROTOCOL_QUALIFIED` reused: an SSE row is qualified and its verb is still
+# an HTTP method, so a NULL there genuinely is unread and must render as such.
+_VERB_OPTIONAL_PROTOCOLS = frozenset({"graphql"})
 
 
 def _wire_identity(endpoint: dict[str, object]) -> str:
     """A row's wire identity as one string. A protocol in `_VERBLESS_PROTOCOLS`
     defines no verb, so it renders `protocol path` with no method at all;
-    every other protocol renders `method path` as before. Either half of
-    either shape may be NULL, and `(unresolved)` stays the marker for an
-    identity the analysis could not read — never a bare `None`."""
+    every other protocol renders `method path`, prefixed by the protocol where
+    its verb does not imply one. Any half of any shape may be NULL, and
+    `(unresolved)` stays the marker for an identity the analysis could not
+    read — never a bare `None`."""
+    protocol = str(endpoint["protocol"])
     path = endpoint["path"]
     rendered_path = "(unresolved)" if path is None else str(path)
-    if str(endpoint["protocol"]) in _VERBLESS_PROTOCOLS:
-        return f"{endpoint['protocol']} {rendered_path}"
+    if protocol in _VERBLESS_PROTOCOLS:
+        return f"{protocol} {rendered_path}"
     method = endpoint["method"]
+    # A verbed protocol whose row carries no verb *by design*
+    # (`_VERB_OPTIONAL_PROTOCOLS`, above): rendering `(unresolved)` there
+    # would report a gap that does not exist. Every other verbed protocol —
+    # HTTP and the SSE routes reclassified out of it alike — has a method it
+    # was supposed to read, so a NULL genuinely is unread.
+    if method is None and protocol in _VERB_OPTIONAL_PROTOCOLS:
+        return f"{protocol} {rendered_path}"
     rendered_method = "(unresolved)" if method is None else str(method)
-    return f"{rendered_method} {rendered_path}"
+    prefix = f"{protocol} " if protocol in _PROTOCOL_QUALIFIED else ""
+    return f"{prefix}{rendered_method} {rendered_path}"
+
+
+def _handler(endpoint: dict[str, object]) -> str:
+    """The Handler column: the owner's bare descriptor, or one of the two
+    different things a NULL `handler` can mean.
+
+    Until 2H every inbound row with no handler was a row whose address could
+    not be read either, so one word covered both. `schema_operations` (2H
+    design §3) makes the second case real: a schema declares an operation
+    outright — `resolution` is `resolved`, the identity is complete — and
+    names no code at all, because a schema never does and the wiring that
+    would is explicitly not read (COVERAGE). Printing `unresolved` there would
+    report a gap that does not exist, the same mistake `_wire_identity`
+    already refuses to make for a GraphQL resolver's NULL verb.
+
+    `none recorded` rather than `none`: the claim is about what this evidence
+    carries, never that the service implements nothing — that would be a
+    statement about code this analysis deliberately did not read. The
+    discriminator is the row's own two columns, not its protocol or catalog: a
+    row that names neither a handler nor a caller and still resolved its
+    address is one whose evidence had no symbol to give.
+    """
+    handler = endpoint.get("handler")
+    if handler is not None:
+        return f"`{bare_descriptor(str(handler))}`"
+    if endpoint.get("caller") is None and endpoint.get("resolution") == "resolved":
+        return "none recorded"
+    return "unresolved"
 
 
 def _media(value: object) -> str:
@@ -222,13 +286,9 @@ def render_module_document(
     if inbound:
         lines += ["| Endpoint | Handler | Media | Format | Resolution |", "|---|---|---|---|---|"]
         for endpoint in inbound:
-            handler = endpoint.get("handler")
-            rendered_handler = (
-                "unresolved" if handler is None else f"`{bare_descriptor(str(handler))}`"
-            )
             media = f"{_media(endpoint.get('consumes'))} → {_media(endpoint.get('produces'))}"
             lines.append(
-                f"| `{_wire_identity(endpoint)}` | {rendered_handler} | {media} | "
+                f"| `{_wire_identity(endpoint)}` | {_handler(endpoint)} | {media} | "
                 f"{_format(endpoint)} | {endpoint['resolution']} |"
             )
         for endpoint in inbound:

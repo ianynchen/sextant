@@ -244,10 +244,13 @@ def test_a_protocol_with_a_fixed_format_answers_before_anything_else(tmp_path: P
     it — the media declaration below is deliberately present and deliberately
     ignored.
 
-    Exercised synthetically because NO catalog Sextant ships declares
-    `format_fixed` today: none of them declares a fixed-format protocol
-    (2G design §7 names gRPC and SOAP; the shipped set covers neither). The
-    mechanism is validated and reachable the moment one does."""
+    Exercised synthetically on an INVENTED pairing (`kafka` is not a
+    fixed-format protocol), because the rung's own precedence is what this
+    test is about and a synthetic catalog is the only way to put a media
+    declaration underneath it that must lose. The rung is no longer without a
+    live surface: since 2H the four catalogs owning `graphql` each declare
+    `format_fixed: {graphql: json}`, and the live GraphQL rows answering
+    `json`/`resolved` are pinned end to end in `tests/e2e/`."""
     workspace = _workspace(tmp_path)
     _seed(workspace, {"path": "a", "produces": json.dumps([SCROLL_MIME])})
     rows = _run(
@@ -346,6 +349,39 @@ def test_a_source_declared_schema_also_describes_the_payload(tmp_path: Path):
     workspace.close()
 
     assert _formats(rows)["a"] == ("avro", "narrowed")
+
+
+def test_a_schema_language_that_is_not_a_wire_format_answers_nothing_at_rung_4(
+    tmp_path: Path,
+):
+    """`endpoints.format` is closed at D00's six values (NFR-5) and
+    `stamp_format.sql` applies whatever this pass hands it without re-checking
+    — so a rung that published its input verbatim could put a non-member into
+    a closed column, where a reader cannot tell it from an observation.
+
+    A `declared_shape`'s `schema_format` names the schema LANGUAGE, and only
+    some schema languages are also encodings: protobuf and Avro define bytes,
+    GraphQL states a type system and leaves the transport to say how it is
+    written. So the rung is silent here, and the row falls through honestly.
+
+    Rung 5 does NOT pick it up either, even with the default converter's
+    family present: the payload is still schema-described, which is exactly
+    what that rung's "ordinary declared payload" excludes. `unresolved` is the
+    answer, and it is an answer.
+
+    (2H Task 4 review, IMPORTANT 1. This was reachable the moment graphql
+    `declared_shape` facts existed; on the live fixture rung 1's
+    `format_fixed: {graphql: json}` answers first and masks it — a mask is not
+    a rule, which is why the constraint lives in the rung.)
+    """
+    workspace = _workspace(
+        tmp_path, shapes=[_schema_shape("graphql", evidence="declared")], marked=MARKER_2
+    )
+    _seed(workspace, {"path": "a", "response_shape": PARCEL_PAYLOAD})
+    rows = _run(workspace, _catalog(json_default_markers=[MARKER_2]))
+    workspace.close()
+
+    assert _formats(rows)["a"] == (None, "unresolved")
 
 
 @pytest.mark.parametrize("marker", [MARKER_2, MARKER_3])

@@ -58,9 +58,19 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # pass). Phase 2E Task 9: +10 more (the `combinator` engine's WebFlux
     # functional-routing tree, both DSLs). 2G Task 5: +1 more
     # (`POST /v1/orders/proto-orders`, the generated-protobuf payload
-    # endpoint) — see test_pipeline.py's own dedicated row-level test for
-    # the full breakdown.
-    assert metadata["endpoints"]["inbound"]["http"] == 32
+    # endpoint). 2H Task 1: +2 more (`GET /events/emitter`, `GET
+    # /events/stream` — `OrderEventsController`'s already-shipped
+    # `@GetMapping` annotations derive as ordinary http endpoints today; a
+    # later 2H task reclassifies them to SSE). 2H Task 6 IS that task: -2,
+    # back to 32, and the two rows reappear under `sse` — the
+    # `protocol_hint` pass moves a row between buckets and never adds or
+    # removes one, so the TOTAL is untouched. See test_pipeline.py's own
+    # dedicated row-level test for the full breakdown.
+    # + 2: the prefix-seam controllers — `GET /v1/seam/owners/{ownerId}` and
+    # `POST /chat`, one route each. Both were already derivable; what the
+    # `path_separator` fix changed is the ADDRESS each derives, not the count.
+    assert metadata["endpoints"]["inbound"]["http"] == 34
+    assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
 def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_path: Path):
@@ -82,7 +92,20 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # class files (the listeners and the two delegation targets), one
     # document each — a real source counted once, which is exactly what this
     # test exists to keep true.
-    assert metadata["coverage"]["documents"] == 87
+    # + 6: 2H Task 1's GraphQL, WebSocket/STOMP and SSE surfaces compile to
+    # six more class files, one document each.
+    # + 1: 2H Task 2's `CustomerGraphqlController` — one more class file, one
+    # more document. It is the class-level-scope resolver shape, which needed
+    # its own type to carry the class-level annotation.
+    # + 2: 2H Task 3's SDL reader now claims Task 1's two `.graphqls` files
+    # under `src/main/resources/graphql`, one document each. TWO, not four:
+    # that directory is a schema root INSIDE the resource root, and `analyze`
+    # reads it in the schema loop only (`_config_files`) — a file read by both
+    # loops would mint a second Document for one source file, the very fault
+    # this test exists to catch.
+    # + 2: the prefix-seam controllers (`SeamController`, `RootSeamController`)
+    # — one more class file each, one more document each.
+    assert metadata["coverage"]["documents"] == 98
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

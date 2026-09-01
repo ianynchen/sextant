@@ -44,6 +44,42 @@
 --   $produces_from       -- attribute names the mapping annotation's declared
 --                           response media types are read from; same rules as
 --                           $consumes_from.
+--   $path_fallback       -- what the declared name is when every $path_from
+--                           attribute is ABSENT, or NULL to keep the empty
+--                           default. Today's one word is 'construct_name':
+--                           the annotated construct's own name. A closed
+--                           vocabulary rather than a boolean, so a second
+--                           source is a new word here, not a second key.
+--   $qualifier_from      -- attribute names holding the SCOPE the declared
+--                           name sits inside, read off the SAME (method-level)
+--                           annotation, first present wins — kept apart from
+--                           $prefix_from, which reads a TYPE-level annotation
+--                           through an entirely different join. Empty where a
+--                           catalog declares no such scope, which is every
+--                           catalog but the ones that need it.
+--   $qualifier_separator -- what joins a qualifier to the name it qualifies.
+--                           Catalog data, never a literal here: which
+--                           punctuation separates a scope from a member is a
+--                           framework's convention, and an engine that baked
+--                           one in would be naming a framework in code.
+--   $path_separator      -- what joins a TYPE-level prefix to the address it
+--                           prefixes, and the character deduped at the seam
+--                           where both halves already carry it. NULL where a
+--                           catalog declares none, which restores the bare
+--                           `prefix || suffix` every catalog composed before
+--                           this parameter existed. Catalog data for the same
+--                           reason $qualifier_separator is: whether two
+--                           address fragments join with a separator, and
+--                           which, is the FRAMEWORK's convention — one
+--                           framework's address is a sequence of segments and
+--                           another's is an opaque name with no segments to
+--                           join — and an engine that picked one would be
+--                           naming a framework in code.
+--                           SINGLE-CHARACTER by contract (`annotation_driven.
+--                           py::_validate_naming` refuses anything else): the
+--                           dedupe below is `rtrim`/`ltrim`, which trim a SET
+--                           of characters, so a multi-character separator
+--                           would trim each of its characters individually.
 --   $synthetic_annotations -- Task 6 (D02 §2, §3): rows the effective-
 --                           annotations pre-pass (`resolve/effective_annotations.py`)
 --                           synthesizes for a module-local composed annotation
@@ -66,9 +102,12 @@ INSERT INTO endpoints (
     handler_signature, resolution, evidence, catalog_id, consumes, produces
 )
 WITH mapping_catalog AS (
-    SELECT s.fqn AS fqn, s.methods AS methods
+    SELECT s.fqn AS fqn, s.methods AS methods,
+           coalesce(s.requires_qualifier, FALSE) AS requires_qualifier
     FROM (SELECT UNNEST(
-        $mapping_annotations::STRUCT(fqn VARCHAR, methods VARCHAR[])[]
+        $mapping_annotations::STRUCT(
+            fqn VARCHAR, methods VARCHAR[], requires_qualifier BOOLEAN
+        )[]
     ) AS s)
 ),
 -- Task 6 (D02 §2, §3): widens the annotation set every CTE below reads from
@@ -134,7 +173,39 @@ declared AS (
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
-        ), v -> v IS NOT NULL), 1) AS produces_list
+        ), v -> v IS NOT NULL), 1) AS produces_list,
+        -- The SCOPE this declaration's name sits inside, read off the same
+        -- annotation that carries the name (2H design §1, form 2). Scalar-or-
+        -- array and first-alias-wins like every other attribute read here.
+        -- NULL where the annotation names no scope, which is what keeps the
+        -- composition below a no-op for the annotations that carry a bare
+        -- name and for every catalog declaring no `$qualifier_from` at all.
+        list_extract(list_filter(list_transform(
+            $qualifier_from::VARCHAR[],
+            n -> coalesce(a.args -> n ->> 0, a.args ->> n)
+        ), v -> v IS NOT NULL), 1) AS qualifier,
+        mc.requires_qualifier AS requires_qualifier
+    FROM annotations_effective a
+    JOIN mapping_catalog mc ON mc.fqn = a.annotation
+),
+-- The same scope read, one level out: a catalog's mapping annotation sitting
+-- on a TYPE states the scope once for every method the type declares, instead
+-- of each method repeating it. Mirrors `prefixes` below exactly — same
+-- attribute list, same scalar-or-array read, joined on `s.enclosing` the same
+-- way — because it is the same idea at the same level; only the attribute it
+-- reads and the separator it composes with differ.
+--
+-- A type-level annotation mints no row of its own: `derived`'s join to
+-- `symbols` keeps methods and functions only, so a type target never reaches
+-- `mappings`. That is what lets one annotation play both roles here without
+-- the two colliding — the `prefix_annotation` precedent, unchanged.
+qualifier_scopes AS (
+    SELECT
+        a.target AS type_symbol,
+        list_extract(list_filter(list_transform(
+            $qualifier_from::VARCHAR[],
+            n -> coalesce(a.args -> n ->> 0, a.args ->> n)
+        ), v -> v IS NOT NULL), 1) AS qualifier
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
 ),
@@ -166,7 +237,9 @@ mapped_methods AS (
                        THEN [CAST(NULL AS VARCHAR)] ELSE d.methods END) AS wire_method,
            d.paths AS paths,
            d.consumes_list AS consumes_list,
-           d.produces_list AS produces_list
+           d.produces_list AS produces_list,
+           d.qualifier AS qualifier,
+           d.requires_qualifier AS requires_qualifier
     FROM declared d
 ),
 mappings AS (
@@ -174,7 +247,9 @@ mappings AS (
            mm.wire_method AS wire_method,
            UNNEST(mm.paths) AS path_suffix,
            mm.consumes_list AS consumes_list,
-           mm.produces_list AS produces_list
+           mm.produces_list AS produces_list,
+           mm.qualifier AS qualifier,
+           mm.requires_qualifier AS requires_qualifier
     FROM mapped_methods mm
 ),
 derived AS (
@@ -182,7 +257,90 @@ derived AS (
         $protocol   AS protocol,
         $direction  AS direction,
         m.wire_method AS method,
-        coalesce(p.prefix, '') || m.path_suffix AS path,
+        -- Three fragments, in address order (2H design §1): the TYPE-level
+        -- prefix, the scope this declaration names on its own annotation, and
+        -- the declared name itself. The last two compose here into
+        -- `scoped_name`; the prefix joins onto its front just below, because
+        -- that seam has a rule of its own and this one does not.
+        --
+        -- Both new fragments are inert unless a catalog asks for them —
+        -- `$qualifier_from` empty leaves `m.qualifier` NULL, `$path_fallback`
+        -- NULL fails its equality — so every catalog written before them
+        -- reduces this to `m.path_suffix`, which is what it was.
+        --
+        -- The fallback fires only on an EMPTY suffix, which is the same fact
+        -- as "every `$path_from` alias was absent" (`declared` defaults the
+        -- list to `['']`). An annotation's declared default is not in the
+        -- bytecode, so absent and defaulted are one thing, and a framework
+        -- whose default IS the construct's own name is describing an
+        -- identity that is present in the code rather than one nobody wrote.
+        -- Reading it as '' instead published a resolved endpoint with no
+        -- address — the failure D02 §2 already names for `path_from`
+        -- ("wrong output rather than a missing one"), reached by a second
+        -- route.
+        -- The scope is the declaration's own where it states one, else the
+        -- one its enclosing type states (2H design §1): the nearer
+        -- declaration wins, which is the precedence every framework with
+        -- both levels keeps. Where neither states one this is NULL and
+        -- composes nothing — no scope, no separator.
+        CASE WHEN coalesce(m.qualifier, q.qualifier) IS NOT NULL
+             THEN coalesce(m.qualifier, q.qualifier) || $qualifier_separator
+             ELSE '' END
+            || CASE WHEN m.path_suffix = '' AND $path_fallback = 'construct_name'
+                    -- The construct's own name, off the symbol the join below
+                    -- already resolved. D00 §1's descriptor puts it between
+                    -- the type separator and the signature — the shape
+                    -- `$method_from`'s own read above already relies on.
+                    -- `$` is in the class because the JVM admits it in a
+                    -- method name; a symbol this failed to match would yield
+                    -- '' silently, which is the empty-address failure again.
+                    THEN regexp_extract(s.symbol, '#([A-Za-z0-9_$]+)\(', 1)
+                    ELSE m.path_suffix END AS scoped_name,
+        -- THE PREFIX SEAM. What joins here, what does not, and why:
+        --
+        -- A catalog that declares `$path_separator` composes SEGMENTED
+        -- addresses, where the two halves are written by two different
+        -- authors who each decide independently whether to spell the
+        -- separator. The framework joins them with EXACTLY ONE separator
+        -- however they were written, so this dedupes the seam: strip the
+        -- prefix's trailing separators and the remainder's leading ones,
+        -- then join with one. A prefix `/api/gateway` and a suffix
+        -- `owners/{ownerId}` compose `/api/gateway/owners/{ownerId}`, and a
+        -- prefix `/` with a suffix `/chatclient` composes `/chatclient` —
+        -- both real declarations, both derived as `/api/gatewayowners/
+        -- {ownerId}` and `//chatclient` by the bare concatenation this
+        -- replaces, and both found live against a real repository. An
+        -- address nobody serves, published at `resolved`/`compiler` where
+        -- nothing downstream can tell it from something observed, is the
+        -- same confidently-wrong-address class `$path_fallback` closes from
+        -- the other direction.
+        --
+        -- What does NOT join this way, and must not:
+        --   * A catalog declaring NO `$path_separator` — every one written
+        --     before this parameter, and every one whose address is an
+        --     opaque name rather than a sequence of segments. That is the
+        --     live reason the separator is opt-in rather than an engine
+        --     default: a catalog whose type-level prefix is a broker
+        --     destination NAME has nothing to join, and a separator
+        --     inserted into one would invent a destination nobody serves.
+        --   * The qualifier seam above, which joins with
+        --     `$qualifier_separator` and dedupes nothing — a scope and a
+        --     member are written by ONE author on ONE annotation, so
+        --     neither half ever spells the separator and there is no seam
+        --     to dedupe. The two seams stay separate expressions for that
+        --     reason, not by accident.
+        --
+        -- An EMPTY half contributes nothing and takes no separator with it:
+        -- an absent prefix leaves `scoped_name` exactly as written (so a
+        -- bare `owners` stays `owners` rather than gaining a leading
+        -- separator this engine would be inventing), and an empty
+        -- `scoped_name` — the catalogs whose method-level annotation
+        -- carries no path attribute at all — leaves the prefix alone.
+        CASE WHEN coalesce(p.prefix, '') = '' OR scoped_name = ''
+                  OR $path_separator IS NULL
+             THEN coalesce(p.prefix, '') || scoped_name
+             ELSE rtrim(p.prefix, $path_separator) || $path_separator
+                  || ltrim(scoped_name, $path_separator) END AS path,
         -- The symbol lands by direction (D01 §3, amended): the server side
         -- handles, the client side calls, and a later merge may hold both.
         CASE WHEN $direction = 'outbound' THEN NULL ELSE s.symbol END AS handler,
@@ -209,7 +367,17 @@ derived AS (
     JOIN symbols s ON s.symbol = m.method_symbol AND s.construct_kind IN ('method', 'function')
     LEFT JOIN controllers c ON s.enclosing = c.type_symbol
     LEFT JOIN prefixes p ON p.type_symbol = s.enclosing
-    WHERE $type_annotation IS NULL OR c.type_symbol IS NOT NULL
+    LEFT JOIN qualifier_scopes q ON q.type_symbol = s.enclosing
+    WHERE ($type_annotation IS NULL OR c.type_symbol IS NOT NULL)
+      -- A declaration whose annotation only means anything INSIDE a scope,
+      -- with no scope found at either level, has no address — so it derives
+      -- NO ROW rather than the bare member name. The bare name would read as
+      -- a top-level identity, which is a different endpoint from the one the
+      -- code declares, and `resolved`/`compiler` beside it would present that
+      -- as observed. Silence is the honest answer: the declaration is real,
+      -- but what it is a member OF is stated somewhere these facts do not
+      -- reach (a parameter's type, for the framework that infers it there).
+      AND NOT (m.requires_qualifier AND coalesce(m.qualifier, q.qualifier) IS NULL)
 ),
 -- Within-batch union (D01 §4, spec §4): rows differing ONLY in declared
 -- media are one endpoint, so this groups on every OTHER column derived

@@ -17,6 +17,10 @@ matches:
     # typed reaches the bytecode. First present wins, in this order.
     path_from: [value, path]
     prefix_from: [value, path]
+    # The same `@RequestMapping` composition spring-web.yml describes: Spring
+    # joins a class prefix to a method path with exactly one `/`, whichever
+    # half spelled it, so the seam is deduped rather than concatenated bare.
+    path_separator: "/"
     # Declared media types (2E Task 5, evidence kind (a)): each mapping
     # annotation's own `consumes`/`produces` attribute, read scalar-or-array
     # like `path_from`. Neither has an alias to worry about here.
@@ -39,6 +43,17 @@ wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: reactor.core.publisher.Mono,             payload_arg: 0, semantics: async }
   - { type: reactor.core.publisher.Flux,             payload_arg: 0, semantics: streaming }
+  # 2H Task 6 fix round 1. `ServerSentEvent<T>` is the per-EVENT envelope an
+  # SSE stream carries — `id`/`event`/`retry` metadata wrapped around `data:
+  # T` — so the payload on that wire is `T`, exactly as `ResponseEntity`'s is.
+  # Without this line `Flux<ServerSentEvent<OrderView>>` peeled its outer
+  # `Flux` and then stopped, publishing the envelope TYPE as the contract;
+  # `rooting.py` peels recursively, so one entry is the whole remedy.
+  # `http_envelope`, not `streaming`: the stream is the `Flux` around it, and
+  # `semantics` only ever gates `optional`, so the value is a label for a
+  # reader rather than a branch.
+  - { type: org.springframework.http.codec.ServerSentEvent,
+      payload_arg: 0, semantics: http_envelope }
   - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
   - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
 
@@ -63,12 +78,35 @@ known_types:
   - { type: java.math.BigDecimal, wire: number }
   - { type: java.util.UUID,       wire: string, format: uuid }
 
+# 2H design §6 — see `spring-web.yml`'s own block for the full rule. `protocol`
+# and `hint_media` are the duplicated half (an HTTP media declaration, carried
+# on both catalogs of the family for the reason `media_formats` below is
+# carried on both); `hint_returns` names the one SSE marker type THIS
+# artifact declares. `SseEmitter` is spring-webmvc's own servlet-side stream
+# handle and appears nowhere in spring-web, so it is declared here and only
+# here — the `parse_calls` ownership rule, not the `media_formats` copy rule.
+#
+# It is also the shape that makes the "marker anywhere in the chain" rule
+# necessary from BOTH ends: `SseEmitter` is a flat return with no type
+# arguments at all, so the outer symbol IS the marker — while spring-web's
+# `ServerSentEvent` is only ever reached through a wrapper's arguments.
+protocol_hint:
+  protocol: sse
+  hint_media: [text/event-stream]
+  hint_returns:
+    - org.springframework.web.servlet.mvc.method.annotation.SseEmitter
+
 # 2G design §7, rungs 2 and 5 — the same two tables spring-web.yml carries,
 # for the same reason it carries them: this catalog owns the HTTP protocol
 # too, and a module that pulls in only one of the two must still get the
 # vocabulary. Identical by construction; the ladder refuses a contradiction
 # between two catalogs rather than picking one, so the duplication cannot
 # drift silently.
+#
+# **`text/event-stream` is deliberately absent from both copies**, and
+# spring-web.yml's own table says at length why: it is the envelope, not the
+# payload. `protocol_hint` above reads that MIME string to name a protocol;
+# nothing may read it to name a format.
 media_formats:
   application/json: json
   application/x-protobuf: protobuf

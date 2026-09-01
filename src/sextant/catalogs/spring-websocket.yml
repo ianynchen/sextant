@@ -1,0 +1,86 @@
+id: spring-websocket
+displayName: Spring WebSocket (programmatic handler registration)
+style: single_call
+protocol: websocket
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework:spring-websocket"]
+
+requires: [call_site, string_constants]
+
+# `WebSocketHandlerRegistry.addHandler(WebSocketHandler handler, String...
+# paths)` — the raw, non-STOMP registration form
+# (`WebSocketConfigurer#registerWebSocketHandlers`'s own callback argument),
+# a single_call surface rather than an annotation one: nothing on the
+# `WebSocketHandler` implementation itself names a path, and the path lives
+# entirely at the `.addHandler(handler, "/ws")` call site instead — the same
+# shape `spring-kafka-template.yml`'s `KafkaTemplate.send` reads off a call
+# rather than an annotation.
+#
+# COVERAGE boundary (Task 5): this entry has NO live fixture surface — Task 1
+# built none (2H Task 5 brief, spec ruling) — so it is proved only by a
+# unit-level test over synthetic call facts
+# (`tests/application/test_call_engines.py`'s own pattern for an invented
+# `single_call` catalog), never by a compiled-bytecode pin. `arity: 2` and
+# `channel_arg: 1` assume the single-path call form
+# (`.addHandler(handler, "/ws")`) compiles to exactly two call-site
+# arguments — the receiver's own varargs collapsing a single trailing
+# `String` into a one-element array the way `javac` ordinarily does for a
+# literal call — unverified against real bytecode. A multi-path call
+# (`.addHandler(handler, "/ws", "/ws2")`) is a THREE-argument call this row's
+# own `arity: 2` does not match at all, so it derives no row rather than a
+# wrong one — a known limitation, not a silent guess, the same shape
+# spring-kafka.yml's own class-level `@KafkaListener` "element 0 only"
+# comment already keeps for a different multi-value case.
+#
+# `channel_arg`, not `url_arg`: a WebSocket dispatch path is a destination
+# identity `SockJS`/plain handshake registration resolves against, never a
+# peer+path URL to split (CP-2) — the same `channel_arg` reasoning
+# `spring-pubsub.yml`/`google-pubsub-subscriber.yml` already keep for their
+# own inbound registration calls.
+matches:
+  owner: org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
+  methods:
+    - { name: addHandler, arity: 2, channel_arg: 1 }
+
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

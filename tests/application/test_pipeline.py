@@ -128,6 +128,16 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `@RequestMapping`.
         ("GET", "/orders"),
         ("POST", "/orders/new"),
+        # The prefix seam, live (`spring-web.yml`'s `mapping.path_separator`).
+        # SeamController's class prefix spells no trailing slash and its method
+        # path no leading one; RootSeamController's `"/"` prefix meets a
+        # slash-leading method path. Spring joins each with exactly one `/`,
+        # and the bare concatenation these replaced derived
+        # `/v1/seamowners/{ownerId}` and `//chat` — addresses nobody serves,
+        # published at `resolved`/`compiler`. Both forms found live against
+        # spring-petclinic-microservices before they were fixtures here.
+        ("GET", "/v1/seam/owners/{ownerId}"),
+        ("POST", "/chat"),
         # LegacyOrderController: the pre-4.3 form, invisible until the mapping
         # declaration replaced one-annotation-per-method (D02 §2). The `path`
         # alias is read here too — reading `value` alone gave an empty path.
@@ -432,6 +442,87 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         (None, "parsed-shared-inbound"),
         (None, "parsed-mixed-inbound"),
         (None, "parsed-relay-queue"),
+        # 2H Task 1: `OrderEventsController`'s two SSE routes derive as
+        # ordinary http endpoints today — `@GetMapping` is an
+        # already-shipped annotation, and no engine exists yet to give SSE
+        # its own handling (that is later 2H work; this fixture's GraphQL,
+        # WebSocket and STOMP surfaces derive NO rows at all, by design —
+        # nothing here catalogs those annotations yet). Neither route merges
+        # with anything else in the fixture.
+        ("GET", "/events/emitter"),
+        ("GET", "/events/stream"),
+        # 2H Task 2: the GraphQL surface — eight rows across three catalogs
+        # and one engine, and the `method` column carries the OPERATION TYPE
+        # rather than an HTTP verb (D01 identity `(graphql, query|mutation|
+        # subscription, <field>)` for a root operation, `(graphql, NULL,
+        # Type.field)` for a resolver). No graphql path collides with an HTTP
+        # one, so the set still tells every row apart.
+        #
+        # `orderById` is the explicit-value case; `orders`, `placeOrder` and
+        # `orderUpdates` are the DEFAULTED case, and they are the whole reason
+        # `path_fallback: construct_name` exists — all three declare their
+        # name attribute `default ""`, which never reaches the class file, so
+        # before the form they derived `path: ''` at `resolved` (four wrong
+        # rows, checkpoint answer 1). The empty-path regression below pins
+        # that they cannot come back.
+        ("query", "orderById"),
+        ("query", "orders"),
+        ("mutation", "placeOrder"),
+        ("subscription", "orderUpdates"),
+        # The non-root resolvers, composed from two attributes on ONE
+        # method-level annotation: `@SchemaMapping(typeName = "Order", field =
+        # "lines")` spells both halves, `@BatchMapping(typeName = "Order")`
+        # spells only the first and takes `totals` from the method name — the
+        # two forms composing, which is what makes them one mechanism rather
+        # than two special cases. Verbless: a resolver is not a root
+        # operation, so `method` is NULL.
+        (None, "Order.lines"),
+        (None, "Order.totals"),
+        # `CustomerGraphqlController`, the CLASS-level scope shape: the type
+        # states `typeName = "Customer"` once and `nickname` names only its
+        # own field, so the scope is read one level out. `shipTo` spells its
+        # own `typeName = "Order"` and that WINS over the class's — the nearer
+        # declaration is the more specific, which is why it lands under
+        # `Order.` and not `Customer.`.
+        (None, "Customer.nickname"),
+        (None, "Order.shipTo"),
+        # NOT here, and asserted absent below: `OrderGraphqlController
+        # #orphanField`'s `@SchemaMapping(field = "orphan")`. No scope on the
+        # method, none on the class — Spring infers it from the parameter
+        # type, a fact no annotation carries — so the row is REFUSED rather
+        # than derived as the bare `orphan`, which would claim a
+        # root-operation-shaped identity for a resolver.
+        # The amended acceptance test (2H design §1): these rows come from
+        # `netflix-dgs.yml` and `microprofile-graphql.yml`, which ride the two
+        # forms `spring-graphql.yml` introduced with ZERO further engine
+        # change. `Order.dgsLines` is the DGS spelling of the qualifier —
+        # `parentType` where Spring says `typeName` — through the same form.
+        # Asserted explicitly, by catalog, below.
+        ("query", "dgsOrders"),
+        (None, "Order.dgsLines"),
+        ("query", "mpOrders"),
+        # 2H Task 5: the WebSocket/STOMP surface — verbless like every other
+        # messaging row (D02 §2, amended), `method` NULL. `LiveEndpoint`'s
+        # `@ServerEndpoint("/live")` + `@OnMessage onFrame` is the
+        # `@KafkaHandler` prefix shape (checkpoint answer 5): no HTTP or
+        # messaging path collides with it.
+        (None, "/live"),
+        # `OrderStompController`: class-level `@MessageMapping("/orders")`
+        # composes with `place`'s own `@MessageMapping("/place")` and
+        # `board`'s `@SubscribeMapping("/board")` — bare `prefix || suffix`,
+        # no separator, matching the fixture's own source comments exactly.
+        (None, "/orders/place"),
+        (None, "/orders/board"),
+        # `place`'s own `@SendTo("/topic/order-placed")` — the reply block's
+        # resolved row (D02 §2's `reply`, spring-kafka.yml's own precedent,
+        # now serving a second protocol with zero engine change).
+        (None, "/topic/order-placed"),
+        # `board` is ALSO value-returning (`OrderView`) and declares no
+        # `@SendTo` — the SAME dynamic-reply shape `escalate`'s own kafka row
+        # keeps (comment above, line ~285): a path-NULL, `unresolved` reply
+        # row. It shares the existing `(None, None)` tuple already in this
+        # set, so the SET gains no new entry for it even though the endpoint
+        # count below does (asserted by caller below).
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -594,7 +685,48 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # ambiguous SQS row and the two-hop JMS row that refuse to. Every one of
     # the five destinations is unique to that file, so none merges with
     # anything and none of the existing 92 identities moves. 92 + 5 = 97.
-    assert len(report.endpoints) == 97
+    #
+    # 2H Task 1 adds 2 more: `OrderEventsController`'s `/events/emitter` and
+    # `/events/stream`, the only new rows the GraphQL/WebSocket/STOMP/SSE
+    # fixture surfaces produce — the rest derive nothing under the shipped
+    # engines. Neither merges with anything. 97 + 2 = 99.
+    #
+    # 2H Task 2 adds 11: the whole GraphQL surface, one row per mapped method
+    # across three catalogs — 8 from `spring-graphql.yml`
+    # (`orderById`/`orders`/`placeOrder`/`orderUpdates` root operations, the
+    # `Order.lines`/`Order.totals` resolvers, and
+    # `CustomerGraphqlController`'s class-level-scope pair
+    # `Customer.nickname`/`Order.shipTo`), 2 from `netflix-dgs.yml`, 1 from
+    # `microprofile-graphql.yml`. No two share a wire identity and none
+    # collides with an HTTP or messaging row, so all 11 are new rows and none
+    # of the existing 99 identities moves. 99 + 11 = 110.
+    #
+    # TWELVE annotated methods produce those 11 rows: `orphanField` names a
+    # field of a type nothing states, so it derives none at all (pinned by
+    # `test_a_resolver_whose_scope_no_annotation_states_derives_no_row`).
+    # `schema_operations` (2H Task 4) adds nothing to THIS particular
+    # count: its one new row (`query auditTrail`) comes from the SDL reader's
+    # own `declared_shape`/schema facts, which this fixture never loads (this
+    # test's own docstring precedent, `test_the_format_ladder_answers_every_
+    # live_row`'s docstring: "this fixture resolves WITHOUT the descriptor
+    # interpreter") — pinned instead in `tests/e2e/test_vertical_slice.py`,
+    # where the interpreter runs. 110 stands unmoved through Task 4.
+    #
+    # 2H Task 5 adds 5: the WebSocket/STOMP surface — 3 inbound
+    # (`jakarta-websocket.yml`'s `/live`, `spring-stomp.yml`'s
+    # `/orders/place`/`/orders/board`) and 2 outbound (`place`'s own
+    # `@SendTo`, resolved; `board`'s own dynamic reply, unresolved — the
+    # `escalate` shape again, a different protocol). None merges with
+    # anything already in the fixture: no messaging destination or HTTP path
+    # collides with a WebSocket one, and a `direction: inbound` catalog never
+    # meets an outbound row on its own. 110 + 5 = 115.
+    #
+    # The prefix-seam controllers add 2: `SeamController`'s one route and
+    # `RootSeamController`'s one, both inbound http, neither colliding with
+    # an existing identity. 115 + 2 = 117. The `path_separator` fix itself
+    # adds no row anywhere — it changes the ADDRESS a row carries — which is
+    # why every other identity in the set above is unmoved.
+    assert len(report.endpoints) == 117
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
@@ -724,6 +856,545 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     assert all(
         (row["consumes"], row["produces"]) == (None, None) for row in combinator_rows.values()
     )
+
+
+# --- 2H Task 2: the GraphQL surface, live on real bytecode ---------------
+#
+# Pinned from the live run this task froze: 110 endpoints, extractor 9.9.
+
+
+def _graphql_rows(report: ResolveReport) -> dict[tuple[str | None, str | None], dict]:
+    """The graphql rows keyed by their D01 wire identity — `(method, path)`,
+    where `method` is the OPERATION TYPE for a root operation and NULL for a
+    resolver. One row per key: no two GraphQL declarations in the fixture
+    share an identity."""
+    rows = [e for e in report.endpoints if e["protocol"] == "graphql"]
+    keyed = {(e["method"], e["path"]): e for e in rows}
+    assert len(keyed) == len(rows), "two graphql rows shared one wire identity"
+    return keyed
+
+
+def test_the_graphql_surface_derives_its_eleven_operations(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """2H design §1, live: three catalogs, one `annotation_driven` engine,
+    eleven rows — every one `resolved`/`compiler`, and each attributed to the
+    catalog that derived it.
+
+    The four root operations show both halves of form 1: `orderById` names its
+    field explicitly, while `orders`, `placeOrder` and `orderUpdates` name
+    nothing and take the method's own name. The resolvers show form 2 at both
+    levels: `Order.lines` composes two attributes spelled on one annotation,
+    `Order.totals` composes the first with form 1's fallback for the second,
+    and `Customer.nickname` takes its scope from the enclosing type while
+    naming only its own field — which is the point of writing them as two
+    composable forms rather than one GraphQL-shaped rule.
+    """
+    _, report = resolved_fixture
+    rows = _graphql_rows(report)
+
+    assert set(rows) == {
+        ("query", "orderById"),
+        ("query", "orders"),
+        ("mutation", "placeOrder"),
+        ("subscription", "orderUpdates"),
+        (None, "Order.lines"),
+        (None, "Order.totals"),
+        (None, "Customer.nickname"),
+        (None, "Order.shipTo"),
+        ("query", "dgsOrders"),
+        (None, "Order.dgsLines"),
+        ("query", "mpOrders"),
+    }
+    for row in rows.values():
+        assert (row["direction"], row["resolution"], row["evidence"]) == (
+            "inbound",
+            "resolved",
+            "compiler",
+        )
+        # A GraphQL operation is served by code in this module, never called
+        # by it, so every row names a handler and no row names a caller.
+        assert row["handler"] is not None
+        assert row["caller"] is None
+
+    handlers = {key: row["handler"] for key, row in rows.items()}
+    assert handlers[("query", "orderById")].endswith("OrderGraphqlController#byId(sig_079d928d).")
+    assert handlers[("query", "orders")].endswith("OrderGraphqlController#orders(sig_3f061508).")
+    assert handlers[("mutation", "placeOrder")].endswith(
+        "OrderGraphqlController#placeOrder(sig_079d928d)."
+    )
+    assert handlers[("subscription", "orderUpdates")].endswith(
+        "OrderGraphqlController#orderUpdates(sig_ed469b30)."
+    )
+    assert handlers[(None, "Order.lines")].endswith(
+        "OrderGraphqlController#orderLines(sig_f5672381)."
+    )
+    assert handlers[(None, "Order.totals")].endswith("OrderGraphqlController#totals(sig_5ed41d1a).")
+    assert handlers[(None, "Customer.nickname")].endswith(
+        "CustomerGraphqlController#nickname(sig_03276a7b)."
+    )
+    assert handlers[(None, "Order.shipTo")].endswith(
+        "CustomerGraphqlController#shipTo(sig_03276a7b)."
+    )
+    assert handlers[("query", "dgsOrders")].endswith("DgsOrderFetcher#dgsOrders(sig_3f061508).")
+    assert handlers[(None, "Order.dgsLines")].endswith("DgsOrderFetcher#dgsLines(sig_f5672381).")
+    assert handlers[("query", "mpOrders")].endswith("MpOrderApi#mpOrders(sig_3f061508).")
+
+
+def test_a_class_level_scope_reaches_a_resolver_that_names_only_its_field(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """2H design §1's class-level bullet, live.
+
+    `CustomerGraphqlController` carries `@SchemaMapping(typeName = "Customer")`
+    on the CLASS. `nickname` spells neither half — the scope comes from the
+    type, the field name from the method — and `shipTo` spells its own
+    `typeName = "Order"`, which WINS over the class's. Both cases sit on one
+    fixture class deliberately: precedence is only observable where the two
+    levels disagree.
+    """
+    _, report = resolved_fixture
+    rows = _graphql_rows(report)
+
+    assert (None, "Customer.nickname") in rows
+    assert (None, "Order.shipTo") in rows
+    # The class-level value did not leak onto the method that overrode it.
+    assert (None, "Customer.shipTo") not in rows
+
+
+def test_a_resolver_whose_scope_no_annotation_states_derives_no_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`OrderGraphqlController#orphanField` carries
+    `@SchemaMapping(field = "orphan")` with no `typeName`, on a class that
+    states none either — Spring infers the parent type from the resolver's
+    PARAMETER, which is a fact no annotation carries.
+
+    So the row is refused. The alternative is not "a slightly vague row": a
+    bare `orphan` is a DIFFERENT wire identity from the `Something.orphan` the
+    code actually declares — a top-level shape for a declaration that is not
+    one — published at `resolved`/`compiler` where nothing downstream could
+    tell it from an observation. Silence is the honest answer.
+    """
+    _, report = resolved_fixture
+    rows = _graphql_rows(report)
+
+    assert (None, "orphan") not in rows
+    assert not [key for key in rows if key[1] is not None and key[1].endswith("orphan")]
+    # And the handler appears nowhere in the table at all — the row is not
+    # derived-then-blanked, it is never derived.
+    assert not [e for e in report.endpoints if e["handler"] and "orphanField" in str(e["handler"])]
+
+
+def test_dgs_and_microprofile_ride_the_shared_vocabulary_with_no_rules_of_their_own(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """2H design §1's AMENDED acceptance test.
+
+    The original claim — three catalogs on an unchanged engine — was falsified
+    by this task's checkpoint: all three frameworks default their field-name
+    attribute to `""`, which never reaches the class file, so an absent value
+    derived `path: ''`. The ruling moved the zero-change proof to where it is
+    meaningful: `spring-graphql.yml` motivated two framework-neutral forms,
+    and DGS and MicroProfile must then be pure YAML.
+
+    That is what `catalog_id` pins here: three rows derived by two catalogs
+    that are pure YAML.
+
+    What the rows prove, stated exactly. `dgsOrders` and `mpOrders` both SPELL
+    their field names, so neither exercises form 1 — they prove the ordinary
+    projection reaches a second and third framework unchanged. `Order.dgsLines`
+    is the one that exercises a form: `@DgsData(parentType, field)` composes
+    through `qualifier_from` reading `parentType`, where Spring's own catalog
+    reads `typeName` — the same engine form, a different attribute name, which
+    is the whole claim that the forms describe a declaration pattern rather
+    than a library.
+
+    (Form 1 still matters for both frameworks in general — `@DgsQuery.field()`
+    and `@Query.value()` are declared `default ""` exactly like Spring's
+    `name()` — it is simply not what THIS fixture's rows demonstrate.)
+    """
+    _, report = resolved_fixture
+    rows = _graphql_rows(report)
+
+    dgs = {("query", "dgsOrders"), (None, "Order.dgsLines")}
+    assert {rows[key]["catalog_id"] for key in dgs} == {"netflix-dgs"}
+    assert rows[("query", "mpOrders")]["catalog_id"] == "microprofile-graphql"
+    assert {
+        rows[key]["catalog_id"] for key in rows if key not in dgs | {("query", "mpOrders")}
+    } == {"spring-graphql"}
+
+
+def test_an_absent_annotation_attribute_never_derives_an_empty_path(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """The regression this task's two forms exist to make impossible.
+
+    An empty `path` is not a small error. The row is still `resolved` with
+    `compiler` evidence, so it publishes an endpoint that confidently
+    addresses nothing, and D01 identity is `(protocol, direction, method,
+    path)` — so several such rows collide with each other as well as being
+    individually wrong. D02 §2 already names this failure mode for
+    `path_from` ("wrong output rather than a missing one"); an unread default
+    reached it by a second route.
+
+    Framework-neutral and whole-table on purpose, rather than scoped to the
+    graphql rows: no catalog shipped today has any business deriving an
+    empty address, so the invariant is the pin. Verified to hold BEFORE this
+    task as well — the four bad rows appeared only under a candidate
+    `spring-graphql.yml` written without the forms, never under a shipped
+    catalog — which is what makes it a regression pin and not a new rule.
+    """
+    _, report = resolved_fixture
+
+    assert [
+        (e["protocol"], e["method"], e["path"], e["catalog_id"])
+        for e in report.endpoints
+        if e["path"] == ""
+    ] == []
+
+
+# --- 2H Task 5: WebSocket/STOMP, end to end, on real bytecode ------------
+
+
+def _websocket_row(report: ResolveReport, direction: str, path: str | None) -> dict:
+    [row] = [
+        e
+        for e in report.endpoints
+        if e["protocol"] == "websocket" and e["direction"] == direction and e["path"] == path
+    ]
+    return row
+
+
+def test_a_jakarta_websocket_frame_handler_derives_a_verbless_row_with_no_shapes_or_format(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`LiveEndpoint`'s class-level `@ServerEndpoint("/live")` + method-level
+    `@OnMessage onFrame(String frame)` — checkpoint answer 5's `@KafkaHandler`
+    prefix shape (a scalar type-level annotation doubling as
+    `prefix_annotation`, an argless method-level one composing an empty
+    suffix onto it), verified live rather than only unit-tested.
+
+    Both shapes stay NULL (`jakarta-websocket.yml` deliberately declares no
+    `request_body` block at all, and `onFrame` returns `void`) and format
+    stays unresolved: a raw WebSocket frame is untyped by definition, and
+    nothing in the ladder may narrow it — not even rung 5's Jackson-presence
+    default, which requires a declared payload TYPE this row has none of.
+    """
+    _, report = resolved_fixture
+    row = _websocket_row(report, "inbound", "/live")
+
+    assert row["method"] is None
+    assert row["handler"].endswith("LiveEndpoint#onFrame(sig_a7421bf5).")
+    assert row["resolution"] == "resolved"
+    assert row["catalog_id"] == "jakarta-websocket"
+    assert row["request_shape"] is None
+    assert row["response_shape"] is None
+    assert row["format"] is None
+    assert row["format_resolution"] == "unresolved"
+
+
+def test_a_stomp_class_level_prefix_composes_with_both_its_method_mappings(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`OrderStompController`'s class-level `@MessageMapping("/orders")`
+    composes with `place`'s own `@MessageMapping("/place")` AND `board`'s
+    `@SubscribeMapping("/board")` — bare `prefix || suffix`, no separator,
+    exactly the fixture's own source comments (checkpoint answer 5) —
+    proving `@MessageMapping` plays both the `prefix_annotation` role (class
+    level) and an ordinary `mapping.annotations` entry (method level) in one
+    catalog with no collision, the same double duty spring-kafka.yml's
+    class-level `@KafkaListener` already plays for `@KafkaHandler`.
+
+    `place`'s own bare, unannotated `OrderView order` parameter reaches
+    `request_shape` through the `sole_unannotated` fallback (the same
+    `@Payload` vocabulary spring-kafka.yml/spring-jms.yml already read);
+    `board` declares no parameter at all, so it derives no request shape."""
+    _, report = resolved_fixture
+    place = _websocket_row(report, "inbound", "/orders/place")
+    board = _websocket_row(report, "inbound", "/orders/board")
+
+    assert place["method"] is None and board["method"] is None
+    assert place["handler"].endswith("OrderStompController#place(sig_961974f8).")
+    assert board["handler"].endswith("OrderStompController#board(sig_26be7569).")
+    for row in (place, board):
+        assert row["resolution"] == "resolved"
+        assert row["catalog_id"] == "spring-stomp"
+    assert json.loads(place["request_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+    assert json.loads(place["response_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+    assert board["request_shape"] is None
+    assert json.loads(board["response_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+
+
+def test_a_stomp_handlers_sendto_reply_derives_a_resolved_outbound_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`place`'s own `@SendTo("/topic/order-placed")` — D02 §2's `reply`
+    block, spring-kafka.yml's own precedent, now pointed at a second
+    protocol with zero engine change (the checkpoint's own ruling). The
+    reply's payload is `place`'s own return type (`OrderView`), carried as
+    the reply row's `request_shape` exactly as `annotation_driven.py::
+    _reply_row` documents — a reply has no `response_shape` of its own."""
+    _, report = resolved_fixture
+    reply = _websocket_row(report, "outbound", "/topic/order-placed")
+
+    assert reply["method"] is None
+    assert reply["handler"] is None
+    assert reply["caller"].endswith("OrderStompController#place(sig_961974f8).")
+    assert reply["resolution"] == "resolved"
+    assert reply["catalog_id"] == "spring-stomp"
+    assert json.loads(reply["request_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+    assert reply["response_shape"] is None
+
+
+def test_a_value_returning_stomp_handler_with_no_sendto_derives_an_unresolved_reply_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`board`'s own `@SubscribeMapping` handler ALSO returns `OrderView` and
+    declares no `@SendTo` at all — the SAME dynamic-reply shape kafka's own
+    `escalate` listener already exercises (`test_a_value_returning_listener_
+    with_no_sendto_derives_an_unresolved_reply_row`, above): the reply
+    destination is real (a STOMP client that subscribed gets a reply) but
+    unnamed anywhere this catalog's own annotations can see, so the row is
+    `path` NULL, `unresolved` — never silently dropped (D02 §2's
+    unresolved-is-an-answer). It shares the `caller`, but not the wire
+    identity, with `board`'s own inbound row above."""
+    _, report = resolved_fixture
+    [reply] = [
+        e
+        for e in report.endpoints
+        if e["protocol"] == "websocket"
+        and e["direction"] == "outbound"
+        and e["caller"] is not None
+        and "OrderStompController#board(" in e["caller"]
+    ]
+
+    assert reply["path"] is None
+    assert reply["method"] is None
+    assert reply["resolution"] == "unresolved"
+    assert reply["catalog_id"] == "spring-stomp"
+    assert json.loads(reply["request_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+
+
+# --- 2H Task 6: `protocol_hint`, live on real bytecode -------------------
+#
+# Pinned from the live run this task froze: still 115 endpoints, extractor
+# 9.9. Nothing here adds a row — every assertion below is about rows that
+# already existed reading a different protocol.
+
+
+def _route(report: ResolveReport, path: str) -> dict:
+    [row] = [e for e in report.endpoints if e["path"] == path and e["handler"] is not None]
+    return row
+
+
+def test_the_two_sse_routes_reclassify_one_by_each_evidence_kind(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """2H design §6, live. Both of `OrderEventsController`'s `@GetMapping`
+    routes derive as ordinary HTTP rows — nothing in the annotation says SSE —
+    and the `protocol_hint` pass moves both, each on a DIFFERENT evidence
+    kind, which is exactly why the fixture carries two:
+
+    * `/events/stream` declares `produces = TEXT_EVENT_STREAM_VALUE`, so the
+      MEDIA rung answers it off the row's own `produces` column. Its return
+      type would have answered too — but the media rung runs first, and the
+      column is there to be read.
+    * `/events/emitter` declares NO `produces` at all. Its media column is
+      NULL, so the media rung has nothing, and only the RETURN-TYPE rung can
+      reach it. Without this row the return-type rung would have no live
+      surface at all.
+
+    The two return types are also the two ends of the "marker anywhere in the
+    chain" rule (checkpoint answer 6, frozen off this same bytecode):
+    `emitterEvents` returns `SseEmitter` FLAT — no type arguments, the marker
+    IS the outer symbol — while `streamEvents` returns
+    `Flux<ServerSentEvent<OrderView>>`, whose outer symbol is an ordinary
+    reactive wrapper and whose marker sits in the MIDDLE link. A rule reading
+    only `returns.symbol` would answer the first and miss the second.
+
+    Everything else about both rows is untouched: same direction, same verb,
+    same path, same handler, same catalog, same `resolution`. This pass
+    writes one column."""
+    _, report = resolved_fixture
+    emitter, stream = _route(report, "/events/emitter"), _route(report, "/events/stream")
+
+    assert (emitter["protocol"], stream["protocol"]) == ("sse", "sse")
+    # Which evidence answered which, read off the rows' own columns.
+    assert emitter["produces"] is None and emitter["consumes"] is None
+    assert stream["produces"] == '["text/event-stream"]'
+    assert (
+        json.loads(emitter["handler_signature"])["returns"]["symbol"]
+        == "org/springframework/web/servlet/mvc/method/annotation/SseEmitter#"
+    )
+    returns = json.loads(stream["handler_signature"])["returns"]
+    assert returns["symbol"] == "reactor/core/publisher/Flux#"
+    assert returns["arguments"][0]["symbol"] == "org/springframework/http/codec/ServerSentEvent#"
+
+    for row in (emitter, stream):
+        assert row["direction"] == "inbound"
+        assert row["method"] == "GET"
+        assert row["resolution"] == "resolved"
+        # The catalog that DERIVED the row, unchanged: this pass reclassifies
+        # a row, it does not re-attribute it, and `spring-web.yml` is both the
+        # deriving catalog and the one whose `protocol_hint` block moved it.
+        assert row["catalog_id"] == "spring-web"
+    assert emitter["handler"].endswith("OrderEventsController#emitterEvents(sig_6e650372).")
+    assert stream["handler"].endswith("OrderEventsController#streamEvents(sig_ed469b30).")
+
+
+def test_nothing_but_the_two_sse_routes_moves(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """The pass's three promises, read off the whole live table rather than
+    off the two rows it touched.
+
+    *Scoped.* Only `spring-mvc.yml`/`spring-web.yml` declare a
+    `protocol_hint`, and both are `protocol: http`, so an http row is the only
+    thing that CAN move — the graphql, websocket and messaging rows are
+    untouchable rather than merely untouched. Their counts are the same
+    numbers their own tasks froze.
+
+    *No row created or removed.* 117 before, 117 after: the two rows left the
+    http bucket and arrived in the sse one, and nothing else changed size.
+
+    *Every other http row stayed.* The http bucket is exactly two smaller,
+    and the identities it lost are exactly the two SSE paths — pinned by
+    subtracting them rather than by re-listing 30-odd routes, so a row moving
+    for the wrong reason shows up as a missing identity here."""
+    _, report = resolved_fixture
+    counts: dict[object, int] = {}
+    for row in report.endpoints:
+        counts[row["protocol"]] = counts.get(row["protocol"], 0) + 1
+
+    assert counts == {
+        "graphql": 11,
+        # 54 + 2: the prefix-seam controllers, one route each. They ride the
+        # same `spring-web.yml` `protocol_hint` every other http row does and
+        # are equally untouched by it.
+        "http": 56,
+        "jms": 8,
+        "kafka": 22,
+        "pubsub": 6,
+        "sqs": 7,
+        "sse": 2,
+        "websocket": 5,
+    }
+    assert sum(counts.values()) == len(report.endpoints) == 117
+    assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
+        "/events/emitter",
+        "/events/stream",
+    }
+    # The http rows the reclassification did NOT take, by wire identity: every
+    # inbound route the fixture still exposes over plain HTTP.
+    assert not {e["path"] for e in report.endpoints if e["protocol"] == "http"} & {
+        "/events/emitter",
+        "/events/stream",
+    }
+
+
+def test_the_websocket_frame_row_is_untouched_by_the_reclassification(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`/live` is the nearest neighbour this pass has — another streaming,
+    long-lived, HTTP-adjacent channel — and it is out of reach: its protocol
+    is `websocket`, which no catalog names as a hint SOURCE, so no evidence on
+    it could move it even if it carried some.
+
+    Re-pinned whole rather than by protocol alone (Task 5 froze these same
+    values): a raw frame stays untyped and its format stays `unresolved`,
+    which is the one live row in this fixture proving the SSE work put nothing
+    new into the ladder's weakest rung."""
+    _, report = resolved_fixture
+    row = _websocket_row(report, "inbound", "/live")
+
+    assert row["protocol"] == "websocket"
+    assert (row["format"], row["format_resolution"]) == (None, "unresolved")
+    assert row["request_shape"] is None and row["response_shape"] is None
+
+
+def test_an_sse_rows_format_is_assumed_never_read_off_the_envelope(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """The format-honesty half of 2H design §6, live.
+
+    `text/event-stream` is deliberately absent from `media_formats` — it is
+    the ENVELOPE, not the payload — so `/events/stream` carries a declared
+    MIME string that the format ladder's rung 2 maps to nothing at all, and
+    falls past it. Both rows land on rung 5's framework default instead:
+    `json`, at `narrowed`, because Jackson is on this module's classpath and
+    NOTHING on either row states the wire.
+
+    `narrowed` is the whole point. An SSE event's `data:` line is JSON in
+    practice and by nobody's declaration, and `resolved` here would make that
+    convention look like an observation. The rendered document says `json
+    (assumed)`.
+
+    Rung 1 is NOT what answers these: `sse` has no `format_fixed` entry on any
+    catalog, because SSE's fixedness is the envelope only. The graphql rows
+    beside them, which DO have one, are re-pinned here as the contrast — the
+    same `(json, resolved)` Task 2 froze, unmoved by this pass."""
+    _, report = resolved_fixture
+
+    assert {
+        (e["path"], e["format"], e["format_resolution"])
+        for e in report.endpoints
+        if e["protocol"] == "sse"
+    } == {
+        ("/events/emitter", "json", "narrowed"),
+        ("/events/stream", "json", "narrowed"),
+    }
+    assert {
+        (e["format"], e["format_resolution"])
+        for e in report.endpoints
+        if e["protocol"] == "graphql"
+    } == {("json", "resolved")}
+
+
+def test_a_streams_per_event_payload_unwraps_through_the_sse_envelope(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """2H design §6's payload sentence, live: `Flux<ServerSentEvent<T>>`
+    reaches `T` through the existing PTR/generic machinery.
+
+    Two envelopes peel, not one. `rooting.py` unwraps RECURSIVELY, so a single
+    `wrappers` entry for `ServerSentEvent` (added on every catalog carrying the
+    Flux/Mono family, verbatim, per that block's own duplication convention) is
+    the whole remedy: `Flux` peels as `streaming`, `ServerSentEvent` peels as
+    `http_envelope`, and the walk stops at `OrderView` — an ordinary declared
+    type with field facts of its own. Before the entry existed the walk stopped
+    at the envelope and published the ENVELOPE TYPE as the contract.
+
+    `/events/emitter` does NOT and cannot follow: `SseEmitter` is a callback
+    handle, not a generic container — its `TypeRef` carries no type arguments
+    at all, so nothing in the signature names the events it will push and no
+    unwrapping rule could reach a payload. It stays the honestly-open envelope
+    type, which is the right answer rather than a missing one, and the rendered
+    document discloses it under "Not expanded" rather than publishing an empty
+    contract as a complete one (pinned in `tests/e2e/test_vertical_slice.py`).
+
+    `OrderView` is itself `open` — its `HttpHeaders` field is third-party and
+    unexpanded, which the fixture's own source comment says outright — and that
+    is unchanged by this task: the point here is that the SSE row reaches the
+    SAME shape every other `OrderView`-carrying row reaches."""
+    workspace, report = resolved_fixture
+    emitter, stream = _route(report, "/events/emitter"), _route(report, "/events/stream")
+
+    assert emitter["request_shape"] is None and stream["request_shape"] is None
+    assert (
+        json.loads(stream["response_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+    )
+    assert (
+        json.loads(emitter["response_shape"])["shape_id"]
+        == "org/springframework/web/servlet/mvc/method/annotation/SseEmitter#"
+    )
+    # The envelope type is no longer a shape at all: nothing references it, so
+    # nothing rooted it, so it was never expanded — which is the difference
+    # between "unwrapped" and "unwrapped and left behind as an open type".
+    shapes = {str(row["shape_id"]) for row in workspace.query("shapes")}
+    assert "org/springframework/http/codec/ServerSentEvent#" not in shapes
+    assert "org/springframework/web/servlet/mvc/method/annotation/SseEmitter#" in shapes
+    assert "com/acme/orders/contracts/OrderView#" in shapes
 
 
 # --- Task 10: the three listener catalogs, end to end, on real bytecode ---
@@ -1797,6 +2468,19 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
     # declares `produces` only, `consumes` NULL (no `consumes` attribute on
     # its own `@PostMapping`) — these three are the only pre-existing
     # non-NULL media in the table.
+    #
+    # 2H Task 1 adds a fourth: `OrderEventsController#streamEvents`'s
+    # `@GetMapping(produces = TEXT_EVENT_STREAM_VALUE)` declares its own
+    # media, `consumes` NULL. `emitterEvents` declares neither (no
+    # `produces` on its own `@GetMapping`), so it carries no row here at
+    # all.
+    #
+    # That fourth row reads `sse` as of 2H Task 6, and the MEDIA is why: the
+    # `protocol_hint` pass reclassified it off this very column. The MIME
+    # string it kept is unchanged — a stamp that never fired here still never
+    # fires — and it names a protocol, never a format (`spring-web.yml`'s
+    # `media_formats` says at length why `text/event-stream` is absent from
+    # that table).
     declared = {
         (e["protocol"], e["path"], e["consumes"], e["produces"])
         for e in report.endpoints
@@ -1806,6 +2490,7 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
         ("http", "/v1/orders/{id}", None, json_media),
         ("http", "/v1/orders/detailed", json_media, json_media),
         ("http", "/v1/orders/proto-orders", None, json_media),
+        ("sse", "/events/stream", None, '["text/event-stream"]'),
     }
 
 
@@ -1859,6 +2544,22 @@ def test_the_format_ladder_answers_every_live_row(
     assert all(
         (e["format"] is None) == (e["format_resolution"] == "unresolved") for e in report.endpoints
     )
+
+    # Rung 1 — FIRST LIVE SURFACE (2H Task 2). The mechanism shipped in 2G
+    # with no catalog owning a fixed-format protocol, so it had never fired
+    # outside a unit test; the three GraphQL catalogs each declare
+    # `format_fixed: {graphql: json}` and every graphql row is answered by it.
+    # `resolved`, not `narrowed`: GraphQL's payload envelope is JSON by
+    # definition, so this is the protocol stating its own wire, not a
+    # framework default being assumed.
+    #
+    # Three catalogs declare the identical entry and the ladder unions them —
+    # a contradiction between two would be refused rather than resolved, which
+    # is what keeps the three copies from drifting silently.
+    assert {answer for key, answer in answers.items() if key[0] == "graphql"} == {
+        ("json", "resolved")
+    }
+    assert len([e for e in report.endpoints if e["protocol"] == "graphql"]) == 11
 
     # Rung 2 — the only three HTTP routes whose mapping annotations declare a
     # media type at all.
@@ -1919,10 +2620,32 @@ def test_the_format_ladder_answers_every_live_row(
     # which reads a declared payload TYPE and finds none behind a byte array.
     # That is the binding observable in this run — before it, all five of the
     # new rows fell to rung 6.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 42
+    # + 2 with 2H Task 1: `/events/emitter` (no declared media at all, an
+    # `SseEmitter` return carrying no payload type the ladder can read
+    # either — rung 5's assumed default) and `/events/stream` (its declared
+    # `text/event-stream` media matches no rung-2 MIME the ladder knows, so
+    # it falls through to the same assumed default). Neither is a new rung
+    # 3/4 answer — rung 3 stays kafka-only, and rung 4 has no live surface
+    # here, per this test's own docstring.
+    # + 4 with 2H Task 5: `/orders/place` (request AND response both
+    # `OrderView`, but ONE row), `/orders/board` (response only), `place`'s
+    # own resolved `@SendTo` reply, and `board`'s own UNRESOLVED reply —
+    # rung 5 answers off the row's declared payload TYPE alone, which
+    # `board`'s reply still carries (`OrderView`) even though its own
+    # `resolution` is `unresolved` for a completely different reason (no
+    # destination named); `endpoints.resolution` and `format_resolution` are
+    # two different columns answering two different questions, and this row
+    # is the fixture's own live proof they can disagree.
+    # + 2: the two prefix-seam routes, which reach the same rung 5 default
+    # every other json-bodied http row here does.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 50
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 30
+    # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by
+    # definition (`jakarta-websocket.yml` declares no `request_body` block at
+    # all, and `onFrame` returns `void`), so this row carries no payload
+    # shape for rung 5 to read either, and falls all the way to rung 6.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 31
 
     # No rung saw two answers for one row anywhere in this fixture, so the
     # ledger holds no `format_conflict` at all — every row in it is the

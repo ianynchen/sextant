@@ -15,6 +15,7 @@ from sextant.application.resolve.engines import (
     config_join,
     fluent,
     interface_implementation,
+    schema_operations,
     single_call,
 )
 
@@ -24,7 +25,15 @@ from sextant.application.resolve.engines import (
 # a declared media type onto one — cannot run before the rows exist, so its
 # position is a property of the style, never a request the catalog file
 # makes. `config_join` is the first of them to ship.
-_RUNS_LAST = frozenset({"config_join"})
+#
+# `schema_operations` (2H design §3) is the second, for the same reason twice
+# over. It stamps a declared response shape onto rows other engines minted, so
+# it cannot precede them; and its own rows meet the insert-if-absent guard
+# LAST on purpose — a schema states an operation, an annotation states the
+# operation AND the code serving it, and running afterwards is the whole of
+# what makes the annotation row the one that survives. First-writer agreement
+# by ordering, with no second rule to keep in step.
+_RUNS_LAST = frozenset({"config_join", "schema_operations"})
 
 # Within the runs-last group, the same reason applies once more, one level
 # down (fix round 1, M-3): a style whose catalogs may EITHER derive rows or
@@ -64,13 +73,16 @@ def derive_endpoints(
     # inbound before outbound, filename breaking the tie within a direction,
     # which is the loader's own order.
     #
-    # One style sorts ahead of all of that, or rather behind it: a `_RUNS_LAST`
-    # style enriches rows the other engines minted (above), so its own
-    # declared direction says nothing about when it must run. Its rows are
-    # therefore also the last to face `derive_call_endpoints.sql`'s
-    # insert-if-absent guard, which is a real consequence and not an
-    # accident: a wire identity another catalog already recorded stays that
-    # catalog's row.
+    # Some styles sort ahead of all of that, or rather behind it: a
+    # `_RUNS_LAST` style enriches rows the other engines minted (above), so
+    # its own declared direction says nothing about when it must run. Its rows
+    # therefore face `derive_call_endpoints.sql`'s insert-if-absent guard
+    # after every ANNOTATION and CALL-SITE style has written — which is a real
+    # consequence and not an accident: a wire identity one of those catalogs
+    # already recorded stays that catalog's row. (Not "last" outright: within
+    # the runs-last group the ranks below decide, and two members of it are
+    # ordered against each other by `_derives_rows` and then the tiebreaks,
+    # exactly as any two catalogs are.)
     #
     # `_derives_rows` then orders WITHIN that group, for the same reason one
     # level down: a catalog that only stamps must not run before one that
@@ -132,4 +144,5 @@ _ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
     "interface_implementation": interface_implementation.run,
     "combinator": combinator.run,
     "config_join": config_join.run,
+    "schema_operations": schema_operations.run,
 }

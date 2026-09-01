@@ -161,10 +161,21 @@ goes in `ext`, never into a widened set.
 `persistence` carries `target_kind`: `database`, `cache`, `file`. A sub-field, so that
 splitting it later is a rendering choice rather than a re-index.
 
-**`protocol`** — `http`, `soap`, `grpc`, `kafka`, `jms`, `sqs`, `pubsub`. `message` is
+**`protocol`** — `http`, `soap`, `grpc`, `kafka`, `jms`, `sqs`, `pubsub`, `graphql`,
+`websocket`, `sse`. `message` is
 retired: it was reserved and never declared by any shipped catalog, so nothing migrates.
 The broker family is the protocol because linking gates on protocol equality (DR-5), and
 a Kafka topic can never be answered by an SQS queue.
+
+**The last three are HTTP-ADJACENT and are still their own protocols, not flavours of
+`http`** (Phase 2H). [D01](D01-graph-schema.md) §3's wire identity is protocol-scoped,
+and none of the three *is* an HTTP route: a GraphQL schema is N boundaries behind one
+POST path, a WebSocket connection fans into N destinations, and an SSE stream is a route
+whose return type turned it into something a request/response comparison cannot match
+against. They were declared in one edit because the set is closed (NFR-5) and all three
+are live today: `graphql` from the annotation and schema catalogs, `websocket` from the
+WebSocket/STOMP catalogs, `sse` only ever by RECLASSIFICATION — no catalog derives an
+`sse` row, `protocol_hint` moves one there ([D02](D02-catalog-schema.md) §2).
 
 **`control_flow_kind`** — `sequential`, `conditional`, `alternative`, `loop`, `handler`
 
@@ -415,7 +426,11 @@ links a schema runtime to do it.
   grammar (§1). It is what a gap names when a payload cannot be interpreted, and one
   holder emits one fact: a protobuf file's messages all share their file's descriptor, so
   a fact per message would be one payload copied once per type.
-- **`schema_format`** is `protobuf` or `avro`.
+- **`schema_format`** is `protobuf`, `avro` or `graphql`. It names the schema LANGUAGE
+  that described the payload, which is not the same question as what is on the wire:
+  protobuf and Avro define an encoding, GraphQL defines a type system and leaves the
+  encoding to the transport. [D02](D02-catalog-schema.md) §2c's rung 4 turns on exactly
+  that distinction.
 - **`payload`** is base64 for a binary format and the text itself for a textual one — a
   protobuf `FileDescriptorProto`'s bytes are base64; an Avro schema is JSON that was
   always JSON and travels verbatim, because re-encoding readable text costs a reader
@@ -443,6 +458,12 @@ Each such fact carries, beside its `fields`:
 - **`evidence`** — `compiler` for a compiled origin, `declared` for a source one. The
   shape's whole field list carries the one tier; a schema does not state some of its
   fields more confidently than others.
+- **`role`** — `query`, `mutation` or `subscription` where the schema names this type as
+  the entry point every operation of that kind is addressed against, and NULL for the
+  ordinary payload types, which is nearly all of them. It is a fact and not a derivation
+  because a schema may *rename* its roots, so which type holds the role cannot be
+  recovered from the type's own name by anything downstream — and only the interpreter
+  may read a schema format at all.
 
 Per field: the schema's own `name` and the encoded `wire_name` (a protobuf `json_name`,
 **read from the descriptor, never computed** — protoc puts the computed default and an

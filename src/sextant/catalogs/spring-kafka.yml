@@ -29,6 +29,12 @@ matches:
     # listener) becomes the path prefix for every `@KafkaHandler` method the
     # class declares.
     prefix_from: [topics]
+    # DELIBERATELY no `path_separator` (unlike every path-addressed catalog
+    # here): the prefix above is a TOPIC NAME, and a topic name has no
+    # segments to join. A `/` at this seam would invent a destination no
+    # broker carries. The seam stays a bare concatenation, which for a
+    # `@KafkaHandler` — carrying neither `topics` nor `topicPattern`, so an
+    # empty suffix — is the class-level topic unchanged.
     method_from: method
     # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
     all_methods: []
