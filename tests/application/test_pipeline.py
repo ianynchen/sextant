@@ -491,6 +491,28 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("query", "dgsOrders"),
         (None, "Order.dgsLines"),
         ("query", "mpOrders"),
+        # 2H Task 5: the WebSocket/STOMP surface — verbless like every other
+        # messaging row (D02 §2, amended), `method` NULL. `LiveEndpoint`'s
+        # `@ServerEndpoint("/live")` + `@OnMessage onFrame` is the
+        # `@KafkaHandler` prefix shape (checkpoint answer 5): no HTTP or
+        # messaging path collides with it.
+        (None, "/live"),
+        # `OrderStompController`: class-level `@MessageMapping("/orders")`
+        # composes with `place`'s own `@MessageMapping("/place")` and
+        # `board`'s `@SubscribeMapping("/board")` — bare `prefix || suffix`,
+        # no separator, matching the fixture's own source comments exactly.
+        (None, "/orders/place"),
+        (None, "/orders/board"),
+        # `place`'s own `@SendTo("/topic/order-placed")` — the reply block's
+        # resolved row (D02 §2's `reply`, spring-kafka.yml's own precedent,
+        # now serving a second protocol with zero engine change).
+        (None, "/topic/order-placed"),
+        # `board` is ALSO value-returning (`OrderView`) and declares no
+        # `@SendTo` — the SAME dynamic-reply shape `escalate`'s own kafka row
+        # keeps (comment above, line ~285): a path-NULL, `unresolved` reply
+        # row. It shares the existing `(None, None)` tuple already in this
+        # set, so the SET gains no new entry for it even though the endpoint
+        # count below does (asserted by caller below).
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -672,7 +694,23 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # TWELVE annotated methods produce those 11 rows: `orphanField` names a
     # field of a type nothing states, so it derives none at all (pinned by
     # `test_a_resolver_whose_scope_no_annotation_states_derives_no_row`).
-    assert len(report.endpoints) == 110
+    # `schema_operations` (2H Task 4) adds nothing to THIS particular
+    # count: its one new row (`query auditTrail`) comes from the SDL reader's
+    # own `declared_shape`/schema facts, which this fixture never loads (this
+    # test's own docstring precedent, `test_the_format_ladder_answers_every_
+    # live_row`'s docstring: "this fixture resolves WITHOUT the descriptor
+    # interpreter") — pinned instead in `tests/e2e/test_vertical_slice.py`,
+    # where the interpreter runs. 110 stands unmoved through Task 4.
+    #
+    # 2H Task 5 adds 5: the WebSocket/STOMP surface — 3 inbound
+    # (`jakarta-websocket.yml`'s `/live`, `spring-stomp.yml`'s
+    # `/orders/place`/`/orders/board`) and 2 outbound (`place`'s own
+    # `@SendTo`, resolved; `board`'s own dynamic reply, unresolved — the
+    # `escalate` shape again, a different protocol). None merges with
+    # anything already in the fixture: no messaging destination or HTTP path
+    # collides with a WebSocket one, and a `direction: inbound` catalog never
+    # meets an outbound row on its own. 110 + 5 = 115.
+    assert len(report.endpoints) == 115
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
@@ -998,6 +1036,128 @@ def test_an_absent_annotation_attribute_never_derives_an_empty_path(
         for e in report.endpoints
         if e["path"] == ""
     ] == []
+
+
+# --- 2H Task 5: WebSocket/STOMP, end to end, on real bytecode ------------
+
+
+def _websocket_row(report: ResolveReport, direction: str, path: str | None) -> dict:
+    [row] = [
+        e
+        for e in report.endpoints
+        if e["protocol"] == "websocket" and e["direction"] == direction and e["path"] == path
+    ]
+    return row
+
+
+def test_a_jakarta_websocket_frame_handler_derives_a_verbless_row_with_no_shapes_or_format(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`LiveEndpoint`'s class-level `@ServerEndpoint("/live")` + method-level
+    `@OnMessage onFrame(String frame)` — checkpoint answer 5's `@KafkaHandler`
+    prefix shape (a scalar type-level annotation doubling as
+    `prefix_annotation`, an argless method-level one composing an empty
+    suffix onto it), verified live rather than only unit-tested.
+
+    Both shapes stay NULL (`jakarta-websocket.yml` deliberately declares no
+    `request_body` block at all, and `onFrame` returns `void`) and format
+    stays unresolved: a raw WebSocket frame is untyped by definition, and
+    nothing in the ladder may narrow it — not even rung 5's Jackson-presence
+    default, which requires a declared payload TYPE this row has none of.
+    """
+    _, report = resolved_fixture
+    row = _websocket_row(report, "inbound", "/live")
+
+    assert row["method"] is None
+    assert row["handler"].endswith("LiveEndpoint#onFrame(sig_a7421bf5).")
+    assert row["resolution"] == "resolved"
+    assert row["catalog_id"] == "jakarta-websocket"
+    assert row["request_shape"] is None
+    assert row["response_shape"] is None
+    assert row["format"] is None
+    assert row["format_resolution"] == "unresolved"
+
+
+def test_a_stomp_class_level_prefix_composes_with_both_its_method_mappings(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`OrderStompController`'s class-level `@MessageMapping("/orders")`
+    composes with `place`'s own `@MessageMapping("/place")` AND `board`'s
+    `@SubscribeMapping("/board")` — bare `prefix || suffix`, no separator,
+    exactly the fixture's own source comments (checkpoint answer 5) —
+    proving `@MessageMapping` plays both the `prefix_annotation` role (class
+    level) and an ordinary `mapping.annotations` entry (method level) in one
+    catalog with no collision, the same double duty spring-kafka.yml's
+    class-level `@KafkaListener` already plays for `@KafkaHandler`.
+
+    `place`'s own bare, unannotated `OrderView order` parameter reaches
+    `request_shape` through the `sole_unannotated` fallback (the same
+    `@Payload` vocabulary spring-kafka.yml/spring-jms.yml already read);
+    `board` declares no parameter at all, so it derives no request shape."""
+    _, report = resolved_fixture
+    place = _websocket_row(report, "inbound", "/orders/place")
+    board = _websocket_row(report, "inbound", "/orders/board")
+
+    assert place["method"] is None and board["method"] is None
+    assert place["handler"].endswith("OrderStompController#place(sig_961974f8).")
+    assert board["handler"].endswith("OrderStompController#board(sig_26be7569).")
+    for row in (place, board):
+        assert row["resolution"] == "resolved"
+        assert row["catalog_id"] == "spring-stomp"
+    assert json.loads(place["request_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+    assert json.loads(place["response_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+    assert board["request_shape"] is None
+    assert json.loads(board["response_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+
+
+def test_a_stomp_handlers_sendto_reply_derives_a_resolved_outbound_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`place`'s own `@SendTo("/topic/order-placed")` — D02 §2's `reply`
+    block, spring-kafka.yml's own precedent, now pointed at a second
+    protocol with zero engine change (the checkpoint's own ruling). The
+    reply's payload is `place`'s own return type (`OrderView`), carried as
+    the reply row's `request_shape` exactly as `annotation_driven.py::
+    _reply_row` documents — a reply has no `response_shape` of its own."""
+    _, report = resolved_fixture
+    reply = _websocket_row(report, "outbound", "/topic/order-placed")
+
+    assert reply["method"] is None
+    assert reply["handler"] is None
+    assert reply["caller"].endswith("OrderStompController#place(sig_961974f8).")
+    assert reply["resolution"] == "resolved"
+    assert reply["catalog_id"] == "spring-stomp"
+    assert json.loads(reply["request_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+    assert reply["response_shape"] is None
+
+
+def test_a_value_returning_stomp_handler_with_no_sendto_derives_an_unresolved_reply_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`board`'s own `@SubscribeMapping` handler ALSO returns `OrderView` and
+    declares no `@SendTo` at all — the SAME dynamic-reply shape kafka's own
+    `escalate` listener already exercises (`test_a_value_returning_listener_
+    with_no_sendto_derives_an_unresolved_reply_row`, above): the reply
+    destination is real (a STOMP client that subscribed gets a reply) but
+    unnamed anywhere this catalog's own annotations can see, so the row is
+    `path` NULL, `unresolved` — never silently dropped (D02 §2's
+    unresolved-is-an-answer). It shares the `caller`, but not the wire
+    identity, with `board`'s own inbound row above."""
+    _, report = resolved_fixture
+    [reply] = [
+        e
+        for e in report.endpoints
+        if e["protocol"] == "websocket"
+        and e["direction"] == "outbound"
+        and e["caller"] is not None
+        and "OrderStompController#board(" in e["caller"]
+    ]
+
+    assert reply["path"] is None
+    assert reply["method"] is None
+    assert reply["resolution"] == "unresolved"
+    assert reply["catalog_id"] == "spring-stomp"
+    assert json.loads(reply["request_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
 
 
 # --- Task 10: the three listener catalogs, end to end, on real bytecode ---
@@ -2223,10 +2383,23 @@ def test_the_format_ladder_answers_every_live_row(
     # it falls through to the same assumed default). Neither is a new rung
     # 3/4 answer — rung 3 stays kafka-only, and rung 4 has no live surface
     # here, per this test's own docstring.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 44
+    # + 4 with 2H Task 5: `/orders/place` (request AND response both
+    # `OrderView`, but ONE row), `/orders/board` (response only), `place`'s
+    # own resolved `@SendTo` reply, and `board`'s own UNRESOLVED reply —
+    # rung 5 answers off the row's declared payload TYPE alone, which
+    # `board`'s reply still carries (`OrderView`) even though its own
+    # `resolution` is `unresolved` for a completely different reason (no
+    # destination named); `endpoints.resolution` and `format_resolution` are
+    # two different columns answering two different questions, and this row
+    # is the fixture's own live proof they can disagree.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 48
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 30
+    # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by
+    # definition (`jakarta-websocket.yml` declares no `request_body` block at
+    # all, and `onFrame` returns `void`), so this row carries no payload
+    # shape for rung 5 to read either, and falls all the way to rung 6.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 31
 
     # No rung saw two answers for one row anywhere in this fixture, so the
     # ledger holds no `format_conflict` at all — every row in it is the

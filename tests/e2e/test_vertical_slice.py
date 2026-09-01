@@ -109,6 +109,43 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     assert (
         "Unresolved endpoint derivation: `spring-cloud-stream` — a composed selection expression."
     ) in document
+    # 2H Task 5: websocket rows ride the verbless, messaging-style rendering
+    # (kafka precedent) — `_VERBLESS_PROTOCOLS` derives from D00's whole
+    # protocol set minus the verbed ones, so `websocket` lands in it with no
+    # renderer change at all (only `graphql` joined the verbed/qualified
+    # sets in this phase). `/live`'s frame is untyped, so its own format
+    # column reads `unresolved`, never a guess; `/orders/place` and
+    # `/orders/board` both read `json (assumed)` — rung 5's framework
+    # default, the ladder's own live answer today (Task 6 re-pins this if
+    # its own work moves it, per the checkpoint).
+    assert (
+        "`websocket /live` | `com/example/orders/ws/LiveEndpoint#onFrame(sig_a7421bf5).` | - → - | unresolved | resolved |"
+        in document
+    )
+    assert (
+        "`websocket /orders/place` | `com/example/orders/ws/OrderStompController#place(sig_961974f8).` | - → - | json (assumed) | resolved |"
+        in document
+    )
+    assert (
+        "`websocket /orders/board` | `com/example/orders/ws/OrderStompController#board(sig_26be7569).` | - → - | json (assumed) | resolved |"
+        in document
+    )
+    # `place`'s own resolved `@SendTo` reply, and `board`'s own dynamic
+    # reply — the SAME `escalate`-shaped unresolved row (D02 §2's reply
+    # block), rendered `websocket (unresolved)` exactly as every other
+    # path-NULL outbound row already is.
+    assert (
+        "`websocket /topic/order-placed` | unresolved | `com/example/orders/ws/OrderStompController#place(sig_961974f8).` | json (assumed) | resolved |"
+        in document
+    )
+    assert (
+        "`websocket (unresolved)` | unresolved | `com/example/orders/ws/OrderStompController#board(sig_26be7569).` | json (assumed) | unresolved |"
+        in document
+    )
+    assert (
+        "Unresolved endpoint derivation: `spring-stomp` — caller "
+        "`com/example/orders/ws/OrderStompController#board(sig_26be7569).`."
+    ) in document
 
 
 def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_path: Path):
@@ -246,6 +283,17 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # keeps that row — which is the whole of how first-writer agreement works
     # here. Still nothing outbound, and no existing bucket moves.
     # `110 + 1 = 111` total.
+    # 2H Task 5 (WebSocket/STOMP catalogs): +3 websocket inbound —
+    # `jakarta-websocket.yml`'s `/live` (checkpoint answer 5's
+    # `@KafkaHandler` prefix shape) and `spring-stomp.yml`'s
+    # `/orders/place`/`/orders/board` (class-level `@MessageMapping` prefix
+    # composition) — and +2 websocket outbound — `place`'s own resolved
+    # `@SendTo("/topic/order-placed")` reply, and `board`'s own dynamic
+    # reply (value-returning, no `@SendTo`, the `escalate` shape again —
+    # `path` NULL, `unresolved`, still counted here: metadata buckets every
+    # row regardless of `resolution`). A NEW protocol bucket, the third the
+    # 2H phase adds (`graphql`, then `sse` at Task 6, now `websocket`); no
+    # existing bucket moves. `111 + 5 = 116` total.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "graphql": 12,
@@ -254,6 +302,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "kafka": 15,
         "pubsub": 3,
         "sqs": 4,
+        "websocket": 3,
     }
     assert metadata["endpoints"]["outbound"] == {
         "http": 23,
@@ -261,6 +310,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "kafka": 10,
         "pubsub": 4,
         "sqs": 3,
+        "websocket": 2,
     }
     # 2F Task 9: metadata.json's own "environments" (D06 §3), populated from
     # `resolved_config`'s distinct environments — the fixture's own
@@ -355,7 +405,13 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # 2H Task 4: +1 inbound, the schema-first `query auditTrail` — inbound
     # 67 + 1 = 68, the 111-endpoint total (5 + 68 + 38 = 111). It is inbound
     # and unmerged for the same reason every other GraphQL row is.
-    assert rows == [("both", 5), ("inbound", 68), ("outbound", 38)]
+    # 2H Task 5: +3 inbound (`/live`, `/orders/place`, `/orders/board`) and
+    # +2 outbound (`place`'s resolved `@SendTo` reply, `board`'s own
+    # unresolved dynamic reply) — inbound 68 + 3 = 71, outbound 38 + 2 = 40,
+    # `both` untouched (a `direction: inbound` catalog's own rows never meet
+    # an outbound row on any protocol nothing else in the fixture names) —
+    # the 116-endpoint total (5 + 71 + 40 = 116).
+    assert rows == [("both", 5), ("inbound", 71), ("outbound", 40)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
