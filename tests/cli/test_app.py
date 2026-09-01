@@ -105,7 +105,13 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # this test exists to catch.
     # + 2: the prefix-seam controllers (`SeamController`, `RootSeamController`)
     # — one more class file each, one more document each.
-    assert metadata["coverage"]["documents"] == 98
+    # + 5: 2I Task 1's SOAP surfaces compile to five more class files
+    # (`OrderSoapEndpoint`, `BillingWebService`, `LegacyBillingWebService`,
+    # `BillingSoapClient`, `PlaceOrderRequest`), one document each. The new
+    # `src/main/resources/wsdl/*.wsdl`/`*.xsd` files add nothing here: no
+    # reader claims those extensions yet (readers claim by extension), so
+    # they never reach either the config or the schema read loop.
+    assert metadata["coverage"]["documents"] == 103
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

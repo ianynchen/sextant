@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Document/literal WSDL for the SOAP surfaces (2I design). quoteOrder is
+     the operation no annotation implements anywhere in this fixture — the
+     schema-first pin; the wsdl:import below is the cross-file pin (this
+     document is meaningless without orders-types.xsd). -->
+<wsdl:definitions name="OrdersService"
+    targetNamespace="http://orders.example.com/ws"
+    xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+    xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+    xmlns:tns="http://orders.example.com/ws"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+
+  <wsdl:types>
+    <xsd:schema>
+      <xsd:import namespace="http://orders.example.com/ws" schemaLocation="orders-types.xsd"/>
+    </xsd:schema>
+  </wsdl:types>
+
+  <wsdl:message name="placeOrderRequestMessage">
+    <wsdl:part name="parameters" element="tns:placeOrderRequest"/>
+  </wsdl:message>
+
+  <wsdl:message name="quoteOrderRequestMessage">
+    <wsdl:part name="parameters" element="tns:quoteOrderRequest"/>
+  </wsdl:message>
+
+  <wsdl:portType name="OrdersPort">
+    <wsdl:operation name="placeOrder">
+      <wsdl:input message="tns:placeOrderRequestMessage"/>
+    </wsdl:operation>
+    <wsdl:operation name="quoteOrder">
+      <wsdl:input message="tns:quoteOrderRequestMessage"/>
+    </wsdl:operation>
+  </wsdl:portType>
+
+  <wsdl:binding name="OrdersBinding" type="tns:OrdersPort">
+    <soap:binding transport="http://schemas.xmlsoap.org/soap/http" style="document"/>
+    <wsdl:operation name="placeOrder">
+      <soap:operation soapAction="http://orders.example.com/action/placeOrder"/>
+      <wsdl:input>
+        <soap:body use="literal"/>
+      </wsdl:input>
+    </wsdl:operation>
+    <wsdl:operation name="quoteOrder">
+      <soap:operation soapAction="http://orders.example.com/action/quoteOrder"/>
+      <wsdl:input>
+        <soap:body use="literal"/>
+      </wsdl:input>
+    </wsdl:operation>
+  </wsdl:binding>
+
+  <wsdl:service name="OrdersService">
+    <wsdl:port name="OrdersPort" binding="tns:OrdersBinding">
+      <soap:address location="http://orders.internal.example.com/ws"/>
+    </wsdl:port>
+  </wsdl:service>
+
+</wsdl:definitions>

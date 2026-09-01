@@ -42,6 +42,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "BillingClients.jsonl",
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
+        "BillingSoapClient.jsonl",
+        "BillingWebService.jsonl",
         "ClassLevelListener.jsonl",
         "CommonProtos$Money$1.jsonl",
         "CommonProtos$Money$Builder.jsonl",
@@ -63,6 +65,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "KotlinOrderRoutes$ktRoutes$1$1$3$1.jsonl",
         "KotlinOrderRoutes.jsonl",
         "LegacyBillingApi.jsonl",
+        "LegacyBillingWebService.jsonl",
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
@@ -98,6 +101,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderResult.jsonl",
         "OrderRoutes.jsonl",
         "OrderService.jsonl",
+        "OrderSoapEndpoint.jsonl",
         "OrderStatus.jsonl",
         "OrderStompController.jsonl",
         "OrderStreamBindings.jsonl",
@@ -108,6 +112,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
         "ParsedPayloadListeners.jsonl",
+        "PlaceOrderRequest.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
         "RawKafkaMessageSender.jsonl",
@@ -132,7 +137,10 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # — two class files, one document each. Two types rather than one because
     # a class states its prefix once, and the two seam forms need two
     # different prefixes.
-    assert report.documents == 89
+    # + 5: 2I Task 1's SOAP surfaces — `OrderSoapEndpoint`, `BillingWebService`,
+    # `LegacyBillingWebService`, `BillingSoapClient` and the `PlaceOrderRequest`
+    # payload, each its own class file.
+    assert report.documents == 94
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -162,6 +170,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "BillingClients.jsonl",
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
+        "BillingSoapClient.jsonl",
+        "BillingWebService.jsonl",
         "ClassLevelListener.jsonl",
         "CommonProtos$Money$1.jsonl",
         "CommonProtos$Money$Builder.jsonl",
@@ -183,6 +193,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "KotlinOrderRoutes$ktRoutes$1$1$3$1.jsonl",
         "KotlinOrderRoutes.jsonl",
         "LegacyBillingApi.jsonl",
+        "LegacyBillingWebService.jsonl",
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
@@ -218,6 +229,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderResult.jsonl",
         "OrderRoutes.jsonl",
         "OrderService.jsonl",
+        "OrderSoapEndpoint.jsonl",
         "OrderStatus.jsonl",
         "OrderStompController.jsonl",
         "OrderStreamBindings.jsonl",
@@ -228,6 +240,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
         "ParsedPayloadListeners.jsonl",
+        "PlaceOrderRequest.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
         "RawKafkaMessageSender.jsonl",

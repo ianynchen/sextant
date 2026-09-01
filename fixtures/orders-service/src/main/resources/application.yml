@@ -16,6 +16,13 @@ orders:
 billing:
   url: http://billing.internal
 
+# soap.billing.uri — read by BillingSoapClient's constructor @Value, feeding
+# WebServiceTemplate.setDefaultUri (2I design). Default-environment value;
+# application-prod.yml overrides it for prod, mirroring billing.url above.
+soap:
+  billing:
+    uri: http://billing.internal.example.com/ws
+
 # Overrides bootstrap.yml's value for the same key — the layering-order pin.
 boot:
   layer:
