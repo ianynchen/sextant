@@ -119,6 +119,18 @@
       <artifactId>avro</artifactId>
       <version>1.12.2</version>
     </dependency>
+    <!-- Jackson 3, whose whole relocation is the package rename
+         `com.fasterxml.jackson` -> `tools.jackson` (2G design §7). Here so
+         the `parse_calls` row for the relocated `readValue` is exercised
+         against real bytecode rather than only against an invented owner in
+         a unit test: the catalog claim is that a new generation of a parse
+         library costs catalog rows and no code, and only a compiled call
+         site proves it. -->
+    <dependency>
+      <groupId>tools.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>3.1.4</version>
+    </dependency>
   </dependencies>
   <build>
     <plugins>

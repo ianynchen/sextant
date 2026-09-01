@@ -7,6 +7,7 @@ from click.testing import CliRunner
 
 from sextant.cli.app import cli
 from sextant.domain.factfile import read_fact_file
+from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
@@ -218,13 +219,18 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # 15 and 10. `87 + 4 = 91` total.
     # 2G Task 5 (declared shapes): +1 http inbound —
     # `POST /v1/orders/proto-orders`, unmerged. `91 + 1 = 92` total.
+    # 2G Task 7 (parse binding): +2 jms inbound and +3 sqs inbound — the
+    # bytes-only listeners in `messaging/parse`, whose destinations are
+    # unique to that file and merge with nothing. The pass binds a payload
+    # onto three of them and refuses two; both outcomes are still endpoint
+    # rows, so all five count. `92 + 5 = 97` total.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "http": 32,
-        "jms": 3,
+        "jms": 5,
         "kafka": 15,
         "pubsub": 3,
-        "sqs": 1,
+        "sqs": 4,
     }
     assert metadata["endpoints"]["outbound"] == {
         "http": 23,
@@ -312,4 +318,101 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # 2G Task 5 (declared shapes): +1 inbound, unmerged —
     # `POST /v1/orders/proto-orders`: inbound 48 + 1 = 49 — the 92-endpoint
     # total (5 + 49 + 38 = 92).
-    assert rows == [("both", 5), ("inbound", 49), ("outbound", 38)]
+    # 2G Task 7 (parse binding): +5 inbound, all unmerged — the bytes-only
+    # listeners in `messaging/parse`: inbound 49 + 5 = 54 — the 97-endpoint
+    # total (5 + 54 + 38 = 97).
+    assert rows == [("both", 5), ("inbound", 54), ("outbound", 38)]
+
+
+def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
+    tmp_path: Path,
+):
+    """2G Task 7's binding, end to end through the REAL command — and the one
+    place rung 4 of the format ladder (2G design §5) has a live surface.
+
+    `test_pipeline.py` resolves without the descriptor interpreter, so no
+    `declared_shape` fact exists there and the same rows read `json`/
+    `narrowed` off rung 5. Here the whole `analyze` runs: the interpreter
+    turns the fixture's embedded protobuf descriptor into declared shapes,
+    the parse binding puts one of those types on three bytes-only channels,
+    and rung 4 reads it back as the schema format at `narrowed` — never
+    `resolved`, because proto3 has a JSON encoding and a payload's TYPE is
+    not a statement about the bytes.
+
+    The two rows the binding REFUSED are pinned in the same breath: they keep
+    the byte array their signature declares, answer `unresolved`, and appear
+    in `open_questions` with the candidates the pass would not choose between.
+    A test that only pinned the successes could not tell a refusal from a
+    miss.
+    """
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    try:
+        answers = {
+            str(row["path"]): (row["request_shape"], row["format"], row["format_resolution"])
+            for row in workspace.query("endpoints")
+            if row["path"] is not None and str(row["path"]).startswith("parsed-")
+        }
+        questions = [
+            (str(row["path"]), str(row["question"]), json.loads(str(row["candidates"])))
+            for row in workspace.query("open_questions")
+        ]
+    finally:
+        workspace.close()
+
+    proto = json.dumps(
+        {
+            "nullable": True,
+            "shape_id": "com/example/orders/proto/OrderProtos$OrderRequest#",
+            "wire_format": "",
+            "wire_type": "object",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    bytes_payload = json.dumps(
+        {
+            "item": {"nullable": False, "wire_format": "int32", "wire_type": "integer"},
+            "nullable": True,
+            "wire_format": "",
+            "wire_type": "array",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert answers == {
+        # Rung A — the parse is in the handler itself.
+        "parsed-orders-inbound": (proto, "protobuf", "narrowed"),
+        # Rung B — one delegation hop, and the same callee reached from a
+        # second channel: multi-caller is not ambiguity.
+        "parsed-audit-queue": (proto, "protobuf", "narrowed"),
+        "parsed-shared-inbound": (proto, "protobuf", "narrowed"),
+        # Refused: two parses of one payload, and a parse two hops out.
+        "parsed-mixed-inbound": (bytes_payload, None, "unresolved"),
+        "parsed-relay-queue": (bytes_payload, None, "unresolved"),
+    }
+    assert [(path, question) for path, question, _ in questions] == [
+        ("parsed-relay-queue", "payload_binding"),
+        ("parsed-mixed-inbound", "payload_binding"),
+    ]
+    # The ambiguous row carries BOTH answers, and one of them comes through
+    # the relocated parser package — the Jackson-3-shaped catalog row,
+    # exercised against real bytecode rather than an invented owner.
+    assert [candidate["payload_type"] for candidate in questions[1][2]] == [
+        "com/acme/orders/contracts/OrderView#",
+        "com/example/orders/proto/OrderProtos$OrderRequest#",
+    ]
+    assert questions[1][2][0]["why"] == "tools/jackson/databind/json/JsonMapper#readValue"
+    # And the beyond-horizon row names the parse it refused, two hops out.
+    assert questions[0][2] == [
+        {
+            "hops": "2",
+            "payload_type": "com/example/orders/proto/OrderProtos$OrderRequest#",
+            "seen_in": "com/acme/orders/messaging/parse/OrderIngest#process(sig_2fd69fe6).",
+            "why": "com/example/orders/proto/OrderProtos$OrderRequest#parseFrom",
+        }
+    ]

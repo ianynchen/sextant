@@ -78,7 +78,11 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     )
     assert result.exit_code == 0, result.output
     metadata = json.loads((tmp_path / "metadata.json").read_text())
-    assert metadata["coverage"]["documents"] == 84
+    # 84 + 3: 2G Task 7's `messaging/parse` package compiles to three more
+    # class files (the listeners and the two delegation targets), one
+    # document each — a real source counted once, which is exactly what this
+    # test exists to keep true.
+    assert metadata["coverage"]["documents"] == 87
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

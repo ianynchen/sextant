@@ -59,6 +59,7 @@ class YamlCatalogSource:
                     format_fixed=raw.get("format_fixed", {}),
                     media_formats=raw.get("media_formats", {}),
                     json_default_markers=raw.get("json_default_markers", []),
+                    parse_calls=raw.get("parse_calls", {}),
                 )
             )
         return catalogs

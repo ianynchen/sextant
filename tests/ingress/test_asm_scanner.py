@@ -68,6 +68,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderController.jsonl",
         "OrderEvent.jsonl",
         "OrderEventsListener.jsonl",
+        "OrderIngest.jsonl",
         "OrderPageController.jsonl",
         "OrderProtos$OrderReply$1.jsonl",
         "OrderProtos$OrderReply$Builder.jsonl",
@@ -85,6 +86,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderProtos$OrderRequest.jsonl",
         "OrderProtos$OrderRequestOrBuilder.jsonl",
         "OrderProtos.jsonl",
+        "OrderRelay.jsonl",
         "OrderRequest.jsonl",
         "OrderResult$Detail.jsonl",
         "OrderResult.jsonl",
@@ -98,6 +100,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrdersApiController.jsonl",
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
+        "ParsedPayloadListeners.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
         "RawKafkaMessageSender.jsonl",
@@ -111,7 +114,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]
-    assert report.documents == 77
+    # 77 + 3: 2G Task 7's `messaging/parse` package — the listeners plus the
+    # two delegation targets its rungs follow.
+    assert report.documents == 80
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -167,6 +172,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderController.jsonl",
         "OrderEvent.jsonl",
         "OrderEventsListener.jsonl",
+        "OrderIngest.jsonl",
         "OrderPageController.jsonl",
         "OrderProtos$OrderReply$1.jsonl",
         "OrderProtos$OrderReply$Builder.jsonl",
@@ -184,6 +190,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderProtos$OrderRequest.jsonl",
         "OrderProtos$OrderRequestOrBuilder.jsonl",
         "OrderProtos.jsonl",
+        "OrderRelay.jsonl",
         "OrderRequest.jsonl",
         "OrderResult$Detail.jsonl",
         "OrderResult.jsonl",
@@ -197,6 +204,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrdersApiController.jsonl",
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
+        "ParsedPayloadListeners.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
         "RawKafkaMessageSender.jsonl",

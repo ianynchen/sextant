@@ -409,8 +409,12 @@ def test_messaging_gap_retires_and_both_lists_rotate_together():
     `test_every_machine_readable_gap_has_a_sentence_a_person_can_read` never
     masks a key that lost its sentence."""
     assert "messaging_endpoints_not_read" not in KNOWN_GAPS
-    assert len(KNOWN_GAPS) == 12
-    assert len(_GAPS) == 12
+    # Twelve became fourteen with 2G Task 7: the two boundaries the
+    # parse-binding pass refuses to cross — a payload parsed past the
+    # one-hop horizon, and a payload reaching two different parses — each
+    # arrive with their own sentence in the same position. Nothing retired.
+    assert len(KNOWN_GAPS) == 14
+    assert len(_GAPS) == 14
     assert not any("Messaging endpoints" in gap for gap in _GAPS)
 
 

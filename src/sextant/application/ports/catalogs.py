@@ -53,6 +53,13 @@ class Catalog:
     format_fixed: dict[str, str] = field(default_factory=dict)
     media_formats: dict[str, str] = field(default_factory=dict)
     json_default_markers: list[str] = field(default_factory=list)
+    # 2G design §7's fourth format vocabulary, read only by
+    # `resolve/shapes/parse_binding.py`: `{bytes_payloads: [...], calls:
+    # [...]}` — which payload parameter types mean "this channel carries the
+    # wire's bytes, not a decoded object", and which calls turn those bytes
+    # into a typed payload. Carried through unread here, like every block
+    # above; the pass that reads it refuses a malformed one.
+    parse_calls: dict[str, Any] = field(default_factory=dict)
 
 
 class CatalogError(ValueError):

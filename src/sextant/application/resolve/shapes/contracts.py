@@ -210,26 +210,43 @@ def _owns(catalog: Catalog, endpoint: dict[str, object]) -> bool:
 
 def _body_type(signature: dict[str, Any], catalog: Catalog) -> dict[str, Any] | None:
     """The type of the parameter the catalog's body rule marks (D02 §2 as
-    amended). The marker wins; the sole-unannotated fallback exists because
-    one contract (Feign's) marks the body by being the only bare parameter.
-    A catalog declaring neither contributes no request shapes."""
+    amended)."""
+    found = _body_parameter(signature, catalog)
+    return None if found is None else dict(found[1]["type"])
+
+
+def _body_parameter(
+    signature: dict[str, Any], catalog: Catalog
+) -> tuple[int, dict[str, Any]] | None:
+    """The payload parameter the catalog's body rule marks, as its DECLARED
+    index and the parameter itself (D02 §2 as amended). The marker wins; the
+    sole-unannotated fallback exists because one contract (Feign's) marks the
+    body by being the only bare parameter. A catalog declaring neither
+    contributes no request shapes.
+
+    The index is carried, not only the type, because 2G's parse binding
+    (`shapes/parse_binding.py`) joins a call argument that NAMES a parameter
+    (`{kind: parameter, value: N}`, D00 §5) back to the payload — and N is
+    the declared index. One rule, read two ways, rather than a second copy of
+    the marker/fallback logic in the pass that needs the other half.
+    """
     declared = catalog.matches.get("request_body")
     if declared is None:
         return None
     body_annotation = _catalog_symbol(declared["annotation"])
     parameters = signature.get("parameters", [])
-    for parameter in parameters:
+    for index, parameter in enumerate(parameters):
         if any(use["annotation"] == body_annotation for use in parameter.get("annotations", [])):
-            return dict(parameter["type"])
+            return index, parameter
     if declared.get("fallback") == "sole_unannotated":
         excluded = {_catalog_symbol(t) for t in declared.get("excludes", [])}
         bare = [
-            p
-            for p in parameters
-            if not p.get("annotations") and p["type"].get("symbol") not in excluded
+            (index, parameter)
+            for index, parameter in enumerate(parameters)
+            if not parameter.get("annotations") and parameter["type"].get("symbol") not in excluded
         ]
         if len(bare) == 1:
-            return dict(bare[0]["type"])
+            return bare[0]
     return None
 
 

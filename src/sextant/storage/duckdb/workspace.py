@@ -290,9 +290,20 @@ _NAMED_QUERIES = {
     # row carries, `question` breaking a tie where one endpoint raises both
     # kinds — "rows are ordered by wire identity for NFR-1 determinism", and
     # an ordering with ties is one that can change between runs.
+    #
+    # Wire identity plus `question` is NOT total, which is why the row's own
+    # content closes it: two listeners on one destination are two rows sharing
+    # every one of those four columns (`endpoints` itself orders by
+    # `handler, caller` for exactly this reason), and their order would
+    # otherwise be the insert order rather than an ordering. `candidates` is
+    # cast to text because it is the answer that differs between two such
+    # rows, and `evidence` is the last tie-break — two rows agreeing on all
+    # six are the same question asked twice and may appear in either order
+    # without changing a byte.
     "open_questions": """
         SELECT protocol, method, path, question, candidates, evidence
-        FROM open_questions ORDER BY protocol, method, path, question
+        FROM open_questions
+        ORDER BY protocol, method, path, question, candidates::VARCHAR, evidence
     """,
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
@@ -343,6 +354,7 @@ _NAMED_DERIVATIONS = {
     "resolved_config_insert": "insert_resolved_config.sql",
     "stamp_media": "stamp_media.sql",
     "stamp_format": "stamp_format.sql",
+    "bind_request_shape": "bind_request_shape.sql",
     "open_questions_reset": "reset_open_questions.sql",
     "open_questions_insert": "insert_open_questions.sql",
 }

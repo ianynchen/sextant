@@ -29,6 +29,8 @@ KNOWN_GAPS = [
     "merged_endpoints_keep_only_the_handlers_contract",
     "shape_rules_unscoped_to_the_producing_catalog",
     "reactive_flow_not_traced",
+    "payload_parsed_beyond_horizon",
+    "payload_parse_ambiguous",
 ]
 
 

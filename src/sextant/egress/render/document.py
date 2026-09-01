@@ -66,6 +66,18 @@ _GAPS = [
         "payloads read inside a functional handler's body — await the call "
         "graph."
     ),
+    (
+        "A bytes-only channel whose payload is parsed further than one "
+        "delegation hop from its handler is not bound: the parse is found "
+        "and listed as an open question instead, because a flow followed "
+        "further than it was observed is an assumption, not a fact."
+    ),
+    (
+        "A bytes-only channel whose payload reaches two different parses "
+        "binds neither: two answers about one wire is a question for a "
+        "reader, and picking the one that sorts first would publish a "
+        "coin toss as a contract."
+    ),
 ]
 
 # D00 §4 closed-set protocol names whose wire identity has no verb: a Kafka

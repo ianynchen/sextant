@@ -421,6 +421,17 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # generated-protobuf endpoint — its own new route; no client anywhere
         # in the fixture calls it, so no inbound/outbound merge.
         ("POST", "/v1/orders/proto-orders"),
+        # 2G Task 7 (parse binding): five bytes-only channels, one per case
+        # the binding rungs have to answer differently — rung A, rung B, a
+        # second caller into that same rung-B callee, an ambiguous handler
+        # and a two-hop one. Each destination is unique to those listeners on
+        # purpose: two of them sharing a destination would merge into ONE row
+        # and the five cases would stop being five rows to pin.
+        (None, "parsed-orders-inbound"),
+        (None, "parsed-audit-queue"),
+        (None, "parsed-shared-inbound"),
+        (None, "parsed-mixed-inbound"),
+        (None, "parsed-relay-queue"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -577,7 +588,13 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # 2G Task 5 (declared shapes) adds 1 more: `POST /v1/orders/proto-orders`
     # (`OrderController#createProtoOrder`, a generated-protobuf payload in
     # and out) — no merge, nothing else in the fixture calls it. 91 + 1 = 92.
-    assert len(report.endpoints) == 92
+    #
+    # 2G Task 7 (parse binding) adds 5: the bytes-only listeners in
+    # `messaging/parse` — two SQS and one JMS row that bind, plus the
+    # ambiguous SQS row and the two-hop JMS row that refuse to. Every one of
+    # the five destinations is unique to that file, so none merges with
+    # anything and none of the existing 92 identities moves. 92 + 5 = 97.
+    assert len(report.endpoints) == 97
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
@@ -1820,9 +1837,14 @@ def test_the_format_ladder_answers_every_live_row(
     * **rung 6** on the rest.
 
     Rung 1 has no live surface (no shipped catalog declares a fixed-format
-    protocol) and rung 4 has none either (the fixture's one schema-described
-    payload is on a route that DECLARES its media, which is the precedence
-    pin below); both are covered in `test_format_ladder.py`.
+    protocol) and rung 4 has none *here*: this fixture resolves WITHOUT the
+    descriptor interpreter (see `conftest.py` — no reader or interpret step),
+    so no `declared_shape` fact exists for rung 4 to read, and the payload
+    types 2G Task 7's parse binding lands on these rows are ordinary declared
+    objects as far as this run can tell — which is what makes them rung 5's.
+    The rung-4 answer those same rows carry in a FULL analyze is pinned in
+    `tests/e2e/test_vertical_slice.py`, where the interpreter runs; the rung
+    itself is unit-covered in `test_format_ladder.py`.
     """
     workspace, report = resolved_fixture
     answers = {
@@ -1892,12 +1914,22 @@ def test_the_format_ladder_answers_every_live_row(
     assert {e["format"] for e in report.endpoints if e["format_resolution"] == "narrowed"} == {
         "json"
     }
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 39
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 28
+    # 39 + 3 with 2G Task 7: the three bytes-only listeners whose payload the
+    # parse binding replaced with a real declared type now qualify for rung 5,
+    # which reads a declared payload TYPE and finds none behind a byte array.
+    # That is the binding observable in this run — before it, all five of the
+    # new rows fell to rung 6.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 42
+    # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
+    # so nothing described them and rung 6 is still the honest answer.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 30
 
-    # And nothing was ambiguous enough to ask about: no rung saw two answers
-    # for one row anywhere in this fixture.
-    assert workspace.query("open_questions") == []
+    # No rung saw two answers for one row anywhere in this fixture, so the
+    # ledger holds no `format_conflict` at all — every row in it is the
+    # parse binding's own (2G design §6's other question kind).
+    assert {str(row["question"]) for row in workspace.query("open_questions")} == {
+        "payload_binding"
+    }
 
 
 # --- 2F Task 8: the field ladder and base composition, live --------------
