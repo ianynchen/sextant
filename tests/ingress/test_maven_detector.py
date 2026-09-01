@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from sextant.ingress.detect.maven import MavenDetector
 
 FIXTURE = Path(__file__).parents[2] / "fixtures" / "orders-service"
@@ -38,6 +40,60 @@ _BARE_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
 def _module(root: Path, pom: str = _BARE_POM) -> Path:
     (root / "pom.xml").write_text(pom, encoding="utf-8")
     return root
+
+
+_CHILD_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent>
+    <groupId>com.acme</groupId>
+    <artifactId>acme-parent</artifactId>
+    <version>2.3.0</version>
+  </parent>
+  <artifactId>thing</artifactId>
+</project>
+"""
+
+
+def test_a_reactor_child_takes_the_coordinates_its_parent_states(tmp_path: Path):
+    """Maven's inheritance rule: a child inherits `groupId` and `version` from
+    `<parent>` and may omit both elements entirely — `artifactId` alone is
+    never inherited. Reading only the child's own elements raised
+    `pom.xml has no <version>` and failed the whole analyze on the first
+    reactor module it met, which is most real multi-module repositories:
+    `spring-petclinic-microservices`' own children omit `<version>` exactly
+    like this. The parent's value is Maven convention data, not a guess."""
+    module = MavenDetector().detect(_module(tmp_path, _CHILD_POM)).modules[0]
+
+    assert module.module_id == "com.acme:thing"
+    assert module.coordinates == "com.acme/thing"
+    assert module.version == "2.3.0"
+
+
+def test_a_childs_own_coordinates_win_over_the_ones_its_parent_states(tmp_path: Path):
+    """The parent is a FALLBACK, never an override: a child that states its own
+    `groupId` is that groupId, whatever the parent says. The half-and-half form
+    is the common one and the one `spring-petclinic-api-gateway` writes — its
+    own `groupId`, its parent's `version` — so a fallback that fired
+    unconditionally would rename every module in a reactor to its parent's
+    group and merge modules that are not the same module."""
+    pom = _CHILD_POM.replace(
+        "  <artifactId>thing</artifactId>",
+        "  <groupId>com.acme.sub</groupId>\n  <artifactId>thing</artifactId>",
+    )
+    module = MavenDetector().detect(_module(tmp_path, pom)).modules[0]
+
+    assert module.module_id == "com.acme.sub:thing"
+    # Still the parent's: only the stated half stopped being inherited.
+    assert module.version == "2.3.0"
+
+
+def test_a_pom_stating_no_coordinates_at_either_level_is_still_refused(tmp_path: Path):
+    """The fallback widens where a value may be READ from; it does not invent
+    one. A pom with no version anywhere still fails loudly rather than
+    detecting a module with an empty or guessed version (M02)."""
+    pom = _BARE_POM.replace("  <version>1.0.0</version>\n", "")
+
+    with pytest.raises(ValueError, match="version"):
+        MavenDetector().detect(_module(tmp_path, pom))
 
 
 def test_kind_is_undetermined_when_no_evidence_decides_it(tmp_path: Path):

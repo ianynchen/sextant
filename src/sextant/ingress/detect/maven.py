@@ -55,9 +55,13 @@ class MavenDetector:
 
     def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
         pom = ElementTree.parse(path / "pom.xml").getroot()
-        group = self._text(pom, "groupId")
+        # A reactor child inherits groupId and version from <parent> and may
+        # omit its own elements entirely (Maven's inheritance rule) —
+        # artifactId alone is never inherited. Reading the parent's value is
+        # Maven convention data, not a guess.
+        group = self._text(pom, "groupId", inherited=True)
         artifact = self._text(pom, "artifactId")
-        version = self._text(pom, "version")
+        version = self._text(pom, "version", inherited=True)
         source_roots = self._source_roots(path, pom)
         resources = path / "src" / "main" / "resources"
         module = ModuleModel(
@@ -151,8 +155,10 @@ class MavenDetector:
         return "undetermined"
 
     @staticmethod
-    def _text(pom: ElementTree.Element, tag: str) -> str:
+    def _text(pom: ElementTree.Element, tag: str, inherited: bool = False) -> str:
         node = pom.find(f"m:{tag}", _POM_NS)
+        if node is None and inherited:
+            node = pom.find(f"m:parent/m:{tag}", _POM_NS)
         if node is None or node.text is None:
             raise ValueError(f"pom.xml has no <{tag}>")
         return node.text.strip()
