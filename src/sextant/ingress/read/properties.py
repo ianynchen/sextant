@@ -60,6 +60,8 @@ def _entry(line: str) -> tuple[str, str, str] | None:
 class PropertiesReader:
     """Keyed by extension `properties` (M03)."""
 
+    reads_schema_sources = False
+
     def accepts(self, file_kind: str) -> bool:
         return file_kind == "properties"
 

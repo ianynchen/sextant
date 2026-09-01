@@ -22,6 +22,8 @@ class GraphqlSdlReader:
     own default suffix, and the spelling the wider ecosystem uses for the
     same file."""
 
+    reads_schema_sources = True
+
     def accepts(self, file_kind: str) -> bool:
         return file_kind in ("graphqls", "graphql")
 

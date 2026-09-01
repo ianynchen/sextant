@@ -39,15 +39,23 @@ from graphql import GraphQLSyntaxError, parse, print_ast
 from graphql.language.ast import (
     DocumentNode,
     EnumTypeDefinitionNode,
+    ExecutableDefinitionNode,
     FieldDefinitionNode,
+    InputObjectTypeDefinitionNode,
     InputValueDefinitionNode,
+    InterfaceTypeDefinitionNode,
     ListTypeNode,
     NamedTypeNode,
     NonNullTypeNode,
+    ObjectTypeDefinitionNode,
+    OperationType,
     ScalarTypeDefinitionNode,
+    SchemaDefinitionNode,
+    SchemaExtensionNode,
     TypeDefinitionNode,
     TypeExtensionNode,
     TypeNode,
+    UnionTypeDefinitionNode,
 )
 
 from sextant.domain.facts import DeclaredFieldFact, DeclaredShapeFact, EmbeddedDescriptorFact
@@ -104,6 +112,20 @@ _GRAPHQL_SCALARS: dict[str, tuple[str, str | None]] = {
     "Int": ("integer", "int32"),
     "Float": ("number", "double"),
     "Boolean": ("boolean", None),
+}
+
+# `DeclaredShapeFact.role` for each of the two ways SDL names an operation
+# root: a `schema` block's explicit binding, and — only when no block binds
+# anything — GraphQL's own default type names.
+_GRAPHQL_OPERATIONS: dict[OperationType, Literal["query", "mutation", "subscription"]] = {
+    OperationType.QUERY: "query",
+    OperationType.MUTATION: "mutation",
+    OperationType.SUBSCRIPTION: "subscription",
+}
+_GRAPHQL_ROOT_NAMES: dict[str, Literal["query", "mutation", "subscription"]] = {
+    "Query": "query",
+    "Mutation": "mutation",
+    "Subscription": "subscription",
 }
 
 
@@ -627,13 +649,17 @@ class _GraphqlUniverse:
     declaration the runtime was meant to serve. `scalars` and `enums` are the
     two kinds of declared name that are not a reference to a payload's shape.
     `extensions` holds the fields an `extend type` contributes, keyed by the
-    type they belong to, because the runtime merges them in before serving.
+    type they belong to, because the runtime merges them in before serving —
+    contributed only by files that survive, since a file publishing nothing
+    must not publish fields into someone else's type either. `roles` names the
+    operation root each entry-point type serves.
     """
 
     declared: frozenset[str]
     scalars: frozenset[str]
     enums: Mapping[str, tuple[str, ...]]
     extensions: Mapping[str, tuple[FieldDefinitionNode | InputValueDefinitionNode, ...]]
+    roles: Mapping[str, Literal["query", "mutation", "subscription"]]
 
 
 def _graphql_shapes(
@@ -655,6 +681,16 @@ def _graphql_shapes(
     A file is the failure boundary: one that cannot be read publishes nothing
     at all rather than the types read before the trouble (2G's Avro rule),
     and every other file still interprets.
+
+    A failed file takes its declarations with it, and that CASCADES by
+    design: a file whose text does not parse declared nothing this module can
+    see, so a sibling naming one of its types is naming a type the merged
+    schema does not contain — which is exactly the state the runtime would
+    refuse to start in, and so a gap of its own rather than a shape pointing
+    at nothing. A file that parsed but could not be projected is the milder
+    case: its names are in the universe, so a sibling's reference to one
+    stays an ordinary `shape_ref` that this run published no shape for, and
+    reads downstream as an unclosed reference rather than a second gap.
     """
     parsed: list[tuple[EmbeddedDescriptorFact, DocumentNode]] = []
     failed: list[str] = []
@@ -670,17 +706,12 @@ def _graphql_shapes(
     for fact, document in parsed:
         if fact.symbol in unusable:
             continue
-        if not any(
-            isinstance(node, TypeDefinitionNode | TypeExtensionNode)
-            for node in document.definitions
-        ):
-            # SDL that declares no type is not a schema: an executable
-            # document (a query someone filed beside the schema) parses
-            # perfectly and describes nothing the service serves. Reported
-            # rather than dropped, because something harvested it as a schema
-            # and a payload yielding neither a shape nor a gap is an omission
-            # dressed as success (D00 §3).
-            failed.append(fact.symbol)
+        if all(isinstance(node, ExecutableDefinitionNode) for node in document.definitions):
+            # An operations document — the queries a client sends, which
+            # `.graphql` also spells — is not a schema and describes no
+            # payload this service declares. Ignored outright, neither shape
+            # nor gap: a gap would report a file that is not missing anything,
+            # permanently, for as long as it sits beside the schema.
             continue
         try:
             found = _graphql_document_shapes(fact, document, universe)
@@ -704,12 +735,23 @@ def _graphql_universe(
     owners: dict[str, list[str]] = {}
     enums: dict[str, tuple[str, ...]] = {}
     scalars: set[str] = set()
-    extensions: dict[str, list[FieldDefinitionNode | InputValueDefinitionNode]] = {}
+    # Tagged with the file each contribution came from, so the ones belonging
+    # to a file that turns out to be a gap can be dropped below.
+    extensions: dict[str, list[tuple[str, FieldDefinitionNode | InputValueDefinitionNode]]] = {}
     extenders: dict[str, list[str]] = {}
+    bound_roots: list[tuple[str, str, Literal["query", "mutation", "subscription"]]] = []
     unusable: set[str] = set()
     for fact, document in parsed:
         for node in document.definitions:
-            if isinstance(node, TypeDefinitionNode):
+            if isinstance(node, UnionTypeDefinitionNode):
+                # A union is one of several types, and this vocabulary has no
+                # word for that: its members are separate shapes and it has no
+                # field of its own to carry them, so a shape for it would be
+                # an empty payload nobody sends. Its file is a gap — the same
+                # answer `extend union` gets, for the same reason (2H design
+                # §2's "a construct the branch cannot project").
+                unusable.add(fact.symbol)
+            elif isinstance(node, TypeDefinitionNode):
                 owners.setdefault(node.name.value, []).append(fact.symbol)
                 if isinstance(node, EnumTypeDefinitionNode):
                     enums[node.name.value] = tuple(value.name.value for value in node.values)
@@ -720,12 +762,22 @@ def _graphql_universe(
                 if fields is None:
                     # `extend enum`, `extend union`, `extend scalar`: an
                     # extension that adds members this projection has no field
-                    # to carry. Its file is a gap rather than a silent partial
-                    # (2H design §2's "a construct the branch cannot project").
+                    # to carry. Its file is a gap rather than a silent partial.
                     unusable.add(fact.symbol)
                     continue
-                extensions.setdefault(node.name.value, []).extend(fields)
+                extensions.setdefault(node.name.value, []).extend(
+                    (fact.symbol, field) for field in fields
+                )
                 extenders.setdefault(node.name.value, []).append(fact.symbol)
+            elif isinstance(node, SchemaDefinitionNode | SchemaExtensionNode):
+                bound_roots.extend(
+                    (
+                        fact.symbol,
+                        operation.type.name.value,
+                        _GRAPHQL_OPERATIONS[operation.operation],
+                    )
+                    for operation in node.operation_types or ()
+                )
 
     duplicated = {name for name, holders in owners.items() if len(holders) > 1}
     # A name two files declare is a schema Spring itself rejects, and nothing
@@ -739,27 +791,76 @@ def _graphql_universe(
         if name not in owners or name in duplicated
         for symbol in holders
     )
+    # Two bindings of one operation to different types is the same ambiguity a
+    # duplicate type name is, and has the same answer: no winner, both files
+    # are gaps — never a fold whose result depends on which file arrived first
+    # (NFR-1).
+    bound_names: dict[str, set[str]] = {}
+    for _, name, role in bound_roots:
+        bound_names.setdefault(role, set()).add(name)
+    unusable.update(symbol for symbol, _, role in bound_roots if len(bound_names[role]) > 1)
+    declared = frozenset(owners) - duplicated
     universe = _GraphqlUniverse(
-        declared=frozenset(owners) - duplicated,
+        declared=declared,
         scalars=frozenset(scalars),
         enums=enums,
-        extensions={name: tuple(fields) for name, fields in extensions.items()},
+        # A file that publishes no shape publishes no fields into anyone
+        # else's type either — without this, a gapped file's `extend type`
+        # would still reach the extended type's shape, which is exactly the
+        # half-published schema the failure boundary exists to prevent.
+        extensions={
+            name: tuple(field for symbol, field in tagged if symbol not in unusable)
+            for name, tagged in extensions.items()
+        },
+        roles=_graphql_roles(bound_roots, declared, unusable),
     )
     return universe, frozenset(unusable)
+
+
+def _graphql_roles(
+    bound_roots: Sequence[tuple[str, str, Literal["query", "mutation", "subscription"]]],
+    declared: frozenset[str],
+    unusable: frozenset[str] | set[str],
+) -> Mapping[str, Literal["query", "mutation", "subscription"]]:
+    """Which type answers each kind of operation.
+
+    A `schema` block binds the roots by name, and renaming them is the whole
+    reason it exists (`schema { query: MyQuery }`), so the binding cannot be
+    recovered from a type's own name later — nothing downstream may parse SDL
+    (the confinement rule), which is why the answer rides on the fact.
+
+    Absent any binding, GraphQL's own defaults apply: `Query`, `Mutation` and
+    `Subscription` are the roots because they are named that. A binding
+    anywhere in the module turns the defaults off exactly as the GraphQL spec
+    says it does — a schema block that names only a query root declares that
+    the service has only that root.
+    """
+    bound = {name: role for symbol, name, role in bound_roots if symbol not in unusable}
+    if bound:
+        return {name: role for name, role in bound.items() if name in declared}
+    return {name: role for name, role in _GRAPHQL_ROOT_NAMES.items() if name in declared}
 
 
 def _graphql_document_shapes(
     fact: EmbeddedDescriptorFact, document: DocumentNode, universe: _GraphqlUniverse
 ) -> list[DeclaredShapeFact]:
-    """One shape per type this file declares. An object, an interface, an
-    input and a union each name a payload something sends or receives; an
-    enum names a type fields reference, and carries no fields of its own —
-    its constants ride on every field that references it, because a record of
-    them is a payload nobody sends (D00 §5b). A scalar declares no payload at
-    all, so it is the one declared type that is no shape."""
+    """One shape per type this file declares that names a payload: an object,
+    an interface and an input each describe one something sends or receives,
+    and an enum is a type fields reference by name — carrying no fields of its
+    own, because a record of its constants is a payload nobody sends (D00
+    §5b); they ride on every field that references it instead. The two
+    declared types missing from that list are the two that describe no
+    payload: a scalar, and a union (whose file `_graphql_universe` has already
+    made a gap)."""
     shapes: list[DeclaredShapeFact] = []
     for node in document.definitions:
-        if not isinstance(node, TypeDefinitionNode) or isinstance(node, ScalarTypeDefinitionNode):
+        if not isinstance(
+            node,
+            ObjectTypeDefinitionNode
+            | InterfaceTypeDefinitionNode
+            | InputObjectTypeDefinitionNode
+            | EnumTypeDefinitionNode,
+        ):
             continue
         name = node.name.value
         declared_fields = [
@@ -776,6 +877,9 @@ def _graphql_document_shapes(
                 schema_format="graphql",
                 origin=fact.origin,
                 evidence=_evidence(fact.origin),
+                # NULL for every type but the two or three the schema names as
+                # its operation roots.
+                role=universe.roles.get(name),
                 fields=[_graphql_field(field, universe) for field in declared_fields],
             )
         )

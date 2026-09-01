@@ -261,6 +261,61 @@ def test_a_type_extension_merges_into_the_type_it_extends():
     assert list(_fields(_shape(shapes, "Query"))) == ["orders", "audits"]
 
 
+def test_a_type_extension_from_a_failed_file_does_not_reach_the_type_it_extends():
+    """Fix round 1, IMPORTANT: the merge used to be built before the gap list
+    was, so a file that publishes NO shape of its own still published fields
+    into someone else's type — half a schema, sneaked in through the back
+    door the failure boundary exists to close."""
+    sound = _sdl("type Query { ok: String }\n", symbol="a.graphqls", document_id="doc:a")
+    failing = _sdl(
+        "extend type Query { sneaky: String }\ntype Dup { x: String }\n",
+        symbol="b.graphqls",
+        document_id="doc:b",
+    )
+    duplicate = _sdl("type Dup { y: String }\n", symbol="c.graphqls", document_id="doc:c")
+
+    shapes, failed = _interpret([sound, failing, duplicate])
+
+    assert failed == ["b.graphqls", "c.graphqls"]
+    assert list(_fields(_shape(shapes, "Query"))) == ["ok"]
+
+
+def test_the_schema_block_says_which_type_answers_which_operation():
+    """A `schema` block exists to rename the roots, so the binding cannot be
+    recovered from a type's own name — and nothing downstream may parse SDL
+    (the confinement rule), so the answer has to ride on the fact itself."""
+    shapes, failed = _interpret(
+        [
+            _sdl(
+                "schema { query: MyQuery, mutation: MyMutation }\n"
+                "type MyQuery { a: String }\n"
+                "type MyMutation { b: String }\n"
+                "type Query { c: String }\n"
+            )
+        ]
+    )
+
+    assert failed == []
+    assert _shape(shapes, "MyQuery").role == "query"
+    assert _shape(shapes, "MyMutation").role == "mutation"
+    # Named `Query` but bound to nothing: a schema block that names its roots
+    # is the whole answer, exactly as the GraphQL spec says.
+    assert _shape(shapes, "Query").role is None
+
+
+def test_the_default_root_names_carry_their_roles_when_no_schema_block_binds_them():
+    shapes, failed = _interpret(_module())
+
+    assert failed == []
+    assert [(shape.symbol, shape.role) for shape in shapes if shape.role is not None] == [
+        ("Mutation", "mutation"),
+        ("Query", "query"),
+        ("Subscription", "subscription"),
+    ]
+    # Every ordinary payload type carries no role at all.
+    assert _shape(shapes, "Order").role is None
+
+
 def test_the_naming_hook_is_never_consulted():
     """SDL compiles into no class, so a source-origin symbol IS the schema's
     own type name. `_RefusingNaming` raising is the assertion."""
@@ -317,16 +372,74 @@ def test_a_type_declared_twice_fails_every_file_that_declares_it():
     assert [shape.symbol for shape in shapes] == ["AuditEntry"]
 
 
-def test_a_payload_that_is_not_a_schema_at_all_is_a_gap_not_a_crash():
-    """A `.graphqls` file holding a query document parses cleanly and
-    declares no type. Reported rather than dropped: something harvested it as
-    a schema, and a payload that yields neither a shape nor a gap is an
-    omission dressed as success (D00 §3)."""
-    query_document = _sdl("{ orders { id } }\n", symbol="query.graphqls")
+def test_a_union_is_a_gap_rather_than_an_empty_shape():
+    """Fix round 1, SPEC: a union is one of several types, and this vocabulary
+    has no word for that — its members are separate shapes and it has no field
+    of its own to carry them. Publishing it as a fieldless shape would be an
+    omission dressed as success; `extend union` was already a gap, and a plain
+    one now gives the same answer for the same reason."""
+    with_union = _sdl(
+        "type Cart { id: ID! }\nunion Res = Cart | Basket\ntype Basket { sku: String }\n",
+        symbol="union.graphqls",
+        document_id="doc:union",
+    )
 
-    shapes, failed = _interpret([query_document])
+    shapes, failed = _interpret([with_union, *_module()])
 
-    assert (shapes, failed) == ([], ["query.graphqls"])
+    assert failed == ["union.graphqls"]
+    # Not even the two sound types beside it: the file is the failure boundary.
+    assert {shape.symbol for shape in shapes}.isdisjoint({"Res", "Cart", "Basket"})
+    assert "Order" in {shape.symbol for shape in shapes}
+
+
+def test_an_extend_union_is_a_gap_for_the_same_reason_a_plain_union_is():
+    extending = _sdl("union Res = Cart\n", symbol="union.graphqls", document_id="doc:union")
+    extension = _sdl(
+        "extend union Res = Basket\ntype Basket { sku: String }\n",
+        symbol="more.graphqls",
+        document_id="doc:more",
+    )
+
+    shapes, failed = _interpret([extending, extension])
+
+    assert failed == ["more.graphqls", "union.graphqls"]
+    assert shapes == []
+
+
+def test_an_operations_document_is_ignored_rather_than_reported():
+    """Fix round 1, MINOR: `.graphql` also spells the queries a CLIENT sends.
+    Such a file declares no type because it is not a schema — reporting it
+    would be a permanent gap naming a file that is missing nothing."""
+    operations = _sdl(
+        "query Orders { orders { id } }\nfragment F on Order { id }\n", symbol="query.graphql"
+    )
+
+    shapes, failed = _interpret([operations])
+
+    assert (shapes, failed) == ([], [])
+
+
+def test_a_file_that_mixes_operations_with_types_still_declares_its_types():
+    shapes, failed = _interpret([_sdl("query Q { a }\ntype Order { id: ID! }\n")])
+
+    assert failed == []
+    assert [shape.symbol for shape in shapes] == ["Order"]
+
+
+def test_an_unreadable_file_takes_the_types_it_declared_with_it():
+    """The cascade, stated: a file whose text does not parse declared nothing
+    this module can see, so a sibling naming one of its types is naming a type
+    the merged schema does not contain — the state the runtime would refuse to
+    start in, and a gap of its own rather than a shape pointing at nothing."""
+    broken = _sdl("type Ghost { id: ID! ", symbol="ghost.graphqls", document_id="doc:ghost")
+    referring = _sdl(
+        "type Haunted { ghost: Ghost }\n", symbol="haunted.graphqls", document_id="doc:haunted"
+    )
+
+    shapes, failed = _interpret([broken, referring, *_module()])
+
+    assert failed == ["ghost.graphqls", "haunted.graphqls"]
+    assert "Order" in {shape.symbol for shape in shapes}
 
 
 # --- determinism (NFR-1) -------------------------------------------------

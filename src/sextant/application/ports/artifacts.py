@@ -32,8 +32,22 @@ class ArtifactReader(Protocol):
     compete: `accepts` partitions file kinds so at most one registered
     reader claims any given file (M03)."""
 
+    # Which of `analyze`'s two read loops this reader serves: a schema source
+    # (its facts describe a payload's shape) or an ordinary resource. Declared
+    # by the reader rather than inferred from the root it is handed, because
+    # one schema root genuinely lives INSIDE a resource root — Spring
+    # GraphQL's `src/main/resources/graphql` — so the same directory holds
+    # both kinds of file, and only the reader knows which kind it reads.
+    # Stated with no default so a new reader has to answer the question.
+    reads_schema_sources: bool
+
     def accepts(self, file_kind: str) -> bool: ...
     def read(self, request: ReadRequest) -> list[tuple[Document, list[Fact]]]: ...
+
+
+def file_kind(path: Path) -> str:
+    """The extension a reader is keyed by (M03), lower-cased and bare."""
+    return path.suffix.removeprefix(".").lower()
 
 
 def group_files_by_reader(
@@ -52,7 +66,7 @@ def group_files_by_reader(
     relative path by the caller (NFR-1)."""
     grouped: dict[int, list[Path]] = {}
     for file in files:
-        kind = file.suffix.removeprefix(".").lower()
+        kind = file_kind(file)
         for index, reader in enumerate(readers):
             if reader.accepts(kind):
                 grouped.setdefault(index, []).append(file)

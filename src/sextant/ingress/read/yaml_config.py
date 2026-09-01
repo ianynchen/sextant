@@ -84,6 +84,8 @@ class YamlConfigReader:
     `yaml` format on the Document (D00 §5c: the format, never the raw
     extension)."""
 
+    reads_schema_sources = False
+
     def accepts(self, file_kind: str) -> bool:
         return file_kind in ("yml", "yaml")
 

@@ -22,6 +22,7 @@ from sextant.domain.facts import DeclaredShapeFact, Document, EmbeddedDescriptor
 from sextant.ingress.interpret.descriptors import SchemaLocation, interpret_descriptors
 from sextant.ingress.read.avsc import AvscReader
 from sextant.ingress.read.graphql_sdl import GraphqlSdlReader
+from sextant.ingress.read.properties import PropertiesReader
 from sextant.ingress.read.proto_source import ProtoSourceReader
 from sextant.ingress.read.yaml_config import YamlConfigReader
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -360,7 +361,7 @@ def _analyze_sdl_module(root: Path) -> None:
             catalogs=_EmptyCatalogs(),
             fact_root=root / "facts",
             progress=NullProgress(),
-            readers=[YamlConfigReader(), GraphqlSdlReader()],
+            readers=[PropertiesReader(), YamlConfigReader(), GraphqlSdlReader()],
             interpret=_FakeInterpreter(),
         )
     finally:
@@ -408,6 +409,32 @@ def test_an_sdl_file_inside_the_resource_root_is_read_once_not_twice(tmp_path: P
         "audit.graphqls",
         "schema.graphqls",
     ]
+
+
+def test_an_ordinary_resource_inside_a_schema_root_stays_an_ordinary_resource(tmp_path: Path):
+    """Fix round 1, MINOR: a schema root is a DIRECTORY, and the partition
+    between the two read loops is per file. A `messages.properties` filed
+    beside the SDL is still config: reading it in the schema loop would give
+    it a schema-root-relative path and a `schema/` fact target, so the same
+    file would land in a different place purely because of a sibling
+    directory's name."""
+    _write_sdl_module(tmp_path)
+    resources = tmp_path / "src" / "main" / "resources"
+    (resources / "application.properties").write_text("a=1\n", encoding="utf-8")
+    (resources / "graphql" / "messages.properties").write_text("b=2\n", encoding="utf-8")
+
+    _analyze_sdl_module(tmp_path)
+
+    targets = {
+        document.relative_path: target.relative_to(tmp_path / "facts").parts[0]
+        for target, document, _ in read_fact_tree(tmp_path / "facts")
+    }
+    # Keyed by a RESOURCE-root-relative path (`graphql/…`, not `…`) and
+    # written under the config tree — the identity it would have had if the
+    # sibling SDL directory were named anything else.
+    assert targets["graphql/messages.properties"] == "config"
+    assert targets["application.properties"] == "config"
+    assert targets["schema.graphqls"] == "schema"
 
 
 def test_the_ingress_import_contract_still_holds():

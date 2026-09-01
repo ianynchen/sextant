@@ -443,6 +443,12 @@ Each such fact carries, beside its `fields`:
 - **`evidence`** — `compiler` for a compiled origin, `declared` for a source one. The
   shape's whole field list carries the one tier; a schema does not state some of its
   fields more confidently than others.
+- **`role`** — `query`, `mutation` or `subscription` where the schema names this type as
+  the entry point every operation of that kind is addressed against, and NULL for the
+  ordinary payload types, which is nearly all of them. It is a fact and not a derivation
+  because a schema may *rename* its roots, so which type holds the role cannot be
+  recovered from the type's own name by anything downstream — and only the interpreter
+  may read a schema format at all.
 
 Per field: the schema's own `name` and the encoded `wire_name` (a protobuf `json_name`,
 **read from the descriptor, never computed** — protoc puts the computed default and an

@@ -272,6 +272,13 @@ class DeclaredShapeFact(BaseModel):
     # §4.1's strongest tier); a schema file in the repository is a
     # declaration, and says nothing about what the build actually shipped.
     evidence: Literal["compiler", "declared"]
+    # The operation root this type serves, where its schema names one: a
+    # schema format may declare that one of its types is the entry point every
+    # query (or mutation, or subscription) is addressed against, and which
+    # type that is can be renamed, so it cannot be recovered from the type's
+    # own name downstream. NULL for every type that is an ordinary payload,
+    # which is nearly all of them.
+    role: Literal["query", "mutation", "subscription"] | None = None
     fields: list[DeclaredFieldFact] = Field(default_factory=list)
 
 
