@@ -30,10 +30,22 @@ Self-review corrections baked in: the SDL-to-endpoint derivation is named as its
 engine style rather than hidden in a reader section (§3), and the "response shapes
 prefer the SDL type" idea is **withdrawn** as a guess — the honest rule is §4's.
 
-## 1. GraphQL inbound — three catalogs, zero engine changes
+## 1. GraphQL inbound — three catalogs, two vocabulary forms
 
-Three new annotation catalogs on the existing `annotation_driven` engine, unchanged —
-that is this section's own acceptance test:
+Three new annotation catalogs on the `annotation_driven` engine. **Execution
+amendment (checkpoint falsification, 2026-09-01):** the brainstorm assumed an existing
+default-to-method-name vocabulary and an existing `{a}.{b}` path composition; the
+checkpoint proved live that neither exists (all three frameworks declare their field
+attribute `default ""`, which never materializes into bytecode, so an absent value
+derived `path: ''` at `resolved`/`compiler` — four actively wrong rows; and a
+method-level `typeName` can never reach the class-prefix CTE). The ruling: two
+**framework-neutral vocabulary additions** to `annotation_driven` — (1) a declared
+name that falls back to the annotated construct's own name when the attribute is
+absent, and (2) a dotted composition of two attribute values where the second falls
+back per (1) — the `channel_via`/`field_sources` precedent: vocabulary grows for a
+genuinely new declaration pattern; framework names stay in catalogs. **The
+zero-engine-change acceptance test moves to where it is meaningful: Netflix DGS and
+MicroProfile GraphQL must ride the two new forms with zero further engine change.**
 
 - **`spring-graphql.yml`**: `@QueryMapping` → `method: query`, `@MutationMapping` →
   `mutation`, `@SubscriptionMapping` → `subscription`; field name from the annotation
