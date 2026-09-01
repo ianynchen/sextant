@@ -1774,6 +1774,120 @@ def test_a_type_level_mapping_annotation_mints_no_endpoint_of_its_own(tmp_path):
     workspace.close()
 
 
+# --- 2H Task 5 review, fix round 1: `spring-stomp.yml`'s `reply` block is
+# @SendTo-only — `annotation_driven.py::_derive_replies` reads a single
+# `reply.annotation` fqn (D02 §2's block, never a list), the same forced
+# single-valued constraint the catalog's own `prefix_annotation` runs into
+# for jakarta/javax. `@SendToUser` is a DIFFERENT annotation
+# (`org.springframework.messaging.handler.annotation.SendToUser`), so a
+# handler carrying it instead of `@SendTo` is annotated but invisible to
+# `reply_annotation`'s own equality check — this probes what that produces:
+# not nothing, and not a wrong destination, but the same honest unresolved
+# row a completely UNannotated value-returning handler already gets
+# (`_derive_replies`'s own no-reply-annotation branch, the `board`/`escalate`
+# precedent). No live fixture surface exists for this shape (Task 1 built
+# none), so it is proved here over synthetic facts, on the REAL shipped
+# catalog, the same discipline `single_call`'s own `addHandler` probe keeps.
+def _sendtouser_facts(root: Path) -> None:
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/ws/StompUserHandler.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    handler_type = "com/acme/ws/StompUserHandler#"
+    notify = "com/acme/ws/StompUserHandler#notify(sig_11112222)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=handler_type, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=notify,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=handler_type,
+            signature=Signature(
+                parameters=[],
+                returns=TypeRef(symbol="java/lang/String#", wire_type="string"),
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=notify,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/messaging/handler/annotation/MessageMapping#",
+                args={"value": ["/notify"]},
+            ),
+        ),
+        # NOT `@SendTo` — `@SendToUser`, a different fqn `reply.annotation`
+        # never names.
+        AnnotationFact(
+            document_id="doc_1",
+            target=notify,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/messaging/handler/annotation/SendToUser#",
+                args={"value": ["/queue/notify"]},
+            ),
+        ),
+    ]
+    write_fact_file(root / "StompUserHandler.jsonl", document, facts)
+
+
+def _spring_stomp_catalog() -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-stomp")
+
+
+def test_an_sendtouser_handler_derives_the_same_honest_unresolved_reply_row_as_no_annotation(
+    tmp_path: Path,
+):
+    _sendtouser_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(
+        workspace,
+        [_spring_stomp_catalog()],
+        capabilities={"annotation_args", "typed_signatures"},
+    )
+    assert skipped == []
+    rows = list(workspace.query("endpoints"))
+    workspace.close()
+
+    # The inbound row derives normally — `@SendToUser` plays no role in
+    # identity, only in the reply.
+    [inbound] = [e for e in rows if e["direction"] == "inbound"]
+    assert (inbound["method"], inbound["path"]) == (None, "/notify")
+    assert inbound["resolution"] == "resolved"
+
+    # Exactly ONE outbound reply row — never two (a wrongly-matched extra
+    # row) and never zero (a silently dropped one): `_derive_replies` walks
+    # every handler this catalog's own rows named exactly once, and
+    # `notify`'s return type is a real payload (`String`), so it always
+    # gets a reply decision, resolved or not.
+    outbound = [e for e in rows if e["direction"] == "outbound"]
+    assert len(outbound) == 1
+    [reply] = outbound
+    assert reply["catalog_id"] == "spring-stomp"
+    assert reply["caller"] == "com/acme/ws/StompUserHandler#notify(sig_11112222)."
+    # The honest answer: NOT the wrong destination (`/queue/notify` never
+    # appears anywhere on this row — nothing in `reply.annotation`'s
+    # single-valued equality check could have read it), and NOT no row at
+    # all — `path` NULL, `unresolved`, the same tuple a completely bare
+    # value-returning handler derives (`board`'s own live row, `escalate`'s
+    # kafka precedent).
+    assert reply["path"] is None
+    assert reply["method"] is None
+    assert reply["resolution"] == "unresolved"
+    assert reply["request_shape"] is not None
+
+
 _UNKNOWN_STYLE_CATALOG = """id: invented
 style: protocol_hint
 protocol: http
