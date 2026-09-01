@@ -98,7 +98,12 @@ validation pattern, no SOAP word in engine code:
   each WSDL operation's input element via 2H's role machinery, widened by one neutral
   word: `role` gains `"operation"`, and `schema_operations` maps it to
   `(soap, NULL, {ns}element)` at `declared`, NULL handler (rendered "none recorded").
-  The role→method mapping addition is this phase's one sanctioned engine-code touch.
+  **The derivation shape differs from 2H's and the engine must say so** (self-review
+  correction): graphql roles derive one endpoint per *field of* the role-carrying
+  type; `operation` derives one endpoint from **the shape itself** — the input
+  element IS the operation, its `schema_name` QName IS the path, and its fields are
+  the request shape, not further endpoints. This per-shape mapping plus the
+  role→method addition is this phase's one sanctioned engine-code touch.
   The style block ships on a new **`wsdl-schema.yml`** (one file = one style — the
   registry constraint `graphql-schema.yml` already proved). Agreement with annotation
   rows rides the existing first-writer guard + response-shape coalesce unchanged.
@@ -108,8 +113,12 @@ validation pattern, no SOAP word in engine code:
 **`WebServiceTemplate`** (`single_call` rows on `spring-ws.yml`): URI-carrying
 overloads (`marshalSendAndReceive(uri, payload)`) derive the address from the
 literal or config-fed argument; no-URI overloads fall back to `defaultUri` —
-constructor/setter-fed, resolved by 2F's field ladder, **pinned live** (a fixture
-template fed `${soap.billing.uri}` through configuration). The operation identity
+constructor/setter-fed, resolved through the existing **`field_sources` vocabulary**
+declared on `spring-ws.yml` (the mechanism `spring-resttemplate.yml` already uses:
+the call's receiver is the template field, and 2F's ladder walks its constructor/
+`@Value`/config feed — named here so the mechanism is concrete, not implied;
+self-review correction), **pinned live** (a fixture template fed
+`${soap.billing.uri}` through configuration). The operation identity
 lives in the payload argument's JAXB annotations (`@XmlRootElement(name, namespace)`),
 not in the call: the **checkpoint probes whether the argument's type is recoverable
 from existing `call_site` facts**. If yes, one targeted vocabulary form — identity
@@ -149,12 +158,19 @@ extract_libraries:
   ecosystem's coordinate fits a string). Library fact files land under their own
   subtree, `facts/lib/<coordinate>/…` — the 2F/2G collision rule extended, so a
   library class path can never collide with a module class.
-- Honesty structure: an opted-in jar supplies *annotations and shapes*; call-driven
-  styles still derive only where the module's own call sites reach the library's
-  types, so opting in cannot fabricate call-evidenced endpoints. Annotation-driven
-  outbound (Feign-style, §4's stubs) derives from the interface alone — identical to
-  in-module stubs, which is the mechanism's purpose. The dependency tree is never
-  auto-scanned: opt-in, per-library, stated.
+- Honesty structure, stated precisely (self-review correction): call-driven styles
+  derive only where the module's own call sites reach the library's types, so opting
+  in cannot fabricate call-evidenced endpoints; annotation-driven outbound (Feign-
+  style, §4's stubs) derives from the interface alone — identical to in-module stubs,
+  which is the mechanism's purpose. But annotation-driven **inbound** from a library
+  class (a jar carrying `@RestController`/`@Endpoint` classes) derives from
+  annotations alone, and whether those surfaces are active depends on component
+  scanning Sextant cannot see. The rule: **opting a library in asserts it is part of
+  the module's runtime surface** — the user's own claim, made once, per library.
+  Every derivation carries the origin coordinate, and the rendered document marks
+  library-contributed rows, so the assertion is always visible, never laundered into
+  module-observed evidence. The dependency tree is never auto-scanned: opt-in,
+  per-library, stated.
 
 ## 6. Fixtures and checkpoint
 
