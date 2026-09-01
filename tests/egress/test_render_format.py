@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.egress.render.document import render_module_document
@@ -74,20 +76,36 @@ def test_a_null_format_renders_unresolved():
     assert "| `GET /v1/orders` | `com/acme/C#list().` | - → - | unresolved | resolved |" in text
 
 
-def test_a_merged_row_with_a_format_but_a_weaker_marker_still_shows_its_format():
-    """`merge_endpoints.sql` keeps the surviving row's format while taking
-    the WEAKER of the two halves' `format_resolution` markers (schema.sql's
-    own note), so a merged row may carry `(protobuf, unresolved)` — an answer
-    that is still worth showing beside the honest trust marker, per the
-    schema comment's own reading. It must not be silently discarded the way
-    a genuinely NULL format is."""
+@pytest.mark.parametrize(
+    "format_resolution",
+    ["unresolved", "partial"],
+    ids=["merged-row-weaker-marker", "partial-hypothetical"],
+)
+def test_a_present_format_beside_any_non_resolved_marker_still_hedges(format_resolution):
+    """`format_resolution` is the authority on trust (schema.sql's own
+    comment), and the rendered document carries no separate trust column —
+    this Format cell is the ONLY place a reader ever sees it. So `resolved`
+    is the only marker that ever prints unhedged; printing a non-resolved
+    marker plain would make an unresolved-trust value typographically
+    identical to a resolved one, exactly what "an assumed format must never
+    look observed" (2G design §5) forbids (task 8 review round 1).
+
+    Two schema-valid cases: `unresolved` is the `merge_endpoints.sql`
+    exception, where a merged row keeps the surviving format beside the
+    WEAKER of its two halves' markers (schema.sql's own note), so a merged
+    row may carry `(protobuf, unresolved)`. `partial` is D00 §4's closed
+    resolution set's fourth member — no pass in this pipeline emits it for
+    `format_resolution` today, but the renderer must be correct for any
+    schema-valid row, not only the ones live code currently produces."""
     report = ResolveReport(
         facts_loaded=1,
-        endpoints=[_endpoint(format="protobuf", format_resolution="unresolved")],
+        endpoints=[_endpoint(format="protobuf", format_resolution=format_resolution)],
         coverage={"documents": 1, "partial_documents": 0},
     )
     text = render_module_document(MODULE, report, "a3f91c")
-    assert "| `GET /v1/orders` | `com/acme/C#list().` | - → - | protobuf | resolved |" in text
+    assert (
+        "| `GET /v1/orders` | `com/acme/C#list().` | - → - | protobuf (assumed) | resolved |"
+    ) in text
 
 
 def test_the_open_questions_section_lists_wire_identity_question_and_candidates():

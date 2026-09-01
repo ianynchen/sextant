@@ -123,22 +123,26 @@ def _media(value: object) -> str:
 
 def _format(endpoint: dict[str, object]) -> str:
     """The Format column beside Media: `protobuf` at `resolved`, `protobuf
-    (assumed)` at `narrowed`, `unresolved` where the ladder left `format`
+    (assumed)` at anything else, `unresolved` where the ladder left `format`
     NULL — the same NULL-renders-`unresolved` rule `rendered_handler` already
     keeps below (2E precedent).
 
-    Keyed on the VALUE first, not the resolution tier alone: `format` is NULL
-    exactly when `format_resolution` is `unresolved`, EXCEPT after a merge,
-    which keeps the surviving row's format beside the weaker of the two
+    `format_resolution` is the authority on trust (schema.sql's own comment),
+    and this column is the ONLY place a reader sees it — the rendered
+    document carries no separate trust column. So `resolved` is the only
+    marker that ever prints unhedged; every other non-NULL marker hedges,
+    including `narrowed` and a value schema-valid but off today's live
+    surface like `partial`, and including the `merge_endpoints.sql` exception
+    where a merged row keeps a non-NULL format beside the WEAKER of its two
     halves' markers (schema.sql's own note) — a merged row may read
-    `(protobuf, unresolved)`. `format_resolution` stays the authority on
-    trust, but a non-NULL format is still worth showing beside it, so only
-    `narrowed` earns the `(assumed)` suffix; any other non-NULL answer prints
-    plain."""
+    `(protobuf, unresolved)`. Printing that plain would make an
+    unresolved-trust value typographically identical to a resolved one,
+    which is exactly what "an assumed format must never look observed" (2G
+    design §5) forbids (task 8 review round 1)."""
     value = endpoint.get("format")
     if value is None:
         return "unresolved"
-    if endpoint.get("format_resolution") == "narrowed":
+    if endpoint.get("format_resolution") != "resolved":
         return f"{value} (assumed)"
     return str(value)
 
