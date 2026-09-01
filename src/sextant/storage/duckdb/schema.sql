@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS shape_fields (
     shape_id    TEXT,
     ordinal     INTEGER,
     wire_name   TEXT,
+    -- The schema's own field number (protobuf) — NULL for a format with none
+    -- (Avro) and for every bytecode-derived (annotation/reflection) shape,
+    -- which never carries one at all (2G design §3, Task 5).
+    field_number INTEGER,
     wire_type   TEXT,
     wire_format TEXT,
     required    BOOLEAN,

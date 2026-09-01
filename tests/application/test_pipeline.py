@@ -417,6 +417,10 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # selection excludes it, asserted explicitly below.
         (None, "stream-orders"),
         (None, "audit-tap"),
+        # 2G Task 5 (declared shapes): OrderController#createProtoOrder's
+        # generated-protobuf endpoint — its own new route; no client anywhere
+        # in the fixture calls it, so no inbound/outbound merge.
+        ("POST", "/v1/orders/proto-orders"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -569,7 +573,11 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # degrade). None of the four merges: the two resolved destinations are
     # named by nothing else in the fixture, and a NULL path never dedups
     # (SQL's `NULL = NULL` is unknown). 87 + 4 = 91.
-    assert len(report.endpoints) == 91
+    #
+    # 2G Task 5 (declared shapes) adds 1 more: `POST /v1/orders/proto-orders`
+    # (`OrderController#createProtoOrder`, a generated-protobuf payload in
+    # and out) — no merge, nothing else in the fixture calls it. 91 + 1 = 92.
+    assert len(report.endpoints) == 92
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
@@ -1753,10 +1761,12 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
     assert len([e for e in kafka if e["consumes"] == json_media]) == 15
     assert len([e for e in kafka if e["produces"] == json_media]) == 10
 
-    # Untouched: every non-kafka row, including the two HTTP rows that
-    # declare their own media through the annotations (first-writer
-    # discipline — a stamp never overwrites, and these two are the only
-    # pre-existing non-NULL media in the table).
+    # Untouched: every non-kafka row, including the HTTP rows that declare
+    # their own media through the annotations (first-writer discipline — a
+    # stamp never overwrites). 2G Task 5 adds a third: `proto-orders`
+    # declares `produces` only, `consumes` NULL (no `consumes` attribute on
+    # its own `@PostMapping`) — these three are the only pre-existing
+    # non-NULL media in the table.
     declared = {
         (e["protocol"], e["path"], e["consumes"], e["produces"])
         for e in report.endpoints
@@ -1765,6 +1775,7 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
     assert declared == {
         ("http", "/v1/orders/{id}", None, json_media),
         ("http", "/v1/orders/detailed", json_media, json_media),
+        ("http", "/v1/orders/proto-orders", None, json_media),
     }
 
 

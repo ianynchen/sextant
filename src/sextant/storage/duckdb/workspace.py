@@ -101,6 +101,24 @@ _NAMED_QUERIES = {
         WHERE kind = 'symbol' AND json_array_length(payload -> 'interfaces') > 0
         ORDER BY symbol
     """,
+    # Every `declared_shape` fact (2G design §3), keyed by its own `symbol` —
+    # the generated class a compiled schema type travels as, or the schema's
+    # own full name for a source-origin one — with its `fields` JSON array
+    # carried through verbatim for the expansion pass to project. Ordered by
+    # `(symbol, document_id)`, the same tiebreak the interpreter's own sort
+    # uses for a symbol that legitimately arrives twice (a shared nested type
+    # inlined into more than one schema payload), so which occurrence wins a
+    # dict keyed on `symbol` never depends on read order (NFR-1).
+    "declared_shapes": """
+        SELECT payload ->> 'symbol'        AS symbol,
+               payload ->> 'schema_name'   AS schema_name,
+               payload ->> 'schema_format' AS schema_format,
+               payload ->> 'origin'        AS origin,
+               payload ->> 'evidence'      AS evidence,
+               payload ->  'fields'        AS fields
+        FROM raw_facts WHERE kind = 'declared_shape'
+        ORDER BY symbol, document_id
+    """,
     # Every declared method symbol, module-prefixed exactly as the fact wrote
     # it — what `interface_implementation` joins a receiver back to (D02 §2's
     # handler rule). A registration's own receiver argument carries only the

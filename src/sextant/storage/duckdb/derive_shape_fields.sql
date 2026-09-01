@@ -18,18 +18,20 @@
 -- forgetting it existed.
 --
 -- Parameters:
---   $fields -- {shape_id, ordinal, wire_name, wire_type, wire_format, required,
---              nullable, resolution, evidence, item} rows, in ordinal order
+--   $fields -- {shape_id, ordinal, wire_name, field_number, wire_type,
+--              wire_format, required, nullable, resolution, evidence, item}
+--              rows, in ordinal order. `field_number` is NULL except for a
+--              declared shape's own protobuf fields (2G design §3, Task 5).
 INSERT INTO shape_fields (
-    shape_id, ordinal, wire_name, wire_type, wire_format,
+    shape_id, ordinal, wire_name, field_number, wire_type, wire_format,
     required, nullable, resolution, evidence, tags, item
 )
-SELECT f.shape_id, f.ordinal, f.wire_name, f.wire_type, f.wire_format,
+SELECT f.shape_id, f.ordinal, f.wire_name, f.field_number, f.wire_type, f.wire_format,
        f.required, f.nullable, f.resolution, f.evidence, NULL, f.item::JSON
 FROM (SELECT UNNEST(
     $fields::STRUCT(
-        shape_id VARCHAR, ordinal INTEGER, wire_name VARCHAR, wire_type VARCHAR,
-        wire_format VARCHAR, required BOOLEAN, nullable BOOLEAN,
+        shape_id VARCHAR, ordinal INTEGER, wire_name VARCHAR, field_number INTEGER,
+        wire_type VARCHAR, wire_format VARCHAR, required BOOLEAN, nullable BOOLEAN,
         resolution VARCHAR, evidence VARCHAR, item VARCHAR
     )[]
 ) AS f)

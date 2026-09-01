@@ -38,6 +38,7 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     rules = _rules_of(catalog)
     scope_prefixes = _scope_prefixes(workspace, rules)
     declared = _declared_fields(workspace)
+    descriptors = _declared_shapes(workspace)
     enums = _enum_symbols(workspace)
     shapes: list[dict[str, object]] = []
     fields: list[dict[str, object]] = []
@@ -53,14 +54,24 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
             continue
         expanded.add(shape_id)
         referenced: list[str] = []
-        rows = _rows_of(
-            workspace, rules, scope_prefixes, declared.get(shape_id, []), enums, referenced
-        )
+        # A type owning a `declared_shape` takes ONLY its declared fields,
+        # never bytecode ones (the never-a-blend rule, D01 §3): a compiled
+        # schema class's own fields are serializer machinery — bitfields,
+        # cached hash codes — not the wire contract the schema states, so
+        # `declared.get(shape_id, [])` is never consulted once a descriptor
+        # is found here.
+        descriptor = descriptors.get(shape_id)
+        if descriptor is not None:
+            rows = _declared_rows_of(descriptor, referenced)
+        else:
+            rows = _rows_of(
+                workspace, rules, scope_prefixes, declared.get(shape_id, []), enums, referenced
+            )
         pending.extend(referenced)
         # Expansion needs field facts, and only scanned types have them, so a
         # type without them stops here whoever wrote it (ruling F4). Its
         # reference is still kept: an open, zero-field shape row (D2).
-        expandable = shape_id in declared
+        expandable = descriptor is not None or shape_id in declared
         if not expandable:
             unexpanded.append(shape_id)
         shapes.append(
@@ -69,7 +80,10 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
                 "content_hash": _content_hash(rows),
                 # Direct, never transitive: a shape is open because a field of
                 # its own stopped, not because something further down did.
-                "open": not expandable or any(held not in declared for held in referenced),
+                # A referenced type closes the field either way it can be
+                # expanded — bytecode fields or a declared shape's own.
+                "open": not expandable
+                or any(held not in declared and held not in descriptors for held in referenced),
             }
         )
         fields.extend(
@@ -162,6 +176,28 @@ def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
     return owners
 
 
+def _declared_shapes(workspace: Workspace) -> dict[str, dict[str, Any]]:
+    """Every `declared_shape` fact (2G design §3), keyed by its own `symbol` —
+    the lookup a payload type reference meets once expansion reaches it. A
+    compiled shape's symbol is the generated class it travels as, so this is
+    the same grammar `_declared_fields` above keys bytecode owners on, and a
+    `shape_id` this pass reaches through a field reference joins either map.
+
+    A symbol may legitimately arrive more than once — a shared nested type is
+    declared once per schema payload that inlines it (2G design §3's own
+    interpreter docstring) — so later rows win; ordered by `(symbol,
+    document_id)` first, the interpreter's own sort key, so which row that is
+    never depends on read order (NFR-1).
+    """
+    return {
+        str(row["symbol"]): {
+            "evidence": str(row["evidence"]),
+            "fields": json.loads(str(row["fields"])),
+        }
+        for row in workspace.query("declared_shapes")
+    }
+
+
 def _enum_symbols(workspace: Workspace) -> set[str]:
     """The declared types the facts call enumerations, as the descriptors a
     type reference is keyed on.
@@ -216,6 +252,9 @@ def _rows_of(
         rows.append(
             {
                 "wire_name": wire_name,
+                # NULL: no schema format numbers a bytecode-derived field —
+                # only a `declared_shape`'s own fields ever carry one.
+                "field_number": None,
                 "wire_type": described["wire_type"],
                 "wire_format": described["wire_format"],
                 # Presence machinery only, never nullability (D00 §5b): the
@@ -230,6 +269,82 @@ def _rows_of(
             }
         )
     return rows
+
+
+def _declared_rows_of(shape: dict[str, Any], referenced: list[str]) -> list[dict[str, object]]:
+    """One projected row per `DeclaredFieldFact`, appending every shape a field
+    references to `referenced` — `_rows_of`'s declared-shape counterpart.
+
+    Nothing here is re-derived: `wire_name`, `wire_type`, `wire_format`,
+    `field_number`, `required` and `nullable` already arrive in D00 §5b's wire
+    vocabulary, projected by the interpreter that understands the schema
+    format (2G design §3), so this only reshapes them into the row grammar
+    `_rows_of` also produces — never re-answers a question the schema already
+    settled. `resolution` is `"resolved"` throughout: a schema's own
+    presence/nullability rule is as settled an answer as a known type's own
+    override (`_nullability_of`'s same-named branch). `evidence` is the
+    shape's own — `compiler` for a schema compiled into the artifact,
+    `declared` for one read off a repository file (D00 §3) — one shape, one
+    evidence tier, for every field it declares.
+    """
+    rows: list[dict[str, object]] = []
+    for field in shape["fields"]:
+        target = field.get("shape_ref")
+        if target is not None:
+            referenced.append(str(target))
+        elif field.get("item") is not None:
+            referenced.extend(_declared_referenced(field["item"]))
+        rows.append(
+            {
+                "wire_name": field["wire_name"],
+                "field_number": field.get("field_number"),
+                "wire_type": field["wire_type"],
+                "wire_format": field.get("wire_format"),
+                "required": field["required"],
+                "nullable": field["nullable"],
+                "resolution": "resolved",
+                "evidence": shape["evidence"],
+                "item": _declared_item_of(field),
+            }
+        )
+    return rows
+
+
+def _declared_item_of(field: dict[str, Any]) -> str | None:
+    """`_item_of`'s declared-shape counterpart: a collection field's `item`
+    already carries D01 §5's recursive descriptor verbatim (the interpreter
+    built it); a singular object field has no such descriptor of its own —
+    only `shape_ref`, its bare symbol — so one is assembled here from the
+    field's own wire columns, the same shape `_item_of` gives a bytecode
+    object field."""
+    if field.get("item") is not None:
+        return json.dumps(field["item"], sort_keys=True, separators=(",", ":"))
+    if field.get("shape_ref") is None:
+        return None
+    held = {
+        "wire_type": field["wire_type"],
+        "wire_format": field.get("wire_format"),
+        "nullable": field["nullable"],
+        "shape_id": field["shape_ref"],
+    }
+    return json.dumps(held, sort_keys=True, separators=(",", ":"))
+
+
+def _declared_referenced(item: dict[str, Any]) -> list[str]:
+    """Every shape a collection's `item` chain reaches, walking `item.item`
+    the way `_shape_roots_of` (contracts.py) walks a finished descriptor
+    column — needed here because a declared collection can nest (Avro's
+    array-of-array), and each level's own `shape_id` must still reach the
+    expansion queue."""
+    found: list[str] = []
+    node: dict[str, Any] | None = item
+    while node is not None:
+        shape_id = node.get("shape_id")
+        if shape_id is not None:
+            found.append(str(shape_id))
+        held = node.get("item")
+        node = held if isinstance(held, dict) else None
+    return found
 
 
 def _wire_name(

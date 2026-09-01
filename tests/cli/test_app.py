@@ -55,9 +55,11 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # pre-pass's `@ApiGet` composition). Phase 2E Task 7: +2 more
     # (`GET /api/orders`, `GET /api/composed`, the inherited-mappings
     # pass). Phase 2E Task 9: +10 more (the `combinator` engine's WebFlux
-    # functional-routing tree, both DSLs) — see test_pipeline.py's own
-    # dedicated row-level test for the full breakdown.
-    assert metadata["endpoints"]["inbound"]["http"] == 31
+    # functional-routing tree, both DSLs). 2G Task 5: +1 more
+    # (`POST /v1/orders/proto-orders`, the generated-protobuf payload
+    # endpoint) — see test_pipeline.py's own dedicated row-level test for
+    # the full breakdown.
+    assert metadata["endpoints"]["inbound"]["http"] == 32
 
 
 def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_path: Path):

@@ -216,9 +216,11 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # `both` row in BOTH buckets, so kafka reads 12 + 3 = 15 inbound and
     # 6 + 1 = 7 outbound, plus the 3 unchanged `both` rows on each side —
     # 15 and 10. `87 + 4 = 91` total.
+    # 2G Task 5 (declared shapes): +1 http inbound —
+    # `POST /v1/orders/proto-orders`, unmerged. `91 + 1 = 92` total.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
-        "http": 31,
+        "http": 32,
         "jms": 3,
         "kafka": 15,
         "pubsub": 3,
@@ -307,4 +309,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # `both` unchanged (neither resolved destination has a twin, and a
     # path-NULL row never merges): inbound 45 + 3 = 48, outbound 37 + 1 = 38
     # — the 91-endpoint total (5 + 48 + 38 = 91).
-    assert rows == [("both", 5), ("inbound", 48), ("outbound", 38)]
+    # 2G Task 5 (declared shapes): +1 inbound, unmerged —
+    # `POST /v1/orders/proto-orders`: inbound 48 + 1 = 49 — the 92-endpoint
+    # total (5 + 49 + 38 = 92).
+    assert rows == [("both", 5), ("inbound", 49), ("outbound", 38)]
