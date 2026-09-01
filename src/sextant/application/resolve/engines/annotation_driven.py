@@ -9,7 +9,7 @@ parameters. No framework name appears in this module's code.
 import json
 from typing import Any
 
-from sextant.application.ports.catalogs import Catalog
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_annotations import (
     composed_mapping_rows,
@@ -26,6 +26,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     engine here is generic: it never names a framework or a protocol, only
     forwards what the catalog declares."""
     mapping = catalog.matches["mapping"]
+    _validate_naming(catalog, mapping)
     type_annotation = catalog.matches.get("type_annotation")
     type_annotation_fqn = None if type_annotation is None else _catalog_symbol(type_annotation)
     prefix_annotation = mapping["prefix_annotation"]
@@ -56,6 +57,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # change — the HTTP catalogs are the only ones that declare these.
         consumes_from=list(mapping.get("consumes_from", [])),
         produces_from=list(mapping.get("produces_from", [])),
+        # 2H design §1's two naming forms, both optional and both inert
+        # unless declared. `path_fallback` says what the declared name is when
+        # every `path_from` alias is absent; `qualifier_from`/
+        # `qualifier_separator` compose a scope named on the SAME annotation
+        # in front of that name. Absent on every catalog written before them,
+        # which is what keeps their derivations byte-identical.
+        path_fallback=mapping.get("path_fallback"),
+        qualifier_from=list(mapping.get("qualifier_from", [])),
+        qualifier_separator=mapping.get("qualifier_separator"),
         # 2E design §2, §3: the effective-annotations pre-pass widens
         # this catalog's own mapping fqns to every module-local annotation
         # type transitively meta-annotated with one of them PLUS, for a
@@ -74,6 +84,38 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # second-row rule at all — the HTTP catalogs, which never see @SendTo.
     if "reply" in catalog.matches:
         _derive_replies(workspace, catalog)
+
+
+# The sources a declared name may fall back to when the annotation carries
+# none (2H design §1, form 1). A closed vocabulary rather than a boolean, so
+# a second source is a new word here instead of a second catalog key — and so
+# a typo is refused rather than read as "no fallback", which would silently
+# restore the empty path this form exists to remove.
+_PATH_FALLBACKS = frozenset({"construct_name"})
+
+
+def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
+    """Refuses a mapping block whose naming vocabulary cannot be honoured.
+
+    Both checks catch a file that would otherwise derive quietly wrong
+    addresses rather than fail: an unknown `path_fallback` would fall through
+    to the empty default, and a `qualifier_from` with no separator would
+    concatenate a scope onto a name with nothing between them. Neither is
+    distinguishable downstream from something observed, which is the same
+    reason the loader checks `protocol`/`direction` at the edge (NFR-5).
+    """
+    fallback = mapping.get("path_fallback")
+    if fallback is not None and fallback not in _PATH_FALLBACKS:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.path_fallback: {fallback}` is not one "
+            f"of {', '.join(sorted(_PATH_FALLBACKS))} (2H design §1)"
+        )
+    if mapping.get("qualifier_from") and mapping.get("qualifier_separator") is None:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.qualifier_from` is declared with no "
+            f"`mapping.qualifier_separator` — what joins a scope to the name it qualifies is "
+            f"catalog data, and this engine names no punctuation of its own (2H design §1)"
+        )
 
 
 def _synthetic_annotations(

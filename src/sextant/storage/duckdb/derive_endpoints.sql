@@ -44,6 +44,24 @@
 --   $produces_from       -- attribute names the mapping annotation's declared
 --                           response media types are read from; same rules as
 --                           $consumes_from.
+--   $path_fallback       -- what the declared name is when every $path_from
+--                           attribute is ABSENT, or NULL to keep the empty
+--                           default. Today's one word is 'construct_name':
+--                           the annotated construct's own name. A closed
+--                           vocabulary rather than a boolean, so a second
+--                           source is a new word here, not a second key.
+--   $qualifier_from      -- attribute names holding the SCOPE the declared
+--                           name sits inside, read off the SAME (method-level)
+--                           annotation, first present wins — kept apart from
+--                           $prefix_from, which reads a TYPE-level annotation
+--                           through an entirely different join. Empty where a
+--                           catalog declares no such scope, which is every
+--                           catalog but the ones that need it.
+--   $qualifier_separator -- what joins a qualifier to the name it qualifies.
+--                           Catalog data, never a literal here: which
+--                           punctuation separates a scope from a member is a
+--                           framework's convention, and an engine that baked
+--                           one in would be naming a framework in code.
 --   $synthetic_annotations -- Task 6 (D02 §2, §3): rows the effective-
 --                           annotations pre-pass (`resolve/effective_annotations.py`)
 --                           synthesizes for a module-local composed annotation
@@ -134,7 +152,17 @@ declared AS (
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
-        ), v -> v IS NOT NULL), 1) AS produces_list
+        ), v -> v IS NOT NULL), 1) AS produces_list,
+        -- The SCOPE this declaration's name sits inside, read off the same
+        -- annotation that carries the name (2H design §1, form 2). Scalar-or-
+        -- array and first-alias-wins like every other attribute read here.
+        -- NULL where the annotation names no scope, which is what keeps the
+        -- composition below a no-op for the annotations that carry a bare
+        -- name and for every catalog declaring no `$qualifier_from` at all.
+        list_extract(list_filter(list_transform(
+            $qualifier_from::VARCHAR[],
+            n -> coalesce(a.args -> n ->> 0, a.args ->> n)
+        ), v -> v IS NOT NULL), 1) AS qualifier
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
 ),
@@ -166,7 +194,8 @@ mapped_methods AS (
                        THEN [CAST(NULL AS VARCHAR)] ELSE d.methods END) AS wire_method,
            d.paths AS paths,
            d.consumes_list AS consumes_list,
-           d.produces_list AS produces_list
+           d.produces_list AS produces_list,
+           d.qualifier AS qualifier
     FROM declared d
 ),
 mappings AS (
@@ -174,7 +203,8 @@ mappings AS (
            mm.wire_method AS wire_method,
            UNNEST(mm.paths) AS path_suffix,
            mm.consumes_list AS consumes_list,
-           mm.produces_list AS produces_list
+           mm.produces_list AS produces_list,
+           mm.qualifier AS qualifier
     FROM mapped_methods mm
 ),
 derived AS (
@@ -182,7 +212,36 @@ derived AS (
         $protocol   AS protocol,
         $direction  AS direction,
         m.wire_method AS method,
-        coalesce(p.prefix, '') || m.path_suffix AS path,
+        -- Three fragments, in address order (2H design §1): the TYPE-level
+        -- prefix, the scope this declaration names on its own annotation, and
+        -- the declared name itself.
+        --
+        -- Both new fragments are inert unless a catalog asks for them —
+        -- `$qualifier_from` empty leaves `m.qualifier` NULL, `$path_fallback`
+        -- NULL fails its equality — so every catalog written before them
+        -- composes exactly `coalesce(p.prefix, '') || m.path_suffix`, which is
+        -- what this expression was.
+        --
+        -- The fallback fires only on an EMPTY suffix, which is the same fact
+        -- as "every `$path_from` alias was absent" (`declared` defaults the
+        -- list to `['']`). An annotation's declared default is not in the
+        -- bytecode, so absent and defaulted are one thing, and a framework
+        -- whose default IS the construct's own name is describing an
+        -- identity that is present in the code rather than one nobody wrote.
+        -- Reading it as '' instead published a resolved endpoint with no
+        -- address — the failure D02 §2 already names for `path_from`
+        -- ("wrong output rather than a missing one"), reached by a second
+        -- route.
+        coalesce(p.prefix, '')
+            || CASE WHEN m.qualifier IS NOT NULL
+                    THEN m.qualifier || $qualifier_separator ELSE '' END
+            || CASE WHEN m.path_suffix = '' AND $path_fallback = 'construct_name'
+                    -- The construct's own name, off the symbol the join below
+                    -- already resolved. D00 §1's descriptor puts it between
+                    -- the type separator and the signature — the shape
+                    -- `$method_from`'s own read above already relies on.
+                    THEN regexp_extract(s.symbol, '#([A-Za-z0-9_]+)\(', 1)
+                    ELSE m.path_suffix END AS path,
         -- The symbol lands by direction (D01 §3, amended): the server side
         -- handles, the client side calls, and a later merge may hold both.
         CASE WHEN $direction = 'outbound' THEN NULL ELSE s.symbol END AS handler,

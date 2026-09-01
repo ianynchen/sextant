@@ -307,6 +307,193 @@ def _invented_listener_facts(root: Path) -> None:
     write_fact_file(root / "OrderListener.jsonl", document, facts)
 
 
+# --- 2H design §1: the two naming forms, on an invented framework ---------
+#
+# Deliberately NOT GraphQL, and deliberately not Spring: the forms are engine
+# vocabulary, so a test that could only be written with `@QueryMapping` in it
+# would be pinning a framework rather than a mechanism. The fixture below
+# declares an annotation with a `scope` attribute and a `value` attribute and
+# nothing else, which is the shape Spring GraphQL, Netflix DGS and
+# MicroProfile all happen to share.
+
+
+def _naming_forms_catalog(**mapping: object) -> Catalog:
+    """A gateless catalog over the invented annotation below, with whatever
+    naming vocabulary a test wants layered on."""
+    return Catalog(
+        id="invented-naming",
+        style="annotation_driven",
+        protocol="kafka",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-naming.yml"),
+        matches={
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": [],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": None,
+                "annotations": [{"fqn": "com.acme.messaging.annotation.OnMessage"}],
+                **mapping,
+            }
+        },
+    )
+
+
+def _naming_forms_facts(root: Path) -> None:
+    """Four declarations covering every combination the two forms produce: a
+    name spelled out, a name left to the construct, a scope with a spelled
+    name, and a scope with a defaulted one."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/notify/NamedHandlers.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    owner = "com/acme/notify/NamedHandlers#"
+    facts: list[object] = [
+        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS)
+    ]
+    # `args` mirrors what a real extractor emits: an ABSENT attribute is
+    # absent from the map entirely — an annotation's declared default is
+    # never written into the class file (2H checkpoint answer 1).
+    declarations = {
+        "explicit": {"value": ["named"]},
+        "defaulted": {},
+        "scoped": {"scope": "Parent", "value": ["member"]},
+        "scopedDefaulted": {"scope": "Parent"},
+    }
+    for name, args in declarations.items():
+        symbol = f"{owner}{name}(sig_3d92af60)."
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=symbol,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+            )
+        )
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=symbol,
+                retention="runtime",
+                use=AnnotationUse(annotation="com/acme/messaging/annotation/OnMessage#", args=args),
+            )
+        )
+    write_fact_file(root / "NamedHandlers.jsonl", document, facts)
+
+
+def _paths_of(tmp_path: Path, catalog: Catalog) -> set[str]:
+    _naming_forms_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+    return paths
+
+
+def test_a_catalog_declaring_no_naming_forms_derives_exactly_what_it_always_did(
+    tmp_path: Path,
+):
+    """The inertness pin. Both forms are optional, and a catalog that declares
+    neither must compose `prefix || suffix` and nothing else — which is what
+    lets them ship without touching the behaviour of every catalog written
+    before them.
+
+    The empty paths below are the PRE-2H behaviour, recorded here rather than
+    quietly fixed: an absent attribute defaulted to `''`. That is the bug the
+    next test removes, and it is only reachable by a catalog that asks for
+    none of the vocabulary that removes it.
+    """
+    assert _paths_of(tmp_path, _naming_forms_catalog()) == {"named", "member", ""}
+
+
+def test_an_absent_name_attribute_falls_back_to_the_constructs_own_name(
+    tmp_path: Path,
+):
+    """Form 1. `defaulted` and `scopedDefaulted` carry the annotation with no
+    `value` at all, and each takes the name of the method it sits on.
+
+    The two spelled names are asserted UNCHANGED in the same breath: the
+    fallback fires on absence only, never as a rename of something declared.
+    """
+    paths = _paths_of(tmp_path, _naming_forms_catalog(path_fallback="construct_name"))
+
+    assert paths == {"named", "member", "defaulted", "scopedDefaulted"}
+
+
+def test_a_scope_attribute_composes_in_front_of_the_name_it_qualifies(
+    tmp_path: Path,
+):
+    """Form 2, composing with form 1.
+
+    `scoped` spells both halves; `scopedDefaulted` spells the scope and takes
+    the name from the method — the two forms meeting, which is the case that
+    would need its own bespoke rule if they were not separable. The two
+    declarations carrying NO scope compose no separator either: a qualifier
+    that is absent contributes nothing rather than a leading `.`.
+    """
+    paths = _paths_of(
+        tmp_path,
+        _naming_forms_catalog(
+            path_fallback="construct_name",
+            qualifier_from=["scope"],
+            qualifier_separator=".",
+        ),
+    )
+
+    assert paths == {"named", "defaulted", "Parent.member", "Parent.scopedDefaulted"}
+
+
+def test_the_separator_is_catalog_data_rather_than_a_punctuation_the_engine_picked(
+    tmp_path: Path,
+):
+    """Which character joins a scope to a member is a framework's convention —
+    GraphQL's `.`, another framework's `#` or `/`. An engine that baked one in
+    would be naming a framework in code, which D02 §2 forbids for exactly the
+    reasons it forbids naming an annotation there."""
+    paths = _paths_of(
+        tmp_path,
+        _naming_forms_catalog(qualifier_from=["scope"], qualifier_separator="#"),
+    )
+
+    assert "Parent#member" in paths
+
+
+def test_a_catalog_naming_an_unknown_name_fallback_is_refused_by_file(tmp_path: Path):
+    """An unrecognised word must fail loudly rather than fall through to the
+    empty default — a silent fall-through would restore the very empty-path
+    row the form exists to remove, and nothing downstream could tell that
+    address from an observed one (NFR-5)."""
+    with pytest.raises(CatalogError) as raised:
+        _paths_of(tmp_path, _naming_forms_catalog(path_fallback="parameter_name"))
+
+    assert "parameter_name" in str(raised.value)
+    assert "invented-naming.yml" in str(raised.value)
+
+
+def test_a_qualifier_with_no_separator_is_refused_by_file(tmp_path: Path):
+    """Declaring a scope but no separator would concatenate `Parent` onto
+    `member` with nothing between them — a plausible-looking address that
+    matches no caller."""
+    with pytest.raises(CatalogError) as raised:
+        _paths_of(tmp_path, _naming_forms_catalog(qualifier_from=["scope"]))
+
+    assert "qualifier_separator" in str(raised.value)
+    assert "invented-naming.yml" in str(raised.value)
+
+
 def test_derive_endpoints_carries_the_catalogs_own_protocol_and_direction_when_non_http(
     tmp_path: Path,
 ):
