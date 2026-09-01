@@ -122,13 +122,18 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
     # each of its characters individually from either half, composing an
     # address the framework does not serve. An explicitly EMPTY one declares a
     # composition with nothing between the halves, which is what a catalog
-    # declaring no separator at all already gets. Both are refused here rather
-    # than read as something they are not.
-    if separator is not None and len(str(separator)) != 1:
+    # declaring no separator at all already gets — omitting the key is the
+    # supported way to say that, so the key spelled empty is refused instead
+    # of silently doing the same thing. A non-string YAML scalar (an int, a
+    # bool) is refused for the same reason: `len(str(5))` coerces to `"5"`
+    # and would pass a naive length check, joining paths with a character
+    # nobody wrote. All three are refused here rather than read as something
+    # they are not.
+    if separator is not None and (not isinstance(separator, str) or len(separator) != 1):
         raise CatalogError(
             f"loading catalog {catalog.source}: `mapping.path_separator: {separator!r}` is not a "
-            f"single character — the prefix seam is deduped character-wise, so a longer "
-            f"separator would compose an address the framework does not serve"
+            f"single character — the prefix seam is deduped character-wise, so a separator that "
+            f"isn't exactly one character would compose an address the framework does not serve"
         )
     fallback = mapping.get("path_fallback")
     if fallback is not None and fallback not in _PATH_FALLBACKS:
@@ -143,15 +148,26 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
     separator = mapping.get("qualifier_separator")
     # An ABSENT separator joins a scope to a name with nothing between them
     # (`Parentmember`); an explicitly EMPTY one does exactly the same thing
-    # while passing an `is None` check, so both are refused by one test. An
-    # empty separator has no honest use: a framework that concatenates the two
-    # halves with nothing between them has no composition to declare.
-    if not separator:
+    # while passing an `is None` check, so both are refused by the same
+    # message here. An empty separator has no honest use: a framework that
+    # concatenates the two halves with nothing between them has no
+    # composition to declare.
+    if separator is None or separator == "":
         raise CatalogError(
             f"loading catalog {catalog.source}: `mapping.qualifier_from` is declared with no "
             f"usable `mapping.qualifier_separator` (got {separator!r}) — what joins a scope to "
             f"the name it qualifies is catalog data, and this engine names no punctuation of "
             f"its own (2H design §1)"
+        )
+    # Anything else that isn't exactly one STRING character (a YAML int/bool,
+    # a multi-character string) would compose an address nobody serves — the
+    # same failure mode `path_separator` is checked for, and the same reason.
+    if not isinstance(separator, str) or len(separator) != 1:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.qualifier_separator: {separator!r}` is "
+            f"not a single character — what joins a scope to the name it qualifies is a single "
+            f"piece of punctuation, and a value that isn't exactly one character would compose "
+            f"an address the framework does not serve"
         )
     # Without a fallback, an annotation carrying a scope and no name composes
     # the scope and the separator onto nothing — a dangling `Parent.`, which

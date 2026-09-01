@@ -2265,9 +2265,12 @@ def test_the_messagebuilder_kafka_chain_resolves_its_topic_but_not_its_bare_payl
 
 # --- 2F Task 7: the `config_join` engine, live ---------------------------
 #
-# Every assertion below is pinned from the live run this task froze —
-# `uv run sextant module analyze fixtures/orders-service`, 91 endpoints,
-# extractor 9.8 — not computed from the plan.
+# Every assertion below is pinned from a live run —
+# `uv run sextant module analyze fixtures/orders-service` (today 117
+# endpoints total, per `test_resolve_finds_every_fixture_endpoint_exactly_
+# once_when_run_end_to_end`'s own count; 91 when this task froze the
+# assertions below, before later tasks grew the fixture), extractor 9.8 —
+# not computed from the plan.
 
 BEANS = "com/acme/orders/streams/OrderStreamBindings#"
 ORDER_EVENT_PAYLOAD = {
@@ -2657,9 +2660,11 @@ def test_the_format_ladder_answers_every_live_row(
 
 # --- 2F Task 8: the field ladder and base composition, live --------------
 #
-# Pinned from the live run this task froze — `uv run sextant module analyze
-# fixtures/orders-service`, still 91 endpoints (these four rows CHANGE; none
-# is added or removed), extractor 9.8.
+# Pinned from a live run — `uv run sextant module analyze
+# fixtures/orders-service` (today 117 endpoints total, same as Task 7 above;
+# still 91 when THIS task froze the assertions below), extractor 9.8. The
+# total is unmoved by this task either way: these four rows CHANGE, none is
+# added or removed.
 
 BILLING_CLIENTS = "com/acme/orders/config/BillingClients#"
 
