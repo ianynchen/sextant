@@ -21,14 +21,15 @@ schema format (2H design §2).
 **What it derives** is one row per field of a root type, at the wire identity
 D01 states for a root operation — `(graphql, query|mutation|subscription,
 <field>)`, the operation-kind column value coming from the catalog.
-`direction` and `protocol` are the catalog's own; `evidence` is `declared`
-(2H design §2: the schema is a file in the repository, and the format whose
-roots are operations has no compiled origin); `resolution` is `resolved`,
-because the schema states the operation outright and nothing about the
-address was left unread. `handler` and `caller` are both NULL: the schema
-names no code, and the wiring that would is explicitly not read (2H design
-§3, recorded as a COVERAGE boundary). `request_shape` is NULL for the same
-kind of reason — a root field's ARGUMENTS are what the operation takes, and
+`direction` and `protocol` are the catalog's own; `evidence` is the
+DECLARING SHAPE'S OWN tier, so a row never claims one the schema did not earn
+(a schema file in the repository is `declared`, one the compiler embedded is
+`compiler` — D00 §3, and the shape's fact already decided which); `resolution`
+is `resolved`, because the schema states the operation outright and nothing
+about the address was left unread. `handler` and `caller` are both NULL: the
+schema names no code, and the wiring that would is explicitly not read (2H
+design §3, recorded as a COVERAGE boundary). `request_shape` is NULL for the
+same kind of reason — a root field's ARGUMENTS are what the operation takes, and
 the interpreter deliberately does not project them, so there is nothing here
 to carry.
 
@@ -54,7 +55,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.domain.closed_sets import Evidence, Resolution
+from sextant.domain.closed_sets import Resolution
 
 _OPERATIONS = "schema_operations"
 
@@ -110,7 +111,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             if (str(method), path) in seen:
                 continue
             seen.add((str(method), path))
-            rows.append(_row(catalog, str(method), path))
+            rows.append(_row(catalog, str(method), path, str(shape["evidence"])))
             stamps.append(
                 {
                     "protocol": catalog.protocol,
@@ -125,11 +126,17 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     workspace.derive("stamp_declared_response", rows=stamps)
 
 
-def _row(catalog: Catalog, method: str, path: str) -> dict[str, Any]:
+def _row(catalog: Catalog, method: str, path: str, evidence: str) -> dict[str, Any]:
     """One root operation's row. Every column this style cannot speak for is
     NULL rather than filled with a plausible value — the schema declares an
     operation and its type, and says nothing whatever about the code that
     serves it, the media it negotiates, or the arguments' own shapes.
+
+    `evidence` is the DECLARING SHAPE's own, carried rather than restated: the
+    interpreter already decided which tier a schema earned (D00 §3 —
+    `declared` for a repository file, `compiler` for one the build embedded),
+    and a literal here would be this engine claiming a tier on the schema's
+    behalf, wrong the first time a format arrives with a compiled origin.
 
     `response_shape` is NULL HERE and filled by the stamp, not set on the row:
     the schema's answer must reach the annotation twin that blocked this row
@@ -146,7 +153,7 @@ def _row(catalog: Catalog, method: str, path: str) -> dict[str, Any]:
         "peer": None,
         "handler_signature": None,
         "resolution": str(Resolution.RESOLVED),
-        "evidence": str(Evidence.DECLARED),
+        "evidence": evidence,
         "catalog_id": catalog.id,
         "request_shape": None,
         "response_shape": None,

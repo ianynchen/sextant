@@ -73,13 +73,16 @@ def derive_endpoints(
     # inbound before outbound, filename breaking the tie within a direction,
     # which is the loader's own order.
     #
-    # One style sorts ahead of all of that, or rather behind it: a `_RUNS_LAST`
-    # style enriches rows the other engines minted (above), so its own
-    # declared direction says nothing about when it must run. Its rows are
-    # therefore also the last to face `derive_call_endpoints.sql`'s
-    # insert-if-absent guard, which is a real consequence and not an
-    # accident: a wire identity another catalog already recorded stays that
-    # catalog's row.
+    # Some styles sort ahead of all of that, or rather behind it: a
+    # `_RUNS_LAST` style enriches rows the other engines minted (above), so
+    # its own declared direction says nothing about when it must run. Its rows
+    # therefore face `derive_call_endpoints.sql`'s insert-if-absent guard
+    # after every ANNOTATION and CALL-SITE style has written — which is a real
+    # consequence and not an accident: a wire identity one of those catalogs
+    # already recorded stays that catalog's row. (Not "last" outright: within
+    # the runs-last group the ranks below decide, and two members of it are
+    # ordered against each other by `_derives_rows` and then the tiebreaks,
+    # exactly as any two catalogs are.)
     #
     # `_derives_rows` then orders WITHIN that group, for the same reason one
     # level down: a catalog that only stamps must not run before one that

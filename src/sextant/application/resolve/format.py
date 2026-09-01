@@ -75,6 +75,25 @@ from sextant.domain.symbols import bare_descriptor, package_path
 _MEDIA_BLOCK = "media_from_config"
 _FORMAT_FROM = "format_from"
 
+# What rung 4 is allowed to say. A `declared_shape`'s `schema_format` names
+# the SCHEMA LANGUAGE that described the payload (D00 §5), and only some
+# schema languages are also wire formats: protobuf and Avro define an
+# encoding, so "described by this schema" really does suggest bytes; a schema
+# language that defines no encoding of its own — GraphQL states a type system
+# and leaves the transport to say how it is written — suggests nothing this
+# column can hold.
+#
+# `endpoints.format` is closed at D00's six values (NFR-5) and the stamp does
+# not re-check what the pass hands it (`stamp_format.sql` applies, it does not
+# decide), so a rung 4 that published its input verbatim would put a
+# non-member straight into a closed column — where a reader cannot tell it
+# from an observation. The rung is therefore silent for such a shape, and the
+# row falls to a weaker rung or to `unresolved`, which is the honest answer:
+# nothing here knows what is on that wire. (2H Task 4 review: the graphql
+# `declared_shape` facts made this reachable, and rung 1's `format_fixed` is
+# what masks it on today's live rows — a mask is not a rule.)
+_WIRE_FORMATS = frozenset(member.value for member in Format)
+
 # The two evidence tiers a schema-described shape may carry (2G design §3):
 # `compiler` for a schema compiled into the artifact, `declared` for one read
 # off a repository file. Every `declared_shape` fact carries one of them
@@ -274,12 +293,17 @@ def _payload_candidates(
     encoding, so a schema-described payload is evidence about the payload's
     type, not a statement about the bytes. Rungs 1-3 have already had their
     say by the time this runs, which is exactly the precedence the design
-    asks for."""
+    asks for.
+
+    **A schema language that is not also a wire format contributes nothing**
+    (`_WIRE_FORMATS`, above, states why): the shape stays schema-described —
+    rung 5 still excludes it as anything but ordinary — and this rung simply
+    has no answer to give for it."""
     return [
         {"format": described[root]["schema_format"], "seen_in": column, "why": root}
         for column in _PAYLOAD_COLUMNS
         for root in _shape_roots_of(endpoint.get(column))
-        if root in described
+        if root in described and described[root]["schema_format"] in _WIRE_FORMATS
     ]
 
 

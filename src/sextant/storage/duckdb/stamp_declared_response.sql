@@ -33,6 +33,14 @@
 --     its own handler signature really serializes, and the schema's declared
 --     type is what a row with nothing else to say ends up publishing.
 --
+-- The narrowest corner of that — a handler with a REQUEST payload and no
+-- response, whose owner is therefore in `$contracts` with a NULL response
+-- answer, so the stamped type is nulled again and the row publishes no
+-- response at all — is pinned as a test
+-- (`test_a_handler_with_a_request_and_no_response_ends_with_response_shape_null`).
+-- Moving this statement relative to the shape pass changes that published
+-- column, so it must fail a test and be argued for rather than flip silently.
+--
 -- Parameters:
 --   $rows -- {protocol, direction, method, path, response_shape} rows, one per
 --            root-operation identity the pass derived, already deduplicated on
