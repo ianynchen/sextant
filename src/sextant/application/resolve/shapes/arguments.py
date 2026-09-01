@@ -241,16 +241,48 @@ _ANNOTATION_VALUE_ARG = "value"
 # exactly this delimiter pair). Rungs 1 and 2 return an expression the facts
 # already spell; rung 3 SYNTHESISES one from a prefix and a property name, so
 # it is the one rung that has to write the delimiters itself.
+#
+# Written here rather than read from a `config_model` for the same reason the
+# relaxed-binding rule below is applied unconditionally: `placeholders` and
+# `key_matching` are declared on the framework FAMILY's base catalog, and a
+# client catalog — the only thing this ladder is handed — cannot see them.
+# `resolved_peers`' own SQL already hard-codes this same pair, so one form is
+# assumed in exactly two places rather than one; a non-`${}` ecosystem has to
+# thread the pair onto `field_sources` and into that query together.
 _PLACEHOLDER = ("${", "}")
+
+
+def carries_expression(text: str) -> bool:
+    """Whether an address carries a D01 placeholder — an OPEN delimiter with
+    a matching CLOSE after it, `resolve/config.py`'s own reading (an
+    unterminated `${` is literal text there too).
+
+    What it decides: an address containing one is unsplittable, whatever else
+    it looks like (2F design §4). `https://${billing.host}/orders` matches
+    CP-2's absolute-URL shape perfectly and splitting it would write
+    `${billing.host}` into the `peer` column as if it were an authority —
+    a peer no environment ever named, and one the per-environment join reads
+    only from `path`/`peer` as WHOLE expressions. So the check runs BEFORE the
+    split, never after."""
+    open_, close = _PLACEHOLDER
+    start = text.find(open_)
+    return start != -1 and close in text[start + len(open_) :]
 
 
 def field_facts(workspace: Workspace, catalog: Catalog) -> FieldFacts | None:
     """The field ladder's own facts for one catalog, or None where the
     catalog declares no `field_sources` block at all — the gate: a catalog
     that never names which annotations carry configuration never consults the
-    ladder, and every row it derives is exactly what it was before 2F."""
+    ladder, and every row it derives is exactly what it was before 2F.
+
+    Absence is the ONLY gate (fix round 1): a `field_sources: {}` that is
+    present but empty is a block that declares nothing it must declare, and it
+    is refused below exactly as any other malformed one is. `if not declared`
+    would have read the two as the same thing and turned a broken file into a
+    silent no-op — which is the one outcome `ports/catalogs.py`'s own
+    discipline exists to prevent."""
     declared = catalog.matches.get("field_sources")
-    if not declared:
+    if declared is None:
         return None
     sources = _field_sources(declared, catalog)
     value_expressions: dict[str, str] = {}
@@ -466,7 +498,17 @@ def _bound_property(accessor: str, owner: str, facts: FieldFacts) -> str:
     spelling the configuration key itself is written in. The de-prefixed name
     stands on its own where the type declares no matching field: an accessor
     is evidence of a property either way, and a key spelled from it is a
-    better answer than none."""
+    better answer than none.
+
+    Relaxed UNCONDITIONALLY, never gated on the model's own `key_matching`
+    (fix round 1, recorded rather than left implicit): that setting lives on
+    the framework family's `config_model`, declared on the FAMILY's base
+    catalog, and this ladder is only ever handed a CLIENT catalog, which
+    cannot see it — the same constraint that makes `_PLACEHOLDER` above a
+    written constant. The cost is bounded and one-directional: relaxing only
+    ever finds a declared field an exact comparison would have missed, and
+    where nothing matches the answer is the de-prefixed name either way, so
+    an `exact` family gets a key it could equally have spelled itself."""
     name = _without_getter_prefix(accessor, facts.sources.getter_prefixes)
     normalized = normalize_key(name)
     for declared in facts.declared_fields.get(owner, []):

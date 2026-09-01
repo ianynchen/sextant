@@ -48,9 +48,11 @@ from sextant.application.resolve.shapes.arguments import (
     _capture_resolved,
     address_argument,
     argument_descriptor,
+    carries_expression,
     channel_of,
     field_facts,
     linked_channels,
+    split_url,
     supertypes_of,
     url_of,
 )
@@ -257,7 +259,19 @@ def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[
     order (the `call_sites` query, NFR-1), and a value id already visited ends
     the walk rather than looping. Captures fold in real chain order —
     outermost producer first — so last-wins reads the same backward as
-    forward."""
+    forward.
+
+    **Only steps that declare an `owner` fold backward** (fix round 1, two
+    fabrications proven by probe: an unrelated registry's own
+    `uri("registry-key")` reached backward from a WebClient root became that
+    row's address, and one chain's `uri` leaked into a DIFFERENT chain's root
+    through a shared prefix). This is `combinator`'s own owner-gated rooting
+    rule reapplied: an owner-free entry "matches any owner, which is useful
+    for reaching a step and reckless for deciding a chain belongs to this
+    catalog at all". Forward of a root the walk is already chain-rooted, so an
+    owner-free step there can only fold within a chain this catalog matched;
+    BACKWARD, the prefix is exactly the part of the chain no root has vouched
+    for yet, so the owner is what vouches for it instead."""
     producers: list[dict[str, Any]] = []
     visited: set[Any] = set()
     current = root_site
@@ -278,9 +292,13 @@ def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[
             break
         producers.append(producer)
         current = producer
+    owned = [step for step in context.steps if step["owner"] is not None]
     captures: dict[str, Any] = {}
+    # `reversed`: `producers` was collected from the root outward, so this
+    # folds the outermost producer first — real chain order, which is what
+    # makes last-wins mean the same thing on both sides of the root.
     for producer in reversed(producers):
-        step = _matching_step(producer, context.steps)
+        step = _matching_step(producer, owned)
         if step is not None:
             captures.update(_step_captures(step, producer))
     return captures
@@ -475,25 +493,45 @@ def _composed_address(
     — rather than reporting the path alone as if it were the address: a
     relative path presented as the row's whole identity would misstate the URL
     the module actually calls, which is the one thing an address column must
-    never do. A base with no url capture stands alone through `url_of`; the
-    two together compose by concatenation and go through that same reader, so
-    CP-2 splits a composed absolute literal into peer and path exactly as it
-    splits a written one, while a composition carrying a `${…}` expression
-    matches no scheme and stays whole as `path` with `peer` NULL —
-    unsplittable until the per-environment join resolves it."""
+    never do. A url capture that was REACHED and could not be read is the same
+    answer for the same reason — half an address is not an address — while a
+    url capture never reached at all is no claim, and the base then stands
+    alone as the whole address (spec §4's "a base with no url stands alone").
+
+    The composed string is then read by `_address_of`, so a composed absolute
+    literal splits by CP-2 exactly as a written one does and a composition
+    carrying an expression stays whole."""
     url_argument = _address_read(captures.get("url"), context) if "url" in captures else None
     if "base" not in captures:
         return url_of(url_argument)
-    base_argument = _address_read(captures.get("base"), context)
-    base = _string_value(base_argument)
+    base = _string_value(_address_read(captures.get("base"), context))
     if base is None:
         return None, None, "unresolved"
     if "url" not in captures:
-        return url_of(base_argument)
+        return _address_of(base)
     path = _string_value(url_argument)
     if path is None:
         return None, None, "unresolved"
-    return url_of({"kind": "string", "value": base + path})
+    return _address_of(base + path)
+
+
+def _address_of(composed: str) -> tuple[str | None, str | None, str]:
+    """One composed address as peer/path/resolution. CP-2's split applies to
+    the composed string exactly as it would to a literal at a url position —
+    but only where the composition is splittable at all: an address carrying a
+    placeholder anywhere keeps the WHOLE expression as `path` with `peer` NULL
+    (2F design §4), checked BEFORE the split rather than after.
+
+    Fix round 1: `url_of` alone got this wrong for a base that is an absolute
+    literal with an expression INSIDE it (`https://${billing.host}` + `/x`).
+    That matches CP-2's absolute-URL shape, so the split fired and wrote
+    `${billing.host}` into `peer` — a fabricated authority, and one the
+    per-environment join could then only resolve as a peer rather than as the
+    address it is half of."""
+    if carries_expression(composed):
+        return None, composed, "resolved"
+    peer, path = split_url(composed)
+    return peer, path, "resolved"
 
 
 def _string_value(argument: dict[str, Any] | None) -> str | None:

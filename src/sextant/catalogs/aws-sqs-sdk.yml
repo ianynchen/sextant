@@ -37,6 +37,12 @@ matches:
   # same-named method reached later in THIS SAME already-rooted chain —
   # never one reached from a caller that never invoked
   # `SendMessageRequest.builder()` at all.
+  #
+  # 2F fix round 1 keeps that bound true where it would otherwise have
+  # broken: chains now also fold their PRE-ROOT prefix (the `base` capture,
+  # D02 §2j), and that half of the walk is NOT vouched for by a root, so it
+  # consults owner-DECLARED steps only. An owner-free step like these two is
+  # therefore still forward-only, exactly as this comment describes.
   steps:
     - { method: queueUrl,    captures: { url: arg0 } }
     - { method: messageBody, captures: { body: arg0 } }

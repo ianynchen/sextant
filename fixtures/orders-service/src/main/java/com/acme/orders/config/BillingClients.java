@@ -2,17 +2,19 @@
 // commit 461d35d): every base URL below reaches
 // `WebClient.builder().baseUrl(...)` imperatively — through a field, a
 // constructor parameter, and a bound properties object — rather than
-// InventoryWebClient's already-injected WebClient. TODAY (before Tasks
-// 5/8), `baseUrl()` is not a declared step in the shipped fluent catalog,
-// so each row below derives off its own `.uri()` literal alone, peer NULL
-// — pinned exactly as the live run emits it (Task 3 report). Task 8 adds a
-// `base` capture with base+path composition; these rows are expected to
-// change again then, which is re-freezing, not a bug. Each method's own
-// `.uri()` literal is deliberately distinct (`/invoices`, `/refunds`,
-// `/statements`) so the three real rows survive `fluent.py`'s cross-caller
-// wire-identity dedup rather than collapsing into one. The fourth case
-// defeats every future field-ladder rung on purpose: a concatenation the
-// ladder cannot trace back to a single key.
+// InventoryWebClient's already-injected WebClient. Since Task 8, `baseUrl`
+// IS a declared `base` capture on `spring-webclient.yml` (owner-gated, so
+// it folds backward from the chain's root), and each row below carries its
+// base composed with its own `.uri()` literal: the three real cases resolve
+// to `${billing.url}/invoices`, `/refunds` and `/statements` — the whole
+// expression as `path`, peer NULL until the per-environment join. Each
+// method's own `.uri()` literal is deliberately distinct so the three
+// survive `fluent.py`'s cross-caller wire-identity dedup rather than
+// collapsing into one. The fourth case defeats every field-ladder rung on
+// purpose: a concatenation the ladder cannot trace back to a single key, so
+// its row carries path NULL and reads `unresolved` — a captured base nobody
+// could read poisons the address rather than letting `/adjustments` stand
+// in for the whole URL.
 package com.acme.orders.config;
 
 import com.acme.orders.contracts.OrderView;

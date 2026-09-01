@@ -389,17 +389,32 @@ second address (2F). A builder states its base address once
 that builder appends its own path, so `base` and `url` compose at derive time: base plus
 path where a chain captures both, the base alone where it captures no `url`, and the
 composed string then read exactly as a written url is — CP-2 splits an absolute literal
-into peer and path, while a composition carrying a `${…}` expression matches no scheme and
-stays whole as `path` with `peer` NULL, unsplittable until the per-environment peer join
-resolves it. **A `base` that was captured and could not be read makes the row unresolved
-with `path` NULL**, never the path alone: half an address presented as the whole one names
-a URL the module never calls.
+into peer and path. **A composed address carrying a placeholder ANYWHERE keeps the whole
+expression as `path` with `peer` NULL**, checked before that split rather than after:
+`https://${billing.host}/orders` matches CP-2's absolute shape perfectly, and splitting it
+would write `${billing.host}` into `peer` as though it were an authority — a peer no
+environment ever named. It stays whole until the per-environment peer join resolves it.
+**A `base` that was captured and could not be read makes the row unresolved with `path`
+NULL**, never the path alone — and a `url` capture that was REACHED and could not be read
+does the same, for the same reason: half an address presented as the whole one names a URL
+the module never calls. A `url` capture never reached at all is no claim, and the base then
+stands alone as the address.
 
 `baseUrl` sits BEFORE the row that roots the chain, so a chain's captures are folded from
 its PRE-ROOT prefix too — the same `result → receiver` link followed backward from the
 root, outermost producer first, so last-wins reads the same in both directions. A row's
 `receiver` is one value id and the row that produced it is the one whose own chain key IS
 that id; nothing here is a search by proximity.
+
+**Backward folding consults steps that declare an `owner`, and only those** — the same
+gate `combinator` puts on rooting an owner-free continuation, for the same reason. Forward
+of a root, an owner-free step is already bounded: the walk is chain-rooted, so the step can
+only fold into a chain this catalog matched. The pre-root prefix is precisely the part of a
+chain no root has vouched for, and an owner-free step reached there would fold ANY
+same-named call the value happens to come from — an unrelated registry's own
+`uri("registry-key")` read as this row's address, or one chain's capture leaking into
+another's row through a shared prefix. So a `base`-shaped step declares its builder type,
+and a catalog whose step is owner-free is forward-only, exactly as before.
 
 **A root's or a step's own `captures` may also name `channel`** — `url`'s
 destination-shaped counterpart, exactly the distinction `single_call`'s own `url_arg`/

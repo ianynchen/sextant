@@ -3684,7 +3684,16 @@ _BASE_MATCHES = {
         {"owner": "com.acme.http.WebClient", "method": "get", "captures": {"http_method": "GET"}}
     ],
     "steps": [
-        {"method": "baseUrl", "captures": {"base": "arg0"}},
+        # `baseUrl` declares its owner because only an owner-declared step
+        # folds BACKWARD (fix round 1) — the shipped catalogs declare theirs
+        # for the same reason. `uri`/`bodyValue` stay owner-free, exactly as
+        # the shipped ones do, which is what the two fabrication probes below
+        # exercise.
+        {
+            "method": "baseUrl",
+            "owner": "com.acme.http.WebClient$Builder",
+            "captures": {"base": "arg0"},
+        },
         {"method": "uri", "captures": {"url": "arg0"}},
         {"method": "bodyValue", "captures": {"body": "arg0"}},
     ],
@@ -3970,18 +3979,66 @@ def test_an_expression_bearing_composition_keeps_the_whole_expression_as_the_pat
 ):
     """A composed address beginning `${` matches no scheme, so there is no
     authority to split off: the WHOLE expression is the path and `peer` stays
-    NULL, unsplittable until the per-environment join resolves it."""
-    caller = "com/acme/http/Client#fieldFed()."
+    NULL, unsplittable until the per-environment join resolves it.
+
+    Deliberately built from facts none of the rung tests above use — its own
+    field, its own key, its own path — and asserted as a WHOLE row, so it
+    cannot pass on another test's evidence (fix round 1, F5)."""
+    caller = "com/acme/http/Client#gatewaySettle()."
     facts = [
-        *_base_chain(caller, CallArgument(kind="field", symbol=CLIENT + "fieldUrl.")),
-        *_annotated_field(CLIENT + "fieldUrl.", "${billing.url}"),
+        *_base_chain(
+            caller,
+            CallArgument(kind="field", symbol=CLIENT + "gatewayUrl."),
+            path="/settle",
+        ),
+        *_annotated_field(CLIENT + "gatewayUrl.", "${orders.gateway}"),
     ]
     workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
     endpoint = _endpoint_of(workspace, caller)
     workspace.close()
 
-    assert endpoint["peer"] is None
-    assert endpoint["path"] == "${billing.url}/invoices"
+    assert (
+        endpoint["protocol"],
+        endpoint["direction"],
+        endpoint["method"],
+        endpoint["path"],
+        endpoint["peer"],
+        endpoint["resolution"],
+        endpoint["handler"],
+        endpoint["caller"],
+        endpoint["catalog_id"],
+    ) == (
+        "http",
+        "outbound",
+        "GET",
+        "${orders.gateway}/settle",
+        None,
+        "resolved",
+        None,
+        caller,
+        "invented-fluent",
+    )
+
+
+def test_an_absolute_base_with_an_embedded_placeholder_is_never_split(tmp_path: Path):
+    """Fix round 1, F2: `https://${billing.host}` + `/orders` matches CP-2's
+    absolute-URL shape exactly, so the split fired and wrote
+    `${billing.host}` into `peer` — an authority no environment ever named,
+    and one the per-environment join reads only as a whole expression. The
+    placeholder check runs BEFORE the split now: the whole composition is the
+    path, `peer` NULL."""
+    caller = "com/acme/http/Client#embeddedHost()."
+    facts = _base_chain(
+        caller,
+        CallArgument(kind="string", value="https://${billing.host}"),
+        path="/orders",
+    )
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["peer"], endpoint["path"]) == (None, "https://${billing.host}/orders")
+    assert endpoint["resolution"] == "resolved"
 
 
 def test_a_poisoned_base_never_reports_the_path_alone_as_the_address(tmp_path: Path):
@@ -4060,6 +4117,11 @@ def test_a_base_capture_and_a_channel_capture_together_are_refused_at_run_start(
 @pytest.mark.parametrize(
     "block",
     [
+        # Declared but EMPTY (fix round 1): a block naming nothing it must
+        # name is a broken file, not a catalog opting out — only absence opts
+        # out. `if not declared` read the two as the same thing and turned
+        # this into a silent no-op.
+        {},
         {
             "properties_annotation": "com.acme.config.ConfigurationProperties",
             "prefix_from": "prefix",
@@ -4133,3 +4195,197 @@ def test_a_single_call_url_argument_climbs_the_same_ladder(tmp_path: Path):
 
     assert endpoint["path"] == "${billing.url}/balances"
     assert endpoint["resolution"] == "resolved"
+
+
+# --- Fix round 1: the pre-root walk's bound, and three mutation survivors --
+
+REGISTRY = "com/acme/http/Registry#"
+
+
+def test_an_owner_free_step_reached_backward_never_fabricates_an_address(tmp_path: Path):
+    """Reviewer probe 1: `registry.uri("registry-key")` produces the value the
+    WebClient root is reached on. `uri` is an owner-free step, so an
+    unbounded backward fold read that unrelated call's argument as this row's
+    address — a resolved endpoint at `registry-key`, invented whole.
+
+    Backward folding consults owner-DECLARED steps only (the `combinator`
+    rooting rule reapplied), so the registry call folds nothing and the row is
+    the honest answer: this chain never captured an address."""
+    caller = "com/acme/http/Client#registryRooted()."
+    facts = [
+        _call(
+            caller,
+            REGISTRY,
+            "uri",
+            0,
+            receiver=1,
+            result=5,
+            arguments=[CallArgument(kind="string", value="registry-key")],
+        ),
+        _call(caller, WEBCLIENT, "get", 1, receiver=5, result=6),
+        _call(caller, URI_SPEC, "retrieve", 2, receiver=6, result=7),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["peer"]) == (None, None)
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_one_chains_url_never_leaks_backward_into_another_chains_row(tmp_path: Path):
+    """Reviewer probe 2: two roots in one caller, the second reached from a
+    value produced DOWNSTREAM of the first chain's own `uri("/a")`. An
+    unbounded backward fold walked through it and gave root B an address it
+    never captured — `/a` reported twice, once on a chain that never
+    mentioned it.
+
+    Root B captures no url of its own, so its honest row is path NULL; `/a`
+    belongs to root A alone."""
+    caller = "com/acme/http/Client#twoChains()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=10, result=11),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=11,
+            result=12,
+            arguments=[CallArgument(kind="string", value="/a")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 2, receiver=12, result=13),
+        # Something consumes the first chain's own `uri` result and hands
+        # back a client the second chain roots on.
+        _call(caller, URI_SPEC, "unwrap", 3, receiver=12, result=40),
+        _call(caller, WEBCLIENT, "get", 4, receiver=40, result=41),
+        _call(caller, URI_SPEC, "retrieve", 5, receiver=41, result=42),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    rows = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert {(row["path"], row["resolution"]) for row in rows} == {
+        ("/a", "resolved"),
+        (None, "unresolved"),
+    }
+
+
+def test_the_pre_root_fold_reads_the_prefix_in_real_chain_order(tmp_path: Path):
+    """Two `baseUrl` calls before the root: the SECOND is what the builder
+    ends up carrying, so last-wins has to mean the same backward as forward.
+    The producers are collected root-outward and folded reversed; drop the
+    reversal and the first base wins instead — a silently wrong address, the
+    kind no other assertion here would catch."""
+    caller = "com/acme/http/Client#twoBases()."
+    facts = [
+        _call(caller, WEBCLIENT, "builder", 0, receiver=None, result=2, invoke_kind="static"),
+        _call(
+            caller,
+            BUILDER_SPEC,
+            "baseUrl",
+            1,
+            receiver=2,
+            result=5,
+            arguments=[CallArgument(kind="string", value="https://first.internal")],
+        ),
+        _call(
+            caller,
+            BUILDER_SPEC,
+            "baseUrl",
+            2,
+            receiver=5,
+            result=7,
+            arguments=[CallArgument(kind="string", value="https://second.internal")],
+        ),
+        _call(caller, BUILDER_SPEC, "build", 3, receiver=7, result=10),
+        _call(caller, WEBCLIENT, "get", 4, receiver=10, result=11),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            5,
+            receiver=11,
+            result=12,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 6, receiver=12, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["peer"], endpoint["path"]) == ("second.internal", "/orders")
+
+
+def test_a_readable_base_beside_an_unreadable_url_still_derives_unresolved(tmp_path: Path):
+    """The url capture was REACHED — the chain ran `uri(<a lambda>)` — and
+    could not be read. Half an address is not an address, so the row is path
+    NULL, `unresolved`, even though the base read perfectly. Distinct from a
+    chain that never reaches a url step at all, where the base legitimately
+    stands alone (the test above)."""
+    caller = "com/acme/http/Client#unreadableUri()."
+    facts = [
+        _call(caller, WEBCLIENT, "builder", 0, receiver=None, result=2, invoke_kind="static"),
+        _call(
+            caller,
+            BUILDER_SPEC,
+            "baseUrl",
+            1,
+            receiver=2,
+            result=7,
+            arguments=[CallArgument(kind="string", value="https://billing.internal")],
+        ),
+        _call(caller, BUILDER_SPEC, "build", 2, receiver=7, result=10),
+        _call(caller, WEBCLIENT, "get", 3, receiver=10, result=11),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            4,
+            receiver=11,
+            result=12,
+            arguments=[CallArgument(kind="lambda", symbol=CLIENT + "lambda$build$0().")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 5, receiver=12, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["peer"]) == (None, None)
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_rung_three_never_follows_a_call_that_takes_arguments(tmp_path: Path):
+    """A property accessor takes none. `properties.getUrl(tenant)` is a
+    lookup, not a property read, and reading it as one would name a key the
+    configuration does not have — so the zero-argument guard holds and the
+    ladder answers nothing."""
+    caller = "com/acme/http/Client#parameterisedGetter()."
+    facts = [
+        _call(
+            caller,
+            PROPERTIES,
+            "getUrl",
+            0,
+            receiver=4,
+            result=20,
+            arguments=[CallArgument(kind="string", value="tenant-a")],
+        ),
+        *_base_chain(caller, CallArgument(kind="unresolved", source=20)),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + PROPERTIES + "url.", construct_kind="field"
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_MODULE + PROPERTIES,
+            retention="runtime",
+            use=AnnotationUse(annotation=PROPERTIES_ANNOTATION, args={"prefix": "billing"}),
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")
