@@ -45,12 +45,29 @@ spring:
           destination: stream-orders
         auditTap-out-0:
           destination: audit-tap
-  # Serializer media (2F design §3, job 2). Repeated with the identical
-  # value in application-prod.yml so every resolved environment agrees —
-  # the agreement the media stamp requires.
+  # Serializer media (2F design §3, job 2) and serializer FORMAT (2G design
+  # §5, rung 3). Both keys are repeated with identical values in
+  # application-prod.yml so every resolved environment agrees — the
+  # agreement both the media stamp and the format rung require.
+  #
+  # The two keys deliberately name classes the catalog treats differently,
+  # so each half of that split is observable in a live run:
+  #
+  #   * the CONSUMER class is in spring-kafka-media.yml's `values` AND its
+  #     `format_from`, so it stamps `consumes: application/json` and every
+  #     inbound kafka row's format is decided by rung 2 (declared media)
+  #     before rung 3 is ever consulted — the precedence pin;
+  #   * the PRODUCER class is a schema-registry serializer with no MIME
+  #     string anyone registered: `format_from` only. It stamps NO media,
+  #     which is what leaves every outbound-only kafka row for rung 3 to
+  #     answer `protobuf` — the only way rung 3 is reachable at all, since a
+  #     class with a MIME would have been answered a rung earlier.
+  #
+  # The class name is configuration data. Nothing in this fixture depends on
+  # the Confluent artifacts, and nothing needs to.
   kafka:
     producer:
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      value-serializer: io.confluent.kafka.serializers.protobuf.KafkaProtobufSerializer
     consumer:
       value-deserializer: org.springframework.kafka.support.serializer.JsonSerializer
 ---

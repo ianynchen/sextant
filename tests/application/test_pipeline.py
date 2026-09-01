@@ -1726,9 +1726,9 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """`media_from_config`, live and whole. Both serializer keys resolve to
-    the same class in BOTH environments (the agreement the stamp requires),
-    and the class is in the catalog's `values` map, so one MIME string is
-    computed per rule and applied to every row the rule's `(protocol,
+    one class in BOTH environments (the agreement the stamp requires); the
+    CONSUMER's class is in the catalog's `values` map, so one MIME string is
+    computed for that rule and applied to every row its `(protocol,
     direction)` pair names.
 
     The whole stamped picture is pinned, not a sample: this is a
@@ -1738,28 +1738,40 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
     a row that already declared its own media (the two `spring-web` HTTP
     rows), or fill the opposite direction's column.
 
-    The `both` rows carry BOTH columns — the merge now coalesces the
-    outbound twin's media onto the surviving row before deleting it
-    (checkpoint falsification F-4). Without that, three stamps applied
-    moments earlier would have been destroyed by the merge, leaving a
-    `both` row that reads as "no producer declared"."""
+    **The PRODUCER rule stamps nothing, live, and that is the pin** (2G Task
+    6). Its configured class is a schema-registry serializer with no MIME
+    string anyone registered, so it is absent from `values` — and D02 §2d's
+    "a class absent from `values` is a gap to grow the catalog from, not a
+    guess" is now exercised against a real class in a real run, not only in
+    `test_config_join.py`'s invented one. The class is in the catalog's
+    `format_from` table instead, where it answers the format ladder's rung 3
+    (`test_the_format_ladder_answers_every_live_row` below). Leaving the two
+    keys pointing at the same class would have hidden rung 3 entirely: rung
+    2 reads the media this stamp writes and would have answered first, every
+    time.
+
+    The `both` rows therefore carry `consumes` only. The merge's own media
+    carry (checkpoint falsification F-4) is unchanged and still tested
+    directly in `test_config_join.py`; what it has to carry here is now one
+    column rather than two."""
     _, report = resolved_fixture
     kafka = [e for e in report.endpoints if e["protocol"] == "kafka"]
     json_media = '["application/json"]'
 
-    # Every kafka row that consumes carries the consumer-side stamp, and
-    # every one that produces carries the producer-side one — direction by
-    # direction, with `both` counted on both sides.
+    # Every kafka row that consumes carries the consumer-side stamp —
+    # `both` counted on that side, since a merged row is one the module
+    # both exposes and calls.
     assert {e["consumes"] for e in kafka if e["direction"] in ("inbound", "both")} == {json_media}
-    assert {e["produces"] for e in kafka if e["direction"] in ("outbound", "both")} == {json_media}
     # And nothing bled across: an inbound-only row declares nothing it
     # produces, an outbound-only row nothing it consumes.
     assert {e["produces"] for e in kafka if e["direction"] == "inbound"} == {None}
     assert {e["consumes"] for e in kafka if e["direction"] == "outbound"} == {None}
-    # 15 rows consume (12 inbound + 3 both), 10 produce (7 outbound + 3
-    # both) — the checkpoint's own frozen kafka metadata counts.
+    # 15 rows consume (12 inbound + 3 both) — the checkpoint's own frozen
+    # kafka metadata count. NOTHING produces: the producer rule resolved its
+    # key, agreed across environments, and still stamped nothing, because
+    # the class it named has no MIME to stamp.
     assert len([e for e in kafka if e["consumes"] == json_media]) == 15
-    assert len([e for e in kafka if e["produces"] == json_media]) == 10
+    assert {e["produces"] for e in kafka} == {None}
 
     # Untouched: every non-kafka row, including the HTTP rows that declare
     # their own media through the annotations (first-writer discipline — a
@@ -1777,6 +1789,102 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
         ("http", "/v1/orders/detailed", json_media, json_media),
         ("http", "/v1/orders/proto-orders", None, json_media),
     }
+
+
+def test_the_format_ladder_answers_every_live_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """The six-rung ladder (2G design §5), live and whole, against the
+    shipped catalogs' own vocabulary and real bytecode.
+
+    The invariant first: EVERY row leaves the pass with a resolution, and
+    `format` is NULL exactly when that resolution is `unresolved`. A row the
+    pass never reached would carry a NULL resolution, which is a different
+    claim from "nothing described this channel" — and the whole design turns
+    on those two staying distinguishable.
+
+    Then the rungs that are reachable in this fixture, pinned by the rows
+    they actually answered rather than by counts alone:
+
+    * **rung 2** (declared media) on the three HTTP routes whose own mapping
+      annotations declare a MIME type, and on every kafka row the consumer
+      stamp reached;
+    * **rung 3** (serializer config) on exactly the outbound kafka rows —
+      reachable only because the configured producer class has no MIME to
+      stamp, so rung 2 had nothing to say about them;
+    * **rung 5** (framework default) on every remaining row carrying a
+      declared payload type, at `narrowed`, because Jackson's package family
+      is present in this module and nothing declared these channels;
+    * **rung 6** on the rest.
+
+    Rung 1 has no live surface (no shipped catalog declares a fixed-format
+    protocol) and rung 4 has none either (the fixture's one schema-described
+    payload is on a route that DECLARES its media, which is the precedence
+    pin below); both are covered in `test_format_ladder.py`.
+    """
+    workspace, report = resolved_fixture
+    answers = {
+        (e["protocol"], e["direction"], e["method"], e["path"]): (
+            e["format"],
+            e["format_resolution"],
+        )
+        for e in report.endpoints
+    }
+
+    assert all(e["format_resolution"] is not None for e in report.endpoints)
+    assert all(
+        (e["format"] is None) == (e["format_resolution"] == "unresolved") for e in report.endpoints
+    )
+
+    # Rung 2 — the only three HTTP routes whose mapping annotations declare a
+    # media type at all.
+    assert {
+        key for key, answer in answers.items() if key[0] == "http" and answer[1] == "resolved"
+    } == {
+        ("http", "inbound", "GET", "/v1/orders/{id}"),
+        ("http", "inbound", "POST", "/v1/orders/detailed"),
+        ("http", "inbound", "POST", "/v1/orders/proto-orders"),
+    }
+    # **Rung 2 beats rung 4**, live: `proto-orders` takes a generated
+    # protobuf type in and returns one out — Task 5 pinned both shapes
+    # expanding from their descriptors — and is still `json`, because its
+    # own `@PostMapping` declares the media. Proto3 has a JSON encoding;
+    # reading the wire off the payload's TYPE would be a confident wrong
+    # answer, and this row is the one place the fixture can catch it.
+    assert answers[("http", "inbound", "POST", "/v1/orders/proto-orders")] == ("json", "resolved")
+
+    # Rung 3 — the outbound kafka rows, and only those: the producer's
+    # configured class names a wire format and no MIME type, so it is
+    # invisible to rung 2 and answered here.
+    protobuf = {key for key, answer in answers.items() if answer[0] == "protobuf"}
+    assert protobuf == {
+        ("kafka", "outbound", None, "audit-tap"),
+        ("kafka", "outbound", None, "order-raw"),
+        ("kafka", "outbound", None, "order-return-receipts"),
+        ("kafka", "outbound", None, "raw-messages"),
+        # Three outbound rows whose destination could not be read at all
+        # (`sendDefault`, a `@SendTo` naming nothing): the format of a
+        # channel is knowable even where its address is not.
+        ("kafka", "outbound", None, None),
+    }
+    assert len([e for e in report.endpoints if e["format"] == "protobuf"]) == 7
+    # Every other kafka row is rung 2's, off the consumer stamp — including
+    # the three merged `both` rows, which consume.
+    assert {
+        answer for key, answer in answers.items() if key[0] == "kafka" and key not in protobuf
+    } == {("json", "resolved")}
+
+    # Rung 5 — assumed, never observed. `narrowed` is what keeps a framework
+    # default from reading like a declaration.
+    assert {e["format"] for e in report.endpoints if e["format_resolution"] == "narrowed"} == {
+        "json"
+    }
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 39
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 28
+
+    # And nothing was ambiguous enough to ask about: no rung saw two answers
+    # for one row anywhere in this fixture.
+    assert workspace.query("open_questions") == []
 
 
 # --- 2F Task 8: the field ladder and base composition, live --------------

@@ -114,10 +114,16 @@ _NAMED_QUERIES = {
     # nested type inlined into more than one schema payload), so which
     # occurrence wins a dict keyed on `symbol` never depends on read order
     # (NFR-1).
+    # `schema_format` is the format ladder's rung 4 (2G design §5): the
+    # schema that described this shape is the only thing that can say which
+    # wire format the payload's own TYPE suggests. `schema_name`/`origin`
+    # stay unselected — DR-4 precedence is settled upstream, in `analyze`'s
+    # `_prefer_compiled`, before a fact reaches this table.
     "declared_shapes": """
-        SELECT payload ->> 'symbol'   AS symbol,
-               payload ->> 'evidence' AS evidence,
-               payload ->  'fields'   AS fields
+        SELECT payload ->> 'symbol'        AS symbol,
+               payload ->> 'evidence'      AS evidence,
+               payload ->> 'schema_format' AS schema_format,
+               payload ->  'fields'        AS fields
         FROM raw_facts WHERE kind = 'declared_shape'
         ORDER BY symbol, document_id
     """,
@@ -280,6 +286,14 @@ _NAMED_QUERIES = {
         FROM joined
         ORDER BY environment, protocol, method, path, peer, caller
     """,
+    # The 2K hand-off ledger (2G design §6). Ordered by the wire identity the
+    # row carries, `question` breaking a tie where one endpoint raises both
+    # kinds — "rows are ordered by wire identity for NFR-1 determinism", and
+    # an ordering with ties is one that can change between runs.
+    "open_questions": """
+        SELECT protocol, method, path, question, candidates, evidence
+        FROM open_questions ORDER BY protocol, method, path, question
+    """,
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
     "facts": "SELECT count(*) AS facts FROM raw_facts",
@@ -328,6 +342,9 @@ _NAMED_DERIVATIONS = {
     "resolved_config_reset": "reset_resolved_config.sql",
     "resolved_config_insert": "insert_resolved_config.sql",
     "stamp_media": "stamp_media.sql",
+    "stamp_format": "stamp_format.sql",
+    "open_questions_reset": "reset_open_questions.sql",
+    "open_questions_insert": "insert_open_questions.sql",
 }
 
 

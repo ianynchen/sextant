@@ -55,7 +55,12 @@
 
 -- Named explicitly: `endpoints` also carries request_shape/response_shape
 -- (D01 §3 Contracts), which this engine does not populate — that is the
--- shape pass's job, not the annotation-driven endpoint engine's.
+-- shape pass's job, not the annotation-driven endpoint engine's. The same
+-- goes for format/format_resolution (2G design §5): a mapping annotation
+-- declares a MEDIA type, never a wire format, and the ladder that turns one
+-- into the other runs once over the finished table. Both columns are absent
+-- from the insert list below and from `unioned`'s GROUP BY, so every row
+-- this engine writes starts at NULL and is answered later.
 INSERT INTO endpoints (
     protocol, direction, method, path, handler, caller, peer,
     handler_signature, resolution, evidence, catalog_id, consumes, produces

@@ -63,6 +63,36 @@ known_types:
   - { type: java.math.BigDecimal, wire: number }
   - { type: java.util.UUID,       wire: string, format: uuid }
 
+# 2G design §7, rung 2: what a declared MIME string means on the wire. Shipped
+# on the catalogs that own the HTTP protocol, because a `consumes`/`produces`
+# attribute is an HTTP declaration; the table itself is protocol-neutral and
+# the ladder unions it across every catalog that declares one (two catalogs
+# contradicting each other on one key is refused, not resolved).
+#
+# A MIME string absent from this table maps to nothing — the row then falls to
+# a lower rung rather than being guessed at, exactly as an unmapped serializer
+# class stamps no media.
+media_formats:
+  application/json: json
+  application/x-protobuf: protobuf
+  application/protobuf: protobuf
+  avro/binary: avro
+  application/xml: xml
+  text/xml: xml
+
+# 2G design §7, rung 5: the package families whose presence anywhere in a
+# module is evidence that a JSON default converter is on the classpath. Both
+# Jackson generations are listed because the relocation between them is a
+# package rename and nothing else — two rows here, zero code.
+#
+# PRESENCE, not usage: a payload carrying none of these annotations is still
+# converted by whichever of them the build resolved, which is why the rung
+# answers `narrowed` for every ordinary payload rather than only for annotated
+# ones.
+json_default_markers:
+  - com.fasterxml.jackson
+  - tools.jackson
+
 # D02 §2i: the family's own configuration model — carried on the family's
 # base catalog, one per framework family, read by resolve/config.py's M04
 # pass 2 rather than assumed by any engine.

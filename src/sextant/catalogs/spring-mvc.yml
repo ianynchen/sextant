@@ -62,3 +62,21 @@ known_types:
   - { type: java.time.LocalDate,  wire: string, format: date }
   - { type: java.math.BigDecimal, wire: number }
   - { type: java.util.UUID,       wire: string, format: uuid }
+
+# 2G design §7, rungs 2 and 5 — the same two tables spring-web.yml carries,
+# for the same reason it carries them: this catalog owns the HTTP protocol
+# too, and a module that pulls in only one of the two must still get the
+# vocabulary. Identical by construction; the ladder refuses a contradiction
+# between two catalogs rather than picking one, so the duplication cannot
+# drift silently.
+media_formats:
+  application/json: json
+  application/x-protobuf: protobuf
+  application/protobuf: protobuf
+  avro/binary: avro
+  application/xml: xml
+  text/xml: xml
+
+json_default_markers:
+  - com.fasterxml.jackson
+  - tools.jackson

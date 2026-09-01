@@ -80,6 +80,20 @@ def type_descriptor(dotted: str) -> str:
     return dotted.replace(".", "/") + "#"
 
 
+def package_path(dotted: str) -> str:
+    """Converts a catalog's dotted PACKAGE name to the path form the facts
+    use — `type_descriptor`'s prefix-only sibling.
+
+    A package is not a type: it has no descriptor suffix, so a caller
+    matching one (2G design §5's `json_default_markers`, which ask whether
+    anything from a package family appears at all) cannot use
+    `type_descriptor` without also asserting that the prefix names a type.
+    Here rather than at the call site for the reason `type_descriptor` is:
+    the two notations meet in one seam, never in every pass that compares
+    them."""
+    return dotted.replace(".", "/")
+
+
 def simple_name(symbol: str) -> str:
     """The display name for a SCIP symbol (D00 §5a): the last path segment,
     with the trailing `#` a type descriptor always carries stripped."""
