@@ -18,9 +18,13 @@
 --                           declares no type-level gate at all (D02 §2,
 --                           amended) — a Retrofit interface carries no marker,
 --                           so its method annotations are the whole evidence.
---   $mapping_annotations -- list of {fqn, methods} rows: one per mapping annotation,
---                           `methods` holding the methods that annotation pre-sets,
---                           or NULL where it pre-sets none
+--   $mapping_annotations -- list of {fqn, methods, requires_qualifier,
+--                           unless_attribute, unless_equals} rows: one per
+--                           mapping annotation. `methods` holds the methods
+--                           that annotation pre-sets, or NULL where it pre-sets
+--                           none; the `unless_*` pair names the attribute whose
+--                           value makes the rule derive NOTHING (2I design §2,
+--                           form 6), both NULL where it withdraws nothing.
 --   $prefix_annotation   -- fqn of the type-level annotation carrying the path prefix
 --   $path_from           -- attribute names that alias one another, first present wins
 --   $prefix_from         -- attribute names the prefix annotation's address
@@ -106,6 +110,16 @@
 --                           dedupe below is `rtrim`/`ltrim`, which trim a SET
 --                           of characters, so a multi-character separator
 --                           would trim each of its characters individually.
+--   $members             -- 2I design §2, form 5: what a GATED CLASS exposes
+--                           on its own, with no member-level annotation
+--                           anywhere, or NULL where a catalog declares no such
+--                           rule (every catalog whose framework exposes only
+--                           what an annotation marks). Today's one word is
+--                           'public_methods'. A member-level rule OVERRIDES
+--                           this for the member it names — one row per member,
+--                           never two — and $path_fallback is required beside
+--                           it, since a member carries no name attribute at
+--                           all (`annotation_driven.py::_validate_naming`).
 --   $synthetic_annotations -- Task 6 (D02 §2, §3): rows the effective-
 --                           annotations pre-pass (`resolve/effective_annotations.py`)
 --                           synthesizes for a module-local composed annotation
@@ -129,10 +143,18 @@ INSERT INTO endpoints (
 )
 WITH mapping_catalog AS (
     SELECT s.fqn AS fqn, s.methods AS methods,
-           coalesce(s.requires_qualifier, FALSE) AS requires_qualifier
+           coalesce(s.requires_qualifier, FALSE) AS requires_qualifier,
+           -- 2I design §2, form 6: the attribute whose value withdraws this
+           -- rule, and that value as TEXT — the one representation `json ->>`
+           -- reads every scalar back as, so a catalog's YAML boolean and a
+           -- bytecode JSON boolean compare without either side guessing at the
+           -- other's type. Both NULL where the rule withdraws nothing.
+           s.unless_attribute AS unless_attribute,
+           s.unless_equals AS unless_equals
     FROM (SELECT UNNEST(
         $mapping_annotations::STRUCT(
-            fqn VARCHAR, methods VARCHAR[], requires_qualifier BOOLEAN
+            fqn VARCHAR, methods VARCHAR[], requires_qualifier BOOLEAN,
+            unless_attribute VARCHAR, unless_equals VARCHAR
         )[]
     ) AS s)
 ),
@@ -213,6 +235,111 @@ declared AS (
         mc.requires_qualifier AS requires_qualifier
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
+    -- THE WITHDRAWAL FILTER (2I design §2, form 6). A declaration whose named
+    -- attribute carries the withdrawing value derives NOTHING: the framework
+    -- itself does not expose it, so a row here would be an endpoint nobody
+    -- serves, published at `resolved`/`compiler` where nothing downstream can
+    -- tell it from an observation.
+    --
+    -- `IS DISTINCT FROM` rather than `<>`, and that is the whole rule for an
+    -- ABSENT attribute: an annotation's declared default is never written into
+    -- the class file (Phase 2I Task 2 checkpoint item 4), so the attribute
+    -- reads NULL when it was left at its default — and NULL IS DISTINCT FROM
+    -- anything, so the declaration is KEPT. Absence is not the withdrawing
+    -- value; only the value written out is. A plain `<>` would have made every
+    -- absent attribute NULL and dropped every row the filter touched.
+    --
+    -- Read scalar-or-array like every other attribute here, so a framework
+    -- that arrays its flag needs no second rule.
+    WHERE mc.unless_attribute IS NULL
+       OR coalesce(a.args -> mc.unless_attribute ->> 0, a.args ->> mc.unless_attribute)
+          IS DISTINCT FROM mc.unless_equals
+),
+-- THE CLASS GATE for the member rule below (2I design §2, form 5): every type
+-- carrying one of this catalog's own mapping annotations ON THE TYPE ITSELF.
+--
+-- The same type-level join `qualifier_scopes` performs, and deliberately the
+-- same one rather than `controllers`: `$type_annotation` is a single fqn, and
+-- a framework whose gate has TWO spellings (one library renamed, both still in
+-- the wild) cannot be named by it — `mapping.annotations` is a list, so it
+-- can. Where a catalog declares `$type_annotation` as well, `derived`'s own
+-- existing gate filter applies to these rows exactly as it does to every
+-- other, so the narrower gate still wins with no second rule here.
+--
+-- DISTINCT because a type carrying two of the catalog's annotations is one
+-- gated class, not two: without it a class annotated with both spellings at
+-- once would enumerate each of its members twice.
+gate_types AS (
+    SELECT DISTINCT a.target AS type_symbol
+    FROM annotations_effective a
+    JOIN mapping_catalog mc ON mc.fqn = a.annotation
+),
+-- THE MEMBER RULE (2I design §2, form 5). Where a catalog declares
+-- `$members`, a gated class exposes members that carry no annotation at all,
+-- and each becomes a declaration with an empty name — which `$path_fallback`
+-- (required beside `$members` by `annotation_driven.py::_validate_naming`)
+-- then answers with the member's own name.
+--
+-- WHAT IS NOT A MEMBER, and why each exclusion is a fact rather than a taste:
+--   * A CONSTRUCTOR. `construct_kind` tells it apart from a method outright
+--     (D00's closed set), and `derived`'s own join already admits only
+--     'method'/'function'; naming it here as well says the member rule
+--     intends the exclusion rather than inheriting it by luck.
+--   * A STATIC method. It is bound to the type, not to an instance, so it is
+--     not a member of the exposed object at all — the same distinction
+--     `modifiers.static` already draws for a field that reaches no payload.
+--   * A SYNTHETIC method — a covariant-return bridge, a lambda body, an
+--     accessor minted for a nested class. Nobody wrote it, so there is no
+--     declaration to expose. Unlike fields, synthetic METHODS do reach the
+--     fact stream on purpose (the inheritance walk's bridge rule needs to see
+--     them), which is exactly why this has to say so.
+--   * A NON-PUBLIC method: not callable from outside the type, so not
+--     exposed. This is the one exclusion the word itself names.
+-- `coalesce(..., 'false')` on both modifiers for the reason D00 §5a states:
+-- a scanner that does not report a modifier is not asserting the modifier is
+-- true, and each reader supplies its own default.
+--
+-- AND THE OVERRIDE. A member that carries ANY of this catalog's mapping
+-- annotations is left entirely to that rule — one row per member, never two.
+-- The anti-join is against `annotations_effective`, NOT against `declared`,
+-- and the difference is the whole of the interaction with form 6: a
+-- declaration the withdrawal filter removed from `declared` is still an
+-- ANNOTATED declaration, so the member rule must not quietly re-derive the
+-- very row the framework withdrew. Joining `declared` instead would have
+-- turned every `unless` into a no-op on a gated class.
+member_declarations AS (
+    SELECT
+        s.symbol AS target,
+        [''] AS paths,
+        $all_methods::VARCHAR[] AS methods,
+        CAST(NULL AS VARCHAR[]) AS consumes_list,
+        CAST(NULL AS VARCHAR[]) AS produces_list,
+        -- A member states no scope of its own — it has no annotation to state
+        -- one on — so it takes the one its enclosing type states, through the
+        -- same `qualifier_scopes` join every other row uses.
+        CAST(NULL AS VARCHAR) AS qualifier,
+        -- `requires_qualifier` is a statement about the FRAMEWORK ("what this
+        -- framework exposes is a member of a scope"), not about one
+        -- annotation, so a catalog that says it of its annotated operations is
+        -- saying it of the unannotated ones too — they are the same
+        -- operations. Without this a member of a class with no scope anywhere
+        -- would publish its bare name as a top-level identity, which is the
+        -- confidently-wrong-address failure `requires_qualifier` exists to
+        -- close, reached by the one route that carries no annotation.
+        (SELECT coalesce(bool_or(requires_qualifier), FALSE) FROM mapping_catalog)
+            AS requires_qualifier
+    FROM symbols s
+    JOIN gate_types g ON g.type_symbol = s.enclosing
+    WHERE $members = 'public_methods'
+      AND s.construct_kind = 'method'
+      AND s.visibility = 'public'
+      AND coalesce(s.modifiers ->> 'static', 'false') <> 'true'
+      AND coalesce(s.modifiers ->> 'synthetic', 'false') <> 'true'
+      AND NOT EXISTS (
+          SELECT 1 FROM annotations_effective a
+          JOIN mapping_catalog mc ON mc.fqn = a.annotation
+          WHERE a.target = s.symbol
+      )
 ),
 -- The same scope read, one level out: a catalog's mapping annotation sitting
 -- on a TYPE states the scope once for every method the type declares, instead
@@ -309,7 +436,7 @@ mapped_methods AS (
            d.produces_list AS produces_list,
            d.qualifier AS qualifier,
            d.requires_qualifier AS requires_qualifier
-    FROM declared d
+    FROM (SELECT * FROM declared UNION ALL SELECT * FROM member_declarations) d
 ),
 mappings AS (
     SELECT mm.target AS method_symbol,

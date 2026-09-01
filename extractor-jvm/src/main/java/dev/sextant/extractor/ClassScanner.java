@@ -225,7 +225,8 @@ public final class ClassScanner {
                     super.visitEnd();
                     emit(methodSymbol, constructKind, typeSymbol,
                          signatureJson(descriptor, sig, parameterNames, parameterAnnotations,
-                                       parameterTypeAnnotations, returnTypeAnnotations), methodAccess);
+                                       parameterTypeAnnotations, returnTypeAnnotations), methodAccess,
+                         null, methodModifiersJson(methodAccess));
                     // After the method's own symbol, never before: a call site
                     // names its caller, and a fact file reads top-down.
                     lines.addAll(MethodFlow.callSites(documentId, methodSymbol, this));
@@ -482,13 +483,35 @@ public final class ClassScanner {
          *  would have to guess.
          *
          *  <p>Both keys are always written, never only the true one: an absent key
-         *  cannot be told apart from a scanner that does not report the modifier.
-         *  Emitted for fields only, because a field is the only construct whose
-         *  answer anything reads today (D00 §5). */
+         *  cannot be told apart from a scanner that does not report the modifier. */
         private String modifiersJson(int access) {
             TreeMap<String, String> modifiers = new TreeMap<>();
             modifiers.put("static", String.valueOf((access & Opcodes.ACC_STATIC) != 0));
             modifiers.put("transient", String.valueOf((access & Opcodes.ACC_TRANSIENT) != 0));
+            return JsonOut.object(modifiers);
+        }
+
+        /** A METHOD's declaration modifiers — the same `modifiers` slot, a different
+         *  pair of keys, because the two constructs do not share a vocabulary.
+         *  {@code transient} is deliberately absent: its bit ({@code 0x0080}) is
+         *  {@code ACC_VARARGS} on a method, so writing it here would report every
+         *  varargs method as not-serialized — a modifier nobody declared.
+         *
+         *  <p>Both keys answer the same question for a consumer enumerating a
+         *  class's exposed members: {@code static} is bound to the type rather than
+         *  to an instance, and {@code synthetic} is compiler machinery nobody wrote
+         *  — a covariant-return bridge, a lambda body, an accessor for a nested
+         *  class's private member. Unlike {@code visitField}, {@code visitMethod}
+         *  does NOT skip synthetic declarations (the inheritance walk's own bridge
+         *  rule depends on seeing them), so the flag is the only way a later pass
+         *  can tell one from a method a human declared. {@code ACC_BRIDGE} is folded
+         *  into it because a bridge is synthetic in every sense that matters here
+         *  and javac sets the two together on the same declaration. */
+        private String methodModifiersJson(int access) {
+            TreeMap<String, String> modifiers = new TreeMap<>();
+            modifiers.put("static", String.valueOf((access & Opcodes.ACC_STATIC) != 0));
+            modifiers.put("synthetic", String.valueOf(
+                (access & (Opcodes.ACC_SYNTHETIC | Opcodes.ACC_BRIDGE)) != 0));
             return JsonOut.object(modifiers);
         }
 

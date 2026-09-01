@@ -240,6 +240,20 @@ scanner that does not report the modifier. **A compiler-synthesized field is not
 declaration and produces no fact at all** — a modifier would say "somebody wrote this and it
 stays off the wire", where the truth is that no source file contains it.
 
+**A method symbol carries the same `modifiers` slot with a different pair of keys** —
+`modifiers.static` and `modifiers.synthetic` — because the two constructs do not share a
+vocabulary. `transient` is deliberately absent: its class-file bit is `ACC_VARARGS` on a
+method, so writing it would report every varargs method as not-serialized. The pair answers
+one question, asked by any rule that enumerates a class's EXPOSED members (D02's
+`mapping.members`): `static` is bound to the type rather than to an instance, and
+`synthetic` is compiler machinery nobody wrote — a covariant-return bridge (`ACC_BRIDGE` is
+folded in, since javac sets the two together), a lambda body, an accessor minted for a
+nested class's private member. **Unlike a synthetic field, a synthetic METHOD does produce a
+fact**, on purpose: the effective-annotations inheritance walk's bridge rule can only
+recognise a bridge by seeing it, so the flag — not omission — is what lets a later pass tell
+one from a method a human declared. Both keys are always written, for the field rule's
+reason, and a reader supplies `false` for a scanner that reports neither.
+
 **A type-use annotation attaches to the type reference it annotates, not to a flat fact.**
 A method has more than one type reference — the return type, and each parameter — so the
 annotation alone does not say which one it belongs to the way a field's single reference

@@ -41,6 +41,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # found. Absent (the default) on every annotation that names a
             # top-level identity, which is every annotation shipped before it.
             "requires_qualifier": bool(m.get("requires_qualifier", False)),
+            # 2I design §2, form 6: the attribute this rule withdraws itself on,
+            # and the value that withdraws it. Both NULL on every annotation
+            # that withdraws nothing, which is every annotation shipped before
+            # this word — the pair is read as "no filter" and the rule derives
+            # exactly what it always did.
+            "unless_attribute": _unless_attribute(m),
+            "unless_equals": _unless_equals(m),
         }
         for m in mapping["annotations"]
     ]
@@ -87,6 +94,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # NULL where the catalog declares no default, which is what keeps the
         # derivation below inert for every catalog but the ones that ask.
         namespace_template=_NAMESPACE_DEFAULTS.get(str(mapping.get("namespace_default"))),
+        # 2I design §2, form 5: the class-gate MEMBER rule. NULL where a
+        # catalog declares none, which is every catalog whose framework
+        # exposes only what an annotation marks.
+        members=mapping.get("members"),
         # What joins a TYPE-level prefix to the address it prefixes, and the
         # character deduped where both halves already spell it. Optional and
         # inert while absent, so a catalog composing a Kafka topic — which has
@@ -154,6 +165,24 @@ _QUALIFIER_FORMATS = frozenset({"qname"})
 # dot-joined package.
 _NAMESPACE_DEFAULTS = {"reversed_package": "http://%s/"}
 
+# What a CLASS GATE exposes on its own, with no member-level annotation
+# anywhere (2I design §2, form 5). Today's one word is 'public_methods': the
+# framework exposes the gated construct's public members, and a member-level
+# rule overrides the member rule for the member it names — one row per member,
+# never two.
+#
+# A closed vocabulary for `_PATH_FALLBACKS`'s reason, and an especially sharp
+# one here: this is the only word in the mapping vocabulary that derives rows
+# for declarations carrying NO annotation at all, so a word read as something
+# it is not mints endpoints out of ordinary methods.
+_MEMBER_RULES = frozenset({"public_methods"})
+
+# The two keys a `unless` filter may carry, and no others (2I design §2,
+# form 6). A closed SHAPE rather than a closed vocabulary, because the values
+# are catalog data: which attribute withdraws a declaration, and at which
+# value, is the framework's own convention.
+_UNLESS_KEYS = frozenset({"attribute", "equals"})
+
 
 def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
     """Refuses a mapping block whose naming vocabulary cannot be honoured.
@@ -191,6 +220,47 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
             f"loading catalog {catalog.source}: `mapping.path_fallback: {fallback}` is not one "
             f"of {', '.join(sorted(_PATH_FALLBACKS))} (2H design §1)"
         )
+    members = mapping.get("members")
+    if members is not None:
+        if members not in _MEMBER_RULES:
+            # An unrecognised word read as "no member rule" loses every
+            # unannotated member silently; read as a member rule it does not
+            # mean would mint endpoints out of ordinary methods. Both are
+            # worse than a refused file.
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.members: {members}` is not one of "
+                f"{', '.join(sorted(_MEMBER_RULES))} (2I design §2)"
+            )
+        # A member carries NO annotation, so it carries no name attribute
+        # either — every alias is absent by construction, which is exactly the
+        # case `path_fallback` exists for. Without it every member row composes
+        # the EMPTY path: a resolved endpoint addressing nothing, the failure
+        # `path_from` and `qualifier_from` are both already checked for,
+        # reached by a third route.
+        if mapping.get("path_fallback") is None:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.members: {members}` is declared with "
+                f"no `mapping.path_fallback` — a member carries no annotation and so no name "
+                f"attribute at all, and every member row would compose an empty address "
+                f"(2I design §2)"
+            )
+        # THE CLASS GATE. A member rule enumerates the members OF something,
+        # so something has to gate the class — and where nothing does, the
+        # rule is not inert, it is catastrophic: every public method in the
+        # module becomes an endpoint. The gate may be the single
+        # `type_annotation`, or — for a framework whose gate has two spellings,
+        # which `type_annotation` cannot carry (it is one fqn) — one of this
+        # catalog's own `mapping.annotations` found on a TYPE, the same
+        # type-level join `qualifier_scopes` reads a class-level scope through.
+        # A catalog declaring neither names no class at all.
+        if catalog.matches.get("type_annotation") is None and not mapping["annotations"]:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.members: {members}` is declared with "
+                f"no class gate — neither `type_annotation` nor any `mapping.annotations` entry "
+                f"that could mark one, so the rule names no class to enumerate (2I design §2)"
+            )
+    for entry in mapping["annotations"]:
+        _validate_unless(catalog, entry)
     qualifier_format = mapping.get("qualifier_format")
     if qualifier_format is not None and qualifier_format not in _QUALIFIER_FORMATS:
         # An unrecognised word would fall through to the separator
@@ -281,6 +351,56 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
             f"`mapping.path_fallback` — a scoped declaration that names no member would compose "
             f"a scope and a separator onto an empty name (2H design §1)"
         )
+
+
+def _validate_unless(catalog: Catalog, entry: dict[str, Any]) -> None:
+    """Refuses an `unless` filter whose shape the derivation cannot honour.
+
+    Exactly `attribute` (a string) and `equals` (present, any scalar), and
+    nothing else. A misspelled or missing key would leave the filter reading
+    NULL and matching nothing — the rule would derive every declaration
+    including the ones the framework itself withdraws, which is a published
+    endpoint nobody serves rather than a missing one.
+    """
+    declared = entry.get("unless")
+    if declared is None:
+        return
+    valid = (
+        isinstance(declared, dict)
+        and set(declared) == _UNLESS_KEYS
+        and isinstance(declared.get("attribute"), str)
+        and declared.get("equals") is not None
+    )
+    if not valid:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `unless` on `{entry.get('fqn')}` must name "
+            f"exactly `attribute` (a string) and `equals`, got {declared!r} (2I design §2)"
+        )
+
+
+def _unless_attribute(entry: dict[str, Any]) -> str | None:
+    declared = entry.get("unless")
+    return None if declared is None else str(declared["attribute"])
+
+
+def _unless_equals(entry: dict[str, Any]) -> str | None:
+    """The withdrawing value, spelled the way `json ->> key` reads it back.
+
+    A JSON boolean reads back as the lowercase text `true`/`false`, a number
+    as its digits, a string as itself — so the comparison happens on ONE
+    representation and a YAML `equals: true` matches the boolean checkpoint
+    item 4 pins in the bytecode (`@WebMethod(exclude = true)` emits a real
+    JSON boolean, never the string `"true"`). `str(True)` is `'True'`, which
+    would match nothing at all, so the bool case is spelled out first — bools
+    are ints in Python, and the order of these branches is load-bearing.
+    """
+    declared = entry.get("unless")
+    if declared is None:
+        return None
+    value = declared["equals"]
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
 def _synthetic_annotations(

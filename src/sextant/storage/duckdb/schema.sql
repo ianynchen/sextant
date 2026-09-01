@@ -188,6 +188,11 @@ SELECT rowid                        AS seq,
        payload ->> 'construct_kind' AS construct_kind,
        payload ->> 'enclosing'      AS enclosing,
        payload ->  'signature'      AS signature,
+       -- D00 §5a: `public` or `other`, as the declaring language sees it.
+       -- Carried on every symbol fact and, until 2I's class-gate member rule,
+       -- read by nothing — a rule that derives a class's EXPOSED members is
+       -- the first thing that has to tell one from a member nobody can call.
+       payload ->> 'visibility'     AS visibility,
        -- Declaration modifiers (D00 §5): what only the declaring language can
        -- say about whether a field reaches a payload at all. Absent on every
        -- other construct, and on a fact from a scanner that does not report

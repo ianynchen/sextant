@@ -47,6 +47,8 @@ matches:
     # name WITH ITSELF — `{placeOrderRequest}placeOrderRequest`, a QName
     # nobody serves, published at `resolved`/`compiler`. The two attributes
     # play different roles (scope and name), and each is named exactly once.
+    # (Task 2 brief said `[namespace, localPart]`; the controller ACCEPTED the
+    # correction on alias-list semantics — the brief was imprecise, not this.)
     #
     # `@SoapAction` carries no `namespace` attribute at all, so its rows read
     # NULL here and compose no braces — a SOAPAction is an opaque URI, not a

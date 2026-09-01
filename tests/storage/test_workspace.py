@@ -240,6 +240,10 @@ _TOPIC_ENDPOINT_KWARGS = {
     # the one it always was.
     "qualifier_format": None,
     "namespace_template": None,
+    # 2I Task 2's class-gate member rule, inert too: no catalog in this file
+    # derives an unannotated declaration, so every row below still comes from
+    # an annotation the fixture spells out.
+    "members": None,
     # The prefix seam, at its inert value too: no catalog in this file
     # composes a segmented address, so the seam stays the bare concatenation
     # every assertion below already pins.

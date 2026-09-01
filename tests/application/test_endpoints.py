@@ -1113,6 +1113,398 @@ def test_a_qname_form_declared_without_a_qualifier_from_is_refused_by_file(
     assert "invented-qname.yml" in str(raised.value)
 
 
+# --- 2I design §2: the class-gate member rule and the withdrawal filter ---
+#
+# Deliberately NOT JAX-WS, for the reason every section above is not the
+# framework that motivated it: `members` and `unless` are engine vocabulary,
+# and a test spelled with `@WebService`/`@WebMethod` in it would pin a
+# framework rather than a mechanism.
+#
+# The invented framework below is the shape neither 2H nor the QName forms can
+# express: a class gate that exposes its members WITHOUT marking them, and a
+# member-level annotation that WITHDRAWS the very declaration it sits on.
+
+
+def _member_catalog(**mapping: object) -> Catalog:
+    """A catalog whose class gate is an ordinary `mapping.annotations` entry —
+    the list-valued type-level role, which is the only one that could carry two
+    spellings of one gate — plus a member-level rule that may withdraw itself.
+    """
+    return Catalog(
+        id="invented-members",
+        style="annotation_driven",
+        protocol="soap",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-members.yml"),
+        matches={
+            "mapping": {
+                "path_from": ["op"],
+                "prefix_from": [],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": None,
+                "path_fallback": "construct_name",
+                "annotations": [
+                    {"fqn": "com.acme.rpc.annotation.Service"},
+                    {"fqn": "com.acme.rpc.annotation.Operation"},
+                ],
+                **mapping,
+            }
+        },
+    )
+
+
+def _member_facts(root: Path, gated: bool = True) -> None:
+    """One gated class holding every member shape the rule has to tell apart.
+
+    `bare` carries no annotation at all — the whole point of the member rule.
+    `named` carries the member-level rule with a spelled name, `withdrawn`
+    carries it with the withdrawing attribute set, and `defaulted` carries it
+    bare. `hidden` is non-public, `helper` is static and `bridge$1` is
+    synthetic — none of them is an exposed member, and each is excluded for a
+    different reason. The constructor is here because a class always has one
+    and it must never become an endpoint.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rpc/MemberService.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    owner = "com/acme/rpc/MemberService#"
+    facts: list[object] = [
+        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS)
+    ]
+    if gated:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/rpc/annotation/Service#", args={"ns": "urn:acme"}
+                ),
+            )
+        )
+    facts.append(
+        SymbolFact(
+            document_id="doc_1",
+            symbol=f"{owner}<init>(sig_da8c82d5).",
+            construct_kind=ConstructKind.CONSTRUCTOR,
+            enclosing=owner,
+        )
+    )
+    members = {
+        "bare": {"visibility": "public", "modifiers": {}},
+        "hidden": {"visibility": "other", "modifiers": {}},
+        "helper": {"visibility": "public", "modifiers": {"static": True, "synthetic": False}},
+        "bridge": {"visibility": "public", "modifiers": {"static": False, "synthetic": True}},
+        "named": {"visibility": "public", "modifiers": {}},
+        "withdrawn": {"visibility": "public", "modifiers": {}},
+        "defaulted": {"visibility": "public", "modifiers": {}},
+    }
+    for name, shape in members.items():
+        symbol = f"{owner}{name}(sig_3d92af60)."
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=symbol,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+                visibility=str(shape["visibility"]),
+                modifiers=dict(shape["modifiers"]),  # type: ignore[arg-type]
+            )
+        )
+    # Only the three ANNOTATED members carry the member-level rule; `bare`,
+    # `hidden`, `helper` and `bridge` carry nothing, which is what makes them
+    # the member rule's own business.
+    annotated = {
+        "named": {"op": "namedOp"},
+        "withdrawn": {"skip": True},
+        "defaulted": {},
+    }
+    for name, args in annotated.items():
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=f"{owner}{name}(sig_3d92af60).",
+                retention="runtime",
+                use=AnnotationUse(annotation="com/acme/rpc/annotation/Operation#", args=args),
+            )
+        )
+    write_fact_file(root / "MemberService.jsonl", document, facts)
+
+
+def _member_paths(tmp_path: Path, catalog: Catalog, gated: bool = True) -> set[str]:
+    _member_facts(tmp_path / "facts", gated)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+    return paths
+
+
+def test_a_catalog_declaring_no_member_rule_derives_only_what_is_annotated(
+    tmp_path: Path,
+):
+    """The inertness pin. `members` is optional, and a catalog declaring none
+    must derive exactly the annotated declarations it always did — which is
+    what lets the word ship without touching any catalog written before it.
+
+    `withdrawn` and `defaulted` are here too: with no `unless` declared, the
+    withdrawing attribute is just an attribute nobody reads, so all three
+    annotated members derive."""
+    assert _member_paths(tmp_path, _member_catalog()) == {
+        "namedOp",
+        "withdrawn",
+        "defaulted",
+    }
+
+
+def test_a_class_gate_derives_every_public_member_that_no_rule_claims(tmp_path: Path):
+    """Form 5. `bare` carries NO annotation at all and is still an endpoint,
+    because the framework exposes what the class declares rather than what an
+    author marked — the pattern no vocabulary before this could express (the
+    2H class-level mechanism composes a PREFIX onto a row that a method-level
+    annotation must already have minted).
+
+    Its name comes from `path_fallback: construct_name`, which is required
+    beside `members` precisely because a member has no name attribute to read.
+    """
+    paths = _member_paths(tmp_path, _member_catalog(members="public_methods"))
+
+    assert "bare" in paths
+
+
+def test_a_member_level_rule_overrides_the_member_rule_for_the_member_it_names(
+    tmp_path: Path,
+):
+    """One row per member, never two. `named` is a public method of a gated
+    class AND carries the member-level rule, so it derives ONCE, with the
+    rule's own value (`namedOp`) — not also under its construct name.
+
+    The override is by ANNOTATION, not by outcome: `withdrawn` is claimed by
+    the rule too, and the rule's answer for it is nothing.
+    """
+    paths = _member_paths(
+        tmp_path,
+        _member_catalog(
+            members="public_methods",
+            annotations=[
+                {"fqn": "com.acme.rpc.annotation.Service"},
+                {
+                    "fqn": "com.acme.rpc.annotation.Operation",
+                    "unless": {"attribute": "skip", "equals": True},
+                },
+            ],
+        ),
+    )
+
+    assert paths == {
+        # The member rule's own row — no annotation anywhere.
+        "bare",
+        # The rule's value, and NOT a second `named` row beside it.
+        "namedOp",
+        # Annotated, bare attributes: the rule claims it, `path_fallback`
+        # names it. Still one row, still the rule's answer.
+        "defaulted",
+        # NOT here: `withdrawn` (the framework withdrew it), `hidden`
+        # (non-public), `helper` (static), `bridge` (synthetic), and the
+        # constructor.
+    }
+
+
+def test_a_withdrawn_declaration_derives_nothing_even_inside_a_gated_class(
+    tmp_path: Path,
+):
+    """Form 6, and its interaction with form 5 — the one that would have been
+    a silent no-op if the override had been written the obvious way.
+
+    `withdrawn` carries the member-level rule with the withdrawing attribute
+    set, so the rule derives nothing for it. It is ALSO a public method of a
+    gated class, so the member rule would happily re-derive the very row the
+    framework withdrew — unless the override is keyed on carrying an
+    annotation rather than on having produced a row. It is.
+    """
+    withdrawing = _member_catalog(
+        members="public_methods",
+        annotations=[
+            {"fqn": "com.acme.rpc.annotation.Service"},
+            {
+                "fqn": "com.acme.rpc.annotation.Operation",
+                "unless": {"attribute": "skip", "equals": True},
+            },
+        ],
+    )
+
+    assert "withdrawn" not in _member_paths(tmp_path, withdrawing)
+    # …and with no filter declared, the SAME declaration derives: the row is
+    # absent because the framework withdrew it, not because the fixture is
+    # shaped so it could never appear.
+    assert "withdrawn" in _member_paths(tmp_path / "b", _member_catalog(members="public_methods"))
+
+
+def test_an_absent_attribute_is_not_the_withdrawing_value(tmp_path: Path):
+    """An annotation's declared default is never written into the class file
+    (checkpoint item 4: `@WebMethod(exclude = true)` emits the attribute,
+    `@WebMethod` alone emits `{}`), so the withdrawing attribute reads NULL on
+    every declaration that left it alone. Absence must therefore mean KEPT.
+
+    `defaulted` carries the rule with no attributes at all and still derives;
+    a comparison written `<>` instead of `IS DISTINCT FROM` would have made
+    its NULL comparison NULL and dropped it — dropping, silently, every
+    declaration that did not spell the flag out.
+    """
+    paths = _member_paths(
+        tmp_path,
+        _member_catalog(
+            annotations=[
+                {"fqn": "com.acme.rpc.annotation.Service"},
+                {
+                    "fqn": "com.acme.rpc.annotation.Operation",
+                    "unless": {"attribute": "skip", "equals": True},
+                },
+            ]
+        ),
+    )
+
+    assert paths == {"namedOp", "defaulted"}
+
+
+@pytest.mark.parametrize(
+    ("excluded", "why"),
+    [
+        ("hidden", "not public — not callable from outside the type"),
+        ("helper", "static — bound to the type, not to an exposed instance"),
+        ("bridge", "synthetic — compiler machinery nobody declared"),
+        ("<init>", "a constructor is not a member the framework exposes"),
+    ],
+)
+def test_the_member_rule_excludes_what_is_not_an_exposed_member(
+    tmp_path: Path, excluded: str, why: str
+):
+    """Four exclusions, each a fact rather than a taste, and each pinned
+    separately so a rule that lost one shows up as itself.
+
+    The static and synthetic ones matter most in practice: a gated class
+    holding a `public static void main` or a covariant-return bridge would
+    otherwise publish it as an operation, at `resolved`/`compiler`, where
+    nothing downstream could tell it from something observed. Synthetic
+    methods reach the fact stream on purpose (the inheritance walk's bridge
+    rule needs them), so this is a real filter, not a defensive one.
+    """
+    paths = _member_paths(tmp_path, _member_catalog(members="public_methods"))
+
+    assert excluded not in paths, why
+
+
+def test_the_member_rule_derives_nothing_for_a_class_the_gate_does_not_hold(
+    tmp_path: Path,
+):
+    """The gate is the whole safety of the rule: without it, every public
+    method in the module becomes an endpoint. The same class, with its
+    type-level annotation removed, contributes no member rows at all — and
+    its ANNOTATED members still derive, because their own rule never needed
+    the gate."""
+    paths = _member_paths(tmp_path, _member_catalog(members="public_methods"), gated=False)
+
+    assert paths == {"namedOp", "withdrawn", "defaulted"}
+
+
+def test_a_catalog_naming_an_unknown_member_rule_is_refused_by_file(tmp_path: Path):
+    """A closed vocabulary, and the sharpest one in the mapping block: this is
+    the only word that derives rows for declarations carrying no annotation,
+    so a word read as something it is not mints endpoints out of ordinary
+    methods."""
+    with pytest.raises(CatalogError) as raised:
+        _member_paths(tmp_path, _member_catalog(members="all_methods"))
+
+    assert "all_methods" in str(raised.value)
+    assert "invented-members.yml" in str(raised.value)
+
+
+def test_a_member_rule_without_a_name_fallback_is_refused(tmp_path: Path):
+    """A member carries no annotation and therefore no name attribute at all —
+    every alias is absent by construction. Without `path_fallback` every member
+    row would compose the EMPTY path: a resolved endpoint addressing nothing,
+    which is the failure `path_from` and `qualifier_from` are both already
+    checked for, reached by a third route."""
+    catalog = _member_catalog(members="public_methods")
+    del catalog.matches["mapping"]["path_fallback"]
+
+    with pytest.raises(CatalogError) as raised:
+        _member_paths(tmp_path, catalog)
+
+    assert "path_fallback" in str(raised.value)
+    assert "invented-members.yml" in str(raised.value)
+
+
+def test_a_member_rule_with_no_class_gate_at_all_is_refused(tmp_path: Path):
+    """A member rule enumerates the members OF something. Where nothing can
+    name the class, the rule is not inert — it is catastrophic, since the only
+    remaining filter would be "is a public method". Refused at load, where a
+    catalog can still be fixed."""
+    catalog = _member_catalog(members="public_methods")
+    catalog.matches["mapping"]["annotations"] = []
+
+    with pytest.raises(CatalogError) as raised:
+        _member_paths(tmp_path, catalog)
+
+    assert "class gate" in str(raised.value)
+    assert "invented-members.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        # A misspelled key: the filter would read an attribute no annotation
+        # carries, match nothing, and derive every declaration including the
+        # ones the framework withdraws.
+        {"attr": "skip", "equals": True},
+        # `equals` missing entirely — a filter with no value to compare.
+        {"attribute": "skip"},
+        # `attribute` missing — a value with nothing to read it from.
+        {"equals": True},
+        # A third key: the shape is closed, so a key the engine does not read
+        # is a rule the author believes is being applied and is not.
+        {"attribute": "skip", "equals": True, "unless": "nested"},
+        # Not a mapping at all.
+        "skip",
+        # `attribute` must be a NAME, not a YAML scalar of some other type.
+        {"attribute": 5, "equals": True},
+    ],
+)
+def test_a_malformed_withdrawal_filter_is_refused_by_file(tmp_path: Path, declared: object):
+    """Exactly `attribute` and `equals`, and nothing else. Every shape here
+    would leave the filter reading NULL and matching nothing — so the rule
+    would derive every declaration including the ones the framework itself
+    withdraws, which is a published endpoint nobody serves rather than a
+    missing one."""
+    with pytest.raises(CatalogError) as raised:
+        _member_paths(
+            tmp_path,
+            _member_catalog(
+                annotations=[
+                    {"fqn": "com.acme.rpc.annotation.Service"},
+                    {"fqn": "com.acme.rpc.annotation.Operation", "unless": declared},
+                ]
+            ),
+        )
+
+    assert "unless" in str(raised.value)
+    assert "invented-members.yml" in str(raised.value)
+
+
 # --- The prefix seam: `mapping.path_separator` ----------------------------
 #
 # Deliberately NOT Spring, for the reason the naming forms above are not

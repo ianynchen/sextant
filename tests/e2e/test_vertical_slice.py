@@ -362,10 +362,14 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # `direction: inbound` and declares no `reply` block, since a SOAP
     # response travels back down the same request the operation arrived on
     # rather than to a destination the code names.
-    # The fixture's three JAX-WS methods add NOTHING: `jakarta-jws.yml` is not
-    # shipped, because the engine cannot yet derive a bare public method nor
-    # subtract a `@WebMethod(exclude = true)` one — see
-    # `.superpowers/sdd/2026-09-01-phase-2i-soap/checkpoint-task-2.md`.
+    # 2I Task 2 (controller ruling), `jakarta-jws.yml`: +3 soap inbound —
+    # `{…billing…}chargeOrder` (annotated), `{…billing…}refund` (the DR-6 row,
+    # no annotation at all, derived by the class-gate member rule) and
+    # `{http://soap.orders.example.com/}legacyCharge` (the javax spelling with
+    # a bare `@WebService`, taking the reversed-package default). FOUR public
+    # methods produce those three: `internalAudit`'s
+    # `@WebMethod(exclude = true)` is JAX-WS withdrawing the operation, so it
+    # derives nothing. `soap` becomes 5.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "graphql": 12,
@@ -373,7 +377,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
-        "soap": 2,
+        "soap": 5,
         "sqs": 4,
         "sse": 2,
         "websocket": 3,
@@ -488,12 +492,13 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # The prefix-seam controllers: +2 inbound (`GET /v1/seam/owners/{ownerId}`,
     # `POST /chat`) — inbound 71 + 2 = 73 — the 118-endpoint total
     # (5 + 73 + 40 = 118).
-    # 2I Task 2 (`spring-ws.yml`): +2 inbound soap, one per identity form —
-    # inbound 73 + 2 = 75 — the 120-endpoint total (5 + 75 + 40 = 120).
+    # 2I Task 2: +5 inbound soap — 2 from `spring-ws.yml` (one per identity
+    # form) and 3 from `jakarta-jws.yml` (one per exposed operation) —
+    # inbound 73 + 5 = 78 — the 123-endpoint total (5 + 78 + 40 = 123).
     # Nothing outbound and nothing `both`: the catalog is `direction: inbound`
     # with no `reply` block, and no soap row can merge with an http one
     # because wire identity is protocol-scoped (D01 §3).
-    assert rows == [("both", 5), ("inbound", 75), ("outbound", 40)]
+    assert rows == [("both", 5), ("inbound", 78), ("outbound", 40)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(

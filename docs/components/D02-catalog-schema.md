@@ -377,6 +377,53 @@ mapping:
   (ARCHITECTURE §10), and a URI scheme is one, so `annotation_driven.py` maps the declared
   word to a `printf` template and the SQL composes only the package half into it.
 
+**Phase 2I generalises it a sixth time, for a framework that exposes what a class DECLARES
+rather than what an author marked, and for one that WITHDRAWS a declaration it marked.**
+Two more keys, both optional and both inert unless declared:
+
+```yaml
+mapping:
+  members: public_methods              # the class gate exposes the construct's public members
+  annotations:
+    - { fqn: "…jws.WebService" }                      # the gate, and the scope
+    - { fqn: "…jws.WebMethod", requires_qualifier: true,
+        unless: { attribute: exclude, equals: true } }  # …withdrawn where the flag says so
+```
+
+- **`members` says what a gated class exposes on its own, with no member-level annotation
+  anywhere.** Today's one word is `public_methods`. It is the only word in the mapping
+  block that derives rows for declarations carrying **no annotation at all**, which is why
+  it is the most tightly fenced. **A member-level rule overrides it for the member it
+  names** — one row per member, never two — and the override is keyed on the member
+  *carrying* one of the catalog's annotations, not on that rule having produced a row:
+  otherwise a declaration removed by `unless` below would be silently re-derived under its
+  own construct name, making every withdrawal a no-op on a gated class.
+- **Four things are not exposed members**, each excluded for a reason rather than a taste:
+  a **constructor** (`construct_kind` says so, and the derivation admits only methods and
+  functions), a **static** method (bound to the type, not to an exposed instance), a
+  **synthetic** method (compiler machinery nobody wrote — and unlike fields, synthetic
+  methods deliberately DO reach the fact stream, because the inheritance walk's bridge rule
+  needs them), and a **non-public** one. The last two modifiers are read from `symbols.
+  modifiers`, defaulted false where a scanner reports none (D00 §5a).
+- **The gate is what makes the rule safe rather than catastrophic**, so it is checked:
+  `members` is refused with no class gate at all, and refused without `path_fallback`,
+  since a member carries no annotation and therefore no name attribute — every member row
+  would compose the empty address. The gate may be the single `type_annotation`, or one of
+  the catalog's own `mapping.annotations` found on a TYPE (the same type-level join a
+  class-level qualifier reaches methods through) — which is the only form that can carry
+  **two spellings of one gate**, since `type_annotation` is one fqn. That is how a
+  `javax`/`jakarta` pair is gated without an engine change, and it closes for a scope the
+  javax boundary a single-valued `prefix_annotation` still leaves open for a prefix.
+- **`unless: {attribute, equals}` on one annotation entry withdraws the declarations the
+  framework itself withdraws.** A closed SHAPE — exactly those two keys, anything else
+  refused — rather than a closed vocabulary, because *which* attribute withdraws a
+  declaration and at *which* value is the framework's convention. **An absent attribute is
+  never the withdrawing value**: a declared default is not written into the class file, so
+  the attribute reads NULL wherever it was left alone, and only a value actually written
+  out withdraws anything. The comparison happens on the text `json ->>` reads every scalar
+  back as, so a YAML `equals: true` matches a real JSON boolean in the bytecode without
+  either side guessing at the other's type.
+
 **Three catalogs, one engine change.** The forms are stated in framework-neutral words for
 a reason that was tested rather than asserted: `spring-graphql.yml` introduced them, and
 `netflix-dgs.yml` and `microprofile-graphql.yml` then rode them with **zero further engine
