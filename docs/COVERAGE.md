@@ -245,8 +245,9 @@ module today produces:
   directory of Parquet tables plus a manifest carrying versions, catalog hash, coverage,
   the profiles resolved (`environments`, Phase 2F) and the same gaps, byte-identical on
   every re-run of the same inputs. Since Phase 2G the summary also names, in full rather
-  than counted, any schema source `protoc` refused to compile and any embedded payload the
-  interpreter could not read; and `open_questions` is one of the bundle's tables.
+  than counted, any schema source `protoc` refused to compile (`schema_sources_not_compiled`)
+  and any embedded payload the interpreter could not read (`descriptors_not_interpreted`);
+  and `open_questions` is one of the bundle's tables.
 
 What a run does **not** give you, each entry named in the output's own gap list rather
 than silently absent:
@@ -521,6 +522,15 @@ serializer's matching deserializer is catalogued beside it.
 **The registry column is knowledge, not behaviour**: no subject name is derived from any of
 these rows today (§4.3, §11 of the 2G design — re-derivable later from the topic and the
 serializer, both of which are already kept).
+
+**The rung fires on the wire pair, not the listener.** `format_from`'s
+`on: {protocol: kafka, direction: inbound}` selector is 2F's own coverage-rule shape,
+reused rather than narrowed for rung 3: it stamps every inbound Kafka row the config's
+environment agreement reaches, whichever engine minted that row — a raw
+`KafkaConsumer.subscribe` listener that never reads `spring.kafka.consumer.value-deserializer`
+at all is stamped the same as a Spring-managed `@KafkaListener`. A fixture's count of rows
+landing `protobuf`/`resolved` this way is evidence of the stamp's *reach*, never evidence
+that each row's own listener was individually checked against the configured deserializer.
 
 ### 4.2 Binding the spec
 

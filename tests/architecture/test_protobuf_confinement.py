@@ -14,6 +14,7 @@ interpreter's, and not anybody else's.
 """
 
 import ast
+import sys
 from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "sextant"
@@ -70,3 +71,19 @@ def test_the_check_finds_the_protobuf_runtime_where_one_is_allowed_to_be():
     reason. The interpreter is the one module that must read descriptors, so
     the check must see the import there."""
     assert INTERPRETER in _importers("google.protobuf")
+
+
+def test_the_check_would_catch_a_module_that_imports_the_schema_compiler(tmp_path, monkeypatch):
+    """The test above passes today for two reasons a bare empty offender list
+    cannot tell apart: no violation, or a checker blind to one. Unlike
+    `google.protobuf` (caught above, imported by the interpreter), nothing
+    shipped imports `grpc_tools` at all — `proto_source.py` shells to
+    `grpc_tools.protoc` as a subprocess (its own module docstring), so the
+    walk above never actually sees a `grpc_tools` import to flag. Point it at
+    a synthetic tree holding a module that DOES import `grpc_tools`, the
+    same positive control the protobuf check gets for free from real code, to
+    rule out the second reading."""
+    offender = tmp_path / "offender.py"
+    offender.write_text("import grpc_tools.protoc\n", encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "SOURCE_ROOT", tmp_path)
+    assert _offenders("grpc_tools", PROTO_READER) == ["offender.py"]

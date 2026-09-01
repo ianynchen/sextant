@@ -59,14 +59,16 @@ schema-format knowledge in exactly one place.
   scanner from `serialized_pb`, a TS scanner from protobufjs static output. No
   extractor ever links a schema runtime.
 
-**`parse_call`** — the payload evidence on bytes-only channels. Not a new pass: 2C's
-per-method dataflow already emits linked `call_site` facts; 2G adds one argument-kind
-capture — the *type identified by the call* (the static receiver of `parseFrom`, or a
-`Class<T>` literal argument), recorded as `payload_type` on the call-site fact where a
-catalog-matched parse shape names it. Which calls count is catalog vocabulary (§7),
-never extractor knowledge: the extractor records the same call sites it always has,
-plus class-literal argument values (`LDC` of a `Class` constant → new argument kind
-`class_literal`, carrying the type descriptor).
+**`parse_call`** — the payload evidence on bytes-only channels — is not a new fact,
+and 2G adds no pass and no argument kind. 2C's per-method dataflow already emits
+linked `call_site` facts, with a `class` argument kind (2C-era) that names a
+`Class<T>` literal. `application/resolve/shapes/parse_binding.py` reads those
+`call_site` facts extractors already emit and matches them, at resolve time,
+against catalog-declared parse shapes (§7) to determine the *type identified by the
+call* (the static receiver of `parseFrom`, or the `class`-kind argument for
+`readValue`). No fact carries a `payload_type` field; which calls count is catalog
+vocabulary (§7), and the type a matched parse identifies is read off the existing
+`call_site`/`CallArgument` shape, never stored back onto it.
 
 ## 2. Source-file readers (ingress/read)
 
@@ -240,8 +242,10 @@ parsing two types from one parameter) binds nothing.
 
 The ledger (user ruling — every miss recorded, the undecidable handed to 2K):
 
-- Gap counters: `payload_parsed_beyond_horizon` (a catalog-matched parse exists in
-  the module past the one-hop line, unreachable by rung), `payload_parse_ambiguous`.
+- Named gaps: `payload_parsed_beyond_horizon` (a catalog-matched parse exists in
+  the module past the one-hop line, unreachable by rung), `payload_parse_ambiguous`
+  — both entries in `metadata.json`'s `KNOWN_GAPS` (rotated whole, never counted),
+  not a counter either one increments.
 - **`open_questions`** — a workspace table and D06 bundle artifact; one row per
   undecidable binding: the endpoint's wire identity (protocol/method/path), a closed
   `question` kind (`payload_binding`, `format_conflict`), the candidate answers as a
@@ -267,7 +271,7 @@ All names are data; no engine learns a framework or library name:
   vocabulary in `spring-kafka-media.yml`.
 - `parse_calls` — the shapes rungs A/B match: owner + method + which argument carries
   the bytes + where the payload type lives (static receiver for
-  `parseFrom`, `class_literal` argument for `readValue`). Ships with entries for
+  `parseFrom`, the pre-existing `class`-kind argument for `readValue`). Ships with entries for
   protobuf (`parseFrom` on generated types — matched by hierarchy, not name),
   Jackson 2 (`com.fasterxml.jackson.databind.ObjectMapper#readValue`) and
   **Jackson 3** (`tools.jackson.databind.ObjectMapper#readValue`,
@@ -285,16 +289,20 @@ All names are data; no engine learns a framework or library name:
   `field_number` shows where present.
 - **Export:** `open_questions` joins the D06 bundle and its manifest;
   `field_number`, `format`, `format_resolution` ride the existing tables' exports.
-- **metadata.json:** the new gap counters (§2, §3, §6).
+- **metadata.json:** named `KNOWN_GAPS` entries for `payload_parsed_beyond_horizon`
+  and `payload_parse_ambiguous` (§6), plus the two analyze-side gap-name lists,
+  `schema_sources_not_compiled` (§2) and `descriptors_not_interpreted` (§3) — every
+  one listed in full by name, never counted.
 - **README** (user requirement): a Dependencies section — Python side (`uv sync`;
   `protobuf` and `grpcio-tools` now among the pinned dependencies and why), JVM
   extractor build (unchanged — deliberately no new dependency), fixture toolchain
   (protoc arrives via the Maven plugins; nothing installed by hand).
-- **Docs:** D00 (two fact kinds, `declared_shape` made real, `class_literal`
-  argument kind, cross-language contract sentences); D02 (§2c ladder completed, the
-  four vocabularies of §7); D06 (`open_questions` artifact); COVERAGE (protobuf/Avro
-  row flips, Jackson 3 row, honesty boundaries: beyond-horizon, drift check
-  deferred, registry subjects deferred, gRPC service extraction deferred).
+- **Docs:** D00 (two fact kinds, `declared_shape` made real, cross-language contract
+  sentences — no argument-kind addition, `class` being 2C-era and unchanged);
+  D02 (§2c ladder completed, the four vocabularies of §7); D06 (`open_questions`
+  artifact); COVERAGE (protobuf/Avro row flips, Jackson 3 row, honesty boundaries:
+  beyond-horizon, drift check deferred, registry subjects deferred, gRPC service
+  extraction deferred).
 
 ## 9. Dependencies (GUIDELINES §7 — approved in brainstorm)
 
