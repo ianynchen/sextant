@@ -41,6 +41,12 @@ matches:
     # (`path_from`/`prefix_from` share one) already handles a scalar with no
     # new vocabulary.
     prefix_from: [value]
+    # `@ServerEndpoint("/live")`'s value is a URI path, so its seam joins with
+    # `/` like every other path-addressed catalog here. Inert in practice
+    # rather than dormant-and-wrong: `@OnMessage` carries no attribute at all
+    # (above), so the suffix is always '' and an empty half takes no separator
+    # with it — the prefix reaches `path` exactly as written either way.
+    path_separator: "/"
     # Neither generation's annotations declare a `method` attribute; the name
     # is borrowed and never populated (spring-jms.yml/spring-kafka.yml
     # precedent), which is what keeps every row verbless below.

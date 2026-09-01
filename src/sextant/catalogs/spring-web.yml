@@ -17,6 +17,18 @@ matches:
     # typed reaches the bytecode. First present wins, in this order.
     path_from: [value, path]
     prefix_from: [value, path]
+    # Spring joins a class-level prefix to a method-level path with EXACTLY
+    # ONE `/`, whichever half spelled it: `@RequestMapping("/api/gateway")` +
+    # `@GetMapping("owners/{ownerId}")` is served at
+    # `/api/gateway/owners/{ownerId}`, and `@RequestMapping("/")` +
+    # `@PostMapping("/chatclient")` at `/chatclient`. Both forms are ordinary
+    # Spring and both were derived wrong — `/api/gatewayowners/{ownerId}` and
+    # `//chatclient` — while the seam was a bare concatenation (found live
+    # against spring-petclinic-microservices). Declared here rather than
+    # assumed in the engine for the reason `qualifier_separator` is: a Kafka
+    # topic name has no segments, so the catalogs composing one declare no
+    # separator and keep concatenating bare.
+    path_separator: "/"
     # Declared media types (2E Task 5, evidence kind (a)): each mapping
     # annotation's own `consumes`/`produces` attribute, read scalar-or-array
     # like `path_from`. Neither has an alias to worry about here.

@@ -128,6 +128,16 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `@RequestMapping`.
         ("GET", "/orders"),
         ("POST", "/orders/new"),
+        # The prefix seam, live (`spring-web.yml`'s `mapping.path_separator`).
+        # SeamController's class prefix spells no trailing slash and its method
+        # path no leading one; RootSeamController's `"/"` prefix meets a
+        # slash-leading method path. Spring joins each with exactly one `/`,
+        # and the bare concatenation these replaced derived
+        # `/v1/seamowners/{ownerId}` and `//chat` — addresses nobody serves,
+        # published at `resolved`/`compiler`. Both forms found live against
+        # spring-petclinic-microservices before they were fixtures here.
+        ("GET", "/v1/seam/owners/{ownerId}"),
+        ("POST", "/chat"),
         # LegacyOrderController: the pre-4.3 form, invisible until the mapping
         # declaration replaced one-annotation-per-method (D02 §2). The `path`
         # alias is read here too — reading `value` alone gave an empty path.
@@ -710,7 +720,13 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # anything already in the fixture: no messaging destination or HTTP path
     # collides with a WebSocket one, and a `direction: inbound` catalog never
     # meets an outbound row on its own. 110 + 5 = 115.
-    assert len(report.endpoints) == 115
+    #
+    # The prefix-seam controllers add 2: `SeamController`'s one route and
+    # `RootSeamController`'s one, both inbound http, neither colliding with
+    # an existing identity. 115 + 2 = 117. The `path_separator` fix itself
+    # adds no row anywhere — it changes the ADDRESS a row carries — which is
+    # why every other identity in the set above is unmoved.
+    assert len(report.endpoints) == 117
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
@@ -1239,7 +1255,7 @@ def test_nothing_but_the_two_sse_routes_moves(
     untouchable rather than merely untouched. Their counts are the same
     numbers their own tasks froze.
 
-    *No row created or removed.* 115 before, 115 after: the two rows left the
+    *No row created or removed.* 117 before, 117 after: the two rows left the
     http bucket and arrived in the sse one, and nothing else changed size.
 
     *Every other http row stayed.* The http bucket is exactly two smaller,
@@ -1253,7 +1269,10 @@ def test_nothing_but_the_two_sse_routes_moves(
 
     assert counts == {
         "graphql": 11,
-        "http": 54,
+        # 54 + 2: the prefix-seam controllers, one route each. They ride the
+        # same `spring-web.yml` `protocol_hint` every other http row does and
+        # are equally untouched by it.
+        "http": 56,
         "jms": 8,
         "kafka": 22,
         "pubsub": 6,
@@ -1261,7 +1280,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         "sse": 2,
         "websocket": 5,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 115
+    assert sum(counts.values()) == len(report.endpoints) == 117
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -2617,7 +2636,9 @@ def test_the_format_ladder_answers_every_live_row(
     # destination named); `endpoints.resolution` and `format_resolution` are
     # two different columns answering two different questions, and this row
     # is the fixture's own live proof they can disagree.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 48
+    # + 2: the two prefix-seam routes, which reach the same rung 5 default
+    # every other json-bodied http row here does.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 50
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by

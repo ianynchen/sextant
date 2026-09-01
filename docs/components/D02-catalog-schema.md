@@ -173,6 +173,54 @@ matches:
   separately, so `@RequestMapping` declares `prefix_from: [value, path]`, `@FeignClient`
   declares `prefix_from: [path]` and `peer_from: [name, value]`, and `@HttpExchange`
   declares `prefix_from: [value, url]`.
+- **`path_separator` says what joins the prefix to the address it prefixes**, and it is
+  the character deduped at that seam. Optional; a catalog declaring none concatenates the
+  two halves bare, which is what every catalog did before the key existed.
+
+  ```yaml
+  mapping:
+    prefix_from: [value, path]
+    path_separator: "/"   # the seam joins with exactly one, whichever half spelled it
+  ```
+
+  It is **catalog data for the same reason `qualifier_separator` is**: whether two address
+  fragments join with a separator, and which, is the framework's convention. A path-addressed
+  framework composes a class prefix and a method path into a sequence of segments, and the two
+  halves are written by two different authors who each decide independently whether to spell
+  the separator — Spring joins them with **exactly one `/` however they were written**. A
+  broker-destination catalog has no such composition: `spring-kafka.yml`'s prefix is a
+  class-level `@KafkaListener`'s *topic name*, which has no segments, and a `/` inserted into
+  one would invent a destination no broker carries. So the key is **opt-in, never an engine
+  default**, and `spring-kafka.yml` says in place why it declares none.
+
+  Two forms were derived wrong while the seam was a bare concatenation, both ordinary Spring
+  and both found live against `spring-petclinic-microservices`:
+  `@RequestMapping("/api/gateway")` + `@GetMapping("owners/{ownerId}")` published
+  `/api/gatewayowners/{ownerId}` where Spring serves `/api/gateway/owners/{ownerId}`, and
+  `@RequestMapping("/")` + `@PostMapping("/chatclient")` published `//chatclient` where Spring
+  serves `/chatclient`. An address nobody serves, emitted at `resolved`/`compiler` where
+  nothing downstream can tell it from something observed, is the **same
+  confidently-wrong-address class `path_fallback` closes from the other direction**.
+
+  **An empty half takes no separator with it.** An absent prefix leaves the address exactly as
+  written — a slashless name does not gain a leading `/` the engine would be inventing — and
+  an empty suffix (`@KafkaHandler`, `@OnMessage`: annotations carrying no path attribute at
+  all) leaves the prefix alone. **The separator is a single character**, refused at load
+  otherwise: the dedupe is `rtrim`/`ltrim`, which trim a *set* of characters, so a longer
+  separator would strip each of its characters individually.
+
+  **It is not the qualifier seam, and does not touch it.** `qualifier_separator` joins a scope
+  to the member it qualifies and dedupes nothing, because both halves are written by one author
+  on one annotation and neither ever spells the separator. The two remain separate rules; a
+  catalog may declare both, and the GraphQL catalogs — which declare only the qualifier one —
+  are unchanged by this key existing.
+
+  Declared today by every catalog whose addresses are URI-style paths and whose type-level
+  annotation can carry a prefix: `spring-web.yml`, `spring-mvc.yml`,
+  `spring-cloud-openfeign.yml`, `spring-http-interface.yml`, `spring-stomp.yml` (a STOMP
+  destination composes through the same `AntPathMatcher` separator, `/` by default) and
+  `jakarta-websocket.yml`. `retrofit.yml` declares none because it declares no
+  `prefix_annotation` either — it has no seam to rule on.
 
 Covers Spring Web, JAX-RS, Spring Kafka, JMS listeners, and JAX-WS — inbound; Spring Cloud
 OpenFeign, Spring 6 `@HttpExchange`, and Retrofit — outbound.
@@ -262,8 +310,9 @@ mapping:
 - **`qualifier_from` reads a SCOPE off the same annotation that carries the name**, first
   present alias wins, scalar-or-array like every other read here, and
   `qualifier_separator` states what joins the two. It is deliberately not `prefix_from`:
-  that reads a TYPE-level annotation through an entirely different join and composes with
-  no separator at all. `@SchemaMapping(typeName = "Order", field = "lines")` composes
+  that reads a TYPE-level annotation through an entirely different join and composes under
+  a separator rule of its own (`path_separator`, above), which dedupes the seam where this
+  one does not. `@SchemaMapping(typeName = "Order", field = "lines")` composes
   `Order.lines`; a `@QueryMapping` carrying no `typeName` composes nothing. **The
   separator is catalog data and never a literal in the engine** — which punctuation
   separates a scope from a member is a framework's convention — so `qualifier_from`

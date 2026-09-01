@@ -38,6 +38,20 @@ matches:
     # `@MessageMapping("/orders")` is single-valued) — the same documented
     # gap, not a new one.
     prefix_from: [value]
+    # A STOMP destination is segmented exactly as an HTTP path is, and Spring
+    # composes a class-level `@MessageMapping` onto a method-level one through
+    # the same `AntPathMatcher` separator — `/` by default — so the seam
+    # dedupes here for the same reason it does on spring-web.yml. Already the
+    # live answer for the fixture's own destinations, whose halves are all
+    # slash-leading (`"/orders"` + `"/place"` composed `/orders/place` under
+    # the bare concatenation too); declared so a class prefix written WITHOUT
+    # a trailing slash, or a `"/"` prefix, composes what the broker serves
+    # rather than `/ordersplace` or `//place`.
+    #
+    # Not a claim about every websocket catalog: `path_separator` is declared
+    # per catalog because composition is the FRAMEWORK's convention, and a
+    # protocol name is not evidence of one.
+    path_separator: "/"
     # Neither mapping annotation declares a `method` attribute; the name is
     # borrowed and never populated (spring-jms.yml/spring-kafka.yml
     # precedent), which is what keeps every row verbless below.

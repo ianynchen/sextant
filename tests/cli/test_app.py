@@ -66,7 +66,10 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # `protocol_hint` pass moves a row between buckets and never adds or
     # removes one, so the TOTAL is untouched. See test_pipeline.py's own
     # dedicated row-level test for the full breakdown.
-    assert metadata["endpoints"]["inbound"]["http"] == 32
+    # + 2: the prefix-seam controllers — `GET /v1/seam/owners/{ownerId}` and
+    # `POST /chat`, one route each. Both were already derivable; what the
+    # `path_separator` fix changed is the ADDRESS each derives, not the count.
+    assert metadata["endpoints"]["inbound"]["http"] == 34
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -100,7 +103,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # reads it in the schema loop only (`_config_files`) — a file read by both
     # loops would mint a second Document for one source file, the very fault
     # this test exists to catch.
-    assert metadata["coverage"]["documents"] == 96
+    # + 2: the prefix-seam controllers (`SeamController`, `RootSeamController`)
+    # — one more class file each, one more document each.
+    assert metadata["coverage"]["documents"] == 98
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

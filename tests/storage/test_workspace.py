@@ -234,6 +234,10 @@ _TOPIC_ENDPOINT_KWARGS = {
     "path_fallback": None,
     "qualifier_from": [],
     "qualifier_separator": None,
+    # The prefix seam, at its inert value too: no catalog in this file
+    # composes a segmented address, so the seam stays the bare concatenation
+    # every assertion below already pins.
+    "path_separator": None,
 }
 
 

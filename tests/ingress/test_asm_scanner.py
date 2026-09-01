@@ -116,8 +116,10 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "RawPubSubSubscribers.jsonl",
         "RawSqsClientSender.jsonl",
         "ReceiptView.jsonl",
+        "RootSeamController.jsonl",
         "RouteHandlers.jsonl",
         "ScopedRequest.jsonl",
+        "SeamController.jsonl",
         "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]
@@ -126,7 +128,11 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # + 6: 2H Task 1's GraphQL, WebSocket/STOMP and SSE surfaces.
     # + 1: 2H Task 2's `CustomerGraphqlController`, the class-level-scope
     # resolver shape (2H design §1's class-level bullet).
-    assert report.documents == 87
+    # + 2: the prefix-seam controllers (`SeamController`, `RootSeamController`)
+    # — two class files, one document each. Two types rather than one because
+    # a class states its prefix once, and the two seam forms need two
+    # different prefixes.
+    assert report.documents == 89
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -230,8 +236,10 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "RawPubSubSubscribers.jsonl",
         "RawSqsClientSender.jsonl",
         "ReceiptView.jsonl",
+        "RootSeamController.jsonl",
         "RouteHandlers.jsonl",
         "ScopedRequest.jsonl",
+        "SeamController.jsonl",
         "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]

@@ -74,6 +74,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         path_fallback=mapping.get("path_fallback"),
         qualifier_from=list(mapping.get("qualifier_from", [])),
         qualifier_separator=mapping.get("qualifier_separator"),
+        # What joins a TYPE-level prefix to the address it prefixes, and the
+        # character deduped where both halves already spell it. Optional and
+        # inert while absent, so a catalog composing a Kafka topic — which has
+        # no segments to join — keeps the bare concatenation it always had.
+        path_separator=mapping.get("path_separator"),
         # 2E design §2, §3: the effective-annotations pre-pass widens
         # this catalog's own mapping fqns to every module-local annotation
         # type transitively meta-annotated with one of them PLUS, for a
@@ -111,6 +116,20 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
     nothing downstream can tell it from something observed. That is the same
     reason the loader checks `protocol`/`direction` at the edge (NFR-5).
     """
+    separator = mapping.get("path_separator")
+    # `derive_endpoints.sql` dedupes the prefix seam with `rtrim`/`ltrim`,
+    # which trim a SET of characters: a two-character separator would strip
+    # each of its characters individually from either half, composing an
+    # address the framework does not serve. An explicitly EMPTY one declares a
+    # composition with nothing between the halves, which is what a catalog
+    # declaring no separator at all already gets. Both are refused here rather
+    # than read as something they are not.
+    if separator is not None and len(str(separator)) != 1:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.path_separator: {separator!r}` is not a "
+            f"single character — the prefix seam is deduped character-wise, so a longer "
+            f"separator would compose an address the framework does not serve"
+        )
     fallback = mapping.get("path_fallback")
     if fallback is not None and fallback not in _PATH_FALLBACKS:
         # An unrecognised word would fall through to the empty default,

@@ -62,6 +62,24 @@
 --                           punctuation separates a scope from a member is a
 --                           framework's convention, and an engine that baked
 --                           one in would be naming a framework in code.
+--   $path_separator      -- what joins a TYPE-level prefix to the address it
+--                           prefixes, and the character deduped at the seam
+--                           where both halves already carry it. NULL where a
+--                           catalog declares none, which restores the bare
+--                           `prefix || suffix` every catalog composed before
+--                           this parameter existed. Catalog data for the same
+--                           reason $qualifier_separator is: whether two
+--                           address fragments join with a separator, and
+--                           which, is the FRAMEWORK's convention — one
+--                           framework's address is a sequence of segments and
+--                           another's is an opaque name with no segments to
+--                           join — and an engine that picked one would be
+--                           naming a framework in code.
+--                           SINGLE-CHARACTER by contract (`annotation_driven.
+--                           py::_validate_naming` refuses anything else): the
+--                           dedupe below is `rtrim`/`ltrim`, which trim a SET
+--                           of characters, so a multi-character separator
+--                           would trim each of its characters individually.
 --   $synthetic_annotations -- Task 6 (D02 §2, §3): rows the effective-
 --                           annotations pre-pass (`resolve/effective_annotations.py`)
 --                           synthesizes for a module-local composed annotation
@@ -241,13 +259,14 @@ derived AS (
         m.wire_method AS method,
         -- Three fragments, in address order (2H design §1): the TYPE-level
         -- prefix, the scope this declaration names on its own annotation, and
-        -- the declared name itself.
+        -- the declared name itself. The last two compose here into
+        -- `scoped_name`; the prefix joins onto its front just below, because
+        -- that seam has a rule of its own and this one does not.
         --
         -- Both new fragments are inert unless a catalog asks for them —
         -- `$qualifier_from` empty leaves `m.qualifier` NULL, `$path_fallback`
         -- NULL fails its equality — so every catalog written before them
-        -- composes exactly `coalesce(p.prefix, '') || m.path_suffix`, which is
-        -- what this expression was.
+        -- reduces this to `m.path_suffix`, which is what it was.
         --
         -- The fallback fires only on an EMPTY suffix, which is the same fact
         -- as "every `$path_from` alias was absent" (`declared` defaults the
@@ -264,10 +283,9 @@ derived AS (
         -- declaration wins, which is the precedence every framework with
         -- both levels keeps. Where neither states one this is NULL and
         -- composes nothing — no scope, no separator.
-        coalesce(p.prefix, '')
-            || CASE WHEN coalesce(m.qualifier, q.qualifier) IS NOT NULL
-                    THEN coalesce(m.qualifier, q.qualifier) || $qualifier_separator
-                    ELSE '' END
+        CASE WHEN coalesce(m.qualifier, q.qualifier) IS NOT NULL
+             THEN coalesce(m.qualifier, q.qualifier) || $qualifier_separator
+             ELSE '' END
             || CASE WHEN m.path_suffix = '' AND $path_fallback = 'construct_name'
                     -- The construct's own name, off the symbol the join below
                     -- already resolved. D00 §1's descriptor puts it between
@@ -277,7 +295,52 @@ derived AS (
                     -- method name; a symbol this failed to match would yield
                     -- '' silently, which is the empty-address failure again.
                     THEN regexp_extract(s.symbol, '#([A-Za-z0-9_$]+)\(', 1)
-                    ELSE m.path_suffix END AS path,
+                    ELSE m.path_suffix END AS scoped_name,
+        -- THE PREFIX SEAM. What joins here, what does not, and why:
+        --
+        -- A catalog that declares `$path_separator` composes SEGMENTED
+        -- addresses, where the two halves are written by two different
+        -- authors who each decide independently whether to spell the
+        -- separator. The framework joins them with EXACTLY ONE separator
+        -- however they were written, so this dedupes the seam: strip the
+        -- prefix's trailing separators and the remainder's leading ones,
+        -- then join with one. A prefix `/api/gateway` and a suffix
+        -- `owners/{ownerId}` compose `/api/gateway/owners/{ownerId}`, and a
+        -- prefix `/` with a suffix `/chatclient` composes `/chatclient` —
+        -- both real declarations, both derived as `/api/gatewayowners/
+        -- {ownerId}` and `//chatclient` by the bare concatenation this
+        -- replaces, and both found live against a real repository. An
+        -- address nobody serves, published at `resolved`/`compiler` where
+        -- nothing downstream can tell it from something observed, is the
+        -- same confidently-wrong-address class `$path_fallback` closes from
+        -- the other direction.
+        --
+        -- What does NOT join this way, and must not:
+        --   * A catalog declaring NO `$path_separator` — every one written
+        --     before this parameter, and every one whose address is an
+        --     opaque name rather than a sequence of segments. That is the
+        --     live reason the separator is opt-in rather than an engine
+        --     default: a catalog whose type-level prefix is a broker
+        --     destination NAME has nothing to join, and a separator
+        --     inserted into one would invent a destination nobody serves.
+        --   * The qualifier seam above, which joins with
+        --     `$qualifier_separator` and dedupes nothing — a scope and a
+        --     member are written by ONE author on ONE annotation, so
+        --     neither half ever spells the separator and there is no seam
+        --     to dedupe. The two seams stay separate expressions for that
+        --     reason, not by accident.
+        --
+        -- An EMPTY half contributes nothing and takes no separator with it:
+        -- an absent prefix leaves `scoped_name` exactly as written (so a
+        -- bare `owners` stays `owners` rather than gaining a leading
+        -- separator this engine would be inventing), and an empty
+        -- `scoped_name` — the catalogs whose method-level annotation
+        -- carries no path attribute at all — leaves the prefix alone.
+        CASE WHEN coalesce(p.prefix, '') = '' OR scoped_name = ''
+                  OR $path_separator IS NULL
+             THEN coalesce(p.prefix, '') || scoped_name
+             ELSE rtrim(p.prefix, $path_separator) || $path_separator
+                  || ltrim(scoped_name, $path_separator) END AS path,
         -- The symbol lands by direction (D01 §3, amended): the server side
         -- handles, the client side calls, and a later merge may hold both.
         CASE WHEN $direction = 'outbound' THEN NULL ELSE s.symbol END AS handler,

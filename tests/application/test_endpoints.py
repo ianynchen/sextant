@@ -730,6 +730,193 @@ def test_a_qualifier_with_no_separator_is_refused_by_file(tmp_path: Path):
     assert "invented-naming.yml" in str(raised.value)
 
 
+# --- The prefix seam: `mapping.path_separator` ----------------------------
+#
+# Deliberately NOT Spring, for the reason the naming forms above are not
+# GraphQL: how a TYPE-level prefix joins the address it prefixes is engine
+# vocabulary driven by catalog data, and a test spelled with `@RequestMapping`
+# in it would pin a framework rather than the mechanism. The live failure the
+# mechanism closes IS Spring, and is pinned where a live failure belongs — on
+# the fixture, through `spring-web.yml` (`tests/e2e/test_vertical_slice.py`).
+
+
+def _seam_catalog(**mapping: object) -> Catalog:
+    """A gated catalog whose type-level annotation carries a prefix and whose
+    method-level annotation carries a suffix — the two halves of one seam,
+    with whatever composition vocabulary a test layers on."""
+    return Catalog(
+        id="invented-seam",
+        style="annotation_driven",
+        protocol="http",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-seam.yml"),
+        matches={
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": ["value"],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": "com.acme.rest.annotation.Resource",
+                "annotations": [{"fqn": "com.acme.rest.annotation.Route"}],
+                **mapping,
+            }
+        },
+    )
+
+
+def _seam_facts(root: Path, prefix: str, suffix: str) -> None:
+    """One type carrying `prefix`, one method on it carrying `suffix`."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rest/Seam.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    owner = "com/acme/rest/Seam#"
+    route = f"{owner}route(sig_3d92af60)."
+    write_fact_file(
+        root / "Seam.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=route,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/rest/annotation/Resource#", args={"value": [prefix]}
+                ),
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=route,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/rest/annotation/Route#", args={"value": [suffix]}
+                ),
+            ),
+        ],
+    )
+
+
+def _seam_path(tmp_path: Path, catalog: Catalog, prefix: str, suffix: str) -> str:
+    _seam_facts(tmp_path / "facts", prefix, suffix)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    [row] = workspace.query("endpoints")
+    workspace.close()
+    return str(row["path"])
+
+
+@pytest.mark.parametrize(
+    ("prefix", "suffix", "composed"),
+    [
+        # Neither half spells the separator: one is inserted. The live
+        # failure — spring-petclinic-microservices' api-gateway writes
+        # `@RequestMapping("/api/gateway")` + `@GetMapping("owners/{ownerId}")`
+        # and is served at `/api/gateway/owners/{ownerId}`; the bare
+        # concatenation published `/api/gatewayowners/{ownerId}`.
+        ("/api/gateway", "owners/{id}", "/api/gateway/owners/{id}"),
+        # Both halves spell it: the seam is deduped to one, never doubled.
+        ("/api/gateway", "/owners/{id}", "/api/gateway/owners/{id}"),
+        # One half spells it — the shape every catalogued fixture path
+        # already had, which is why the bug hid: unchanged by the fix.
+        ("/api/gateway/", "owners/{id}", "/api/gateway/owners/{id}"),
+        # A `"/"` prefix contributes nothing but the leading slash. The
+        # second live failure — genai-service's `@RequestMapping("/")` +
+        # `@PostMapping("/chatclient")` is served at `/chatclient`; the bare
+        # concatenation published `//chatclient`.
+        ("/", "/chatclient", "/chatclient"),
+        ("/", "chatclient", "/chatclient"),
+    ],
+)
+def test_a_declared_separator_joins_the_two_halves_of_a_seam_with_exactly_one(
+    tmp_path: Path, prefix: str, suffix: str, composed: str
+):
+    """Whichever half spelled the separator, the composed address carries one.
+    A doubled or missing separator is an address nobody serves, published at
+    `resolved`/`compiler` where nothing downstream can tell it from something
+    observed — the same confidently-wrong-address class `path_fallback` closes
+    from the other direction."""
+    assert _seam_path(tmp_path, _seam_catalog(path_separator="/"), prefix, suffix) == composed
+
+
+def test_an_empty_half_takes_no_separator_with_it(tmp_path: Path):
+    """An absent prefix leaves the suffix exactly as written — a slashless
+    name does NOT gain a leading `/` this engine would be inventing — and an
+    empty suffix (a `@KafkaHandler`, an `@OnMessage`) leaves the prefix
+    alone. Both halves are real: the catalogs riding the seam include ones
+    whose method annotation carries no path attribute at all."""
+    catalog = _seam_catalog(path_separator="/")
+
+    assert _seam_path(tmp_path, catalog, "", "owners") == "owners"
+    assert _seam_path(tmp_path / "b", catalog, "/v1/orders", "") == "/v1/orders"
+
+
+def test_a_catalog_declaring_no_separator_concatenates_exactly_as_it_always_did(
+    tmp_path: Path,
+):
+    """The inertness pin, and the reason the separator is catalog data rather
+    than an engine default: `spring-kafka.yml`'s prefix is a class-level
+    `@KafkaListener`'s TOPIC, and a topic name has no segments to join. A `/`
+    inserted between two halves of one would invent a destination no broker
+    carries, so a catalog that declares no separator keeps the bare
+    concatenation every catalog had before this vocabulary existed."""
+    assert _seam_path(tmp_path, _seam_catalog(), "orders", "-retry") == "orders-retry"
+
+
+def test_a_multi_character_separator_is_refused_by_file(tmp_path: Path):
+    """The seam is deduped with `rtrim`/`ltrim`, which trim a SET of
+    characters: a two-character separator would strip each of its characters
+    individually from either half and compose an address the framework does
+    not serve. Refused at load rather than read as something it is not — the
+    same edge check `qualifier_separator` gets, for the same reason."""
+    with pytest.raises(CatalogError) as raised:
+        _seam_path(tmp_path, _seam_catalog(path_separator="::"), "/a", "/b")
+
+    assert "path_separator" in str(raised.value)
+    assert "invented-seam.yml" in str(raised.value)
+
+
+def test_the_qualifier_seam_keeps_its_own_separator_when_a_path_separator_is_declared(
+    tmp_path: Path,
+):
+    """The two seams are separate rules and must not blend. A scope and a
+    member are written by ONE author on ONE annotation, so neither half ever
+    spells the separator and there is nothing to dedupe; a prefix and a path
+    are written by two authors who each decide independently. A catalog
+    declaring both composes `.` between scope and member and `/` at the
+    prefix seam — and the GraphQL catalogs, which declare only the former,
+    are untouched by the latter existing."""
+    paths = _paths_of(
+        tmp_path,
+        _naming_forms_catalog(
+            path_fallback="construct_name",
+            qualifier_from=["scope"],
+            qualifier_separator=".",
+            path_separator="/",
+        ),
+    )
+
+    assert paths == {"named", "defaulted", "Parent.member", "Parent.scopedDefaulted"}
+
+
 def test_derive_endpoints_carries_the_catalogs_own_protocol_and_direction_when_non_http(
     tmp_path: Path,
 ):

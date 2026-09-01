@@ -17,6 +17,10 @@ matches:
     # typed reaches the bytecode. First present wins, in this order.
     path_from: [value, path]
     prefix_from: [value, path]
+    # The same `@RequestMapping` composition spring-web.yml describes: Spring
+    # joins a class prefix to a method path with exactly one `/`, whichever
+    # half spelled it, so the seam is deduped rather than concatenated bare.
+    path_separator: "/"
     # Declared media types (2E Task 5, evidence kind (a)): each mapping
     # annotation's own `consumes`/`produces` attribute, read scalar-or-array
     # like `path_from`. Neither has an alias to worry about here.

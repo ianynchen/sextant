@@ -247,6 +247,9 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         path_fallback=None,
         qualifier_from=[],
         qualifier_separator=None,
+        # Inert for the same reason: this regression is about WHETHER a
+        # prefix joins at all, not what joins it.
+        path_separator=None,
     )
     rows = workspace.query("endpoints")
     workspace.close()

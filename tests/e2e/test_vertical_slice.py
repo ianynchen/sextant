@@ -44,6 +44,17 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     document = (tmp_path / "render" / "architecture.md").read_text()
     for route in ("POST", "GET", "/v1/orders", "/v1/orders/{id}"):
         assert route in document
+    # The prefix seam, live through `spring-web.yml` (`mapping.path_separator`).
+    # Both forms are ordinary Spring, both derived a wrong address while the
+    # seam was a bare concatenation, and both were found live against
+    # spring-petclinic-microservices before they were fixtures here:
+    # `SeamController`'s prefix spells no trailing slash and its method path no
+    # leading one (was `/v1/seamowners/{ownerId}`), and `RootSeamController`'s
+    # `"/"` prefix meets a slash-leading method path (was `//chat`). Pinned
+    # with the surrounding backticks so the doubled-slash form cannot pass as
+    # a substring of the fixed one.
+    assert "`GET /v1/seam/owners/{ownerId}`" in document
+    assert "`POST /chat`" in document
     assert "Known gaps" in document
     assert "## Outbound endpoints" in document
     assert "/billing/invoices" in document
@@ -339,10 +350,14 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # the published metadata rather than asserted in a comment. Nothing
     # outbound moves: the two rows are inbound routes, and this pass never
     # touches direction.
+    # The prefix-seam controllers add 2 inbound http rows (`GET
+    # /v1/seam/owners/{ownerId}`, `POST /chat`) — 32 becomes 34. The
+    # `path_separator` fix itself moved no row between buckets and created
+    # none; it changed the ADDRESS two rows carry.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "graphql": 12,
-        "http": 32,
+        "http": 34,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -457,7 +472,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # `both` untouched (a `direction: inbound` catalog's own rows never meet
     # an outbound row on any protocol nothing else in the fixture names) —
     # the 116-endpoint total (5 + 71 + 40 = 116).
-    assert rows == [("both", 5), ("inbound", 71), ("outbound", 40)]
+    # The prefix-seam controllers: +2 inbound (`GET /v1/seam/owners/{ownerId}`,
+    # `POST /chat`) — inbound 71 + 2 = 73 — the 118-endpoint total
+    # (5 + 73 + 40 = 118).
+    assert rows == [("both", 5), ("inbound", 73), ("outbound", 40)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(

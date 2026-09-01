@@ -23,6 +23,10 @@ matches:
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
     prefix_annotation: org.springframework.web.service.annotation.HttpExchange
     prefix_from: [value, url]
+    # A type-level `@HttpExchange` prefixes each method's own exchange the way
+    # a class-level `@RequestMapping` prefixes a method mapping — exactly one
+    # `/` at the seam, whichever half spelled it (spring-web.yml).
+    path_separator: "/"
     annotations:
       - { fqn: org.springframework.web.service.annotation.HttpExchange }
       - { fqn: org.springframework.web.service.annotation.GetExchange,    method: [GET] }
