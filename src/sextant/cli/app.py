@@ -105,6 +105,7 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
             result.scanner_version,
             _commit_of(path),
             result.uncovered,
+            resolved_config=workspace.query("resolved_config"),
         )
     finally:
         workspace.close()
@@ -167,6 +168,7 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             _commit_of(path),
             tuple(metadata.get("uncovered", [])),
             shape_fields=workspace.query("shape_fields"),
+            resolved_config=workspace.query("resolved_config"),
         )
         target = workspace_dir / "render" / "architecture.md"
         target.parent.mkdir(parents=True, exist_ok=True)

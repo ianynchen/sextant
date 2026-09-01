@@ -46,9 +46,11 @@ def write_manifest(
         "module": metadata["module"],
         "source": {**source, "module_commit": module_commit},
         "producer": producer,
-        # Nothing resolves profiles yet, so this is honestly empty rather
-        # than guessed (D06 §3 "environments").
-        "environments": [],
+        # Carried straight from metadata.json (D06 §3 "environments"),
+        # which `write_metadata` itself derives from `resolved_config`'s
+        # distinct environments — never re-derived here, the same
+        # never-re-analyze rule every other field on this manifest follows.
+        "environments": metadata.get("environments", []),
         "coverage": coverage,
         "contents": {
             "facts": True,

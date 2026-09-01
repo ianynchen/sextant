@@ -92,7 +92,10 @@ monorepo without fetching history itself.
 
 **`environments`** lists the profiles this module resolved. Endpoints carry configuration
 expressions rather than one environment's values, so a bundle serves every environment and
-the system tier selects.
+the system tier selects. **Live since Phase 2F**: populated from `resolved_config`'s own
+distinct environments into `metadata.json` (`egress/render/metadata.py`), and carried
+straight through into this manifest by the exporter — never re-derived, the same
+never-re-analyze rule every other field here follows.
 
 ---
 

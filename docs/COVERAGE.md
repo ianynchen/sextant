@@ -154,9 +154,26 @@ directly declared interfaces — never a supertype's — the first framework thi
 matching a type's shape against a catalog rather than an annotation or a call alone. Every
 `endpoints` row also now carries `catalog_id`, naming the catalog that derived it.
 
+**Phase 2F then made configuration a first-class fact.** Every `application.yml`/properties
+file resolves into `resolved_config`, one row per key per environment, through a
+catalog-declared `config_model` (D02 §2i) — no framework name in the engine, the same
+generic-interpreter discipline every style keeps; a key that cannot be resolved is recorded
+with a reason and the environment, never a bare "unresolved". Two consumers ride it: the
+`config_join` engine (D02 §2d's eighth style) joins a bean's own name to the configuration
+key that names its destination — shipped for Spring Cloud Stream's functional
+`Consumer`/`Supplier`/`Function` bindings and Kafka's serializer-to-format table — and the
+field resolution ladder (D02 §2j) climbs a DECLARED outbound base address (a field, a
+constructor parameter, an `@ConfigurationProperties` class) to the same table, so
+`WebClient.builder().baseUrl(...)` fed from configuration composes a real address per
+environment instead of standing `unresolved`. Both land as expressions, not values —
+`resolved_peers` (a join, never a write) answers each per environment, so a bundle serves
+every environment and the system tier selects (D06 §3).
+
 **Everything else in both matrices remains a gap** — including, inside the cells Phase 2D and
-2E-prep touched, Spring Integration, Spring Cloud Stream, spring-cloud-aws bindings, and every
-messaging peer address except SQS's. In particular, per Q1 a tier in a row whose
+2E-prep touched, Spring Integration's channel adapters and spring-cloud-aws's own
+channel-adapter bindings (`config_join`'s shape, not yet catalogued — Spring Cloud Stream's
+own functional bindings are the one row this phase ships), and every messaging peer address
+except SQS's queue URL. In particular, per Q1 a tier in a row whose
 **Scanner** reads `none` is a *marginal* cost — what the cell would take once a scanner for
 that language exists. It is not a cost you can pay today. Only ✅ and ◐ mean working code.
 
@@ -180,30 +197,40 @@ module today produces:
   inbound through the new `interface_implementation` style — and since Phase 2E, WebFlux
   functional routing (`RouterFunctions.route()`/`.andRoute()`/`.nest()`, Kotlin's `coRouter {}`)
   through the new `combinator` engine, inherited and meta-annotation-composed `@RequestMapping`
-  rows, and every inbound row's declared `consumes`/`produces` media types), each with its wire
-  identity, handler and/or caller, `peer` where the code declares one (NULL on every messaging
-  row except SQS's queue URL — broker addresses are otherwise configuration), and its request
-  and response payload descriptors; `shapes`/`shape_fields` holding every reachable payload
-  field by field — wire name, wire type and format, `required`, `nullable`, trust fields —
-  with known types mapped and expansion stopping visibly at unknown ones. A path the module
-  both exposes and calls is one endpoint, direction `both`.
-- **`architecture.md`** — coverage, a Mermaid contract class diagram, per-endpoint
-  contract tables for inbound, an outbound table with peers, and a Known-gaps section
-  naming every omission below.
+  rows, and every inbound row's declared `consumes`/`produces` media types — and since Phase 2F,
+  Spring Cloud Stream's functional `Consumer`/`Supplier`/`Function` bindings through the new
+  `config_join` engine), each with its wire identity, handler and/or caller, `peer` where the
+  code declares one or a DECLARED base address climbs the field ladder to a configuration key
+  (NULL on every messaging row except SQS's queue URL — broker addresses are otherwise
+  configuration), and its request and response payload descriptors; `shapes`/`shape_fields`
+  holding every reachable payload field by field — wire name, wire type and format, `required`,
+  `nullable`, trust fields — with known types mapped and expansion stopping visibly at unknown
+  ones. A path the module both exposes and calls is one endpoint, direction `both`.
+- **`resolved_config` and `resolved_peers`** (Phase 2F) — every configuration key resolved per
+  environment, with a reason where it could not be; and, per environment, every outbound
+  expression's own substituted address — a join over the two, never a write, so a bundle
+  serves every environment and a consumer selects (D06 §3).
+- **`architecture.md`** — coverage (environments resolved, every unresolved configuration key
+  named with its reason and environment, every unresolved endpoint derivation named by catalog
+  and site), a Mermaid contract class diagram, per-endpoint contract tables for inbound, an
+  outbound table with peers, and a Known-gaps section naming every omission below.
 - **`metadata.json` and a D06 bundle** — the machine-readable summary, and a portable
-  directory of Parquet tables plus a manifest carrying versions, catalog hash, coverage
-  and the same gaps, byte-identical on every re-run of the same inputs.
+  directory of Parquet tables plus a manifest carrying versions, catalog hash, coverage,
+  the profiles resolved (`environments`, Phase 2F) and the same gaps, byte-identical on
+  every re-run of the same inputs.
 
 What a run does **not** give you, each entry named in the output's own gap list rather
 than silently absent:
 
 | You do not get | Because | Arrives with |
 |---|---|---|
-| Spring Integration adapters, Spring Cloud Stream and spring-cloud-aws bindings | each names a destination in configuration, not code (`config_join`, D02 §2d) | Phase 2F |
+| Spring Integration's channel adapters, spring-cloud-aws's own channel-adapter bindings | each names a destination through a channel indirection, not a bean's own functional shape — `config_join`'s shape fits, but neither has a catalog yet (D02 §2d) | undecided |
+| A base address built by computation — concatenation, setter injection, a method's return value | only a directly-read field, a constructor-injected value, or an `@ConfigurationProperties` class climbs the field ladder to configuration; a computed base derives `path` NULL, `unresolved` (`computed_base_addresses_not_traced`) | undecided |
+| Configuration constructed in code — a settings module, a config factory | only configuration FILES reach resolution; a `resolved_config` row exists only where a reader parsed a file from disk (`config_as_code_not_read`) | undecided |
+| Every messaging peer except SQS's queue URL | a broker address is connection configuration, never the destination expression `config_join`/the field ladder resolve — `peer` stays NULL there even where the destination itself now resolves | undecided |
 | Sequencing between reactive/lambda calls (`flatMap`, `map`) | calls inside them derive endpoints, but the sequence between those calls awaits the call graph (`reactive_flow_not_traced`) | call-graph phases |
 | Sequence diagrams, traces, a call graph | no `call_site`/control-flow facts (`sequence_diagrams_pending_call_graph`, `call_graph_not_implemented`) | call-graph phases |
 | A full class diagram (inheritance) | only contract types are drawn (`structure_diagram_limited_to_contracts`) | with the `edges` table |
-| Outbound base addresses for `@HttpExchange`/Retrofit/`RestTemplate`/`RestClient`/`WebClient`/OkHttp; every messaging peer except SQS's queue URL | they live in builder or config code (`client_base_addresses_not_resolved`); `peer` is NULL there | Phase 2F |
 | Cross-service links or a system document | linking is a system-scope pass over bundles; no `participants`/`links` exist yet | linking phase |
 | `consumes`/`produces` on a predicate-derived WebFlux functional route | `accept(...)`/`contentType(...)`'s `MediaType` vararg constants compile through an `ANEWARRAY` the extractor cannot read | a later extractor candidate |
 | `@RequestMapping` inherited from a non-generic superclass | the `supertype` edge exists only for a generic superclass — the extractor reads it from the Signature attribute alone | undecided |
@@ -219,6 +246,41 @@ endpoint referencing it (`shape_rules_unscoped_to_the_producing_catalog`). The s
 catalogs do not declare identical rules, so a wrapper type one of them unwraps and
 another does not can be reported as an unexpanded type even where the shape behind it
 was expanded correctly.
+
+**Configuration resolution (Phase 2F) carries its own honesty caveats**, narrower than a
+missing capability — each is a nuance in how far a shipped mechanism reaches, not a gap in
+the gap list:
+
+- **A candidate is never gated on the bean annotation.** `config_join`'s Spring Cloud
+  Stream catalog matches every method whose RETURN type is a `Consumer`/`Supplier`/
+  `Function` — a private helper that merely returns one, never itself a `@Bean`, is picked
+  up exactly like a real bean, and where `spring.cloud.function.definition` is absent
+  (every candidate binds, the framework's own default) it derives its own row, unresolved
+  when nothing in configuration names a destination for it.
+- **`@ConfigurationProperties` binds through the `prefix` argument only; the `value`
+  alias is not read.** A class annotated `@ConfigurationProperties(value = "billing")`
+  never climbs the field ladder — only `prefix =` does.
+- **Relaxed binding is honest at the ladder and exact at the join.** The field ladder's
+  rung 3 emits the DECLARED field's own spelling (`getBaseUrl` → `${billing.baseUrl}`),
+  but `resolved_config`'s join compares keys exactly — a properties class whose field is
+  `baseUrl` and whose config key is written `base-url` produces an expression no
+  environment resolves (`missing_key`, correctly, though the value exists).
+- **A constructor-assigned field names no overload.** Where two constructors assign the
+  same field from different parameter positions, the field ladder's rung 2 takes the
+  first (by symbol order) carrying the argument annotation at that index —
+  deterministic, never a guess, but a first match rather than a proof.
+- **The `${}` placeholder delimiters are engine constants**, shared between the field
+  ladder's own synthesis (rung 3) and `resolved_peers`' substitution query — a framework
+  whose placeholder syntax differs would need the pair threaded onto `field_sources`
+  rather than reading it from the catalog, the way every other config_model detail is.
+- **Media stamping requires agreement across every environment.** Kafka's
+  serializer-to-format table (§4.1) stamps `consumes`/`produces` only where every
+  environment's own serializer key resolves to the SAME class; a per-environment split —
+  JSON in `default`, Avro in `prod` — leaves both columns NULL rather than picking one
+  environment's answer over another's.
+- **A `resolved_config` row imported from a remote source is never fetched.** A
+  `spring.config.import`-shaped value resolves `unresolved_reason: remote_source`,
+  naming where the value lives, never what it is.
 
 ### 2a. Application protocols over HTTP
 
@@ -238,7 +300,7 @@ SNS and Redis are **out of scope by decision**, not oversight — each would be 
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | 3A 1B | ◐ 1A 3B | ◐ 2A | ◐ 2A 1B | ◐ 1A 1B | 2A 2B 1C |
+| **Java / Kotlin** | 3A 1B | ◐ 1A 2B | ◐ 2A | ◐ 2A 1B | ◐ 1A 1B | 2A 2B 1C |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -713,8 +775,8 @@ complete answer.
 | Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)` | `List.of` (≤10 elements) resolves per topic; `Collections.singletonList`/`Pattern.compile` resolve their one argument; `Arrays.asList` is genuine varargs and degrades to one unresolved row | `registration_call` | ✅ shipped |
 | Java | **`KafkaProducer.send(ProducerRecord)`** | **topic is a constructor argument of `ProducerRecord`**, not of `send` | `fluent_chain` | ✅ shipped |
 | Java | `KafkaTemplate.send(Message)` with topic in a header | topic read from a `setHeader(KafkaHeaders.TOPIC, …)` value-guarded step | `fluent_chain` | ✅ shipped |
-| Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination` | `config_join` | **B** — [D02](components/D02-catalog-schema.md) §2d, Phase 2F |
-| Java | **SmallRye** `@Incoming("orders")` / `@Outgoing` | channel in code, topic in `application.properties` | `config_join` | **B** — [D02](components/D02-catalog-schema.md) §2d, Phase 2F |
+| Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination` | `config_join` | ✅ shipped |
+| Java | **SmallRye** `@Incoming("orders")` / `@Outgoing` | channel in code, topic in `application.properties` | `config_join` | **B** — rides 2F's `config_join` once catalogued |
 | Java | Alpakka / Pekko Connectors `Consumer.plainSource(s, Subscriptions.topics("t"))` | — | `registration_call` | B |
 | Go | `segmentio/kafka-go` `kafka.NewReader(kafka.ReaderConfig{Topic: "t"})` | **topic is a struct-literal field** — easier than positional | `registration_call` | A |
 | Go | `IBM/sarama` (was `Shopify/sarama`), `confluent-kafka-go` | **both import paths are live in the wild** — the module declared the Shopify path for a period after the move, so neither can be dropped | `registration_call` | A |
@@ -838,7 +900,7 @@ the exception, read directly with no annotation at all.
 | Java | Spring Cloud GCP `PubSubTemplate.publish(…)`, `.subscribeAndConvert(…, Class<T>)` | typed direct calls, not the channel-adapter indirection below | `registration_call` | ✅ shipped |
 | Java | `Publisher.newBuilder(TopicName.of(p, t)).build()`, `.publish(…)` | co-located build+publish chains resolve; a config-built/field-held `Publisher` derives an honest unresolved row instead of vanishing | `fluent_chain` | ✅ shipped |
 | Java | `Subscriber` + `MessageReceiver`, `.startAsync()` | named implementers and lambda receivers both resolve; direct implementers only, and the registration is the evidence | `interface_implementation` | ✅ shipped |
-| Java | Spring Cloud GCP `PubSubTemplate.subscribe(…)`, or `PubSubInboundChannelAdapter` + `@ServiceActivator` | channel indirection | `config_join` | B — [D02](components/D02-catalog-schema.md) §2d, Phase 2F |
+| Java | Spring Cloud GCP `PubSubTemplate.subscribe(…)`, or `PubSubInboundChannelAdapter` + `@ServiceActivator` | channel indirection | `config_join` | B — rides 2F's `config_join` once catalogued |
 | Go | `client.Topic("n").Publish(ctx, m)`, `client.Subscription("s").Receive(ctx, fn)` | — | `fluent_chain` | B |
 | TS | `pubsub.topic("n").publishMessage(…)`, `subscription.on("message", cb)` | — | `fluent_chain` | B |
 | Python | `publisher.publish(topic_path, data)`, path built by `publisher.topic_path(proj, t)` | topic assembled from a helper call | `fluent_chain` | B |
@@ -862,12 +924,16 @@ handed to `Subscriber.newBuilder` derives nothing at all, because the registrati
 evidence, never the class's shape alone.
 
 **Every messaging peer is NULL except one.** A broker address, a queue URL or a GCP
-project/topic pair is usually configuration, not code — `peer` is NULL on every Kafka, JMS and
-Pub/Sub row this phase derives, the same way outbound HTTP peers are NULL until builder or
-config code is read; that arrives with Phase 2F, alongside the outbound HTTP case. AWS SQS's
-raw `SqsClient` catalog (§5.10) is the one exception this phase ships: its queue URL is a
-genuine HTTP-style address by AWS's own design, so it resolves a real `peer` today, the same
-way OkHttp's absolute `Request.Builder#url` does.
+project/topic pair is usually configuration, not code — `peer` stays NULL on every Kafka,
+JMS and Pub/Sub row, a different question from the DESTINATION Spring Cloud Stream's own
+`config_join` catalog now resolves (§5.8): a broker's connection address is never what a
+binding key names. Phase 2F gave a DECLARED outbound HTTP base the analogous treatment
+(§5.2) — a directly-read field, a constructor parameter or an `@ConfigurationProperties`
+class climbs the field ladder to a real `peer` — but no messaging catalog reaches a
+broker's own connection address the same way; that stays a gap (§2's "does not give
+you" table). AWS SQS's raw `SqsClient` catalog (§5.10) is the one exception either phase
+ships: its queue URL is a genuine HTTP-style address by AWS's own design, so it resolves
+a real `peer` today, the same way OkHttp's absolute `Request.Builder#url` does.
 
 ### 5.12 Async and internal boundaries
 
@@ -878,7 +944,7 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 | Java | `@Scheduled`, Quartz | `annotation` | A |
 | Java | Temporal / Cadence `@WorkflowInterface`, `@ActivityInterface` | `annotation` | A |
 | Java | **Vert.x event bus** `vertx.eventBus().send("addr", m)` / `.consumer("addr", h)` | in-process pub/sub with **string addresses**, matchable like topics | `registration_call` | B |
-| Java | Spring Integration `@ServiceActivator`, `@InboundChannelAdapter` | channels, not destinations | `config_join` | B — [D02](components/D02-catalog-schema.md) §2d, Phase 2F |
+| Java | Spring Integration `@ServiceActivator`, `@InboundChannelAdapter` | channels, not destinations | `config_join` | B — rides 2F's `config_join` once catalogued |
 | Java | **Akka / Pekko actor messaging** `ref ! msg`, `ref.tell(msg)` | receiver comes from an `ActorRef` created elsewhere | — | **C, possibly permanent — see §7** |
 | Python | **Celery** `@app.task`, `task.delay(…)`, `.apply_async(queue=…)` | a real async boundary, easy to miss | `annotation` | A |
 | TS | `bullmq` `new Queue("n")`, `new Worker("n", fn)` | string names, matchable like topics | `registration_call` | A |

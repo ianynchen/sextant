@@ -115,6 +115,7 @@ def render_module_document(
     commit: str,
     uncovered: tuple[str, ...] = (),
     shape_fields: Sequence[dict[str, object]] = (),
+    resolved_config: Sequence[dict[str, object]] = (),
 ) -> str:
     """Adds no information. Every row comes from the graph, and every omission
     is stated (M07). Rendering the same report twice is byte-identical
@@ -131,6 +132,19 @@ def render_module_document(
         f"- Documents analysed: {report.coverage.get('documents', 0)}",
         f"- Partial documents: {report.coverage.get('partial_documents', 0)}",
         f"- Facts loaded: {report.facts_loaded}",
+    ]
+    lines += _config_coverage_lines(resolved_config)
+    lines += _unresolved_derivation_lines(report.endpoints)
+    lines += [
+        # Per-environment peer AUTHORITIES — one substituted address per
+        # environment for a resolved outbound row — are the system-scope
+        # document's material (M06 stitcher, M07 system scope): this module
+        # document names the expression a row carries (`path`/`peer`), never
+        # the per-environment values `resolved_peers` joins them against.
+        (
+            "- Per-environment peer resolution is the system architecture "
+            "document's material, not repeated per module here."
+        ),
         "",
         "## Structure",
         "",
@@ -206,6 +220,64 @@ def render_module_document(
                 f"- `{skipped.catalog_id}` requires {', '.join(skipped.missing_capabilities)}"
             )
     return "\n".join(lines) + "\n"
+
+
+def _config_coverage_lines(resolved_config: Sequence[dict[str, object]]) -> list[str]:
+    """Coverage's own view of pass 2 (2F design §2): which profiles resolved,
+    and which declared keys did not — named with their reason and
+    environment, never just counted, so a reader can act on the same row
+    `resolved_config` itself carries (spec §5). An empty answer is stated,
+    never a section that silently has nothing to say (NFR-7)."""
+    environments = list(dict.fromkeys(str(row["environment"]) for row in resolved_config))
+    if environments:
+        rendered = ", ".join(f"`{e}`" for e in environments)
+        lines = [f"- Environments resolved: {rendered}."]
+    else:
+        lines = ["- Environments resolved: none."]
+    unresolved = [row for row in resolved_config if row.get("value") is None]
+    if not unresolved:
+        lines.append("- Configuration keys unresolved: none.")
+        return lines
+    for row in unresolved:
+        lines.append(
+            f"- Configuration key unresolved: {row['key']} — "
+            f"{row['unresolved_reason']} in {row['environment']}."
+        )
+    return lines
+
+
+def _unresolved_derivation_lines(endpoints: Sequence[dict[str, object]]) -> list[str]:
+    """Every endpoint row a catalog derived but could not address (`path`
+    NULL, `resolution: unresolved`) — named by the catalog that derived it
+    and the site it read, since neither is visible from the wire-identity
+    tables below. Covers every `config_join` row this way (I-1, Task 7
+    review): a missing binding key derives with `handler` set (the bean
+    method exists) and no key to name, since the key was never declared in
+    any file and so carries no `resolved_config` row of its own; a composed
+    `pipeA|pipeB` selection names no single bean at all, and the composed
+    expression itself is not a column any row carries — there is no
+    engine-to-report channel, so it renders as what it is, not what it said.
+    The same filter also catches an unresolved row from any OTHER engine
+    (a computed base address, Task 8 D-4): the row carries no marker naming
+    its deriving STYLE, only its catalog, so this is deliberately a superset
+    rather than a filter this data cannot make honestly."""
+    rows = [e for e in endpoints if e.get("path") is None and e.get("resolution") == "unresolved"]
+    if not rows:
+        return ["- Unresolved endpoint derivations: none."]
+    lines = []
+    for row in rows:
+        catalog_id = row.get("catalog_id")
+        catalog = "unresolved" if catalog_id is None else str(catalog_id)
+        handler = row.get("handler")
+        caller = row.get("caller")
+        if handler is not None:
+            site = f"handler `{bare_descriptor(str(handler))}`"
+        elif caller is not None:
+            site = f"caller `{bare_descriptor(str(caller))}`"
+        else:
+            site = "a composed selection expression"
+        lines.append(f"- Unresolved endpoint derivation: `{catalog}` — {site}.")
+    return lines
 
 
 def _fields_by_shape(

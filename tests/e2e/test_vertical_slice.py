@@ -83,6 +83,24 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
         "`pubsub raw-notify` | "
         "`com/acme/orders/messaging/raw/RawPubSubReceiver#receiveMessage(sig_bb1c3cf6).`"
     ) in document
+    # 2F Task 9: the coverage section names environments resolved, every
+    # unresolved `resolved_config` key with its reason and environment (the
+    # fixture's own layering pin — `only.in.default` resolves in `default`,
+    # is `missing_key` in `prod`), and every unresolved config_join row by
+    # catalog and site (I-1) — `orphanConsumer`'s missing binding key has no
+    # `resolved_config` row of its own (never declared in any file), so it
+    # is named through its handler instead, and the composed `pipeA|pipeB`
+    # entry through neither, since the composed expression is not a column
+    # any row carries.
+    assert "Environments resolved: `default`, `prod`." in document
+    assert "only.in.default — missing_key in prod" in document
+    assert (
+        "Unresolved endpoint derivation: `spring-cloud-stream` — handler "
+        "`com/acme/orders/streams/OrderStreamBindings#orphanConsumer(sig_b4c25d22).`."
+    ) in document
+    assert (
+        "Unresolved endpoint derivation: `spring-cloud-stream` — a composed selection expression."
+    ) in document
 
 
 def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_path: Path):
@@ -206,6 +224,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "pubsub": 4,
         "sqs": 3,
     }
+    # 2F Task 9: metadata.json's own "environments" (D06 §3), populated from
+    # `resolved_config`'s distinct environments — the fixture's own
+    # `default`/`application-prod.yml` pair.
+    assert metadata["environments"] == ["default", "prod"]
     runner = CliRunner()
     result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
     assert result.exit_code == 0, result.output
@@ -214,6 +236,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     assert manifest["producer"]["catalog_hash"].startswith("sha256:")
     assert "reactive_flow_not_traced" in manifest["gaps"]
     assert "endpoints" in manifest["contents"]["tables"]
+    # The bundle manifest's own sibling field, carried from metadata.json
+    # rather than re-derived (M08 "never re-analyzes").
+    assert manifest["environments"] == ["default", "prod"]
     rows = duckdb.sql(
         f"SELECT direction, count(*) AS n FROM read_parquet('{bundle / 'graph' / 'endpoints.parquet'}') "
         "GROUP BY direction ORDER BY direction"

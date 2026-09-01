@@ -42,6 +42,34 @@ def test_metadata_records_the_commit_so_staleness_is_visible(tmp_path: Path):
     assert written["coverage"]["documents"] == 4
 
 
+def test_metadata_environments_are_resolved_configs_own_distinct_set(tmp_path: Path):
+    """D06 §3 "environments" (2F Task 9): sibling data to the bundle
+    manifest's own field, sorted rather than left in `resolved_config`'s
+    row order — a set of profile names, not a row sequence."""
+    resolved_config = [
+        {"key": "billing.url", "value": "http://billing.internal", "environment": "default"},
+        {"key": "billing.url", "value": "http://billing.prod.internal", "environment": "prod"},
+        {"key": "only.in.default", "value": None, "environment": "prod"},
+    ]
+    write_metadata(
+        tmp_path / "metadata.json",
+        MODULE,
+        REPORT,
+        "asm",
+        "9.7",
+        "a3f91c",
+        resolved_config=resolved_config,
+    )
+    written = json.loads((tmp_path / "metadata.json").read_text())
+    assert written["environments"] == ["default", "prod"]
+
+
+def test_metadata_environments_are_empty_when_pass_2_resolved_nothing(tmp_path: Path):
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+    assert written["environments"] == []
+
+
 def test_metadata_names_every_type_expansion_could_not_open(tmp_path: Path):
     """The count says how much was expanded; only the names say what was not,
     and a count cannot be acted on (FR-17, the same rule as `uncovered`)."""
@@ -466,6 +494,90 @@ def test_inbound_media_column_shows_a_dash_on_either_or_both_null_sides():
         "| `GET /v1/orders/{id}` | `com/acme/C#get().` | - → application/json | resolved |"
     ) in text
     assert "| `GET /v1/orders` | `com/acme/C#list().` | - → - | resolved |" in text
+
+
+def test_coverage_section_names_environments_and_the_unresolved_key_with_its_reason():
+    """2F Task 9, the renderer half of I-1's ledgered carry: the fixture's own
+    `only.in.default` key resolves in `default` and reads `missing_key` in
+    `prod` — D01's own "unresolved for prod, resolved for dev" example
+    (`resolve/config.py`), so the line has to name the reason AND the
+    environment, never a bare "unresolved"."""
+    resolved_config = [
+        {
+            "key": "billing.url",
+            "value": "http://billing.internal",
+            "environment": "default",
+            "unresolved_reason": None,
+        },
+        {
+            "key": "only.in.default",
+            "value": "yes",
+            "environment": "default",
+            "unresolved_reason": None,
+        },
+        {
+            "key": "only.in.default",
+            "value": None,
+            "environment": "prod",
+            "unresolved_reason": "missing_key",
+        },
+    ]
+    text = render_module_document(MODULE, REPORT, "a3f91c", resolved_config=resolved_config)
+    assert "Environments resolved: `default`, `prod`." in text
+    assert "only.in.default — missing_key in prod" in text
+    # The row that DID resolve must not also read as unresolved.
+    assert "billing.url" not in text.split("## Coverage", 1)[1].split("## Structure", 1)[0]
+
+
+def test_coverage_section_is_honest_about_no_environments_and_no_unresolved_keys():
+    text = render_module_document(MODULE, REPORT, "a3f91c")
+    assert "Environments resolved: none." in text
+    assert "Configuration keys unresolved: none." in text
+
+
+def test_coverage_section_names_an_unresolved_config_join_derivation_by_catalog_and_site():
+    """2F Task 9 / I-1: a config_join engine's own unresolved rows — a
+    missing binding key (a bean method exists, no key names it) and a
+    composed `pipeA|pipeB` selection (no single bean at all) — are named by
+    the catalog that derived them, since neither the key nor the composed
+    expression is a column any row carries (Task 7 review's own finding:
+    there is no engine-to-report channel)."""
+    report = ResolveReport(
+        facts_loaded=2,
+        endpoints=[
+            {
+                "protocol": "kafka",
+                "direction": "inbound",
+                "method": None,
+                "path": None,
+                "handler": "s maven c 1 com/acme/orders/Bindings#orphanConsumer(sig_1).",
+                "caller": None,
+                "resolution": "unresolved",
+                "evidence": "compiler",
+                "catalog_id": "spring-cloud-stream",
+            },
+            {
+                "protocol": "kafka",
+                "direction": "inbound",
+                "method": None,
+                "path": None,
+                "handler": None,
+                "caller": None,
+                "resolution": "unresolved",
+                "evidence": "compiler",
+                "catalog_id": "spring-cloud-stream",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert (
+        "Unresolved endpoint derivation: `spring-cloud-stream` — "
+        "handler `com/acme/orders/Bindings#orphanConsumer(sig_1).`."
+    ) in text
+    assert (
+        "Unresolved endpoint derivation: `spring-cloud-stream` — a composed selection expression."
+    ) in text
 
 
 def test_structure_and_outbound_sections_state_looked_and_found_nothing():

@@ -74,6 +74,12 @@ A key that cannot be resolved is recorded as unresolved **with a reason and an e
 "unresolved" suggests the code is unreadable. And a value that was redacted is a different
 reason from a value that is missing, or somebody goes looking for a setting that is there.
 
+**The per-environment peer join is a query, not a write.** `resolved_peers` answers, for
+every client-side endpoint and every environment, what that row's own address expression
+substitutes to — a `${…}` placeholder read against `resolved_config` for that environment,
+never a rewrite of the endpoint row itself. An expression carrying more than one
+placeholder answers `multi_placeholder`, the one unresolved reason this join alone emits.
+
 ### 3. Symbol graph
 
 Intern identifiers, build containment and its closure, build the type hierarchy, and
@@ -129,6 +135,19 @@ then reclassification. Inbound precedes outbound so that a path a module both ex
 calls merges into one endpoint with direction `both` rather than appearing twice. Each
 endpoint records its protocol, wire identity, handler and/or caller, and the **type
 references** of its request and response — not yet their contents.
+
+**One style runs last, because it depends on pass 2's own output.** `config_join`
+([D02](D02-catalog-schema.md) §2d) joins a bean's own name to the configuration key that
+names its destination, so it cannot run until `resolved_config` exists — pass 2, not a
+scanner capability, is what gates it (a PIPELINE-declared capability, D02 §1). Within the
+outbound/inbound ordering above, every `config_join` catalog runs after every other style.
+
+**A base address may also climb to configuration.** Where a catalog declares
+`field_sources` ([D02](D02-catalog-schema.md) §2j), an outbound engine reads a DECLARED
+base address — a directly-read field, a constructor-injected value, an
+`@ConfigurationProperties` class — through to the same `resolved_config` table, so the
+address a builder composes is an expression the per-environment peer join (§2's
+`resolved_peers`) can answer, rather than one this stage leaves NULL.
 
 **Every catalog whose required capabilities are unmet is skipped and reported.** This is the
 mechanism that keeps a weaker scanner visible instead of silently producing a shorter

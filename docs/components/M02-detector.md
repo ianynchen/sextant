@@ -42,7 +42,7 @@ The model itself:
 
 | Part | Contents |
 |---|---|
-| Modules | Identifier, root path, kind, languages present, source sets, compiled output directories |
+| Modules | Identifier, root path, kind, languages present, source sets, compiled output directories, resource roots |
 | Classpath | Per module, resolved and **split into three tiers** |
 | Dependencies | Coordinates, scope, and which tier each fell into |
 | Frameworks | The active catalog set for each module |
@@ -149,6 +149,13 @@ The detector records which source sets the build compiles. [M03](M03-scanner.md)
 against **that**, not against every file on disk — otherwise test sources, other-platform
 source sets, and modules outside the requested build all report as uncovered, and an alarm
 everybody silences is worse than no alarm.
+
+### Resource roots, for the config reader
+
+Where the build's own resource directories live — `src/main/resources` for Maven — so
+[M03](M03-scanner.md)'s `ArtifactReader` port knows where to look for configuration files
+without parsing a build file itself (Phase 2F). A build system that names none reports the
+empty tuple, never a guess.
 
 ## What it must not do
 

@@ -159,7 +159,16 @@ line numbers. Kotlin metadata for nullability.
 Configuration, build files, Kubernetes manifests, Helm charts, OpenAPI documents, protobuf
 descriptors. Each declares which file kinds it accepts.
 
-Two are worth naming.
+**Configuration readers are shipped** (Phase 2F): `PropertiesReader` and `YamlConfigReader`,
+model-blind over [M02](M02-detector.md)'s own `resource_roots` — a `.properties` line
+becomes one `config_entry` per key, dotted verbatim; a YAML document flattens nested maps to
+the same dotted `key_path`, a list element becomes an indexed segment (`foo[0]`), and a
+multi-document file's own `doc_index` travels with each entry ([D00](D00-fact-schema.md)
+§5c). Neither reader layers profiles, resolves a placeholder, or interprets what a key
+means — that is [M04](M04-resolver.md) pass 2's job, over facts these readers already wrote.
+A malformed file degrades to `partial`, never kills the run.
+
+Two more are worth naming.
 
 **Protobuf is never read by parsing `.proto` text.** The preferred source is the
 **descriptor embedded in the generated classes** — protobuf's Java output carries the
