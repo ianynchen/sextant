@@ -10,6 +10,7 @@ whose schema is tidier than the fixture's would stop pinning it.
 """
 
 import base64
+import json
 from pathlib import Path
 
 from google.protobuf import descriptor_pb2
@@ -83,7 +84,45 @@ AUDIT_AVSC = """{
 }
 """
 
-PROTOS = {"order.proto": ORDER_PROTO, "common.proto": COMMON_PROTO}
+# `bytes` is the one protobuf scalar whose projection changes the base type
+# (spec §3: `bytes → string/byte`), and no fixture schema carries one.
+BLOB_PROTO = """syntax = "proto3";
+package sextant.orders;
+option java_package = "com.example.orders.proto";
+option java_outer_classname = "BlobProtos";
+
+message Blob {
+  bytes body = 1;
+}
+"""
+
+
+def _diamond(name: str, imports: tuple[str, ...], fields: str) -> str:
+    """One corner of the import diamond: A imports B and C, both import D."""
+    lines = [
+        'syntax = "proto3";',
+        "package diamond;",
+        'option java_package = "com.example.diamond";',
+        f'option java_outer_classname = "{name}Protos";',
+        *[f'import "{imported}";' for imported in imports],
+        f"message {name} {{",
+        fields,
+        "}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+PROTOS = {
+    "order.proto": ORDER_PROTO,
+    "common.proto": COMMON_PROTO,
+    "blob.proto": BLOB_PROTO,
+    "d.proto": _diamond("D", (), "  string id = 1;"),
+    "b.proto": _diamond("B", ("d.proto",), "  diamond.D held = 1;"),
+    "c.proto": _diamond("C", ("d.proto",), "  diamond.D held = 1;"),
+    "a.proto": _diamond(
+        "A", ("b.proto", "c.proto"), "  diamond.B left = 1;\n  diamond.C right = 2;"
+    ),
+}
 
 # The generated descriptor-holder class each file's messages are compiled
 # into — what the extractor puts on an `embedded_descriptor` fact (2G design
@@ -92,6 +131,11 @@ PROTOS = {"order.proto": ORDER_PROTO, "common.proto": COMMON_PROTO}
 HOLDERS = {
     "order.proto": "com/example/orders/proto/OrderProtos#",
     "common.proto": "com/example/orders/proto/CommonProtos#",
+    "blob.proto": "com/example/orders/proto/BlobProtos#",
+    "a.proto": "com/example/diamond/AProtos#",
+    "b.proto": "com/example/diamond/BProtos#",
+    "c.proto": "com/example/diamond/CProtos#",
+    "d.proto": "com/example/diamond/DProtos#",
 }
 
 ORDER_REQUEST = "com/example/orders/proto/OrderProtos$OrderRequest#"
@@ -125,14 +169,77 @@ def _descriptors_from(tmp_path: Path, *names: str, origin: str = "compiled"):
     ]
 
 
-def _avro_descriptor(origin: str = "compiled"):
+def _avro_descriptor(
+    origin: str = "compiled",
+    document_id: str = "doc:avro",
+    symbol: str = AUDIT_EVENT,
+    payload: str = AUDIT_AVSC,
+):
     return EmbeddedDescriptorFact(
-        document_id="doc:avro",
-        symbol=AUDIT_EVENT,
+        document_id=document_id,
+        symbol=symbol,
         schema_format="avro",
-        payload=AUDIT_AVSC,
+        payload=payload,
         origin=origin,
     )
+
+
+def _cyclic_descriptors():
+    """protoc refuses to compile an import cycle, so a cyclic pair can only be
+    hand-built — which is the point: a payload is bytes off an artifact, not
+    something a compiler vouched for on the way in."""
+    return [
+        EmbeddedDescriptorFact(
+            document_id="doc:cycle",
+            symbol=f"com/example/cycle/{name.removesuffix('.proto').capitalize()}Protos#",
+            schema_format="protobuf",
+            payload=base64.b64encode(
+                descriptor_pb2.FileDescriptorProto(
+                    name=name, dependency=[imported]
+                ).SerializeToString()
+            ).decode("ascii"),
+        )
+        for name, imported in (("left.proto", "right.proto"), ("right.proto", "left.proto"))
+    ]
+
+
+def _embedding_avsc(outer: str) -> str:
+    """A generated class inlines every schema it needs, so two documents that
+    both hold `Inner` each declare it in full: one symbol, two shapes."""
+    inner = {
+        "type": "record",
+        "name": "Inner",
+        "namespace": "com.example.orders.avro",
+        "fields": [{"name": "id", "type": "string"}],
+    }
+    return json.dumps(
+        {
+            "type": "record",
+            "name": outer,
+            "namespace": "com.example.orders.avro",
+            "fields": [{"name": "inner", "type": inner}],
+        }
+    )
+
+
+# JSON that parses and is still not a schema. Each is a real shape of
+# malformed `.avsc` — a hand-written schema, a generator half-way through a
+# rename — and every one of them reached an unguarded subscript before.
+MALFORMED_AVSC = {
+    "a field with no type": '{"type": "record", "name": "R", "namespace": "n",'
+    ' "fields": [{"name": "x"}]}',
+    "fields that are not a list": '{"type": "record", "name": "R", "namespace": "n",'
+    ' "fields": "x"}',
+    "an enum with no symbols": '{"type": "record", "name": "R", "namespace": "n",'
+    ' "fields": [{"name": "x", "type": {"type": "enum", "name": "E"}}]}',
+    "a nested record with no name": '{"type": "record", "name": "R", "namespace": "n",'
+    ' "fields": [{"name": "x", "type": {"type": "record", "fields": []}}]}',
+    "an array with no items": '{"type": "record", "name": "R", "namespace": "n",'
+    ' "fields": [{"name": "x", "type": {"type": "array"}}]}',
+    "a record that goes wrong after a good nested one": '{"type": "record", "name": "R",'
+    ' "namespace": "n", "fields": [{"name": "good", "type": {"type": "record",'
+    ' "name": "Inner", "namespace": "n", "fields": []}}, {"name": "bad"}]}',
+}
 
 
 def _interpret(descriptors):
@@ -200,6 +307,41 @@ def test_the_two_origins_of_one_schema_meet_on_schema_name(tmp_path: Path):
     assert _shape(compiled, LINE).schema_name == "sextant.orders.OrderRequest.Line"
 
 
+def test_an_import_diamond_resolves_every_corner(tmp_path: Path):
+    """A imports B and C, both import D. Adding files dependency-first has to
+    reach D once and only once, and reach it before either importer — the
+    pool refuses a file whose imports are not already in it."""
+    shapes, failed = _interpret(
+        _descriptors_from(tmp_path, "a.proto", "b.proto", "c.proto", "d.proto")
+    )
+
+    assert failed == []
+    assert [shape.symbol for shape in shapes] == [
+        "com/example/diamond/AProtos$A#",
+        "com/example/diamond/BProtos$B#",
+        "com/example/diamond/CProtos$C#",
+        "com/example/diamond/DProtos$D#",
+    ]
+    corner = _fields(_shape(shapes, "com/example/diamond/AProtos$A#"))
+    assert corner["left"].shape_ref == "com/example/diamond/BProtos$B#"
+    assert (
+        _fields(_shape(shapes, "com/example/diamond/BProtos$B#"))["held"].shape_ref
+        == "com/example/diamond/DProtos$D#"
+    )
+
+
+def test_an_import_cycle_fails_only_its_members(tmp_path: Path):
+    """Two files importing each other can never be added, and the walk must
+    say so rather than recurse forever. Everything outside the cycle still
+    interprets."""
+    shapes, failed = _interpret(
+        [*_cyclic_descriptors(), *_descriptors_from(tmp_path, "common.proto")]
+    )
+
+    assert failed == ["com/example/cycle/LeftProtos#", "com/example/cycle/RightProtos#"]
+    assert [shape.symbol for shape in shapes] == [MONEY]
+
+
 def test_a_cross_file_reference_resolves_through_the_shared_pool(tmp_path: Path):
     """`price` is typed by a message from the imported file. One pool over
     every payload in the module is what makes that a `shape_ref` instead of a
@@ -241,6 +383,17 @@ def test_types_project_into_the_wire_vocabulary(tmp_path: Path):
 
     assert fields["tags"].wire_type == "map"
     assert fields["tags"].item == {"wire_type": "string", "wire_format": None, "nullable": False}
+
+
+def test_bytes_is_a_string_of_bytes_not_its_own_wire_type(tmp_path: Path):
+    """The one scalar in spec §3's table whose base type changes: D00 §5b has
+    a `bytes` word, and `bytes → string/byte` is deliberately not it, so that
+    a protobuf field and a base64 JSON field compare as the same thing."""
+    shapes, failed = _interpret(_descriptors_from(tmp_path, "blob.proto"))
+
+    assert failed == []
+    body = _fields(_shape(shapes, "com/example/orders/proto/BlobProtos$Blob#"))["body"]
+    assert (body.wire_type, body.wire_format) == ("string", "byte")
 
 
 def test_proto3_presence_decides_required_and_nullable(tmp_path: Path):
@@ -356,6 +509,43 @@ def test_broken_avro_json_is_a_gap_not_a_crash():
     assert _interpret([broken]) == ([], ["com/example/orders/avro/Broken#"])
 
 
+def test_avro_that_parses_but_is_not_a_schema_is_a_gap_not_a_crash():
+    """Valid JSON is not a valid schema, and a hand-written or half-renamed
+    `.avsc` reaches the interpreter looking exactly like a good one. Each
+    payload is one gap; the run keeps going, and the records read before the
+    malformed part are dropped rather than published as a schema nobody
+    declared."""
+    for description, payload in MALFORMED_AVSC.items():
+        broken = _avro_descriptor(
+            document_id="doc:broken", symbol="com/example/orders/avro/Broken#", payload=payload
+        )
+
+        shapes, failed = _interpret([broken, _avro_descriptor()])
+
+        assert failed == ["com/example/orders/avro/Broken#"], description
+        assert [shape.symbol for shape in shapes] == [AUDIT_EVENT], description
+
+
+def test_a_payload_that_decodes_to_no_descriptor_is_a_gap_not_a_silent_no_op():
+    """Protobuf parses leniently: bytes that describe no file still produce a
+    `FileDescriptorProto`, just an empty one. Interpreted quietly it yields no
+    shape and no gap — an omission that reports success, which is the one
+    thing a coverage claim may never do (D00 §3)."""
+    empty = EmbeddedDescriptorFact(
+        document_id="doc:proto",
+        symbol="com/example/orders/proto/EmptyProtos#",
+        schema_format="protobuf",
+        payload="",
+        origin="compiled",
+    )
+
+    assert _interpret([empty]) == ([], ["com/example/orders/proto/EmptyProtos#"])
+
+    shapes, failed = _interpret([empty, _avro_descriptor()])
+    assert failed == ["com/example/orders/proto/EmptyProtos#"]
+    assert [shape.symbol for shape in shapes] == [AUDIT_EVENT]
+
+
 # --- determinism (NFR-1) -------------------------------------------------
 
 
@@ -372,3 +562,33 @@ def test_output_does_not_depend_on_the_order_the_descriptors_arrived_in(tmp_path
     assert serialized == [shape.model_dump_json() for shape in second]
     assert [shape.symbol for shape in first] == sorted(shape.symbol for shape in first)
     assert first_failed == second_failed == []
+
+
+def test_one_symbol_declared_by_two_documents_still_orders_the_same_way():
+    """Every generated class inlines the whole schema it needs, so a shared
+    nested record is declared once per embedding and one symbol arrives twice.
+    Sorting on the symbol alone leaves those two rows in input order — stable,
+    and therefore decided by the artifact walk. Two identical shapes are not
+    interchangeable: they carry different documents, and the fact files are
+    content-hashed."""
+    descriptors = [
+        _avro_descriptor(
+            document_id="doc:one",
+            symbol="com/example/orders/avro/OuterOne#",
+            payload=_embedding_avsc("OuterOne"),
+        ),
+        _avro_descriptor(
+            document_id="doc:two",
+            symbol="com/example/orders/avro/OuterTwo#",
+            payload=_embedding_avsc("OuterTwo"),
+        ),
+    ]
+
+    first, _ = _interpret(descriptors)
+    second, _ = _interpret(list(reversed(descriptors)))
+
+    assert [shape.model_dump_json() for shape in first] == [
+        shape.model_dump_json() for shape in second
+    ]
+    inner = [shape for shape in first if shape.symbol == "com/example/orders/avro/Inner#"]
+    assert [shape.document_id for shape in inner] == ["doc:one", "doc:two"]

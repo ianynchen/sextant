@@ -130,9 +130,14 @@ def interpret_descriptors(
     source-origin shapes compile to no class and are keyed by the schema's own
     full name, so nothing is asked of it for them.
 
-    Output is sorted by symbol and never depends on the order the descriptors
-    arrived in (NFR-1): descriptor input order is whatever an artifact walk
-    happened to produce, and the fact files are content-hashed.
+    Output never depends on the order the descriptors arrived in (NFR-1):
+    descriptor input order is whatever an artifact walk happened to produce,
+    and the fact files are content-hashed. `symbol` alone does not order it —
+    one symbol legitimately arrives twice, because every generated class
+    inlines the whole schema it needs and a shared nested record is therefore
+    declared once per embedding — so the document and origin that produced a
+    shape break the tie, and a stable sort's fallback to input order never
+    decides anything.
     """
     shapes: list[DeclaredShapeFact] = []
     failed: list[str] = []
@@ -146,7 +151,9 @@ def interpret_descriptors(
     )
     shapes.extend(found)
     failed.extend(unread)
-    return sorted(shapes, key=lambda shape: shape.symbol), sorted(failed)
+    return sorted(
+        shapes, key=lambda shape: (shape.symbol, shape.document_id, shape.origin)
+    ), sorted(failed)
 
 
 def _evidence(origin: Origin) -> Literal["compiler", "declared"]:
@@ -194,6 +201,13 @@ def _pool_shapes(
             # would hand an empty, perfectly parseable descriptor on.
             file_proto.ParseFromString(base64.b64decode(fact.payload, validate=True))
         except (binascii.Error, DecodeError):
+            failed.append(fact.symbol)
+            continue
+        if not file_proto.name:
+            # Protobuf parses leniently, so bytes that are not a descriptor at
+            # all can still yield an empty message. No file name means no
+            # file: reported, because a payload that produces neither a shape
+            # nor a gap is an omission dressed as success (D00 §3).
             failed.append(fact.symbol)
             continue
         # First payload wins for a file name repeated within one origin: they
@@ -404,7 +418,16 @@ def _avro_shapes(
         # than dropped: something harvested it as one.
         return [], [fact.symbol]
     reading = _AvroReading(fact=fact, naming=naming, shapes=[])
-    _avro_record(schema, "", reading)
+    try:
+        _avro_record(schema, "", reading)
+    except (KeyError, TypeError, IndexError):
+        # JSON that parsed is not yet a schema: a field with no `type`, a
+        # record with no `name`, an array with no `items`, a `fields` that is
+        # not a list. Every one of those is this payload's gap and no reason
+        # to lose the others — and the records read before the malformed one
+        # are dropped rather than published, because half a schema is a shape
+        # nobody declared.
+        return [], [fact.symbol]
     return reading.shapes, []
 
 
