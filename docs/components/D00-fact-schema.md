@@ -168,6 +168,14 @@ a Kafka topic can never be answered by an SQS queue.
 
 **`control_flow_kind`** — `sequential`, `conditional`, `alternative`, `loop`, `handler`
 
+**`format`** — `json`, `protobuf`, `avro`, `xml`, `string`, `bytes`. What is on a
+channel's wire ([D01](D01-graph-schema.md) §3's `endpoints.format`), inferred and never
+a property of a payload *type*. `json_schema` is **reserved**: the value is named here
+so a catalog cannot quietly claim it, and a catalog that writes it is refused by name
+rather than read as something adjacent — JSON Schema and XSD are out of scope, and the
+refusal is what keeps "we do not do this yet" from arriving as a silent `json`.
+`format_resolution` beside it takes no set of its own: it reuses `resolution` above.
+
 **Two values have no version-1 fact producer, deliberately.** `syntax` is the day-one
 on-ramp for a second language's tree-sitter tier; `llm` is required by
 [M01](M01-overlay.md)'s claim machinery even though model overlays never become facts. Both
@@ -420,6 +428,28 @@ links a schema runtime to do it.
 these payloads, and it is the only code in the system that understands a schema format —
 so a format's rules are stated once, and a new language's extractor gains schema support
 by emitting `embedded_descriptor` and nothing else.
+
+Each such fact carries, beside its `fields`:
+
+- **`symbol`** — the name the shape is *joined* by: the generated class a compiled
+  payload travels as, so a payload type reference in any other fact meets it; the
+  schema's own full name for a source-origin shape, which compiles to no class.
+- **`schema_name`** — the schema's own full name (`sextant.orders.OrderRequest`),
+  written for **both** origins, because `symbol` cannot be the identity across them.
+  It is the one field on which a compiled and a source shape can meet, and therefore
+  what DR-4's compiled-beats-source precedence compares.
+- **`schema_format`** and **`origin`** — as on the `embedded_descriptor` this came
+  from.
+- **`evidence`** — `compiler` for a compiled origin, `declared` for a source one. The
+  shape's whole field list carries the one tier; a schema does not state some of its
+  fields more confidently than others.
+
+Per field: the schema's own `name` and the encoded `wire_name` (a protobuf `json_name`,
+**read from the descriptor, never computed** — protoc puts the computed default and an
+explicit override in the same place), `field_number` where the format numbers its fields
+and NULL where it does not, the [§5b](#5b-the-wire-type-vocabulary) wire type and format,
+`required`, `nullable`, the declared `default`, and the `item`/`shape_ref` references
+that reach other shapes.
 
 ### Why `module` is a fact and not a passing argument
 

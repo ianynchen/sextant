@@ -1025,6 +1025,168 @@ identity. Proto3's JSON mapping renames fields to lowerCamelCase by default, so 
 field `total_amount` reaches a JSON wire as `totalAmount`. A service defined by a `.proto` but
 exposed over REST therefore carries different field names than its own schema states.
 
+### Format, as built: the six-rung ladder
+
+The `resolves.format` sketch above is **not what shipped, and neither is a catalog-level
+`format:` default.** Format turned out not to be resolvable per match at all: the evidence
+that settles it — a declared MIME string, a configured serializer class, the payload type a
+shape pass bound — is spread across columns that do not all exist yet when a match is being
+made, and some of it is not on the row at all. So `format` is answered by **one late pass
+over the finished `endpoints` table**, after media stamping and after payload binding, and
+it stamps [D01](D01-graph-schema.md) §3's two columns on **every** row. `direction`
+resolution is unaffected: it still has to complete before §3's merge, for the reason stated
+above.
+
+The pass climbs six rungs. **The first rung that answers, wins**, and the answer carries
+that rung's resolution tier:
+
+| | Rung | Answers from | `format_resolution` |
+|---|---|---|---|
+| 1 | Fixed by protocol | the protocol's own constant format, `format_fixed` | `resolved` |
+| 2 | Declared media | the row's own `consumes`/`produces`, through `media_formats` | `resolved` |
+| 3 | Serializer config | the class the module's configuration names, through `format_from` | `resolved` |
+| 4 | Payload hierarchy | the bound payload was described by a **schema**, and the schema names its own format | `narrowed` |
+| 5 | Framework default | an ordinary declared payload, plus a default converter's package family present in the module (`json_default_markers`) | `narrowed` |
+| 6 | Nothing | — | `unresolved`, `format` NULL |
+
+**Two rules bind the whole ladder.**
+
+**An assumed format must never look observed.** A framework default is recorded, but at
+`narrowed` — never at the tier a `produces` attribute or a configured serializer earns.
+That is the §2c rule above ("a default that survives unchallenged is not an observation"),
+carried into a column instead of an evidence tier.
+
+**A payload's TYPE does not determine the wire, which is why rung 2 sits above rung 4.**
+Proto3 defines a JSON encoding, so a protobuf-typed payload under `produces =
+"application/json"` is `format: json` — and the shape's `wire_name` (the `json_name`) is
+what a JSON wire carries, while its `name` and `field_number` are what a protobuf wire
+does. Reading the wire off the payload's type would be a confident wrong answer exactly
+where the proto3 rename above makes the mistake most expensive. Rung 4 is therefore
+`narrowed` at best: negotiation the pass cannot see may still put the JSON encoding on the
+wire.
+
+**A rung that answers with more than one format answers with none.** Two MIME types
+meaning different formats, a merged row whose two halves' configured serializers disagree,
+a request described by one schema format and a response by another: the row records
+`unresolved` and the impasse becomes an `open_questions` row of kind `format_conflict`
+([D01](D01-graph-schema.md) §3) carrying the candidates and the trail. **The ladder stops
+at a conflict rather than falling through** — a weaker rung breaking a tie that stronger
+evidence could not is precisely the guess the ledger exists to avoid.
+
+### The five format vocabularies
+
+Every framework, protocol, MIME, class and package name the ladder compares against is
+catalog data; no engine learns one. Three are top-level blocks, one rides inside
+`media_from_config` (§2d), and one is read by the payload-binding pass rather than by the
+ladder itself.
+
+```yaml
+# Rung 1 — a protocol whose wire is constant by definition. Shipped by the
+# catalog that owns the protocol, never hardcoded. NO SHIPPED CATALOG
+# DECLARES ONE TODAY: gRPC, SOAP and GraphQL have no catalog yet, so rung 1
+# is read and validated but has no live surface.
+format_fixed:
+  grpc: protobuf
+
+# Rung 2 — what a declared MIME string means on the wire.
+media_formats:
+  application/json: json
+  application/x-protobuf: protobuf
+  application/protobuf: protobuf
+  avro/binary: avro
+  application/xml: xml
+  text/xml: xml
+
+# Rung 5 — package families whose PRESENCE anywhere in the module is evidence
+# that a JSON default converter is on the classpath. Both Jackson generations:
+# the relocation between them is a package rename and nothing else.
+json_default_markers:
+  - com.fasterxml.jackson
+  - tools.jackson
+```
+
+**The two map tables are unioned across every catalog that declares them**, rather than
+scoped to one: a MIME string means the same format whoever wrote it down, and a row that
+several engines have contributed to carries no catalog of its own. **Two catalogs
+disagreeing about one key is refused, not resolved** — the same table deliberately ships on
+more than one catalog of a family (each owns its own protocol), so the collision is a real
+editing mistake, and picking either side would make the answer depend on filename order.
+`json_default_markers` is a list rather than a map, so it merges without a collision to
+have; every marker in it means the same format anyway.
+
+**Every declared format value — in `format_fixed`, `media_formats` and the `format_from`
+below — is validated against [D00](D00-fact-schema.md) §4's closed format set before
+anything is stamped**: a whole catalog is refused rather than a table half-read, the same
+discipline the configuration model keeps. And **`json_schema` is
+refused by name**: the design names it, nothing implements it, and a catalog writing it
+must fail loudly rather than be read as something adjacent (the reserved-value pattern §2i
+already uses for `from_key_prefix`). Note the distinction the Kafka table below turns on — Confluent's
+JSON-Schema serializer puts plain **JSON** on the wire and carries the schema out of band,
+so it maps to `json`; `json_schema` is about the schema *language*, which is out of scope.
+
+**`format_from` — rung 3 — rides beside `media_from_config`'s `values`** (§2d), because the
+rules that say *which* configuration key holds a serializer and *which rows it covers* are
+already stated there; a second copy of that machinery keyed on the same configuration would
+be two things to keep in step. The two tables answer different questions about the same
+declared class — what MIME type it implies, and what is actually on the wire — and **their
+key sets deliberately differ**. A schema-registry serializer has no MIME string anyone
+registered, so it appears in `format_from` and not in `values`: it stamps no media and
+answers rung 3 instead, which is the more honest of the two answers. The reverse also
+holds. A merged `both` row is covered by rules for **either** direction — it is one
+identity the module both exposes and calls — and where the two halves' configured classes
+mean different formats, that is a real disagreement about one wire, recorded as a
+`format_conflict` rather than resolved.
+
+**`parse_calls` — read by the payload-binding pass, not by the ladder.** It says which
+payload parameter types mean *this channel carries the wire's bytes* and which calls turn
+those bytes into a typed payload:
+
+```yaml
+parse_calls:
+  bytes_payloads: [java.lang.String, "byte[]"]
+  calls:
+    - owner_hierarchy:
+        - com.google.protobuf.MessageOrBuilder
+        - com.google.protobuf.GeneratedMessage
+        - com.google.protobuf.GeneratedMessageV3
+        - com.google.protobuf.GeneratedMessageLite
+      method: parseFrom
+      bytes_arg: 0
+      payload_from: receiver_owner
+    - { owner: com.fasterxml.jackson.databind.ObjectMapper, method: readValue,
+        bytes_arg: 0, payload_from: class_arg, class_arg: 1 }
+    - { owner: tools.jackson.databind.ObjectMapper, method: readValue,
+        bytes_arg: 0, payload_from: class_arg, class_arg: 1 }
+    - { owner: tools.jackson.databind.json.JsonMapper, method: readValue,
+        bytes_arg: 0, payload_from: class_arg, class_arg: 1 }
+    - { owner: org.apache.avro.specific.SpecificDatumReader, method: "<init>",
+        payload_from: class_arg, class_arg: 0 }
+```
+
+An entry names **exactly one** of `owner` (identity) or `owner_hierarchy` (ancestry),
+a `method`, and a `payload_from` of `receiver_owner` (the parse whose receiver *is* the
+payload type) or `class_arg` (the parse handed a class literal, with `class_arg` naming its
+position). A malformed entry is refused at run start rather than silently matching nothing.
+
+**Why protobuf matches through `MessageOrBuilder` and not through the `extends
+GeneratedMessage` the hierarchy evidence elsewhere names.** A plain `extends` is **not in
+the fact stream at all**: [D00](D00-fact-schema.md) §5a emits a `supertype` reference only
+for a *generic* superclass, and a generated message's superclass is not generic. What the
+facts do carry is the message's own `implements …OrBuilder`, and that interface's own
+`extends MessageOrBuilder` — an interface chain, which §5a does record. So the marker that
+actually joins is `MessageOrBuilder`, and it is listed first for that reason. The three
+`GeneratedMessage*` spellings ride along for the case where a generic supertype does name
+one (a generated *builder*'s does). The lite runtime reaches none of these and binds
+nothing — silence, never a wrong payload type.
+
+**The Avro entry ships inert, deliberately.** `SpecificDatumReader`'s constructor names the
+payload type and nothing else: the bytes reach a separately built decoder, never that call.
+It therefore declares **no `bytes_arg`**, and no rung can prove the channel's bytes reach
+it, so it binds nothing today. It is declared because the entry is where the type will
+already be the day a decoder-tracing rung exists — and because an entry that named a
+`bytes_arg` it could not justify would bind a payload on the strength of being in the right
+method.
+
 ---
 
 ## 2d. Addresses that live in configuration
@@ -1127,6 +1289,12 @@ every other media-declaring evidence kind already follows. **An unresolved or un
 serializer class stamps nothing**: the class name still lands in `resolved_config`
 regardless, which is what a later format-inference pass reads; a class absent from `values`
 is a gap to grow the catalog from, not a guess.
+
+**A second table sits beside `values` in this same block: `format_from`** — the same
+configured classes answering the other question, *what is actually on the wire* rather
+than *what MIME type this implies*. It is read by the format ladder's rung 3 and specified
+in §2c above, here rather than in a block of its own because the `rules` above already say
+which key holds a serializer and which rows it covers.
 
 The engine that runs both `address_from_config` and `media_from_config` — `config_join`,
 the eighth style — has its own full section in §2 above; this section specifies the

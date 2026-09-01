@@ -90,6 +90,11 @@ redaction set, so the field is omitted rather than written empty or invented; it
 scan time where a clone already exists. It is what lets the system tier judge staleness in a
 monorepo without fetching history itself.
 
+**`contents.tables` names what actually travelled**, written from the exporter's own table
+list rather than hand-maintained — so `open_questions` (below) appears there beside
+`endpoints`, `shapes`, `shape_fields`, `resolved_config`, `documents`, `symbols`,
+`annotations` and `call_sites`, and the list is sorted so the manifest is deterministic.
+
 **`environments`** lists the profiles this module resolved. Endpoints carry configuration
 expressions rather than one environment's values, so a bundle serves every environment and
 the system tier selects. **Live since Phase 2F**: populated from `resolved_config`'s own
@@ -133,11 +138,50 @@ backwards from the system architecture document:
 | **Cross-service sequence diagrams** | `edges` with control-flow position, `dispatch`, `dispatch_site`, `trace_summary` — the inputs `trace_of` walks over |
 | Naming things | `symbols` for the symbols those tables reference |
 | Honest rendering | The trust fields on every row above |
+| **The enrichment tier's inbox** | `open_questions` — what no programmatic pass could answer |
 
 **The sequence-diagram row is the one to notice.** Traces are a named query, not a table
 ([D01](D01-graph-schema.md)): they travel implicitly, as the tables `trace_of` walks over.
 If `dispatch` or the control-flow positions on `edges` do not travel, the system tier can
 draw a service map but not a sequence — so omitting them is not an optimisation.
+
+## 5a. Open questions, and how a wire format is shown
+
+**`open_questions` ([D01](D01-graph-schema.md) §3) travels like any other graph table** —
+`graph/open_questions.parquet`, exported through its own named query so the row order is
+the one NFR-1 already fixed, and named in `contents.tables`. It is the enrichment tier's
+inbox: the questions a programmatic pass refused to guess at, each with its wire identity,
+its kind, the candidates that were on the table, and the trail that reached the impasse.
+It travels because the tier that answers it runs against the bundle, not against the
+workspace that produced it.
+
+**The rendered module document shows the same rows in an "Open questions" section**, one
+line per row, each candidate rendered in the same prose the writing pass put in its own
+trail — so a human reads the identical fact in the ledger and in the document. The section
+is **absent** on a run with no rows, following the "catalogs skipped" precedent rather than
+the "looked and found nothing" one: this is an inbox, and an empty inbox is not a finding.
+
+**Format joins the endpoint tables beside Media**, on both the inbound and the outbound
+table, and it is the **only** place a reader meets `format_resolution` — the document
+carries no separate trust column. So the rendering hedges everything that is not the top
+tier:
+
+| Row holds | Renders |
+|---|---|
+| `format_resolution: resolved` | `protobuf` — unhedged, and this is the only case that is |
+| any other non-NULL resolution (`narrowed`, and anything schema-valid but off today's live surface) | `protobuf (assumed)` |
+| `format` NULL | `unresolved` — the same NULL-renders-`unresolved` rule the handler column keeps |
+
+The hedge covers the merge exception too ([D01](D01-graph-schema.md) §3): a merged row
+keeping a non-NULL `format` beside the weaker of its two halves' markers reads
+`protobuf (assumed)`, never plain. Printing it plain would make an unsettled value
+typographically identical to an observed one, which is exactly what "an assumed format must
+never look observed" forbids.
+
+**Declared shapes render through the existing shape tables unchanged**, with one addition:
+a field's `field_number` rides beside its wire name as `totalAmount (1)` where the format
+has one, and fields without one — every Avro field, every bytecode-derived field — render
+exactly as before.
 
 ---
 

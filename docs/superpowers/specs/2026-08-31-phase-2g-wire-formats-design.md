@@ -15,7 +15,7 @@ it appears, lands it in the same `shapes`/`shape_fields` tables 2A built, and re
 what is on each wire with the trust level the evidence earns. Two rules bind everything:
 
 1. **An assumed format must never look observed.** A framework default is recorded, but
-   at `format_resolution: narrowed`, never `exact` (user ruling: column + assumed rows).
+   at `format_resolution: narrowed`, never `resolved` (user ruling: column + assumed rows).
 2. **A protobuf-typed payload does not imply a protobuf wire.** Proto3 defines a JSON
    encoding; declared channel evidence (media, serializer) always outranks payload-type
    evidence (user ruling). The shape rows carry both namings — `name`/`field_number`
@@ -72,8 +72,10 @@ plus class-literal argument values (`LDC` of a `Class` constant → new argument
 
 Riding 2F's format-keyed ArtifactReader pattern, two new readers over the repository
 (schema files live outside `src/main/resources` too, so detection contributes schema
-roots: `src/main/proto`, `src/main/avro`, plus any `*.proto`/`*.avsc` under the
-module's source tree — recorded in the detector the way `resource_roots` was):
+roots — recorded in the detector the way `resource_roots` was). **As shipped the roots
+are the two conventional directories only**, `src/main/proto` then `src/main/avro`,
+each contributed when it exists; a loose `*.proto`/`*.avsc` elsewhere under the source
+tree is not swept up, and the boundary is recorded in COVERAGE §4.2:
 
 - **`.avsc`** — the file *is* the schema JSON; the reader emits an
   `embedded_descriptor`-shaped input (`schema_format: "avro"`, payload verbatim,
@@ -159,7 +161,7 @@ type is descriptor-described or field-described, never a blend.
   derive-time `GROUP BY`/dedup lists them. When the two halves disagree, the
   inbound half's answer survives (it is the richer, handler side — same rule as
   media); resolution takes the weaker of the two markers so a `narrowed` half can
-  never launder to `exact` through a merge.
+  never launder to `resolved` through a merge.
 - D00 closed sets: `format ∈ {json, protobuf, avro, xml, string, bytes}`
   (`json_schema` reserved, refused if a catalog writes it — the 2F reserved-mechanism
   pattern); `format_resolution` reuses the existing resolution set.
@@ -171,13 +173,19 @@ per endpoint row. It runs after media stamping (config_join) and after parse bin
 (§6) — the `_RUNS_LAST` ordering precedent — because its rungs read their outputs.
 First rung that answers, wins; every row gets a value or an explicit `unresolved`.
 
+**The strongest tier is written `resolved`, everywhere below.** §4 says
+`format_resolution` reuses the existing resolution set, and D00 §4 closes that set at
+`resolved`/`narrowed`/`partial`/`unresolved` — so an earlier draft's "exact" was prose
+for a value that does not exist, and every rung below states the value actually written
+(ruled at Task 6).
+
 1. **Fixed by protocol** — grpc → `protobuf`, soap → `xml`, graphql → `json`;
-   `exact`. (Catalog-declared per protocol, not hardcoded: a `format_fixed` entry in
+   `resolved`. (Catalog-declared per protocol, not hardcoded: a `format_fixed` entry in
    the catalog's protocol vocabulary — framework and protocol names stay in catalogs.)
 2. **Declared media** — the row's `consumes`/`produces` MIME strings, mapped by
    catalog vocabulary (`application/json → json`, `application/x-protobuf` and
    `application/protobuf → protobuf`, `avro/binary → avro`, `application/xml` and
-   `text/xml → xml`); `exact`. **This rung outranks rung 4 by design**: a
+   `text/xml → xml`); `resolved`. **This rung outranks rung 4 by design**: a
    protobuf-typed payload under `produces: application/json` is `format: json` — the
    proto3 JSON encoding, wire names from `json_name`. A row whose consumes and
    produces map to different formats keeps direction-specific truth: format describes
@@ -188,7 +196,7 @@ First rung that answers, wins; every row gets a value or an explicit `unresolved
    `KafkaAvroSerializer → avro`, `KafkaProtobufSerializer → protobuf`,
    `KafkaJsonSchemaSerializer → json` today with the reserved value noted,
    `KafkaJsonSerializer → json`, Spring's `JsonSerializer → json`,
-   `StringSerializer → string`, `ByteArraySerializer → bytes`); `exact` — a
+   `StringSerializer → string`, `ByteArraySerializer → bytes`); `resolved` — a
    serializer states the wire outright.
 4. **Payload hierarchy** — the bound shape is descriptor-described and nothing above
    answered: `format: protobuf` (or `avro`) at **`narrowed`** — suggestive, never
@@ -210,12 +218,20 @@ a catalog-named envelope type), two rungs:
 
 - **Rung A — handler body:** a catalog-matched parse call in the handler whose linked
   argument traces to the handler's payload parameter (2C dataflow, unchanged) binds
-  the parse's `payload_type` as `request_shape`. Evidence `syntax`, `exact`.
+  the parse's `payload_type` as `request_shape`.
 - **Rung B — one delegation hop:** the handler passes its payload parameter as an
   argument to a module-local method; the callee's body contains a catalog-matched
   parse whose linked argument traces to the corresponding parameter position. The
   one new join: caller argument position → callee parameter position, within the
-  module, one hop, never further. Evidence `syntax`, `exact` — the flow is proven.
+  module, one hop, never further.
+
+**Both rungs are syntax-level evidence, and neither writes an evidence column.** The
+tier describes what the pass read — a call site in the module's own bytecode, never a
+declaration — but the binding's only write is `request_shape` (`bind_request_shape.sql`,
+a compare-and-set against the bytes shape it read). `endpoints.evidence` stays what the
+derivation that created the row put there: it is that row's provenance, and a payload
+rebound afterwards is not a different derivation. A per-column trust field for payloads
+would be a schema change, and 2G makes none (ruled at Task 7).
 
 **Multi-caller is not ambiguity:** two listeners delegating to the same callee both
 bind its parse — both channels' bytes provably reach it. **Real ambiguity refuses to
@@ -229,8 +245,14 @@ The ledger (user ruling — every miss recorded, the undecidable handed to 2K):
 - **`open_questions`** — a workspace table and D06 bundle artifact; one row per
   undecidable binding: the endpoint's wire identity (protocol/method/path), a closed
   `question` kind (`payload_binding`, `format_conflict`), the candidate answers as a
-  JSON array (each with its type/format, where it was seen, and why no rung reached
-  it), and the evidence trail. 2K's enrichment seat reads this artifact and answers
+  JSON array, and the evidence trail. **The candidate keys as shipped**: a
+  `payload_binding` candidate carries `payload_type`, `hops`, `seen_in` and `why` —
+  `why` holds the matched CALL (`…OrderRequest#parseFrom`), and *why no rung reached
+  it* is carried by `hops` together with the row's own `evidence` trail, which names
+  the refusal (`payload parsed beyond the one-hop horizon`, `payload parse
+  ambiguous — one payload, more than one parse`) rather than repeating it per
+  candidate. A `format_conflict` candidate carries `format`, `seen_in` and `why`.
+  2K's enrichment seat reads this artifact and answers
   at `evidence: llm` as overlay claims (2B §6 contract). Programmatic passes never
   read `open_questions` — it is a hand-off, not an input. Rows are ordered by wire
   identity for NFR-1 determinism.
@@ -282,7 +304,10 @@ All names are data; no engine learns a framework or library name:
 - JVM extractor: **no new dependency** — ASM harvests constants; that was the point
   of the layering.
 - Fixture build: `protobuf-maven-plugin` + `avro-maven-plugin` in
-  `orders-service/pom.xml`.
+  `orders-service/pom.xml`, and — fixture-only, user-ruled — the
+  `tools.jackson.core:jackson-databind` artifact, so the Jackson 3 `parse_calls` rows
+  (§7) are matched against a real relocated call site in compiled bytecode rather than
+  only against an invented owner in a unit test. Nothing in `src/` depends on it.
 
 ## 10. Fixtures and the proof obligations
 
