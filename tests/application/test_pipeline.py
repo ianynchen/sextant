@@ -468,11 +468,28 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # operation, so `method` is NULL.
         (None, "Order.lines"),
         (None, "Order.totals"),
-        # The amended acceptance test (2H design §1): these two rows come from
+        # `CustomerGraphqlController`, the CLASS-level scope shape: the type
+        # states `typeName = "Customer"` once and `nickname` names only its
+        # own field, so the scope is read one level out. `shipTo` spells its
+        # own `typeName = "Order"` and that WINS over the class's — the nearer
+        # declaration is the more specific, which is why it lands under
+        # `Order.` and not `Customer.`.
+        (None, "Customer.nickname"),
+        (None, "Order.shipTo"),
+        # NOT here, and asserted absent below: `OrderGraphqlController
+        # #orphanField`'s `@SchemaMapping(field = "orphan")`. No scope on the
+        # method, none on the class — Spring infers it from the parameter
+        # type, a fact no annotation carries — so the row is REFUSED rather
+        # than derived as the bare `orphan`, which would claim a
+        # root-operation-shaped identity for a resolver.
+        # The amended acceptance test (2H design §1): these rows come from
         # `netflix-dgs.yml` and `microprofile-graphql.yml`, which ride the two
         # forms `spring-graphql.yml` introduced with ZERO further engine
-        # change. Asserted explicitly, by catalog, below.
+        # change. `Order.dgsLines` is the DGS spelling of the qualifier —
+        # `parentType` where Spring says `typeName` — through the same form.
+        # Asserted explicitly, by catalog, below.
         ("query", "dgsOrders"),
+        (None, "Order.dgsLines"),
         ("query", "mpOrders"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
@@ -642,14 +659,20 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # fixture surfaces produce — the rest derive nothing under the shipped
     # engines. Neither merges with anything. 97 + 2 = 99.
     #
-    # 2H Task 2 adds 8: the whole GraphQL surface, one row per mapped method
-    # across three catalogs — 6 from `spring-graphql.yml`
-    # (`orderById`/`orders`/`placeOrder`/`orderUpdates` root operations plus
-    # the `Order.lines`/`Order.totals` resolvers), 1 from `netflix-dgs.yml`,
-    # 1 from `microprofile-graphql.yml`. No two share a wire identity and none
-    # collides with an HTTP or messaging row, so all 8 are new rows and none
-    # of the existing 99 identities moves. 99 + 8 = 107.
-    assert len(report.endpoints) == 107
+    # 2H Task 2 adds 11: the whole GraphQL surface, one row per mapped method
+    # across three catalogs — 8 from `spring-graphql.yml`
+    # (`orderById`/`orders`/`placeOrder`/`orderUpdates` root operations, the
+    # `Order.lines`/`Order.totals` resolvers, and
+    # `CustomerGraphqlController`'s class-level-scope pair
+    # `Customer.nickname`/`Order.shipTo`), 2 from `netflix-dgs.yml`, 1 from
+    # `microprofile-graphql.yml`. No two share a wire identity and none
+    # collides with an HTTP or messaging row, so all 11 are new rows and none
+    # of the existing 99 identities moves. 99 + 11 = 110.
+    #
+    # TWELVE annotated methods produce those 11 rows: `orphanField` names a
+    # field of a type nothing states, so it derives none at all (pinned by
+    # `test_a_resolver_whose_scope_no_annotation_states_derives_no_row`).
+    assert len(report.endpoints) == 110
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
@@ -783,7 +806,7 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
 
 # --- 2H Task 2: the GraphQL surface, live on real bytecode ---------------
 #
-# Pinned from the live run this task froze: 107 endpoints, extractor 9.9.
+# Pinned from the live run this task froze: 110 endpoints, extractor 9.9.
 
 
 def _graphql_rows(report: ResolveReport) -> dict[tuple[str | None, str | None], dict]:
@@ -797,20 +820,21 @@ def _graphql_rows(report: ResolveReport) -> dict[tuple[str | None, str | None], 
     return keyed
 
 
-def test_the_graphql_surface_derives_its_eight_operations(
+def test_the_graphql_surface_derives_its_eleven_operations(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """2H design §1, live: three catalogs, one `annotation_driven` engine,
-    eight rows — every one `resolved`/`compiler`, and each attributed to the
+    eleven rows — every one `resolved`/`compiler`, and each attributed to the
     catalog that derived it.
 
     The four root operations show both halves of form 1: `orderById` names its
     field explicitly, while `orders`, `placeOrder` and `orderUpdates` name
-    nothing and take the method's own name. The two resolvers show form 2:
-    `Order.lines` composes two attributes spelled on one annotation,
-    `Order.totals` composes the first with form 1's fallback for the second —
-    which is the point of writing them as two composable forms rather than one
-    GraphQL-shaped rule.
+    nothing and take the method's own name. The resolvers show form 2 at both
+    levels: `Order.lines` composes two attributes spelled on one annotation,
+    `Order.totals` composes the first with form 1's fallback for the second,
+    and `Customer.nickname` takes its scope from the enclosing type while
+    naming only its own field — which is the point of writing them as two
+    composable forms rather than one GraphQL-shaped rule.
     """
     _, report = resolved_fixture
     rows = _graphql_rows(report)
@@ -822,7 +846,10 @@ def test_the_graphql_surface_derives_its_eight_operations(
         ("subscription", "orderUpdates"),
         (None, "Order.lines"),
         (None, "Order.totals"),
+        (None, "Customer.nickname"),
+        (None, "Order.shipTo"),
         ("query", "dgsOrders"),
+        (None, "Order.dgsLines"),
         ("query", "mpOrders"),
     }
     for row in rows.values():
@@ -849,8 +876,60 @@ def test_the_graphql_surface_derives_its_eight_operations(
         "OrderGraphqlController#orderLines(sig_f5672381)."
     )
     assert handlers[(None, "Order.totals")].endswith("OrderGraphqlController#totals(sig_5ed41d1a).")
+    assert handlers[(None, "Customer.nickname")].endswith(
+        "CustomerGraphqlController#nickname(sig_03276a7b)."
+    )
+    assert handlers[(None, "Order.shipTo")].endswith(
+        "CustomerGraphqlController#shipTo(sig_03276a7b)."
+    )
     assert handlers[("query", "dgsOrders")].endswith("DgsOrderFetcher#dgsOrders(sig_3f061508).")
+    assert handlers[(None, "Order.dgsLines")].endswith("DgsOrderFetcher#dgsLines(sig_f5672381).")
     assert handlers[("query", "mpOrders")].endswith("MpOrderApi#mpOrders(sig_3f061508).")
+
+
+def test_a_class_level_scope_reaches_a_resolver_that_names_only_its_field(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """2H design §1's class-level bullet, live.
+
+    `CustomerGraphqlController` carries `@SchemaMapping(typeName = "Customer")`
+    on the CLASS. `nickname` spells neither half — the scope comes from the
+    type, the field name from the method — and `shipTo` spells its own
+    `typeName = "Order"`, which WINS over the class's. Both cases sit on one
+    fixture class deliberately: precedence is only observable where the two
+    levels disagree.
+    """
+    _, report = resolved_fixture
+    rows = _graphql_rows(report)
+
+    assert (None, "Customer.nickname") in rows
+    assert (None, "Order.shipTo") in rows
+    # The class-level value did not leak onto the method that overrode it.
+    assert (None, "Customer.shipTo") not in rows
+
+
+def test_a_resolver_whose_scope_no_annotation_states_derives_no_row(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`OrderGraphqlController#orphanField` carries
+    `@SchemaMapping(field = "orphan")` with no `typeName`, on a class that
+    states none either — Spring infers the parent type from the resolver's
+    PARAMETER, which is a fact no annotation carries.
+
+    So the row is refused. The alternative is not "a slightly vague row": a
+    bare `orphan` is a DIFFERENT wire identity from the `Something.orphan` the
+    code actually declares — a top-level shape for a declaration that is not
+    one — published at `resolved`/`compiler` where nothing downstream could
+    tell it from an observation. Silence is the honest answer.
+    """
+    _, report = resolved_fixture
+    rows = _graphql_rows(report)
+
+    assert (None, "orphan") not in rows
+    assert not [key for key in rows if key[1] is not None and key[1].endswith("orphan")]
+    # And the handler appears nowhere in the table at all — the row is not
+    # derived-then-blanked, it is never derived.
+    assert not [e for e in report.endpoints if e["handler"] and "orphanField" in str(e["handler"])]
 
 
 def test_dgs_and_microprofile_ride_the_shared_vocabulary_with_no_rules_of_their_own(
@@ -865,21 +944,30 @@ def test_dgs_and_microprofile_ride_the_shared_vocabulary_with_no_rules_of_their_
     meaningful: `spring-graphql.yml` motivated two framework-neutral forms,
     and DGS and MicroProfile must then be pure YAML.
 
-    That is what `catalog_id` pins here. Both rows carry a `path` that exists
-    ONLY because `path_fallback`/`qualifier_from` are engine vocabulary rather
-    than three hand-rolled special cases — `@DgsQuery.field()` and
-    `@Query.value()` are declared `default ""` exactly like Spring's `name()`
-    — and neither catalog contributed a line of Python or SQL to get it.
+    That is what `catalog_id` pins here: three rows derived by two catalogs
+    that are pure YAML.
+
+    What the rows prove, stated exactly. `dgsOrders` and `mpOrders` both SPELL
+    their field names, so neither exercises form 1 — they prove the ordinary
+    projection reaches a second and third framework unchanged. `Order.dgsLines`
+    is the one that exercises a form: `@DgsData(parentType, field)` composes
+    through `qualifier_from` reading `parentType`, where Spring's own catalog
+    reads `typeName` — the same engine form, a different attribute name, which
+    is the whole claim that the forms describe a declaration pattern rather
+    than a library.
+
+    (Form 1 still matters for both frameworks in general — `@DgsQuery.field()`
+    and `@Query.value()` are declared `default ""` exactly like Spring's
+    `name()` — it is simply not what THIS fixture's rows demonstrate.)
     """
     _, report = resolved_fixture
     rows = _graphql_rows(report)
 
-    assert rows[("query", "dgsOrders")]["catalog_id"] == "netflix-dgs"
+    dgs = {("query", "dgsOrders"), (None, "Order.dgsLines")}
+    assert {rows[key]["catalog_id"] for key in dgs} == {"netflix-dgs"}
     assert rows[("query", "mpOrders")]["catalog_id"] == "microprofile-graphql"
     assert {
-        rows[key]["catalog_id"]
-        for key in rows
-        if key not in {("query", "dgsOrders"), ("query", "mpOrders")}
+        rows[key]["catalog_id"] for key in rows if key not in dgs | {("query", "mpOrders")}
     } == {"spring-graphql"}
 
 
@@ -2067,7 +2155,7 @@ def test_the_format_ladder_answers_every_live_row(
     assert {answer for key, answer in answers.items() if key[0] == "graphql"} == {
         ("json", "resolved")
     }
-    assert len([e for e in report.endpoints if e["protocol"] == "graphql"]) == 8
+    assert len([e for e in report.endpoints if e["protocol"] == "graphql"]) == 11
 
     # Rung 2 — the only three HTTP routes whose mapping annotations declare a
     # media type at all.

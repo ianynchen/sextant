@@ -353,6 +353,64 @@ def test_kafka_inbound_row_renders_verbless_with_no_unresolved_marker():
     assert "(unresolved)" not in text
 
 
+def test_a_graphql_root_operation_renders_protocol_verb_and_field():
+    """2H design §1 / D06: `graphql query orders`.
+
+    GraphQL is VERBED — its operation type is part of the wire identity, and a
+    caller sending a mutation must not match a query — but its verb is not an
+    HTTP method, so the protocol name has to be rendered too. A bare
+    `query orders` names nothing in particular; `GET /v1/orders` does, which
+    is why HTTP still renders without the prefix.
+    """
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "graphql",
+                "direction": "inbound",
+                "method": "query",
+                "path": "orders",
+                "handler": "s maven c 1 com/acme/orders/graphql/OrderController#orders().",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "`graphql query orders`" in text
+    assert "(unresolved)" not in text
+
+
+def test_a_graphql_resolver_renders_verbless_without_an_unresolved_marker():
+    """The other half of the same rule. A resolver implements a FIELD — it
+    answers no operation — so its NULL method is an absence by design, not a
+    verb the analysis failed to read, and `Type.field` is the whole identity.
+
+    This is the case that makes `graphql` different from simply joining the
+    verbed set: an HTTP row with no method genuinely is unread and must still
+    say so (pinned by the test above this block), while this row must not.
+    """
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "graphql",
+                "direction": "inbound",
+                "method": None,
+                "path": "Order.lines",
+                "handler": "s maven c 1 com/acme/orders/graphql/OrderController#lines(Order).",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "`graphql Order.lines`" in text
+    assert "(unresolved)" not in text
+
+
 def test_kafka_row_with_null_path_renders_unresolved_identity():
     """The path half of a verbless identity is unresolved the same way an
     HTTP row's method or path is: named, never a bare `None`."""

@@ -84,9 +84,12 @@ INSERT INTO endpoints (
     handler_signature, resolution, evidence, catalog_id, consumes, produces
 )
 WITH mapping_catalog AS (
-    SELECT s.fqn AS fqn, s.methods AS methods
+    SELECT s.fqn AS fqn, s.methods AS methods,
+           coalesce(s.requires_qualifier, FALSE) AS requires_qualifier
     FROM (SELECT UNNEST(
-        $mapping_annotations::STRUCT(fqn VARCHAR, methods VARCHAR[])[]
+        $mapping_annotations::STRUCT(
+            fqn VARCHAR, methods VARCHAR[], requires_qualifier BOOLEAN
+        )[]
     ) AS s)
 ),
 -- Task 6 (D02 §2, §3): widens the annotation set every CTE below reads from
@@ -162,6 +165,28 @@ declared AS (
         list_extract(list_filter(list_transform(
             $qualifier_from::VARCHAR[],
             n -> coalesce(a.args -> n ->> 0, a.args ->> n)
+        ), v -> v IS NOT NULL), 1) AS qualifier,
+        mc.requires_qualifier AS requires_qualifier
+    FROM annotations_effective a
+    JOIN mapping_catalog mc ON mc.fqn = a.annotation
+),
+-- The same scope read, one level out: a catalog's mapping annotation sitting
+-- on a TYPE states the scope once for every method the type declares, instead
+-- of each method repeating it. Mirrors `prefixes` below exactly — same
+-- attribute list, same scalar-or-array read, joined on `s.enclosing` the same
+-- way — because it is the same idea at the same level; only the attribute it
+-- reads and the separator it composes with differ.
+--
+-- A type-level annotation mints no row of its own: `derived`'s join to
+-- `symbols` keeps methods and functions only, so a type target never reaches
+-- `mappings`. That is what lets one annotation play both roles here without
+-- the two colliding — the `prefix_annotation` precedent, unchanged.
+qualifier_scopes AS (
+    SELECT
+        a.target AS type_symbol,
+        list_extract(list_filter(list_transform(
+            $qualifier_from::VARCHAR[],
+            n -> coalesce(a.args -> n ->> 0, a.args ->> n)
         ), v -> v IS NOT NULL), 1) AS qualifier
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
@@ -195,7 +220,8 @@ mapped_methods AS (
            d.paths AS paths,
            d.consumes_list AS consumes_list,
            d.produces_list AS produces_list,
-           d.qualifier AS qualifier
+           d.qualifier AS qualifier,
+           d.requires_qualifier AS requires_qualifier
     FROM declared d
 ),
 mappings AS (
@@ -204,7 +230,8 @@ mappings AS (
            UNNEST(mm.paths) AS path_suffix,
            mm.consumes_list AS consumes_list,
            mm.produces_list AS produces_list,
-           mm.qualifier AS qualifier
+           mm.qualifier AS qualifier,
+           mm.requires_qualifier AS requires_qualifier
     FROM mapped_methods mm
 ),
 derived AS (
@@ -232,15 +259,24 @@ derived AS (
         -- address — the failure D02 §2 already names for `path_from`
         -- ("wrong output rather than a missing one"), reached by a second
         -- route.
+        -- The scope is the declaration's own where it states one, else the
+        -- one its enclosing type states (2H design §1): the nearer
+        -- declaration wins, which is the precedence every framework with
+        -- both levels keeps. Where neither states one this is NULL and
+        -- composes nothing — no scope, no separator.
         coalesce(p.prefix, '')
-            || CASE WHEN m.qualifier IS NOT NULL
-                    THEN m.qualifier || $qualifier_separator ELSE '' END
+            || CASE WHEN coalesce(m.qualifier, q.qualifier) IS NOT NULL
+                    THEN coalesce(m.qualifier, q.qualifier) || $qualifier_separator
+                    ELSE '' END
             || CASE WHEN m.path_suffix = '' AND $path_fallback = 'construct_name'
                     -- The construct's own name, off the symbol the join below
                     -- already resolved. D00 §1's descriptor puts it between
                     -- the type separator and the signature — the shape
                     -- `$method_from`'s own read above already relies on.
-                    THEN regexp_extract(s.symbol, '#([A-Za-z0-9_]+)\(', 1)
+                    -- `$` is in the class because the JVM admits it in a
+                    -- method name; a symbol this failed to match would yield
+                    -- '' silently, which is the empty-address failure again.
+                    THEN regexp_extract(s.symbol, '#([A-Za-z0-9_$]+)\(', 1)
                     ELSE m.path_suffix END AS path,
         -- The symbol lands by direction (D01 §3, amended): the server side
         -- handles, the client side calls, and a later merge may hold both.
@@ -268,7 +304,17 @@ derived AS (
     JOIN symbols s ON s.symbol = m.method_symbol AND s.construct_kind IN ('method', 'function')
     LEFT JOIN controllers c ON s.enclosing = c.type_symbol
     LEFT JOIN prefixes p ON p.type_symbol = s.enclosing
-    WHERE $type_annotation IS NULL OR c.type_symbol IS NOT NULL
+    LEFT JOIN qualifier_scopes q ON q.type_symbol = s.enclosing
+    WHERE ($type_annotation IS NULL OR c.type_symbol IS NOT NULL)
+      -- A declaration whose annotation only means anything INSIDE a scope,
+      -- with no scope found at either level, has no address — so it derives
+      -- NO ROW rather than the bare member name. The bare name would read as
+      -- a top-level identity, which is a different endpoint from the one the
+      -- code declares, and `resolved`/`compiler` beside it would present that
+      -- as observed. Silence is the honest answer: the declaration is real,
+      -- but what it is a member OF is stated somewhere these facts do not
+      -- reach (a parameter's type, for the framework that infers it there).
+      AND NOT (m.requires_qualifier AND coalesce(m.qualifier, q.qualifier) IS NULL)
 ),
 -- Within-batch union (D01 §4, spec §4): rows differing ONLY in declared
 -- media are one endpoint, so this groups on every OTHER column derived

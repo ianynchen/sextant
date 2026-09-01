@@ -32,4 +32,12 @@ public class OrderGraphqlController {
 
     @BatchMapping(typeName = "Order")      // field falls back to method name "totals"
     public Map<OrderView, Long> totals(List<OrderView> orders) { return Map.of(); }
+
+    // No typeName here and none on the class: Spring infers the parent type
+    // from the parameter, which is a fact no annotation carries. There is no
+    // address to derive, so this method must derive NO ROW — never the bare
+    // field name `orphan`, which would claim a root-operation-shaped identity
+    // for a resolver.
+    @SchemaMapping(field = "orphan")
+    public String orphanField(OrderView order) { return null; }
 }

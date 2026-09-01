@@ -93,23 +93,43 @@ _GAPS = [
 # protocol was never going to have one. The verbed half is also the stable
 # half: growth in D00's set is broker families, not new request-response
 # verbs.
-_VERBED_PROTOCOLS = frozenset({"http", "soap", "grpc"})
+_VERBED_PROTOCOLS = frozenset({"http", "soap", "grpc", "graphql"})
 _VERBLESS_PROTOCOLS = frozenset(p.value for p in Protocol) - _VERBED_PROTOCOLS
+
+# Of the verbed protocols, the ones whose verb is not an HTTP method, so the
+# protocol name is itself part of the identity a reader needs (D06, 2H design
+# §1): `graphql query orders` names an operation, while a bare `query orders`
+# names nothing in particular — `query` is not a word that implies its own
+# protocol the way `GET` does. HTTP, SOAP and gRPC all speak HTTP verbs and
+# read correctly without the prefix, which is also what every pin written
+# before this expects.
+_PROTOCOL_QUALIFIED = frozenset({"graphql"})
 
 
 def _wire_identity(endpoint: dict[str, object]) -> str:
     """A row's wire identity as one string. A protocol in `_VERBLESS_PROTOCOLS`
     defines no verb, so it renders `protocol path` with no method at all;
-    every other protocol renders `method path` as before. Either half of
-    either shape may be NULL, and `(unresolved)` stays the marker for an
-    identity the analysis could not read — never a bare `None`."""
+    every other protocol renders `method path`, prefixed by the protocol where
+    its verb does not imply one. Any half of any shape may be NULL, and
+    `(unresolved)` stays the marker for an identity the analysis could not
+    read — never a bare `None`."""
+    protocol = str(endpoint["protocol"])
     path = endpoint["path"]
     rendered_path = "(unresolved)" if path is None else str(path)
-    if str(endpoint["protocol"]) in _VERBLESS_PROTOCOLS:
-        return f"{endpoint['protocol']} {rendered_path}"
+    if protocol in _VERBLESS_PROTOCOLS:
+        return f"{protocol} {rendered_path}"
     method = endpoint["method"]
+    # A verbed protocol whose row carries no verb *by design*: a GraphQL
+    # resolver is addressed by `Type.field` alone — it implements a field, it
+    # does not answer an operation — so its NULL method is an absence, not a
+    # verb the analysis failed to read. Rendering `(unresolved)` there would
+    # report a gap that does not exist. Only a protocol-qualified protocol can
+    # reach this: an HTTP row with no method genuinely is unread.
+    if method is None and protocol in _PROTOCOL_QUALIFIED:
+        return f"{protocol} {rendered_path}"
     rendered_method = "(unresolved)" if method is None else str(method)
-    return f"{rendered_method} {rendered_path}"
+    prefix = f"{protocol} " if protocol in _PROTOCOL_QUALIFIED else ""
+    return f"{prefix}{rendered_method} {rendered_path}"
 
 
 def _media(value: object) -> str:

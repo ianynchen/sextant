@@ -90,7 +90,10 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # resources under src/main/resources are NOT claimed by any reader yet
     # (readers claim by extension, and nothing in this task adds one), so
     # they add no documents here.
-    assert metadata["coverage"]["documents"] == 93
+    # + 1: 2H Task 2's `CustomerGraphqlController` — one more class file, one
+    # more document. It is the class-level-scope resolver shape, which needed
+    # its own type to carry the class-level annotation.
+    assert metadata["coverage"]["documents"] == 94
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

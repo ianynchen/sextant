@@ -38,7 +38,9 @@ matches:
       - { fqn: com.netflix.graphql.dgs.DgsMutation,     method: [mutation] }
       - { fqn: com.netflix.graphql.dgs.DgsSubscription, method: [subscription] }
       # The long form. It pre-sets no operation, so it derives the verbless
-      # `Parent.field` identity every non-root resolver has.
+      # `Parent.field` identity every non-root resolver has, and it names a
+      # field OF a type — so `requires_qualifier`, for the reason
+      # `spring-graphql.yml` states on its own two resolver annotations.
       #
       # KNOWN LIMITATION, stated rather than guessed: `@DgsData(parentType =
       # "Query")` is the long spelling of `@DgsQuery`, and this row renders it
@@ -47,7 +49,7 @@ matches:
       # nobody has asked for, and the honest verbless row is a visible,
       # correctly-addressed identity rather than a wrong one. Recorded in
       # COVERAGE by Task 7.
-      - { fqn: com.netflix.graphql.dgs.DgsData }
+      - { fqn: com.netflix.graphql.dgs.DgsData, requires_qualifier: true }
 
 format_fixed:
   graphql: json

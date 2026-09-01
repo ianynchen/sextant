@@ -50,6 +50,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "CommonProtos.jsonl",
         "ComposedController.jsonl",
         "ComposedListener.jsonl",
+        "CustomerGraphqlController.jsonl",
         "CustomerRef.jsonl",
         "DetailedOrderResult.jsonl",
         "DgsOrderFetcher.jsonl",
@@ -123,7 +124,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # 77 + 3: 2G Task 7's `messaging/parse` package — the listeners plus the
     # two delegation targets its rungs follow.
     # + 6: 2H Task 1's GraphQL, WebSocket/STOMP and SSE surfaces.
-    assert report.documents == 86
+    # + 1: 2H Task 2's `CustomerGraphqlController`, the class-level-scope
+    # resolver shape (2H design §1's class-level bullet).
+    assert report.documents == 87
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -161,6 +164,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "CommonProtos.jsonl",
         "ComposedController.jsonl",
         "ComposedListener.jsonl",
+        "CustomerGraphqlController.jsonl",
         "CustomerRef.jsonl",
         "DetailedOrderResult.jsonl",
         "DgsOrderFetcher.jsonl",

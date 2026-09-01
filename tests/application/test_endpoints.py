@@ -389,10 +389,15 @@ def _naming_forms_catalog(**mapping: object) -> Catalog:
     )
 
 
-def _naming_forms_facts(root: Path) -> None:
+def _naming_forms_facts(root: Path, type_scope: str | None = None) -> None:
     """Four declarations covering every combination the two forms produce: a
     name spelled out, a name left to the construct, a scope with a spelled
-    name, and a scope with a defaulted one."""
+    name, and a scope with a defaulted one.
+
+    `type_scope` puts the same annotation on the enclosing TYPE carrying only
+    a scope — the class-level shape, where a type states the scope once for
+    every declaration it holds.
+    """
     document = Document(
         document_id="doc_1",
         relative_path="com/acme/notify/NamedHandlers.java",
@@ -411,6 +416,18 @@ def _naming_forms_facts(root: Path) -> None:
     facts: list[object] = [
         SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS)
     ]
+    if type_scope is not None:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/messaging/annotation/OnMessage#",
+                    args={"scope": type_scope},
+                ),
+            )
+        )
     # `args` mirrors what a real extractor emits: an ABSENT attribute is
     # absent from the map entirely — an annotation's declared default is
     # never written into the class file (2H checkpoint answer 1).
@@ -441,8 +458,8 @@ def _naming_forms_facts(root: Path) -> None:
     write_fact_file(root / "NamedHandlers.jsonl", document, facts)
 
 
-def _paths_of(tmp_path: Path, catalog: Catalog) -> set[str]:
-    _naming_forms_facts(tmp_path / "facts")
+def _paths_of(tmp_path: Path, catalog: Catalog, type_scope: str | None = None) -> set[str]:
+    _naming_forms_facts(tmp_path / "facts", type_scope)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
@@ -510,13 +527,132 @@ def test_the_separator_is_catalog_data_rather_than_a_punctuation_the_engine_pick
     """Which character joins a scope to a member is a framework's convention —
     GraphQL's `.`, another framework's `#` or `/`. An engine that baked one in
     would be naming a framework in code, which D02 §2 forbids for exactly the
-    reasons it forbids naming an annotation there."""
+    reasons it forbids naming an annotation there.
+
+    Asserts the WHOLE set, not membership: a membership check passes happily
+    over a wrong row sitting beside the right one, which is how the dangling
+    separator below survived the first round of this file.
+    """
     paths = _paths_of(
         tmp_path,
-        _naming_forms_catalog(qualifier_from=["scope"], qualifier_separator="#"),
+        _naming_forms_catalog(
+            path_fallback="construct_name",
+            qualifier_from=["scope"],
+            qualifier_separator="#",
+        ),
     )
 
-    assert "Parent#member" in paths
+    assert paths == {"named", "defaulted", "Parent#member", "Parent#scopedDefaulted"}
+
+
+def test_a_qualifier_without_a_name_fallback_is_refused_rather_than_left_dangling(
+    tmp_path: Path,
+):
+    """A scope with no fallback composes the scope and the separator onto an
+    EMPTY name — `Parent#` — published at `resolved`/`compiler`. That is the
+    same confidently-wrong-address class the empty path was, one step along,
+    so the two forms are declared together or not at all.
+
+    Refused at validation rather than filtered at derivation: the catalog is
+    the thing that is wrong, and a run that silently dropped those rows would
+    leave a framework half-described with nothing saying so.
+    """
+    with pytest.raises(CatalogError) as raised:
+        _paths_of(
+            tmp_path,
+            _naming_forms_catalog(qualifier_from=["scope"], qualifier_separator="#"),
+        )
+
+    assert "path_fallback" in str(raised.value)
+    assert "invented-naming.yml" in str(raised.value)
+
+
+def test_an_explicitly_empty_separator_is_refused_like_a_missing_one(tmp_path: Path):
+    """`qualifier_separator: ""` passes an `is None` check and then composes
+    `Parentmember` — precisely what the missing-separator refusal exists to
+    prevent, reached by spelling the key rather than omitting it.
+
+    An empty separator has no honest use: a framework that runs the two halves
+    together has no composition to declare in the first place.
+    """
+    with pytest.raises(CatalogError) as raised:
+        _paths_of(
+            tmp_path,
+            _naming_forms_catalog(
+                path_fallback="construct_name",
+                qualifier_from=["scope"],
+                qualifier_separator="",
+            ),
+        )
+
+    assert "qualifier_separator" in str(raised.value)
+    assert "invented-naming.yml" in str(raised.value)
+
+
+def test_a_scope_stated_on_the_enclosing_type_reaches_a_declaration_that_names_none(
+    tmp_path: Path,
+):
+    """The class-level scope shape (2H design §1): a type states the scope once
+    and its declarations name only their own member.
+
+    Reads the SAME attribute one level out, through a join that mirrors the
+    existing class-level prefix exactly — so a catalog spends no extra
+    vocabulary on it. The declaration's own scope still wins where both are
+    present: the nearer declaration is the more specific, which is the
+    precedence every framework offering both levels keeps.
+    """
+    paths = _paths_of(
+        tmp_path,
+        _naming_forms_catalog(
+            path_fallback="construct_name",
+            qualifier_from=["scope"],
+            qualifier_separator=".",
+        ),
+        type_scope="Enclosing",
+    )
+
+    assert paths == {
+        # No scope of their own — they take the type's.
+        "Enclosing.named",
+        "Enclosing.defaulted",
+        # Their own scope wins over the type's.
+        "Parent.member",
+        "Parent.scopedDefaulted",
+    }
+
+
+def test_a_scoped_annotation_with_no_scope_anywhere_derives_no_row_at_all(
+    tmp_path: Path,
+):
+    """`requires_qualifier` — the rule that keeps a missing scope silent
+    instead of wrong.
+
+    An annotation that names a member OF something has no address until the
+    something is known. Emitting the bare member name would publish a
+    top-level identity for a declaration that is not one — a DIFFERENT
+    endpoint from the one the code declares — at `resolved`/`compiler`, where
+    nothing downstream could tell it from an observation. Silence is the
+    honest answer: the declaration is real, but what it belongs to is stated
+    somewhere these facts do not reach.
+    """
+    paths = _paths_of(
+        tmp_path,
+        _naming_forms_catalog(
+            path_fallback="construct_name",
+            qualifier_from=["scope"],
+            qualifier_separator=".",
+            annotations=[
+                {
+                    "fqn": "com.acme.messaging.annotation.OnMessage",
+                    "requires_qualifier": True,
+                }
+            ],
+        ),
+    )
+
+    # `named` and `defaulted` state no scope and no type states one for them,
+    # so they derive NOTHING — not `named`, not `defaulted`.
+    assert paths == {"Parent.member", "Parent.scopedDefaulted"}
 
 
 def test_a_catalog_naming_an_unknown_name_fallback_is_refused_by_file(tmp_path: Path):

@@ -33,7 +33,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # Optional too (Retrofit, spring-jms): no class-level prefix shape.
     prefix_fqn = None if prefix_annotation is None else _catalog_symbol(prefix_annotation)
     mapping_annotations = [
-        {"fqn": _catalog_symbol(m["fqn"]), "methods": m.get("method")}
+        {
+            "fqn": _catalog_symbol(m["fqn"]),
+            "methods": m.get("method"),
+            # 2H design §1: this annotation names a member of a scope, so a
+            # declaration under it has no address at all until the scope is
+            # found. Absent (the default) on every annotation that names a
+            # top-level identity, which is every annotation shipped before it.
+            "requires_qualifier": bool(m.get("requires_qualifier", False)),
+        }
         for m in mapping["annotations"]
     ]
     workspace.derive(
@@ -97,24 +105,44 @@ _PATH_FALLBACKS = frozenset({"construct_name"})
 def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
     """Refuses a mapping block whose naming vocabulary cannot be honoured.
 
-    Both checks catch a file that would otherwise derive quietly wrong
-    addresses rather than fail: an unknown `path_fallback` would fall through
-    to the empty default, and a `qualifier_from` with no separator would
-    concatenate a scope onto a name with nothing between them. Neither is
-    distinguishable downstream from something observed, which is the same
+    Every check here catches a file that would otherwise derive a quietly
+    WRONG address rather than fail — and a wrong address is worse than a
+    missing one, because it is published at `resolved`/`compiler` where
+    nothing downstream can tell it from something observed. That is the same
     reason the loader checks `protocol`/`direction` at the edge (NFR-5).
     """
     fallback = mapping.get("path_fallback")
     if fallback is not None and fallback not in _PATH_FALLBACKS:
+        # An unrecognised word would fall through to the empty default,
+        # silently restoring the empty path the form exists to remove.
         raise CatalogError(
             f"loading catalog {catalog.source}: `mapping.path_fallback: {fallback}` is not one "
             f"of {', '.join(sorted(_PATH_FALLBACKS))} (2H design §1)"
         )
-    if mapping.get("qualifier_from") and mapping.get("qualifier_separator") is None:
+    if not mapping.get("qualifier_from"):
+        return
+    separator = mapping.get("qualifier_separator")
+    # An ABSENT separator joins a scope to a name with nothing between them
+    # (`Parentmember`); an explicitly EMPTY one does exactly the same thing
+    # while passing an `is None` check, so both are refused by one test. An
+    # empty separator has no honest use: a framework that concatenates the two
+    # halves with nothing between them has no composition to declare.
+    if not separator:
         raise CatalogError(
             f"loading catalog {catalog.source}: `mapping.qualifier_from` is declared with no "
-            f"`mapping.qualifier_separator` — what joins a scope to the name it qualifies is "
-            f"catalog data, and this engine names no punctuation of its own (2H design §1)"
+            f"usable `mapping.qualifier_separator` (got {separator!r}) — what joins a scope to "
+            f"the name it qualifies is catalog data, and this engine names no punctuation of "
+            f"its own (2H design §1)"
+        )
+    # Without a fallback, an annotation carrying a scope and no name composes
+    # the scope and the separator onto nothing — a dangling `Parent.`, which
+    # is the confidently-wrong-address class again. The two forms are declared
+    # together or not at all.
+    if mapping.get("path_fallback") is None:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.qualifier_from` is declared with no "
+            f"`mapping.path_fallback` — a scoped declaration that names no member would compose "
+            f"a scope and a separator onto an empty name (2H design §1)"
         )
 
 

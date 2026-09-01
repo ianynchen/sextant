@@ -231,14 +231,16 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # reclassifies them to SSE); neither merges with anything. The GraphQL,
     # WebSocket and STOMP surfaces this task also adds derive NO rows at
     # all — nothing catalogs those annotations yet. `97 + 2 = 99` total.
-    # 2H Task 2 (the three GraphQL catalogs): +8 graphql inbound — a NEW
+    # 2H Task 2 (the three GraphQL catalogs): +11 graphql inbound — a NEW
     # protocol bucket, which is the visible half of D00's closed set gaining
     # `graphql`. Nothing outbound: a GraphQL operation is served by this
     # module, never called by it, so the outbound map is untouched and no
-    # existing bucket moves. `99 + 8 = 107` total.
+    # existing bucket moves. TWELVE annotated methods produce those 11 rows:
+    # `orphanField` names a field of a type nothing states, so it derives none
+    # at all rather than a bare, wrongly-shaped `orphan`. `99 + 11 = 110`.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
-        "graphql": 8,
+        "graphql": 11,
         "http": 34,
         "jms": 5,
         "kafka": 15,
@@ -337,12 +339,12 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # 2H Task 1: +2 inbound, unmerged — `GET /events/emitter`,
     # `GET /events/stream`: inbound 54 + 2 = 56 — the 99-endpoint total
     # (5 + 56 + 38 = 99).
-    # 2H Task 2: +8 inbound, all unmerged — the GraphQL surface. Every one is
+    # 2H Task 2: +11 inbound, all unmerged — the GraphQL surface. Every one is
     # inbound and none has an outbound twin anywhere in the fixture (a
     # GraphQL operation is served, never called, by the module that declares
-    # it), so `both` and `outbound` are both untouched: inbound 56 + 8 = 64 —
-    # the 107-endpoint total (5 + 64 + 38 = 107).
-    assert rows == [("both", 5), ("inbound", 64), ("outbound", 38)]
+    # it), so `both` and `outbound` are both untouched: inbound 56 + 11 = 67 —
+    # the 110-endpoint total (5 + 67 + 38 = 110).
+    assert rows == [("both", 5), ("inbound", 67), ("outbound", 38)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(

@@ -43,9 +43,15 @@ matches:
     # a type OTHER than a root operation, and the type they name sits on the
     # SAME annotation as the field — so it is read here, not through
     # `prefix_from`, which reads a TYPE-level annotation through an entirely
-    # different join and could never see a method-level attribute.
+    # different join and composes with no separator at all.
     # `@QueryMapping` and friends carry no `typeName`, so the qualifier is
     # absent for them and composes nothing.
+    #
+    # The SAME attribute is read one level out, off a class-level
+    # `@SchemaMapping(typeName = ...)`, when the method's own annotation names
+    # no type — Spring's own shape for a controller whose every method
+    # resolves fields of one type. The method's own value wins where both are
+    # present: the nearer declaration is the more specific.
     qualifier_from: [typeName]
     # `Type.field` is GraphQL's own spelling of a non-root field, and it is
     # this file that knows that — never the engine.
@@ -68,8 +74,16 @@ matches:
       # BATCHING detail, never part of the wire identity (2H design §1): the
       # schema field it implements returns the value type, and the map is how
       # one call answers many parents.
-      - { fqn: org.springframework.graphql.data.method.annotation.SchemaMapping }
-      - { fqn: org.springframework.graphql.data.method.annotation.BatchMapping }
+      #
+      # `requires_qualifier`: these two name a field OF a type, so without a
+      # type there is no address. Spring can infer it from the resolver's
+      # parameter when neither the method nor the class states it — a fact no
+      # annotation carries — so such a method derives NO ROW rather than the
+      # bare field name, which would claim a root-operation-shaped identity.
+      - { fqn: org.springframework.graphql.data.method.annotation.SchemaMapping,
+          requires_qualifier: true }
+      - { fqn: org.springframework.graphql.data.method.annotation.BatchMapping,
+          requires_qualifier: true }
 
 # 2G design §7, rung 1: GraphQL's wire is JSON by definition — the transport
 # is negotiable but the payload envelope is not — so the format is a property
