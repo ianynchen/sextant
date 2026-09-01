@@ -432,6 +432,15 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         (None, "parsed-shared-inbound"),
         (None, "parsed-mixed-inbound"),
         (None, "parsed-relay-queue"),
+        # 2H Task 1: `OrderEventsController`'s two SSE routes derive as
+        # ordinary http endpoints today — `@GetMapping` is an
+        # already-shipped annotation, and no engine exists yet to give SSE
+        # its own handling (that is later 2H work; this fixture's GraphQL,
+        # WebSocket and STOMP surfaces derive NO rows at all, by design —
+        # nothing here catalogs those annotations yet). Neither route merges
+        # with anything else in the fixture.
+        ("GET", "/events/emitter"),
+        ("GET", "/events/stream"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -594,7 +603,12 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # ambiguous SQS row and the two-hop JMS row that refuse to. Every one of
     # the five destinations is unique to that file, so none merges with
     # anything and none of the existing 92 identities moves. 92 + 5 = 97.
-    assert len(report.endpoints) == 97
+    #
+    # 2H Task 1 adds 2 more: `OrderEventsController`'s `/events/emitter` and
+    # `/events/stream`, the only new rows the GraphQL/WebSocket/STOMP/SSE
+    # fixture surfaces produce — the rest derive nothing under the shipped
+    # engines. Neither merges with anything. 97 + 2 = 99.
+    assert len(report.endpoints) == 99
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
@@ -1797,6 +1811,12 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
     # declares `produces` only, `consumes` NULL (no `consumes` attribute on
     # its own `@PostMapping`) — these three are the only pre-existing
     # non-NULL media in the table.
+    #
+    # 2H Task 1 adds a fourth: `OrderEventsController#streamEvents`'s
+    # `@GetMapping(produces = TEXT_EVENT_STREAM_VALUE)` declares its own
+    # media, `consumes` NULL. `emitterEvents` declares neither (no
+    # `produces` on its own `@GetMapping`), so it carries no row here at
+    # all.
     declared = {
         (e["protocol"], e["path"], e["consumes"], e["produces"])
         for e in report.endpoints
@@ -1806,6 +1826,7 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
         ("http", "/v1/orders/{id}", None, json_media),
         ("http", "/v1/orders/detailed", json_media, json_media),
         ("http", "/v1/orders/proto-orders", None, json_media),
+        ("http", "/events/stream", None, '["text/event-stream"]'),
     }
 
 
@@ -1919,7 +1940,14 @@ def test_the_format_ladder_answers_every_live_row(
     # which reads a declared payload TYPE and finds none behind a byte array.
     # That is the binding observable in this run — before it, all five of the
     # new rows fell to rung 6.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 42
+    # + 2 with 2H Task 1: `/events/emitter` (no declared media at all, an
+    # `SseEmitter` return carrying no payload type the ladder can read
+    # either — rung 5's assumed default) and `/events/stream` (its declared
+    # `text/event-stream` media matches no rung-2 MIME the ladder knows, so
+    # it falls through to the same assumed default). Neither is a new rung
+    # 3/4 answer — rung 3 stays kafka-only, and rung 4 has no live surface
+    # here, per this test's own docstring.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 44
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 30

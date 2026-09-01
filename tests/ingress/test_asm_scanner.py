@@ -52,6 +52,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ComposedListener.jsonl",
         "CustomerRef.jsonl",
         "DetailedOrderResult.jsonl",
+        "DgsOrderFetcher.jsonl",
         "EventProducers.jsonl",
         "InventoryExchange.jsonl",
         "InventoryWebClient.jsonl",
@@ -63,11 +64,15 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "LegacyBillingApi.jsonl",
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
+        "LiveEndpoint.jsonl",
+        "MpOrderApi.jsonl",
         "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
         "OrderEvent.jsonl",
+        "OrderEventsController.jsonl",
         "OrderEventsListener.jsonl",
+        "OrderGraphqlController.jsonl",
         "OrderIngest.jsonl",
         "OrderPageController.jsonl",
         "OrderProtos$OrderReply$1.jsonl",
@@ -93,6 +98,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderRoutes.jsonl",
         "OrderService.jsonl",
         "OrderStatus.jsonl",
+        "OrderStompController.jsonl",
         "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
         "OrderView.jsonl",
@@ -116,7 +122,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     ]
     # 77 + 3: 2G Task 7's `messaging/parse` package — the listeners plus the
     # two delegation targets its rungs follow.
-    assert report.documents == 80
+    # + 6: 2H Task 1's GraphQL, WebSocket/STOMP and SSE surfaces.
+    assert report.documents == 86
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -156,6 +163,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "ComposedListener.jsonl",
         "CustomerRef.jsonl",
         "DetailedOrderResult.jsonl",
+        "DgsOrderFetcher.jsonl",
         "EventProducers.jsonl",
         "InventoryExchange.jsonl",
         "InventoryWebClient.jsonl",
@@ -167,11 +175,15 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "LegacyBillingApi.jsonl",
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
+        "LiveEndpoint.jsonl",
+        "MpOrderApi.jsonl",
         "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
         "OrderEvent.jsonl",
+        "OrderEventsController.jsonl",
         "OrderEventsListener.jsonl",
+        "OrderGraphqlController.jsonl",
         "OrderIngest.jsonl",
         "OrderPageController.jsonl",
         "OrderProtos$OrderReply$1.jsonl",
@@ -197,6 +209,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderRoutes.jsonl",
         "OrderService.jsonl",
         "OrderStatus.jsonl",
+        "OrderStompController.jsonl",
         "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
         "OrderView.jsonl",

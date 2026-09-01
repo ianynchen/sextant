@@ -224,9 +224,16 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # unique to that file and merge with nothing. The pass binds a payload
     # onto three of them and refuses two; both outcomes are still endpoint
     # rows, so all five count. `92 + 5 = 97` total.
+    # 2H Task 1 (GraphQL, WebSocket/STOMP and SSE surfaces): +2 http inbound —
+    # `GET /events/emitter`, `GET /events/stream`. `OrderEventsController`
+    # uses the already-shipped `@GetMapping`/`@RestController` annotations,
+    # so both derive as ordinary http endpoints today (a later 2H task
+    # reclassifies them to SSE); neither merges with anything. The GraphQL,
+    # WebSocket and STOMP surfaces this task also adds derive NO rows at
+    # all — nothing catalogs those annotations yet. `97 + 2 = 99` total.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
-        "http": 32,
+        "http": 34,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -321,7 +328,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # 2G Task 7 (parse binding): +5 inbound, all unmerged — the bytes-only
     # listeners in `messaging/parse`: inbound 49 + 5 = 54 — the 97-endpoint
     # total (5 + 54 + 38 = 97).
-    assert rows == [("both", 5), ("inbound", 54), ("outbound", 38)]
+    # 2H Task 1: +2 inbound, unmerged — `GET /events/emitter`,
+    # `GET /events/stream`: inbound 54 + 2 = 56 — the 99-endpoint total
+    # (5 + 56 + 38 = 99).
+    assert rows == [("both", 5), ("inbound", 56), ("outbound", 38)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(

@@ -58,9 +58,12 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # pass). Phase 2E Task 9: +10 more (the `combinator` engine's WebFlux
     # functional-routing tree, both DSLs). 2G Task 5: +1 more
     # (`POST /v1/orders/proto-orders`, the generated-protobuf payload
-    # endpoint) — see test_pipeline.py's own dedicated row-level test for
-    # the full breakdown.
-    assert metadata["endpoints"]["inbound"]["http"] == 32
+    # endpoint). 2H Task 1: +2 more (`GET /events/emitter`, `GET
+    # /events/stream` — `OrderEventsController`'s already-shipped
+    # `@GetMapping` annotations derive as ordinary http endpoints today; a
+    # later 2H task reclassifies them to SSE) — see test_pipeline.py's own
+    # dedicated row-level test for the full breakdown.
+    assert metadata["endpoints"]["inbound"]["http"] == 34
 
 
 def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_path: Path):
@@ -82,7 +85,12 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # class files (the listeners and the two delegation targets), one
     # document each — a real source counted once, which is exactly what this
     # test exists to keep true.
-    assert metadata["coverage"]["documents"] == 87
+    # + 6: 2H Task 1's GraphQL, WebSocket/STOMP and SSE surfaces compile to
+    # six more class files, one document each. The two new `.graphqls`
+    # resources under src/main/resources are NOT claimed by any reader yet
+    # (readers claim by extension, and nothing in this task adds one), so
+    # they add no documents here.
+    assert metadata["coverage"]["documents"] == 93
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

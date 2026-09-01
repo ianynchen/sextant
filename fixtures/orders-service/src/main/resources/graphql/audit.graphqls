@@ -1,0 +1,1 @@
+type AuditEntry { at: String!, actor: String }
