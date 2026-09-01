@@ -134,6 +134,9 @@ class CallArgument(BaseModel):
         "lambda",
         "instance",
         "field",
+        # The caller's own parameter N — `value` is that index, never the
+        # local slot a JVM happens to keep it in (D00 §5).
+        "parameter",
         "null",
         "unresolved",
     ]

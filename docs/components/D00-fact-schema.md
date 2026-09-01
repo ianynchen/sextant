@@ -493,6 +493,7 @@ recovered later. Kinds:
 | `lambda` | invokedynamic via `LambdaMetafactory` | symbol reference to the lambda's synthetic body method — method references resolve the same way |
 | `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR (§5a) and the one-hop body follow ([D02](D02-catalog-schema.md) §2h). Always carries `source`: the constructed value's id, which is also the `receiver` of that object's own `<init>` call site, so the follow is a join on one number rather than a search for a nearby constructor |
 | `field` | GETFIELD/GETSTATIC that is not the enum-constant shape | symbol reference — the field's own bare descriptor |
+| `parameter` | a load of the caller's own parameter | `value` is the parameter's **index**, never the local slot holding it |
 | `null` | ACONST_NULL | |
 | `unresolved` | anything else | a first-class honest answer, never an omission |
 
@@ -514,6 +515,18 @@ above) becomes `{kind: field, symbol: <the field's bare descriptor>}` instead of
 `unresolved`; a Python attribute read or a Go struct-field read normalizes into the same
 kind. Strictly additive: an engine that does not consult `field` treats it exactly as it
 always treated `unresolved`.
+
+**`parameter` is the canonical cross-language kind for "the argument is the caller's
+parameter N, any language"** — the value was handed to this method, so it is knowable
+only where the method was called, and `value` carries the index every language numbers
+its parameters by. The JVM mapping: a load of a parameter's own starting slot becomes
+`{kind: parameter, value: N}` instead of `unresolved`, joinable to the same index
+`field_write.from_parameter` uses and to that position in the method's own signature
+(§5a). It carries no `source` — a parameter is produced by no call in this method — and
+it is deliberately **not** the local slot: a `long` parameter occupies two slots, so
+index and slot diverge, and a slot is a JVM detail no other language shares. Strictly
+additive: an engine that does not consult `parameter` must treat it exactly as it always
+treated `unresolved` — the value is still unread, only its origin is now stated.
 
 **`field_write` is a fact of its own, constructors only, direct traces only** — a
 constructor assigns parameter N directly to field F. The JVM mapping: a PUTFIELD inside

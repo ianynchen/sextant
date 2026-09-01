@@ -44,6 +44,11 @@ public final class MethodFlow {
      *  which is why an {@code ordinal} counts positions a reader of the source
      *  cannot always see: a string concatenation is an invoke to the JVM. */
     public static List<String> callSites(String documentId, String callerSymbol, MethodNode method) {
+        // A static method's parameter 0 lives in slot 0; an instance method's
+        // slot 0 is `this`, which is a parameter of neither the descriptor nor
+        // D00 §5's numbering.
+        int[] parameterSlots = parameterSlotsOf(
+            method.desc, (method.access & Opcodes.ACC_STATIC) != 0 ? 0 : 1);
         Frame<SourceValue>[] frames;
         try {
             frames = new Analyzer<>(new CopyTransparentSourceInterpreter())
@@ -76,7 +81,8 @@ public final class MethodFlow {
             int base = frame.getStackSize() - argumentTypes.length;
             List<String> arguments = new ArrayList<>();
             for (int a = 0; a < argumentTypes.length; a++) {
-                arguments.add(argumentJson(frame.getStack(base + a), argumentTypes[a], instructions));
+                arguments.add(argumentJson(frame.getStack(base + a), argumentTypes[a], instructions,
+                                           parameterSlots));
             }
             Integer receiver = target.hasReceiver()
                 ? sourceId(frame.getStack(base - 1), instructions)
@@ -104,7 +110,7 @@ public final class MethodFlow {
      *  must not count as "something intervened". */
     public static List<String> fieldWrites(String documentId, MethodNode method) {
         if (!"<init>".equals(method.name)) return List.of();
-        int[] parameterSlots = parameterSlotsOf(method.desc);
+        int[] parameterSlots = parameterSlotsOf(method.desc, 1);
         List<AbstractInsnNode> real = new ArrayList<>();
         for (AbstractInsnNode insn : method.instructions) {
             if (insn.getOpcode() >= 0) real.add(insn);
@@ -134,15 +140,16 @@ public final class MethodFlow {
         return opcode >= Opcodes.ILOAD && opcode <= Opcodes.ALOAD;
     }
 
-    /** The local slot each declared parameter starts at, slot 0 being {@code
-     *  this} (a constructor is never static). {@code long}/{@code double}
-     *  occupy two slots, so a parameter's own index and its starting slot
-     *  agree only up to the first wide one — the mapping the two-slot fixture
-     *  case pins. */
-    private static int[] parameterSlotsOf(String descriptor) {
+    /** The local slot each declared parameter starts at, counting from {@code
+     *  firstSlot} — 1 where slot 0 holds {@code this} (a constructor is never
+     *  static), 0 for a static method, which is the only difference between
+     *  the two callers. {@code long}/{@code double} occupy two slots, so a
+     *  parameter's own index and its starting slot agree only up to the first
+     *  wide one — the mapping the two-slot fixture case pins. */
+    private static int[] parameterSlotsOf(String descriptor, int firstSlot) {
         Type[] parameterTypes = Type.getArgumentTypes(descriptor);
         int[] slots = new int[parameterTypes.length];
-        int slot = 1;
+        int slot = firstSlot;
         for (int i = 0; i < parameterTypes.length; i++) {
             slots[i] = slot;
             slot += parameterTypes[i].getSize();
@@ -222,7 +229,27 @@ public final class MethodFlow {
      *  honest answer, and nothing consumes the old one: a fluent root matches by
      *  owner and method, and a step join runs call-result to receiver. A local
      *  reassigned on two branches still merges to several producers and stays
-     *  {@code unresolved}, which is the same honest silence as before. */
+     *  {@code unresolved}, which is the same honest silence as before.
+     *
+     *  <p>Second exception, and the reason the first one's cost is bounded:
+     *  **a parameter's initial value names the slot it arrived in**. That
+     *  emptiness above made an argument fed straight from a parameter
+     *  indistinguishable from one the pass genuinely could not read — both a
+     *  bare {@code unresolved}, which D00 §5's `parameter` kind now separates.
+     *  It cannot be fixed by making the {@code xLOAD} a producer (that is the
+     *  very thing the three joins above forbid), so the *initial* value carries
+     *  a marker instead: a {@code VarInsnNode} naming the slot, deliberately
+     *  **not in the instruction list**.
+     *
+     *  <p>Everything else then keeps working untouched, which is why the marker
+     *  lives here rather than in a second scan of its own: copy transparency
+     *  propagates it through a store and a reload, so a parameter parked in a
+     *  local still reads as that parameter; a slot reassigned from a call
+     *  carries the call's value and reports that; and two parameters merged on
+     *  a branch are two producers, so they stay {@code unresolved} exactly as
+     *  two merged literals do. Because the marker indexes nothing, it is never
+     *  a value **id** — {@link #sourceId} refuses it, which is what keeps the
+     *  receiver contract above true. */
     private static final class CopyTransparentSourceInterpreter extends SourceInterpreter {
         CopyTransparentSourceInterpreter() {
             super(Opcodes.ASM9);
@@ -231,6 +258,15 @@ public final class MethodFlow {
         @Override
         public SourceValue copyOperation(AbstractInsnNode insn, SourceValue value) {
             return value;
+        }
+
+        /** The marker described above. {@code this} is tagged the same way and
+         *  costs nothing: slot 0 is no parameter of the descriptor, so it maps
+         *  to no index and reads {@code unresolved}, exactly as it did before. */
+        @Override
+        public SourceValue newParameterValue(boolean isInstanceMethod, int local, Type type) {
+            return new SourceValue(
+                type.getSize(), new VarInsnNode(type.getOpcode(Opcodes.ILOAD), local));
         }
 
         /** {@code CHECKCAST} is the one unary op that re-labels a value's
@@ -297,10 +333,22 @@ public final class MethodFlow {
      *  load-bearing: a boolean and an int both arrive as {@code ICONST_*}, and
      *  only the descriptor tells them apart. Reporting a flag as {@code 1}
      *  throws away the distinction the flag exists for. */
-    private static String argumentJson(SourceValue value, Type declaredType, InsnList instructions) {
+    private static String argumentJson(SourceValue value, Type declaredType, InsnList instructions,
+                                       int[] parameterSlots) {
         AbstractInsnNode producer = singleSource(value);
         if (producer == null) return argument("unresolved", null, null, null);
 
+        // The only VarInsnNode that can ever be a producer is {@link
+        // ParameterNamingAnalyzer}'s marker: a real load moves a value without
+        // producing it. The slot it names is a parameter's own starting slot,
+        // or `this` / the second half of a wide parameter — neither of which is
+        // a parameter D00 §5 numbers, so those stay the honest `unresolved`.
+        if (producer instanceof VarInsnNode parameter) {
+            int index = indexOfSlot(parameterSlots, parameter.var);
+            return index < 0
+                ? argument("unresolved", null, null, null)
+                : argument("parameter", String.valueOf(index), null, null);
+        }
         if (producer instanceof LdcInsnNode constant) {
             Object literal = constant.cst;
             if (literal instanceof String text) return argument("string", JsonOut.string(text), null, null);
@@ -458,7 +506,12 @@ public final class MethodFlow {
      *  is silence rather than a guess. */
     private static Integer sourceId(SourceValue value, InsnList instructions) {
         AbstractInsnNode producer = singleSource(value);
-        return producer == null ? null : instructions.indexOf(producer);
+        // A parameter marker is not in this method's instruction list, so it
+        // has no index to report: a receiver that arrives as a parameter or as
+        // `this` stays null, the answer it has given since copy transparency
+        // landed. Reporting the marker would emit an id that joins to nothing.
+        if (producer == null || producer instanceof VarInsnNode) return null;
+        return instructions.indexOf(producer);
     }
 
     private static AbstractInsnNode singleSource(SourceValue value) {
