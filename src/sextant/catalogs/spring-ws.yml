@@ -1,0 +1,152 @@
+id: spring-ws
+displayName: Spring Web Services (@Endpoint)
+style: annotation_driven
+protocol: soap
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework.ws:spring-ws-core"]
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # `@Endpoint` — a stereotype of this library's own, unshared with any other
+  # catalog here, so the gate cannot collide the way `spring-graphql.yml` and
+  # `spring-mvc.yml` share `@Controller`.
+  type_annotation: org.springframework.ws.server.endpoint.annotation.Endpoint
+  # `fallback: none` — the STRICT form (`spring-mvc.yml`/`spring-web.yml`'s
+  # `@RequestBody`, not the `sole_unannotated` one the messaging catalogs
+  # take). Spring-WS resolves a payload argument through
+  # `PayloadMethodArgumentResolver`, which supports a parameter only where
+  # `@RequestPayload` is actually present: an unannotated sole parameter is
+  # NOT bound to the payload, so a fallback here would claim a contract the
+  # framework never binds.
+  request_body: { annotation: org.springframework.ws.server.endpoint.annotation.RequestPayload,
+                  fallback: none }
+  mapping:
+    # CHECKPOINT FACT (Phase 2I Task 2, checkpoint item 5's sibling probe on
+    # the same extraction): both annotations' attributes arrive as plain
+    # SCALAR strings in bytecode — `@PayloadRoot` as
+    # `{"localPart": "placeOrderRequest", "namespace": "http://orders.example.com/ws"}`
+    # and `@SoapAction` as `{"value": "http://orders.example.com/action/cancelOrder"}`
+    # — never the `String[]` every Spring HTTP mapping annotation carries.
+    # The engine's existing scalar-or-array read handles both with no new
+    # vocabulary.
+    #
+    # ONE alias list serving two annotations that name their address
+    # differently (the `spring-graphql.yml` precedent, where five annotations
+    # share `[name, value, field]`): first present wins per annotation, so
+    # `@PayloadRoot` reads `localPart` and `@SoapAction` reads `value`, and
+    # neither can read the other's — they are disjoint attribute names.
+    path_from: [localPart, value]
+    # The SCOPE half of the QName, read off the SAME annotation that carries
+    # the local part. Deliberately `[namespace]` ALONE and not
+    # `[namespace, localPart]`: `qualifier_from` is an ALIAS list where the
+    # first present attribute wins, so naming `localPart` as a second alias
+    # would make a `@PayloadRoot` that states only a local part qualify that
+    # name WITH ITSELF — `{placeOrderRequest}placeOrderRequest`, a QName
+    # nobody serves, published at `resolved`/`compiler`. The two attributes
+    # play different roles (scope and name), and each is named exactly once.
+    #
+    # `@SoapAction` carries no `namespace` attribute at all, so its rows read
+    # NULL here and compose no braces — a SOAPAction is an opaque URI, not a
+    # qualified name, and this is what keeps the two identity forms apart in
+    # one catalog without a second mapping block.
+    qualifier_from: [namespace]
+    # 2I design §2, form 3. A payload-root identity is `{namespace}localPart`
+    # — one bracketed token, which no `qualifier_separator` can spell (the
+    # closing brace has no separator equivalent, and the engine refuses a
+    # multi-character separator outright because its seam dedupe trims a SET
+    # of characters).
+    qualifier_format: qname
+    # Required beside `qualifier_from` (2H design §1): a scope composing onto
+    # an EMPTY name would publish a dangling `{namespace}`. Unreachable in
+    # practice rather than dormant-and-wrong — `@SoapAction.value` has no
+    # declared default, and a `@PayloadRoot` naming no `localPart` maps
+    # `QName(namespace, "")`, which matches no payload Spring-WS ever
+    # dispatches — so this names the method rather than inventing an address
+    # for the one shape that would otherwise dangle.
+    path_fallback: construct_name
+    # NO `namespace_default`: Spring-WS defines none. A `@PayloadRoot` with no
+    # `namespace` means the no-namespace QName, not "derive one from the
+    # package" — that default belongs to JAX-WS (`jakarta.jws`), a different
+    # framework in a different file. Declaring it here would invent a
+    # namespace this framework never applies (DR-6).
+    #
+    # NO `prefix_annotation` and NO `path_separator`: `@Endpoint` carries no
+    # address of its own, and neither a QName nor a SOAPAction URI is composed
+    # from a class-level prefix, so there is no seam to rule on.
+    prefix_annotation: null
+    prefix_from: []
+    # Neither annotation declares a `method` attribute; the name is borrowed
+    # and never populated (the spring-jms.yml/spring-kafka.yml precedent),
+    # which is what keeps every row verbless below.
+    method_from: method
+    # Verbless (D02 §2, amended): a SOAP operation declares no HTTP-style
+    # verb. The transport binding's own POST is not the operation's identity —
+    # every operation on a port shares it.
+    all_methods: []
+    annotations:
+      - { fqn: org.springframework.ws.server.endpoint.annotation.PayloadRoot }
+      # A SECOND, independent identity form on the same handler class, not a
+      # variant of the first: `@SoapAction` dispatches on the transport's
+      # SOAPAction header rather than on the payload's root element, so its
+      # address is that header's URI verbatim.
+      - { fqn: org.springframework.ws.soap.server.endpoint.annotation.SoapAction }
+
+# 2G design §7, rung 1: SOAP's wire is XML by definition — the envelope IS an
+# XML document, and no handler-level declaration can make it anything else —
+# so the format is a property of the protocol rather than of anything a
+# mapping annotation states. The ladder refuses a contradiction between two
+# catalogs rather than picking one, so any later catalog owning `soap` must
+# carry this identical entry.
+format_fixed:
+  soap: xml
+
+# Deliberately NO `wrappers` block (the `graphql-schema.yml`/
+# `spring-kafka-media.yml` precedent for omitting it, and the
+# `jakarta-websocket.yml` precedent for saying WHY in the file). Every sibling
+# inbound catalog copies `{ResponseEntity: http_envelope, Optional: optional}`,
+# and both entries would be WRONG here: Spring-WS marshals whatever the
+# handler returns through its `Marshaller`, unwrapping neither an HTTP
+# envelope — a type this transport never sees — nor an `Optional`. Declaring
+# them would peel a return type the framework marshals whole, publishing the
+# inner type as the contract when the wire carries the envelope. An empty
+# `wrappers` is the honest description of a framework that peels nothing.
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

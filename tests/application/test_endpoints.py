@@ -774,6 +774,345 @@ def test_a_non_single_character_qualifier_separator_is_refused_by_type_and_lengt
     assert "invented-naming.yml" in str(raised.value)
 
 
+# --- 2I design §2: the two QName forms, on an invented framework ----------
+#
+# Deliberately NOT Spring-WS and NOT JAX-WS, for the reason the 2H forms above
+# are not GraphQL: `qualifier_format` and `namespace_default` are engine
+# vocabulary, and a test spelled with `@PayloadRoot` or `@WebService` in it
+# would pin a framework rather than a mechanism.
+#
+# The invented framework below is the shape both SOAP families share and that
+# 2H's `qualifier_separator` cannot express: a scope and a name that compose
+# into ONE bracketed token (`{scope}name`) rather than two halves joined by a
+# separator, and a scope whose ABSENCE has a spec-defined derivation rather
+# than meaning "no scope". The type-level annotation and the method-level one
+# are deliberately DIFFERENT fqns here — unlike `_naming_forms_catalog`'s
+# single annotation playing both roles — because the real catalogs need the
+# scope read off an annotation named in `mapping.annotations` alongside the
+# one carrying the name (that list being what lets a catalog name two
+# spellings of the same gate at once; checkpoint item 4).
+
+
+def _qname_catalog(**mapping: object) -> Catalog:
+    """A gateless catalog over the invented annotations below, with whatever
+    QName vocabulary a test layers on."""
+    return Catalog(
+        id="invented-qname",
+        style="annotation_driven",
+        protocol="soap",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-qname.yml"),
+        matches={
+            "mapping": {
+                "path_from": ["op"],
+                "prefix_from": [],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": None,
+                "annotations": [
+                    {"fqn": "com.acme.rpc.annotation.Service"},
+                    {"fqn": "com.acme.rpc.annotation.Operation"},
+                ],
+                **mapping,
+            }
+        },
+    )
+
+
+def _qname_facts(
+    root: Path,
+    owner: str = "com/acme/rpc/OrderService#",
+    namespace: str | None = None,
+    scope_annotated: bool = True,
+) -> None:
+    """One method that always spells its own name, on a type that carries the
+    scope annotation in one of the three shapes checkpoint item 4 tells apart.
+
+    `scope_annotated` false means the annotation is ABSENT from the type
+    altogether; true with `namespace` None means it is PRESENT with the
+    attribute absent — which is the only shape a bytecode-defaulted attribute
+    can take, since a declared default is never written into the class file.
+    `owner` carries the package the reversed-package derivation reads, and is
+    a parameter so a class in the DEFAULT package can be spelled.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rpc/OrderService.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    place = f"{owner}place(sig_3d92af60)."
+    facts: list[object] = [
+        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=place,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=owner,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=place,
+            retention="runtime",
+            # A SCALAR, not an array: checkpoint items 4 and 5 pin both SOAP
+            # families' name attributes as plain strings in bytecode, unlike
+            # every Spring mapping annotation's `String[]`.
+            use=AnnotationUse(
+                annotation="com/acme/rpc/annotation/Operation#", args={"op": "placeRequest"}
+            ),
+        ),
+    ]
+    if scope_annotated:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/rpc/annotation/Service#",
+                    args={} if namespace is None else {"ns": namespace},
+                ),
+            )
+        )
+    write_fact_file(root / "OrderService.jsonl", document, facts)
+
+
+def _qname_paths(tmp_path: Path, catalog: Catalog, **facts: object) -> set[str]:
+    _qname_facts(tmp_path / "facts", **facts)  # type: ignore[arg-type]
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+    return paths
+
+
+def _qname_mapping(**mapping: object) -> dict[str, object]:
+    """The vocabulary every derivation test below shares: the scope read off
+    the type's own attribute, composed as a QName in front of the name."""
+    return {
+        "path_fallback": "construct_name",
+        "qualifier_from": ["ns"],
+        "qualifier_format": "qname",
+        **mapping,
+    }
+
+
+def test_a_qname_format_brackets_the_scope_in_front_of_the_name_it_qualifies(
+    tmp_path: Path,
+):
+    """Form 3. `{namespace}localName` is ONE token, not two halves joined by
+    punctuation: the braces are part of the notation, and the closing one has
+    no separator equivalent at all. That is why it is a `qualifier_format`
+    word rather than a two-character `qualifier_separator` — which
+    `_validate_naming` refuses outright, and rightly, since `rtrim`-style
+    dedupe over a `{`/`}` pair would compose a name nobody serves.
+    """
+    paths = _qname_paths(
+        tmp_path,
+        _qname_catalog(**_qname_mapping()),
+        namespace="http://declared.example.com/ws",
+    )
+
+    assert paths == {"{http://declared.example.com/ws}placeRequest"}
+
+
+def test_an_absent_scope_attribute_falls_back_to_the_reversed_package(tmp_path: Path):
+    """Form 4, composing with form 3.
+
+    The derivation is pinned to what JAX-WS actually computes (checkpoint item
+    2, verified against BOTH `com.sun.xml.ws.model.RuntimeModeler#getNamespace`
+    and Apache CXF's independent `PackageUtils#getNamespace`): `"http://"` +
+    the package's dot-separated tokens REVERSED + a trailing `"/"`. The
+    trailing slash is not decoration — it is in both implementations
+    unconditionally, and an address missing it matches no caller.
+
+    `com/acme/rpc` is deliberately not the namespace the test above declares:
+    a derivation that silently fell through to the declared value, or an
+    assertion that could not tell the two apart, would pass a wrong engine.
+    """
+    paths = _qname_paths(
+        tmp_path,
+        _qname_catalog(**_qname_mapping(namespace_default="reversed_package")),
+        namespace=None,
+    )
+
+    assert paths == {"{http://rpc.acme.com/}placeRequest"}
+
+
+def test_a_declared_scope_still_wins_over_the_reversed_package_default(tmp_path: Path):
+    """The default fires on ABSENCE only, never as a rewrite of something
+    declared — the rule `path_fallback` already keeps for names, restated for
+    scopes because the two forms now compose."""
+    paths = _qname_paths(
+        tmp_path,
+        _qname_catalog(**_qname_mapping(namespace_default="reversed_package")),
+        namespace="http://declared.example.com/ws",
+    )
+
+    assert paths == {"{http://declared.example.com/ws}placeRequest"}
+
+
+def test_an_absent_scope_with_no_default_declared_invents_no_namespace(tmp_path: Path):
+    """The inertness pin for form 4, and the one that matters most: a catalog
+    that declares no `namespace_default` must derive the BARE name rather than
+    a namespace the engine picked. A guessed namespace would be published at
+    `resolved`/`compiler`, where nothing downstream can tell it from an
+    observation — the confidently-wrong-address class again, and the reason
+    DR-6's answer to "the framework's default is unknown" is refusal rather
+    than a plausible-looking string.
+    """
+    paths = _qname_paths(tmp_path, _qname_catalog(**_qname_mapping()), namespace=None)
+
+    assert paths == {"placeRequest"}
+
+
+def test_an_operation_needing_a_scope_with_none_derivable_derives_no_row(tmp_path: Path):
+    """`requires_qualifier` composing with form 4: where the annotation only
+    means anything inside a namespace and no namespace is declared OR
+    derivable, silence is the honest answer — the bare local name would read
+    as a top-level identity, which is a different endpoint from the one the
+    code declares."""
+    paths = _qname_paths(
+        tmp_path,
+        _qname_catalog(
+            **_qname_mapping(
+                annotations=[
+                    {"fqn": "com.acme.rpc.annotation.Service"},
+                    {"fqn": "com.acme.rpc.annotation.Operation", "requires_qualifier": True},
+                ]
+            )
+        ),
+        namespace=None,
+    )
+
+    assert paths == set()
+
+
+def test_the_reversed_package_default_needs_the_scope_annotation_to_be_present(
+    tmp_path: Path,
+):
+    """The default belongs to an ATTRIBUTE of a declared annotation, so the
+    annotation has to be there. A type carrying no scope annotation at all is
+    not a service with a defaulted namespace — it is not a service — and
+    deriving its package's namespace anyway would mint an endpoint for any
+    class that merely happens to hold a matching method.
+
+    This is what lets a catalog whose gate is expressed as a qualifier scope
+    (the only way to name TWO spellings of one gate, since `type_annotation`
+    is single-valued) still gate: no scope row, no default, no address.
+    """
+    paths = _qname_paths(
+        tmp_path,
+        _qname_catalog(**_qname_mapping(namespace_default="reversed_package")),
+        scope_annotated=False,
+    )
+
+    assert paths == {"placeRequest"}
+
+
+def test_a_class_in_the_default_package_derives_no_namespace_rather_than_an_empty_one(
+    tmp_path: Path,
+):
+    """Both reference implementations return `null` for the empty package
+    (checkpoint item 2) — there is no namespace to reverse. So the refusal is
+    part of the pinned algorithm, not an extra rule bolted on: the row keeps
+    its bare name rather than gaining `http:///`, which is neither a namespace
+    nor an honest absence."""
+    paths = _qname_paths(
+        tmp_path,
+        _qname_catalog(**_qname_mapping(namespace_default="reversed_package")),
+        owner="OrderService#",
+        namespace=None,
+    )
+
+    assert paths == {"placeRequest"}
+
+
+def test_a_qualifier_format_and_a_qualifier_separator_are_mutually_exclusive(
+    tmp_path: Path,
+):
+    """Two composition rules for one seam is one too many. Which of them the
+    engine applied would decide the address, and a file declaring both states
+    no preference — so it is refused rather than resolved by precedence
+    nobody wrote down."""
+    with pytest.raises(CatalogError) as raised:
+        _qname_paths(
+            tmp_path,
+            _qname_catalog(**_qname_mapping(qualifier_separator=".")),
+        )
+
+    assert "qualifier_format" in str(raised.value)
+    assert "qualifier_separator" in str(raised.value)
+    assert "invented-qname.yml" in str(raised.value)
+
+
+def test_a_catalog_naming_an_unknown_qualifier_format_is_refused_by_file(tmp_path: Path):
+    """A closed vocabulary, for `path_fallback`'s reason: an unrecognised word
+    would fall through to the separator composition, which for a catalog that
+    declares no separator is the un-composed bare name — silently restoring
+    the un-scoped address the form exists to remove."""
+    with pytest.raises(CatalogError) as raised:
+        _qname_paths(tmp_path, _qname_catalog(**_qname_mapping(qualifier_format="curie")))
+
+    assert "curie" in str(raised.value)
+    assert "invented-qname.yml" in str(raised.value)
+
+
+def test_a_catalog_naming_an_unknown_namespace_default_is_refused_by_file(tmp_path: Path):
+    """The same closed-vocabulary rule for the scope's default. A typo read as
+    "no default" is the silent-fall-through failure again, and here it would
+    be invisible: the rows still derive, just without the namespace the
+    framework gives them."""
+    with pytest.raises(CatalogError) as raised:
+        _qname_paths(
+            tmp_path,
+            _qname_catalog(**_qname_mapping(namespace_default="package_name")),
+        )
+
+    assert "package_name" in str(raised.value)
+    assert "invented-qname.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("word", "value"),
+    [
+        # A format with nothing to format: `qualifier_format` states HOW a
+        # scope composes, and a catalog reading no scope has none to compose.
+        ("qualifier_format", "qname"),
+        # A default for an attribute the catalog never reads. Inert rather
+        # than wrong, but silently inert — a file whose author believed they
+        # had asked for the JAX-WS default and got nothing.
+        ("namespace_default", "reversed_package"),
+    ],
+)
+def test_a_qname_form_declared_without_a_qualifier_from_is_refused_by_file(
+    tmp_path: Path, word: str, value: str
+):
+    """Both new words describe the SCOPE — how it composes, and what it is
+    when unstated. Neither has any meaning on a catalog that reads no scope
+    at all, so declaring one alone is refused at load rather than accepted
+    and ignored."""
+    with pytest.raises(CatalogError) as raised:
+        _qname_paths(
+            tmp_path,
+            _qname_catalog(path_fallback="construct_name", **{word: value}),
+        )
+
+    assert word in str(raised.value)
+    assert "qualifier_from" in str(raised.value)
+    assert "invented-qname.yml" in str(raised.value)
+
+
 # --- The prefix seam: `mapping.path_separator` ----------------------------
 #
 # Deliberately NOT Spring, for the reason the naming forms above are not

@@ -74,6 +74,19 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         path_fallback=mapping.get("path_fallback"),
         qualifier_from=list(mapping.get("qualifier_from", [])),
         qualifier_separator=mapping.get("qualifier_separator"),
+        # 2I design §2's two QName forms, both optional and both inert unless
+        # declared. `qualifier_format` names a composition that is not a
+        # separator at all — `{scope}name` is one bracketed token, and its
+        # closing brace has no separator equivalent — so it REPLACES
+        # `qualifier_separator` rather than joining it. `namespace_default`
+        # says what the scope is when the attribute carrying it is absent,
+        # which for a spec that defines that default is a fact about the
+        # framework rather than a guess.
+        qualifier_format=mapping.get("qualifier_format"),
+        # The declared word's TEMPLATE, not the word: see `_NAMESPACE_DEFAULTS`.
+        # NULL where the catalog declares no default, which is what keeps the
+        # derivation below inert for every catalog but the ones that ask.
+        namespace_template=_NAMESPACE_DEFAULTS.get(str(mapping.get("namespace_default"))),
         # What joins a TYPE-level prefix to the address it prefixes, and the
         # character deduped where both halves already spell it. Optional and
         # inert while absent, so a catalog composing a Kafka topic — which has
@@ -105,6 +118,41 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 # a typo is refused rather than read as "no fallback", which would silently
 # restore the empty path this form exists to remove.
 _PATH_FALLBACKS = frozenset({"construct_name"})
+
+# How a scope composes with the name it qualifies, where a single separator
+# cannot say it (2I design §2, form 3). Today's one word is 'qname': the
+# XML-namespace notation `{scope}name`, one bracketed token whose closing
+# brace has no separator equivalent at all — which is exactly why it is a
+# format word and not a two-character `qualifier_separator`, a value
+# `_validate_naming` refuses outright because the seam dedupe trims a SET of
+# characters. Absent means the separator composition, which is what every
+# catalog written before this word already gets.
+_QUALIFIER_FORMATS = frozenset({"qname"})
+
+# What the scope IS when the attribute carrying it is absent (2I design §2,
+# form 4). Today's one word is 'reversed_package': the JAX-WS default
+# `targetNamespace`, `"http://"` + the declaring type's package tokens
+# reversed and dot-joined + a trailing `"/"` — pinned against BOTH reference
+# implementations (Phase 2I Task 2 checkpoint item 2:
+# `com.sun.xml.ws.model.RuntimeModeler#getNamespace` and Apache CXF's
+# independent `PackageUtils#getNamespace`, which agree character for
+# character, trailing slash included).
+#
+# A closed vocabulary rather than a boolean for `_PATH_FALLBACKS`'s reason,
+# and the stakes are higher here: a typo read as "no default" still derives
+# every row, just without the namespace the framework gives them — a wrong
+# address that looks like a right one, at `resolved`/`compiler` where nothing
+# downstream can tell it from an observation.
+#
+# A MAPPING rather than a set, because each word owes the derivation a
+# template as well as a name — and the template is where the scheme lives.
+# That is not a stylistic choice: `storage/` may not name a protocol
+# (ARCHITECTURE §10, `tests/architecture/test_source_rules.py::
+# test_storage_names_no_framework_language_or_protocol`), and a scheme IS one,
+# so the SQL composes the package half and this layer supplies the wrapper it
+# goes in. The `%s` is DuckDB's `printf` placeholder, filled with the reversed
+# dot-joined package.
+_NAMESPACE_DEFAULTS = {"reversed_package": "http://%s/"}
 
 
 def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
@@ -143,32 +191,86 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
             f"loading catalog {catalog.source}: `mapping.path_fallback: {fallback}` is not one "
             f"of {', '.join(sorted(_PATH_FALLBACKS))} (2H design §1)"
         )
+    qualifier_format = mapping.get("qualifier_format")
+    if qualifier_format is not None and qualifier_format not in _QUALIFIER_FORMATS:
+        # An unrecognised word would fall through to the separator
+        # composition — and for a catalog that declares no separator (which
+        # every catalog reaching for a format does, since the two are
+        # exclusive below) that is the un-composed bare name, silently
+        # restoring the un-scoped address the form exists to remove.
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.qualifier_format: {qualifier_format}` is "
+            f"not one of {', '.join(sorted(_QUALIFIER_FORMATS))} (2I design §2)"
+        )
+    namespace_default = mapping.get("namespace_default")
+    if namespace_default is not None and namespace_default not in _NAMESPACE_DEFAULTS:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.namespace_default: {namespace_default}` "
+            f"is not one of {', '.join(sorted(_NAMESPACE_DEFAULTS))} (2I design §2)"
+        )
+    if qualifier_format is not None and mapping.get("qualifier_separator") is not None:
+        # Two composition rules for one seam is one too many: which of them
+        # the engine applied would decide the address, and a file declaring
+        # both states no preference. Refused rather than resolved by a
+        # precedence nobody wrote down. `is not None` rather than a truth
+        # test, so an explicitly EMPTY separator is caught here too — it is
+        # still the key spelled, still a second rule declared.
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.qualifier_format: {qualifier_format}` and "
+            f"`mapping.qualifier_separator: {mapping.get('qualifier_separator')!r}` are mutually "
+            f"exclusive — a format states the WHOLE composition (`{{scope}}name` has no single "
+            f"joining character), so a separator beside it declares a second rule for one seam "
+            f"(2I design §2)"
+        )
     if not mapping.get("qualifier_from"):
+        # Both new words describe the SCOPE — how it composes, and what it is
+        # when unstated — so neither means anything on a catalog that reads no
+        # scope at all. Refused rather than accepted and silently ignored: a
+        # file whose author believed they had asked for the framework's own
+        # default would otherwise get nothing, with nothing saying so.
+        for word, value in (
+            ("qualifier_format", qualifier_format),
+            ("namespace_default", namespace_default),
+        ):
+            if value is not None:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `mapping.{word}: {value}` is declared "
+                    f"with no `mapping.qualifier_from` — it describes a scope this catalog "
+                    f"never reads (2I design §2)"
+                )
         return
     separator = mapping.get("qualifier_separator")
-    # An ABSENT separator joins a scope to a name with nothing between them
-    # (`Parentmember`); an explicitly EMPTY one does exactly the same thing
-    # while passing an `is None` check, so both are refused by the same
-    # message here. An empty separator has no honest use: a framework that
-    # concatenates the two halves with nothing between them has no
-    # composition to declare.
-    if separator is None or separator == "":
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `mapping.qualifier_from` is declared with no "
-            f"usable `mapping.qualifier_separator` (got {separator!r}) — what joins a scope to "
-            f"the name it qualifies is catalog data, and this engine names no punctuation of "
-            f"its own (2H design §1)"
-        )
-    # Anything else that isn't exactly one STRING character (a YAML int/bool,
-    # a multi-character string) would compose an address nobody serves — the
-    # same failure mode `path_separator` is checked for, and the same reason.
-    if not isinstance(separator, str) or len(separator) != 1:
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `mapping.qualifier_separator: {separator!r}` is "
-            f"not a single character — what joins a scope to the name it qualifies is a single "
-            f"piece of punctuation, and a value that isn't exactly one character would compose "
-            f"an address the framework does not serve"
-        )
+    # A format states the whole composition, so the separator checks below —
+    # which exist to refuse a scope joined by nothing or by the wrong number
+    # of characters — have nothing to rule on. `path_fallback` is still
+    # required past this branch: a format composing onto an EMPTY name yields
+    # a dangling `{scope}`, which is the same confidently-wrong address a
+    # dangling `Parent.` is.
+    if qualifier_format is None:
+        # An ABSENT separator joins a scope to a name with nothing between
+        # them (`Parentmember`); an explicitly EMPTY one does exactly the same
+        # thing while passing an `is None` check, so both are refused by the
+        # same message here. An empty separator has no honest use: a framework
+        # that concatenates the two halves with nothing between them has no
+        # composition to declare.
+        if separator is None or separator == "":
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.qualifier_from` is declared with no "
+                f"usable `mapping.qualifier_separator` (got {separator!r}) — what joins a scope "
+                f"to the name it qualifies is catalog data, and this engine names no punctuation "
+                f"of its own (2H design §1)"
+            )
+        # Anything else that isn't exactly one STRING character (a YAML
+        # int/bool, a multi-character string) would compose an address nobody
+        # serves — the same failure mode `path_separator` is checked for, and
+        # the same reason.
+        if not isinstance(separator, str) or len(separator) != 1:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.qualifier_separator: {separator!r}` "
+                f"is not a single character — what joins a scope to the name it qualifies is a "
+                f"single piece of punctuation, and a value that isn't exactly one character "
+                f"would compose an address the framework does not serve"
+            )
     # Without a fallback, an annotation carrying a scope and no name composes
     # the scope and the separator onto nothing — a dangling `Parent.`, which
     # is the confidently-wrong-address class again. The two forms are declared

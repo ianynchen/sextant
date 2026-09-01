@@ -234,6 +234,12 @@ _TOPIC_ENDPOINT_KWARGS = {
     "path_fallback": None,
     "qualifier_from": [],
     "qualifier_separator": None,
+    # 2I Task 2: the two QName forms, at their inert values for the same
+    # reason — no catalog in this file composes a bracketed scope or defaults
+    # one from a package, so the composition every assertion below pins stays
+    # the one it always was.
+    "qualifier_format": None,
+    "namespace_template": None,
     # The prefix seam, at its inert value too: no catalog in this file
     # composes a segmented address, so the seam stays the bare concatenation
     # every assertion below already pins.

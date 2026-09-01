@@ -336,6 +336,47 @@ mapping:
   one annotation play both roles without colliding with itself (the `prefix_annotation`
   precedent, unchanged).
 
+**Phase 2I generalises it a fifth time, for a scope that composes into ONE token and a
+scope whose ABSENCE the framework's own spec defines.** Two more keys, both optional and
+both inert unless declared:
+
+```yaml
+mapping:
+  qualifier_from: [namespace]          # the SCOPE, as before
+  qualifier_format: qname              # …composed `{scope}name`, not `scope<sep>name`
+  namespace_default: reversed_package  # …and what the scope IS when the attribute is absent
+```
+
+- **`qualifier_format` states a WHOLE composition where no single character can.** Today's
+  one word is `qname` — the XML-namespace notation `{scope}name`, one bracketed token
+  whose closing brace has no separator equivalent at all, which is precisely why it could
+  not be spelled as a `qualifier_separator` (that key is refused unless it is exactly one
+  character, because the seam dedupe trims a SET of characters). A closed vocabulary for
+  `path_fallback`'s reason. **It is mutually exclusive with `qualifier_separator`**: two
+  composition rules for one seam is one too many, and a file declaring both states no
+  preference, so it is refused rather than resolved by a precedence nobody wrote down.
+  `@PayloadRoot(namespace = "…/ws", localPart = "placeOrderRequest")` composes
+  `{…/ws}placeOrderRequest`; an annotation on the same catalog carrying no `namespace`
+  attribute composes no braces at all, which is what lets one mapping block carry two
+  identity forms (a QName and an opaque action URI) with no engine branch.
+- **`namespace_default` says what the scope is when the attribute carrying it is absent.**
+  Today's one word is `reversed_package`: `"http://"` + the DECLARING TYPE's package
+  tokens reversed and dot-joined + a trailing `"/"`, so `com.example.orders.soap` yields
+  `http://soap.orders.example.com/`. It is a fact rather than a guess because the JAX-WS
+  spec DEFINES that default — pinned against both reference implementations, which agree
+  character for character (Phase 2I Task 2 checkpoint item 2). Two rules keep it honest.
+  **It fires only where the scope-carrying annotation was actually found on the type**, so
+  "attribute absent" and "annotation absent" stay different things — otherwise any class
+  holding a matching method would be minted an endpoint. And **a class in the DEFAULT
+  package derives NO scope**, because both implementations return null there: that
+  refusal is part of the pinned algorithm, not a gap in it. A catalog declaring no
+  `namespace_default` gets no scope, never a plausible-looking one (DR-6). Like
+  `qualifier_format`, either word declared without `qualifier_from` is refused — both
+  describe a scope, and neither means anything on a catalog that reads none.
+- **The scheme lives in the engine, not the query.** `storage/` may not name a protocol
+  (ARCHITECTURE §10), and a URI scheme is one, so `annotation_driven.py` maps the declared
+  word to a `printf` template and the SQL composes only the package half into it.
+
 **Three catalogs, one engine change.** The forms are stated in framework-neutral words for
 a reason that was tested rather than asserted: `spring-graphql.yml` introduced them, and
 `netflix-dgs.yml` and `microprofile-graphql.yml` then rode them with **zero further engine

@@ -62,6 +62,32 @@
 --                           punctuation separates a scope from a member is a
 --                           framework's convention, and an engine that baked
 --                           one in would be naming a framework in code.
+--                           NULL where $qualifier_format states the whole
+--                           composition instead; the two are mutually
+--                           exclusive by contract (`annotation_driven.py::
+--                           _validate_naming`).
+--   $qualifier_format    -- 2I design §2, form 3: a whole composition of
+--                           scope and name that no single separator can
+--                           state. Today's one word is 'qname' —
+--                           `{scope}name`, the XML-namespace notation, ONE
+--                           bracketed token whose closing brace has no
+--                           separator equivalent at all. NULL restores the
+--                           separator composition, which is what every
+--                           catalog written before this parameter gets.
+--   $namespace_template  -- 2I design §2, form 4: the `printf` template the
+--                           declaring type's own reversed package is composed
+--                           into, when the attribute carrying the scope is
+--                           absent — or NULL to leave the scope absent. A
+--                           TEMPLATE rather than the catalog's own word
+--                           because the wrapper carries a scheme, and §10
+--                           forbids this layer from naming one; which word
+--                           maps to which template is
+--                           `annotation_driven.py::_NAMESPACE_DEFAULTS`.
+--                           A framework whose spec DEFINES this default is
+--                           stating a fact about every class in it, so
+--                           deriving it is reading the framework rather than
+--                           guessing; a catalog that declares no default gets
+--                           no scope, never a plausible-looking one (DR-6).
 --   $path_separator      -- what joins a TYPE-level prefix to the address it
 --                           prefixes, and the character deduped at the seam
 --                           where both halves already carry it. NULL where a
@@ -199,13 +225,56 @@ declared AS (
 -- `symbols` keeps methods and functions only, so a type target never reaches
 -- `mappings`. That is what lets one annotation play both roles here without
 -- the two colliding — the `prefix_annotation` precedent, unchanged.
+--
+-- This is also where $namespace_default is answered, and answering it HERE
+-- rather than in `derived` is what makes it a fact instead of a guess: a row
+-- exists here only where a scope-carrying annotation was actually FOUND on
+-- the type, so the default fires for a type that declares the annotation and
+-- leaves its attribute unstated, and NEVER for a type that declares no such
+-- annotation at all. A declared default is not written into the class file
+-- (Phase 2I Task 2 checkpoint item 4: a bare `@WebService` emits `args: {}`),
+-- so "absent" is the only shape the defaulted case can take — and without
+-- this gate, "absent attribute" and "absent annotation" would be one thing,
+-- minting an endpoint for any class that merely happens to hold a matching
+-- method.
 qualifier_scopes AS (
     SELECT
         a.target AS type_symbol,
-        list_extract(list_filter(list_transform(
-            $qualifier_from::VARCHAR[],
-            n -> coalesce(a.args -> n ->> 0, a.args ->> n)
-        ), v -> v IS NOT NULL), 1) AS qualifier
+        coalesce(
+            list_extract(list_filter(list_transform(
+                $qualifier_from::VARCHAR[],
+                n -> coalesce(a.args -> n ->> 0, a.args ->> n)
+            ), v -> v IS NOT NULL), 1),
+            -- The declaring type's own package, reversed and dot-joined, then
+            -- composed into $namespace_template. Pinned against BOTH
+            -- reference implementations, which agree character for character
+            -- (checkpoint item 2):
+            -- `com.sun.xml.ws.model.RuntimeModeler#getNamespace` and Apache
+            -- CXF's independent `PackageUtils#getNamespace` — including the
+            -- trailing separator the template carries, which is not
+            -- decoration: an address missing it matches no caller.
+            --
+            -- The package is read off the type symbol itself: D00 §1 puts it
+            -- after the module prefix's last space, and the segment following
+            -- the final `/` is the class (a nested `Outer$Inner` included),
+            -- which is why the class segment is matched and discarded rather
+            -- than kept. A METHOD target reaches this expression too — every
+            -- mapping annotation lands in this CTE, not just type-level ones
+            -- — and matches nothing, because a method descriptor ends `).`
+            -- rather than `#`; so it derives NULL and joins to no type below.
+            --
+            -- A class in the DEFAULT package has no `/` and so no match,
+            -- which yields NULL here — and that is the algorithm, not a gap
+            -- in it: both implementations return null for the empty package,
+            -- because there is nothing to reverse. A template filled with an
+            -- empty package would be neither a scope nor an honest absence.
+            CASE WHEN $namespace_template IS NOT NULL
+                      AND regexp_extract(a.target, '([^ ]*)/[^/ ]*#$', 1) <> ''
+                 THEN printf($namespace_template, array_to_string(list_reverse(str_split(
+                          regexp_extract(a.target, '([^ ]*)/[^/ ]*#$', 1), '/'
+                      )), '.'))
+            END
+        ) AS qualifier
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
 ),
@@ -283,8 +352,20 @@ derived AS (
         -- declaration wins, which is the precedence every framework with
         -- both levels keeps. Where neither states one this is NULL and
         -- composes nothing — no scope, no separator.
+        --
+        -- HOW the scope composes is catalog data twice over: a separator
+        -- between the two halves, or — where no single character can say it
+        -- — a whole $qualifier_format. `qname` is the second kind: `{scope}`
+        -- brackets the scope and butts the name straight against the closing
+        -- brace, and there is no separator value that spells a token with
+        -- punctuation on BOTH sides of one half. The two are mutually
+        -- exclusive by contract (`annotation_driven.py::_validate_naming`),
+        -- so this reads as one rule with two spellings rather than two rules
+        -- racing.
         CASE WHEN coalesce(m.qualifier, q.qualifier) IS NOT NULL
-             THEN coalesce(m.qualifier, q.qualifier) || $qualifier_separator
+             THEN CASE WHEN $qualifier_format = 'qname'
+                       THEN '{' || coalesce(m.qualifier, q.qualifier) || '}'
+                       ELSE coalesce(m.qualifier, q.qualifier) || $qualifier_separator END
              ELSE '' END
             || CASE WHEN m.path_suffix = '' AND $path_fallback = 'construct_name'
                     -- The construct's own name, off the symbol the join below
