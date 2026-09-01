@@ -2,7 +2,7 @@ import hashlib
 import json
 import re
 import subprocess
-from functools import partial
+from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
@@ -14,6 +14,7 @@ from sextant.application.resolve.pipeline import ResolveReport
 from sextant.application.stages.analyze import analyze
 from sextant.cli.progress import RichProgress
 from sextant.cli.resources import catalogs_dir, extractor_jar
+from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
 from sextant.egress.export.manifest import write_manifest
 from sextant.egress.render.document import render_module_document
 from sextant.egress.render.metadata import write_metadata
@@ -30,6 +31,23 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 # The registries the composition root builds (ARCHITECTURE §6). Order is the
 # statement of precedence where two adapters could both accept.
+
+
+class _JvmDescriptorInterpreter:
+    """The `DescriptorInterpreter` port (application/ports/descriptors.py),
+    adapted: binds the JVM's own generated-class naming — constructed only
+    here, per ARCHITECTURE §10's JVM-confinement rule — into
+    `interpret_descriptors`, so `analyze` never has to import either. An
+    object with a named method, like every other adapter this composition
+    root wires in, never a bare callable."""
+
+    def __init__(self) -> None:
+        self._naming = JvmGeneratedNaming()
+
+    def interpret(
+        self, descriptors: Sequence[EmbeddedDescriptorFact]
+    ) -> tuple[list[DeclaredShapeFact], list[str]]:
+        return interpret_descriptors(descriptors, self._naming)
 
 
 def _commit_of(path: Path) -> str:
@@ -106,12 +124,7 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
                 AvscReader(),
                 ProtoSourceReader(),
             ],
-            # `JvmGeneratedNaming` constructed only here (ARCHITECTURE §10's
-            # JVM-confinement rule) and bound into `interpret_descriptors`
-            # before it ever reaches `analyze`, which never imports either
-            # (`sextant.application.ports.descriptors.DescriptorInterpreter`
-            # is the seam it accepts instead).
-            interpret=partial(interpret_descriptors, naming=JvmGeneratedNaming()),
+            interpret=_JvmDescriptorInterpreter(),
         )
         write_metadata(
             workspace_dir / "metadata.json",

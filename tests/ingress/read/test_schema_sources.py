@@ -1,10 +1,18 @@
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
 from sextant.domain.resource_files import list_files
 from sextant.ingress.read.avsc import AvscReader
 from sextant.ingress.read.properties import PropertiesReader
-from sextant.ingress.read.proto_source import ProtoSourceReader
+from sextant.ingress.read.proto_source import (
+    ProtoSourceReader,
+    _leading_string_field,
+    _read_varint,
+    _split_length_delimited_field,
+)
 from sextant.ingress.read.yaml_config import YamlConfigReader
 
 REPO = Path(__file__).parents[3]
@@ -173,6 +181,91 @@ def test_a_broken_proto_fails_every_file_in_its_own_root_only(tmp_path: Path):
     [(healthy_document, healthy_facts)] = healthy_pairs
     assert not healthy_document.partial
     assert len(healthy_facts) == 1
+
+
+def test_a_broken_protoc_output_fails_the_root_cleanly_no_exception_escapes(tmp_path: Path):
+    """IMPORTANT C: `read()` must not let an exception escape even when
+    protoc itself succeeds but this reader's own wire-format read of its
+    output cannot make sense of it. protoc only ever emits well-formed
+    output, so the failure is induced directly on the parsing step rather
+    than through a crafted `.proto` file — this is what `read()`'s own
+    try/except around the wire-format read (module docstring) is actually
+    for."""
+    file = _write(tmp_path, "ok.proto", 'syntax = "proto3";\nmessage Bar { string x = 1; }\n')
+
+    with patch(
+        "sextant.ingress.read.proto_source._split_length_delimited_field",
+        side_effect=ValueError("boom"),
+    ):
+        [(document, facts)] = _read(ProtoSourceReader(), tmp_path, file)
+
+    assert document.partial
+    assert document.partial_reason is not None
+    assert "boom" in document.partial_reason
+    assert facts == []
+
+
+# --- Direct wire-format parser tests (IMPORTANT C) --------------------------
+
+
+def _varint(value: int) -> bytes:
+    out = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            out.append(byte | 0x80)
+        else:
+            out.append(byte)
+            break
+    return bytes(out)
+
+
+def test_read_varint_decodes_a_single_byte_value():
+    assert _read_varint(b"\x05", 0) == (5, 1)
+
+
+def test_read_varint_decodes_a_multi_byte_value():
+    value = 300  # exceeds one byte's 7-bit payload — exercises the continuation bit
+    assert _read_varint(_varint(value), 0) == (value, 2)
+
+
+def test_read_varint_raises_cleanly_on_a_truncated_varint():
+    # Continuation bit set on the final byte, no byte follows it.
+    with pytest.raises(IndexError):
+        _read_varint(b"\x80", 0)
+
+
+def test_split_length_delimited_field_reads_a_two_byte_length_descriptor():
+    payload = b"x" * 200  # length 200 > 127, so the length varint itself is 2 bytes
+    chunk = b"\x0a" + _varint(200) + payload
+    assert _split_length_delimited_field(chunk, 1) == [payload]
+
+
+def test_split_length_delimited_field_raises_cleanly_on_a_truncated_final_chunk():
+    chunk = b"\x0a" + _varint(10) + b"abc"  # declares length 10, provides 3 bytes
+    with pytest.raises(ValueError, match="truncated"):
+        _split_length_delimited_field(chunk, 1)
+
+
+def test_split_length_delimited_field_raises_cleanly_on_unexpected_tag_input():
+    # Field 2 (tag 0x12), never field 1 (0x0a) — not the one shape a
+    # FileDescriptorSet ever carries (module docstring); no wire type is
+    # guessed, so this must raise rather than desync silently.
+    chunk = b"\x12" + _varint(3) + b"abc"
+    with pytest.raises(ValueError, match="unexpected field"):
+        _split_length_delimited_field(chunk, 1)
+
+
+def test_leading_string_field_raises_cleanly_on_a_truncated_value():
+    chunk = b"\x0a" + _varint(10) + b"abc"  # declares length 10, provides 3 bytes
+    with pytest.raises(ValueError, match="truncated"):
+        _leading_string_field(chunk, 1)
+
+
+def test_leading_string_field_returns_none_for_a_non_matching_leading_field():
+    chunk = b"\x12" + _varint(3) + b"abc"
+    assert _leading_string_field(chunk, 1) is None
 
 
 # --- Registry coexistence ---------------------------------------------------

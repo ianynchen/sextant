@@ -1,3 +1,14 @@
+"""The analyze stage (M03): detect, scan, read config and schema sources,
+interpret embedded schemas, resolve — one pass per module, every fact
+written to disk before `resolve` ever runs (M04 reads the whole tree, not a
+stream).
+
+No new scanner capability gates `embedded_descriptor`/`declared_shape` (2G
+design, Task 4 ruling): a module that carries no schema payload simply
+produces no declared shape, the same honest absence an untyped scanner
+already leaves for a construct it never emits — no catalog's `requires`
+needs a name for that."""
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,13 +22,12 @@ from sextant.application.ports.scanner import Scanner, ScanRequest, select_scann
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.pipeline import ResolveReport, resolve
 from sextant.domain.factfile import (
-    append_fact_file,
     config_fact_target,
     read_fact_tree,
     schema_fact_target,
     write_fact_file,
 )
-from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
+from sextant.domain.facts import DeclaredShapeFact, Document, EmbeddedDescriptorFact, Fact
 from sextant.domain.resource_files import list_files
 
 
@@ -135,23 +145,37 @@ def analyze(
     progress.start("interpret")
     descriptors_not_interpreted: tuple[str, ...] = ()
     if interpret is not None:
-        pairs = read_fact_tree(fact_root)
-        documents_by_id = {document.document_id: document for document, _ in pairs}
-        descriptors = [
-            fact for _, facts in pairs for fact in facts if isinstance(fact, EmbeddedDescriptorFact)
-        ]
-        shapes, failed = interpret(descriptors)
+        # Every prior declared_shape fact is dropped here, kept nowhere —
+        # this run's own interpretation is about to recompute the complete,
+        # current answer, and a fact file is written WHOLE below, never
+        # appended to. Without this, a second `analyze` into the same
+        # workspace would read back the first run's own declared_shape facts
+        # alongside the fresh ones and pile up a duplicate set every time.
+        by_document_id: dict[str, tuple[Path, Document, list[Fact]]] = {}
+        descriptors: list[EmbeddedDescriptorFact] = []
+        for target, document, facts in read_fact_tree(fact_root):
+            carried: list[Fact] = [
+                fact for fact in facts if not isinstance(fact, DeclaredShapeFact)
+            ]
+            by_document_id[document.document_id] = (target, document, carried)
+            descriptors.extend(fact for fact in carried if isinstance(fact, EmbeddedDescriptorFact))
+
+        shapes, failed = interpret.interpret(descriptors)
         descriptors_not_interpreted = tuple(failed)
-        kept = _prefer_compiled(shapes)
-        by_document: dict[str, list[DeclaredShapeFact]] = {}
-        for shape in kept:
-            by_document.setdefault(shape.document_id, []).append(shape)
+        kept_shapes: dict[str, list[DeclaredShapeFact]] = {}
+        for shape in _prefer_compiled(shapes):
+            kept_shapes.setdefault(shape.document_id, []).append(shape)
         # Sorted so the write order — and therefore nothing observable about
         # it — never depends on dict iteration order (NFR-1).
-        for document_id in sorted(by_document):
-            document = documents_by_id[document_id]
-            target = schema_fact_target(fact_root, document.relative_path)
-            append_fact_file(target, document, by_document[document_id])
+        for document_id in sorted(kept_shapes):
+            target, document, carried = by_document_id[document_id]
+            # Written into the document's OWN fact file, wherever it already
+            # is — a compiled document's own file the scanner wrote, or a
+            # schema reader's own file from the read step above — never a
+            # NEW file: a second `Document` record for a document that
+            # already has one would double it in the workspace's own
+            # document count (D00 §7's one-record-per-source-file rule).
+            write_fact_file(target, document, [*carried, *kept_shapes[document_id]])
     progress.finish("interpret", f"{len(descriptors_not_interpreted)} not interpreted")
 
     progress.start("resolve")

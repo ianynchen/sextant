@@ -53,27 +53,17 @@ def schema_fact_target(fact_root: Path, relative_path: str) -> Path:
     return fact_root / "schema" / (relative_path + ".jsonl")
 
 
-def read_fact_tree(fact_root: Path) -> list[tuple[Document, list[Fact]]]:
-    """Every fact file already written under `fact_root`, read back. The
-    means by which a later stage — `analyze`'s descriptor interpretation,
-    which needs to see the `embedded_descriptor` facts a scanner already
-    wrote to disk before it ever calls this — can read the fact tree without
-    touching the filesystem itself (ARCHITECTURE §10's application-reads-no-
-    files rule, `test_application_reads_no_files`). Sorted by path for
-    NFR-1: two runs over the same tree read facts in the same order
-    regardless of the filesystem's own directory-entry order."""
-    return [read_fact_file(path) for path in sorted(fact_root.rglob("*.jsonl"))]
-
-
-def append_fact_file(path: Path, document: Document, facts: Iterable[Fact]) -> None:
-    """Adds `facts` to the fact file at `path`, which may already carry some
-    (a schema reader's own document, given `declared_shape` facts later in
-    the same `analyze` run) or may not exist yet at all (a compiled
-    document's facts live wherever the scanner wrote them, never under this
-    path, so the first write here creates it). Either way the result keeps
-    `write_fact_file`'s self-describing invariant: `document` first, every
-    fact — old and new — after it."""
-    existing: list[Fact] = []
-    if path.is_file():
-        _, existing = read_fact_file(path)
-    write_fact_file(path, document, [*existing, *facts])
+def read_fact_tree(fact_root: Path) -> list[tuple[Path, Document, list[Fact]]]:
+    """Every fact file already written under `fact_root`, read back — the
+    path included, not only its content: a later stage that adds facts to a
+    document already on disk (`analyze`'s descriptor interpretation) must
+    write them back into that SAME file, never mint a second one — D00 §7
+    permits exactly one document record per source file, and a second file
+    carrying the identical `Document` would double-count it wherever the
+    workspace counts documents. The means by which that stage can read the
+    fact tree at all without touching the filesystem itself (ARCHITECTURE
+    §10's application-reads-no-files rule, `test_application_reads_no_files`).
+    Sorted by path for NFR-1: two runs over the same tree read facts in the
+    same order regardless of the filesystem's own directory-entry order."""
+    paths = sorted(fact_root.rglob("*.jsonl"))
+    return [(path, *read_fact_file(path)) for path in paths]

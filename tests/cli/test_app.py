@@ -9,6 +9,7 @@ from sextant.application.ports.scanner import ScanReport, ScanRequest
 from sextant.application.stages.analyze import analyze
 from sextant.cli.app import cli
 from sextant.cli.resources import catalogs_dir, extractor_jar
+from sextant.domain.factfile import read_fact_tree
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
@@ -57,6 +58,51 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # functional-routing tree, both DSLs) — see test_pipeline.py's own
     # dedicated row-level test for the full breakdown.
     assert metadata["endpoints"]["inbound"]["http"] == 31
+
+
+def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_path: Path):
+    """IMPORTANT A fix (Task 4 review round 1): compiled-origin declared_shape
+    facts used to be written into a NEW fact file that re-emitted their own
+    `Document` header, so a document that already had one fact file (every
+    compiled class) counted twice in `coverage.documents` — 87 for 84 real
+    documents. Pinned from a live run, not computed by hand, so any future
+    regression that mints a second Document record for an existing document
+    is caught here directly rather than only inferred from row counts
+    elsewhere."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert metadata["coverage"]["documents"] == 84
+
+
+def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):
+    """IMPORTANT B (Task 4 review round 1): `receipt.avsc` is this fixture's
+    one schema identity with no compiled counterpart —
+    `fixtures/orders-service/pom.xml`'s avro-maven-plugin `<excludes>` block
+    keeps the jar from ever embedding it. Pinned end to end, through the real
+    CLI command and the real fact tree it writes, so silently deleting that
+    `<excludes>` block (making Receipt compiled again, and DR-4 drop the
+    source shape this test expects) fails a test rather than only a stale
+    fixture comment."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+
+    shapes = [
+        fact
+        for _, _, facts in read_fact_tree(tmp_path / "facts")
+        for fact in facts
+        if fact.kind == "declared_shape" and fact.schema_name == "com.example.orders.avro.Receipt"
+    ]
+    assert len(shapes) == 1
+    [shape] = shapes
+    assert shape.origin == "source"
+    assert shape.evidence == "declared"
 
 
 def test_export_writes_a_bundle_with_manifest_graph_and_facts(tmp_path: Path):
