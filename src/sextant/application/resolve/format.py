@@ -90,6 +90,22 @@ _DESCRIBED_BY = (Evidence.COMPILER, Evidence.DECLARED)
 _PAYLOAD_COLUMNS = ("request_shape", "response_shape")
 _MEDIA_COLUMNS = ("consumes", "produces")
 
+# What `stamp_format.sql` matches a stamped answer back onto: the row's
+# identity, plus every column a rung above read. The four carried columns are
+# there because they are INPUTS — two rows agreeing on all eight were handed
+# the same answer, which is what lets an UPDATE with no unique key stay
+# idempotent rather than ambiguous.
+_MATCH_COLUMNS = (
+    "protocol",
+    "direction",
+    "method",
+    "path",
+    "handler",
+    "caller",
+    *_MEDIA_COLUMNS,
+    *_PAYLOAD_COLUMNS,
+)
+
 
 def resolve_format(workspace: Workspace, catalogs: list[Catalog]) -> None:
     """Stamps `(format, format_resolution)` on every endpoint row.
@@ -114,19 +130,11 @@ def resolve_format(workspace: Workspace, catalogs: list[Catalog]) -> None:
     questions: list[dict[str, Any]] = []
     for endpoint in workspace.query("endpoints"):
         answer = _answer(endpoint, fixed, media, serializers, described, default_marker)
+        # The row is matched back by its identity AND by every column the
+        # answer above was read from (`stamp_format.sql`) — which is what
+        # makes a duplicate match idempotent in a table with no unique key.
         rows.append(
-            {
-                column: endpoint.get(column)
-                for column in (
-                    "protocol",
-                    "direction",
-                    "method",
-                    "path",
-                    "handler",
-                    "caller",
-                    *_PAYLOAD_COLUMNS,
-                )
-            }
+            {column: endpoint.get(column) for column in _MATCH_COLUMNS}
             | {"format": answer.format, "format_resolution": answer.resolution}
         )
         if answer.candidates is not None:
@@ -408,9 +416,14 @@ def _present_default_marker(workspace: Workspace, catalogs: list[Catalog]) -> st
     and an annotation from its package family is proof that it is, since the
     package could not have been resolved at compile time otherwise.
 
-    Markers are compared in sorted order so which one a module carrying two
-    families gets named is the same on every run (NFR-1); which one it is
-    changes nothing but the recorded trail, since both mean the same format.
+    **Determinism comes from the ANNOTATION ordering, not from the markers.**
+    This walks annotations in the `annotations` named query's own total order
+    (`target, annotation`) and returns on the first hit, so a module carrying
+    two marker families names the same one on every run because the
+    annotations are ordered — sorting the markers only makes the tie-break
+    within a single annotation stable, which is a much smaller claim. Either
+    way the choice changes nothing but the recorded trail: every marker in
+    this list means the same format.
     """
     markers = sorted(
         {str(marker) for catalog in catalogs for marker in catalog.json_default_markers}
@@ -499,10 +512,15 @@ def _question(endpoint: dict[str, Any], answer: _Answer) -> dict[str, Any]:
 
 
 def _mime_list(column: object) -> list[str]:
-    """The MIME strings one media column holds. The column is a JSON array of
-    strings or NULL (D01 §3), never a bare string — every writer of it goes
-    through `to_json`/`json.dumps` — so anything else is a column this pass
-    has no reading for and treats as absent."""
+    """The MIME strings one media column holds.
+
+    The column is a JSON array of strings, or NULL (D01 §3): every writer of
+    it goes through `to_json`/`json.dumps`, so the array is a contract rather
+    than a hope. NULL is the only absence this reads — a column holding text
+    that is not JSON raises `JSONDecodeError` out of this pass, and a column
+    holding a JSON scalar returns no MIME strings. Neither is handled,
+    deliberately: both mean a writer broke the column's contract, which is a
+    defect to see rather than an emptiness to absorb."""
     if column is None:
         return []
     parsed = json.loads(str(column))

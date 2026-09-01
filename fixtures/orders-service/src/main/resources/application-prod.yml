@@ -13,6 +13,6 @@ billing:
 spring:
   kafka:
     producer:
-      value-serializer: io.confluent.kafka.serializers.protobuf.KafkaProtobufSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     consumer:
-      value-deserializer: org.springframework.kafka.support.serializer.JsonSerializer
+      value-deserializer: io.confluent.kafka.serializers.protobuf.KafkaProtobufDeserializer

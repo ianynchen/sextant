@@ -50,26 +50,34 @@ spring:
   # application-prod.yml so every resolved environment agrees — the
   # agreement both the media stamp and the format rung require.
   #
-  # The two keys deliberately name classes the catalog treats differently,
-  # so each half of that split is observable in a live run:
+  # The two keys deliberately name classes spring-kafka-media.yml treats
+  # differently, so each half of that split is observable in one live run:
   #
-  #   * the CONSUMER class is in spring-kafka-media.yml's `values` AND its
-  #     `format_from`, so it stamps `consumes: application/json` and every
-  #     inbound kafka row's format is decided by rung 2 (declared media)
-  #     before rung 3 is ever consulted — the precedence pin;
-  #   * the PRODUCER class is a schema-registry serializer with no MIME
-  #     string anyone registered: `format_from` only. It stamps NO media,
-  #     which is what leaves every outbound-only kafka row for rung 3 to
-  #     answer `protobuf` — the only way rung 3 is reachable at all, since a
-  #     class with a MIME would have been answered a rung earlier.
+  #   * the PRODUCER class is in both `values` and `format_from`. It stamps
+  #     `produces: application/json` on every outbound kafka row, and the
+  #     merge then carries that onto the `both` rows it survives into (2F
+  #     checkpoint falsification F-4 — the ONLY place that carry is
+  #     observable live, since the stamp itself matches direction exactly).
+  #     Every one of those rows is then answered by rung 2 before rung 3 is
+  #     consulted at all: the precedence pin.
+  #   * the CONSUMER class is a schema-registry deserializer with no MIME
+  #     string anyone registered, so it is in `format_from` only. It stamps
+  #     NO media, which leaves `consumes` NULL on every inbound-only kafka
+  #     row — and that is what makes rung 3 reachable at all, since a class
+  #     with a MIME would have been answered a rung earlier.
+  #
+  # It has to be THIS way round. Swapping the two puts the schema-registry
+  # class on the producer key, where stamping nothing leaves `produces` NULL
+  # table-wide: the F-4 merge carry then has nothing to carry and stops being
+  # observable, while rung 3 gains nothing it does not get here.
   #
   # The class name is configuration data. Nothing in this fixture depends on
   # the Confluent artifacts, and nothing needs to.
   kafka:
     producer:
-      value-serializer: io.confluent.kafka.serializers.protobuf.KafkaProtobufSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     consumer:
-      value-deserializer: org.springframework.kafka.support.serializer.JsonSerializer
+      value-deserializer: io.confluent.kafka.serializers.protobuf.KafkaProtobufDeserializer
 ---
 # Document-key profile activation (config_model.profiles.from_document_key),
 # scoped to the "default" profile explicitly — only.in.default must NOT

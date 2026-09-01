@@ -945,6 +945,8 @@ def _stamp_format(
                 "path": "shared",
                 "handler": None,
                 "caller": caller,
+                "consumes": None,
+                "produces": None,
                 "request_shape": None,
                 "response_shape": None,
                 "format": answer[0],

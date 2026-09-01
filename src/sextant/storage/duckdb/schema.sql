@@ -43,7 +43,16 @@ CREATE TABLE IF NOT EXISTS endpoints (
     -- set every other column uses — `resolved` where declared evidence named
     -- the wire outright, `narrowed` where only a framework default or the
     -- payload's own type suggested it, `unresolved` where nothing did.
-    -- `format` is NULL exactly when `format_resolution` is `unresolved`.
+    -- As the ladder writes them, `format` is NULL exactly when
+    -- `format_resolution` is `unresolved`. **One statement breaks that pair
+    -- on purpose**: merge_endpoints.sql keeps the surviving row's format
+    -- while taking the WEAKER of the two halves' markers, so a merged row
+    -- may read (`protobuf`, `unresolved`) — "this is the format one
+    -- direction declared, and this identity as a whole is not settled",
+    -- which is the honest reading of one wire whose two halves were not
+    -- equally observable. A reader must therefore treat
+    -- `format_resolution` as the authority on trust and `format` as an
+    -- answer that may still be worth showing beside it.
     format            TEXT,
     format_resolution TEXT
 );
