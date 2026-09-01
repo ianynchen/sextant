@@ -35,6 +35,15 @@ declaration, made in the source. The return-type read exists because a
 handler may declare no media at all and still be a stream — the return type
 is then the only statement there is.
 
+The media read is DIRECTION-AWARE, and deliberately narrower than the format
+ladder's (`_MEDIA_COLUMNS` states the rule): an inbound row's `consumes` is
+what the route ACCEPTS, and a channel is not renamed after its input.
+
+**One thing outside `endpoints` moves with a row**: its `open_questions`. The
+2K ledger snapshots a wire identity rather than joining to it, and the
+payload-binding pass took that snapshot before this one ran — see
+`reclassify_open_questions.sql`.
+
 **What `hint_returns` matches, precisely.** A return type is a TREE, not a
 name: `SseEmitter` is a flat `TypeRef` whose own symbol is the marker, while
 `Flux<ServerSentEvent<OrderView>>` carries the marker in the MIDDLE of a
@@ -56,7 +65,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.domain.closed_sets import Protocol
+from sextant.domain.closed_sets import Direction, Protocol
 from sextant.domain.symbols import type_descriptor
 
 # The block, and the three keys it may carry. Closed on purpose: a key this
@@ -70,12 +79,30 @@ _MEDIA = "hint_media"
 _RETURNS = "hint_returns"
 _KEYS = (_TARGET, _MEDIA, _RETURNS)
 
-# Both media columns feed the media read, not `produces` alone. The envelope
-# names the protocol whichever side declared it: a server that produces the
-# stream and a client that consumes it are both speaking it, and a merged
-# `both` row carries the caller's half in `consumes`. The same reason the
-# format ladder's rung 2 reads both columns into one answer.
-_MEDIA_COLUMNS = ("consumes", "produces")
+# Which media column may carry protocol evidence, BY DIRECTION — and this is
+# the one place this pass deliberately does NOT follow the format ladder's
+# rung 2, which folds both columns into one answer.
+#
+# `format` describes one wire and both columns describe it, so rung 2 is right
+# to read both. A PROTOCOL hint is a different claim: `consumes` is the
+# REQUEST-body media, and on an inbound row that is what the route ACCEPTS,
+# never what it streams back. An inbound route declaring `consumes:
+# text/event-stream` is a handler being handed an event stream by its caller —
+# a real, if unusual, thing to write — and reclassifying it would rename the
+# channel after its input.
+#
+# So: an inbound row's evidence is `produces` alone, what the server sends. A
+# row with a client side — outbound, and the merged `both` that carries a
+# caller's own declaration — reads both, because there `consumes` is what the
+# client RECEIVES off the wire, which is exactly the envelope. The default
+# covers a NULL direction the same way inbound is covered: the narrower read.
+_SERVER_SENT = ("produces",)
+_EITHER_SIDE = ("consumes", "produces")
+_MEDIA_COLUMNS = {
+    str(Direction.INBOUND): _SERVER_SENT,
+    str(Direction.OUTBOUND): _EITHER_SIDE,
+    str(Direction.BOTH): _EITHER_SIDE,
+}
 
 # The row identity a reclassification is matched back onto — the same six
 # columns `stamp_format.sql` and `bind_request_shape.sql` use, for the same
@@ -105,6 +132,13 @@ def apply_protocol_hints(workspace: Workspace, catalogs: list[Catalog]) -> None:
                 | {"reclassified": hint.target}
             )
     workspace.derive("reclassify_protocol", rows=rows)
+    # The ledger follows the rows. `open_questions.protocol` is a SNAPSHOT of
+    # a wire identity, not a join, and `parse_binding` took its copy before
+    # this pass ran — so a reclassified row's question would otherwise publish
+    # one protocol while the endpoint published another. Two statements
+    # because DuckDB binds parameters only on the last one of an execute, not
+    # because they are two decisions: same `$rows`, one call site.
+    workspace.derive("reclassify_open_questions", rows=rows)
 
 
 # --- the two evidence kinds -----------------------------------------------
@@ -113,9 +147,14 @@ def apply_protocol_hints(workspace: Workspace, catalogs: list[Catalog]) -> None:
 def _declares_media(endpoint: dict[str, Any], hint: "_Hint") -> bool:
     """Evidence 1: the row's own declared MIME strings name the protocol's
     envelope. The channel said so, in the source, which is why this is read
-    first — and why a row carrying it needs no return type at all."""
+    first — and why a row carrying it needs no return type at all.
+
+    WHICH columns count depends on the row's direction (`_MEDIA_COLUMNS`
+    states why): an inbound row's `consumes` is what it ACCEPTS, and a channel
+    is not renamed after its input."""
+    columns = _MEDIA_COLUMNS.get(str(endpoint.get("direction")), _SERVER_SENT)
     return any(
-        mime in hint.media for column in _MEDIA_COLUMNS for mime in _mime_list(endpoint.get(column))
+        mime in hint.media for column in columns for mime in _mime_list(endpoint.get(column))
     )
 
 

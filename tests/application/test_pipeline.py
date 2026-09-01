@@ -1332,39 +1332,50 @@ def test_an_sse_rows_format_is_assumed_never_read_off_the_envelope(
     } == {("json", "resolved")}
 
 
-def test_an_sse_rows_payload_stops_at_the_undeclared_envelope_type(
+def test_a_streams_per_event_payload_unwraps_through_the_sse_envelope(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """**A gap, pinned as it really is.** 2H design §6 expects
-    `ServerSentEvent<T>` to unwrap through the existing PTR/generic machinery
-    so that `/events/stream`'s response shape reads `OrderView`. Live, it does
-    not: the shape pass unwraps `Flux` — `spring-web.yml`'s `wrappers` block
-    declares it — and then stops, because `ServerSentEvent` is declared in no
-    catalog's `wrappers` block at all, so it is treated as an ordinary payload
-    TYPE rather than an envelope to look through.
+    """2H design §6's payload sentence, live: `Flux<ServerSentEvent<T>>`
+    reaches `T` through the existing PTR/generic machinery.
 
-    `SseEmitter` is the same shape for a different reason: it is a callback
-    handle, not a generic container, so nothing in a signature ever names the
-    events it will push and no unwrapping rule could reach a payload here.
+    Two envelopes peel, not one. `rooting.py` unwraps RECURSIVELY, so a single
+    `wrappers` entry for `ServerSentEvent` (added on every catalog carrying the
+    Flux/Mono family, verbatim, per that block's own duplication convention) is
+    the whole remedy: `Flux` peels as `streaming`, `ServerSentEvent` peels as
+    `http_envelope`, and the walk stops at `OrderView` — an ordinary declared
+    type with field facts of its own. Before the entry existed the walk stopped
+    at the envelope and published the ENVELOPE TYPE as the contract.
 
-    Both types are third-party, so no field facts exist for them either and
-    both shapes are `open` — which is what keeps this honest rather than
-    wrong: the rendered document names them under "Not expanded, so the shapes
-    referring to it are open" rather than publishing an empty contract as a
-    complete one. This pass changes none of that; the pinned values are what
-    2H Task 1 already produced, now read under the true protocol."""
-    _, report = resolved_fixture
+    `/events/emitter` does NOT and cannot follow: `SseEmitter` is a callback
+    handle, not a generic container — its `TypeRef` carries no type arguments
+    at all, so nothing in the signature names the events it will push and no
+    unwrapping rule could reach a payload. It stays the honestly-open envelope
+    type, which is the right answer rather than a missing one, and the rendered
+    document discloses it under "Not expanded" rather than publishing an empty
+    contract as a complete one (pinned in `tests/e2e/test_vertical_slice.py`).
+
+    `OrderView` is itself `open` — its `HttpHeaders` field is third-party and
+    unexpanded, which the fixture's own source comment says outright — and that
+    is unchanged by this task: the point here is that the SSE row reaches the
+    SAME shape every other `OrderView`-carrying row reaches."""
+    workspace, report = resolved_fixture
     emitter, stream = _route(report, "/events/emitter"), _route(report, "/events/stream")
 
     assert emitter["request_shape"] is None and stream["request_shape"] is None
     assert (
+        json.loads(stream["response_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+    )
+    assert (
         json.loads(emitter["response_shape"])["shape_id"]
         == "org/springframework/web/servlet/mvc/method/annotation/SseEmitter#"
     )
-    assert (
-        json.loads(stream["response_shape"])["shape_id"]
-        == "org/springframework/http/codec/ServerSentEvent#"
-    )
+    # The envelope type is no longer a shape at all: nothing references it, so
+    # nothing rooted it, so it was never expanded — which is the difference
+    # between "unwrapped" and "unwrapped and left behind as an open type".
+    shapes = {str(row["shape_id"]) for row in workspace.query("shapes")}
+    assert "org/springframework/http/codec/ServerSentEvent#" not in shapes
+    assert "org/springframework/web/servlet/mvc/method/annotation/SseEmitter#" in shapes
+    assert "com/acme/orders/contracts/OrderView#" in shapes
 
 
 # --- Task 10: the three listener catalogs, end to end, on real bytecode ---

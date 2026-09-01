@@ -166,17 +166,19 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
         "`sse GET /events/stream` | `com/example/orders/sse/OrderEventsController#streamEvents(sig_ed469b30).` | - → text/event-stream | json (assumed) | resolved |"
         in document
     )
-    # The payload gap, disclosed rather than hidden (2H design §6 expects
-    # `ServerSentEvent<T>` to unwrap to `OrderView`; live it stops at the
-    # envelope type, which no catalog's `wrappers` block declares — see
-    # `test_pipeline.py::test_an_sse_rows_payload_stops_at_the_undeclared_
-    # envelope_type`). Both envelope types are third-party and carry no field
-    # facts, so the document names them open instead of publishing an empty
-    # contract as a complete one.
-    assert (
-        "Not expanded, so the shapes referring to it are open: "
-        "`org/springframework/http/codec/ServerSentEvent#`."
-    ) in document
+    # The per-event payload unwraps through BOTH envelopes (2H design §6's
+    # payload sentence; `rooting.py` peels recursively, so the one
+    # `ServerSentEvent` `wrappers` entry reaches `OrderView` under `Flux`).
+    # `OrderView`'s own two fields are what the row publishes — its
+    # `HttpHeaders` field is third-party, so the shape stays open, which the
+    # fixture's own source comment says outright.
+    assert "| id | string | yes | yes |" in document
+    # And the envelope type is gone from the open-type disclosure entirely:
+    # nothing references it any more, so nothing rooted it.
+    assert "org/springframework/http/codec/ServerSentEvent#" not in document
+    # `/events/emitter` is the half that cannot follow and says so.
+    # `SseEmitter` is a callback handle with no type argument to unwrap, so it
+    # is disclosed open rather than published as an empty contract.
     assert (
         "Not expanded, so the shapes referring to it are open: "
         "`org/springframework/web/servlet/mvc/method/annotation/SseEmitter#`."

@@ -24,6 +24,7 @@ import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.format import resolve_format
+from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -204,6 +205,52 @@ def test_media_answers_a_row_whose_return_type_says_nothing(tmp_path: Path):
     assert answers == {"/stream": TARGET}
 
 
+def test_an_inbound_rows_consumes_is_never_protocol_evidence(tmp_path: Path):
+    """Review fix round 1. `consumes` is the REQUEST-body media, so on an
+    INBOUND row it says what the route ACCEPTS — a handler being HANDED an
+    event stream by its caller, not one streaming anything back. Reclassifying
+    on it would rename the channel after its input.
+
+    This is the one place the pass deliberately diverges from the format
+    ladder's rung 2, which folds both columns into one answer: `format`
+    describes one wire and both columns describe it, while a protocol hint is
+    a claim about what the channel IS.
+
+    `/accepts` declares the envelope in `consumes` and nothing in `produces`,
+    and must not move. `/emits` is the control — the same MIME string in the
+    column that does count."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    _seed(
+        workspace,
+        {"path": "/accepts", "consumes": json.dumps([STREAM_MIME])},
+        {"path": "/emits", "produces": json.dumps([STREAM_MIME])},
+    )
+    apply_protocol_hints(workspace, [_catalog()])
+    answers = _protocols(workspace)
+    workspace.close()
+
+    assert answers == {"/accepts": SOURCE, "/emits": TARGET}
+
+
+def test_a_client_side_rows_consumes_is_protocol_evidence(tmp_path: Path):
+    """The other half of the same rule. On an OUTBOUND row — and on the merged
+    `both` row that carries a caller's own declaration — `consumes` is what the
+    client RECEIVES off the wire, which is exactly the envelope. Both sides
+    count there, so the narrowing above is about direction and not about the
+    column."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    _seed(
+        workspace,
+        {"path": "/calls", "direction": "outbound", "consumes": json.dumps([STREAM_MIME])},
+        {"path": "/merged", "direction": "both", "consumes": json.dumps([STREAM_MIME])},
+    )
+    apply_protocol_hints(workspace, [_catalog()])
+    answers = _protocols(workspace)
+    workspace.close()
+
+    assert answers == {"/calls": TARGET, "/merged": TARGET}
+
+
 # --- the three promises ---------------------------------------------------
 
 
@@ -273,6 +320,45 @@ def _but_protocol(rows: list[dict]) -> list[dict]:
         ({column: value for column, value in row.items() if column != "protocol"} for row in rows),
         key=lambda row: str(row["path"]),
     )
+
+
+def test_a_reclassified_rows_open_questions_move_with_it(tmp_path: Path):
+    """Review fix round 1. `open_questions.protocol` is a SNAPSHOT of a wire
+    identity, not a join into `endpoints` (schema.sql says why: the endpoint
+    table is rebuilt every resolve). The parse-binding pass takes that snapshot
+    BEFORE this one runs, so a reclassified row's `payload_binding` question
+    would keep publishing the old protocol while the endpoint published the
+    new one — one bundle, two tables, two answers about one channel.
+
+    The ledger follows. The untouched row's own question stays put, which is
+    what makes this a match rather than a blanket rewrite."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    _seed(
+        workspace,
+        {"path": "/stream", "produces": json.dumps([STREAM_MIME])},
+        {"path": "/plain"},
+    )
+    record_open_questions(
+        workspace,
+        [
+            {
+                "protocol": SOURCE,
+                "method": "GET",
+                "path": path,
+                "question": "payload_binding",
+                "candidates": "[]",
+                "evidence": "invented",
+            }
+            for path in ("/stream", "/plain")
+        ],
+    )
+    apply_protocol_hints(workspace, [_catalog()])
+    ledger = {row["path"]: row["protocol"] for row in workspace.query("open_questions")}
+    answers = _protocols(workspace)
+    workspace.close()
+
+    assert answers == {"/stream": TARGET, "/plain": SOURCE}
+    assert ledger == answers
 
 
 def test_two_rows_sharing_a_wire_identity_move_independently(tmp_path: Path):

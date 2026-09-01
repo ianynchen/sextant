@@ -61,6 +61,17 @@ wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: reactor.core.publisher.Mono,             payload_arg: 0, semantics: async }
   - { type: reactor.core.publisher.Flux,             payload_arg: 0, semantics: streaming }
+  # 2H Task 6 fix round 1. `ServerSentEvent<T>` is the per-EVENT envelope an
+  # SSE stream carries — `id`/`event`/`retry` metadata wrapped around `data:
+  # T` — so the payload on that wire is `T`, exactly as `ResponseEntity`'s is.
+  # Without this line `Flux<ServerSentEvent<OrderView>>` peeled its outer
+  # `Flux` and then stopped, publishing the envelope TYPE as the contract;
+  # `rooting.py` peels recursively, so one entry is the whole remedy.
+  # `http_envelope`, not `streaming`: the stream is the `Flux` around it, and
+  # `semantics` only ever gates `optional`, so the value is a label for a
+  # reader rather than a branch.
+  - { type: org.springframework.http.codec.ServerSentEvent,
+      payload_arg: 0, semantics: http_envelope }
   - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
   - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
 

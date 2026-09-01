@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,11 @@ def test_catalog_declares_wrappers_nullability_serialization_and_known_types():
             "reactor.core.publisher.Flux",
             "java.util.concurrent.CompletableFuture",
             "java.util.Optional",
+            # 2H Task 6 (fix round 1): `ServerSentEvent<T>` is the per-EVENT
+            # envelope an SSE stream carries, so the payload on that wire is
+            # `T`. Without it `Flux<ServerSentEvent<OrderView>>` peeled its
+            # outer `Flux` and published the envelope TYPE as the contract.
+            "org.springframework.http.codec.ServerSentEvent",
         }
 
         # The JetBrains entries are not redundant with JSpecify/Spring: the
@@ -96,6 +102,38 @@ def test_catalog_declares_wrappers_nullability_serialization_and_known_types():
             "java.math.BigDecimal",
             "java.util.UUID",
         }
+
+
+def test_every_catalog_carrying_the_reactive_wrapper_family_carries_it_verbatim():
+    """The Spring/reactive `wrappers` family is duplicated VERBATIM by
+    contract, and until now nothing enforced it (2H Task 6, fix round 1 — the
+    `ServerSentEvent` entry is the second thing that has to be kept in step
+    across six files).
+
+    `spring-graphql.yml`'s own comment states the stakes: shape expansion is a
+    GLOBAL, insert-if-absent pass keyed on the type symbol alone, so the first
+    catalog to reach a shared payload type is the one that describes it for
+    everyone — and these files are read in filename order. A copy that
+    disagreed would not be a cosmetic difference; it would silently change what
+    the OTHER catalogs' endpoints publish, depending only on which file sorts
+    first.
+
+    Scoped by MEMBERSHIP, not by a filename list: a catalog belongs to this
+    family exactly when it declares the family's own marker entry, so a seventh
+    catalog copying the block in is covered the day it is written. Catalogs
+    with wrappers of their own and no reactive family — `retrofit.yml`'s
+    `Call`, for one — are a different vocabulary and are correctly excluded."""
+    marker = "reactor.core.publisher.Flux"
+    blocks = {}
+    for path in sorted(CATALOGS.glob("*.yml")):
+        declared = yaml.safe_load(path.read_text(encoding="utf-8")).get("wrappers") or []
+        if any(wrapper["type"] == marker for wrapper in declared):
+            blocks[path.name] = declared
+
+    assert len(blocks) > 1, "the pin is vacuous unless more than one catalog carries the family"
+    assert len({json.dumps(block, sort_keys=True) for block in blocks.values()}) == 1, (
+        f"catalogs disagree about the reactive `wrappers` family: {sorted(blocks)}"
+    )
 
 
 def test_catalog_requires_type_annotations_for_nullability():

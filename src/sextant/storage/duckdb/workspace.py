@@ -364,6 +364,7 @@ _NAMED_DERIVATIONS = {
     "stamp_format": "stamp_format.sql",
     "bind_request_shape": "bind_request_shape.sql",
     "reclassify_protocol": "reclassify_protocol.sql",
+    "reclassify_open_questions": "reclassify_open_questions.sql",
     "open_questions_reset": "reset_open_questions.sql",
     "open_questions_insert": "insert_open_questions.sql",
 }

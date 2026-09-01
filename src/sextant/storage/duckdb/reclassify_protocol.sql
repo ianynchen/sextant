@@ -32,6 +32,12 @@
 -- catalog whose target equals its own source, so no row can match its own
 -- rewritten value.
 --
+-- **`reclassify_open_questions.sql` is this statement's other half**, run from
+-- the same call site with the same `$rows`: the 2K ledger snapshots a wire
+-- identity rather than joining to it, so a row that moves here must take its
+-- questions with it. That file states the constraint its narrower key
+-- carries, and why the two are separate files at all.
+--
 -- Parameters:
 --   $rows -- {protocol, direction, method, path, handler, caller,
 --             reclassified}, one per RECLASSIFIED row. `protocol` is the
