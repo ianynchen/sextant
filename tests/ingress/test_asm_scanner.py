@@ -34,6 +34,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     written = sorted(p.name for p in tmp_path.rglob("*.jsonl"))
     assert written == [
         "ApiGet.jsonl",
+        "AuditEvent$Builder.jsonl",
+        "AuditEvent.jsonl",
         "AuditJmsListener.jsonl",
         "BillingClient.jsonl",
         "BillingClients$BillingProperties.jsonl",
@@ -41,6 +43,11 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
         "ClassLevelListener.jsonl",
+        "CommonProtos$Money$1.jsonl",
+        "CommonProtos$Money$Builder.jsonl",
+        "CommonProtos$Money.jsonl",
+        "CommonProtos$MoneyOrBuilder.jsonl",
+        "CommonProtos.jsonl",
         "ComposedController.jsonl",
         "ComposedListener.jsonl",
         "CustomerRef.jsonl",
@@ -62,6 +69,22 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderEvent.jsonl",
         "OrderEventsListener.jsonl",
         "OrderPageController.jsonl",
+        "OrderProtos$OrderReply$1.jsonl",
+        "OrderProtos$OrderReply$Builder.jsonl",
+        "OrderProtos$OrderReply.jsonl",
+        "OrderProtos$OrderReplyOrBuilder.jsonl",
+        "OrderProtos$OrderRequest$1.jsonl",
+        "OrderProtos$OrderRequest$Builder.jsonl",
+        "OrderProtos$OrderRequest$Line$1.jsonl",
+        "OrderProtos$OrderRequest$Line$Builder.jsonl",
+        "OrderProtos$OrderRequest$Line.jsonl",
+        "OrderProtos$OrderRequest$LineOrBuilder.jsonl",
+        "OrderProtos$OrderRequest$Status$1.jsonl",
+        "OrderProtos$OrderRequest$Status.jsonl",
+        "OrderProtos$OrderRequest$TagsDefaultEntryHolder.jsonl",
+        "OrderProtos$OrderRequest.jsonl",
+        "OrderProtos$OrderRequestOrBuilder.jsonl",
+        "OrderProtos.jsonl",
         "OrderRequest.jsonl",
         "OrderResult$Detail.jsonl",
         "OrderResult.jsonl",
@@ -88,7 +111,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]
-    assert report.documents == 54
+    assert report.documents == 77
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -110,6 +133,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
     )
     assert sorted(p.name for p in out.rglob("*.jsonl")) == [
         "ApiGet.jsonl",
+        "AuditEvent$Builder.jsonl",
+        "AuditEvent.jsonl",
         "AuditJmsListener.jsonl",
         "BillingClient.jsonl",
         "BillingClients$BillingProperties.jsonl",
@@ -117,6 +142,11 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
         "ClassLevelListener.jsonl",
+        "CommonProtos$Money$1.jsonl",
+        "CommonProtos$Money$Builder.jsonl",
+        "CommonProtos$Money.jsonl",
+        "CommonProtos$MoneyOrBuilder.jsonl",
+        "CommonProtos.jsonl",
         "ComposedController.jsonl",
         "ComposedListener.jsonl",
         "CustomerRef.jsonl",
@@ -138,6 +168,22 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderEvent.jsonl",
         "OrderEventsListener.jsonl",
         "OrderPageController.jsonl",
+        "OrderProtos$OrderReply$1.jsonl",
+        "OrderProtos$OrderReply$Builder.jsonl",
+        "OrderProtos$OrderReply.jsonl",
+        "OrderProtos$OrderReplyOrBuilder.jsonl",
+        "OrderProtos$OrderRequest$1.jsonl",
+        "OrderProtos$OrderRequest$Builder.jsonl",
+        "OrderProtos$OrderRequest$Line$1.jsonl",
+        "OrderProtos$OrderRequest$Line$Builder.jsonl",
+        "OrderProtos$OrderRequest$Line.jsonl",
+        "OrderProtos$OrderRequest$LineOrBuilder.jsonl",
+        "OrderProtos$OrderRequest$Status$1.jsonl",
+        "OrderProtos$OrderRequest$Status.jsonl",
+        "OrderProtos$OrderRequest$TagsDefaultEntryHolder.jsonl",
+        "OrderProtos$OrderRequest.jsonl",
+        "OrderProtos$OrderRequestOrBuilder.jsonl",
+        "OrderProtos.jsonl",
         "OrderRequest.jsonl",
         "OrderResult$Detail.jsonl",
         "OrderResult.jsonl",
@@ -182,7 +228,10 @@ def test_no_fact_is_written_for_a_compiler_synthesized_field(tmp_path: Path):
         )
     )
     written = "".join(p.read_text(encoding="utf-8") for p in tmp_path.rglob("*.jsonl"))
-    assert "VALUES" not in written
+    # Narrowed to the synthesized `$VALUES` array: protobuf's generated enum
+    # also declares an explicit, non-synthetic `VALUES` field, whose fact is
+    # correct and must not trip this pin.
+    assert "$VALUES" not in written
 
 
 def test_a_nested_class_is_scanned_under_the_outer_sources_path_and_its_own_id(

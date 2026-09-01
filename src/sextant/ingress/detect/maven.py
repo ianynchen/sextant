@@ -13,6 +13,12 @@ _MAIN_CLASS = f"{{{_POM_NS['m']}}}mainClass"
 # the name of that directory is what the build says is compiled there.
 _NON_SOURCE_DIRECTORIES = frozenset({"resources", "webapp", "filters"})
 
+# Schema-source directory names (protobuf-maven-plugin / avro-maven-plugin
+# convention): schema dirs are not languages, so this detector must not
+# report one from them — a later task formalizes them as declared schema
+# roots instead.
+_SCHEMA_DIRECTORIES = frozenset({"proto", "avro"})
+
 _CONTAINER_FILES = (
     "Dockerfile",
     "Containerfile",
@@ -93,7 +99,9 @@ class MavenDetector:
                 (
                     child
                     for child in main.iterdir()
-                    if child.is_dir() and child.name not in _NON_SOURCE_DIRECTORIES
+                    if child.is_dir()
+                    and child.name not in _NON_SOURCE_DIRECTORIES
+                    and child.name not in _SCHEMA_DIRECTORIES
                 ),
                 key=lambda child: child.name,
             )
