@@ -164,6 +164,13 @@ expansion) and SDL types (declared). The rule, replacing the withdrawn
   per URI template, `(websocket, NULL, /ws)`; the `@OnMessage` method is the handler
   symbol (class-level annotation + method role — the 2E class-annotation machinery).
   Frames are untyped: shapes NULL, format `unresolved`, honestly.
+  **Execution amendment (Task 5): only the jakarta spelling is wired.** The Jackson-2/3
+  precedent does not transfer — `json_default_markers` is a LIST, while
+  `mapping.prefix_annotation` is single-valued, and widening it is an engine change this
+  phase's acceptance rule forbids. Naming the javax `@OnMessage` without a matching javax
+  prefix would not fail honestly; it would derive a *wrong* address (an empty prefix on a
+  `resolved` row). The javax artifact stays in `detect.coordinates`, so such a module is
+  still recognised as WebSocket-shaped and derives no endpoint from this catalog.
 - **STOMP**: `@MessageMapping("/order.place")` and `@SubscribeMapping` →
   `(websocket, NULL, <destination>)` — the destination is what a peer addresses.
   Class-level `@MessageMapping` prefixes compose exactly as `@RequestMapping` paths
@@ -179,8 +186,14 @@ expansion) and SDL types (declared). The rule, replacing the withdrawn
   `json (assumed)` is the true reading).
 - **Programmatic registration**: `registerWebSocketHandlers` /
   `.addHandler(handler, "/ws")` as a `single_call`-style catalog entry — literal path
-  argument, handler class from the handler argument; a non-literal path derives
-  unresolved. Existing engine.
+  argument, a non-literal path derives unresolved. Existing engine.
+  **Execution amendment (Task 5): the handler ARGUMENT is not read.**
+  `spring-websocket.yml` declares `channel_arg` and nothing else; `single_call` has no
+  vocabulary for reading a symbol off an argument, so the row's `handler` is what that
+  engine always puts there for an inbound row — the CALLING method, the one whose body
+  made the registration (`registerWebSocketHandlers` itself), never the
+  `WebSocketHandler` class at argument 0. Naming the implementation class would be a new
+  engine capability, not a catalog key.
 
 ## 6. SSE and `protocol_hint` (mechanism 2 of 2)
 

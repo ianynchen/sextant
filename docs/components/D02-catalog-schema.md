@@ -1830,6 +1830,26 @@ Without this, a catalog is an assertion. With it, a catalog is tested — and ad
 framework stays *one YAML file and one fixture, with no engine change and no existing test
 modified*.
 
+**One narrow exception, and it is stated rather than taken quietly (Phase 2H).** A catalog
+whose only surface is a **programmatic registration call** may ship fixture-less, on three
+conditions together: the rows are pinned over synthetic `call_site` facts against the
+**real loaded catalog** (never an invented one, so the shipped file's own arities and
+argument positions are what the test exercises), every assumption the fixture would have
+settled is written down as a limitation, and the boundary is recorded in
+[COVERAGE](../COVERAGE.md) rather than left to the catalog file. The reason is that such a
+fixture is not small: registering a handler programmatically means a configuration class,
+a framework's own registry interface on the compile classpath and a callback body, all to
+pin one literal argument.
+
+`spring-websocket.yml` (`WebSocketHandlerRegistry.addHandler`) is the first instance, and
+it carries the cost the exception implies: its `arity: 2` assumes a single-path call
+compiles to exactly two call-site arguments, which no bytecode has confirmed, and a
+multi-path call matches no row at all. A catalog under this exception is weaker evidence
+than one with a fixture, and the sentence above — "without this, a catalog is an
+assertion" — is exactly what it trades
+against, so the exception is for this one shape and does not generalise to an
+annotation or configuration catalog, where the fixture is cheap.
+
 ---
 
 ## 5. What a catalog must not contain

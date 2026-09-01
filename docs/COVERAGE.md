@@ -191,7 +191,12 @@ join [D00](components/D00-fact-schema.md)'s protocol set, and each gets the wire
 it actually has: a GraphQL FIELD is the endpoint (`graphql query orders`, `graphql
 Order.lines`), a WebSocket destination is verbless like a topic (`websocket
 /orders/place`), and an SSE route keeps its HTTP verb under a new protocol (`sse GET
-/events/stream`). Six catalogs and one SDL reader ship it. The phase delivered the two
+/events/stream`). **Seven catalogs and one SDL reader ship it**: four owning `graphql`
+(`spring-graphql`, `netflix-dgs`, `microprofile-graphql` and the framework-neutral
+`graphql-schema`, which reads the SDL), and three owning `websocket`
+(`jakarta-websocket`, `spring-stomp`, `spring-websocket`). No catalog owns `sse` — a
+`protocol_hint` block on the two existing HTTP catalogs moves rows there instead. The
+phase delivered the two
 mechanisms the roadmap had reserved: **`schema_operations`**, the ninth engine style and
 the first to read a schema file as a statement of operations — a schema-first service with
 no annotation anywhere now derives its roots, at `declared` with a NULL handler — and
@@ -991,10 +996,16 @@ Boundaries, each verified against the shipped code:
 - **`@MessageMapping` and `@SubscribeMapping` on ONE method is unexercised.** Nothing
   refuses it and nothing pins it; the fixture declares each separately.
 - **The programmatic `addHandler` catalog has no live fixture surface.** It is proved over
-  synthetic call facts only. Its `arity: 2` assumes the single-path call form compiles to
-  exactly two call-site arguments, unverified against real bytecode, and a multi-path
+  synthetic call facts against the real shipped file — the first catalog to ship under
+  [D02](components/D02-catalog-schema.md) §4's stated fixture exception for a
+  registration-call-only surface. Its `arity: 2` assumes the single-path call form compiles
+  to exactly two call-site arguments, unverified against real bytecode, and a multi-path
   `.addHandler(h, "/a", "/b")` is a three-argument call the row does not match at all — no
   row rather than a wrong one.
+- **`addHandler`'s `handler` is the REGISTERING method, not the registered class.**
+  `single_call` has no vocabulary for reading a symbol off an argument, so an inbound row's
+  handler is the method whose body made the call (`registerWebSocketHandlers`); the
+  `WebSocketHandler` implementation at argument 0 is not named anywhere on the row.
 
 ### 5.6 Server-Sent Events
 
