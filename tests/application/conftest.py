@@ -7,7 +7,7 @@ from sextant.application.ports.artifacts import ReadRequest, group_files_by_read
 from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve.pipeline import ResolveReport, resolve
 from sextant.cli.resources import catalogs_dir, extractor_jar
-from sextant.domain.factfile import write_fact_file
+from sextant.domain.factfile import config_fact_target, write_fact_file
 from sextant.domain.resource_files import list_files
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.extract.jvm.scanner import AsmScanner
@@ -58,7 +58,7 @@ def resolved_fixture(
             module_id="com.acme:orders-service", version="1.0.0", files=owned, root=root
         )
         for document, config_facts in reader.read(request):
-            target = facts / "config" / Path(document.relative_path).with_suffix(".jsonl")
+            target = config_fact_target(facts, document.relative_path)
             write_fact_file(target, document, config_facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     report = resolve(

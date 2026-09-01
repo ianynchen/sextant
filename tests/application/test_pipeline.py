@@ -11,7 +11,7 @@ from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport, resolve
 from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.domain.closed_sets import OriginTier
-from sextant.domain.factfile import write_fact_file
+from sextant.domain.factfile import config_fact_target, write_fact_file
 from sextant.domain.facts import Document
 from sextant.domain.resource_files import list_files
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
@@ -74,7 +74,7 @@ def _resolved_fixture(
             module_id="com.acme:orders-service", version="1.0.0", files=owned, root=root
         )
         for document, config_facts in reader.read(request):
-            target = facts / "config" / Path(document.relative_path).with_suffix(".jsonl")
+            target = config_fact_target(facts, document.relative_path)
             write_fact_file(target, document, config_facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     report = resolve(
@@ -2204,3 +2204,46 @@ def test_resolve_reports_the_skip_instead_of_crashing_when_no_catalog_is_satisfi
         SkippedCatalog("spring-web", ("annotation_args", "type_annotations"))
         in report.skipped_catalogs
     )
+
+
+def test_config_documents_with_colliding_basenames_both_survive_to_the_workspace(
+    tmp_path: Path,
+):
+    """`application.properties` and `application.yml` — the exact pair
+    spring-web.yml's `config_model.sources` declares side by side, and the
+    most common real Spring layout — must not collide onto one fact-file
+    target. Before `config_fact_target` appended `.jsonl` to the full
+    relative path, `Path(...).with_suffix(".jsonl")` mapped both to
+    `application.jsonl`; whichever document's `write_fact_file` ran second
+    silently discarded the other's document record and every config entry
+    it carried. This mirrors `stages/analyze.py`'s own read loop directly
+    against a synthetic resource root, without the mvn/AsmScanner fixture
+    the other config-read tests here need — cheap coverage for a bug that
+    lives entirely in the read step's own path arithmetic."""
+    root = tmp_path / "resources"
+    root.mkdir()
+    (root / "application.properties").write_text("server.port=8080\n", encoding="utf-8")
+    (root / "application.yml").write_text("server:\n  host: localhost\n", encoding="utf-8")
+
+    facts = tmp_path / "facts"
+    for reader, owned in group_files_by_reader(
+        list_files(root), [PropertiesReader(), YamlConfigReader()]
+    ):
+        request = ReadRequest(
+            module_id="com.acme:orders-service", version="1.0.0", files=owned, root=root
+        )
+        for document, config_facts in reader.read(request):
+            target = config_fact_target(facts, document.relative_path)
+            write_fact_file(target, document, config_facts)
+
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    documents = workspace.query("documents")
+    entries = workspace.query("config_entries")
+    workspace.close()
+
+    assert {d["relative_path"] for d in documents} == {
+        "application.properties",
+        "application.yml",
+    }
+    assert {e["key_raw"] for e in entries} == {"server.port", "server.host"}

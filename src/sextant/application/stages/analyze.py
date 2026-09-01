@@ -9,7 +9,7 @@ from sextant.application.ports.progress import Progress
 from sextant.application.ports.scanner import Scanner, ScanRequest, select_scanner
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.pipeline import ResolveReport, resolve
-from sextant.domain.factfile import write_fact_file
+from sextant.domain.factfile import config_fact_target, write_fact_file
 from sextant.domain.resource_files import list_files
 
 
@@ -76,7 +76,7 @@ def analyze(
                 module_id=module.module_id, version=module.version, files=owned, root=root
             )
             for document, config_facts in reader.read(request):
-                target = fact_root / "config" / Path(document.relative_path).with_suffix(".jsonl")
+                target = config_fact_target(fact_root, document.relative_path)
                 write_fact_file(target, document, config_facts)
                 entries += len(config_facts)
     progress.finish("read", f"{entries} config entries")
