@@ -1,0 +1,116 @@
+id: spring-graphql
+displayName: Spring GraphQL (annotated controllers)
+style: annotation_driven
+protocol: graphql
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework.graphql:spring-graphql"]
+
+requires: [annotation_args, type_annotations]
+
+matches:
+  # `@Controller` — the SAME type-level gate `spring-mvc.yml` declares, and
+  # deliberately so: Spring GraphQL reuses the stereotype rather than minting
+  # one. The two catalogs cannot claim each other's methods, because a gate
+  # only admits a type whose METHODS carry one of that catalog's own mapping
+  # annotations, and the two annotation sets are disjoint.
+  type_annotation: org.springframework.stereotype.Controller
+  # `@Argument` marks a bound field argument; a bare sole parameter is the
+  # fallback, since Spring GraphQL binds one by name without the annotation
+  # (the Feign-flavoured `sole_unannotated` precedent, not the strict
+  # `@RequestBody` one).
+  request_body: { annotation: org.springframework.graphql.data.method.annotation.Argument,
+                  fallback: sole_unannotated }
+  mapping:
+    # CHECKPOINT FACT: `name` and `value` are @AliasFor each other on the
+    # three root-operation annotations, and `field`/`value` are on
+    # `@SchemaMapping`/`@BatchMapping` — so only the one the author typed
+    # reaches the bytecode, first present wins, and one list serves all five.
+    # CHECKPOINT FACT: all of them arrive SCALAR, unlike every Spring HTTP
+    # mapping annotation, whose `value` is a `String[]`. The read is
+    # scalar-or-array either way, so the difference costs nothing here.
+    path_from: [value, name, field]
+    # 2H design §1, form 1. CHECKPOINT FACT: every one of these annotations
+    # declares its name attribute `default ""`, and an annotation's declared
+    # default is NOT written into the class file — so the framework's own
+    # "defaults to the method name" rule arrives as an ABSENT attribute, and
+    # reading it as an empty path published a resolved endpoint addressing
+    # nothing. The fallback is the method's own name, which is what the
+    # schema really calls the field.
+    path_fallback: construct_name
+    # 2H design §1, form 2. `@SchemaMapping`/`@BatchMapping` name a field on
+    # a type OTHER than a root operation, and the type they name sits on the
+    # SAME annotation as the field — so it is read here, not through
+    # `prefix_from`, which reads a TYPE-level annotation through an entirely
+    # different join and could never see a method-level attribute.
+    # `@QueryMapping` and friends carry no `typeName`, so the qualifier is
+    # absent for them and composes nothing.
+    qualifier_from: [typeName]
+    # `Type.field` is GraphQL's own spelling of a non-root field, and it is
+    # this file that knows that — never the engine.
+    qualifier_separator: "."
+    prefix_from: []
+    peer_from: []
+    method_from: method
+    # Verbless by default (the `all_methods: []` precedent the listener
+    # catalogs set): a GraphQL operation declares no HTTP-style verb, and the
+    # three root annotations pre-set their own operation type below. A
+    # `@SchemaMapping`/`@BatchMapping` row pre-sets none and stays NULL —
+    # D01's identity for a non-root resolver is `Type.field` alone.
+    all_methods: []
+    prefix_annotation: null
+    annotations:
+      - { fqn: org.springframework.graphql.data.method.annotation.QueryMapping,        method: [query] }
+      - { fqn: org.springframework.graphql.data.method.annotation.MutationMapping,     method: [mutation] }
+      - { fqn: org.springframework.graphql.data.method.annotation.SubscriptionMapping, method: [subscription] }
+      # Non-root resolvers. `@BatchMapping`'s `Map<K, V>`/`Flux` return is a
+      # BATCHING detail, never part of the wire identity (2H design §1): the
+      # schema field it implements returns the value type, and the map is how
+      # one call answers many parents.
+      - { fqn: org.springframework.graphql.data.method.annotation.SchemaMapping }
+      - { fqn: org.springframework.graphql.data.method.annotation.BatchMapping }
+
+# 2G design §7, rung 1: GraphQL's wire is JSON by definition — the transport
+# is negotiable but the payload envelope is not — so the format is a property
+# of the protocol rather than of anything a handler declares. Every catalog
+# owning this protocol carries the identical entry; the ladder refuses a
+# contradiction between two catalogs rather than picking one, so the three
+# copies cannot drift silently.
+format_fixed:
+  graphql: json
+
+# Copied verbatim from spring-web.yml, for the reason spring-kafka.yml states
+# at length: shape expansion is a GLOBAL, insert-if-absent pass keyed on the
+# type symbol alone, so the first catalog to reach a shared payload type is
+# the one that describes it for everyone. These three GraphQL files sort
+# BEFORE every `spring-*.yml` by filename, so they genuinely do reach
+# `OrderView` first — a copy that disagreed would not be a cosmetic
+# difference, it would silently change what the HTTP endpoints publish.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: reactor.core.publisher.Mono,             payload_arg: 0, semantics: async }
+  - { type: reactor.core.publisher.Flux,             payload_arg: 0, semantics: streaming }
+  - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.time.LocalDate,  wire: string, format: date }
+  - { type: java.math.BigDecimal, wire: number }
+  - { type: java.util.UUID,       wire: string, format: uuid }

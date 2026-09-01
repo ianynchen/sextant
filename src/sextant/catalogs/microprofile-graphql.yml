@@ -1,0 +1,72 @@
+id: microprofile-graphql
+displayName: MicroProfile GraphQL
+style: annotation_driven
+protocol: graphql
+direction: inbound
+
+detect:
+  coordinates: ["org.eclipse.microprofile.graphql:microprofile-graphql-api"]
+
+requires: [annotation_args, type_annotations]
+
+matches:
+  type_annotation: org.eclipse.microprofile.graphql.GraphQLApi
+  request_body: { annotation: org.eclipse.microprofile.graphql.Name,
+                  fallback: sole_unannotated }
+  mapping:
+    # CHECKPOINT FACT: `@Query` and `@Mutation` declare exactly one attribute
+    # each, `value()`, and it arrives SCALAR.
+    path_from: [value]
+    # CHECKPOINT FACT: `@Query.value()` is declared `default ""` and the
+    # default never reaches the class file — the third framework with the
+    # identical shape, which is why the form is engine vocabulary rather than
+    # three catalog workarounds. Rides `spring-graphql.yml`'s form with no
+    # engine change of its own (2H design §1's amended acceptance test).
+    path_fallback: construct_name
+    # No qualifier: MicroProfile's non-root resolver is `@Source` on a
+    # PARAMETER, which names the parent type through the parameter's own type
+    # rather than through an attribute on the operation annotation. That is a
+    # genuinely different declaration shape from Spring's `typeName` and
+    # DGS's `parentType`, and neither this vocabulary nor any other shipped
+    # form reads it — so `@Source` resolvers derive nothing here rather than
+    # deriving something wrong. Recorded in COVERAGE by Task 7.
+    prefix_from: []
+    peer_from: []
+    method_from: method
+    all_methods: []
+    prefix_annotation: null
+    annotations:
+      - { fqn: org.eclipse.microprofile.graphql.Query,    method: [query] }
+      - { fqn: org.eclipse.microprofile.graphql.Mutation, method: [mutation] }
+
+format_fixed:
+  graphql: json
+
+# Copied verbatim from spring-graphql.yml — see the block comment there.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: reactor.core.publisher.Mono,             payload_arg: 0, semantics: async }
+  - { type: reactor.core.publisher.Flux,             payload_arg: 0, semantics: streaming }
+  - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.time.LocalDate,  wire: string, format: date }
+  - { type: java.math.BigDecimal, wire: number }
+  - { type: java.util.UUID,       wire: string, format: uuid }

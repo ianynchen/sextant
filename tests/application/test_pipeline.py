@@ -441,6 +441,39 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # with anything else in the fixture.
         ("GET", "/events/emitter"),
         ("GET", "/events/stream"),
+        # 2H Task 2: the GraphQL surface — eight rows across three catalogs
+        # and one engine, and the `method` column carries the OPERATION TYPE
+        # rather than an HTTP verb (D01 identity `(graphql, query|mutation|
+        # subscription, <field>)` for a root operation, `(graphql, NULL,
+        # Type.field)` for a resolver). No graphql path collides with an HTTP
+        # one, so the set still tells every row apart.
+        #
+        # `orderById` is the explicit-value case; `orders`, `placeOrder` and
+        # `orderUpdates` are the DEFAULTED case, and they are the whole reason
+        # `path_fallback: construct_name` exists — all three declare their
+        # name attribute `default ""`, which never reaches the class file, so
+        # before the form they derived `path: ''` at `resolved` (four wrong
+        # rows, checkpoint answer 1). The empty-path regression below pins
+        # that they cannot come back.
+        ("query", "orderById"),
+        ("query", "orders"),
+        ("mutation", "placeOrder"),
+        ("subscription", "orderUpdates"),
+        # The non-root resolvers, composed from two attributes on ONE
+        # method-level annotation: `@SchemaMapping(typeName = "Order", field =
+        # "lines")` spells both halves, `@BatchMapping(typeName = "Order")`
+        # spells only the first and takes `totals` from the method name — the
+        # two forms composing, which is what makes them one mechanism rather
+        # than two special cases. Verbless: a resolver is not a root
+        # operation, so `method` is NULL.
+        (None, "Order.lines"),
+        (None, "Order.totals"),
+        # The amended acceptance test (2H design §1): these two rows come from
+        # `netflix-dgs.yml` and `microprofile-graphql.yml`, which ride the two
+        # forms `spring-graphql.yml` introduced with ZERO further engine
+        # change. Asserted explicitly, by catalog, below.
+        ("query", "dgsOrders"),
+        ("query", "mpOrders"),
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -608,7 +641,15 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # `/events/stream`, the only new rows the GraphQL/WebSocket/STOMP/SSE
     # fixture surfaces produce — the rest derive nothing under the shipped
     # engines. Neither merges with anything. 97 + 2 = 99.
-    assert len(report.endpoints) == 99
+    #
+    # 2H Task 2 adds 8: the whole GraphQL surface, one row per mapped method
+    # across three catalogs — 6 from `spring-graphql.yml`
+    # (`orderById`/`orders`/`placeOrder`/`orderUpdates` root operations plus
+    # the `Order.lines`/`Order.totals` resolvers), 1 from `netflix-dgs.yml`,
+    # 1 from `microprofile-graphql.yml`. No two share a wire identity and none
+    # collides with an HTTP or messaging row, so all 8 are new rows and none
+    # of the existing 99 identities moves. 99 + 8 = 107.
+    assert len(report.endpoints) == 107
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
@@ -738,6 +779,137 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     assert all(
         (row["consumes"], row["produces"]) == (None, None) for row in combinator_rows.values()
     )
+
+
+# --- 2H Task 2: the GraphQL surface, live on real bytecode ---------------
+#
+# Pinned from the live run this task froze: 107 endpoints, extractor 9.9.
+
+
+def _graphql_rows(report: ResolveReport) -> dict[tuple[str | None, str | None], dict]:
+    """The graphql rows keyed by their D01 wire identity — `(method, path)`,
+    where `method` is the OPERATION TYPE for a root operation and NULL for a
+    resolver. One row per key: no two GraphQL declarations in the fixture
+    share an identity."""
+    rows = [e for e in report.endpoints if e["protocol"] == "graphql"]
+    keyed = {(e["method"], e["path"]): e for e in rows}
+    assert len(keyed) == len(rows), "two graphql rows shared one wire identity"
+    return keyed
+
+
+def test_the_graphql_surface_derives_its_eight_operations(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """2H design §1, live: three catalogs, one `annotation_driven` engine,
+    eight rows — every one `resolved`/`compiler`, and each attributed to the
+    catalog that derived it.
+
+    The four root operations show both halves of form 1: `orderById` names its
+    field explicitly, while `orders`, `placeOrder` and `orderUpdates` name
+    nothing and take the method's own name. The two resolvers show form 2:
+    `Order.lines` composes two attributes spelled on one annotation,
+    `Order.totals` composes the first with form 1's fallback for the second —
+    which is the point of writing them as two composable forms rather than one
+    GraphQL-shaped rule.
+    """
+    _, report = resolved_fixture
+    rows = _graphql_rows(report)
+
+    assert set(rows) == {
+        ("query", "orderById"),
+        ("query", "orders"),
+        ("mutation", "placeOrder"),
+        ("subscription", "orderUpdates"),
+        (None, "Order.lines"),
+        (None, "Order.totals"),
+        ("query", "dgsOrders"),
+        ("query", "mpOrders"),
+    }
+    for row in rows.values():
+        assert (row["direction"], row["resolution"], row["evidence"]) == (
+            "inbound",
+            "resolved",
+            "compiler",
+        )
+        # A GraphQL operation is served by code in this module, never called
+        # by it, so every row names a handler and no row names a caller.
+        assert row["handler"] is not None
+        assert row["caller"] is None
+
+    handlers = {key: row["handler"] for key, row in rows.items()}
+    assert handlers[("query", "orderById")].endswith("OrderGraphqlController#byId(sig_079d928d).")
+    assert handlers[("query", "orders")].endswith("OrderGraphqlController#orders(sig_3f061508).")
+    assert handlers[("mutation", "placeOrder")].endswith(
+        "OrderGraphqlController#placeOrder(sig_079d928d)."
+    )
+    assert handlers[("subscription", "orderUpdates")].endswith(
+        "OrderGraphqlController#orderUpdates(sig_ed469b30)."
+    )
+    assert handlers[(None, "Order.lines")].endswith(
+        "OrderGraphqlController#orderLines(sig_f5672381)."
+    )
+    assert handlers[(None, "Order.totals")].endswith("OrderGraphqlController#totals(sig_5ed41d1a).")
+    assert handlers[("query", "dgsOrders")].endswith("DgsOrderFetcher#dgsOrders(sig_3f061508).")
+    assert handlers[("query", "mpOrders")].endswith("MpOrderApi#mpOrders(sig_3f061508).")
+
+
+def test_dgs_and_microprofile_ride_the_shared_vocabulary_with_no_rules_of_their_own(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """2H design §1's AMENDED acceptance test.
+
+    The original claim — three catalogs on an unchanged engine — was falsified
+    by this task's checkpoint: all three frameworks default their field-name
+    attribute to `""`, which never reaches the class file, so an absent value
+    derived `path: ''`. The ruling moved the zero-change proof to where it is
+    meaningful: `spring-graphql.yml` motivated two framework-neutral forms,
+    and DGS and MicroProfile must then be pure YAML.
+
+    That is what `catalog_id` pins here. Both rows carry a `path` that exists
+    ONLY because `path_fallback`/`qualifier_from` are engine vocabulary rather
+    than three hand-rolled special cases — `@DgsQuery.field()` and
+    `@Query.value()` are declared `default ""` exactly like Spring's `name()`
+    — and neither catalog contributed a line of Python or SQL to get it.
+    """
+    _, report = resolved_fixture
+    rows = _graphql_rows(report)
+
+    assert rows[("query", "dgsOrders")]["catalog_id"] == "netflix-dgs"
+    assert rows[("query", "mpOrders")]["catalog_id"] == "microprofile-graphql"
+    assert {
+        rows[key]["catalog_id"]
+        for key in rows
+        if key not in {("query", "dgsOrders"), ("query", "mpOrders")}
+    } == {"spring-graphql"}
+
+
+def test_an_absent_annotation_attribute_never_derives_an_empty_path(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """The regression this task's two forms exist to make impossible.
+
+    An empty `path` is not a small error. The row is still `resolved` with
+    `compiler` evidence, so it publishes an endpoint that confidently
+    addresses nothing, and D01 identity is `(protocol, direction, method,
+    path)` — so several such rows collide with each other as well as being
+    individually wrong. D02 §2 already names this failure mode for
+    `path_from` ("wrong output rather than a missing one"); an unread default
+    reached it by a second route.
+
+    Framework-neutral and whole-table on purpose, rather than scoped to the
+    graphql rows: no catalog shipped today has any business deriving an
+    empty address, so the invariant is the pin. Verified to hold BEFORE this
+    task as well — the four bad rows appeared only under a candidate
+    `spring-graphql.yml` written without the forms, never under a shipped
+    catalog — which is what makes it a regression pin and not a new rule.
+    """
+    _, report = resolved_fixture
+
+    assert [
+        (e["protocol"], e["method"], e["path"], e["catalog_id"])
+        for e in report.endpoints
+        if e["path"] == ""
+    ] == []
 
 
 # --- Task 10: the three listener catalogs, end to end, on real bytecode ---
@@ -1880,6 +2052,22 @@ def test_the_format_ladder_answers_every_live_row(
     assert all(
         (e["format"] is None) == (e["format_resolution"] == "unresolved") for e in report.endpoints
     )
+
+    # Rung 1 — FIRST LIVE SURFACE (2H Task 2). The mechanism shipped in 2G
+    # with no catalog owning a fixed-format protocol, so it had never fired
+    # outside a unit test; the three GraphQL catalogs each declare
+    # `format_fixed: {graphql: json}` and every graphql row is answered by it.
+    # `resolved`, not `narrowed`: GraphQL's payload envelope is JSON by
+    # definition, so this is the protocol stating its own wire, not a
+    # framework default being assumed.
+    #
+    # Three catalogs declare the identical entry and the ladder unions them —
+    # a contradiction between two would be refused rather than resolved, which
+    # is what keeps the three copies from drifting silently.
+    assert {answer for key, answer in answers.items() if key[0] == "graphql"} == {
+        ("json", "resolved")
+    }
+    assert len([e for e in report.endpoints if e["protocol"] == "graphql"]) == 8
 
     # Rung 2 — the only three HTTP routes whose mapping annotations declare a
     # media type at all.

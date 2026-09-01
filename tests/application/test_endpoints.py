@@ -131,6 +131,54 @@ def test_catalog_leaves_request_mapping_without_a_preset_method():
     assert "method" not in request_mapping
 
 
+def test_every_graphql_catalog_declares_the_protocols_fixed_format():
+    """2G design §7, rung 1, owned by the catalogs that declare the protocol.
+
+    All THREE declare it, not one: the ladder unions the blocks across
+    catalogs, so a module pulling in only DGS must still get the answer. The
+    entries are identical by construction and a contradiction between two
+    would be refused rather than resolved, which is what keeps three copies
+    from drifting silently — the same rule `media_formats` already lives
+    under on `spring-web.yml`/`spring-mvc.yml`."""
+    catalogs = YamlCatalogSource(CATALOGS).load()
+    graphql = [c for c in catalogs if c.protocol == "graphql"]
+
+    assert {c.id for c in graphql} == {"spring-graphql", "netflix-dgs", "microprofile-graphql"}
+    assert all(c.format_fixed == {"graphql": "json"} for c in graphql)
+    assert all(c.style == "annotation_driven" for c in graphql)
+    assert all(c.direction == "inbound" for c in graphql)
+
+
+def test_only_spring_graphql_needed_the_qualifier_form():
+    """2H design §1's amended acceptance test, read off the catalogs
+    themselves rather than off the derived rows.
+
+    MicroProfile's non-root resolver is `@Source` on a PARAMETER — a
+    genuinely different declaration shape that no shipped form reads — so it
+    declares no qualifier and derives no resolver rows, which is silence
+    rather than a wrong answer. DGS spells its scope on the operation
+    annotation exactly as Spring does, so it rides the same form with a
+    different attribute name and no engine change at all."""
+    catalogs = {c.id: c for c in YamlCatalogSource(CATALOGS).load()}
+    qualifiers = {
+        catalog_id: catalogs[catalog_id].matches["mapping"].get("qualifier_from")
+        for catalog_id in ("spring-graphql", "netflix-dgs", "microprofile-graphql")
+    }
+
+    assert qualifiers == {
+        "spring-graphql": ["typeName"],
+        "netflix-dgs": ["parentType"],
+        "microprofile-graphql": None,
+    }
+    # All three share form 1 — every one of the three frameworks defaults its
+    # name attribute to the method name (checkpoint answers 1, 2, 3), which is
+    # what made it engine vocabulary instead of three catalog workarounds.
+    assert all(
+        catalogs[catalog_id].matches["mapping"]["path_fallback"] == "construct_name"
+        for catalog_id in qualifiers
+    )
+
+
 def _controller_facts(root: Path) -> None:
     """Mirrors the exact shape the ASM extractor emits for a Spring
     controller (verified against fixtures/orders-service): a type-level
