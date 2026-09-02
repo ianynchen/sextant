@@ -730,6 +730,50 @@ def test_a_qualifier_with_no_separator_is_refused_by_file(tmp_path: Path):
     assert "invented-naming.yml" in str(raised.value)
 
 
+@pytest.mark.parametrize(
+    "separator",
+    [
+        # A YAML integer: truthy, so it passed the old `if not separator`
+        # check outright — nothing downstream of that ever looked at its
+        # type or length.
+        5,
+        # A YAML boolean: also truthy, same gap.
+        True,
+        # An explicitly empty string. Passes an `is None` check but is
+        # falsy, so this one was already refused before this change — kept
+        # here so the whole vocabulary of wrong shapes is pinned by one
+        # parametrize rather than split across two tests.
+        "",
+        # Two characters: `qualifier_separator` composes with `||`, a single
+        # piece of punctuation between a scope and the name it qualifies —
+        # not a set of characters to dedupe, so nothing here would even
+        # partially compensate for the extra character the way `path_separator`'s
+        # `rtrim`/`ltrim` does.
+        "..",
+    ],
+)
+def test_a_non_single_character_qualifier_separator_is_refused_by_type_and_length(
+    tmp_path: Path, separator: object
+):
+    """`qualifier_separator` must be a STRING of exactly one character, the
+    same contract `path_separator` is held to. A truthy but wrong-typed
+    value (an int, a bool) used to pass the bare `if not separator` check
+    with nothing checking its shape; a multi-character string was never
+    checked at all."""
+    with pytest.raises(CatalogError) as raised:
+        _paths_of(
+            tmp_path,
+            _naming_forms_catalog(
+                path_fallback="construct_name",
+                qualifier_from=["scope"],
+                qualifier_separator=separator,
+            ),
+        )
+
+    assert "qualifier_separator" in str(raised.value)
+    assert "invented-naming.yml" in str(raised.value)
+
+
 # --- The prefix seam: `mapping.path_separator` ----------------------------
 #
 # Deliberately NOT Spring, for the reason the naming forms above are not
@@ -844,6 +888,13 @@ def _seam_path(tmp_path: Path, catalog: Catalog, prefix: str, suffix: str) -> st
         # concatenation published `//chatclient`.
         ("/", "/chatclient", "/chatclient"),
         ("/", "chatclient", "/chatclient"),
+        # BOTH halves spell it at once — a prefix with a trailing slash AND a
+        # suffix with a leading one, unlike the two-arg case above where only
+        # one side ever carries it. `rtrim`/`ltrim` each strip their own side
+        # independently, so composing them still dedupes to exactly one
+        # separator at the seam rather than the two either half would leave
+        # if the other's trim were skipped.
+        ("/api/x/", "/y", "/api/x/y"),
     ],
 )
 def test_a_declared_separator_joins_the_two_halves_of_a_seam_with_exactly_one(
@@ -889,6 +940,44 @@ def test_a_multi_character_separator_is_refused_by_file(tmp_path: Path):
     same edge check `qualifier_separator` gets, for the same reason."""
     with pytest.raises(CatalogError) as raised:
         _seam_path(tmp_path, _seam_catalog(path_separator="::"), "/a", "/b")
+
+    assert "path_separator" in str(raised.value)
+    assert "invented-seam.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "separator",
+    [
+        # A YAML integer: the check used to be `len(str(separator)) != 1`,
+        # which coerces `5` to the string `"5"` and passes — silently joining
+        # paths with a digit nobody wrote.
+        5,
+        # A YAML boolean: `len(str(True))` is `len("True")`, which the old
+        # check refused only by accident (length 4, not 1); `False` would
+        # have coerced to `"False"` the same way.
+        True,
+        # An explicitly empty string. `path_separator` states what joins a
+        # TYPE-level prefix to the address it prefixes — an empty value
+        # contradicts that purpose, since there is nothing left to declare.
+        # Omitting the key entirely is the supported way to say "no
+        # separator, bare concatenation" — `spring-kafka.yml` does exactly
+        # that for its topic prefix, which has no segments to join.
+        "",
+        # Two characters: `rtrim`/`ltrim` trim a SET of characters, so this
+        # would strip each character individually rather than the pair.
+        "::",
+    ],
+)
+def test_a_non_single_character_path_separator_is_refused_by_type_and_length(
+    tmp_path: Path, separator: object
+):
+    """`path_separator` must be a STRING of exactly one character — not
+    merely something whose `str()` has length one. A wrong-typed or
+    wrong-length value would compose an address the framework does not
+    serve, published at `resolved`/`compiler` where nothing downstream can
+    tell it from something observed."""
+    with pytest.raises(CatalogError) as raised:
+        _seam_path(tmp_path, _seam_catalog(path_separator=separator), "/a", "/b")
 
     assert "path_separator" in str(raised.value)
     assert "invented-seam.yml" in str(raised.value)
