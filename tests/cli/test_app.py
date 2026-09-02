@@ -338,3 +338,33 @@ def test_analyze_reports_nothing_uncovered_now_that_the_nested_class_is_read(tmp
     )
     document = (tmp_path / "render" / "architecture.md").read_text()
     assert "Not read" not in document.split("## Known gaps", 1)[1]
+
+
+def test_a_malformed_sextant_yml_is_reported_as_a_message_not_a_stack_trace(tmp_path: Path):
+    """A `.sextant.yml` Sextant refuses is a mistake in the analysed
+    repository, and the analysed repository belongs to the person running the
+    command — so it reaches them as the CLI's own error, the same way "no
+    analysis found" does. A traceback here would report a user's typo as a
+    crash in the tool, and the message that says which key is wrong would be
+    buried in it.
+
+    Written into a COPY of the fixture, never the fixture itself: this suite's
+    other tests read that directory and a stray config file would follow them
+    around."""
+    module = tmp_path / "module"
+    module.mkdir()
+    (module / "pom.xml").write_text(
+        (FIXTURE / "pom.xml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (module / ".sextant.yml").write_text(
+        "extract_libaries: [com.example:orders-soap-client]\n", encoding="utf-8"
+    )
+
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(module), "--workspace", str(tmp_path / "ws")]
+    )
+
+    assert result.exit_code == 1
+    assert "extract_libaries" in result.output
+    assert "extract_libraries" in result.output
+    assert "Traceback" not in result.output

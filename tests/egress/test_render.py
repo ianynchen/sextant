@@ -837,3 +837,98 @@ def test_metadata_names_every_library_that_resolved_to_nothing(tmp_path: Path):
     write_metadata(tmp_path / "metadata.json", module, REPORT, "asm", "9.7", "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["libraries_not_resolved"] == ["com.example:missing-client"]
+
+
+_LIBRARY_CALLER = (
+    "s maven com.example/orders-soap-client 1 com/example/billing/BillingPort#charge()."
+)
+
+
+def test_a_both_row_this_module_handles_is_locally_declared_and_carries_no_attribution():
+    """RULED. A merged `both` row keeps the HANDLER's declaration and carries
+    the caller onto it (D02 §3) — so a path this module serves is locally
+    declared even when the client that calls it came out of a jar. Attributing
+    it to the library would hand this module's own endpoint to a dependency,
+    which is the opposite of what the marking exists to say. The attribution
+    keys on the surviving evidence, and the handler is it."""
+    row = {
+        **_LIBRARY_ROW,
+        "direction": "both",
+        "handler": "s maven com.acme/orders-service 1 com/acme/O#serve().",
+        "caller": _LIBRARY_CALLER,
+    }
+    text = render_module_document(
+        MODULE, _report_with(row), "a3f91c", library_symbols=_LIBRARY_SYMBOLS
+    )
+    assert "Via:" not in text
+
+
+def test_a_both_row_with_no_handler_still_names_the_library_that_derived_it():
+    """The other side of the same rule, so it is a rule and not a filter that
+    happens to say no: with no handler there IS no local declaration, and the
+    caller becomes the deriving side."""
+    row = {**_LIBRARY_ROW, "direction": "both", "handler": None, "caller": _LIBRARY_CALLER}
+    text = render_module_document(
+        MODULE, _report_with(row), "a3f91c", library_symbols=_LIBRARY_SYMBOLS
+    )
+    assert text.count("  - Via: `com.example:orders-soap-client`") == 1
+
+
+def test_an_attribution_is_stated_once_per_identity_not_once_per_section():
+    """A `both` row is listed in BOTH endpoint tables — it is one wire this
+    module exposes and calls — so an attribution written under the inbound
+    table must not be written again under the outbound one. The same finding
+    twice reads as two."""
+    row = {**_LIBRARY_ROW, "direction": "both", "handler": None, "caller": _LIBRARY_CALLER}
+    text = render_module_document(
+        MODULE, _report_with(row), "a3f91c", library_symbols=_LIBRARY_SYMBOLS
+    )
+    assert text.count("- `soap {http://billing.example.com/ws}stubCharge`") == 1
+
+
+def test_a_library_that_could_not_be_scanned_is_named_beside_one_that_did_not_resolve():
+    """Two lists, because they fail at two stages and are closed by two
+    different actions: nothing resolved the coordinate to an archive (declare
+    it, pin the version, install it) versus the archive was found and could not
+    be read (it is corrupt). One list would leave a reader to work out which
+    from the reason text alone.
+
+    The reason renders as prose beside the coordinate rather than inside the
+    backticks: typesetting a sentence as an identifier is how a document
+    teaches its reader to skip it."""
+    module = replace(
+        MODULE,
+        libraries_not_resolved=(
+            "com.example:missing: this module's pom.xml declares no such dependency",
+        ),
+    )
+    text = render_module_document(
+        module,
+        REPORT,
+        "a3f91c",
+        libraries_not_scanned=("com.example:broken: extractor failed: bad magic",),
+    )
+    assert (
+        "- Not resolved, so nothing above accounts for it: library `com.example:missing` "
+        "— this module's pom.xml declares no such dependency." in text
+    )
+    assert (
+        "- Not scanned, so nothing above accounts for it: library `com.example:broken` "
+        "— extractor failed: bad magic." in text
+    )
+
+
+def test_metadata_keeps_the_two_library_gap_lists_apart(tmp_path: Path):
+    module = replace(MODULE, libraries_not_resolved=("com.example:missing: no such dependency",))
+    write_metadata(
+        tmp_path / "metadata.json",
+        module,
+        REPORT,
+        "asm",
+        "9.7",
+        "a3f91c",
+        libraries_not_scanned=("com.example:broken: unreadable",),
+    )
+    written = json.loads((tmp_path / "metadata.json").read_text())
+    assert written["libraries_not_resolved"] == ["com.example:missing: no such dependency"]
+    assert written["libraries_not_scanned"] == ["com.example:broken: unreadable"]

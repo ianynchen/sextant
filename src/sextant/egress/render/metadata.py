@@ -45,6 +45,7 @@ def write_metadata(
     resolved_config: Sequence[dict[str, object]] = (),
     schema_sources_not_compiled: tuple[str, ...] = (),
     descriptors_not_interpreted: tuple[str, ...] = (),
+    libraries_not_scanned: tuple[str, ...] = (),
 ) -> None:
     """Written as the final act of analyze (D05 §3), so it exists whenever the
     workspace does and always describes the graph beside it."""
@@ -91,12 +92,18 @@ def write_metadata(
         # interpreter could not turn into a shape can be acted on by name.
         "schema_sources_not_compiled": list(schema_sources_not_compiled),
         "descriptors_not_interpreted": list(descriptors_not_interpreted),
-        # The libraries `.sextant.yml` asked for that resolved to no archive
-        # (2I design §5), named the same way and for the same FR-17 reason: a
-        # coordinate nobody could find is the difference between "this module
-        # calls nothing through that library" and "nobody looked", and only
-        # the name says which dependency to build or install to close it.
+        # The libraries `.sextant.yml` asked for that never became facts (2I
+        # design §5), named the same way and for the same FR-17 reason: a
+        # library nobody could read is the difference between "this module
+        # calls nothing through it" and "nobody looked", and only the name and
+        # the reason say what to do about it.
+        #
+        # Two lists, because they fail at two stages and are closed by two
+        # different actions: `_resolved` is the detector finding no archive
+        # (declare the dependency, pin the version, install it), `_scanned` is
+        # the scanner failing on an archive it did find (the file is corrupt).
         "libraries_not_resolved": list(module.libraries_not_resolved),
+        "libraries_not_scanned": list(libraries_not_scanned),
         "endpoints": {"inbound": inbound, "outbound": outbound},
         # The count says how much was expanded; the list says what was not, by
         # name. Both, because a reader who only knows how many shapes exist

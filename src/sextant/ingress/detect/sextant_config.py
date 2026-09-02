@@ -6,6 +6,12 @@ module asks to have extracted alongside its own output. Naming a library here
 is the whole opt-in — a module with no file, or a file naming none, produces
 exactly the facts it produced before library extraction existed.
 
+A coordinate is `groupId:artifactId`, or `groupId:artifactId:version`. The two-part
+form defers to the build for the version, which is where it belongs when the build
+states it. The three-part form is the author's OWN assertion of which release to
+read, and it is the escape hatch for the case the two-part form cannot reach: a
+version managed by a parent POM or a BOM, which the detector does not resolve.
+
 **Every malformed shape is refused, loudly.** This is the DR-6 exemption: DR-6's
 refusal-to-guess is about evidence read from a codebase Sextant does not own,
 where a silent absence is the honest answer. A `.sextant.yml` is not evidence —
@@ -26,12 +32,14 @@ CONFIG_FILE = ".sextant.yml"
 # than being ignored — see the module docstring.
 _KEYS = frozenset({"extract_libraries"})
 
-# `groupId:artifactId`, over Maven's own identifier charset. Each half becomes
-# a directory under `facts/lib/`, so the grammar is what makes that mapping
-# both injective (neither half may carry the `:` the two are joined by, nor a
-# path separator) and safe (neither may be `.` or `..` — a leading dot is
-# refused outright, which no real Maven identifier has).
-_COORDINATE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*:[A-Za-z0-9_-][A-Za-z0-9_.-]*")
+# `groupId:artifactId`, optionally `:version`, over Maven's own identifier
+# charset. Each segment becomes a directory — under `facts/lib/`, or in the
+# local repository's own layout — so the grammar is what makes those mappings
+# both injective (no segment may carry the `:` they are joined by, nor a path
+# separator) and safe (no segment may be `.` or `..` — a leading dot is refused
+# outright, which no real Maven identifier has).
+_SEGMENT = r"[A-Za-z0-9_-][A-Za-z0-9_.-]*"
+_COORDINATE = re.compile(rf"{_SEGMENT}:{_SEGMENT}(:{_SEGMENT})?")
 
 
 class SextantConfigError(ValueError):
@@ -47,7 +55,7 @@ def read_extract_libraries(module_root: Path) -> tuple[str, ...]:
     the ordinary case, and the only absence this function treats as an answer.
     Raises `SextantConfigError` for anything else: unparseable YAML, a root
     that is not a mapping, an unknown key, a non-list value, a non-string
-    entry, or an entry that is not a `groupId:artifactId` coordinate.
+    entry, or an entry that is not a `groupId:artifactId[:version]` coordinate.
     """
     path = module_root / CONFIG_FILE
     if not path.is_file():
@@ -77,6 +85,7 @@ def read_extract_libraries(module_root: Path) -> tuple[str, ...]:
     for entry in declared:
         if not isinstance(entry, str) or not _COORDINATE.fullmatch(entry):
             raise SextantConfigError(
-                f"{path}: `{entry!r}` is not a `groupId:artifactId` coordinate"
+                f"{path}: {entry!r} is not a `groupId:artifactId` or "
+                f"`groupId:artifactId:version` coordinate"
             )
     return tuple(declared)

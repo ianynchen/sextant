@@ -96,11 +96,22 @@ everything reachable would publish every framework's own annotated types as this
 endpoints. A module with no `.sextant.yml` produces exactly the facts it produced before
 this mechanism existed, byte for byte.
 
-Each coordinate is `groupId:artifactId` — no version, because the version is not the
-author's to restate: it comes from the module's own build, which is the only place that
-says which release this module compiles against. [M02](M02-detector.md) resolves the pair
-to an archive in the local repository. A coordinate that resolves to nothing is **named**,
-in `metadata.json` and in the document's gaps list, never silently skipped.
+Each coordinate is `groupId:artifactId`, which defers to the build for the version — the
+only place that says which release this module compiles against — or
+`groupId:artifactId:version`, which is the author's **own** assertion of the release to
+read. The three-part form exists because the two-part one cannot reach every dependency:
+a version managed by a parent POM or a BOM is not one [M02](M02-detector.md) resolves, and
+pinning it here asks the build nothing. Either way the library is *known* by its
+`groupId:artifactId`, so the fact subtree and the rendered attribution do not change shape
+when a version is pinned.
+
+M02 resolves the coordinate to an archive in the local repository. A coordinate that
+resolves to nothing, and an archive that resolves but cannot be read, are both **named**
+with their reason — in `metadata.json` and in the document's gaps list, never silently
+skipped. They are two lists, not one: the first is closed by declaring, pinning or
+installing the dependency, the second by replacing a corrupt archive, and a reader should
+not have to work out which from prose. A library that fails to scan never takes the
+module's own analysis down with it, and leaves no partial fact subtree behind.
 
 **A malformed `.sextant.yml` fails the run** — the one input where Sextant refuses rather
 than degrading. DR-6's refusal-to-guess governs evidence read out of a codebase Sextant

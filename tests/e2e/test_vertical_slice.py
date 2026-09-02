@@ -11,6 +11,7 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
+COORDINATE = "com.example:orders-soap-client"
 
 
 def _run(workspace: Path) -> None:
@@ -1113,13 +1114,17 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     nothing of the sort — which is the whole assertion: the row exists BECAUSE
     of the opt-in, not because the dependency is on the classpath.
 
-    The module is NOT recompiled between the two halves. That is deliberate:
-    it makes the only difference between them the presence of one
-    configuration file.
+    Both halves run into ONE workspace, and the module is NOT recompiled
+    between them. Both are deliberate, and the workspace is the load-bearing
+    one: a fact file is written whole, so a library that is no longer scanned
+    OVERWRITES NOTHING, and a second run into a fresh directory would prove
+    only that a fresh directory is empty. Re-analyzing the same workspace is
+    what shows that opting out actually RETRACTS — the property a reader needs
+    if the opt-in is to be a decision they can reverse.
     """
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
-    _run(tmp_path / "with")
-    document = (tmp_path / "with" / "render" / "architecture.md").read_text()
+    _run(tmp_path)
+    document = (tmp_path / "render" / "architecture.md").read_text()
 
     # The row itself: verbless, address-less peer, and its caller a symbol
     # whose identity carries the LIBRARY's coordinates rather than this
@@ -1130,18 +1135,34 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # repository declares the operation above.
     assert "- `soap {http://billing.example.com/ws}stubCharge`" in document
     assert "  - Via: `com.example:orders-soap-client`" in document
+    assert (tmp_path / "facts" / "lib" / "com.example" / "orders-soap-client").is_dir()
+
+    # The document record carries the coordinate into the EXPORTED table too,
+    # not only into the rendered page: opting a library in is the reader's own
+    # assertion, and an assertion invisible in the published bundle is exactly
+    # where it would be laundered into module-observed evidence.
+    bundle = Path(
+        CliRunner()
+        .invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
+        .output.strip()
+    )
+    origins = duckdb.sql(
+        "SELECT origin, count(*) FROM read_parquet("
+        f"'{bundle / 'graph' / 'documents.parquet'}') GROUP BY origin ORDER BY origin"
+    ).fetchall()
+    assert (COORDINATE, 1) in origins
+    assert (None, 105) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"
     config.rename(moved)
     try:
-        _run(tmp_path / "without")
+        _run(tmp_path)
     finally:
         moved.rename(config)
-    plain = (tmp_path / "without" / "render" / "architecture.md").read_text()
+    plain = (tmp_path / "render" / "architecture.md").read_text()
     assert "stubCharge" not in plain
     assert "Via:" not in plain
-    # The library's own fact subtree goes with it — nothing is left behind for
-    # a later resolve to read back as if it were still configured.
-    assert not (tmp_path / "without" / "facts" / "lib").exists()
-    assert (tmp_path / "with" / "facts" / "lib" / "com.example" / "orders-soap-client").is_dir()
+    # The library's whole fact subtree is discarded before the scan, so nothing
+    # is left for the resolve to read back as if it were still configured.
+    assert not (tmp_path / "facts" / "lib").exists()

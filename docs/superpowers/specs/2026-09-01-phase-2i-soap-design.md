@@ -156,11 +156,26 @@ extract_libraries:
 ```
 
 - The detector reads it at detect time (repo content — ingress reads repos), maps each
-  coordinate to its resolved jar through the recorded classpath (the `ClasspathEntry`
-  facts that already exist), and contributes the jars as **library roots**. An
-  unresolvable coordinate records the `libraries_not_resolved` gap with the
-  coordinate — never a crash. Coordinates are `group:artifact` today; other build
-  ecosystems add their own coordinate forms to the same key later.
+  coordinate to a resolved jar, and contributes the jars as **library roots**. An
+  unresolvable coordinate records the `libraries_not_resolved` gap with the coordinate
+  **and the reason** — never a crash. Coordinates are `group:artifact`, or
+  `group:artifact:version`; other build ecosystems add their own coordinate forms to the
+  same key later.
+
+  **Amended in Task 6, from live evidence.** This section was written expecting the
+  resolution to run through *the recorded classpath — the `ClasspathEntry` facts that
+  already exist*. Those facts are **dead**: `ClasspathEntry` and `ModuleFact.classpath`
+  are declared in `domain/facts.py` and **no producer in any language has ever emitted a
+  `module` fact**, so there is no recorded classpath to resolve anything through. The
+  shipped route is two pieces of Maven convention instead: the **version** from the
+  module's own declared `<dependency>` (or from the coordinate's own third segment, which
+  is the author's assertion and the escape hatch for a version a parent POM or BOM
+  manages), and the **archive** from the local repository's own layout,
+  `~/.m2/repository/<group as directories>/<artifact>/<version>/<artifact>-<version>.jar`,
+  where M02's stated prerequisite — a successful build — has already left it. Nothing is
+  searched for: no version scanned out of the repository, no nearest match, no second
+  location. When `module` facts do get emitted, resolving through them becomes the better
+  route and this becomes the fallback; until then it is the only one.
 - The scan loop runs the extractor over each library root beside the module's own
   classes. **Checkpoint item: verify the extractor accepts a jar input** (it scans
   class directories today); if falsified, a small extractor addition (zip-walking) is
@@ -168,9 +183,15 @@ extract_libraries:
   its own convention.
 - Every fact from a library carries its **origin**: `Document` gains an optional
   `origin` field (the library coordinate; D00 addition, neutral wording — any
-  ecosystem's coordinate fits a string). Library fact files land under their own
-  subtree, `facts/lib/<coordinate>/…` — the 2F/2G collision rule extended, so a
-  library class path can never collide with a module class.
+  ecosystem's coordinate fits a string), and its `origin_tier` reads `dependency` — a
+  factual origin, never `first_party`/`third_party`, which answer a question about
+  ownership that nothing yet reads the patterns for. Library fact files land under their
+  own subtree, `facts/lib/<groupId>/<artifactId>/…` — the 2F/2G collision rule extended,
+  so a library class path can never collide with a module class. **That subtree is
+  discarded whole at the start of every scan**: a fact file is written whole and a
+  library no longer opted into overwrites nothing, so without the discard, opting out
+  would leave its rows in place and the opt-in would be a decision that cannot be
+  reversed.
 - Honesty structure, stated precisely (self-review correction): call-driven styles
   derive only where the module's own call sites reach the library's types, so opting
   in cannot fabricate call-evidenced endpoints; annotation-driven outbound (Feign-

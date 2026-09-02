@@ -95,6 +95,14 @@ list rather than hand-maintained — so `open_questions` (below) appears there b
 `endpoints`, `shapes`, `shape_fields`, `resolved_config`, `documents`, `symbols`,
 `annotations` and `call_sites`, and the list is sorted so the manifest is deterministic.
 
+**`documents` carries `origin`** — the coordinate of the library a document was extracted
+from ([D00](D00-fact-schema.md) §2), NULL for the module's own output. Opting a library in
+is the reader's own assertion that it is part of the module's runtime surface
+([D04](D04-config-and-exclusion.md) §2a), and an assertion visible in the rendered document
+but invisible in the published bundle would be laundered into module-observed evidence
+exactly where it travels furthest from the person who made it. A consumer joins a symbol's
+`document_id` to tell a library-contributed row from a module one.
+
 **`environments`** lists the profiles this module resolved. Endpoints carry configuration
 expressions rather than one environment's values, so a bundle serves every environment and
 the system tier selects. **Live since Phase 2F**: populated from `resolved_config`'s own

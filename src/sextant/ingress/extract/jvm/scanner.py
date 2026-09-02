@@ -2,7 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from sextant.application.ports.scanner import ScanReport, ScanRequest
+from sextant.application.ports.scanner import ScanError, ScanReport, ScanRequest
 
 _LANGUAGES = {"java", "kotlin"}
 _CAPABILITIES = {
@@ -67,7 +67,7 @@ class AsmScanner:
             check=False,
         )
         if completed.returncode != 0:
-            raise RuntimeError(f"extractor failed: {completed.stderr.strip()}")
+            raise ScanError(f"extractor failed: {completed.stderr.strip()}")
         report = json.loads(completed.stdout)
         return ScanReport(
             documents=report["documents"],

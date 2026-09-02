@@ -23,6 +23,17 @@ class ScanRequest:
     origin: str | None = None
 
 
+class ScanError(RuntimeError):
+    """A scan that could not be completed — an unreadable input, or a backend
+    that failed partway through one.
+
+    Typed rather than a bare `RuntimeError` because one caller branches on it:
+    a LIBRARY scan that fails is a gap to record about that library, while the
+    module's own scan failing is the analysis failing. A caller that cannot tell
+    those apart has to choose between crashing on a corrupt jar and swallowing a
+    broken module scan."""
+
+
 @dataclass(frozen=True)
 class ScanReport:
     documents: int

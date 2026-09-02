@@ -11,7 +11,7 @@ import click
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport
-from sextant.application.stages.analyze import analyze
+from sextant.application.stages.analyze import AnalyzeResult, analyze
 from sextant.cli.progress import RichProgress
 from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
@@ -20,6 +20,7 @@ from sextant.egress.render.document import render_module_document
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
+from sextant.ingress.detect.sextant_config import SextantConfigError
 from sextant.ingress.extract.jvm.generated_naming import JvmGeneratedNaming
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
@@ -112,7 +113,37 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
     progress = RichProgress()
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
-        result = analyze(
+        result = _analyzed(path, workspace, workspace_dir, progress)
+        write_metadata(
+            workspace_dir / "metadata.json",
+            result.module,
+            result.report,
+            result.scanner_id,
+            result.scanner_version,
+            _commit_of(path),
+            result.uncovered,
+            resolved_config=workspace.query("resolved_config"),
+            schema_sources_not_compiled=result.schema_sources_not_compiled,
+            descriptors_not_interpreted=result.descriptors_not_interpreted,
+            libraries_not_scanned=result.libraries_not_scanned,
+        )
+    finally:
+        workspace.close()
+        progress.close()
+    click.echo(json.dumps({"endpoints": len(result.report.endpoints)}))
+
+
+def _analyzed(
+    path: Path, workspace: DuckDbWorkspace, workspace_dir: Path, progress: RichProgress
+) -> AnalyzeResult:
+    """`analyze`, with the one failure a USER caused turned into the message a
+    user reads. A malformed `.sextant.yml` is Sextant's own input written
+    wrong (D04 §2a's refusal) — a stack trace here would report a mistake in
+    the analysed repository as a crash in the tool, the same way the two
+    `no analysis found` messages below exist so a missing workspace does
+    not."""
+    try:
+        return analyze(
             path=path,
             workspace=workspace,
             detectors=[MavenDetector()],
@@ -130,22 +161,8 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
             ],
             interpret=_JvmDescriptorInterpreter(),
         )
-        write_metadata(
-            workspace_dir / "metadata.json",
-            result.module,
-            result.report,
-            result.scanner_id,
-            result.scanner_version,
-            _commit_of(path),
-            result.uncovered,
-            resolved_config=workspace.query("resolved_config"),
-            schema_sources_not_compiled=result.schema_sources_not_compiled,
-            descriptors_not_interpreted=result.descriptors_not_interpreted,
-        )
-    finally:
-        workspace.close()
-        progress.close()
-    click.echo(json.dumps({"endpoints": len(result.report.endpoints)}))
+    except SextantConfigError as refused:
+        raise click.ClickException(str(refused)) from refused
 
 
 @module.command("render")
@@ -211,6 +228,7 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             resolved_config=workspace.query("resolved_config"),
             open_questions=workspace.query("open_questions"),
             library_symbols=workspace.query("library_symbols"),
+            libraries_not_scanned=tuple(metadata.get("libraries_not_scanned", [])),
         )
         target = workspace_dir / "render" / "architecture.md"
         target.parent.mkdir(parents=True, exist_ok=True)

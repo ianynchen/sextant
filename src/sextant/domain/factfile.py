@@ -2,6 +2,7 @@
 record is the first line, so a fact file is self-describing."""
 
 import json
+import shutil
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -55,6 +56,34 @@ def library_fact_root(fact_root: Path, coordinate: str) -> Path:
         raise ValueError(f"not a library coordinate: {coordinate!r}")
     group, _, artifact = coordinate.partition(":")
     return fact_root / "lib" / group / artifact
+
+
+def discard_library_facts(fact_root: Path, coordinate: str | None = None) -> None:
+    """Remove the library fact subtree — the whole of it, or one coordinate's.
+
+    A fact file is written whole and never appended to, so a document that is
+    re-scanned overwrites itself. A library that is no longer scanned overwrites
+    NOTHING, and that is the difference this exists for: a run whose
+    `.sextant.yml` was edited or deleted would otherwise read the previous run's
+    library facts straight back out of the same workspace and derive rows for a
+    library nobody opted into any more. **Opting out has to retract**, or the
+    opt-in is not a decision the reader can reverse.
+
+    Also the only correct answer to a scan that FAILED partway through an
+    archive: the extractor writes each class's fact file as it goes, so a
+    failure at the tenth entry leaves nine documents claiming to describe a
+    library nothing successfully read. Discarding that coordinate's subtree is
+    what makes the failure total rather than partial — a fraction of a library,
+    indistinguishable from all of a smaller one, is exactly the silent wrongness
+    the surrounding honesty rules exist to refuse.
+
+    Missing directories are not an error: nothing to retract is the ordinary
+    case, and it is the same answer as having retracted it.
+    """
+    target = fact_root / "lib"
+    if coordinate is not None:
+        target = library_fact_root(fact_root, coordinate)
+    shutil.rmtree(target, ignore_errors=True)
 
 
 def write_fact_file(path: Path, document: Document, facts: Iterable[Fact]) -> None:

@@ -317,24 +317,17 @@ _NAMED_QUERIES = {
     # else, so the attribution has to be joined back through the document the
     # symbol was declared in.
     #
-    # Over `raw_facts` rather than the `documents` view, the same way
-    # `supertypes`/`implementations` are: the view is the projection the
-    # bundle exports (D06 §5), and widening it for one renderer read would
-    # change every exported `documents.parquet` for a column nothing in the
-    # graph joins on. `origin` is absent, not null, on a module's own document,
-    # so `IS NOT NULL` is the whole filter. Ordered by symbol for NFR-1.
-    #
-    # The extraction in the WHERE clause is PARENTHESISED, and has to be:
-    # `IS NOT NULL` binds tighter than `->>` in this dialect, so the bare form
-    # parses as `payload ->> ('origin' IS NOT NULL)` — a boolean subscript,
-    # which fails at run time trying to cast the whole payload to a number
-    # (reproduced against duckdb 1.5.5). The projection above needs no
-    # parentheses because nothing follows the operator there.
+    # Joined through the `documents` view, which projects `origin` for the
+    # bundle's sake anyway (schema.sql's own note): one projection, read by the
+    # renderer and exported, rather than a second extraction that could drift
+    # from it. `origin` is absent — hence NULL here — on a module's own
+    # document, so `IS NOT NULL` is the whole filter. Ordered by symbol for
+    # NFR-1.
     "library_symbols": """
-        SELECT s.payload ->> 'symbol' AS symbol, d.payload ->> 'origin' AS origin
-        FROM raw_facts s
-        JOIN raw_facts d ON d.document_id = s.document_id AND d.kind = 'document'
-        WHERE s.kind = 'symbol' AND (d.payload ->> 'origin') IS NOT NULL
+        SELECT s.symbol AS symbol, d.origin AS origin
+        FROM symbols s
+        JOIN documents d ON d.document_id = s.document_id
+        WHERE d.origin IS NOT NULL
         ORDER BY symbol
     """,
     # A cheap read of what `analyze` already loaded — for `render`, which

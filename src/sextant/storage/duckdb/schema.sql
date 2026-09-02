@@ -166,6 +166,14 @@ SELECT document_id,
        payload ->> 'module_id'       AS module_id,
        payload ->> 'language'        AS language,
        payload ->> 'origin_tier'     AS origin_tier,
+       -- The library this document was extracted from, as its coordinate, and
+       -- NULL for the module's own output (D00 §2). Projected here — and so
+       -- carried into the exported `documents` table — because opting a
+       -- library in is an ASSERTION the reader makes, and an assertion that is
+       -- visible in the rendered document but invisible in the published
+       -- bundle would be laundered into module-observed evidence exactly where
+       -- it travels furthest from the person who made it.
+       payload ->> 'origin'          AS origin,
        (payload ->> 'partial')::BOOLEAN AS partial
 FROM raw_facts WHERE kind = 'document';
 

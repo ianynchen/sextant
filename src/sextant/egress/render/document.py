@@ -225,16 +225,35 @@ def _origin_lines(endpoint: dict[str, object], origin_by_symbol: dict[str, str])
     module's own code declares — same table, same columns, same resolution —
     and the difference matters to a reader: the operation is real, but nothing
     in this repository declares it, so the place to go and look is the
-    library's. The attribution is keyed on the row's own handler or caller
-    symbol, whose document is what carries the coordinate (D00 §2); a row
-    naming neither is a row nothing can attribute, and it is left unmarked
-    rather than guessed at.
+    library's.
+
+    **Keyed on the SURVIVING evidence, which is the handler wherever there is
+    one.** A merged `both` row keeps the handler's own declaration and carries
+    the caller onto it (D02 §3), so a path this module HANDLES is locally
+    declared even where the client that calls it came out of a jar — marking it
+    would attribute this module's own endpoint to a library. Only where there
+    is no handler at all is the caller the deriving side. A row naming neither
+    is a row nothing can attribute, and it is left unmarked rather than guessed
+    at.
     """
-    for column in ("handler", "caller"):
-        symbol = endpoint.get(column)
-        if symbol is not None and str(symbol) in origin_by_symbol:
-            return [f"  - Via: `{origin_by_symbol[str(symbol)]}`"]
-    return []
+    deriving = endpoint.get("handler") or endpoint.get("caller")
+    origin = None if deriving is None else origin_by_symbol.get(str(deriving))
+    return [] if origin is None else [f"  - Via: `{origin}`"]
+
+
+def _library_gap_line(what: str, entry: str) -> str:
+    """One unreachable library, as `<what>, so nothing above accounts for it:
+    library `<coordinate>` — <reason>.`
+
+    The producer writes `<coordinate>: <reason>` — the shape `uncovered`
+    already uses — and only the coordinate is set in code here: a reason is a
+    sentence for a person to read, and typesetting a sentence as an identifier
+    is how a document teaches its reader to skip it. An entry with no reason at
+    all still renders, as the coordinate alone.
+    """
+    coordinate, _, reason = entry.partition(": ")
+    tail = f" — {reason}" if reason else ""
+    return f"- {what}, so nothing above accounts for it: library `{coordinate}`{tail}."
 
 
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
@@ -267,6 +286,10 @@ def render_module_document(
     resolved_config: Sequence[dict[str, object]] = (),
     open_questions: Sequence[dict[str, object]] = (),
     library_symbols: Sequence[dict[str, object]] = (),
+    # Carried in rather than read off `module`, unlike `libraries_not_resolved`:
+    # resolution is a property of the module the detector described, while a
+    # scan failing is something that happened during one analysis of it.
+    libraries_not_scanned: tuple[str, ...] = (),
 ) -> str:
     """Adds no information. Every row comes from the graph, and every omission
     is stated (M07). Rendering the same report twice is byte-identical
@@ -274,6 +297,10 @@ def render_module_document(
     whatever the graph query already fixed."""
     fields_by_shape = _fields_by_shape(shape_fields)
     origin_by_symbol = {str(row["symbol"]): str(row["origin"]) for row in library_symbols}
+    # Wire identities already carrying a library attribution, so the outbound
+    # section does not repeat one the inbound section stated (a `both` row is
+    # listed in both).
+    attributed: set[str] = set()
     lines = [
         f"# {module.module_id}",
         "",
@@ -330,6 +357,8 @@ def render_module_document(
                 lines += via
                 lines += request
                 lines += response
+            if via:
+                attributed.add(_wire_identity(endpoint))
     else:
         lines.append("None found.")
 
@@ -350,11 +379,18 @@ def render_module_document(
         # The outbound half has no request/response detail to hang under, so
         # this is its whole detail block — written only where there is
         # something to say, which is the same rule the inbound one keeps.
+        #
+        # Once per identity, never once per section: a `both` row is listed in
+        # BOTH tables (it is one wire this module exposes and calls), so an
+        # attribution already stated above must not be stated again here. The
+        # same attribution twice reads as two findings.
         for endpoint in outbound:
-            via = _origin_lines(endpoint, origin_by_symbol)
+            identity = _wire_identity(endpoint)
+            via = [] if identity in attributed else _origin_lines(endpoint, origin_by_symbol)
             if via:
-                lines += ["", f"- `{_wire_identity(endpoint)}`"]
+                lines += ["", f"- `{identity}`"]
                 lines += via
+                attributed.add(identity)
     else:
         lines.append("None found.")
 
@@ -385,13 +421,12 @@ def render_module_document(
         for symbol in report.unexpanded_types
     ]
     # Named one by one for the same reason again: a library this module asked
-    # to extract and nobody could resolve is the difference between "nothing
-    # is called through it" and "nobody looked", and only the coordinate says
-    # which dependency to build or install to close it (FR-17, M02).
-    lines += [
-        f"- Not resolved, so nothing above accounts for it: library `{coordinate}`."
-        for coordinate in module.libraries_not_resolved
-    ]
+    # to extract and nobody could read is the difference between "nothing is
+    # called through it" and "nobody looked" (FR-17, M02). Both lists carry
+    # `<coordinate>: <reason>`, and the reason is the point — it says what to
+    # go and do, which a bare coordinate never could.
+    lines += [_library_gap_line("Not resolved", entry) for entry in module.libraries_not_resolved]
+    lines += [_library_gap_line("Not scanned", entry) for entry in libraries_not_scanned]
     if report.skipped_catalogs:
         lines += ["", "## Catalogs skipped", ""]
         for skipped in report.skipped_catalogs:

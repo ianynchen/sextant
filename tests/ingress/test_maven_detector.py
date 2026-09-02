@@ -276,6 +276,17 @@ _LIBRARY_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
       <groupId>com.example</groupId>
       <artifactId>managed</artifactId>
     </dependency>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>interpolated</artifactId>
+      <version>${stub.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>classified</artifactId>
+      <version>2.1.0</version>
+      <classifier>jdk17</classifier>
+    </dependency>
   </dependencies>
 </project>
 """
@@ -328,22 +339,64 @@ def test_a_declared_library_resolves_to_the_archive_the_build_would_use(
     )
 
 
+def test_a_pinned_version_resolves_without_asking_the_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The three-segment escape hatch. `com.example:managed` is declared with
+    NO version — the BOM case this detector cannot read, and the case most real
+    Spring Boot dependencies are in — so the two-segment form can never reach
+    it. Pinning the version in `.sextant.yml` is the author asserting which
+    release to read, and it asks the POM nothing at all.
+
+    The coordinate the library is then KNOWN by stays `groupId:artifactId`, so
+    the fact subtree and the rendered attribution do not change shape depending
+    on whether a version was pinned."""
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    archive = _local_repository(home, "com.example:managed", "4.5.6")
+    root = tmp_path / "module"
+    root.mkdir()
+    _module(root, _LIBRARY_POM)
+    (root / ".sextant.yml").write_text(
+        "extract_libraries: ['com.example:managed:4.5.6']\n", encoding="utf-8"
+    )
+
+    module = MavenDetector().detect(root).modules[0]
+
+    assert module.libraries_not_resolved == ()
+    [library] = module.library_roots
+    assert (library.coordinate, library.version, library.archive) == (
+        "com.example:managed",
+        "4.5.6",
+        archive,
+    )
+
+
 @pytest.mark.parametrize(
-    ("coordinate", "because"),
+    ("coordinate", "expected_reason"),
     [
-        ("com.example:managed", "the POM declares no version, so nothing names a release"),
-        ("com.example:absent", "the POM declares no such dependency at all"),
-        ("com.example:stub", "no local repository holds the archive"),
+        # Three forms this detector cannot read a release out of, one answer —
+        # and the answer names the remedy rather than the form.
+        ("com.example:managed", "does not read a version from"),
+        ("com.example:interpolated", "does not read a version from"),
+        ("com.example:classified", "does not read a version from"),
+        ("com.example:absent", "declares no such dependency"),
+        ("com.example:stub", "no 2.1.0 archive in the local repository"),
     ],
 )
-def test_a_library_that_resolves_to_no_archive_is_named_rather_than_guessed_at(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, coordinate: str, because: str
+def test_a_library_that_resolves_to_no_archive_is_named_with_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, coordinate: str, expected_reason: str
 ):
-    """Three ways a coordinate can fail, one answer: it is REPORTED. No version
-    scanned for in the repository, no nearest match, no second location — a
-    wrong jar is indistinguishable downstream from a right one, while a named
-    coordinate is a gap a reader can close (FR-17). Nothing raises: a library
-    nobody could find is not a reason to refuse the module's own analysis."""
+    """Five ways a coordinate can fail, one answer: it is REPORTED, **with the
+    reason**. No version scanned for in the repository, no nearest match, no
+    second location — a wrong jar is indistinguishable downstream from a right
+    one, while a named coordinate is a gap a reader can close (FR-17).
+
+    The reason is what makes the gap actionable: "declare the dependency",
+    "pin the version" and "install the artifact" are three different things to
+    go and do, and a bare coordinate leaves a reader to guess which. Nothing
+    raises: a library nobody could find is not a reason to refuse the module's
+    own analysis."""
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
     root = tmp_path / "module"
     root.mkdir()
@@ -352,8 +405,28 @@ def test_a_library_that_resolves_to_no_archive_is_named_rather_than_guessed_at(
 
     module = MavenDetector().detect(root).modules[0]
 
-    assert module.library_roots == (), because
-    assert module.libraries_not_resolved == (coordinate,)
+    assert module.library_roots == ()
+    [reported] = module.libraries_not_resolved
+    assert reported.startswith(f"{coordinate}: ")
+    assert expected_reason in reported
+
+
+def test_the_sibling_library_fixture_detects_through_its_parents_coordinates():
+    """`fixtures/orders-soap-client` declares only an `artifactId`: its groupId
+    and version are its parent's. The reactor-inheritance rule has been
+    implemented since the reactor fix with no fixture to prove it on — this is
+    it, and it is the same POM that opt-in library extraction resolves this
+    coordinate against."""
+    module = MavenDetector().detect(FIXTURE.parent / "orders-soap-client").modules[0]
+    assert module.module_id == "com.example:orders-soap-client"
+    assert module.version == "1.0.0"
+    assert module.languages == {"java"}
+    # No main class, no container file: nothing here is evidence of a service,
+    # and `library` is never returned from coordinates alone (`_classify`).
+    assert module.kind == "undetermined"
+    # And it opts into nothing itself — the opt-in belongs to the module doing
+    # the analysing, never to the library being analysed.
+    assert module.library_roots == ()
 
 
 def test_a_malformed_config_stops_detection_rather_than_extracting_nothing(tmp_path: Path):

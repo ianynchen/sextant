@@ -44,6 +44,16 @@ def test_the_declared_coordinates_are_returned_in_the_order_the_file_states_them
     )
 
 
+def test_a_coordinate_may_pin_its_own_version(tmp_path: Path):
+    """The three-segment form is the author's OWN assertion of which release to
+    read, and it is the escape hatch for the case the two-segment form cannot
+    reach at all: a version managed by a parent POM or a BOM, which the detector
+    does not resolve. It is returned verbatim — splitting it is resolution's
+    job, not this reader's."""
+    root = _config(tmp_path, "extract_libraries: ['com.example:orders-soap-client:1.0.0']\n")
+    assert read_extract_libraries(root) == ("com.example:orders-soap-client:1.0.0",)
+
+
 @pytest.mark.parametrize(
     ("text", "because"),
     [
@@ -60,8 +70,12 @@ def test_the_declared_coordinates_are_returned_in_the_order_the_file_states_them
         ("extract_libraries: [42]\n", "a coordinate is a string"),
         ("extract_libraries: [orders-soap-client]\n", "a coordinate names a group"),
         (
-            "extract_libraries: ['com.example:orders:1.0.0']\n",
-            "a version is read from the build, never restated here",
+            "extract_libraries: ['com.example:orders:1.0.0:jdk17']\n",
+            "a fourth segment is a classifier, which the archive name would have to carry",
+        ),
+        (
+            "extract_libraries: ['com.example:']\n",
+            "an empty segment names no artifact and no directory",
         ),
         (
             "extract_libraries: ['..:orders']\n",
@@ -76,5 +90,8 @@ def test_a_config_file_that_cannot_be_honoured_as_written_is_refused(
     indistinguishable from an unconfigured module, and silently wrong for
     exactly as long as nobody checks. This file is an instruction TO Sextant,
     so a mistake in it is reported rather than skipped."""
-    with pytest.raises(SextantConfigError):
-        read_extract_libraries(_config(tmp_path, text)), because
+    try:
+        read_extract_libraries(_config(tmp_path, text))
+    except SextantConfigError:
+        return
+    pytest.fail(f"honoured a config it cannot honour as written — {because}")

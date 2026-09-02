@@ -20,7 +20,7 @@ import pytest
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.detector import LibraryRoot, ModuleModel, RepositoryModel
 from sextant.application.ports.progress import NullProgress
-from sextant.application.stages.analyze import analyze
+from sextant.application.stages.analyze import AnalyzeResult, analyze
 from sextant.cli.resources import extractor_jar
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -76,22 +76,25 @@ def _module(root: Path, libraries: tuple[LibraryRoot, ...]) -> ModuleModel:
     )
 
 
-def _analyze(root: Path, libraries: tuple[LibraryRoot, ...]) -> Path:
-    fact_root = root / "facts"
+def _analyzed(root: Path, libraries: tuple[LibraryRoot, ...]) -> AnalyzeResult:
     workspace = DuckDbWorkspace(root / "ws.duckdb")
     try:
-        analyze(
+        return analyze(
             path=root,
             workspace=workspace,
             detectors=[_FakeDetector(_module(root, libraries))],
             scanners=[AsmScanner(extractor_jar())],
             catalogs=_EmptyCatalogs(),
-            fact_root=fact_root,
+            fact_root=root / "facts",
             progress=NullProgress(),
         )
     finally:
         workspace.close()
-    return fact_root
+
+
+def _analyze(root: Path, libraries: tuple[LibraryRoot, ...]) -> Path:
+    _analyzed(root, libraries)
+    return root / "facts"
 
 
 def _tree(fact_root: Path) -> dict[str, str]:
@@ -121,7 +124,10 @@ def test_a_library_is_scanned_into_its_own_subtree_and_every_document_names_it(
       leave only the second on disk;
     * every document written there carries the COORDINATE as its `origin`
       (D00 §2), which is what survives into a bundle — the archive path does
-      not, because it says nothing off the machine that resolved it;
+      not, because it says nothing off the machine that resolved it — and its
+      `origin_tier` reads `dependency`, because a class this module did not
+      build is not `module_output` and saying so would be a claim known to be
+      false;
     * a scanned symbol's identity carries the LIBRARY's coordinates and
       version, not this module's, so the graph never claims a jar's
       declaration as the module's own.
@@ -138,8 +144,20 @@ def test_a_library_is_scanned_into_its_own_subtree_and_every_document_names_it(
         .splitlines()[:2]
     )
     assert document["origin"] == COORDINATE
+    assert document["origin_tier"] == "dependency"
     assert document["module_id"] == "com.acme:orders-service"
     assert symbol["symbol"].startswith("sextant-jvm maven com.example/orders-soap-client 1.0.0 ")
+
+    # And the module's own half is untouched by any of it — the tier moves for
+    # the library and only for the library.
+    own = [
+        json.loads(text.splitlines()[0])
+        for path, text in _tree(fact_root).items()
+        if not path.startswith("lib/")
+    ]
+    assert own
+    assert all(record["origin_tier"] == "module_output" for record in own)
+    assert not any("origin" in record for record in own)
 
 
 def test_the_modules_own_facts_do_not_move_when_a_library_is_added(
@@ -173,32 +191,102 @@ def test_two_runs_over_the_same_module_and_library_write_the_same_bytes(
     )
 
 
-def test_a_library_whose_archive_holds_no_class_is_named_rather_than_silently_empty(
-    tmp_path: Path,
-):
+def test_a_library_whose_archive_holds_no_class_is_named_by_its_coordinate(tmp_path: Path):
     """The loudness rule, reaching the stage that would otherwise swallow it: a
     library that extracts nothing must be distinguishable from one that was
     never configured, and `uncovered` is what carries that out of `analyze`
-    into metadata.json and the rendered gaps list (FR-17)."""
+    into metadata.json and the rendered gaps list (FR-17).
+
+    Named by the COORDINATE, not the archive path. This entry is read by a
+    person, and it travels — into metadata.json and into a published bundle —
+    where an absolute path under someone's home directory identifies nothing at
+    all."""
     empty = tmp_path / "repository" / "empty-1.0.0.jar"
     empty.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(empty, "w") as archive:
         archive.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n")
     library = LibraryRoot(coordinate="com.example:empty", version="1.0.0", archive=empty)
 
-    fact_root = tmp_path / "run" / "facts"
-    workspace = DuckDbWorkspace(tmp_path / "run" / "ws.duckdb")
-    try:
-        result = analyze(
-            path=tmp_path / "run",
-            workspace=workspace,
-            detectors=[_FakeDetector(_module(tmp_path / "run", (library,)))],
-            scanners=[AsmScanner(extractor_jar())],
-            catalogs=_EmptyCatalogs(),
-            fact_root=fact_root,
-            progress=NullProgress(),
-        )
-    finally:
-        workspace.close()
+    result = _analyzed(tmp_path / "run", (library,))
 
-    assert result.uncovered == (f"{empty}: no class files found",)
+    assert result.uncovered == ("com.example:empty: no class files found",)
+    assert str(empty) not in result.uncovered[0]
+
+
+def test_opting_a_library_out_retracts_its_rows_from_the_same_workspace(
+    tmp_path: Path, library: LibraryRoot
+):
+    """The retraction pin, and the reason the whole `lib/` subtree is discarded
+    at the start of every scan.
+
+    A fact file is written WHOLE, so a library still opted in overwrites itself
+    — but one removed from `.sextant.yml` overwrites nothing, and the resolve
+    reads the whole tree. Re-analyzing the SAME workspace after opting out would
+    otherwise read the previous run's library facts straight back and keep
+    deriving from a library nobody asked for any more. An opt-in that cannot be
+    taken back is not a decision the reader controls."""
+    root = tmp_path / "workspace"
+    with_library = _analyzed(root, (library,))
+    assert (root / "facts" / "lib").is_dir()
+    library_documents = with_library.report.coverage["documents"]
+
+    without = _analyzed(root, ())
+
+    assert not (root / "facts" / "lib").exists()
+    assert without.report.coverage["documents"] == library_documents - 2
+    assert not any(
+        json.loads(text.splitlines()[0]).get("origin") for text in _tree(root / "facts").values()
+    )
+
+
+def test_a_library_that_fails_mid_archive_leaves_no_partial_subtree(
+    tmp_path: Path, library: LibraryRoot
+):
+    """A backend writes each document as it reaches it, so a failure on the
+    SECOND entry of an archive leaves the first one's facts on disk. A fraction
+    of a library is indistinguishable, once loaded, from all of a smaller one —
+    the rows it derives look complete and are not. Discarding that coordinate's
+    subtree is what makes the failure total rather than partial.
+
+    The corrupt entry is real: valid zip framing around bytes that are not a
+    class file, which is what gets the extractor past `names()` and into the
+    walk before it fails."""
+    broken = tmp_path / "repository" / "broken-1.0.0.jar"
+    with zipfile.ZipFile(broken, "w") as archive:
+        archive.writestr(
+            "com/acme/orders/OrderResult.class",
+            (CLASSES / "com/acme/orders/OrderResult.class").read_bytes(),
+        )
+        archive.writestr("com/acme/orders/Zzz.class", b"not bytecode at all")
+    corrupt = LibraryRoot(coordinate="com.example:broken", version="1.0.0", archive=broken)
+
+    result = _analyzed(tmp_path / "run", (corrupt,))
+
+    assert not (tmp_path / "run" / "facts" / "lib" / "com.example" / "broken").exists()
+    [reported] = result.libraries_not_scanned
+    assert reported.startswith("com.example:broken: ")
+
+
+def test_a_library_that_cannot_be_scanned_does_not_take_the_module_with_it(
+    tmp_path: Path, library: LibraryRoot
+):
+    """A dependency nobody can open does not make the module's own facts wrong,
+    and they are already on disk by the time the library is reached. So a
+    library scan that fails is a gap about THAT library — recorded, named, and
+    survived — while the module's own scan failing stays what it always was:
+    the analysis failing.
+
+    The good library beside it still lands, which is the half that says the
+    loop CONTINUES rather than merely not crashing."""
+    missing = LibraryRoot(
+        coordinate="com.example:gone",
+        version="1.0.0",
+        archive=tmp_path / "repository" / "gone-1.0.0.jar",
+    )
+
+    result = _analyzed(tmp_path / "run", (missing, library))
+
+    assert result.report.coverage["documents"] > 0
+    [reported] = result.libraries_not_scanned
+    assert reported.startswith("com.example:gone: ")
+    assert (tmp_path / "run" / "facts" / "lib" / "com.example" / "orders-soap-client").is_dir()
