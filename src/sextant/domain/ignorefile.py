@@ -98,6 +98,10 @@ class IgnoreRules:
         The built-in layer is checked first and short-circuits: a match
         there is ignored regardless of what the repo's own spec — negation
         included — says about the same path.
+
+        **Case-sensitive**, inherited from `pathspec` rather than chosen
+        here: gitignore matching is case-sensitive on Linux, the platform
+        this ships for, so `*.pem` does not match `SERVER.PEM`.
         """
         relative = path.relative_to(self._repo_root) if path.is_absolute() else path
         candidate = relative.as_posix()

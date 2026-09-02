@@ -183,6 +183,10 @@ def analyze(
     scanned_facts = scan_report.facts
     uncovered = list(scan_report.uncovered)
     libraries_not_scanned: list[str] = []
+    # `.sextantignore` is never consulted here: a library archive is not a
+    # repo file to enumerate, and its `.class` walk is out of scope for the
+    # ignore matcher by design (2K design §2) — `IgnoreRules` governs the
+    # repo's own file enumerations (config, schema, resource walks) only.
     for library in module.library_roots:
         try:
             library_report = scanner.scan(

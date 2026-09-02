@@ -5,6 +5,8 @@ cannot be switched off by anything a repository writes."""
 
 from pathlib import Path
 
+import pytest
+
 from sextant.domain.ignorefile import BUILTIN_PATTERNS, IgnoreRules
 
 
@@ -125,6 +127,32 @@ def test_malformed_lines_are_read_the_way_git_reads_them(tmp_path: Path):
     rules = IgnoreRules.load(tmp_path)
     assert rules.matches(tmp_path / "run.log") is True
     assert rules.matches(tmp_path / "# a comment") is False
+
+
+@pytest.mark.parametrize("filename", ["build", "secrets"])
+def test_a_directory_only_pattern_does_not_match_a_bare_file_of_the_same_name(
+    tmp_path: Path, filename: str
+):
+    """git's directory patterns name a DIRECTORY, never a same-named file
+    sitting beside it: `build/`'s trailing slash and `secrets/**` (built
+    in) both require the named segment to be a directory something
+    continues under. Verified live before pinning (2K Task 2 review round
+    1) — this is the regression pin for a future `pathspec` version that
+    ever loosened the corner and over-excluded a real file simply called
+    `build` or `secrets`."""
+    _write_ignorefile(tmp_path, "build/")
+    rules = IgnoreRules.load(tmp_path)
+    assert rules.matches(tmp_path / filename) is False
+
+
+def test_matching_is_case_sensitive_like_gitignore_on_linux(tmp_path: Path):
+    """Inherited from `pathspec`, not a choice this module makes: gitignore
+    matching is case-sensitive on Linux (the platform this ships for), so
+    `*.pem` does not match a file spelled `.PEM`. Stated because nothing
+    else here says so, and a reader relying on Sextant to catch a
+    differently-cased credential file would be wrong to."""
+    rules = IgnoreRules.load(tmp_path)
+    assert rules.matches(tmp_path / "SERVER.PEM") is False
 
 
 def test_a_path_already_relative_to_the_repo_root_is_accepted_directly(tmp_path: Path):
