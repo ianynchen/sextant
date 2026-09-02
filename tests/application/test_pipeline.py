@@ -523,6 +523,52 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # row. It shares the existing `(None, None)` tuple already in this
         # set, so the SET gains no new entry for it even though the endpoint
         # count below does (asserted by caller below).
+        #
+        # 2I Task 2: the Spring-WS surface — verbless like every other
+        # non-HTTP row (D02 §2, amended), `method` NULL, because a SOAP
+        # operation declares no HTTP-style verb: the transport binding's own
+        # POST is shared by every operation on the port and identifies none of
+        # them.
+        #
+        # `OrderSoapEndpoint#placeOrder`'s `@PayloadRoot(namespace, localPart)`
+        # — the QName identity form, composed by `qualifier_format: qname`
+        # into ONE bracketed token. The braces are the notation, not
+        # decoration: `{ns}local` is how a payload root is written everywhere
+        # a human would read it back.
+        (None, "{http://orders.example.com/ws}placeOrderRequest"),
+        # `cancelOrder`'s `@SoapAction` — the SECOND identity form the same
+        # catalog carries, and deliberately NOT a QName: a SOAPAction is an
+        # opaque header URI, so it lands verbatim with no qualifier at all
+        # (`@SoapAction` declares no `namespace` attribute, so the shared
+        # `qualifier_from: [namespace]` reads NULL for it and composes no
+        # braces). Two identity forms, one mapping block, no engine branch.
+        (None, "http://orders.example.com/action/cancelOrder"),
+        #
+        # 2I Task 2 (controller ruling): the JAX-WS surface, `jakarta-jws.yml`.
+        # `BillingWebService#charge`'s own `@WebMethod(operationName)`, scoped
+        # by the namespace its CLASS states once for every operation it holds.
+        (None, "{http://billing.example.com/ws}chargeOrder"),
+        # `refund` carries NO annotation at all — the DR-6 row, derived by the
+        # class-gate member rule (`members: public_methods`) and named by
+        # `path_fallback`, because JAX-WS exposes a public method whether or
+        # not `@WebMethod` customizes it. A catalog deriving only the annotated
+        # methods would report this service missing one of its own operations
+        # while presenting the rest as complete.
+        (None, "{http://billing.example.com/ws}refund"),
+        # `LegacyBillingWebService` is the JAVAX spelling with a BARE
+        # `@WebService`, so it pins two things at once: both gate spellings
+        # reach the derivation through `mapping.annotations` (a list, where
+        # `type_annotation` is one fqn), and the namespace is the
+        # reversed-package default — `com.example.orders.soap` →
+        # `http://soap.orders.example.com/`, trailing slash included, exactly
+        # what both reference implementations compute (checkpoint item 2).
+        (None, "{http://soap.orders.example.com/}legacyCharge"),
+        # NOT here, and asserted absent below: `internalAudit`. Its
+        # `@WebMethod(exclude = true)` is JAX-WS itself withdrawing the
+        # operation, so the `unless` filter derives nothing — and the member
+        # rule must not re-derive it under its construct name, which is why
+        # that rule's override is keyed on carrying an annotation rather than
+        # on having produced a row.
     }
     # One row per mapped method, not one per (method, same-named sibling) pair:
     # the fixture's two `get` overloads share a name, and a symbol that does not
@@ -726,7 +772,31 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # an existing identity. 115 + 2 = 117. The `path_separator` fix itself
     # adds no row anywhere — it changes the ADDRESS a row carries — which is
     # why every other identity in the set above is unmoved.
-    assert len(report.endpoints) == 117
+    #
+    # 2I Task 2 adds 2: `spring-ws.yml`'s two inbound SOAP rows, one per
+    # identity form (`@PayloadRoot`'s QName, `@SoapAction`'s header URI).
+    # Neither collides with anything: `soap` is its own protocol, so a row
+    # here could not merge with an HTTP one even if the strings matched.
+    # 117 + 2 = 119.
+    #
+    # `jakarta-jws.yml` adds 3, one per operation JAX-WS actually exposes:
+    # `chargeOrder` (annotated), `refund` (the DR-6 member row, no annotation
+    # at all) and `legacyCharge` (javax spelling, reversed-package default).
+    # FOUR public methods produce those 3: `internalAudit`'s
+    # `@WebMethod(exclude = true)` is the framework withdrawing the operation,
+    # so it derives nothing — asserted explicitly below rather than left to
+    # this count, since a row lost for the wrong reason counts the same.
+    # 119 + 3 = 122.
+    #
+    # `wsdl-schema.yml` (2I Task 4) adds nothing to THIS particular count, for
+    # the exact reason `graphql-schema.yml` (2H Task 4) did not above: its one
+    # new row (`{http://orders.example.com/ws}quoteOrderRequest`) comes from
+    # the WSDL/XSD reader's own `declared_shape` facts, which this fixture
+    # never loads (`resolved_fixture` runs no reader or interpret step —
+    # `test_the_format_ladder_answers_every_live_row`'s own docstring) —
+    # pinned instead in `tests/e2e/test_vertical_slice.py`, where the
+    # interpreter runs. 122 stands unmoved through this task.
+    assert len(report.endpoints) == 122
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
@@ -860,7 +930,10 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
 
 # --- 2H Task 2: the GraphQL surface, live on real bytecode ---------------
 #
-# Pinned from the live run this task froze: 110 endpoints, extractor 9.9.
+# Pinned from the live run THAT task froze: 110 endpoints, extractor 9.9.
+# The counts have moved with every task since (122 now); the extractor is
+# 9.12 as of 2I Task 6's library origin tier. Both numbers are kept as the
+# historical record of what this section was written against.
 
 
 def _graphql_rows(report: ResolveReport) -> dict[tuple[str | None, str | None], dict]:
@@ -1178,9 +1251,191 @@ def test_a_value_returning_stomp_handler_with_no_sendto_derives_an_unresolved_re
 
 # --- 2H Task 6: `protocol_hint`, live on real bytecode -------------------
 #
-# Pinned from the live run this task froze: still 115 endpoints, extractor
-# 9.9. Nothing here adds a row — every assertion below is about rows that
-# already existed reading a different protocol.
+# Pinned from the live run THAT task froze: still 115 endpoints, extractor
+# 9.9 (122 and 9.12 now — see the 2H Task 2 header above). Nothing here adds
+# a row — every assertion below is about rows that already existed reading a
+# different protocol.
+
+
+def _soap_row(report: ResolveReport, path: str) -> dict:
+    [row] = [e for e in report.endpoints if e["protocol"] == "soap" and e["path"] == path]
+    return row
+
+
+def test_a_payload_root_derives_its_qname_identity_from_two_attributes_of_one_annotation(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """2I design §2, word 1, live. `OrderSoapEndpoint#placeOrder`'s
+    `@PayloadRoot(namespace, localPart)` states BOTH halves of one QName on
+    one annotation, and `qualifier_format: qname` composes them into the one
+    bracketed token a human would read back — `{namespace}localPart`.
+
+    The two attributes play different roles and are named exactly once each:
+    `namespace` in `qualifier_from`, `localPart` in `path_from`. Listing
+    `localPart` as a second `qualifier_from` alias would qualify the name with
+    ITSELF wherever a `@PayloadRoot` stated only a local part, since that key
+    is an alias list where the first present attribute wins.
+
+    Verbless (`method` NULL) like every non-HTTP row: the transport binding's
+    POST is shared by every operation on the port and identifies none of them.
+
+    `request_shape` comes from the `@RequestPayload` parameter through the
+    STRICT body rule (`fallback: none`) — Spring-WS's own
+    `PayloadMethodArgumentResolver` binds a payload argument only where that
+    annotation is actually present, so an unannotated parameter is not a
+    payload here the way a messaging catalog's bare parameter is."""
+    _, report = resolved_fixture
+    row = _soap_row(report, "{http://orders.example.com/ws}placeOrderRequest")
+
+    assert row["method"] is None
+    # 2I Task 5: `both`, not `inbound` — `BillingSoapClient` calls the very
+    # operation this endpoint serves (its payload type's `@XmlRootElement`
+    # states the same QName), so D02 §3's merge folded the outbound row into
+    # this one. Everything this test is ABOUT is untouched by that: the merge
+    # keeps the handler's own row, its handler, its contracts and its
+    # `catalog_id`, and changes only the direction and the carried
+    # caller/peer.
+    assert row["direction"] == "both"
+    assert row["handler"].endswith("OrderSoapEndpoint#placeOrder(sig_fd19bfc7).")
+    assert row["resolution"] == "resolved"
+    assert row["evidence"] == "compiler"
+    assert row["catalog_id"] == "spring-ws"
+    assert (
+        json.loads(row["request_shape"])["shape_id"]
+        == "com/example/orders/soap/payload/PlaceOrderRequest#"
+    )
+    assert json.loads(row["response_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+
+
+def test_a_soap_action_derives_its_header_uri_verbatim_beside_the_qname_rows(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """The SECOND identity form the same catalog carries, and the reason it
+    needed no second mapping block: `@SoapAction` dispatches on the
+    transport's SOAPAction header, so its address is that URI verbatim — NOT
+    a QName, and NOT bracketed.
+
+    That falls out of the shared vocabulary rather than a branch: the one
+    `qualifier_from: [namespace]` list reads NULL on an annotation that
+    declares no `namespace` attribute at all, and an absent qualifier composes
+    no braces (the same "an empty half takes no separator with it" rule the
+    2H seam keeps). The one `path_from: [localPart, value]` list likewise
+    reads `value` here and `localPart` there, first present wins, because the
+    two annotations' attribute names are disjoint.
+
+    Same handler class, same catalog, same protocol as the QName row above —
+    so a catalog that had collapsed the two forms would show up here as a
+    bracketed action URI rather than as a missing row."""
+    _, report = resolved_fixture
+    row = _soap_row(report, "http://orders.example.com/action/cancelOrder")
+
+    assert row["method"] is None
+    assert row["direction"] == "inbound"
+    assert row["handler"].endswith("OrderSoapEndpoint#cancelOrder(sig_fd19bfc7).")
+    assert row["resolution"] == "resolved"
+    assert row["catalog_id"] == "spring-ws"
+    assert (
+        json.loads(row["request_shape"])["shape_id"]
+        == "com/example/orders/soap/payload/PlaceOrderRequest#"
+    )
+
+
+def test_a_jax_ws_class_exposes_its_bare_public_method_beside_its_annotated_one(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """DR-6, live: `@WebMethod` CUSTOMIZES an operation, it does not create
+    one, so `BillingWebService#refund` — which carries no annotation at all —
+    is exposed exactly as `charge` is. That is the class-gate member rule
+    (`members: public_methods`), and `refund`'s name comes from
+    `path_fallback`, since a member has no name attribute to read.
+
+    Both take the namespace their CLASS states once, through the same
+    type-level join a class-level scope has always reached methods by — so the
+    annotated row and the member row are qualified identically, which is the
+    point: they are the same kind of operation.
+
+    `chargeOrder`, not `charge`: a public method that ALSO matches a
+    member-level rule derives ONCE, with that rule's value. A member rule that
+    did not defer would have published both spellings of one operation.
+    """
+    _, report = resolved_fixture
+    charge = _soap_row(report, "{http://billing.example.com/ws}chargeOrder")
+    refund = _soap_row(report, "{http://billing.example.com/ws}refund")
+
+    for row in (charge, refund):
+        assert row["method"] is None
+        assert row["direction"] == "inbound"
+        assert row["resolution"] == "resolved"
+        assert row["evidence"] == "compiler"
+        assert row["catalog_id"] == "jakarta-jws"
+        # No `request_body` block: a JAX-WS request payload is the generated
+        # wrapper element, not the method's own parameters.
+        assert row["request_shape"] is None
+        assert (
+            json.loads(row["response_shape"])["shape_id"] == "com/acme/orders/contracts/OrderView#"
+        )
+    assert charge["handler"].endswith("BillingWebService#charge(sig_079d928d).")
+    assert refund["handler"].endswith("BillingWebService#refund(sig_079d928d).")
+    # `charge` derives ONCE — under the annotation's name, never also under
+    # its own. Asserted by counting the class's rows rather than by absence,
+    # so a second row under any spelling fails here.
+    assert len([e for e in report.endpoints if "soap/BillingWebService#" in str(e["handler"])]) == 2
+
+
+def test_the_javax_spelling_derives_with_the_reversed_package_namespace_default(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """Two facts in one row, and neither is expressible without this task's
+    vocabulary.
+
+    `LegacyBillingWebService` carries the PRE-JAKARTA `javax.jws.WebService`,
+    a distinct fqn from the jakarta one (checkpoint item 4). It derives because
+    both spellings sit in `mapping.annotations` — a LIST — rather than in
+    `type_annotation`, which is a single fqn and would have discarded this
+    whole class's rows. That closes, for a scope, the javax COVERAGE boundary
+    `jakarta-websocket.yml` still carries for a prefix.
+
+    Its `@WebService` is BARE, so the namespace is the framework's own default:
+    `com.example.orders.soap` reversed, `http://` in front, trailing slash —
+    `http://soap.orders.example.com/`, the exact string both
+    `RuntimeModeler#getNamespace` and CXF's `PackageUtils#getNamespace`
+    compute (checkpoint item 2). Not a guessed namespace: a spec that DEFINES
+    the default is stating a fact about every class in it.
+    """
+    _, report = resolved_fixture
+    row = _soap_row(report, "{http://soap.orders.example.com/}legacyCharge")
+
+    assert row["method"] is None
+    assert row["handler"].endswith("LegacyBillingWebService#charge(sig_079d928d).")
+    assert row["resolution"] == "resolved"
+    assert row["catalog_id"] == "jakarta-jws"
+
+
+def test_an_excluded_web_method_derives_nothing_under_any_spelling(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`@WebMethod(exclude = true)` is JAX-WS itself saying the method is NOT
+    an operation, so the honest derivation is no row at all — not a row marked
+    somehow.
+
+    Asserted under BOTH spellings it could have appeared as, because the
+    interesting failure is not the filter missing: it is the filter working and
+    the MEMBER rule then re-deriving the same public method under its construct
+    name. `internalAudit` is public, and its class is gated, so it is a member
+    candidate — the override has to be keyed on carrying an annotation rather
+    than on having produced a row, or every `unless` becomes a no-op on a gated
+    class.
+
+    `exclude` arrives as a real JSON boolean, never the string `"true"`
+    (checkpoint item 4), so this also pins that the comparison reaches the
+    value on one representation rather than guessing at its type.
+    """
+    _, report = resolved_fixture
+    paths = {e["path"] for e in report.endpoints}
+
+    assert "{http://billing.example.com/ws}internalAudit" not in paths
+    assert "internalAudit" not in paths
+    assert not [e for e in report.endpoints if "internalAudit" in str(e["handler"])]
 
 
 def _route(report: ResolveReport, path: str) -> dict:
@@ -1255,7 +1510,7 @@ def test_nothing_but_the_two_sse_routes_moves(
     untouchable rather than merely untouched. Their counts are the same
     numbers their own tasks froze.
 
-    *No row created or removed.* 117 before, 117 after: the two rows left the
+    *No row created or removed.* 122 before, 122 after: the two rows left the
     http bucket and arrived in the sse one, and nothing else changed size.
 
     *Every other http row stayed.* The http bucket is exactly two smaller,
@@ -1277,10 +1532,19 @@ def test_nothing_but_the_two_sse_routes_moves(
         "kafka": 22,
         "pubsub": 6,
         "sqs": 7,
+        # 2I Task 2: `spring-ws.yml`'s two inbound rows. Untouchable by this
+        # pass for the same reason the graphql and messaging buckets are —
+        # only an http row carries a `protocol_hint` to be reclassified by.
+        # 2 from `spring-ws.yml` + 3 from `jakarta-jws.yml`. `wsdl-schema.yml`
+        # (2I Task 4) adds nothing here — same reason `graphql-schema.yml`
+        # adds nothing to `graphql` above: this fixture loads no
+        # `declared_shape` facts at all (comment above `len(report.endpoints)
+        # == 122`).
+        "soap": 5,
         "sse": 2,
         "websocket": 5,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 117
+    assert sum(counts.values()) == len(report.endpoints) == 122
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -2563,6 +2827,23 @@ def test_the_format_ladder_answers_every_live_row(
         ("json", "resolved")
     }
     assert len([e for e in report.endpoints if e["protocol"] == "graphql"]) == 11
+
+    # Rung 1 — SECOND LIVE SURFACE (2I Task 2), and the one that proves the
+    # rung is protocol-generic rather than a GraphQL special case: a different
+    # protocol, a different format, one catalog instead of three, and no
+    # engine change between them. `spring-ws.yml`'s `format_fixed: {soap: xml}`
+    # answers BOTH identity forms alike — the QName row and the SOAPAction
+    # row — because the rung reads the row's PROTOCOL and nothing else.
+    # `resolved`, not `narrowed`, for GraphQL's own reason: a SOAP envelope IS
+    # an XML document, so this is the protocol stating its wire rather than a
+    # framework default being assumed.
+    assert {answer for key, answer in answers.items() if key[0] == "soap"} == {("xml", "resolved")}
+    # `wsdl-schema.yml` (2I Task 4) carries the identical `format_fixed: {soap:
+    # xml}` entry and would answer a third live surface alike — but this
+    # fixture loads no `declared_shape` facts (comment above `len(report.
+    # endpoints) == 122`), so its one row never reaches this table; pinned
+    # instead in `tests/e2e/test_vertical_slice.py`.
+    assert len([e for e in report.endpoints if e["protocol"] == "soap"]) == 5
 
     # Rung 2 — the only three HTTP routes whose mapping annotations declare a
     # media type at all.

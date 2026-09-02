@@ -33,6 +33,26 @@ same kind of reason — a root field's ARGUMENTS are what the operation takes, a
 the interpreter deliberately does not project them, so there is nothing here
 to carry.
 
+**A `role` of the literal word `"operation"` (2I, this task) derives
+differently — one row per SHAPE, never per field, and the one case where this
+engine hardcodes a role name rather than reading it off catalog data.** A WSDL
+input element's shape IS the operation (2I Task 3): the wrapper element is the
+whole request payload, not a type some root field merely returns, so there is
+no "field of a root type" here to iterate — deriving one row per FIELD would
+mint an endpoint per element of the request body, the same defect a per-field
+pass over an ordinary payload type would commit. `path` is the shape's own
+schema name; `method` is NULL, because SOAP is verbless like every other
+non-HTTP protocol (D02 §2, amended) — never the catalog's mapped value, which
+this branch does not read. `request_shape` is NOT NULL here, unlike the
+per-field case above: the wrapper is wire-true (2I design §4), so the
+operation's request shape is the very shape this row derives from, carried as
+a self-referencing descriptor. `response_shape` stays NULL and gets no stamp
+at all — 2I Task 3 marks INPUT elements only, so no fact links an operation to
+an output message, and inventing that join is explicitly out of this task's
+scope (a later task's to read, honestly absent until then). Every other
+column — `handler`, `caller`, `evidence`, `resolution` — reads exactly as the
+per-field case above.
+
 **Agreement with the annotation catalogs rides two existing mechanics** (2H
 design §3), neither of them new:
 
@@ -83,7 +103,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # legitimately arrives twice when a shared name is declared per document —
     # and two rows for one operation would be the same operation counted
     # twice.
-    seen: set[tuple[str, str]] = set()
+    #
+    # `method` is `None` for a per-SHAPE identity (below) — SOAP is verbless,
+    # same as every other non-HTTP protocol (D02 §2, amended) — so the set
+    # widens to hold it rather than gaining a second seen-set for one style.
+    seen: set[tuple[str | None, str]] = set()
     for shape in workspace.query("declared_shapes"):
         # The format gate is what makes this catalog's declared `protocol`
         # true of the rows below: `role` is a neutral field on every declared
@@ -99,9 +123,48 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # A role the catalog does not name derives nothing — the `config_join`
         # rule for an unmapped binder name or serializer class, for the same
         # reason: an unmapped value is a gap to grow the catalog from, never a
-        # column value to invent.
+        # column value to invent. `operations.get` still GATES `"operation"`
+        # (2I design, this task): a catalog must name the role to be read at
+        # all, the same as `query`/`mutation`/`subscription`. Its MAPPED VALUE
+        # is not, though — the branch below never reads `method` — because
+        # unlike a GraphQL root kind, WSDL's `role="operation"` names no verb
+        # for the catalog to spell; the mapping entry exists to be present,
+        # not to be read.
         method = operations.get(str(role))
         if method is None:
+            continue
+        # `role == "operation"` (2I design §3, this task's own ruling): a WSDL
+        # input element's shape IS the operation — 2I Task 3 marks the shape
+        # itself, not one of its fields, with the role — so this branch
+        # derives exactly one row from the SHAPE, never from its fields. The
+        # graphql `query`/`mutation`/`subscription` branch below is
+        # untouched: those roles name a ROOT TYPE whose FIELDS are the
+        # operations, a different shape of fact entirely, and this new branch
+        # runs before it ever sees one of that role's shapes reach the loop
+        # (`continue`, not `elif`, so nothing after it can also fire for the
+        # same shape).
+        if str(role) == "operation":
+            # `symbol` is what `declared_shapes` selects — `schema_name`
+            # itself is deliberately unselected there (DR-4 precedence's own
+            # concern, settled upstream) — but for a schema-only fact the two
+            # are the identical value: `wsdl_xsd.py`'s own `_add_shape` writes
+            # `symbol=qualified, schema_name=qualified` because a contract
+            # file compiles to no class, so there is no second naming for
+            # `schema_name` to bridge. Reading `symbol` here is reading
+            # `schema_name` under the one name this query carries.
+            path = str(shape["symbol"])
+            if (None, path) in seen:
+                continue
+            seen.add((None, path))
+            rows.append(_operation_row(catalog, path, str(shape["evidence"])))
+            # No stamp: `stamps` fills a row's `response_shape` from the
+            # OUTPUT side of an operation, and 2I Task 3 marks INPUT elements
+            # only — no `declared_shape` fact links an operation to what its
+            # WSDL output message names, so there is nothing here to
+            # coalesce a response from. Inventing one by, say, guessing at an
+            # output element's name would be exactly the guess D00 §3 rules
+            # out; `response_shape` stays NULL, honestly, until a later task
+            # reads the output side.
             continue
         for field in json.loads(str(shape["fields"])):
             # GraphQL renames nothing and the interpreter says so by writing
@@ -126,7 +189,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     workspace.derive("stamp_declared_response", rows=stamps)
 
 
-def _row(catalog: Catalog, method: str, path: str, evidence: str) -> dict[str, Any]:
+def _row(catalog: Catalog, method: str | None, path: str, evidence: str) -> dict[str, Any]:
     """One root operation's row. Every column this style cannot speak for is
     NULL rather than filled with a plausible value — the schema declares an
     operation and its type, and says nothing whatever about the code that
@@ -141,7 +204,14 @@ def _row(catalog: Catalog, method: str, path: str, evidence: str) -> dict[str, A
     `response_shape` is NULL HERE and filled by the stamp, not set on the row:
     the schema's answer must reach the annotation twin that blocked this row
     just as much as it reaches this one, and a single statement doing both is
-    one rule rather than two that can drift.
+    one rule rather than two that can drift. (The per-shape `"operation"`
+    branch appends no stamp at all — this task's own stated boundary, in
+    `run`'s comment beside its `continue` — so `response_shape` simply stays
+    NULL on those rows.)
+
+    `method` is `None` for a per-shape `"operation"` row: SOAP is verbless,
+    like every other non-HTTP protocol (D02 §2, amended), and `_operation_row`
+    below is the one caller that passes it.
     """
     return {
         "protocol": catalog.protocol,
@@ -160,6 +230,35 @@ def _row(catalog: Catalog, method: str, path: str, evidence: str) -> dict[str, A
         "consumes": None,
         "produces": None,
     }
+
+
+def _operation_row(catalog: Catalog, path: str, evidence: str) -> dict[str, Any]:
+    """The `role == "operation"` row `_row` cannot fully state on its own:
+    every column but one reads exactly as `_row` already writes it (`method`
+    NULL, `handler`/`caller` NULL, `response_shape` NULL — this task's stated
+    boundary), so this wraps `_row` rather than repeating its fields.
+
+    `request_shape` is the one column that differs, and it is NOT NULL here —
+    the one place this style's `request_shape` is ever set. 2I design §4's
+    ruling is that the wrapper element is wire-true: unlike a GraphQL root
+    field, whose ARGUMENTS the interpreter does not project (`_row`'s own
+    docstring, the per-field branch above), a WSDL operation's request payload
+    IS the shape this row was derived from — the input element wraps the
+    whole request body, so the operation and its request shape are one
+    schema-universe fact, not two. The descriptor self-references `path` by
+    `shape_id`, in the exact `{wire_type, wire_format, nullable, shape_id}`
+    grammar `wsdl_xsd.py` already writes for an element-typed-by-a-named-type
+    reference (D01 §5) — reused rather than invented, and serialised the same
+    deterministic way (`sort_keys`, compact separators — NFR-1) `_declared_
+    response` below already does for the sibling column.
+    """
+    row = _row(catalog, None, path, evidence)
+    row["request_shape"] = json.dumps(
+        {"wire_type": "object", "wire_format": None, "nullable": False, "shape_id": path},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return row
 
 
 def _declared_response(field: dict[str, Any]) -> str:
@@ -194,9 +293,12 @@ def _declared_response(field: dict[str, Any]) -> str:
 def _validate_matches(catalog: Catalog) -> None:
     """Refuses a broken catalog before anything is read (the
     `config_join._validate_matches` precedent): `schema_format` selects which
-    facts this catalog speaks for and every `operations` value is written
-    straight into the `method` column, where a typo is indistinguishable from
-    an observation.
+    facts this catalog speaks for, and every `operations` value except
+    `"operation"`'s own (`run`'s comment beside its `operations.get` call) is
+    written straight into the `method` column, where a typo is
+    indistinguishable from an observation. `"operation"`'s value is still
+    required to be a non-empty string — nothing here excuses it from the rule
+    below — it is simply never read past that check.
 
     The `operations` KEYS are deliberately unchecked against a closed set: a
     role no fact ever carries simply matches nothing, which is the same

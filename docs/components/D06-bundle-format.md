@@ -68,7 +68,7 @@ columnar need per fact kind is stated.
   "contents": { "facts": true, "graph": true, "tables": ["symbols", "edges", "endpoints",
                                                           "shapes", "shape_fields", "dispatch", "trace_summary"],
                 "facts_files": 1283 },
-  "gaps": ["soap_contracts_not_read"],
+  "gaps": ["call_graph_not_implemented"],
   "uncovered": ["src/main/java/…/LegacyController.java"],
   "skipped_catalogs": [{ "catalog_id": "spring-webclient", "missing_capabilities": ["string_constants"] }]
 }
@@ -94,6 +94,14 @@ monorepo without fetching history itself.
 list rather than hand-maintained — so `open_questions` (below) appears there beside
 `endpoints`, `shapes`, `shape_fields`, `resolved_config`, `documents`, `symbols`,
 `annotations` and `call_sites`, and the list is sorted so the manifest is deterministic.
+
+**`documents` carries `origin`** — the coordinate of the library a document was extracted
+from ([D00](D00-fact-schema.md) §2), NULL for the module's own output. Opting a library in
+is the reader's own assertion that it is part of the module's runtime surface
+([D04](D04-config-and-exclusion.md) §2a), and an assertion visible in the rendered document
+but invisible in the published bundle would be laundered into module-observed evidence
+exactly where it travels furthest from the person who made it. A consumer joins a symbol's
+`document_id` to tell a library-contributed row from a module one.
 
 **`environments`** lists the profiles this module resolved. Endpoints carry configuration
 expressions rather than one environment's values, so a bundle serves every environment and
@@ -195,12 +203,20 @@ the row's `protocol` — never by the catalog that derived it.
 
 | Row | Renders | Why |
 |---|---|---|
-| `http` / `soap` / `grpc` | `GET /v1/orders` | the verb implies its own protocol |
-| `kafka` / `jms` / `sqs` / `pubsub` / `websocket` | `kafka order-events`, `websocket /orders/place` | verbless: the protocol defines no verb, so there is none to print |
+| `http` / `grpc` | `GET /v1/orders` | the verb implies its own protocol |
+| `kafka` / `jms` / `sqs` / `pubsub` / `websocket` / `soap` | `kafka order-events`, `websocket /orders/place`, `soap {http://orders.example.com/ws}placeOrderRequest` | verbless: the protocol defines no verb, so there is none to print |
 | `graphql` root operation | `graphql query orders` | verbed, and PREFIXED — a bare `query orders` names nothing in particular |
 | `graphql` resolver (`method` NULL) | `graphql Order.lines` | the NULL is an absence by design, not an unread verb |
 | `sse` | `sse GET /events/stream` | verbed with a real HTTP verb, and prefixed so it does not read as an ordinary REST route |
 | any half unread | `(unresolved)` in that half | never a bare `None` |
+
+**`soap` is verbless and was carried in the verbed half by mistake until Phase 2I.** The
+protocol joined [D00](D00-fact-schema.md)'s closed set in 2H, when no catalog owned it, so
+the misclassification rendered nothing and nobody could see it; 2I's first live SOAP rows
+inherited it, and every one of them — `method` NULL by design, one POST shared by every
+operation on a port — rendered `(unresolved)` beside a fully `resolved` address. Recorded
+because the shape of the bug is the argument for the derived set below: a protocol placed
+in the wrong half of a hand-listed pair says nothing at all until something derives a row.
 
 **The verbless set is DERIVED — every protocol minus the verbed ones — so a protocol added
 to [D00](D00-fact-schema.md)'s closed set renders verblessly by default.** That is right for
@@ -227,6 +243,26 @@ that does not exist. `none recorded` rather than `none`: the claim is about what
 evidence carries, never that the service implements nothing. The discriminator is the row's
 own columns — neither a handler nor a caller, and an address that resolved — not its
 protocol or its catalog.
+
+**A row a library contributed is marked, as a `Via: `<coordinate>`` detail line** under the
+identity, in the same `Label: value` style the `Request:`/`Response:` lines use (Phase 2I).
+Such a row is otherwise indistinguishable from one this repository declares — same table,
+same columns, same resolution — and the difference is what a reader needs: the operation is
+real, and the place to go and look is the library's source, not this module's. Three rules
+make the marking honest rather than decorative:
+
+- **It keys on the SURVIVING evidence — the handler wherever there is one, the caller only
+  where there is not.** A merged `both` row keeps the handler's own declaration
+  ([D02](D02-catalog-schema.md) §3), so a path this module HANDLES stays unmarked even when
+  the client calling it came out of a jar; marking it would attribute this module's own
+  endpoint to a library.
+- **One attribution per wire identity.** A `both` row is listed in both tables, and the same
+  finding stated twice reads as two findings.
+- **A row naming neither handler nor caller is left unmarked** rather than guessed at.
+
+The coordinate itself comes back through the document a symbol was declared in — an
+endpoint row names a symbol and nothing more — which is the same `origin` the bundle's
+`documents` table carries (§3), so the page and the published data cannot disagree.
 
 ---
 

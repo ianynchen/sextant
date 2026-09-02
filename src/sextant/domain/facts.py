@@ -73,6 +73,11 @@ class Document(BaseModel):
     redaction_set_hash: str
     partial: bool = False
     partial_reason: str | None = None
+    # Which artifact outside this module's own output the document was read
+    # from, as that artifact's coordinate (D00 §2). NULL — and, on disk,
+    # absent — for the module's own output, which is what every document was
+    # until libraries could be scanned at all.
+    origin: str | None = None
 
 
 class ModuleFact(BaseModel):
@@ -217,7 +222,10 @@ class EmbeddedDescriptorFact(BaseModel):
     kind: Literal["embedded_descriptor"] = "embedded_descriptor"
     document_id: str
     symbol: str
-    schema_format: Literal["protobuf", "avro", "graphql"]
+    # `wsdl` covers both `.wsdl` and `.xsd`: a WSDL declares its payload types
+    # by embedding XSD in `<types>`, so the two extensions are one type
+    # universe rather than two formats.
+    schema_format: Literal["protobuf", "avro", "graphql", "wsdl"]
     payload: str
     # Compiled unless a source-file reader says otherwise: the artifact that
     # runs is the authority (DR-4), and it is also the common case.
@@ -266,7 +274,7 @@ class DeclaredShapeFact(BaseModel):
     # the schema — so this is what DR-4's compiled-beats-source precedence
     # compares, and the one field on which the two origins can meet.
     schema_name: str
-    schema_format: Literal["protobuf", "avro", "graphql"]
+    schema_format: Literal["protobuf", "avro", "graphql", "wsdl"]
     origin: Literal["compiled", "source"]
     # A schema compiled into the artifact is compiler evidence (COVERAGE
     # §4.1's strongest tier); a schema file in the repository is a
@@ -276,9 +284,11 @@ class DeclaredShapeFact(BaseModel):
     # schema format may declare that one of its types is the entry point every
     # query (or mutation, or subscription) is addressed against, and which
     # type that is can be renamed, so it cannot be recovered from the type's
-    # own name downstream. NULL for every type that is an ordinary payload,
-    # which is nearly all of them.
-    role: Literal["query", "mutation", "subscription"] | None = None
+    # own name downstream. `operation` is the fourth word and the one that
+    # names the type as an operation itself rather than as a root operations
+    # hang off, which a schema format may equally state. NULL for every type
+    # that is an ordinary payload, which is nearly all of them.
+    role: Literal["query", "mutation", "subscription", "operation"] | None = None
     fields: list[DeclaredFieldFact] = Field(default_factory=list)
 
 

@@ -23,11 +23,18 @@ from sextant.application.ports.catalogs import CatalogSource
 from sextant.application.ports.descriptors import DescriptorInterpreter
 from sextant.application.ports.detector import Detector, ModuleModel, select_detector
 from sextant.application.ports.progress import Progress
-from sextant.application.ports.scanner import Scanner, ScanRequest, select_scanner
+from sextant.application.ports.scanner import (
+    ScanError,
+    Scanner,
+    ScanRequest,
+    select_scanner,
+)
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.pipeline import ResolveReport, resolve
 from sextant.domain.factfile import (
     config_fact_target,
+    discard_library_facts,
+    library_fact_root,
     read_fact_tree,
     schema_fact_target,
     write_fact_file,
@@ -85,6 +92,14 @@ class AnalyzeResult:
     # declared_shape (compiled or source, whichever origin failed), named by
     # their own `symbol` (interpret_descriptors's own failure list).
     descriptors_not_interpreted: tuple[str, ...] = ()
+    # Opted-into libraries whose archive RESOLVED but could not be scanned —
+    # `<coordinate>: <reason>`, the shape `uncovered` already uses. Its own
+    # list beside the detector's `libraries_not_resolved`, deliberately: the
+    # two fail at different stages and are closed by different actions (build
+    # or install the dependency, versus the archive is unreadable), and one
+    # list would leave a reader to work out which of the two they are looking
+    # at from the reason text alone.
+    libraries_not_scanned: tuple[str, ...] = ()
 
 
 def analyze(
@@ -123,6 +138,27 @@ def analyze(
     # run. The registry is the composition root's; the moment is the pipeline's.
     scanner = select_scanner(scanners, module.languages)
     progress.start("scan")
+    # Every library fact from a PREVIOUS run of this workspace goes first,
+    # before a single one of this run's is written. A fact file is written
+    # whole, so a library still opted in overwrites itself — but one that was
+    # removed from `.sextant.yml`, or renamed, overwrites nothing, and the
+    # resolve below reads the whole tree. Without this, opting OUT would leave
+    # the rows exactly where they were and the opt-in would be a decision that
+    # cannot be taken back.
+    #
+    # BEFORE the module's own scan, not after it: `facts/lib/` is a directory
+    # name, and a module holding a top-level `lib` package writes its own class
+    # facts there (the same target collision `facts/config` and `facts/schema`
+    # already live with). Discarding first means such a module rewrites them a
+    # line later; discarding after would delete facts this run had just written.
+    #
+    # The delete-then-rewrite window assumes ONE analyze per fact root at a
+    # time. That is what a workspace is (M00: one module, one workspace, one
+    # command), and nothing here takes a lock — a second concurrent analyze
+    # into the same workspace would see the gap between the discard and the
+    # rewrite. Stated because it is load-bearing and free to satisfy, not
+    # because it is enforced.
+    discard_library_facts(fact_root)
     scan_report = scanner.scan(
         ScanRequest(
             module_id=module.module_id,
@@ -132,7 +168,58 @@ def analyze(
             out_dir=fact_root,
         )
     )
-    progress.finish("scan", f"{scan_report.facts} facts")
+    # Each opted-into library (D04 §2a) is scanned by the SAME scanner, through
+    # the same port, into its own subtree — nothing here knows it is reading an
+    # archive rather than a directory, which is the scanner's business. Three
+    # things differ from the module's own scan and each is deliberate: the
+    # library's OWN coordinates and version, so a scanned symbol's identity
+    # says which artifact declares it rather than borrowing this module's;
+    # `origin`, so every document it writes records the library it came from
+    # (D00 §2); and the fact subtree, so a library class can never compete with
+    # a module class for one fact-file target. `module_id` stays the analysed
+    # module's: these facts are part of THIS module's analysis, whoever
+    # compiled the bytecode.
+    scanned_facts = scan_report.facts
+    uncovered = list(scan_report.uncovered)
+    libraries_not_scanned: list[str] = []
+    for library in module.library_roots:
+        try:
+            library_report = scanner.scan(
+                ScanRequest(
+                    module_id=module.module_id,
+                    coordinates=library.coordinate.replace(":", "/"),
+                    version=library.version,
+                    classes_dir=library.archive,
+                    out_dir=library_fact_root(fact_root, library.coordinate),
+                    origin=library.coordinate,
+                )
+            )
+        except ScanError as failure:
+            # An archive that cannot be read is a gap about THAT library, never
+            # the end of the module's analysis: the module's own facts are
+            # already on disk and are not made wrong by a dependency nobody
+            # could open. The module's own scan above is deliberately outside
+            # this — that one failing IS the analysis failing.
+            #
+            # Whatever the scan managed to write first goes with it. A backend
+            # writes each document as it reaches it, so a failure partway
+            # through an archive leaves a fraction of a library on disk —
+            # indistinguishable, once loaded, from all of a smaller one.
+            discard_library_facts(fact_root, library.coordinate)
+            # The archive PATH is replaced by the coordinate wherever the
+            # backend's own message names it. This string travels — into
+            # metadata.json, the rendered gaps list, a published bundle — and a
+            # path under someone's home directory identifies nothing off the
+            # machine that wrote it (D00 §2's rule, which holds for every
+            # reader-facing string and not only for the document record). The
+            # coordinate IS the portable name for exactly that path, so the
+            # substitution loses nothing and the reason survives intact.
+            reason = str(failure).replace(str(library.archive), library.coordinate)
+            libraries_not_scanned.append(f"{library.coordinate}: {reason}")
+            continue
+        scanned_facts += library_report.facts
+        uncovered.extend(library_report.uncovered)
+    progress.finish("scan", f"{scanned_facts} facts")
 
     # Ingress stays model-blind (design §1): every parseable config file
     # under every resource root is read, sorted by relative path (NFR-1),
@@ -230,9 +317,10 @@ def analyze(
         report,
         scan_report.scanner_id,
         scan_report.scanner_version,
-        scan_report.uncovered,
+        tuple(uncovered),
         tuple(schema_sources_not_compiled),
         descriptors_not_interpreted,
+        tuple(libraries_not_scanned),
     )
 
 

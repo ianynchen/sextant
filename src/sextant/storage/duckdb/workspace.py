@@ -310,6 +310,26 @@ _NAMED_QUERIES = {
         FROM open_questions
         ORDER BY protocol, method, path, question, candidates::VARCHAR, evidence
     """,
+    # Every symbol that came out of an extracted LIBRARY rather than the
+    # module's own output, with the coordinate it came from (D00 §2's
+    # `origin`). Read by the renderer, which has to mark a row a library
+    # contributed: an endpoint row names a handler or a caller and nothing
+    # else, so the attribution has to be joined back through the document the
+    # symbol was declared in.
+    #
+    # Joined through the `documents` view, which projects `origin` for the
+    # bundle's sake anyway (schema.sql's own note): one projection, read by the
+    # renderer and exported, rather than a second extraction that could drift
+    # from it. `origin` is absent — hence NULL here — on a module's own
+    # document, so `IS NOT NULL` is the whole filter. Ordered by symbol for
+    # NFR-1.
+    "library_symbols": """
+        SELECT s.symbol AS symbol, d.origin AS origin
+        FROM symbols s
+        JOIN documents d ON d.document_id = s.document_id
+        WHERE d.origin IS NOT NULL
+        ORDER BY symbol
+    """,
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
     "facts": "SELECT count(*) AS facts FROM raw_facts",

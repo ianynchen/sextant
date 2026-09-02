@@ -87,14 +87,20 @@ _GAPS = [
 # `GET` does. `sse` is qualified for the mirror-image reason (2H design §6):
 # its verb IS an HTTP method, because an SSE stream is a route a client GETs,
 # and a bare `GET /events/stream` therefore reads as an ordinary REST route
-# and loses the one thing the reclassification established. HTTP, SOAP and
-# gRPC read correctly without the prefix, which is also what every pin
-# written before this expects.
+# and loses the one thing the reclassification established. HTTP and gRPC
+# read correctly without the prefix, which is also what every pin written
+# before this expects.
 _PROTOCOL_QUALIFIED = frozenset({"graphql", "sse"})
 
 # D00 §4 closed-set protocol names whose wire identity has no verb: a Kafka
 # topic, a JMS destination, an SQS queue or a Pub/Sub topic is addressed, not
-# called, so there is no method to render beside the path.
+# called, so there is no method to render beside the path. SOAP belongs here
+# too (spec §1, 2I Task 4 fix round 1, ruled) — an operation is addressed by
+# its payload root or its SOAPAction URI, never a verb, the same 2D messaging
+# shape as a Kafka topic. It sat in the verbed half from 2H (when no catalog
+# owned the protocol, so the misclassification rendered nothing) through 2I
+# Task 2's own live rows, which is what let every SOAP row render a phantom
+# `(unresolved)` verb nobody ever failed to read.
 #
 # Derived from D00's closed set by SUBTRACTING the verbed protocols, rather
 # than hand-listing the verbless ones. Two sets naming halves of one closed
@@ -111,7 +117,7 @@ _PROTOCOL_QUALIFIED = frozenset({"graphql", "sse"})
 # be added to one list and silently fall out of the other — a GET route
 # reclassified into the verbless half renders `sse /events/stream` and drops
 # the verb it does have.
-_VERBED_PROTOCOLS = frozenset({"http", "soap", "grpc"}) | _PROTOCOL_QUALIFIED
+_VERBED_PROTOCOLS = frozenset({"http", "grpc"}) | _PROTOCOL_QUALIFIED
 _VERBLESS_PROTOCOLS = frozenset(p.value for p in Protocol) - _VERBED_PROTOCOLS
 
 # The verbed protocols whose rows may legitimately carry NO verb. A GraphQL
@@ -211,6 +217,45 @@ def _format(endpoint: dict[str, object]) -> str:
     return str(value)
 
 
+def _origin_lines(endpoint: dict[str, object], origin_by_symbol: dict[str, str]) -> list[str]:
+    """The `Via:` detail line for a row an extracted LIBRARY contributed, or
+    nothing at all for the ordinary case.
+
+    A library-contributed row is otherwise indistinguishable from one the
+    module's own code declares — same table, same columns, same resolution —
+    and the difference matters to a reader: the operation is real, but nothing
+    in this repository declares it, so the place to go and look is the
+    library's.
+
+    **Keyed on the SURVIVING evidence, which is the handler wherever there is
+    one.** A merged `both` row keeps the handler's own declaration and carries
+    the caller onto it (D02 §3), so a path this module HANDLES is locally
+    declared even where the client that calls it came out of a jar — marking it
+    would attribute this module's own endpoint to a library. Only where there
+    is no handler at all is the caller the deriving side. A row naming neither
+    is a row nothing can attribute, and it is left unmarked rather than guessed
+    at.
+    """
+    deriving = endpoint.get("handler") or endpoint.get("caller")
+    origin = None if deriving is None else origin_by_symbol.get(str(deriving))
+    return [] if origin is None else [f"  - Via: `{origin}`"]
+
+
+def _library_gap_line(what: str, entry: str) -> str:
+    """One unreachable library, as `<what>, so nothing above accounts for it:
+    library `<coordinate>` — <reason>.`
+
+    The producer writes `<coordinate>: <reason>` — the shape `uncovered`
+    already uses — and only the coordinate is set in code here: a reason is a
+    sentence for a person to read, and typesetting a sentence as an identifier
+    is how a document teaches its reader to skip it. An entry with no reason at
+    all still renders, as the coordinate alone.
+    """
+    coordinate, _, reason = entry.partition(": ")
+    tail = f" — {reason}" if reason else ""
+    return f"- {what}, so nothing above accounts for it: library `{coordinate}`{tail}."
+
+
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     """One open question's candidate, in the same prose the writing pass
     already puts in its own `evidence` trail (`resolve/format.py`,
@@ -240,12 +285,22 @@ def render_module_document(
     shape_fields: Sequence[dict[str, object]] = (),
     resolved_config: Sequence[dict[str, object]] = (),
     open_questions: Sequence[dict[str, object]] = (),
+    library_symbols: Sequence[dict[str, object]] = (),
+    # Carried in rather than read off `module`, unlike `libraries_not_resolved`:
+    # resolution is a property of the module the detector described, while a
+    # scan failing is something that happened during one analysis of it.
+    libraries_not_scanned: tuple[str, ...] = (),
 ) -> str:
     """Adds no information. Every row comes from the graph, and every omission
     is stated (M07). Rendering the same report twice is byte-identical
     (NFR-1): nothing here reads a clock, and endpoint and shape order is
     whatever the graph query already fixed."""
     fields_by_shape = _fields_by_shape(shape_fields)
+    origin_by_symbol = {str(row["symbol"]): str(row["origin"]) for row in library_symbols}
+    # Wire identities already carrying a library attribution, so the outbound
+    # section does not repeat one the inbound section stated (a `both` row is
+    # listed in both).
+    attributed: set[str] = set()
     lines = [
         f"# {module.module_id}",
         "",
@@ -296,10 +351,14 @@ def render_module_document(
             response = _descriptor_lines(
                 "Response", endpoint.get("response_shape"), fields_by_shape
             )
-            if request or response:
+            via = _origin_lines(endpoint, origin_by_symbol)
+            if request or response or via:
                 lines += ["", f"- `{_wire_identity(endpoint)}`"]
+                lines += via
                 lines += request
                 lines += response
+            if via:
+                attributed.add(_wire_identity(endpoint))
     else:
         lines.append("None found.")
 
@@ -317,6 +376,21 @@ def render_module_document(
                 f"{'unresolved' if peer is None else peer} | "
                 f"`{caller}` | {_format(endpoint)} | {endpoint['resolution']} |"
             )
+        # The outbound half has no request/response detail to hang under, so
+        # this is its whole detail block — written only where there is
+        # something to say, which is the same rule the inbound one keeps.
+        #
+        # Once per identity, never once per section: a `both` row is listed in
+        # BOTH tables (it is one wire this module exposes and calls), so an
+        # attribution already stated above must not be stated again here. The
+        # same attribution twice reads as two findings.
+        for endpoint in outbound:
+            identity = _wire_identity(endpoint)
+            via = [] if identity in attributed else _origin_lines(endpoint, origin_by_symbol)
+            if via:
+                lines += ["", f"- `{identity}`"]
+                lines += via
+                attributed.add(identity)
     else:
         lines.append("None found.")
 
@@ -346,6 +420,13 @@ def render_module_document(
         f"- Not expanded, so the shapes referring to it are open: `{symbol}`."
         for symbol in report.unexpanded_types
     ]
+    # Named one by one for the same reason again: a library this module asked
+    # to extract and nobody could read is the difference between "nothing is
+    # called through it" and "nobody looked" (FR-17, M02). Both lists carry
+    # `<coordinate>: <reason>`, and the reason is the point — it says what to
+    # go and do, which a bare coordinate never could.
+    lines += [_library_gap_line("Not resolved", entry) for entry in module.libraries_not_resolved]
+    lines += [_library_gap_line("Not scanned", entry) for entry in libraries_not_scanned]
     if report.skipped_catalogs:
         lines += ["", "## Catalogs skipped", ""]
         for skipped in report.skipped_catalogs:

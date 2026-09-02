@@ -11,8 +11,27 @@ class ScanRequest:
     module_id: str
     coordinates: str
     version: str
+    # A directory tree of compiled classes, or a single library archive — the
+    # scanner backend says which forms it reads. Named `classes_dir` since
+    # Phase 1, when a directory was the only form.
     classes_dir: Path
     out_dir: Path
+    # The library this request scans, as its coordinate — recorded on every
+    # document the scan writes (D00 §2's `origin`). NULL for the module's own
+    # output, which is what a scan has always been, so an unset origin leaves
+    # a document exactly as it was.
+    origin: str | None = None
+
+
+class ScanError(RuntimeError):
+    """A scan that could not be completed — an unreadable input, or a backend
+    that failed partway through one.
+
+    Typed rather than a bare `RuntimeError` because one caller branches on it:
+    a LIBRARY scan that fails is a gap to record about that library, while the
+    module's own scan failing is the analysis failing. A caller that cannot tell
+    those apart has to choose between crashing on a corrupt jar and swallowing a
+    broken module scan."""
 
 
 @dataclass(frozen=True)

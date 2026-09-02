@@ -24,6 +24,40 @@ uv run sextant module export  <module-path>
 extractor's own build and tests, then the Python suite. `scripts/check.sh --lint` runs
 the lint gates alone, which is what the pre-commit hook in `.githooks/` runs.
 
+## `.sextant.yml` — reading a dependency's own code
+
+Some declarations a module depends on are not in the module. A generated SOAP client stub,
+for instance, is usually published as a jar. A file beside the module's build file names
+the dependencies whose **own bytecode** should be scanned alongside it:
+
+```yaml
+# .sextant.yml, beside pom.xml
+extract_libraries:
+  - com.example:orders-soap-client        # version comes from the build
+  - com.example:legacy-billing:2.4.0      # …or state it here
+```
+
+Three things are worth knowing before using it.
+
+**It is an assertion, which is why it is opt-in.** Naming a library says its declarations
+are part of *this module's* runtime surface — that a `@WebService` interface it ships is an
+operation this module calls. Sextant cannot see component scanning, so it cannot check that
+for you; instead every row a library contributed is marked with its coordinate in the
+rendered document, in the facts and in the exported bundle, so the claim stays visible. The
+dependency tree is **never** walked: a transitive jar nobody named stays invisible.
+
+**It is retractable.** Remove a coordinate and its rows are gone on the next run — the
+library fact subtree is discarded before anything is written, so opting out actually takes
+effect rather than leaving the previous run's facts behind.
+
+**Two coordinate forms.** `groupId:artifactId` defers to the build for the version, which
+is the only place that says which release this module compiles against; `groupId:artifactId:version`
+states it outright, and is the form to use when a parent POM or a BOM manages the version
+(which Sextant does not resolve). The archive is read from the local Maven repository at
+Maven's own layout, where a successful build has already left it. A coordinate that resolves
+to nothing, and an archive that cannot be read, are both named with their reason in
+`metadata.json` and in the document's gaps list — never silently skipped.
+
 ## Dependencies
 
 Three toolchains, deliberately kept apart. **The layering is the reason there are three
@@ -74,3 +108,11 @@ so the Python reader emits it verbatim and the extractor never sees it.
 `protobuf-maven-plugin` (which downloads the `protoc` it needs — there is no system
 `protoc` to install) and `avro-maven-plugin`. Building the fixture therefore needs Maven
 and a JDK, and nothing else.
+
+Since Phase 2I it also depends on `fixtures/orders-soap-client`, the stub library its
+`.sextant.yml` opts into extracting. `tests/conftest.py` builds that sibling and installs
+it into the local Maven repository — `~/.m2/repository/com/example/orders-soap-client/`,
+exactly what `mvn install` of that fixture would write, and the only thing in this suite
+that writes outside the repository — once per session, so `pytest` remains the only command
+anyone runs. But `mvn -o compile` inside `fixtures/orders-service` on a fresh clone fails
+until that helper has run.

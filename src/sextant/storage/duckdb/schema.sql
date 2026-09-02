@@ -166,6 +166,14 @@ SELECT document_id,
        payload ->> 'module_id'       AS module_id,
        payload ->> 'language'        AS language,
        payload ->> 'origin_tier'     AS origin_tier,
+       -- The library this document was extracted from, as its coordinate, and
+       -- NULL for the module's own output (D00 §2). Projected here — and so
+       -- carried into the exported `documents` table — because opting a
+       -- library in is an ASSERTION the reader makes, and an assertion that is
+       -- visible in the rendered document but invisible in the published
+       -- bundle would be laundered into module-observed evidence exactly where
+       -- it travels furthest from the person who made it.
+       payload ->> 'origin'          AS origin,
        (payload ->> 'partial')::BOOLEAN AS partial
 FROM raw_facts WHERE kind = 'document';
 
@@ -188,6 +196,11 @@ SELECT rowid                        AS seq,
        payload ->> 'construct_kind' AS construct_kind,
        payload ->> 'enclosing'      AS enclosing,
        payload ->  'signature'      AS signature,
+       -- D00 §5a: `public` or `other`, as the declaring language sees it.
+       -- Carried on every symbol fact and, until 2I's class-gate member rule,
+       -- read by nothing — a rule that derives a class's EXPOSED members is
+       -- the first thing that has to tell one from a member nobody can call.
+       payload ->> 'visibility'     AS visibility,
        -- Declaration modifiers (D00 §5): what only the declaring language can
        -- say about whether a field reaches a payload at all. Absent on every
        -- other construct, and on a fact from a scanner that does not report

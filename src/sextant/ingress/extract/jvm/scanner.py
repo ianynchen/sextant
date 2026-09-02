@@ -2,7 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from sextant.application.ports.scanner import ScanReport, ScanRequest
+from sextant.application.ports.scanner import ScanError, ScanReport, ScanRequest
 
 _LANGUAGES = {"java", "kotlin"}
 _CAPABILITIES = {
@@ -41,6 +41,10 @@ class AsmScanner:
         return 100
 
     def scan(self, request: ScanRequest) -> ScanReport:
+        # `--origin` is passed only when the request names one: the extractor
+        # writes the key only when it is given, so a module's own scan stays
+        # byte-for-byte what it was before library extraction existed.
+        origin = ["--origin", request.origin] if request.origin is not None else []
         completed = subprocess.run(
             [
                 "java",
@@ -56,13 +60,14 @@ class AsmScanner:
                 str(request.classes_dir),
                 "--out",
                 str(request.out_dir),
+                *origin,
             ],
             capture_output=True,
             text=True,
             check=False,
         )
         if completed.returncode != 0:
-            raise RuntimeError(f"extractor failed: {completed.stderr.strip()}")
+            raise ScanError(f"extractor failed: {completed.stderr.strip()}")
         report = json.loads(completed.stdout)
         return ScanReport(
             documents=report["documents"],

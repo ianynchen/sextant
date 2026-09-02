@@ -1,10 +1,13 @@
 package dev.sextant.extractor;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.*;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 /** The subprocess contract: arguments in, fact files out, a JSON report on
  *  stdout. Errors exit non-zero with a message on stderr. */
@@ -21,14 +24,34 @@ public final class Main {
             int documents = 0;
             int facts = 0;
             List<String> uncovered = new ArrayList<>();
-            try (Stream<Path> walk = Files.walk(classes)) {
-                List<Path> classFiles = walk
-                    .filter(p -> p.toString().endsWith(".class"))
-                    .sorted()
-                    .toList();
-                for (Path classFile : classFiles) {
-                    String classRelative = posix(classes.relativize(classFile));
-                    byte[] bytes = Files.readAllBytes(classFile);
+            try (ClassSource source = ClassSource.of(classes)) {
+                List<String> classFiles = source.names();
+                // The silent-success hole, closed (2I Task 6). A `--classes`
+                // that yields no class file at all used to report
+                // `documents: 0, facts: 0` at exit 0 with an empty `uncovered`
+                // — indistinguishable from a scan that genuinely found
+                // nothing to say. The two honest shapes are split by what is
+                // wrong: an input this extractor cannot READ is a failed
+                // request and exits non-zero (`ClassSource.of` throws); an
+                // input it read fine that simply holds no class file is a
+                // finding ABOUT the input, so it rides the channel findings
+                // already ride (FR-17's `uncovered`) and reaches
+                // metadata.json and the rendered gaps list by itself. A jar of
+                // zero classes is legitimate-but-suspicious, and this is what
+                // makes it visible instead of silent.
+                //
+                // Named by the COORDINATE where one was given, and only by the
+                // path otherwise. An `uncovered` entry is read by a person, in
+                // metadata.json and in a published bundle: an absolute archive
+                // path under someone's home directory identifies nothing once
+                // it leaves the machine that produced it, while the coordinate
+                // is the same name the configuration used to ask for it.
+                if (classFiles.isEmpty()) {
+                    String named = options.getOrDefault("origin", options.get("classes"));
+                    uncovered.add(named + ": no class files found");
+                }
+                for (String classRelative : classFiles) {
+                    byte[] bytes = source.read(classRelative);
                     // D00 §2: one class file is one document, a nested or
                     // anonymous class's own file included. The id is the sha256
                     // of the **class**-relative path, so `OrderResult` and its
@@ -63,6 +86,87 @@ public final class Main {
         }
     }
 
+    /** Where the class files being scanned come from. Two forms, because a
+     *  library ships as a jar and a module's own output does not: a directory
+     *  tree of loose `.class` files, and a jar read as a zip.
+     *
+     *  <p>Both answer with class-relative POSIX names in one fixed sorted
+     *  order, which is what keeps a scan byte-identical between runs and
+     *  between platforms (NFR-1) — a zip's own entry order is whatever the
+     *  archiver wrote and is never relied on. */
+    private interface ClassSource extends Closeable {
+
+        /** Every `.class` file this source holds, class-relative and sorted. */
+        List<String> names() throws IOException;
+
+        byte[] read(String name) throws IOException;
+
+        /** Refuses anything it cannot read, rather than reporting an empty
+         *  scan: a `--classes` naming a regular file that is not a jar (or a
+         *  path that does not exist at all) is a failed REQUEST, and a failed
+         *  request exits non-zero. */
+        static ClassSource of(Path classes) throws IOException {
+            if (Files.isDirectory(classes)) {
+                return new DirectorySource(classes);
+            }
+            if (Files.isRegularFile(classes) && classes.getFileName().toString().endsWith(".jar")) {
+                return new JarSource(classes);
+            }
+            throw new IllegalArgumentException(
+                "--classes must name a directory of class files or a .jar file: " + classes);
+        }
+    }
+
+    private record DirectorySource(Path root) implements ClassSource {
+
+        @Override public List<String> names() throws IOException {
+            try (Stream<Path> walk = Files.walk(root)) {
+                return walk.filter(p -> p.toString().endsWith(".class"))
+                           .map(p -> posix(root.relativize(p)))
+                           .sorted()
+                           .toList();
+            }
+        }
+
+        @Override public byte[] read(String name) throws IOException {
+            return Files.readAllBytes(root.resolve(name));
+        }
+
+        @Override public void close() {}
+    }
+
+    private static final class JarSource implements ClassSource {
+        private final ZipFile zip;
+
+        JarSource(Path jar) throws IOException {
+            // Throws on a file that is not a readable zip, which `of` above
+            // lets propagate: a corrupt jar is an error, never an empty scan.
+            this.zip = new ZipFile(jar.toFile());
+        }
+
+        @Override public List<String> names() {
+            // Directory entries are skipped by the `.class` filter itself; a
+            // zip may also omit them entirely, so nothing here may depend on
+            // their presence.
+            return zip.stream()
+                      .map(ZipEntry::getName)
+                      .filter(name -> name.endsWith(".class"))
+                      .sorted()
+                      .toList();
+        }
+
+        @Override public byte[] read(String name) throws IOException {
+            ZipEntry entry = zip.getEntry(name);
+            try (var stream = zip.getInputStream(entry)) {
+                return stream.readAllBytes();
+            }
+        }
+
+        @Override public void close() throws IOException {
+            zip.close();
+        }
+    }
+
     private static void writeFactFile(Path target, String relative, String documentId,
                                       Map<String, String> options, String contentHash,
                                       List<String> factLines) throws IOException {
@@ -76,10 +180,27 @@ public final class Main {
         document.put("sextant_version", JsonOut.string(options.getOrDefault("sextant-version", "0.1.0")));
         document.put("fact_schema_version", JsonOut.string("1.0.0"));
         document.put("scanner_id", JsonOut.string("asm"));
-        document.put("scanner_version", JsonOut.string("9.9"));
+        document.put("scanner_version", JsonOut.string("9.12"));
         document.put("content_hash", JsonOut.string("sha256:" + contentHash));
         document.put("origin_entry", JsonOut.string(options.get("classes")));
-        document.put("origin_tier", JsonOut.string("module_output"));
+        // The library this document was extracted FROM, as its coordinate —
+        // written only when `--origin` names one (D00 §2). Omitted entirely
+        // for a module's own output, rather than written as null, so a scan
+        // of a module is byte-for-byte the scan it was before opt-in library
+        // extraction existed.
+        //
+        // The TIER moves with it, and must: `module_output` on a class this
+        // module did not build is a claim known to be false. `dependency` is
+        // the factual answer and deliberately not `first_party`/`third_party`
+        // — those need the group patterns D04 §2 declares and nothing
+        // implements, so either would be a guess about ownership dressed as
+        // an observation (D00 §4).
+        if (options.get("origin") != null) {
+            document.put("origin", JsonOut.string(options.get("origin")));
+            document.put("origin_tier", JsonOut.string("dependency"));
+        } else {
+            document.put("origin_tier", JsonOut.string("module_output"));
+        }
         document.put("redaction_set_hash", JsonOut.string(options.getOrDefault("redaction-hash", "sha256:none")));
         document.put("partial", "false");
         document.put("partial_reason", "null");
@@ -134,7 +255,7 @@ public final class Main {
         fields.put("documents", String.valueOf(documents));
         fields.put("facts", String.valueOf(facts));
         fields.put("scanner_id", JsonOut.string("asm"));
-        fields.put("scanner_version", JsonOut.string("9.9"));
+        fields.put("scanner_version", JsonOut.string("9.12"));
         fields.put("uncovered", JsonOut.array(quoted));
         return JsonOut.object(fields);
     }

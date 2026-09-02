@@ -234,10 +234,28 @@ _TOPIC_ENDPOINT_KWARGS = {
     "path_fallback": None,
     "qualifier_from": [],
     "qualifier_separator": None,
+    # 2I Task 2: the two QName forms, at their inert values for the same
+    # reason — no catalog in this file composes a bracketed scope or defaults
+    # one from a package, so the composition every assertion below pins stays
+    # the one it always was.
+    "qualifier_format": None,
+    "namespace_template": None,
+    # 2I Task 2's class-gate member rule, inert too: no catalog in this file
+    # derives an unannotated declaration, so every row below still comes from
+    # an annotation the fixture spells out.
+    "members": None,
     # The prefix seam, at its inert value too: no catalog in this file
     # composes a segmented address, so the seam stays the bare concatenation
     # every assertion below already pins.
     "path_separator": None,
+    # 2I Task 5's construct gate, inert as well: no catalog in this file
+    # confines itself to one construct kind, so every declaration the fixture
+    # annotates still derives regardless of what encloses it.
+    "declared_on": None,
+    # 2I Task 5's SEI fence, inert as well: no catalog in this file is an
+    # outbound interface-gated one, so the fence's own `$direction`/
+    # `$declared_on` test never reaches this list.
+    "locally_implemented": [],
 }
 
 

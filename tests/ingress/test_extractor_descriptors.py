@@ -149,4 +149,4 @@ def test_the_scanner_reports_the_version_that_harvests_descriptors(tmp_path: Pat
             out_dir=tmp_path,
         )
     )
-    assert report.scanner_version == "9.9"
+    assert report.scanner_version == "9.12"

@@ -13,6 +13,7 @@ import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
+from sextant.application.resolve.engines import single_call as sc_engine
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.arguments import split_url
 from sextant.domain.closed_sets import OriginTier
@@ -4511,6 +4512,510 @@ def test_rung_three_never_follows_a_call_that_takes_arguments(tmp_path: Path):
     ]
     workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
     endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")
+
+
+# --- 2I Task 5: the argument-type identity and the configured address ------
+#
+# Two `single_call` vocabulary forms (2I design §4), over an INVENTED
+# framework exactly as the sections above invent theirs. Both exist because
+# some protocols put the operation's identity on the SOAPISH_PAYLOAD rather than in
+# the address, and put the address on the client rather than at the call.
+
+SOAPISH_TEMPLATE = "com/acme/soapish/Template#"
+SOAPISH_PAYLOAD = "com/acme/soapish/PlaceRequest#"
+SOAPISH_ROOT = "com/acme/soapish/Root#"
+SOAPISH_CLIENT = "com/acme/soapish/Client#"
+
+_SOAPISH_IDENTITY = {
+    "arg": 0,
+    "annotation": "com.acme.soapish.Root",
+    "name_from": "name",
+    "qualifier_from": "namespace",
+    "format": "qname",
+}
+
+
+def _soapish_catalog(matches: dict, catalog_id: str = "invented-argument-type") -> Catalog:
+    return Catalog(
+        id=catalog_id,
+        style="single_call",
+        protocol="soap",
+        direction="outbound",
+        requires=("call_site", "string_constants"),
+        matches=matches,
+        source=Path(f"tests/{catalog_id}.yml"),
+    )
+
+
+def _identity_matches(**extra: object) -> dict:
+    return {
+        "owner": "com.acme.soapish.Template",
+        "methods": [{"name": "send", "arity": 1, "path_from_argument_type": _SOAPISH_IDENTITY}],
+        **extra,
+    }
+
+
+def _soapish_payload_method(name: str, payload: str = SOAPISH_PAYLOAD) -> SymbolFact:
+    """The calling method's own declaration — the ONE place the argument's
+    declared type is written down (the call's own descriptor is erased)."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + SOAPISH_CLIENT + f"{name}(sig_a).",
+        construct_kind="method",
+        enclosing=_MODULE + SOAPISH_CLIENT,
+        signature=Signature(
+            parameters=[Parameter(name="request", type=TypeRef(symbol=payload))],
+            returns=TypeRef(symbol="java/lang/Object#"),
+        ),
+    )
+
+
+def _soapish_root_annotation(args: dict, target: str = SOAPISH_PAYLOAD) -> AnnotationFact:
+    return AnnotationFact(
+        document_id="doc_1",
+        target=_MODULE + target,
+        retention="runtime",
+        use=AnnotationUse(annotation=SOAPISH_ROOT, args=args),
+    )
+
+
+def _soapish_send(caller: str, arguments: list, name: str = "send") -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(owner=SOAPISH_TEMPLATE, name=name, descriptor="(Ljava/lang/Object;)V"),
+        invoke_kind="virtual",
+        ordinal=0,
+        receiver=3,
+        result=5,
+        arguments=arguments,
+    )
+
+
+def test_a_payload_arguments_declared_type_names_the_operation(tmp_path: Path):
+    """2I design §4, form 1. The call site carries `{"kind": "parameter",
+    "value": 0}` and an ERASED descriptor, so nothing at the call names the
+    payload — the identity is one hop out, through the caller's own declared
+    signature to the argument's type, and off that type's annotation.
+    `{namespace}name` is the same QName notation the annotation-driven side
+    composes, which is what lets a caller and a handler meet on one string."""
+    caller = _MODULE + SOAPISH_CLIENT + "place(sig_a)."
+    facts = [
+        _soapish_send(caller, [CallArgument(kind="parameter", value=0)]),
+        _soapish_payload_method("place"),
+        _soapish_root_annotation({"name": "placeRequest", "namespace": "http://acme.example/ws"}),
+    ]
+    workspace = _resolve(tmp_path, facts, _soapish_catalog(_identity_matches()))
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["path"] == "{http://acme.example/ws}placeRequest"
+    assert (endpoint["method"], endpoint["peer"]) == (None, None)
+    assert endpoint["resolution"] == "resolved"
+    assert endpoint["caller"] == caller
+    # The type the identity was read THROUGH is the payload, so the row
+    # describes its request without a `body_arg` that would have failed on a
+    # bare parameter (checkpoint ruling I1).
+    assert json.loads(str(endpoint["request_shape"]))["shape_id"] == SOAPISH_PAYLOAD
+
+
+def test_a_url_literal_beside_the_identity_fills_peer_and_never_the_path(tmp_path: Path):
+    """The URI-carrying overload. `peer_of` keeps the whole address rather
+    than splitting it (CP-2's split answers a different question: for this
+    protocol the address is not the identity), and the `path` column stays
+    the operation's — an address written into it would publish a transport
+    URL as an operation name."""
+    caller = _MODULE + SOAPISH_CLIENT + "placeAt(sig_a)."
+    matches = {
+        "owner": "com.acme.soapish.Template",
+        "methods": [
+            {
+                "name": "send",
+                "arity": 2,
+                "url_arg": 0,
+                "path_from_argument_type": {**_SOAPISH_IDENTITY, "arg": 1},
+            }
+        ],
+    }
+    facts = [
+        _soapish_send(
+            caller,
+            [
+                CallArgument(kind="string", value="http://acme.example/ws/direct"),
+                CallArgument(kind="parameter", value=0),
+            ],
+        ),
+        _soapish_payload_method("placeAt"),
+        _soapish_root_annotation({"name": "placeRequest", "namespace": "http://acme.example/ws"}),
+    ]
+    workspace = _resolve(tmp_path, facts, _soapish_catalog(matches, "invented-argument-type-url"))
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["path"] == "{http://acme.example/ws}placeRequest"
+    assert endpoint["peer"] == "http://acme.example/ws/direct"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_an_argument_that_is_not_a_bare_parameter_names_no_operation(tmp_path: Path):
+    """The soundness boundary, unchanged from the parse join it shares its
+    primitive with: only a BARE parameter reference names one declared type.
+    A constructed instance at that position is a real payload the row can
+    still describe from its own symbol — but it is not the caller's declared
+    parameter, so the identity hop does not run and the operation is honestly
+    unresolved rather than guessed from the instance's type."""
+    caller = _MODULE + SOAPISH_CLIENT + "place(sig_a)."
+    facts = [
+        _soapish_send(caller, [CallArgument(kind="instance", symbol=SOAPISH_PAYLOAD)]),
+        _soapish_payload_method("place"),
+        _soapish_root_annotation({"name": "placeRequest", "namespace": "http://acme.example/ws"}),
+    ]
+    workspace = _resolve(
+        tmp_path, facts, _soapish_catalog(_identity_matches(), "invented-not-bare")
+    )
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        pytest.param({"namespace": "http://acme.example/ws"}, id="no name"),
+        pytest.param({"name": "placeRequest"}, id="no namespace"),
+        pytest.param({}, id="neither"),
+    ],
+)
+def test_an_absent_identity_attribute_derives_no_operation_rather_than_a_default(
+    tmp_path: Path, args: dict
+):
+    """DR-6's refusal-to-default, at the one place this phase could most
+    easily have guessed. A framework's own defaults for these attributes are
+    never written into the class file (checkpoint item 4) and, for a
+    namespace, live in a schema no class file carries — so an absent
+    attribute derives an unresolved operation, never a plausible-looking one
+    published at `resolved`/`compiler`.
+
+    The SOAPISH_PAYLOAD is still described: the annotation was found, so the type is
+    a payload of the family the catalog names — it is only unnamed."""
+    caller = _MODULE + SOAPISH_CLIENT + "place(sig_a)."
+    facts = [
+        _soapish_send(caller, [CallArgument(kind="parameter", value=0)]),
+        _soapish_payload_method("place"),
+        _soapish_root_annotation(args),
+    ]
+    workspace = _resolve(tmp_path, facts, _soapish_catalog(_identity_matches(), "invented-absent"))
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")
+    assert json.loads(str(endpoint["request_shape"]))["shape_id"] == SOAPISH_PAYLOAD
+
+
+def test_an_unannotated_argument_type_describes_no_payload_either(tmp_path: Path):
+    """A type carrying none of the catalog's annotation is not evidence of a
+    payload — the position could be anything (a callback, an option object).
+    So neither the identity nor the request shape is claimed, which is what
+    keeps an overload this catalog mis-guessed from describing the wrong
+    type as its contract."""
+    caller = _MODULE + SOAPISH_CLIENT + "place(sig_a)."
+    facts = [
+        _soapish_send(caller, [CallArgument(kind="parameter", value=0)]),
+        _soapish_payload_method("place"),
+    ]
+    workspace = _resolve(
+        tmp_path, facts, _soapish_catalog(_identity_matches(), "invented-unannotated")
+    )
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["request_shape"]) == (None, None)
+    assert endpoint["resolution"] == "unresolved"
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        pytest.param({**_SOAPISH_IDENTITY, "format": "brackets"}, id="unknown format"),
+        pytest.param(
+            {k: v for k, v in _SOAPISH_IDENTITY.items() if k != "format"}, id="qualifier, no format"
+        ),
+        pytest.param(
+            {k: v for k, v in _SOAPISH_IDENTITY.items() if k != "qualifier_from"},
+            id="format, no qualifier",
+        ),
+        pytest.param(
+            {k: v for k, v in _SOAPISH_IDENTITY.items() if k != "name_from"}, id="no name_from"
+        ),
+        pytest.param({**_SOAPISH_IDENTITY, "arg": "0"}, id="arg not an int"),
+        pytest.param({**_SOAPISH_IDENTITY, "extra": 1}, id="unknown key"),
+        pytest.param("root", id="not a mapping"),
+    ],
+)
+def test_a_malformed_identity_rule_is_refused_at_run_start(tmp_path: Path, rule: object):
+    """The `_validate_methods` discipline: an unchecked value does not stay in
+    the file. Each shape here would otherwise derive a quietly WRONG identity
+    or silently none at all — both worse than a refused catalog, because both
+    are published at `resolved`/`compiler`."""
+    matches = {
+        "owner": "com.acme.soapish.Template",
+        "methods": [{"name": "send", "arity": 1, "path_from_argument_type": rule}],
+    }
+    with pytest.raises(CatalogError):
+        _resolve(tmp_path, [], _soapish_catalog(matches, "invented-bad-identity"))
+
+
+def test_an_identity_rule_beside_record_arg_is_refused_at_run_start(tmp_path: Path):
+    """`record_arg` IS the channel+payload source (D02 §2), so a row naming
+    both states one capture twice — contradictory evidence, not a richer
+    row."""
+    matches = {
+        "owner": "com.acme.soapish.Template",
+        "methods": [
+            {
+                "name": "send",
+                "arity": 1,
+                "record_arg": 0,
+                "path_from_argument_type": _SOAPISH_IDENTITY,
+            }
+        ],
+    }
+    with pytest.raises(CatalogError):
+        _resolve(tmp_path, [], _soapish_catalog(matches, "invented-identity-record"))
+
+
+# --- 2I Task 5, form 2: the address the client was CONFIGURED with --------
+
+_SOAPISH_FIELD_SOURCES = {
+    "value_annotation": "com.acme.config.Value",
+    "properties_annotation": "com.acme.config.Properties",
+    "prefix_from": "prefix",
+    "getter_prefixes": ["get"],
+}
+SOAPISH_VALUE = "com/acme/config/Value#"
+
+
+def _soapish_constructor(expression: str = "${acme.billing.uri}") -> SymbolFact:
+    """The client's own constructor, its address parameter carrying the
+    configuration expression — a parameter's annotations live inside its
+    declaration's signature and nowhere else (Task 6 checkpoint (3))."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + SOAPISH_CLIENT + "<init>(sig_c).",
+        construct_kind="constructor",
+        enclosing=_MODULE + SOAPISH_CLIENT,
+        signature=Signature(
+            parameters=[
+                Parameter(
+                    name="uri",
+                    type=TypeRef(symbol="java/lang/String#"),
+                    annotations=[
+                        AnnotationUse(annotation=SOAPISH_VALUE, args={"value": expression})
+                    ],
+                )
+            ]
+        ),
+    )
+
+
+def _soapish_setup_call(caller: str, argument: CallArgument, ordinal: int = 1) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=SOAPISH_TEMPLATE, name="setDefaultUri", descriptor="(Ljava/lang/String;)V"
+        ),
+        invoke_kind="virtual",
+        ordinal=ordinal,
+        receiver=12,
+        result=None,
+        arguments=[argument],
+    )
+
+
+def test_an_address_less_call_takes_the_address_its_own_type_configured(tmp_path: Path):
+    """2I design §4, form 2, end to end: the call passes no address, the
+    declaring type set one on the client in its own constructor, and that
+    setter argument is the constructor's own `@Value` parameter — the field
+    ladder's parameter rung, reached without a field to follow. The
+    expression lands in `peer` whole, where the per-environment join reads
+    it."""
+    caller = _MODULE + SOAPISH_CLIENT + "place(sig_a)."
+    facts = [
+        _soapish_send(caller, [CallArgument(kind="parameter", value=0)]),
+        _soapish_payload_method("place"),
+        _soapish_root_annotation({"name": "placeRequest", "namespace": "http://acme.example/ws"}),
+        _soapish_setup_call(
+            _MODULE + SOAPISH_CLIENT + "<init>(sig_c).", CallArgument(kind="parameter", value=0)
+        ),
+        _soapish_constructor(),
+    ]
+    matches = _identity_matches(
+        default_address={"method": "setDefaultUri", "arg": 0}, field_sources=_SOAPISH_FIELD_SOURCES
+    )
+    workspace = _resolve(tmp_path, facts, _soapish_catalog(matches, "invented-default-address"))
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["peer"] == "${acme.billing.uri}"
+    assert endpoint["path"] == "{http://acme.example/ws}placeRequest"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_two_configured_addresses_in_one_type_refuse_rather_than_pick(tmp_path: Path):
+    """Two candidates are not an address. Picking either would publish a peer
+    the code does not state, so the row keeps its operation and drops its
+    resolution — I1's own shape, applied to a declared capture that read two
+    answers instead of none."""
+    caller = _MODULE + SOAPISH_CLIENT + "place(sig_a)."
+    facts = [
+        _soapish_send(caller, [CallArgument(kind="parameter", value=0)]),
+        _soapish_payload_method("place"),
+        _soapish_root_annotation({"name": "placeRequest", "namespace": "http://acme.example/ws"}),
+        _soapish_setup_call(
+            _MODULE + SOAPISH_CLIENT + "<init>(sig_c).",
+            CallArgument(kind="string", value="http://one.example"),
+        ),
+        _soapish_setup_call(
+            _MODULE + SOAPISH_CLIENT + "reconfigure().",
+            CallArgument(kind="string", value="http://two.example"),
+            ordinal=0,
+        ),
+    ]
+    matches = _identity_matches(
+        default_address={"method": "setDefaultUri", "arg": 0}, field_sources=_SOAPISH_FIELD_SOURCES
+    )
+    workspace = _resolve(tmp_path, facts, _soapish_catalog(matches, "invented-two-addresses"))
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["peer"] is None
+    assert endpoint["path"] == "{http://acme.example/ws}placeRequest"
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_configuration_made_by_another_type_is_never_borrowed(tmp_path: Path):
+    """The boundary that makes form 2 sound. Nothing links a call's receiver
+    to the field holding it — a receiver is a value id, meaningless outside
+    its own method (D00 §5) — so a client configured in some OTHER class
+    proves nothing about this one's address, and the row says so."""
+    caller = _MODULE + SOAPISH_CLIENT + "place(sig_a)."
+    other = "com/acme/soapish/OtherConfig#"
+    facts = [
+        _soapish_send(caller, [CallArgument(kind="parameter", value=0)]),
+        _soapish_payload_method("place"),
+        _soapish_root_annotation({"name": "placeRequest", "namespace": "http://acme.example/ws"}),
+        _soapish_setup_call(
+            _MODULE + other + "configure().",
+            CallArgument(kind="string", value="http://one.example"),
+        ),
+    ]
+    matches = _identity_matches(
+        default_address={"method": "setDefaultUri", "arg": 0}, field_sources=_SOAPISH_FIELD_SOURCES
+    )
+    workspace = _resolve(tmp_path, facts, _soapish_catalog(matches, "invented-other-type"))
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_declared_url_position_always_wins_over_the_configured_address(tmp_path: Path):
+    """A declared position is the call's OWN answer. A framework whose client
+    carries a default and whose call may override it states both, and the
+    call is the nearer declaration — the same precedence a method-level scope
+    takes over a type-level one."""
+    caller = _MODULE + SOAPISH_CLIENT + "placeAt(sig_a)."
+    matches = {
+        "owner": "com.acme.soapish.Template",
+        "methods": [
+            {
+                "name": "send",
+                "arity": 2,
+                "url_arg": 0,
+                "path_from_argument_type": {**_SOAPISH_IDENTITY, "arg": 1},
+            }
+        ],
+        "default_address": {"method": "setDefaultUri", "arg": 0},
+        "field_sources": _SOAPISH_FIELD_SOURCES,
+    }
+    facts = [
+        _soapish_send(
+            caller,
+            [
+                CallArgument(kind="string", value="http://acme.example/ws/direct"),
+                CallArgument(kind="parameter", value=0),
+            ],
+        ),
+        _soapish_payload_method("placeAt"),
+        _soapish_root_annotation({"name": "placeRequest", "namespace": "http://acme.example/ws"}),
+        _soapish_setup_call(
+            _MODULE + SOAPISH_CLIENT + "<init>(sig_c).",
+            CallArgument(kind="string", value="http://configured.example"),
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _soapish_catalog(matches, "invented-position-wins"))
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["peer"] == "http://acme.example/ws/direct"
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        pytest.param({"method": "setDefaultUri"}, id="no arg"),
+        pytest.param({"arg": 0}, id="no method"),
+        pytest.param({"method": "setDefaultUri", "arg": "0"}, id="arg not an int"),
+        pytest.param({"method": "setDefaultUri", "arg": 0, "extra": 1}, id="unknown key"),
+        pytest.param("setDefaultUri", id="not a mapping"),
+    ],
+)
+def test_a_malformed_default_address_is_refused_at_run_start(tmp_path: Path, declared: object):
+    """A block that cannot be honoured would resolve every address-less call
+    to nothing — indistinguishable from a catalog that never declared the
+    word, which is exactly the silence `ports/catalogs.py`'s discipline
+    refuses."""
+    matches = _identity_matches(default_address=declared, field_sources=_SOAPISH_FIELD_SOURCES)
+    with pytest.raises(CatalogError):
+        _resolve(tmp_path, [], _soapish_catalog(matches, "invented-bad-default-address"))
+
+
+def test_the_declared_format_is_what_composes_the_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The composition branches on the DECLARED word rather than assuming
+    today's only one — `derive_endpoints.sql`'s own `$qualifier_format`
+    shape. Proved by widening the validated set without teaching the composer
+    the new word: validation accepts the rule, and the identity comes out
+    UNRESOLVED rather than silently composed as a QName. A hardcoded
+    composition would have published `{ns}name` for a format nobody
+    implemented."""
+    monkeypatch.setattr(sc_engine, "_IDENTITY_FORMATS", frozenset({"qname", "curie"}))
+    caller = _MODULE + SOAPISH_CLIENT + "place(sig_a)."
+    matches = {
+        "owner": "com.acme.soapish.Template",
+        "methods": [
+            {
+                "name": "send",
+                "arity": 1,
+                "path_from_argument_type": {**_SOAPISH_IDENTITY, "format": "curie"},
+            }
+        ],
+    }
+    facts = [
+        _soapish_send(caller, [CallArgument(kind="parameter", value=0)]),
+        _soapish_payload_method("place"),
+        _soapish_root_annotation({"name": "placeRequest", "namespace": "http://acme.example/ws"}),
+    ]
+    workspace = _resolve(tmp_path, facts, _soapish_catalog(matches, "invented-second-format"))
+    [endpoint] = workspace.query("endpoints")
     workspace.close()
 
     assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")

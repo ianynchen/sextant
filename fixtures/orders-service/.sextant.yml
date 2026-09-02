@@ -1,0 +1,6 @@
+# Opt-in library extraction (D04 §2a). Naming a coordinate here says "scan this
+# dependency's own bytecode as well as mine" — nothing is extracted from a
+# library that is not named, and a module with no file here behaves exactly as
+# it did before this existed.
+extract_libraries:
+  - com.example:orders-soap-client

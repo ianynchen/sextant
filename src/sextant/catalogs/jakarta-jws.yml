@@ -1,0 +1,196 @@
+id: jakarta-jws
+displayName: Jakarta XML Web Services (@WebService)
+style: annotation_driven
+protocol: soap
+direction: inbound
+
+detect:
+  coordinates: ["jakarta.jws:jakarta.jws-api", "javax.jws:javax.jws-api"]
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # 2I design §4 (Task 5): the mirror image of `jakarta-jws-client.yml`'s own
+  # `declared_on: interface`. `@WebService` marks both a service and the
+  # generated client stub of one, and the two are opposite DIRECTIONS of the
+  # same wire identity — so the annotation is partitioned between the two
+  # files by what it sits on, and neither can reach the other's declarations.
+  # Without it, a module holding a stub interface would publish every stubbed
+  # operation as one it also SERVES, on the strength of an annotation that says
+  # only "this is a web service interface".
+  #
+  # It also fences the member rule below, which is the sharper half: `members:
+  # public_methods` over an unowned `@WebService` interface would derive an
+  # inbound row for each of its methods, with a handler that implements
+  # nothing.
+  declared_on: class
+  # Deliberately NO `type_annotation`, and this is the one design decision the
+  # whole file turns on. `annotation_driven.py::run` reads it as a SINGLE fqn,
+  # and this gate has TWO spellings that are the same annotation either side of
+  # the Jakarta EE 9 package rename — both still in the wild, both in the
+  # fixture, both `retention: runtime` and therefore both in the fact stream as
+  # DISTINCT fqns (Phase 2I Task 2, checkpoint item 4). Naming one would silently
+  # drop every class carrying the other: `derive_endpoints.sql`'s own gate filter
+  # (`$type_annotation IS NULL OR c.type_symbol IS NOT NULL`) discards a whole
+  # class's rows, so `LegacyBillingWebService`'s operations would vanish with
+  # nothing saying so.
+  #
+  # `mapping.annotations` IS a list, so both spellings go there and the gate is
+  # the type-level join instead — the same one `qualifier_scopes` reads a
+  # class-level scope through, and the same one `gate_types` reads the member
+  # rule's class through. That is not a workaround: a `@WebService` class IS the
+  # scope its operations are members of, so the annotation that gates and the
+  # annotation that names the namespace are one annotation doing one job.
+  # The `jakarta-websocket.yml` COVERAGE boundary — javax present in `detect` but
+  # underivable, because `prefix_annotation` is single-valued too — is closed
+  # here rather than repeated: the difference is that a PREFIX has no list-valued
+  # role to fall back to and a scope does.
+  #
+  # Deliberately NO `request_body` block (the `jakarta-websocket.yml` precedent
+  # for saying why in the file). A JAX-WS operation's request payload is the
+  # GENERATED WRAPPER element — document/literal wrapped is the default binding
+  # — whose type exists in no source file this scanner reads; the method's own
+  # parameters are that wrapper's CHILDREN, not the payload. A
+  # `fallback: sole_unannotated` here would publish `charge(String orderId)`'s
+  # `String` as the request contract for `{…}chargeOrder`, which is not what is
+  # on that wire. `@WebParam` marks a child's name, never a body, so there is no
+  # marker to read either. Silence is the honest answer; T4's WSDL reading is
+  # where a real request element can come from.
+  mapping:
+    # CHECKPOINT FACT (Phase 2I Task 2, item 4): `operationName` arrives as a
+    # plain SCALAR string (`{"operationName": "chargeOrder"}`), and a
+    # `@WebMethod` that names none carries the key not at all — an annotation's
+    # declared default is never written into the class file. So "absent" is the
+    # only shape the defaulted case can take, which is exactly what
+    # `path_fallback` below answers.
+    path_from: [operationName]
+    prefix_from: []
+    prefix_annotation: null
+    # `@WebMethod`'s own default for `operationName` IS the method's name (the
+    # spec says so), so this names a fact about the code rather than inventing
+    # one — the same reason the three GraphQL catalogs declare it. It is also
+    # required beside `members` below, since a member carries no annotation and
+    # therefore no name attribute at all.
+    path_fallback: construct_name
+    # The namespace is stated ONCE on the class and belongs to every operation
+    # the class declares — read one level out through the type-level join. No
+    # `@WebMethod` carries a `targetNamespace` of its own, so the method-level
+    # read is always NULL here and the class always wins; naming the attribute
+    # for both levels is one list either way.
+    qualifier_from: [targetNamespace]
+    # A JAX-WS operation's identity is the QName `{targetNamespace}operationName`
+    # — the same bracketed token `spring-ws.yml`'s `@PayloadRoot` composes, and
+    # the reason it is engine vocabulary rather than either catalog's own trick.
+    qualifier_format: qname
+    # CHECKPOINT FACT (item 2, verified against BOTH reference implementations —
+    # `com.sun.xml.ws.model.RuntimeModeler#getNamespace` and Apache CXF's
+    # independent `PackageUtils#getNamespace`, which agree character for
+    # character): a `@WebService` naming no `targetNamespace` gets `"http://"` +
+    # its package reversed and dot-joined + a trailing `"/"`. This is the
+    # framework's OWN default, defined by its spec and implemented identically
+    # twice, so deriving it is reading JAX-WS rather than guessing (DR-6) —
+    # `LegacyBillingWebService` in `com.example.orders.soap` is served at
+    # `http://soap.orders.example.com/`, and a row without it would carry a
+    # namespace-less QName that matches no caller.
+    namespace_default: reversed_package
+    # DR-6, the rule that made this file wait on a vocabulary addition: a public
+    # method with no `@WebMethod` at all IS exposed by JAX-WS — the annotation
+    # customizes an operation, it does not create one. `BillingWebService#refund`
+    # is a real operation, and a catalog that derived only the annotated methods
+    # would report a service missing one of its own operations while presenting
+    # the rest as complete.
+    #
+    # The gate is the type-level `@WebService` above (`gate_types`), so this
+    # enumerates the members of a WEB SERVICE, never of every class in the
+    # module. A `@WebMethod`-carrying method is left entirely to its own rule —
+    # one row per operation, never two — which is also what keeps
+    # `@WebMethod(exclude = true)` withdrawn rather than quietly re-derived
+    # under its construct name.
+    members: public_methods
+    # Neither annotation declares a `method` attribute; the name is borrowed and
+    # never populated (the spring-jms.yml/spring-kafka.yml precedent), which is
+    # what keeps every row verbless below.
+    method_from: method
+    # Verbless (D02 §2, amended): a SOAP operation declares no HTTP-style verb —
+    # every operation on a port shares the binding's own POST.
+    all_methods: []
+    annotations:
+      # BOTH spellings, and no prefix machinery needed to carry them (verified:
+      # `mapping.annotations` is a list and every CTE that reads a type-level
+      # annotation joins through it). A type target mints no row of its own —
+      # `derived`'s join to `symbols` admits only methods and functions — so
+      # these two entries play the gate-and-scope role without colliding with
+      # the method-level ones, the `prefix_annotation` precedent unchanged.
+      - { fqn: jakarta.jws.WebService }
+      - { fqn: javax.jws.WebService }
+      # `requires_qualifier` on the OPERATION entries only: an operation is a
+      # member of a namespace, and one with no namespace declared, none stated
+      # by its class, and none derivable from its package (a class in the
+      # DEFAULT package, where both reference implementations return null) has
+      # no address at all. The bare local name would read as a top-level
+      # identity, which is a different endpoint from the one the code declares.
+      # The member rule inherits the same answer, since it describes the same
+      # operations.
+      #
+      # CHECKPOINT FACT (item 4): `exclude` arrives as a real JSON BOOLEAN
+      # (`{"exclude": true}`), never the string `"true"`, and a `@WebMethod`
+      # that leaves it alone carries the key not at all — so `unless` compares
+      # against a written-out value only, and absence never withdraws anything.
+      # `@WebMethod(exclude = true)` is JAX-WS itself saying the method is NOT
+      # an operation, so the honest derivation is no row, not a row marked
+      # somehow.
+      - { fqn: jakarta.jws.WebMethod, requires_qualifier: true,
+          unless: { attribute: exclude, equals: true } }
+      - { fqn: javax.jws.WebMethod, requires_qualifier: true,
+          unless: { attribute: exclude, equals: true } }
+
+# 2G design §7, rung 1: SOAP's wire is XML by definition — the envelope IS an
+# XML document — so the format is a property of the protocol rather than of
+# anything an annotation states. IDENTICAL to `spring-ws.yml`'s entry by
+# contract: the ladder refuses a contradiction between two catalogs rather than
+# picking one, so the two copies cannot drift silently.
+format_fixed:
+  soap: xml
+
+# Deliberately NO `wrappers` block, for `spring-ws.yml`'s reason restated: a
+# JAX-WS runtime marshals whatever the operation returns through JAXB and
+# unwraps neither an HTTP envelope — a type this transport never sees — nor an
+# `Optional`. Declaring the family every sibling inbound catalog copies would
+# peel a return type the framework marshals whole.
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

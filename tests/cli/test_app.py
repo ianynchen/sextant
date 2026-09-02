@@ -105,7 +105,19 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # this test exists to catch.
     # + 2: the prefix-seam controllers (`SeamController`, `RootSeamController`)
     # — one more class file each, one more document each.
-    assert metadata["coverage"]["documents"] == 98
+    # + 5: 2I Task 1's SOAP surfaces compile to five more class files
+    # (`OrderSoapEndpoint`, `BillingWebService`, `LegacyBillingWebService`,
+    # `BillingSoapClient`, `PlaceOrderRequest`), one document each.
+    # + 2: 2I Task 3's WSDL/XSD reader now claims Task 1's `orders.wsdl` and
+    # `orders-types.xsd` under `src/main/resources/wsdl`, one document each.
+    # TWO, not four, for the same reason the SDL pair above is two: that
+    # directory is a schema root INSIDE the resource root, so only the schema
+    # loop reads it.
+    # + 1: 2I Task 6's opt-in library extraction. `BillingPort` is one class
+    # file inside `com.example:orders-soap-client`, and a class file is a
+    # document wherever it was read from (D00 §2) — this is the count moving
+    # because a jar was scanned, which is the point of the feature.
+    assert metadata["coverage"]["documents"] == 106
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):
@@ -326,3 +338,33 @@ def test_analyze_reports_nothing_uncovered_now_that_the_nested_class_is_read(tmp
     )
     document = (tmp_path / "render" / "architecture.md").read_text()
     assert "Not read" not in document.split("## Known gaps", 1)[1]
+
+
+def test_a_malformed_sextant_yml_is_reported_as_a_message_not_a_stack_trace(tmp_path: Path):
+    """A `.sextant.yml` Sextant refuses is a mistake in the analysed
+    repository, and the analysed repository belongs to the person running the
+    command — so it reaches them as the CLI's own error, the same way "no
+    analysis found" does. A traceback here would report a user's typo as a
+    crash in the tool, and the message that says which key is wrong would be
+    buried in it.
+
+    Written into a COPY of the fixture, never the fixture itself: this suite's
+    other tests read that directory and a stray config file would follow them
+    around."""
+    module = tmp_path / "module"
+    module.mkdir()
+    (module / "pom.xml").write_text(
+        (FIXTURE / "pom.xml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (module / ".sextant.yml").write_text(
+        "extract_libaries: [com.example:orders-soap-client]\n", encoding="utf-8"
+    )
+
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(module), "--workspace", str(tmp_path / "ws")]
+    )
+
+    assert result.exit_code == 1
+    assert "extract_libaries" in result.output
+    assert "extract_libraries" in result.output
+    assert "Traceback" not in result.output

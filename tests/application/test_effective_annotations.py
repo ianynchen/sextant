@@ -247,9 +247,21 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         path_fallback=None,
         qualifier_from=[],
         qualifier_separator=None,
+        # 2I Task 2's two QName forms and its member rule, inert for the
+        # same reason.
+        qualifier_format=None,
+        namespace_template=None,
+        members=None,
         # Inert for the same reason: this regression is about WHETHER a
         # prefix joins at all, not what joins it.
         path_separator=None,
+        # 2I Task 5's construct gate, inert — this regression's own facts
+        # declare no enclosing type at all, and NULL applies the rules to
+        # every construct exactly as every pre-2I catalog gets.
+        declared_on=None,
+        # 2I Task 5's SEI fence, inert for the same reason — this regression's
+        # catalog is inbound and gates on no construct kind.
+        locally_implemented=[],
     )
     rows = workspace.query("endpoints")
     workspace.close()

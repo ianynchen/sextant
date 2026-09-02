@@ -18,6 +18,7 @@ from sextant.application.resolve.effective_annotations import (
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.domain.symbols import bare_descriptor
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
@@ -27,6 +28,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     forwards what the catalog declares."""
     mapping = catalog.matches["mapping"]
     _validate_naming(catalog, mapping)
+    declared_on = _declared_on(catalog)
     type_annotation = catalog.matches.get("type_annotation")
     type_annotation_fqn = None if type_annotation is None else _catalog_symbol(type_annotation)
     prefix_annotation = mapping["prefix_annotation"]
@@ -41,6 +43,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # found. Absent (the default) on every annotation that names a
             # top-level identity, which is every annotation shipped before it.
             "requires_qualifier": bool(m.get("requires_qualifier", False)),
+            # 2I design §2, word 4: the attribute this rule withdraws itself on,
+            # and the value that withdraws it. Both NULL on every annotation
+            # that withdraws nothing, which is every annotation shipped before
+            # this word — the pair is read as "no filter" and the rule derives
+            # exactly what it always did.
+            "unless_attribute": _unless_attribute(m),
+            "unless_equals": _unless_equals(m),
         }
         for m in mapping["annotations"]
     ]
@@ -50,6 +59,24 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         direction=catalog.direction,
         # Optional (D02 §2, amended): absence means "no type-level gate".
         type_annotation=type_annotation_fqn,
+        # 2I design §4: WHICH KIND of construct this catalog's rules describe,
+        # or NULL where the catalog describes declarations on any construct —
+        # which is every catalog written before it. One annotation family can
+        # mark both a service and the generated client stub of one, and the
+        # two are opposite directions of the same wire; without this the two
+        # catalogs would each derive both, and a module would be reported as
+        # calling the very operations it serves.
+        declared_on=declared_on,
+        # 2I design §4's SEI fence — `derive_endpoints.sql`'s own comment
+        # states what it refuses and why it is scoped rather than universal.
+        # Read only for the one catalog shape that can be wrong without it, so
+        # every other catalog binds an empty list and the fence's own
+        # `$direction`/`$declared_on` test already evaluates false for it.
+        locally_implemented=(
+            _locally_implemented(workspace)
+            if catalog.direction == "outbound" and declared_on == "interface"
+            else []
+        ),
         prefix_annotation=prefix_fqn,
         # `method` is absent for an annotation that pre-sets none, and the
         # derivation reads that absence as "every method in all_methods".
@@ -74,6 +101,23 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         path_fallback=mapping.get("path_fallback"),
         qualifier_from=list(mapping.get("qualifier_from", [])),
         qualifier_separator=mapping.get("qualifier_separator"),
+        # 2I design §2's two QName forms, both optional and both inert unless
+        # declared. `qualifier_format` names a composition that is not a
+        # separator at all — `{scope}name` is one bracketed token, and its
+        # closing brace has no separator equivalent — so it REPLACES
+        # `qualifier_separator` rather than joining it. `namespace_default`
+        # says what the scope is when the attribute carrying it is absent,
+        # which for a spec that defines that default is a fact about the
+        # framework rather than a guess.
+        qualifier_format=mapping.get("qualifier_format"),
+        # The declared word's TEMPLATE, not the word: see `_NAMESPACE_DEFAULTS`.
+        # NULL where the catalog declares no default, which is what keeps the
+        # derivation below inert for every catalog but the ones that ask.
+        namespace_template=_NAMESPACE_DEFAULTS.get(str(mapping.get("namespace_default"))),
+        # 2I design §2, word 3: the class-gate MEMBER rule. NULL where a
+        # catalog declares none, which is every catalog whose framework
+        # exposes only what an annotation marks.
+        members=mapping.get("members"),
         # What joins a TYPE-level prefix to the address it prefixes, and the
         # character deduped where both halves already spell it. Optional and
         # inert while absent, so a catalog composing a Kafka topic — which has
@@ -105,6 +149,104 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 # a typo is refused rather than read as "no fallback", which would silently
 # restore the empty path this form exists to remove.
 _PATH_FALLBACKS = frozenset({"construct_name"})
+
+# How a scope composes with the name it qualifies, where a single separator
+# cannot say it (2I design §2, word 1). Today's one word is 'qname': the
+# XML-namespace notation `{scope}name`, one bracketed token whose closing
+# brace has no separator equivalent at all — which is exactly why it is a
+# format word and not a two-character `qualifier_separator`, a value
+# `_validate_naming` refuses outright because the seam dedupe trims a SET of
+# characters. Absent means the separator composition, which is what every
+# catalog written before this word already gets.
+_QUALIFIER_FORMATS = frozenset({"qname"})
+
+# What the scope IS when the attribute carrying it is absent (2I design §2,
+# word 2). Today's one word is 'reversed_package': the JAX-WS default
+# `targetNamespace`, `"http://"` + the declaring type's package tokens
+# reversed and dot-joined + a trailing `"/"` — pinned against BOTH reference
+# implementations (Phase 2I Task 2 checkpoint item 2:
+# `com.sun.xml.ws.model.RuntimeModeler#getNamespace` and Apache CXF's
+# independent `PackageUtils#getNamespace`, which agree character for
+# character, trailing slash included).
+#
+# A closed vocabulary rather than a boolean for `_PATH_FALLBACKS`'s reason,
+# and the stakes are higher here: a typo read as "no default" still derives
+# every row, just without the namespace the framework gives them — a wrong
+# address that looks like a right one, at `resolved`/`compiler` where nothing
+# downstream can tell it from an observation.
+#
+# A MAPPING rather than a set, because each word owes the derivation a
+# template as well as a name — and the template is where the scheme lives.
+# That is not a stylistic choice: `storage/` may not name a protocol
+# (ARCHITECTURE §10, `tests/architecture/test_source_rules.py::
+# test_storage_names_no_framework_language_or_protocol`), and a scheme IS one,
+# so the SQL composes the package half and this layer supplies the wrapper it
+# goes in. The `%s` is DuckDB's `printf` placeholder, filled with the reversed
+# dot-joined package.
+_NAMESPACE_DEFAULTS = {"reversed_package": "http://%s/"}
+
+# What a CLASS GATE exposes on its own, with no member-level annotation
+# anywhere (2I design §2, word 3). Today's one word is 'public_methods': the
+# framework exposes the gated construct's public members, and a member-level
+# rule overrides the member rule for the member it names — one row per member,
+# never two.
+#
+# A closed vocabulary for `_PATH_FALLBACKS`'s reason, and an especially sharp
+# one here: this is the only word in the mapping vocabulary that derives rows
+# for declarations carrying NO annotation at all, so a word read as something
+# it is not mints endpoints out of ordinary methods.
+_MEMBER_RULES = frozenset({"public_methods"})
+
+# The two keys a `unless` filter may carry, and no others (2I design §2,
+# word 4). A closed SHAPE rather than a closed vocabulary, because the values
+# are catalog data: which attribute withdraws a declaration, and at which
+# value, is the framework's own convention.
+_UNLESS_KEYS = frozenset({"attribute", "equals"})
+
+
+# WHICH construct kinds a catalog may confine itself to (2I design §4). A
+# subset of D00's own ConstructKind set rather than the whole of it, because
+# only a TYPE can enclose the methods this engine derives from — naming a
+# method kind here would gate every row out and read as "this catalog derives
+# nothing", which is not something a file should be able to say by accident.
+_DECLARED_ON = frozenset({"class", "interface"})
+
+
+def _declared_on(catalog: Catalog) -> str | None:
+    """The construct kind this catalog's declarations sit on, checked against
+    the closed set — the `_validate_naming` discipline, at the one place the
+    value is still cheap to fix (NFR-5, `yaml_source.py`'s own reason for
+    checking `protocol`/`direction` at the edge).
+
+    An unrecognised word read as "no gate" is the dangerous direction: a
+    catalog written to describe generated client stubs would derive an
+    OUTBOUND row for every server class carrying the same annotations, and a
+    module would be published as calling the operations it serves."""
+    declared = catalog.matches.get("declared_on")
+    if declared is not None and declared not in _DECLARED_ON:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `declared_on: {declared}` is not one of "
+            f"{', '.join(sorted(_DECLARED_ON))} (2I design §4)"
+        )
+    return None if declared is None else str(declared)
+
+
+def _locally_implemented(workspace: Workspace) -> list[str]:
+    """Every interface this module's own classes declare they implement (D00
+    §5a's `implemented_interfaces`), as BARE descriptors.
+
+    The same strip `interface_implementation._implemented_interfaces` and
+    `config_join._implemented_interfaces` make, for the same reason: each
+    entry in the fact is itself module-prefixed, and only the descriptor is
+    ever compared (D00 §5a). Sorted and deduped so the bound parameter is one
+    value for one workspace regardless of read order (NFR-1).
+    """
+    found = {
+        bare_descriptor(str(entry))
+        for row in workspace.query("implementations")
+        for entry in json.loads(str(row["interfaces"]))
+    }
+    return sorted(found)
 
 
 def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
@@ -143,32 +285,127 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
             f"loading catalog {catalog.source}: `mapping.path_fallback: {fallback}` is not one "
             f"of {', '.join(sorted(_PATH_FALLBACKS))} (2H design §1)"
         )
+    members = mapping.get("members")
+    if members is not None:
+        if members not in _MEMBER_RULES:
+            # An unrecognised word read as "no member rule" loses every
+            # unannotated member silently; read as a member rule it does not
+            # mean would mint endpoints out of ordinary methods. Both are
+            # worse than a refused file.
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.members: {members}` is not one of "
+                f"{', '.join(sorted(_MEMBER_RULES))} (2I design §2)"
+            )
+        # A member carries NO annotation, so it carries no name attribute
+        # either — every alias is absent by construction, which is exactly the
+        # case `path_fallback` exists for. Without it every member row composes
+        # the EMPTY path: a resolved endpoint addressing nothing, the failure
+        # `path_from` and `qualifier_from` are both already checked for,
+        # reached by a third route.
+        if mapping.get("path_fallback") is None:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.members: {members}` is declared with "
+                f"no `mapping.path_fallback` — a member carries no annotation and so no name "
+                f"attribute at all, and every member row would compose an empty address "
+                f"(2I design §2)"
+            )
+        # THE CLASS GATE. A member rule enumerates the members OF something,
+        # so something has to gate the class — and where nothing does, the
+        # rule is not inert, it is catastrophic: every public method in the
+        # module becomes an endpoint. The gate may be the single
+        # `type_annotation`, or — for a framework whose gate has two spellings,
+        # which `type_annotation` cannot carry (it is one fqn) — one of this
+        # catalog's own `mapping.annotations` found on a TYPE, the same
+        # type-level join `qualifier_scopes` reads a class-level scope through.
+        # A catalog declaring neither names no class at all.
+        if catalog.matches.get("type_annotation") is None and not mapping["annotations"]:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.members: {members}` is declared with "
+                f"no class gate — neither `type_annotation` nor any `mapping.annotations` entry "
+                f"that could mark one, so the rule names no class to enumerate (2I design §2)"
+            )
+    for entry in mapping["annotations"]:
+        _validate_unless(catalog, entry)
+    qualifier_format = mapping.get("qualifier_format")
+    if qualifier_format is not None and qualifier_format not in _QUALIFIER_FORMATS:
+        # An unrecognised word would fall through to the separator
+        # composition — and for a catalog that declares no separator (which
+        # every catalog reaching for a format does, since the two are
+        # exclusive below) that is the un-composed bare name, silently
+        # restoring the un-scoped address the form exists to remove.
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.qualifier_format: {qualifier_format}` is "
+            f"not one of {', '.join(sorted(_QUALIFIER_FORMATS))} (2I design §2)"
+        )
+    namespace_default = mapping.get("namespace_default")
+    if namespace_default is not None and namespace_default not in _NAMESPACE_DEFAULTS:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.namespace_default: {namespace_default}` "
+            f"is not one of {', '.join(sorted(_NAMESPACE_DEFAULTS))} (2I design §2)"
+        )
+    if qualifier_format is not None and mapping.get("qualifier_separator") is not None:
+        # Two composition rules for one seam is one too many: which of them
+        # the engine applied would decide the address, and a file declaring
+        # both states no preference. Refused rather than resolved by a
+        # precedence nobody wrote down. `is not None` rather than a truth
+        # test, so an explicitly EMPTY separator is caught here too — it is
+        # still the key spelled, still a second rule declared.
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.qualifier_format: {qualifier_format}` and "
+            f"`mapping.qualifier_separator: {mapping.get('qualifier_separator')!r}` are mutually "
+            f"exclusive — a format states the WHOLE composition (`{{scope}}name` has no single "
+            f"joining character), so a separator beside it declares a second rule for one seam "
+            f"(2I design §2)"
+        )
     if not mapping.get("qualifier_from"):
+        # Both new words describe the SCOPE — how it composes, and what it is
+        # when unstated — so neither means anything on a catalog that reads no
+        # scope at all. Refused rather than accepted and silently ignored: a
+        # file whose author believed they had asked for the framework's own
+        # default would otherwise get nothing, with nothing saying so.
+        for word, value in (
+            ("qualifier_format", qualifier_format),
+            ("namespace_default", namespace_default),
+        ):
+            if value is not None:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `mapping.{word}: {value}` is declared "
+                    f"with no `mapping.qualifier_from` — it describes a scope this catalog "
+                    f"never reads (2I design §2)"
+                )
         return
     separator = mapping.get("qualifier_separator")
-    # An ABSENT separator joins a scope to a name with nothing between them
-    # (`Parentmember`); an explicitly EMPTY one does exactly the same thing
-    # while passing an `is None` check, so both are refused by the same
-    # message here. An empty separator has no honest use: a framework that
-    # concatenates the two halves with nothing between them has no
-    # composition to declare.
-    if separator is None or separator == "":
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `mapping.qualifier_from` is declared with no "
-            f"usable `mapping.qualifier_separator` (got {separator!r}) — what joins a scope to "
-            f"the name it qualifies is catalog data, and this engine names no punctuation of "
-            f"its own (2H design §1)"
-        )
-    # Anything else that isn't exactly one STRING character (a YAML int/bool,
-    # a multi-character string) would compose an address nobody serves — the
-    # same failure mode `path_separator` is checked for, and the same reason.
-    if not isinstance(separator, str) or len(separator) != 1:
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `mapping.qualifier_separator: {separator!r}` is "
-            f"not a single character — what joins a scope to the name it qualifies is a single "
-            f"piece of punctuation, and a value that isn't exactly one character would compose "
-            f"an address the framework does not serve"
-        )
+    # A format states the whole composition, so the separator checks below —
+    # which exist to refuse a scope joined by nothing or by the wrong number
+    # of characters — have nothing to rule on. `path_fallback` is still
+    # required past this branch: a format composing onto an EMPTY name yields
+    # a dangling `{scope}`, which is the same confidently-wrong address a
+    # dangling `Parent.` is.
+    if qualifier_format is None:
+        # An ABSENT separator joins a scope to a name with nothing between
+        # them (`Parentmember`); an explicitly EMPTY one does exactly the same
+        # thing while passing an `is None` check, so both are refused by the
+        # same message here. An empty separator has no honest use: a framework
+        # that concatenates the two halves with nothing between them has no
+        # composition to declare.
+        if separator is None or separator == "":
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.qualifier_from` is declared with no "
+                f"usable `mapping.qualifier_separator` (got {separator!r}) — what joins a scope "
+                f"to the name it qualifies is catalog data, and this engine names no punctuation "
+                f"of its own (2H design §1)"
+            )
+        # Anything else that isn't exactly one STRING character (a YAML
+        # int/bool, a multi-character string) would compose an address nobody
+        # serves — the same failure mode `path_separator` is checked for, and
+        # the same reason.
+        if not isinstance(separator, str) or len(separator) != 1:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.qualifier_separator: {separator!r}` "
+                f"is not a single character — what joins a scope to the name it qualifies is a "
+                f"single piece of punctuation, and a value that isn't exactly one character "
+                f"would compose an address the framework does not serve"
+            )
     # Without a fallback, an annotation carrying a scope and no name composes
     # the scope and the separator onto nothing — a dangling `Parent.`, which
     # is the confidently-wrong-address class again. The two forms are declared
@@ -179,6 +416,56 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
             f"`mapping.path_fallback` — a scoped declaration that names no member would compose "
             f"a scope and a separator onto an empty name (2H design §1)"
         )
+
+
+def _validate_unless(catalog: Catalog, entry: dict[str, Any]) -> None:
+    """Refuses an `unless` filter whose shape the derivation cannot honour.
+
+    Exactly `attribute` (a string) and `equals` (present, any scalar), and
+    nothing else. A misspelled or missing key would leave the filter reading
+    NULL and matching nothing — the rule would derive every declaration
+    including the ones the framework itself withdraws, which is a published
+    endpoint nobody serves rather than a missing one.
+    """
+    declared = entry.get("unless")
+    if declared is None:
+        return
+    valid = (
+        isinstance(declared, dict)
+        and set(declared) == _UNLESS_KEYS
+        and isinstance(declared.get("attribute"), str)
+        and declared.get("equals") is not None
+    )
+    if not valid:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `unless` on `{entry.get('fqn')}` must name "
+            f"exactly `attribute` (a string) and `equals`, got {declared!r} (2I design §2)"
+        )
+
+
+def _unless_attribute(entry: dict[str, Any]) -> str | None:
+    declared = entry.get("unless")
+    return None if declared is None else str(declared["attribute"])
+
+
+def _unless_equals(entry: dict[str, Any]) -> str | None:
+    """The withdrawing value, spelled the way `json ->> key` reads it back.
+
+    A JSON boolean reads back as the lowercase text `true`/`false`, a number
+    as its digits, a string as itself — so the comparison happens on ONE
+    representation and a YAML `equals: true` matches the boolean checkpoint
+    item 4 pins in the bytecode (`@WebMethod(exclude = true)` emits a real
+    JSON boolean, never the string `"true"`). `str(True)` is `'True'`, which
+    would match nothing at all, so the bool case is spelled out first — bools
+    are ints in Python, and the order of these branches is load-bearing.
+    """
+    declared = entry.get("unless")
+    if declared is None:
+        return None
+    value = declared["equals"]
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
 def _synthetic_annotations(

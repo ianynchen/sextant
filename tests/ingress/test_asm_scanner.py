@@ -1,5 +1,8 @@
 import json
+import zipfile
 from pathlib import Path
+
+import pytest
 
 from sextant.application.ports.scanner import ScanRequest
 from sextant.cli.resources import extractor_jar
@@ -42,6 +45,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "BillingClients.jsonl",
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
+        "BillingSoapClient.jsonl",
+        "BillingWebService.jsonl",
         "ClassLevelListener.jsonl",
         "CommonProtos$Money$1.jsonl",
         "CommonProtos$Money$Builder.jsonl",
@@ -63,6 +68,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "KotlinOrderRoutes$ktRoutes$1$1$3$1.jsonl",
         "KotlinOrderRoutes.jsonl",
         "LegacyBillingApi.jsonl",
+        "LegacyBillingWebService.jsonl",
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
@@ -98,6 +104,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderResult.jsonl",
         "OrderRoutes.jsonl",
         "OrderService.jsonl",
+        "OrderSoapEndpoint.jsonl",
         "OrderStatus.jsonl",
         "OrderStompController.jsonl",
         "OrderStreamBindings.jsonl",
@@ -108,6 +115,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
         "ParsedPayloadListeners.jsonl",
+        "PlaceOrderRequest.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
         "RawKafkaMessageSender.jsonl",
@@ -132,7 +140,10 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # — two class files, one document each. Two types rather than one because
     # a class states its prefix once, and the two seam forms need two
     # different prefixes.
-    assert report.documents == 89
+    # + 5: 2I Task 1's SOAP surfaces — `OrderSoapEndpoint`, `BillingWebService`,
+    # `LegacyBillingWebService`, `BillingSoapClient` and the `PlaceOrderRequest`
+    # payload, each its own class file.
+    assert report.documents == 94
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -162,6 +173,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "BillingClients.jsonl",
         "BillingRestTemplate$1.jsonl",
         "BillingRestTemplate.jsonl",
+        "BillingSoapClient.jsonl",
+        "BillingWebService.jsonl",
         "ClassLevelListener.jsonl",
         "CommonProtos$Money$1.jsonl",
         "CommonProtos$Money$Builder.jsonl",
@@ -183,6 +196,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "KotlinOrderRoutes$ktRoutes$1$1$3$1.jsonl",
         "KotlinOrderRoutes.jsonl",
         "LegacyBillingApi.jsonl",
+        "LegacyBillingWebService.jsonl",
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
@@ -218,6 +232,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderResult.jsonl",
         "OrderRoutes.jsonl",
         "OrderService.jsonl",
+        "OrderSoapEndpoint.jsonl",
         "OrderStatus.jsonl",
         "OrderStompController.jsonl",
         "OrderStreamBindings.jsonl",
@@ -228,6 +243,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
         "ParsedPayloadListeners.jsonl",
+        "PlaceOrderRequest.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
         "RawKafkaMessageSender.jsonl",
@@ -342,3 +358,160 @@ def test_scanner_declares_the_implemented_interfaces_capability():
     catalog to key off of once the scanner that wrote it says it produces
     them."""
     assert "implemented_interfaces" in AsmScanner(JAR).capabilities()
+
+
+def _jar_of(target: Path, entries: dict[str, bytes]) -> Path:
+    """A jar built here rather than by `jar`/`mvn package`: a zip of class
+    files IS what a library ships as, and building it in the test keeps the
+    entry ORDER under the test's control — which is the point of the
+    determinism pin below."""
+    with zipfile.ZipFile(target, "w") as archive:
+        for name, payload in entries.items():
+            archive.writestr(name, payload)
+    return target
+
+
+def _fixture_classes() -> dict[str, bytes]:
+    names = ("com/acme/orders/contracts/OrderView.class", "com/acme/orders/OrderResult.class")
+    return {name: (CLASSES / name).read_bytes() for name in names}
+
+
+def test_scan_reads_the_class_files_inside_a_jar(tmp_path: Path):
+    """A library ships as a jar, and until 2I Task 6 `--classes` pointed at one
+    walked for loose `.class` files, found none, and reported a clean scan of
+    nothing. Opt-in library extraction has no honest shape at all unless a jar
+    is a scannable input, so this is the pin for the capability itself."""
+    jar = _jar_of(tmp_path / "lib.jar", _fixture_classes())
+    report = AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.example/lib",
+            version="1.0.0",
+            classes_dir=jar,
+            out_dir=tmp_path / "facts",
+        )
+    )
+    assert report.documents == 2
+    assert report.facts > 0
+    assert report.uncovered == ()
+    written = sorted(p.name for p in (tmp_path / "facts").rglob("*.jsonl"))
+    assert written == ["OrderResult.jsonl", "OrderView.jsonl"]
+
+
+def test_a_jars_entries_are_scanned_in_sorted_order_whatever_order_the_archive_holds(
+    tmp_path: Path,
+):
+    """A zip's entry order is whatever the archiver happened to write, so a
+    scan that followed it would produce a different `raw_facts` load order —
+    and `symbols.seq`, which IS declaration order in the workspace, is derived
+    from that (NFR-1). Two jars holding the same classes in opposite orders
+    must therefore write identical bytes.
+
+    Both jars are written to ONE path, in turn, rather than to two: the jar's
+    own location is recorded on every document as `origin_entry`, so two
+    differently named archives would differ for a reason that has nothing to
+    do with entry order and the pin would pass vacuously."""
+    classes = _fixture_classes()
+    orders = (dict(sorted(classes.items())), dict(sorted(classes.items(), reverse=True)))
+    scanned = []
+    for index, entries in enumerate(orders):
+        jar = _jar_of(tmp_path / "lib.jar", entries)
+        out = tmp_path / f"facts{index}"
+        AsmScanner(JAR).scan(
+            ScanRequest(
+                module_id="com.acme:orders",
+                coordinates="com.example/lib",
+                version="1.0.0",
+                classes_dir=jar,
+                out_dir=out,
+            )
+        )
+        scanned.append(
+            {
+                str(p.relative_to(out)): p.read_text(encoding="utf-8")
+                for p in sorted(out.rglob("*.jsonl"))
+            }
+        )
+    assert scanned[0] == scanned[1]
+
+
+def test_a_classes_input_holding_no_class_file_is_named_rather_than_reported_as_a_clean_scan(
+    tmp_path: Path,
+):
+    """The silent-success hole this task closed. An empty jar, and a directory
+    holding only a jar, both used to answer `documents: 0, facts: 0` with an
+    empty `uncovered` at exit 0 — a SUCCESS report for an extraction that
+    happened not to happen. A library extraction built on that would publish an
+    empty fact set as a complete one, so the input is named in `uncovered`
+    (FR-17), which is the channel a finding about unread input already uses."""
+    empty_jar = _jar_of(
+        tmp_path / "empty.jar", {"META-INF/MANIFEST.MF": b"Manifest-Version: 1.0\n"}
+    )
+    jar_only = tmp_path / "jaronly"
+    jar_only.mkdir()
+    _jar_of(jar_only / "lib.jar", _fixture_classes())
+    for index, classes in enumerate((empty_jar, jar_only)):
+        report = AsmScanner(JAR).scan(
+            ScanRequest(
+                module_id="com.acme:orders",
+                coordinates="com.example/lib",
+                version="1.0.0",
+                classes_dir=classes,
+                out_dir=tmp_path / f"facts{index}",
+            )
+        )
+        assert report.documents == 0
+        assert report.uncovered == (f"{classes}: no class files found",)
+
+
+def test_a_classes_input_the_scanner_cannot_read_fails_instead_of_scanning_nothing(
+    tmp_path: Path,
+):
+    """The other half of the split: an input that cannot be READ is a failed
+    request, not a finding about the input, so it exits non-zero and the
+    adapter raises. A path that does not exist and a regular file that is not
+    a jar are the same mistake — pointing the scanner somewhere there is no
+    code — and neither may pass as an empty scan."""
+    not_a_jar = tmp_path / "notes.txt"
+    not_a_jar.write_text("not bytecode\n", encoding="utf-8")
+    for classes in (not_a_jar, tmp_path / "absent"):
+        with pytest.raises(RuntimeError, match="must name a directory of class files or a .jar"):
+            AsmScanner(JAR).scan(
+                ScanRequest(
+                    module_id="com.acme:orders",
+                    coordinates="com.example/lib",
+                    version="1.0.0",
+                    classes_dir=classes,
+                    out_dir=tmp_path / "facts",
+                )
+            )
+
+
+def test_a_scan_records_its_origin_coordinate_only_when_one_was_asked_for(tmp_path: Path):
+    """`origin` names the library a document was extracted from (D00 §2). It is
+    written only for a scan that names one: a module's own output carries no
+    origin KEY at all, not an origin of null, so every fact file a module scan
+    writes is byte-for-byte what it was before this option existed."""
+    jar = _jar_of(tmp_path / "lib.jar", _fixture_classes())
+    for out, origin in (
+        (tmp_path / "with", "com.example:orders-soap-client"),
+        (tmp_path / "without", None),
+    ):
+        AsmScanner(JAR).scan(
+            ScanRequest(
+                module_id="com.acme:orders",
+                coordinates="com.example/lib",
+                version="1.0.0",
+                classes_dir=jar,
+                out_dir=out,
+                origin=origin,
+            )
+        )
+    written = (
+        tmp_path / "with" / "com" / "acme" / "orders" / "contracts" / "OrderView.jsonl"
+    ).read_text(encoding="utf-8")
+    assert json.loads(written.splitlines()[0])["origin"] == "com.example:orders-soap-client"
+    plain = (
+        tmp_path / "without" / "com" / "acme" / "orders" / "contracts" / "OrderView.jsonl"
+    ).read_text(encoding="utf-8")
+    assert "origin" not in json.loads(plain.splitlines()[0])

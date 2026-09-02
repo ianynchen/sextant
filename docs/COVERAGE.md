@@ -210,6 +210,34 @@ deliberate early run of 2J's acceptance test. `graphql-core` joined the core dep
 confined to the one descriptor interpreter like `protobuf` before it, and the format
 ladder's rung 1 got its first live surface.
 
+**Phase 2I closed SOAP — the last protocol on the coverage program's own committed list.**
+That list is the roadmap's, not [REQUIREMENTS.md](REQUIREMENTS.md)'s: version-1 scope names
+**gRPC** as well, and gRPC has no shipped Java row (§5.7) — it is enumerated in the
+milestone's own modulo rather than quietly folded into "done". A SOAP
+operation is `(soap, NULL, {namespace}localPart)` — verbless, the identity being the input
+element's QName rather than the one POST path every operation shares — with a second form
+on the same protocol for `@SoapAction`, whose address is the transport header's URI
+verbatim. **Five catalogs and one reader ship it**: `spring-ws` (`@Endpoint` +
+`@PayloadRoot` + `@SoapAction`) and `jakarta-jws` (`@WebService`/`@WebMethod`, **both** the
+`jakarta` and `javax` spellings, a bare public method included because JAX-WS exposes it)
+inbound; `spring-ws-template` (`WebServiceTemplate`, reading the operation off the payload
+argument's own type and the address off the template's configured default) and
+`jakarta-jws-client` (generated stubs, the 2B Feign shape) outbound; and the
+framework-neutral `wsdl-schema`, over a new **stdlib-XML** reader and interpreter branch
+for `.wsdl`/`.xsd` — zero new dependencies — that projects declared shapes and marks each
+operation's input element, so a schema-first service with no annotation anywhere derives
+its operations at `declared`. Seven new vocabulary words carried the catalogs, and every
+one of them is named for a shape rather than for a framework — a QName composition, a
+reversed-package namespace default, a class gate over public members, a per-annotation
+withdrawal filter, an identity read off an argument's type, a client's configured default
+address, and a gate on whether a declaration sits on a class or an interface — so the
+framework names stay in the catalog files. The phase also shipped the **first
+analysis-configuration file that lives in the analysed repository**: `.sextant.yml` names
+dependencies whose own bytecode is extracted beside the module's, because SOAP's commonest
+outbound form is a stub in a jar — an opt-in, per library, never a walk of the dependency
+tree, and every row it contributes carries its origin coordinate into the facts, the
+rendered document and the exported bundle.
+
 **Everything else in both matrices remains a gap** — including, inside the cells Phase 2D and
 2E-prep touched, Spring Integration's channel adapters and spring-cloud-aws's own
 channel-adapter bindings (`config_join`'s shape, not yet catalogued — Spring Cloud Stream's
@@ -246,7 +274,10 @@ module today produces:
   configuration), and its request and response payload descriptors; `shapes`/`shape_fields`
   holding every reachable payload field by field — wire name, wire type and format, `required`,
   `nullable`, trust fields — with known types mapped and expansion stopping visibly at unknown
-  ones. A path the module both exposes and calls is one endpoint, direction `both`.
+  ones. A path the module both exposes and calls is one endpoint, direction `both`. Since
+  Phase 2I the same table also holds SOAP operations — `@PayloadRoot`/`@SoapAction`,
+  `@WebService`/`@WebMethod` in both spellings, `WebServiceTemplate` calls and generated
+  client stubs, plus every operation a `.wsdl` declares — verblessly, at their QName.
 - **`resolved_config` and `resolved_peers`** (Phase 2F) — every configuration key resolved per
   environment, with a reason where it could not be; and, per environment, every outbound
   expression's own substituted address — a join over the two, never a write, so a bundle
@@ -294,6 +325,8 @@ than silently absent:
 | Trustworthy analysis of a POM using parents/profiles/interpolation | the detector reads `pom.xml` raw (`maven_parent_and_profile_resolution_not_implemented`) | undecided |
 | A payload bound from a parse more than one delegation hop from its handler | a flow followed further than it was observed is an assumption; the parse is found at hop two and ledgered as an open question instead, and past hop two it is not found at all (`payload_parsed_beyond_horizon`, §4.2) | the enrichment tier |
 | A payload bound where one channel's bytes reach two different parses | two answers about one wire is a question for a reader, not a coin toss to publish (`payload_parse_ambiguous`) | the enrichment tier |
+| Anything declared inside a dependency jar nobody named | a jar's own bytecode is scanned only where `.sextant.yml` opts it in, per library; the dependency tree is never walked, because scanning everything reachable publishes every framework's annotated types as this module's endpoints ([D04](components/D04-config-and-exclusion.md) §2a) | opt-in, per library |
+| The response payload of a SOAP operation read from a WSDL | operations are marked from their INPUT elements only, so a schema-first row's response is honestly NULL rather than joined to a guessed output message (§5.3) | the phase that reads the output side |
 
 Two honesty caveats also ride every output: a merged `both` endpoint keeps only the
 handler's declared contract (`merged_endpoints_keep_only_the_handlers_contract`), and —
@@ -351,7 +384,7 @@ the gap list:
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ 5A 3B 5C | ◐ 2A 2B | 2A | ✅ | ✅ | ◐ 1A |
+| **Java / Kotlin** | ✅ ASM | ◐ 5A 3B 5C | ◐ 2A 2B | ◐ — | ◐ — | ◐ — | ◐ 1A |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -380,7 +413,14 @@ identical in every language.
 ### Reading the matrices
 
 **Every cell is generated from §5** by `scripts/coverage_matrix.py`, so the summary cannot
-drift from the checklist it summarises. A cell counts libraries at each tier — `4A 3B 2C`
+drift from the checklist it summarises. **Three Java cells moved in Phase 2I and only one
+of them is a coverage change**: SOAP went from `2A` to `◐ —` because its rows shipped,
+while GraphQL and WebSocket went from a hand-written `✅` to the generated `◐ —`. Those two
+are a **correction, not a downgrade** — the generator never emits a bare `✅` for a protocol
+cell, and `◐ —` is what it writes for a cell whose rows are all shipped and whose gap
+spread is therefore empty. The matrices had simply been left stale since 2H. Anyone
+comparing against an older copy of this file should read `◐ —` as the stronger of the two
+markings, not the weaker. A cell counts libraries at each tier — `4A 3B 2C`
 means four need only a catalog, three need a scanner capability, and two are not in the code
 at all. **The spread is the point**: a single headline tier hides the gap, which is the thing
 worth seeing.
@@ -451,8 +491,9 @@ Three residual cases need more than a shape, and are recorded rather than smooth
   and `zeep` build clients at runtime, but from a `.proto` or WSDL path that is a **literal in
   the source** — so read the artifact instead. `boto3` has no such escape, which is why it
   stays C.
-- **`artifact` depends on whether that reader exists.** GraphQL SDL is A because reading it is
-  planned; WSDL is C because SOAP is deferred.
+- **`artifact` depends on whether that reader exists.** Both readers now do: GraphQL SDL
+  shipped in 2H and WSDL/XSD in 2I, so a row resting on either is no longer waiting on the
+  reader — which is the same burndown property, seen from the artifact side.
 
 Run `python scripts/coverage_matrix.py --check` to confirm §2 still matches §5.
 
@@ -518,7 +559,7 @@ far that reaches today:
 | Protocol | How the format is declared | Evidence | If nothing is declared | Shipped today |
 |---|---|---|---|---|
 | **gRPC** | **Fixed by the protocol** | `compiler` | Protobuf, always. The only certain cell in this table. | Rung 1 is built; **no shipped catalog owns gRPC**, so nothing declares `format_fixed` — **A**, one catalog entry once a gRPC catalog exists |
-| SOAP | Fixed | `compiler` | XML | as gRPC — **A**, with the catalog (§5.3, 2I) |
+| SOAP | Fixed | `compiler` | XML | ✅ **rung 1, the second live surface** (2I). `format_fixed: {soap: xml}` ships on all five catalogs owning the protocol, so every SOAP row answers `xml`/`resolved` before any other rung — including the schema-first rows, which carry no bytecode type for a later rung to read |
 | GraphQL | Fixed | `compiler` | JSON | ✅ **rung 1, and its first live surface** (2H). `format_fixed: {graphql: json}` ships on all four catalogs owning the protocol, so every GraphQL row answers `json`/`resolved` before any other rung is consulted |
 | **REST in** | `produces` / `consumes`, JAX-RS `@Produces` / `@Consumes`, or a return type that is itself a generated message | `declared` | **Assumed** from the framework's default converter (Jackson → JSON) | ◐ **rung 2** off Spring's own `produces`/`consumes` (2E), `resolved`; an undeclared route falls to **rung 5** — `json` at `narrowed` — where it carries a declared payload type at all, and to rung 6 where it carries none. JAX-RS `@Produces` is **A**, with that catalog |
 | **REST out** | `Content-Type` / `Accept` set somewhere in the client chain | `syntax` | **Assumed** JSON | **not read** — no client chain's `Content-Type` reaches `consumes`/`produces`, so outbound rows answer at rung 5 (`json`, `narrowed`) or rung 6 |
@@ -566,7 +607,7 @@ that each row's own listener was individually checked against the configured des
 | **Avro** | `.avsc`, or `SCHEMA$` on a `SpecificRecordBase` subclass | repository **and** compiled output | record full name; on Kafka, the **subject** `<topic>-value` | ◐ **both origins**, with two limits: only the Avro-1.12 `SCHEMA$` shape is harvested (below), and **no subject is derived** |
 | **JSON** | Usually none — **the DTO type declaration is the spec** | code | type reference | ✅ since Phase 2A — the shape tables *are* this row |
 | JSON Schema | Fastify route options, OpenAPI `components`, `zod` | code or artifact | `$ref` / type reference | **out of scope.** `json_schema` is a reserved format value: a catalog that writes it is refused by name rather than read as something adjacent |
-| XML | XSD, WSDL | repository | namespace + element name | with SOAP (§5.3, 2I) |
+| XML | XSD, WSDL | repository **only** — a contract file compiles into no class, so there is no second origin | namespace + element name, as one QName that is both the shape's `symbol` and its `schema_name` | ✅ since Phase 2I, at `declared`. One reader claims both extensions and one interpreter branch merges every contract file in the module into a single type universe before projecting — **stdlib `ElementTree`, no new dependency**. Global elements and named complex types become shapes; `minOccurs="0"`, `nillable`, unbounded repeats and enumeration facets become presence, nullability, arrays and enum symbols; **`field_number` is NULL — the format numbers nothing** |
 | **GraphQL SDL** | `.graphqls` / `.graphql` under `src/main/resources/graphql` | repository **only** — SDL compiles into no class, so there is no second origin | the type's own name, which is both its `symbol` and its `schema_name` | ✅ since Phase 2H, at `declared`. The reader emits each file verbatim and the interpreter merges every file in the module into one type universe before projecting (the protobuf-pool precedent, because the runtime merges them too). Object, interface, input and enum types become shapes; **`field_number` is NULL — the format numbers nothing** |
 
 Protobuf and Avro share a property nothing else here has: **the schema survives into the
@@ -631,7 +672,9 @@ coverage:
   serializer, both already kept.
 - **gRPC service extraction from descriptors is deferred.** A descriptor names services and
   methods; reading them is a protocol phase, not a format phase.
-- **JSON Schema and XSD are out** — `json_schema` reserved and refused (§4.2 above).
+- **JSON Schema is out** — `json_schema` reserved and refused (§4.2 above). XSD was out of
+  2G for the same reason and is no longer: Phase 2I reads it as half of a SOAP contract
+  (§5.3), which changes nothing about the reserved value.
 - **Rung 5's presence test is annotation-only.** The framework-default rung fires when an
   annotation from a declared converter package family appears anywhere in the module. A
   module that uses a JSON converter through code alone — no annotation from its package
@@ -837,20 +880,134 @@ has nothing to match against them.
 
 ### 5.3 SOAP
 
-Deferred by decision — *"can defer, not really that widely used"*. Listed for completeness.
+**Shipped in Phase 2I** — the last protocol on the coverage roadmap's committed list, which
+is a narrower list than [REQUIREMENTS.md](REQUIREMENTS.md)'s version-1 scope: that also
+names gRPC, still unshipped for Java (§5.7). The boundary is not the HTTP route — one POST path fronts every
+operation — so the identity is the **input element's QName** in W3C notation
+(`{http://orders.example.com/ws}placeOrderRequest`), verbless, on
+[D01](components/D01-graph-schema.md) §3's operation-is-the-endpoint rule. The row that
+was `C (tier-2 artifact)` here — the WSDL itself — is the reason the rest works: the same
+QName is stated by a handler's annotation, by a client's payload type and by the contract
+file, so three independent statements meet on one string.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
-| Java | JAX-WS `@WebService`, `@WebMethod`, `@WebParam` | — | `annotation` | A |
-| Java | Spring-WS `@Endpoint` + `@PayloadRoot(namespace, localPart)` | — | `annotation` | A |
+| Java | JAX-WS `@WebService` + `@WebMethod` — **both `jakarta.jws` and `javax.jws`** | annotation on class + method; the class-level namespace scopes every operation | `annotation` | ✅ shipped — both spellings, including a **bare public method** (JAX-WS exposes it, so it derives) and `@WebMethod(exclude = true)` deriving nothing. `@WebParam` is not read |
+| Java | Spring-WS `@Endpoint` + `@PayloadRoot(namespace, localPart)` | annotation | `annotation` | ✅ shipped — `{namespace}localPart`, and `@RequestPayload` binds the request shape strictly |
+| Java | Spring-WS `@SoapAction("…")` | a second identity axis on the same handler class — the transport header, not the payload | `annotation` | ✅ shipped — the action URI verbatim, in the same catalog and with no engine branch |
+| Java | Spring-WS `WebServiceTemplate.marshalSendAndReceive` | the operation is on the payload TYPE (`@XmlRootElement`), the address on the template (`setDefaultUri`) | `registration_call` | ✅ shipped — outbound, with the address resolved through configuration |
+| Java | JAX-WS generated client stubs — a `wsimport` service endpoint interface | the annotated interface IS the client (the Feign shape) | `annotation` | ✅ shipped — outbound, from the module's own code or from an opted-in dependency jar |
 | Python | `zeep`, `spyne` | client built from a WSDL URL at runtime | `runtime_dynamic` | B |
 | Go | — | **no meaningful SOAP ecosystem** — hand-rolled XML if at all | — | — |
 | TS | — | **no meaningful SOAP ecosystem** | — | — |
 | Rust | — | **no meaningful SOAP ecosystem** | — | — |
 | Swift | — | **no meaningful SOAP ecosystem** | — | — |
-| — | WSDL / XSD documents | the actual contract | artifact | C (tier-2 artifact) |
+| — | WSDL / XSD documents | the actual contract | artifact | ✅ shipped — a reader and a stdlib-XML interpreter branch; an operation no annotation implements derives at `declared` with no handler |
 
-Without WSDL reading, SOAP link matching falls back to structural comparison.
+**Five catalogs and one reader ship it.** `spring-ws` and `jakarta-jws` inbound,
+`spring-ws-template` and `jakarta-jws-client` outbound, and the framework-neutral
+`wsdl-schema` reading the contract; `format_fixed: {soap: xml}` on all five makes SOAP the
+format ladder's second rung-1 protocol. Four framework-neutral vocabulary words carried the
+annotation side — a QName composition, the JAX-WS spec's own reversed-package namespace
+default, a class gate that exposes its public members, and a per-annotation withdrawal
+filter — plus two on the call side (an identity read off an argument's TYPE, and a
+client's configured default address) and one gate on where a declaration sits
+([D02](components/D02-catalog-schema.md) §2). The phase also shipped the first
+analysis-configuration file living in the analysed repository, `.sextant.yml`, because
+SOAP's commonest outbound form — a generated stub — usually sits in a dependency jar
+(§2a of [D04](components/D04-config-and-exclusion.md)).
+
+**`declared_on` is what keeps a service from being published as its own client.**
+`@WebService` marks both a service implementation and a generated stub, so the two catalogs
+partition the annotation by what it sits on — class inbound, interface outbound — and the
+outbound one further subtracts every interface the module's own classes implement. That
+subtraction is the style's semantic rather than extra vocabulary: a stub is a declaration
+nothing local answers.
+
+The boundaries, each verified against the shipped code rather than assumed:
+
+- **`rpc/encoded` is not implemented, and never will be here.** Only document/literal
+  (wrapped included) has an element QName to be identified by; an `rpc`-style message part
+  is typed rather than element-declared, and makes its file a gap.
+- **An input message with more than one part — or none — is that WSDL's gap.**
+  Document/literal *wrapped* is exactly one part and the wrapper IS the operation; a
+  two-part message is a different wire shape, and a zero-part one names no request element
+  at all, so both refuse rather than mark an arbitrary part.
+- **`xsd:attribute` and `complexContent` make their file a gap.** The projection reads
+  elements; attributes and derivation-by-extension are constructs it has no word for. Both
+  are common in real schemas and both are cheap additions — recorded as a fast-follow
+  candidate rather than a permanent boundary.
+- **`substitutionGroup`, `xsd:any`/`anyAttribute`, `choice`, `redefine` and `override` are
+  each their file's gap.** The first three describe a payload this vocabulary cannot state
+  without guessing; the last two REPLACE a declaration in the file they name, so publishing
+  that file would publish the definition the contract explicitly replaced — a wrong answer
+  rather than a partial one.
+- **A chameleon include gaps the INCLUDING file**, because the included file is read on its
+  own terms and its components carry the bare names it wrote rather than the includer's
+  namespace. The mirror case is not detected: the check fires only where the including
+  schema has a target namespace, so a no-namespace schema including a namespaced one passes
+  unremarked.
+- **An element and a `complexType` sharing a QName is a representation limit, not an
+  invalid schema.** XSD has two symbol spaces where a declared shape's symbol has one, so
+  the file is reported rather than publishing two facts under one name — and this is a
+  different rule from the duplicate-declaration gap, where the schema really is invalid.
+- **Only conventional schema directories are read** — `src/main/resources/wsdl`, `.../xsd`
+  and `.../META-INF/wsdl`. A configured or non-standard location is invisible, and a WSDL
+  served from a **runtime URL** is not fetched at all (the registry-at-runtime class 2G
+  already recorded for Confluent subjects).
+- **The WSDL's output side is unread.** Operations are marked from input elements only, so
+  every schema-first row's `response_shape` is NULL — permanently, until something reads
+  the output message and links it.
+- **`@SoapAction` rows are link-orphan-prone.** They are a different identity axis on the
+  same protocol, so such a row links only where a client states the same action URI, which
+  code rarely does. Honest and stated, not a defect in the derivation.
+- **A JAX-WS operation has no request shape.** Its payload is the generated wrapper
+  element, whose type exists in no source file the scanner reads, and the method's own
+  parameters are that wrapper's children — so both JAX-WS catalogs deliberately declare no
+  request-body rule rather than publishing a parameter type as the contract.
+- **`sendAndReceive` is not claimed.** Its four callback overloads take no payload argument
+  at all — the request message is written inside the callback — so no declared type carries
+  the identity annotation, and a row for one would read its address through the url rule and
+  publish a transport address in the column that holds the operation.
+- **`marshalSendAndReceive`'s arity does not discriminate its overloads.** Calls are matched
+  by owner, name and argument count, and the callback forms collide with the payload forms
+  at arities 2 and 3; both reads then fail, so the cost is recall (that call's identity is
+  missed) and never a wrong row.
+- **JAXB's own defaults are not synthesised.** An `@XmlRootElement` omitting `name` or
+  `namespace` derives an `unresolved` operation: neither default is written into the class
+  file, and the namespace default is the schema's, which is not in the class file at all.
+- **A hand-written `@WebService` interface whose methods carry no `@WebMethod` derives
+  nothing** on the client side, and the belief that `wsimport` annotates every operation is
+  recorded as **secondhand**: no JAX-WS RI, CXF, Axis or Metro artifact was available to
+  probe, and this JDK has removed `wsimport`.
+- **A stub interface with no local implementation always derives outbound**, which is the
+  honest limit of the fence above: a hand-written service endpoint interface that this
+  module does not implement is indistinguishable, in the facts, from a generated stub.
+- **Two calls to one operation at two addresses keep one address.** `peer` is not part of
+  wire identity, so the surviving address is whichever call was read first — call-order
+  dependent, and the other address is not recorded.
+- **SOAP 1.1 and 1.2 are not distinguished**, and WS-Security, WS-Addressing, MTOM and
+  `Dispatch` dynamic clients are unread — the last of these is `runtime_dynamic` by
+  construction.
+
+**Opt-in library extraction has boundaries of its own**, all of them about reach rather
+than about correctness:
+
+- **The dependency tree is never auto-scanned.** A stub in a jar nobody named in
+  `.sextant.yml` is invisible, and that is the design: scanning everything reachable would
+  publish every framework's own annotated types as this module's endpoints.
+- **A version managed by a parent POM or a BOM does not resolve from the two-part
+  coordinate**, because the detector reads `pom.xml` directly
+  (`maven_parent_and_profile_resolution_not_implemented`). The remedy is in the file:
+  `groupId:artifactId:version` states the release outright.
+- **A relocated local repository is invisible.** `settings.xml`'s `<localRepository>`,
+  `-Dmaven.repo.local` and `M2_REPO` are all unread, so such a coordinate lands in the
+  run's `libraries_not_resolved` list with its reason rather than resolving to a guess.
+- **A jar inside a jar is not opened.** Only `.class` entries are read, so a Spring Boot
+  fat jar's `BOOT-INF/lib/*.jar` contributes nothing.
+- **A multi-release jar documents its versioned copies separately.** Every `.class` entry
+  is scanned, `META-INF/versions/…` included, so one class compiled twice becomes two
+  documents.
 
 ### 5.4 GraphQL
 

@@ -201,6 +201,50 @@ def test_every_graphql_catalog_declares_the_protocols_fixed_format():
     assert next(c for c in graphql if c.style == "schema_operations").id == "graphql-schema"
 
 
+def test_every_soap_catalog_declares_the_protocols_fixed_format():
+    """2G design §7, rung 1's SECOND live protocol (2I design §1), and the
+    same rule the graphql test above pins: all FIVE catalogs owning `soap`
+    declare the identical `format_fixed: {soap: xml}` entry, not one — the
+    ladder unions the blocks across catalogs, so a module pulling in only
+    `wsdl-schema` (no `@Endpoint`/`@WebService` annotation anywhere) must
+    still get the answer, the same way a schema-first GraphQL module does.
+
+    `wsdl-schema` (2I Task 4) is the third, and — like `graphql-schema`
+    before it — the only one of the five that is not `annotation_driven` or
+    `single_call`: a schema belongs to no framework, and without its own copy
+    its rows would reach rung 1 with nothing declared and fall through with no
+    rung to answer `xml` at all (its rows carry no bytecode type for rung 4 or
+    rung 5 to read).
+
+    2I Task 5 adds the two OUTBOUND ones — the protocol's first — and the
+    direction assertion below splits accordingly. Each is a separate file
+    rather than a block on its inbound twin because a catalog declares exactly
+    one style and one direction (`yaml_source.py`), the registry constraint
+    `graphql-schema.yml` proved and `wsdl-schema.yml` restated this phase."""
+    catalogs = YamlCatalogSource(CATALOGS).load()
+    soap = [c for c in catalogs if c.protocol == "soap"]
+
+    assert {c.id for c in soap} == {
+        "spring-ws",
+        "jakarta-jws",
+        "wsdl-schema",
+        "spring-ws-template",
+        "jakarta-jws-client",
+    }
+    assert all(c.format_fixed == {"soap": "xml"} for c in soap)
+    assert {c.id for c in soap if c.direction == "outbound"} == {
+        "spring-ws-template",
+        "jakarta-jws-client",
+    }
+    assert all(c.direction == "inbound" for c in soap if c.direction != "outbound")
+    assert {c.style for c in soap} == {
+        "annotation_driven",
+        "schema_operations",
+        "single_call",
+    }
+    assert next(c for c in soap if c.style == "schema_operations").id == "wsdl-schema"
+
+
 def test_only_spring_graphql_needed_the_qualifier_form():
     """2H design §1's amended acceptance test, read off the catalogs
     themselves rather than off the derived rows.
@@ -772,6 +816,737 @@ def test_a_non_single_character_qualifier_separator_is_refused_by_type_and_lengt
 
     assert "qualifier_separator" in str(raised.value)
     assert "invented-naming.yml" in str(raised.value)
+
+
+# --- 2I design §2: the two QName forms, on an invented framework ----------
+#
+# Deliberately NOT Spring-WS and NOT JAX-WS, for the reason the 2H forms above
+# are not GraphQL: `qualifier_format` and `namespace_default` are engine
+# vocabulary, and a test spelled with `@PayloadRoot` or `@WebService` in it
+# would pin a framework rather than a mechanism.
+#
+# The invented framework below is the shape both SOAP families share and that
+# 2H's `qualifier_separator` cannot express: a scope and a name that compose
+# into ONE bracketed token (`{scope}name`) rather than two halves joined by a
+# separator, and a scope whose ABSENCE has a spec-defined derivation rather
+# than meaning "no scope". The type-level annotation and the method-level one
+# are deliberately DIFFERENT fqns here — unlike `_naming_forms_catalog`'s
+# single annotation playing both roles — because the real catalogs need the
+# scope read off an annotation named in `mapping.annotations` alongside the
+# one carrying the name (that list being what lets a catalog name two
+# spellings of the same gate at once; checkpoint item 4).
+
+
+def _qname_catalog(**mapping: object) -> Catalog:
+    """A gateless catalog over the invented annotations below, with whatever
+    QName vocabulary a test layers on."""
+    return Catalog(
+        id="invented-qname",
+        style="annotation_driven",
+        protocol="soap",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-qname.yml"),
+        matches={
+            "mapping": {
+                "path_from": ["op"],
+                "prefix_from": [],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": None,
+                "annotations": [
+                    {"fqn": "com.acme.rpc.annotation.Service"},
+                    {"fqn": "com.acme.rpc.annotation.Operation"},
+                ],
+                **mapping,
+            }
+        },
+    )
+
+
+def _qname_facts(
+    root: Path,
+    owner: str = "com/acme/rpc/OrderService#",
+    namespace: str | None = None,
+    scope_annotated: bool = True,
+) -> None:
+    """One method that always spells its own name, on a type that carries the
+    scope annotation in one of the three shapes checkpoint item 4 tells apart.
+
+    `scope_annotated` false means the annotation is ABSENT from the type
+    altogether; true with `namespace` None means it is PRESENT with the
+    attribute absent — which is the only shape a bytecode-defaulted attribute
+    can take, since a declared default is never written into the class file.
+    `owner` carries the package the reversed-package derivation reads, and is
+    a parameter so a class in the DEFAULT package can be spelled.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rpc/OrderService.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    place = f"{owner}place(sig_3d92af60)."
+    facts: list[object] = [
+        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=place,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=owner,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=place,
+            retention="runtime",
+            # A SCALAR, not an array: checkpoint items 4 and 5 pin both SOAP
+            # families' name attributes as plain strings in bytecode, unlike
+            # every Spring mapping annotation's `String[]`.
+            use=AnnotationUse(
+                annotation="com/acme/rpc/annotation/Operation#", args={"op": "placeRequest"}
+            ),
+        ),
+    ]
+    if scope_annotated:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/rpc/annotation/Service#",
+                    args={} if namespace is None else {"ns": namespace},
+                ),
+            )
+        )
+    write_fact_file(root / "OrderService.jsonl", document, facts)
+
+
+def _qname_paths(tmp_path: Path, catalog: Catalog, **facts: object) -> set[str]:
+    _qname_facts(tmp_path / "facts", **facts)  # type: ignore[arg-type]
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+    return paths
+
+
+def _qname_mapping(**mapping: object) -> dict[str, object]:
+    """The vocabulary every derivation test below shares: the scope read off
+    the type's own attribute, composed as a QName in front of the name."""
+    return {
+        "path_fallback": "construct_name",
+        "qualifier_from": ["ns"],
+        "qualifier_format": "qname",
+        **mapping,
+    }
+
+
+def test_a_qname_format_brackets_the_scope_in_front_of_the_name_it_qualifies(
+    tmp_path: Path,
+):
+    """Word 1. `{namespace}localName` is ONE token, not two halves joined by
+    punctuation: the braces are part of the notation, and the closing one has
+    no separator equivalent at all. That is why it is a `qualifier_format`
+    word rather than a two-character `qualifier_separator` — which
+    `_validate_naming` refuses outright, and rightly, since `rtrim`-style
+    dedupe over a `{`/`}` pair would compose a name nobody serves.
+    """
+    paths = _qname_paths(
+        tmp_path,
+        _qname_catalog(**_qname_mapping()),
+        namespace="http://declared.example.com/ws",
+    )
+
+    assert paths == {"{http://declared.example.com/ws}placeRequest"}
+
+
+def test_an_absent_scope_attribute_falls_back_to_the_reversed_package(tmp_path: Path):
+    """Word 2, composing with word 1.
+
+    The derivation is pinned to what JAX-WS actually computes (checkpoint item
+    2, verified against BOTH `com.sun.xml.ws.model.RuntimeModeler#getNamespace`
+    and Apache CXF's independent `PackageUtils#getNamespace`): `"http://"` +
+    the package's dot-separated tokens REVERSED + a trailing `"/"`. The
+    trailing slash is not decoration — it is in both implementations
+    unconditionally, and an address missing it matches no caller.
+
+    `com/acme/rpc` is deliberately not the namespace the test above declares:
+    a derivation that silently fell through to the declared value, or an
+    assertion that could not tell the two apart, would pass a wrong engine.
+    """
+    paths = _qname_paths(
+        tmp_path,
+        _qname_catalog(**_qname_mapping(namespace_default="reversed_package")),
+        namespace=None,
+    )
+
+    assert paths == {"{http://rpc.acme.com/}placeRequest"}
+
+
+def test_a_declared_scope_still_wins_over_the_reversed_package_default(tmp_path: Path):
+    """The default fires on ABSENCE only, never as a rewrite of something
+    declared — the rule `path_fallback` already keeps for names, restated for
+    scopes because the two forms now compose."""
+    paths = _qname_paths(
+        tmp_path,
+        _qname_catalog(**_qname_mapping(namespace_default="reversed_package")),
+        namespace="http://declared.example.com/ws",
+    )
+
+    assert paths == {"{http://declared.example.com/ws}placeRequest"}
+
+
+def test_an_absent_scope_with_no_default_declared_invents_no_namespace(tmp_path: Path):
+    """The inertness pin for word 2, and the one that matters most: a catalog
+    that declares no `namespace_default` must derive the BARE name rather than
+    a namespace the engine picked. A guessed namespace would be published at
+    `resolved`/`compiler`, where nothing downstream can tell it from an
+    observation — the confidently-wrong-address class again, and the reason
+    DR-6's answer to "the framework's default is unknown" is refusal rather
+    than a plausible-looking string.
+    """
+    paths = _qname_paths(tmp_path, _qname_catalog(**_qname_mapping()), namespace=None)
+
+    assert paths == {"placeRequest"}
+
+
+def test_an_operation_needing_a_scope_with_none_derivable_derives_no_row(tmp_path: Path):
+    """`requires_qualifier` composing with word 2: where the annotation only
+    means anything inside a namespace and no namespace is declared OR
+    derivable, silence is the honest answer — the bare local name would read
+    as a top-level identity, which is a different endpoint from the one the
+    code declares."""
+    paths = _qname_paths(
+        tmp_path,
+        _qname_catalog(
+            **_qname_mapping(
+                annotations=[
+                    {"fqn": "com.acme.rpc.annotation.Service"},
+                    {"fqn": "com.acme.rpc.annotation.Operation", "requires_qualifier": True},
+                ]
+            )
+        ),
+        namespace=None,
+    )
+
+    assert paths == set()
+
+
+def test_the_reversed_package_default_needs_the_scope_annotation_to_be_present(
+    tmp_path: Path,
+):
+    """The default belongs to an ATTRIBUTE of a declared annotation, so the
+    annotation has to be there. A type carrying no scope annotation at all is
+    not a service with a defaulted namespace — it is not a service — and
+    deriving its package's namespace anyway would mint an endpoint for any
+    class that merely happens to hold a matching method.
+
+    This is what lets a catalog whose gate is expressed as a qualifier scope
+    (the only way to name TWO spellings of one gate, since `type_annotation`
+    is single-valued) still gate: no scope row, no default, no address.
+    """
+    paths = _qname_paths(
+        tmp_path,
+        _qname_catalog(**_qname_mapping(namespace_default="reversed_package")),
+        scope_annotated=False,
+    )
+
+    assert paths == {"placeRequest"}
+
+
+def test_a_class_in_the_default_package_derives_no_namespace_rather_than_an_empty_one(
+    tmp_path: Path,
+):
+    """Both reference implementations return `null` for the empty package
+    (checkpoint item 2) — there is no namespace to reverse. So the refusal is
+    part of the pinned algorithm, not an extra rule bolted on: the row keeps
+    its bare name rather than gaining `http:///`, which is neither a namespace
+    nor an honest absence."""
+    paths = _qname_paths(
+        tmp_path,
+        _qname_catalog(**_qname_mapping(namespace_default="reversed_package")),
+        owner="OrderService#",
+        namespace=None,
+    )
+
+    assert paths == {"placeRequest"}
+
+
+def test_a_qualifier_format_and_a_qualifier_separator_are_mutually_exclusive(
+    tmp_path: Path,
+):
+    """Two composition rules for one seam is one too many. Which of them the
+    engine applied would decide the address, and a file declaring both states
+    no preference — so it is refused rather than resolved by precedence
+    nobody wrote down."""
+    with pytest.raises(CatalogError) as raised:
+        _qname_paths(
+            tmp_path,
+            _qname_catalog(**_qname_mapping(qualifier_separator=".")),
+        )
+
+    assert "qualifier_format" in str(raised.value)
+    assert "qualifier_separator" in str(raised.value)
+    assert "invented-qname.yml" in str(raised.value)
+
+
+def test_a_catalog_naming_an_unknown_qualifier_format_is_refused_by_file(tmp_path: Path):
+    """A closed vocabulary, for `path_fallback`'s reason: an unrecognised word
+    would fall through to the separator composition, which for a catalog that
+    declares no separator is the un-composed bare name — silently restoring
+    the un-scoped address the form exists to remove."""
+    with pytest.raises(CatalogError) as raised:
+        _qname_paths(tmp_path, _qname_catalog(**_qname_mapping(qualifier_format="curie")))
+
+    assert "curie" in str(raised.value)
+    assert "invented-qname.yml" in str(raised.value)
+
+
+def test_a_catalog_naming_an_unknown_namespace_default_is_refused_by_file(tmp_path: Path):
+    """The same closed-vocabulary rule for the scope's default. A typo read as
+    "no default" is the silent-fall-through failure again, and here it would
+    be invisible: the rows still derive, just without the namespace the
+    framework gives them."""
+    with pytest.raises(CatalogError) as raised:
+        _qname_paths(
+            tmp_path,
+            _qname_catalog(**_qname_mapping(namespace_default="package_name")),
+        )
+
+    assert "package_name" in str(raised.value)
+    assert "invented-qname.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("word", "value"),
+    [
+        # A format with nothing to format: `qualifier_format` states HOW a
+        # scope composes, and a catalog reading no scope has none to compose.
+        ("qualifier_format", "qname"),
+        # A default for an attribute the catalog never reads. Inert rather
+        # than wrong, but silently inert — a file whose author believed they
+        # had asked for the JAX-WS default and got nothing.
+        ("namespace_default", "reversed_package"),
+    ],
+)
+def test_a_qname_form_declared_without_a_qualifier_from_is_refused_by_file(
+    tmp_path: Path, word: str, value: str
+):
+    """Both new words describe the SCOPE — how it composes, and what it is
+    when unstated. Neither has any meaning on a catalog that reads no scope
+    at all, so declaring one alone is refused at load rather than accepted
+    and ignored."""
+    with pytest.raises(CatalogError) as raised:
+        _qname_paths(
+            tmp_path,
+            _qname_catalog(path_fallback="construct_name", **{word: value}),
+        )
+
+    assert word in str(raised.value)
+    assert "qualifier_from" in str(raised.value)
+    assert "invented-qname.yml" in str(raised.value)
+
+
+# --- 2I design §2: the class-gate member rule and the withdrawal filter ---
+#
+# Deliberately NOT JAX-WS, for the reason every section above is not the
+# framework that motivated it: `members` and `unless` are engine vocabulary,
+# and a test spelled with `@WebService`/`@WebMethod` in it would pin a
+# framework rather than a mechanism.
+#
+# The invented framework below is the shape neither 2H nor the QName forms can
+# express: a class gate that exposes its members WITHOUT marking them, and a
+# member-level annotation that WITHDRAWS the very declaration it sits on.
+
+
+def _member_catalog(**mapping: object) -> Catalog:
+    """A catalog whose class gate is an ordinary `mapping.annotations` entry —
+    the list-valued type-level role, which is the only one that could carry two
+    spellings of one gate — plus a member-level rule that may withdraw itself.
+    """
+    return Catalog(
+        id="invented-members",
+        style="annotation_driven",
+        protocol="soap",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-members.yml"),
+        matches={
+            "mapping": {
+                "path_from": ["op"],
+                "prefix_from": [],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": None,
+                "path_fallback": "construct_name",
+                "annotations": [
+                    {"fqn": "com.acme.rpc.annotation.Service"},
+                    {"fqn": "com.acme.rpc.annotation.Operation"},
+                ],
+                **mapping,
+            }
+        },
+    )
+
+
+def _member_facts(root: Path, gated: bool = True) -> None:
+    """One gated class holding every member shape the rule has to tell apart.
+
+    `bare` carries no annotation at all — the whole point of the member rule.
+    `named` carries the member-level rule with a spelled name, `withdrawn`
+    carries it with the withdrawing attribute set, and `defaulted` carries it
+    bare. `hidden` is non-public, `helper` is static and `bridge$1` is
+    synthetic — none of them is an exposed member, and each is excluded for a
+    different reason. The constructor is here because a class always has one
+    and it must never become an endpoint.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rpc/MemberService.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    owner = "com/acme/rpc/MemberService#"
+    facts: list[object] = [
+        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS)
+    ]
+    if gated:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/rpc/annotation/Service#", args={"ns": "urn:acme"}
+                ),
+            )
+        )
+    facts.append(
+        SymbolFact(
+            document_id="doc_1",
+            symbol=f"{owner}<init>(sig_da8c82d5).",
+            construct_kind=ConstructKind.CONSTRUCTOR,
+            enclosing=owner,
+        )
+    )
+    members = {
+        "bare": {"visibility": "public", "modifiers": {}},
+        "hidden": {"visibility": "other", "modifiers": {}},
+        "helper": {"visibility": "public", "modifiers": {"static": True, "synthetic": False}},
+        "bridge": {"visibility": "public", "modifiers": {"static": False, "synthetic": True}},
+        "named": {"visibility": "public", "modifiers": {}},
+        "withdrawn": {"visibility": "public", "modifiers": {}},
+        "defaulted": {"visibility": "public", "modifiers": {}},
+    }
+    for name, shape in members.items():
+        symbol = f"{owner}{name}(sig_3d92af60)."
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=symbol,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+                visibility=str(shape["visibility"]),
+                modifiers=dict(shape["modifiers"]),  # type: ignore[arg-type]
+            )
+        )
+    # Only the three ANNOTATED members carry the member-level rule; `bare`,
+    # `hidden`, `helper` and `bridge` carry nothing, which is what makes them
+    # the member rule's own business.
+    annotated = {
+        "named": {"op": "namedOp"},
+        "withdrawn": {"skip": True},
+        "defaulted": {},
+    }
+    for name, args in annotated.items():
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=f"{owner}{name}(sig_3d92af60).",
+                retention="runtime",
+                use=AnnotationUse(annotation="com/acme/rpc/annotation/Operation#", args=args),
+            )
+        )
+    write_fact_file(root / "MemberService.jsonl", document, facts)
+
+
+def _member_paths(tmp_path: Path, catalog: Catalog, gated: bool = True) -> set[str]:
+    _member_facts(tmp_path / "facts", gated)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+    return paths
+
+
+def test_a_catalog_declaring_no_member_rule_derives_only_what_is_annotated(
+    tmp_path: Path,
+):
+    """The inertness pin. `members` is optional, and a catalog declaring none
+    must derive exactly the annotated declarations it always did — which is
+    what lets the word ship without touching any catalog written before it.
+
+    `withdrawn` and `defaulted` are here too: with no `unless` declared, the
+    withdrawing attribute is just an attribute nobody reads, so all three
+    annotated members derive."""
+    assert _member_paths(tmp_path, _member_catalog()) == {
+        "namedOp",
+        "withdrawn",
+        "defaulted",
+    }
+
+
+def test_a_class_gate_derives_every_public_member_that_no_rule_claims(tmp_path: Path):
+    """Word 3. `bare` carries NO annotation at all and is still an endpoint,
+    because the framework exposes what the class declares rather than what an
+    author marked — the pattern no vocabulary before this could express (the
+    2H class-level mechanism composes a PREFIX onto a row that a method-level
+    annotation must already have minted).
+
+    Its name comes from `path_fallback: construct_name`, which is required
+    beside `members` precisely because a member has no name attribute to read.
+    """
+    paths = _member_paths(tmp_path, _member_catalog(members="public_methods"))
+
+    assert "bare" in paths
+
+
+def test_a_member_level_rule_overrides_the_member_rule_for_the_member_it_names(
+    tmp_path: Path,
+):
+    """One row per member, never two. `named` is a public method of a gated
+    class AND carries the member-level rule, so it derives ONCE, with the
+    rule's own value (`namedOp`) — not also under its construct name.
+
+    The override is by ANNOTATION, not by outcome: `withdrawn` is claimed by
+    the rule too, and the rule's answer for it is nothing.
+    """
+    paths = _member_paths(
+        tmp_path,
+        _member_catalog(
+            members="public_methods",
+            annotations=[
+                {"fqn": "com.acme.rpc.annotation.Service"},
+                {
+                    "fqn": "com.acme.rpc.annotation.Operation",
+                    "unless": {"attribute": "skip", "equals": True},
+                },
+            ],
+        ),
+    )
+
+    assert paths == {
+        # The member rule's own row — no annotation anywhere.
+        "bare",
+        # The rule's value, and NOT a second `named` row beside it.
+        "namedOp",
+        # Annotated, bare attributes: the rule claims it, `path_fallback`
+        # names it. Still one row, still the rule's answer.
+        "defaulted",
+        # NOT here: `withdrawn` (the framework withdrew it), `hidden`
+        # (non-public), `helper` (static), `bridge` (synthetic), and the
+        # constructor.
+    }
+
+
+def test_a_withdrawn_declaration_derives_nothing_even_inside_a_gated_class(
+    tmp_path: Path,
+):
+    """Word 4, and its interaction with word 3 — the one that would have been
+    a silent no-op if the override had been written the obvious way.
+
+    `withdrawn` carries the member-level rule with the withdrawing attribute
+    set, so the rule derives nothing for it. It is ALSO a public method of a
+    gated class, so the member rule would happily re-derive the very row the
+    framework withdrew — unless the override is keyed on carrying an
+    annotation rather than on having produced a row. It is.
+    """
+    withdrawing = _member_catalog(
+        members="public_methods",
+        annotations=[
+            {"fqn": "com.acme.rpc.annotation.Service"},
+            {
+                "fqn": "com.acme.rpc.annotation.Operation",
+                "unless": {"attribute": "skip", "equals": True},
+            },
+        ],
+    )
+
+    assert "withdrawn" not in _member_paths(tmp_path, withdrawing)
+    # …and with no filter declared, the SAME declaration derives: the row is
+    # absent because the framework withdrew it, not because the fixture is
+    # shaped so it could never appear.
+    assert "withdrawn" in _member_paths(tmp_path / "b", _member_catalog(members="public_methods"))
+
+
+def test_an_absent_attribute_is_not_the_withdrawing_value(tmp_path: Path):
+    """An annotation's declared default is never written into the class file
+    (checkpoint item 4: `@WebMethod(exclude = true)` emits the attribute,
+    `@WebMethod` alone emits `{}`), so the withdrawing attribute reads NULL on
+    every declaration that left it alone. Absence must therefore mean KEPT.
+
+    `defaulted` carries the rule with no attributes at all and still derives;
+    a comparison written `<>` instead of `IS DISTINCT FROM` would have made
+    its NULL comparison NULL and dropped it — dropping, silently, every
+    declaration that did not spell the flag out.
+    """
+    paths = _member_paths(
+        tmp_path,
+        _member_catalog(
+            annotations=[
+                {"fqn": "com.acme.rpc.annotation.Service"},
+                {
+                    "fqn": "com.acme.rpc.annotation.Operation",
+                    "unless": {"attribute": "skip", "equals": True},
+                },
+            ]
+        ),
+    )
+
+    assert paths == {"namedOp", "defaulted"}
+
+
+@pytest.mark.parametrize(
+    ("excluded", "why"),
+    [
+        ("hidden", "not public — not callable from outside the type"),
+        ("helper", "static — bound to the type, not to an exposed instance"),
+        ("bridge", "synthetic — compiler machinery nobody declared"),
+        ("<init>", "a constructor is not a member the framework exposes"),
+    ],
+)
+def test_the_member_rule_excludes_what_is_not_an_exposed_member(
+    tmp_path: Path, excluded: str, why: str
+):
+    """Four exclusions, each a fact rather than a taste, and each pinned
+    separately so a rule that lost one shows up as itself.
+
+    The static and synthetic ones matter most in practice: a gated class
+    holding a `public static void main` or a covariant-return bridge would
+    otherwise publish it as an operation, at `resolved`/`compiler`, where
+    nothing downstream could tell it from something observed. Synthetic
+    methods reach the fact stream on purpose (the inheritance walk's bridge
+    rule needs them), so this is a real filter, not a defensive one.
+    """
+    paths = _member_paths(tmp_path, _member_catalog(members="public_methods"))
+
+    assert excluded not in paths, why
+
+
+def test_the_member_rule_derives_nothing_for_a_class_the_gate_does_not_hold(
+    tmp_path: Path,
+):
+    """The gate is the whole safety of the rule: without it, every public
+    method in the module becomes an endpoint. The same class, with its
+    type-level annotation removed, contributes no member rows at all — and
+    its ANNOTATED members still derive, because their own rule never needed
+    the gate."""
+    paths = _member_paths(tmp_path, _member_catalog(members="public_methods"), gated=False)
+
+    assert paths == {"namedOp", "withdrawn", "defaulted"}
+
+
+def test_a_catalog_naming_an_unknown_member_rule_is_refused_by_file(tmp_path: Path):
+    """A closed vocabulary, and the sharpest one in the mapping block: this is
+    the only word that derives rows for declarations carrying no annotation,
+    so a word read as something it is not mints endpoints out of ordinary
+    methods."""
+    with pytest.raises(CatalogError) as raised:
+        _member_paths(tmp_path, _member_catalog(members="all_methods"))
+
+    assert "all_methods" in str(raised.value)
+    assert "invented-members.yml" in str(raised.value)
+
+
+def test_a_member_rule_without_a_name_fallback_is_refused(tmp_path: Path):
+    """A member carries no annotation and therefore no name attribute at all —
+    every alias is absent by construction. Without `path_fallback` every member
+    row would compose the EMPTY path: a resolved endpoint addressing nothing,
+    which is the failure `path_from` and `qualifier_from` are both already
+    checked for, reached by a third route."""
+    catalog = _member_catalog(members="public_methods")
+    del catalog.matches["mapping"]["path_fallback"]
+
+    with pytest.raises(CatalogError) as raised:
+        _member_paths(tmp_path, catalog)
+
+    assert "path_fallback" in str(raised.value)
+    assert "invented-members.yml" in str(raised.value)
+
+
+def test_a_member_rule_with_no_class_gate_at_all_is_refused(tmp_path: Path):
+    """A member rule enumerates the members OF something. Where nothing can
+    name the class, the rule is not inert — it is catastrophic, since the only
+    remaining filter would be "is a public method". Refused at load, where a
+    catalog can still be fixed."""
+    catalog = _member_catalog(members="public_methods")
+    catalog.matches["mapping"]["annotations"] = []
+
+    with pytest.raises(CatalogError) as raised:
+        _member_paths(tmp_path, catalog)
+
+    assert "class gate" in str(raised.value)
+    assert "invented-members.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        # A misspelled key: the filter would read an attribute no annotation
+        # carries, match nothing, and derive every declaration including the
+        # ones the framework withdraws.
+        {"attr": "skip", "equals": True},
+        # `equals` missing entirely — a filter with no value to compare.
+        {"attribute": "skip"},
+        # `attribute` missing — a value with nothing to read it from.
+        {"equals": True},
+        # A third key: the shape is closed, so a key the engine does not read
+        # is a rule the author believes is being applied and is not.
+        {"attribute": "skip", "equals": True, "unless": "nested"},
+        # Not a mapping at all.
+        "skip",
+        # `attribute` must be a NAME, not a YAML scalar of some other type.
+        {"attribute": 5, "equals": True},
+    ],
+)
+def test_a_malformed_withdrawal_filter_is_refused_by_file(tmp_path: Path, declared: object):
+    """Exactly `attribute` and `equals`, and nothing else. Every shape here
+    would leave the filter reading NULL and matching nothing — so the rule
+    would derive every declaration including the ones the framework itself
+    withdraws, which is a published endpoint nobody serves rather than a
+    missing one."""
+    with pytest.raises(CatalogError) as raised:
+        _member_paths(
+            tmp_path,
+            _member_catalog(
+                annotations=[
+                    {"fqn": "com.acme.rpc.annotation.Service"},
+                    {"fqn": "com.acme.rpc.annotation.Operation", "unless": declared},
+                ]
+            ),
+        )
+
+    assert "unless" in str(raised.value)
+    assert "invented-members.yml" in str(raised.value)
 
 
 # --- The prefix seam: `mapping.path_separator` ----------------------------
@@ -2369,3 +3144,266 @@ class _UnusedWorkspace:
         raise AssertionError(f"no query for a refused catalog: {name}")
 
     def close(self) -> None: ...
+
+
+# --- 2I Task 5: `declared_on`, the construct gate -------------------------
+#
+# One annotation family can mark BOTH a served interface and the generated
+# client stub of one — `@WebService` does exactly that — and the two are
+# opposite DIRECTIONS of the same wire identity. Without a gate on the kind of
+# construct the declaration sits on, each catalog derives both and a module is
+# published as calling the very operations it serves. Invented framework, the
+# section above's own discipline.
+
+_GATE_DOCUMENT = Document(
+    document_id="doc_1",
+    relative_path="com/acme/wsish/Surface.java",
+    module_id="com.acme:orders-service",
+    language="java",
+    sextant_version="0.1.0",
+    fact_schema_version="1.0.0",
+    scanner_id="asm",
+    scanner_version="9.7",
+    content_hash="sha256:a",
+    origin_entry="target/classes",
+    origin_tier=OriginTier.MODULE_OUTPUT,
+    redaction_set_hash="sha256:b",
+)
+
+
+def _construct_gate_facts(root: Path) -> None:
+    """One annotation on two constructs: a service CLASS and a stub
+    INTERFACE, each declaring one operation."""
+    service, stub = "com/acme/wsish/Service#", "com/acme/wsish/Stub#"
+    facts = []
+    for enclosing, kind, operation in (
+        (service, ConstructKind.CLASS, "serve"),
+        (stub, ConstructKind.INTERFACE, "call"),
+    ):
+        method = f"{enclosing}{operation}(sig_1)."
+        facts += [
+            SymbolFact(document_id="doc_1", symbol=enclosing, construct_kind=kind),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=enclosing,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=enclosing,
+                retention="runtime",
+                use=AnnotationUse(annotation="com/acme/wsish/Endpoint#", args={}),
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=method,
+                retention="runtime",
+                use=AnnotationUse(annotation="com/acme/wsish/Operation#", args={"name": operation}),
+            ),
+        ]
+    write_fact_file(root / "Surface.jsonl", _GATE_DOCUMENT, facts)
+
+
+def _construct_gate_catalog(declared_on: object, direction: str, catalog_id: str) -> Catalog:
+    matches: dict = {
+        "type_annotation": "com.acme.wsish.Endpoint",
+        "mapping": {
+            "path_from": ["name"],
+            "prefix_from": [],
+            "peer_from": [],
+            "method_from": "method",
+            "all_methods": [],
+            "prefix_annotation": None,
+            "annotations": [{"fqn": "com.acme.wsish.Operation"}],
+        },
+    }
+    if declared_on is not None:
+        matches["declared_on"] = declared_on
+    return Catalog(
+        id=catalog_id,
+        style="annotation_driven",
+        protocol="soap",
+        direction=direction,
+        requires=("annotation_args",),
+        source=Path(f"tests/{catalog_id}.yml"),
+        matches=matches,
+    )
+
+
+def _construct_gate_rows(tmp_path: Path, catalogs: list[Catalog]) -> list[tuple[str, str]]:
+    _construct_gate_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    assert derive_endpoints(workspace, catalogs, capabilities={"annotation_args"}) == []
+    rows = [(str(e["direction"]), str(e["path"])) for e in workspace.query("endpoints")]
+    workspace.close()
+    return sorted(rows)
+
+
+def test_two_catalogs_partition_one_annotation_by_the_construct_it_sits_on(tmp_path: Path):
+    """The whole point of the word: an inbound catalog claiming classes and an
+    outbound one claiming interfaces divide the same annotation between them,
+    and neither reaches the other's declarations. Without it both catalogs
+    would derive both rows, the two identities would merge (D02 §3), and a
+    served operation would read as one the module also calls."""
+    rows = _construct_gate_rows(
+        tmp_path,
+        [
+            _construct_gate_catalog("class", "inbound", "invented-gate-class"),
+            _construct_gate_catalog("interface", "outbound", "invented-gate-interface"),
+        ],
+    )
+    assert rows == [("inbound", "serve"), ("outbound", "call")]
+
+
+def test_a_catalog_declaring_no_construct_gate_still_derives_both(tmp_path: Path):
+    """The inert value, and the regression that matters: every catalog written
+    before this word declares none, and NULL applies its rules to a
+    declaration regardless of what encloses it."""
+    rows = _construct_gate_rows(
+        tmp_path, [_construct_gate_catalog(None, "inbound", "invented-gate-none")]
+    )
+    assert rows == [("inbound", "call"), ("inbound", "serve")]
+
+
+def test_an_unrecognised_construct_gate_is_refused(tmp_path: Path):
+    """Read as "no gate", a typo would republish every served operation as one
+    the module calls — the confidently-wrong-row class this file's other
+    refusals exist for. Refused at run start instead, naming the file."""
+    with pytest.raises(CatalogError) as raised:
+        _construct_gate_rows(
+            tmp_path, [_construct_gate_catalog("klass", "outbound", "invented-gate-typo")]
+        )
+    assert "declared_on" in str(raised.value)
+    assert "invented-gate-typo.yml" in str(raised.value)
+
+
+# --- 2I Task 5, fix round 1: the SEI fence -------------------------------
+#
+# `declared_on: interface` says a catalog's declarations sit on interfaces; an
+# OUTBOUND one saying that is describing client stubs. An interface the module
+# itself implements is the opposite claim, and the annotation family that marks
+# a generated stub marks a hand-written service endpoint interface too. The
+# fence is what makes the gate's own meaning true.
+
+
+def _sei_facts(root: Path, with_local_impl: bool) -> None:
+    """One `@Endpoint`-marked interface declaring one operation, optionally
+    implemented by a local class that carries the same marker — the shape a
+    JAX-WS SEI plus its `@WebService` implementation takes."""
+    port, impl = "com/acme/wsish/Port#", "com/acme/wsish/PortImpl#"
+    port_method = f"{port}charge(sig_1)."
+    facts: list = [
+        SymbolFact(document_id="doc_1", symbol=port, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=port_method,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=port,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=port,
+            retention="runtime",
+            use=AnnotationUse(annotation="com/acme/wsish/Endpoint#", args={}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=port_method,
+            retention="runtime",
+            use=AnnotationUse(annotation="com/acme/wsish/Operation#", args={"name": "charge"}),
+        ),
+    ]
+    if with_local_impl:
+        impl_method = f"{impl}charge(sig_1)."
+        facts += [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=impl,
+                construct_kind=ConstructKind.CLASS,
+                interfaces=[port],
+            ),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=impl_method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=impl,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=impl,
+                retention="runtime",
+                use=AnnotationUse(annotation="com/acme/wsish/Endpoint#", args={}),
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=impl_method,
+                retention="runtime",
+                use=AnnotationUse(annotation="com/acme/wsish/Operation#", args={"name": "charge"}),
+            ),
+        ]
+    write_fact_file(root / "Sei.jsonl", _GATE_DOCUMENT, facts)
+
+
+def _sei_rows(tmp_path: Path, with_local_impl: bool) -> list[tuple[str, str, str | None]]:
+    _sei_facts(tmp_path / "facts", with_local_impl)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalogs = [
+        _construct_gate_catalog("class", "inbound", "invented-sei-server"),
+        _construct_gate_catalog("interface", "outbound", "invented-sei-client"),
+    ]
+    assert derive_endpoints(workspace, catalogs, capabilities={"annotation_args"}) == []
+    rows = [
+        (str(e["direction"]), str(e["path"]), e["handler"] and str(e["handler"]))
+        for e in workspace.query("endpoints")
+    ]
+    workspace.close()
+    return sorted(rows)
+
+
+def test_an_interface_this_module_implements_derives_no_outbound_row(tmp_path: Path):
+    """An SEI plus its implementation is a SERVER, twice stated. Without the
+    fence the interface derives an outbound row, the class derives an inbound
+    one, the two share a wire identity, the merge folds them into `both`, and
+    the module is published as calling what it only serves.
+
+    With it, the operation derives exactly ONCE — from the implementing class,
+    inbound, handler intact — because a class-gated catalog is untouched by
+    the fence."""
+    rows = _sei_rows(tmp_path, with_local_impl=True)
+    assert rows == [("inbound", "charge", "com/acme/wsish/PortImpl#charge(sig_1).")]
+
+
+def test_the_same_interface_with_no_local_implementation_still_derives_outbound(
+    tmp_path: Path,
+):
+    """The stub case, unchanged — and the proof the fence subtracts on the
+    IMPLEMENTED fact rather than on being an interface at all. Identical
+    facts minus the implementing class: the outbound row derives, with no
+    handler, exactly as a generated stub in an opted-in jar will."""
+    rows = _sei_rows(tmp_path, with_local_impl=False)
+    assert rows == [("outbound", "charge", None)]
+
+
+def test_the_soap_template_catalog_skips_visibly_without_annotation_arguments(
+    tmp_path: Path,
+):
+    """`requires` is the mechanism that keeps degradation visible (D02 §1).
+    `spring-ws-template.yml`'s PRIMARY identity read is annotation attributes
+    — `path_from_argument_type` reads them off the payload type — so a scanner
+    that cannot report them derives no operation from any of its calls. The
+    catalog says so and is SKIPPED by name rather than running and quietly
+    producing address-only rows."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-ws-template")
+    skipped = derive_endpoints(
+        workspace, [catalog], capabilities={"call_site", "string_constants", "typed_signatures"}
+    )
+    workspace.close()
+
+    assert skipped == [SkippedCatalog("spring-ws-template", ("annotation_args",))]

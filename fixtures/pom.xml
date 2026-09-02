@@ -1,0 +1,21 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>fixtures</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <!-- The reactor parent for the fixture LIBRARIES only. `orders-service` is
+       deliberately not a module of it: that fixture is `com.acme`, is built in
+       its own directory by every test that needs it, and gaining a parent would
+       change its coordinates. What lives here is the one thing a library
+       fixture needs and cannot state for itself — a groupId and a version to
+       inherit (2I Task 6). -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.parameters>true</maven.compiler.parameters>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <modules>
+    <module>orders-soap-client</module>
+  </modules>
+</project>

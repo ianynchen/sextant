@@ -6,6 +6,11 @@
 billing:
   url: http://billing.prod.internal
 
+# Overrides application.yml's soap.billing.uri for prod.
+soap:
+  billing:
+    uri: http://billing.prod.internal.example.com/ws
+
 # Repeats application.yml's kafka serializer keys with the SAME values, so
 # both the media stamp (2F design §3, job 2) and the format ladder's rung 3
 # (2G design §5) see agreement across every resolved environment. A key that

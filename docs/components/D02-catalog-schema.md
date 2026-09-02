@@ -125,7 +125,10 @@ from `@RequestMapping` lives in this module's own scanned bytecode, so the effec
 pre-pass (`resolve/effective_annotations.py`, spec §2, §3) widens the mapping-annotation set to
 every module-local annotation type transitively meta-annotated with one of the catalog's own
 declared fqns, before this table is ever consulted — no catalog author hand-copies a project's
-own composition. The jar half above is what remains open.
+own composition. The jar half above is what remains open — narrowed rather than closed by
+Phase 2I: `.sextant.yml` (§4a) scans a NAMED library's own bytecode, so a framework
+jar's class files are no longer unreachable in principle, but nothing has been tested
+against a framework jar and no shipped catalog stops hand-copying its table.
 
 **Outbound annotation clients generalise the same vocabulary rather than needing a new
 style.** Three parts of the shape above, previously assumed constant, become catalog data:
@@ -336,6 +339,134 @@ mapping:
   one annotation play both roles without colliding with itself (the `prefix_annotation`
   precedent, unchanged).
 
+**Phase 2I generalises it a fifth time, for a scope that composes into ONE token and a
+scope whose ABSENCE the framework's own spec defines.** Two more keys, both optional and
+both inert unless declared:
+
+```yaml
+mapping:
+  qualifier_from: [namespace]          # the SCOPE, as before
+  qualifier_format: qname              # …composed `{scope}name`, not `scope<sep>name`
+  namespace_default: reversed_package  # …and what the scope IS when the attribute is absent
+```
+
+- **`qualifier_format` states a WHOLE composition where no single character can.** Today's
+  one word is `qname` — the XML-namespace notation `{scope}name`, one bracketed token
+  whose closing brace has no separator equivalent at all, which is precisely why it could
+  not be spelled as a `qualifier_separator` (that key is refused unless it is exactly one
+  character, because the seam dedupe trims a SET of characters). A closed vocabulary for
+  `path_fallback`'s reason. **It is mutually exclusive with `qualifier_separator`**: two
+  composition rules for one seam is one too many, and a file declaring both states no
+  preference, so it is refused rather than resolved by a precedence nobody wrote down.
+  `@PayloadRoot(namespace = "…/ws", localPart = "placeOrderRequest")` composes
+  `{…/ws}placeOrderRequest`; an annotation on the same catalog carrying no `namespace`
+  attribute composes no braces at all, which is what lets one mapping block carry two
+  identity forms (a QName and an opaque action URI) with no engine branch.
+- **`namespace_default` says what the scope is when the attribute carrying it is absent.**
+  Today's one word is `reversed_package`: `"http://"` + the DECLARING TYPE's package
+  tokens reversed and dot-joined + a trailing `"/"`, so `com.example.orders.soap` yields
+  `http://soap.orders.example.com/`. It is a fact rather than a guess because the JAX-WS
+  spec DEFINES that default — pinned against both reference implementations, which agree
+  character for character (Phase 2I Task 2 checkpoint item 2). Two rules keep it honest.
+  **It fires only where the scope-carrying annotation was actually found on the type**, so
+  "attribute absent" and "annotation absent" stay different things — otherwise any class
+  holding a matching method would be minted an endpoint. And **a class in the DEFAULT
+  package derives NO scope**, because both implementations return null there: that
+  refusal is part of the pinned algorithm, not a gap in it. A catalog declaring no
+  `namespace_default` gets no scope, never a plausible-looking one (DR-6). Like
+  `qualifier_format`, either word declared without `qualifier_from` is refused — both
+  describe a scope, and neither means anything on a catalog that reads none.
+- **The scheme lives in the engine, not the query.** `storage/` may not name a protocol
+  (ARCHITECTURE §10), and a URI scheme is one, so `annotation_driven.py` maps the declared
+  word to a `printf` template and the SQL composes only the package half into it.
+
+**Phase 2I generalises it a sixth time, for a framework that exposes what a class DECLARES
+rather than what an author marked, and for one that WITHDRAWS a declaration it marked.**
+Two more keys, both optional and both inert unless declared:
+
+```yaml
+mapping:
+  members: public_methods              # the class gate exposes the construct's public members
+  annotations:
+    - { fqn: "…jws.WebService" }                      # the gate, and the scope
+    - { fqn: "…jws.WebMethod", requires_qualifier: true,
+        unless: { attribute: exclude, equals: true } }  # …withdrawn where the flag says so
+```
+
+- **`members` says what a gated class exposes on its own, with no member-level annotation
+  anywhere.** Today's one word is `public_methods`. It is the only word in the mapping
+  block that derives rows for declarations carrying **no annotation at all**, which is why
+  it is the most tightly fenced. **A member-level rule overrides it for the member it
+  names** — one row per member, never two — and the override is keyed on the member
+  *carrying* one of the catalog's annotations, not on that rule having produced a row:
+  otherwise a declaration removed by `unless` below would be silently re-derived under its
+  own construct name, making every withdrawal a no-op on a gated class.
+- **Four things are not exposed members**, each excluded for a reason rather than a taste:
+  a **constructor** (`construct_kind` says so, and the derivation admits only methods and
+  functions), a **static** method (bound to the type, not to an exposed instance), a
+  **synthetic** method (compiler machinery nobody wrote — and unlike fields, synthetic
+  methods deliberately DO reach the fact stream, because the inheritance walk's bridge rule
+  needs them), and a **non-public** one. The last two modifiers are read from `symbols.
+  modifiers`, defaulted false where a scanner reports none (D00 §5a).
+- **The gate is what makes the rule safe rather than catastrophic**, so it is checked:
+  `members` is refused with no class gate at all, and refused without `path_fallback`,
+  since a member carries no annotation and therefore no name attribute — every member row
+  would compose the empty address. The gate may be the single `type_annotation`, or one of
+  the catalog's own `mapping.annotations` found on a TYPE (the same type-level join a
+  class-level qualifier reaches methods through) — which is the only form that can carry
+  **two spellings of one gate**, since `type_annotation` is one fqn. That is how a
+  `javax`/`jakarta` pair is gated without an engine change, and it closes for a scope the
+  javax boundary a single-valued `prefix_annotation` still leaves open for a prefix.
+- **`unless: {attribute, equals}` on one annotation entry withdraws the declarations the
+  framework itself withdraws.** A closed SHAPE — exactly those two keys, anything else
+  refused — rather than a closed vocabulary, because *which* attribute withdraws a
+  declaration and at *which* value is the framework's convention. **An absent attribute is
+  never the withdrawing value**: a declared default is not written into the class file, so
+  the attribute reads NULL wherever it was left alone, and only a value actually written
+  out withdraws anything. The comparison happens on the text `json ->>` reads every scalar
+  back as, so a YAML `equals: true` matches a real JSON boolean in the bytecode without
+  either side guessing at the other's type.
+
+**Phase 2I generalises it once more, at `matches` level rather than inside `mapping`,
+because the question is about the DECLARATION SITE rather than about naming:**
+
+```yaml
+matches:
+  declared_on: interface     # …or `class`; absent applies the rules to either
+```
+
+- **`declared_on` confines a catalog's rules to declarations enclosed by one kind of
+  construct.** It exists because one annotation family can mark two opposite things: a
+  JAX-WS `@WebService` marks both the class that SERVES an operation and the generated stub
+  INTERFACE through which a module CALLS one, and those are opposite directions of the same
+  wire identity. Without it each of the two catalogs derives both rows, the pair then
+  merges (§3), and a module is published as calling the very operations it serves. With it
+  the annotation is partitioned between the two files and neither reaches the other's
+  declarations.
+- **A closed set of two words, `class` and `interface`**, and deliberately not the whole of
+  D00's construct set: only a type encloses the methods this style derives from, so a
+  member kind here would gate every row out and let a file say "this catalog derives
+  nothing" by accident. An unrecognised word is refused rather than read as "no gate",
+  because that reading is the dangerous one — it republishes a served operation as a called
+  one.
+- **Absent means either**, which is what every catalog written before this word declares,
+  and what keeps their derivations byte-identical.
+- **An OUTBOUND catalog declaring `declared_on: interface` subtracts every interface the
+  module's own classes implement** ([D00](D00-fact-schema.md) §5a's
+  `implemented_interfaces`). This is not extra vocabulary — it is what the gate already
+  *means*, made true. Such a catalog describes client stubs, declarations whose whole
+  content is "somebody else answers this"; an interface the module implements is the
+  opposite claim, and one annotation family marks both (a `wsimport` stub and a
+  hand-written service endpoint interface are annotated identically). Without the
+  subtraction the pair derives an outbound row from the interface and an inbound one from
+  its implementing class, the two merge (§3), and the module is published as CALLING an
+  operation it only serves. With it the operation derives exactly once, from the
+  implementing class, since a class-gated inbound catalog is untouched. **Scoped to the
+  interface gate rather than to every outbound catalog**, deliberately: a Spring Cloud
+  `@FeignClient(fallback = …)` names a local class implementing the client interface, and
+  that interface is still a client — widening the rule would delete every Feign client
+  declaring a fallback.
+
 **Three catalogs, one engine change.** The forms are stated in framework-neutral words for
 a reason that was tested rather than asserted: `spring-graphql.yml` introduced them, and
 `netflix-dgs.yml` and `microprofile-graphql.yml` then rode them with **zero further engine
@@ -359,7 +490,8 @@ matches:
 ```
 
 Each `methods` row is `{name, arity?, http_method | method_arg | neither, url_arg |
-channel_arg, body_arg?, response_arg?, record_arg?, direction?}`.
+channel_arg, body_arg?, response_arg?, record_arg?, direction?, path_from_argument_type?}`,
+beside the catalog-level `default_address?` both described below.
 **`http_method` is a literal when the catalog already knows the verb** — `postForObject` is
 always a POST, so the catalog states it once. **`method_arg` is a position when the call
 site carries it instead** — `exchange`'s verb is its own `HttpMethod` argument, an
@@ -425,6 +557,45 @@ payload** — `send(ProducerRecord)`'s one argument names the record, not the to
 value directly. It resolves through the catalog-level block `record_wrappers: [{type,
 channel_ctor_arg, payload_ctor_arg}]`, where `payload_ctor_arg` is an integer position or
 the string `last`.
+
+**`path_from_argument_type` names the operation off the PAYLOAD rather than the address**
+(2I design §4). Some protocols address every operation at one URL and distinguish them by
+what is sent: a SOAP call's identity is its payload's root element, stated on the payload
+*type*, and the call site itself names no type at all — its argument is a bare `parameter`
+([D00](D00-fact-schema.md) §5) and its target descriptor is the erased `Object` such APIs
+declare. The rule is `{arg, annotation, name_from, qualifier_from?, format?}`: the argument
+at `arg` must be a bare parameter reference, its declared type comes from the caller's own
+signature (one hop, the join `parse_binding` already makes for the same argument kind), and
+`annotation`'s attributes on that type give the name and, where declared, the scope it sits
+in. `qualifier_from` and `format` are declared together or not at all — a scope with no
+stated composition is half a rule — and `format`'s one word today is `qname`, the same
+`{scope}name` bracketing `annotation_driven`'s own `qualifier_format` composes.
+
+Three consequences follow, and each is a refusal rather than a convenience. **The address
+stops being the identity**: a row declaring this reads its url argument for `peer` only,
+WHOLE and unsplit (an address fed from configuration is a `${...}` expression with no
+authority half to take, and two deployments on one host are two peers), leaving `path` to
+the operation. **An absent attribute derives no operation** — a framework's own default
+for one is never written into the class file, and a scope defaulted from a schema is not in
+the class file at all, so the row is `unresolved` rather than carrying a plausible-looking
+address. **The resolved type is the payload**, so the row describes its request without a
+`body_arg` that would have failed on a bare parameter — but only once `annotation` has been
+found on it: a type carrying none is not evidence of a payload, whatever sits at that
+position. `path_from_argument_type` beside `record_arg` is a `CatalogError` (the record IS
+the payload source), as is any malformed or unrecognised rule.
+
+**`default_address: {method, arg}` is the address a client was CONFIGURED with**, for the
+overloads that carry none — a `WebServiceTemplate` whose `setDefaultUri` was called in its
+holder's constructor. Catalog-level, because it describes the `owner` rather than one of
+its methods, and applied only to rows naming no `url_arg`/`channel_arg`/`record_arg` of
+their own: a declared position is the call's own answer and always wins. The lookup is
+CONFINED TO THE TYPE THAT MAKES THE CALL, and that boundary is the soundness argument —
+nothing links a call's receiver back to the field holding it (a receiver is a value id,
+meaningless outside its own method), so what can honestly be said is that the type making
+the call also configures the client in its own body. A client configured in another class
+resolves to nothing; so does a type whose setup calls hand over two different addresses,
+because two candidates are not an address. The argument found is read through the field
+ladder (§2j) exactly as an address written at a call site is.
 
 Per matching call site: `path` is the url argument's string literal — the template
 verbatim, placeholders and all, because the template is the wire identity — and
@@ -1008,6 +1179,32 @@ no code and the wiring that would is explicitly not read (a COVERAGE boundary).
 `request_shape` is NULL for the same kind of reason — a root field's ARGUMENTS are what
 the operation takes, and the interpreter deliberately does not project them.
 
+**A `role` of `operation` derives PER SHAPE instead, and the engine says so** (Phase 2I).
+Where `query`/`mutation`/`subscription` name a root type whose FIELDS are the operations,
+`operation` names a shape that IS one — a WSDL input element is the whole request payload,
+not a type some field returns — so iterating its fields would mint an endpoint per element
+of a request body. One row comes from the shape itself: `path` is the shape's own schema
+name (the QName), `method` is NULL because SOAP is verbless, and `request_shape` is **not**
+NULL here but a self-reference to that same shape, because the wrapper element is what
+goes on the wire. `response_shape` stays NULL and takes no stamp at all: the interpreter
+marks input elements only, so no fact links an operation to what its output message names,
+and an output join would be invented rather than read. `handler`, `caller`, `evidence` and
+`resolution` read exactly as above. This is the one place the engine matches a role name
+rather than reading it off catalog data; the catalog must still NAME the role to be read at
+all, but the value it maps the role to is never consulted, since a WSDL input element names
+no operation KIND for a `method` column to spell.
+
+```yaml
+# wsdl-schema.yml — framework-neutral, one file for one style, and its own
+# because a contract belongs to no framework.
+style: schema_operations
+protocol: soap
+matches:
+  schema_operations:
+    schema_format: wsdl
+    operations: { operation: operation }   # a GATE; the value is never read
+```
+
 **Agreement with the annotation catalogs rides two existing mechanics, not a new rule.**
 The style runs in the §3 runs-last group, so its rows meet the same insert-if-absent guard
 every call-site style meets, LAST — an operation an annotation already derived keeps
@@ -1347,8 +1544,11 @@ ladder itself.
 # catalog that owns the protocol, never hardcoded. LIVE SINCE PHASE 2H:
 # `format_fixed: {graphql: json}` ships on all four catalogs that own the
 # graphql protocol (the three annotation catalogs and `graphql-schema.yml`),
-# which closed this branch's documented dead end. gRPC and SOAP still have no
-# catalog, so `grpc: protobuf` remains an illustration.
+# which closed this branch's documented dead end. PHASE 2I added the second
+# such protocol: `format_fixed: {soap: xml}` ships on all five catalogs owning
+# `soap` — a SOAP envelope IS an XML document, so no handler-level declaration
+# can make it anything else. gRPC still has no catalog, so `grpc: protobuf`
+# remains an illustration.
 format_fixed:
   graphql: json
 
@@ -1819,6 +2019,13 @@ a `field` ([D00](D00-fact-schema.md) §5) climbs four rungs, in order:
    ([D00](D00-fact-schema.md) §5's `field_write`) and ITS own `value_annotation`
    expression — a parameter's annotations live only inside the constructor's signature,
    never as an annotation fact of their own;
+   - **2a. the enclosing declaration's OWN parameter**, where the address argument IS that
+     parameter passed straight through ([D00](D00-fact-schema.md) §5's `parameter` kind):
+     rung 2's terminal read, reached without the field. An injected value assigned to a
+     field and an injected value handed straight to a configuring call are the same
+     declaration, and only the second carries no `field_write` to follow. Bare parameter
+     references only — a value merged from a parameter and anything else reads
+     `unresolved`, which is the honest answer and not a case to widen;
 3. a `properties_annotation` prefix (read from the annotation argument `prefix_from`
    names) plus the relaxed-bound property name — §2i's own `key_matching` rule, reused
    rather than re-implemented. The property is read either from a properties FIELD the
@@ -1898,6 +2105,47 @@ than one with a fixture, and the sentence above — "without this, a catalog is 
 assertion" — is exactly what it trades
 against, so the exception is for this one shape and does not generalise to an
 annotation or configuration catalog, where the fixture is cheap.
+
+**It is still the only instance, and Phase 2I is the reason that is worth recording.**
+`jakarta-jws-client.yml` — generated client stubs, whose declarations live in a dependency
+by definition — was pinned over synthetic facts for exactly one task, and then got a real
+fixture of a shape this document had not had before: a **sibling module built and consumed
+as a jar**, opted into by the analysed fixture's own `.sextant.yml` (§4a), deriving its one
+endpoint through the real commands in CI. A catalog whose subject matter is compiled
+libraries is fixturable after all; it just needs a library.
+
+---
+
+## 4a. Catalog rules over an extracted library
+
+Every style above reads facts, and since Phase 2I some of those facts can come from a
+**dependency's own bytecode** rather than from the module's output — the libraries a module
+names in `.sextant.yml` ([D04](D04-config-and-exclusion.md) §2a). No style changed to allow
+it and none is opted out of it, so what each one then claims has to be stated:
+
+- **A call-driven style derives only where the module's own call sites reach the library's
+  types.** `single_call`, `fluent`, `combinator` and `interface_implementation` all root in
+  a call this module makes, so opting a library in cannot fabricate call-evidenced rows; at
+  most it adds the declarations those calls resolve against.
+- **An annotation-driven OUTBOUND catalog derives from the interface alone**, which is the
+  mechanism's purpose: a generated client stub is annotated exactly as it would be inside
+  the module, and a row derived from it says the module calls that operation because the
+  module compiled against the stub.
+- **An annotation-driven INBOUND catalog derives from annotations alone too, and that is
+  the claim the opt-in has to carry.** A jar holding `@RestController` or `@Endpoint`
+  classes derives inbound rows whether or not component scanning ever reaches them, and
+  Sextant cannot see component scanning. So **naming a library asserts it is part of this
+  module's runtime surface** — the reader's own claim, made once, per library, never
+  inferred from the dependency tree. Every such derivation carries its origin coordinate
+  into the facts ([D00](D00-fact-schema.md) §2), the rendered document
+  ([D06](D06-bundle-format.md) §5b) and the exported `documents` table, so the assertion
+  stays visible instead of being laundered into module-observed evidence.
+
+**The assertion is retractable, which is what makes it a decision rather than a
+commitment.** Removing a coordinate from `.sextant.yml` removes its rows on the next run:
+the library fact subtree is discarded whole before anything is written, because a fact file
+is written whole and a library that is no longer scanned would otherwise overwrite nothing
+and be read straight back out of the same workspace.
 
 ---
 

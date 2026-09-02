@@ -64,6 +64,16 @@ request and response shapes, and its trust fields.
 data, never as code, so that supporting a new framework requires no change to Sextant
 itself.*
 
+**Status, as of Phase 2I: three of the four protocol families named above derive.** HTTP
+(both directions, plus GraphQL, WebSocket and SSE on top of it), SOAP, and the message
+brokers Kafka, JMS, SQS and Pub/Sub. **gRPC does not — no Java row for it has shipped**
+([COVERAGE.md](COVERAGE.md) §5.7): the JVM is the one ecosystem where a gRPC service is
+declared by inheriting a generated base class rather than by a registration call, which
+is a scanner capability question rather than a catalog one, and the two Spring-side
+annotation rows beside it are each a catalog away. This note records the position rather
+than changing it — gRPC remains in version-1 scope above, and whether it stays there is a
+scoping decision, not a documentation one.
+
 ### FR-4 — Shape catalog
 
 Sextant produces the shape of every payload crossing a boundary: its fields, their
@@ -393,7 +403,7 @@ Recorded so they are not mistaken for oversights.
 
 | Gap | Consequence |
 |---|---|
-| SOAP contracts are not read | SOAP endpoints are catalogued from annotations, but SOAP links fall back to structural matching rather than contract identity. FR-17 requires this be reported. |
+| ~~SOAP contracts are not read~~ — **closed in Phase 2I** | `.wsdl`/`.xsd` files in the repository are read into declared shapes, and an operation's input element gives the same QName identity an annotation states, so a SOAP link has a contract key rather than a structural fallback. What remains is narrower and named in [COVERAGE.md](COVERAGE.md) §5.3: the output message is not read, so a schema-first row carries no response shape, and `rpc/encoded` is out of scope. A module whose contract lives only at a runtime URL still falls back to structure, and FR-17 still requires that be reported. |
 | Branch conditions are not named | Sequence diagrams show `alt`, `opt` and `loop` blocks with unlabelled branches — the structure is honest, the condition text is not recovered from bytecode in this version. |
 | Message payload schema files are not read | Payload shapes for brokers come from code only. |
 | Source-retention annotations are not visible | Measured as reaching no requirement on this list. |

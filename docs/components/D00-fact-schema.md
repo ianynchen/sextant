@@ -67,7 +67,9 @@ Written once per class file. Every fact points at one.
 | `scanner_id` | Which scanner produced these facts |
 | `scanner_version` | |
 | `content_hash` | Of the source of truth this was read from |
-| `origin` | **The classpath entry this was read from, and that entry's tier** — module output, first-party, third-party |
+| `origin_entry` | **The classpath entry this was read from** — the module's own output directory, or a library archive |
+| `origin_tier` | That entry's tier (§4) — module output, a declared dependency, first-party, third-party, platform |
+| `origin` | The **library** this document was extracted from, as its coordinate (`com.example:orders-soap-client`). Absent for the module's own output |
 | `redaction_set_hash` | From [D04](D04-config-and-exclusion.md) |
 | `partial` | True when the file was analysed incompletely, with a reason |
 
@@ -89,13 +91,29 @@ and the source file is the unit of incremental reuse, which is exactly where the
 `scanner_id` exists because multiple scanners per language is a supported operation. It is
 what allows two scanners to be compared.
 
-**`origin` is recorded here because this is the moment it is a fact.** The scanner is
+**Origin is recorded here because this is the moment it is a fact.** The scanner is
 holding the jar it read the class from, and [M02](M02-detector.md) already tiered that
 classpath entry. Every downstream question of the form "is this symbol first-party?" —
 noise filtering in diagrams and answers, the `narrowed`/`partial` boundary — reads this
 field. **Package names are never pattern-matched to decide it**: group patterns classify
 artifacts in M02, and shaded or oddly-grouped jars would make any name-based inference
 silently wrong.
+
+**`origin` is written only where there is a library to name**, and it is then the
+coordinate M02 resolved the archive from — never a path, so it survives being read on a
+machine whose local repository lives somewhere else. A document from the module's own
+output carries **no `origin` key at all** rather than one spelled null: a module with no
+library extraction configured produces exactly the fact files it produced before opt-in
+library extraction existed, which is what makes "did enabling this change my module's
+facts?" answerable by comparing bytes.
+
+**`origin_tier` moves with it, to `dependency`.** A class this module did not build is
+not `module_output`, and saying so would be a claim known to be false. `dependency` is
+what the analysis actually observed — the class came out of a declared dependency's
+archive — and deliberately not `first_party` or `third_party`, which answer a different
+question (*whose* dependency) from the group patterns [D04](D04-config-and-exclusion.md)
+§2 declares and nothing yet implements. A tier is a factual origin; it is never a trust
+guess.
 
 **`sextant_version` and `fact_schema_version` are here because a result can change when the
 tool changes, even when the code does not.** A fixed bug in extraction produces different
@@ -149,6 +167,14 @@ goes in `ext`, never into a widened set.
 
 **`construct_kind`** — `class`, `interface`, `struct`, `trait`, `protocol`, `enum`,
 `record`, `alias`, `method`, `function`, `constructor`, `accessor`, `field`, `module`
+
+**`origin_tier`** — `module_output`, `dependency`, `first_party`, `third_party`,
+`platform`. Where a document's class file was read from (§2). `dependency` is the tier
+of a declared dependency's own archive, read because the module opted into it
+([D04](D04-config-and-exclusion.md) §2a); it says the class came out of a dependency and
+nothing about whose. `first_party`/`third_party` answer that second question from
+declared group patterns, and until those are read no producer writes either — a tier is
+an observation, never a trust judgement.
 
 **`relationship_kind`** — `extends`, `implements`, `type_of`
 
@@ -239,6 +265,20 @@ flags are always written on a field fact, because an absent one cannot be told a
 scanner that does not report the modifier. **A compiler-synthesized field is not a
 declaration and produces no fact at all** — a modifier would say "somebody wrote this and it
 stays off the wire", where the truth is that no source file contains it.
+
+**A method symbol carries the same `modifiers` slot with a different pair of keys** —
+`modifiers.static` and `modifiers.synthetic` — because the two constructs do not share a
+vocabulary. `transient` is deliberately absent: its class-file bit is `ACC_VARARGS` on a
+method, so writing it would report every varargs method as not-serialized. The pair answers
+one question, asked by any rule that enumerates a class's EXPOSED members (D02's
+`mapping.members`): `static` is bound to the type rather than to an instance, and
+`synthetic` is compiler machinery nobody wrote — a covariant-return bridge (`ACC_BRIDGE` is
+folded in, since javac sets the two together), a lambda body, an accessor minted for a
+nested class's private member. **Unlike a synthetic field, a synthetic METHOD does produce a
+fact**, on purpose: the effective-annotations inheritance walk's bridge rule can only
+recognise a bridge by seeing it, so the flag — not omission — is what lets a later pass tell
+one from a method a human declared. Both keys are always written, for the field rule's
+reason, and a reader supplies `false` for a scanner that reports neither.
 
 **A type-use annotation attaches to the type reference it annotates, not to a flat fact.**
 A method has more than one type reference — the return type, and each parameter — so the
@@ -426,11 +466,14 @@ links a schema runtime to do it.
   grammar (§1). It is what a gap names when a payload cannot be interpreted, and one
   holder emits one fact: a protobuf file's messages all share their file's descriptor, so
   a fact per message would be one payload copied once per type.
-- **`schema_format`** is `protobuf`, `avro` or `graphql`. It names the schema LANGUAGE
-  that described the payload, which is not the same question as what is on the wire:
-  protobuf and Avro define an encoding, GraphQL defines a type system and leaves the
+- **`schema_format`** is `protobuf`, `avro`, `graphql` or `wsdl`. It names the schema
+  LANGUAGE that described the payload, which is not the same question as what is on the
+  wire: protobuf and Avro define an encoding, GraphQL defines a type system and leaves the
   encoding to the transport. [D02](D02-catalog-schema.md) §2c's rung 4 turns on exactly
-  that distinction.
+  that distinction. `wsdl` covers both `.wsdl` and `.xsd` files, because they are one type
+  universe and not two formats: a WSDL declares its payload types by embedding XSD in its
+  `<types>` element, and an `.xsd` beside it is the same schema split across a file
+  boundary by an `xsd:import`.
 - **`payload`** is base64 for a binary format and the text itself for a textual one — a
   protobuf `FileDescriptorProto`'s bytes are base64; an Avro schema is JSON that was
   always JSON and travels verbatim, because re-encoding readable text costs a reader
@@ -459,11 +502,12 @@ Each such fact carries, beside its `fields`:
   shape's whole field list carries the one tier; a schema does not state some of its
   fields more confidently than others.
 - **`role`** — `query`, `mutation` or `subscription` where the schema names this type as
-  the entry point every operation of that kind is addressed against, and NULL for the
-  ordinary payload types, which is nearly all of them. It is a fact and not a derivation
-  because a schema may *rename* its roots, so which type holds the role cannot be
-  recovered from the type's own name by anything downstream — and only the interpreter
-  may read a schema format at all.
+  the entry point every operation of that kind is addressed against; `operation` where
+  the schema names the type as *being* an operation rather than a root operations hang
+  off; and NULL for the ordinary payload types, which is nearly all of them. It is a fact
+  and not a derivation because a schema may *rename* its roots, so which type holds the
+  role cannot be recovered from the type's own name by anything downstream — and only the
+  interpreter may read a schema format at all.
 
 Per field: the schema's own `name` and the encoded `wire_name` (a protobuf `json_name`,
 **read from the descriptor, never computed** — protoc puts the computed default and an
@@ -471,6 +515,23 @@ explicit override in the same place), `field_number` where the format numbers it
 and NULL where it does not, the [§5b](#5b-the-wire-type-vocabulary) wire type and format,
 `required`, `nullable`, the declared `default`, and the `item`/`shape_ref` references
 that reach other shapes.
+
+**The file is the failure boundary, and a failed file's CONTENT never publishes.** A
+schema file the interpreter cannot read — text that does not parse, a name two
+declarations claim, a construct the branch has no word for — publishes *none* of its
+declarations rather than the ones read before the trouble, is named in the run's
+`descriptors_not_interpreted` list, and never stops a sibling from being interpreted.
+What differs between formats is only what a sibling is left holding, and it follows from
+how that format's projection reaches another file rather than from a policy choice: **a
+pointer to a shape this run did not publish stays an open reference** — a GraphQL field's
+`shape_ref` into a file that parsed but could not be projected reads downstream as a
+reference nothing answered — while a projection that **copies** what it names cannot
+leave a pointer at all, so the failed file's declarations leave the type universe and a
+sibling naming one becomes a dangling reference and its own gap. An XSD element typed by
+a named `complexType` carries that type's *fields*, which is exactly the copying case: an
+open reference there would have meant republishing a failed file's content under another
+file's name. A file whose text never parsed declared nothing the module can see in any
+format, so its names are not in the universe to be pointed at either.
 
 ### Why `module` is a fact and not a passing argument
 

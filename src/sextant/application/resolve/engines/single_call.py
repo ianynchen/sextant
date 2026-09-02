@@ -14,6 +14,7 @@ catalog data; this module never names a framework.
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -21,7 +22,9 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.arguments import (
     CallFacts,
     CarrierRules,
+    FieldFacts,
     _arg_at,
+    _bare_reference,
     _capture_resolved,
     _linked_constructor,
     address_argument,
@@ -29,15 +32,39 @@ from sextant.application.resolve.shapes.arguments import (
     channel_of,
     field_facts,
     linked_channels,
+    parameter_index,
+    peer_of,
     supertypes_of,
     url_of,
 )
+from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.domain.closed_sets import Direction
-from sextant.domain.symbols import member_name
+from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
 _DIRECTIONS = sorted(member.value for member in Direction)
+
+# 2I design §4, form 1's catalog key — spelled once because the run loop tests
+# for it, normalizes it and reads it.
+_IDENTITY = "path_from_argument_type"
+
+# The keys form 1 may carry, split by whether the rule means anything without
+# them. `arg` is the position handed over, `annotation` the type-level
+# annotation carrying the identity, `name_from` the attribute holding the
+# name; `qualifier_from` and `format` are the optional PAIR that scopes it.
+_IDENTITY_REQUIRED = frozenset({"arg", "annotation", "name_from"})
+_IDENTITY_OPTIONAL = frozenset({"qualifier_from", "format"})
+
+# How a scope composes with the name it qualifies (2I design §2, word 1's own
+# closed vocabulary, restated for the rule that reads a scope off a TYPE's
+# annotation rather than off a declaration's). One word today, and the same
+# word: `{scope}name`, one bracketed token with no separator equivalent.
+_IDENTITY_FORMATS = frozenset({"qname"})
+
+# 2I design §4, form 2's catalog key and its two required parts.
+_DEFAULT_ADDRESS = "default_address"
+_DEFAULT_ADDRESS_KEYS = frozenset({"method", "arg"})
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
@@ -71,6 +98,25 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         {**row, "channel_via": _channel_via_forms(row)} if "channel_via" in row else row
         for row in methods
     ]
+    # 2I design §4, form 1: the identity rule's declared annotation converted
+    # to the SCIP symbol form once, at run start — the `channel_via` treatment
+    # above, and the same binding-seam discipline.
+    methods = [
+        {
+            **row,
+            _IDENTITY: {
+                **row[_IDENTITY],
+                "annotation": _catalog_symbol(row[_IDENTITY]["annotation"]),
+            },
+        }
+        if _IDENTITY in row
+        else row
+        for row in methods
+    ]
+    # 2I design §4, form 2: how this client type is CONFIGURED with the
+    # address its address-less calls use. Catalog-level rather than per-row
+    # because it describes the owner, not one of its methods.
+    default_address = _default_address(matches, catalog)
     record_wrappers = list(matches.get("record_wrappers", []))
     _validate_record_wrappers(record_wrappers, catalog)
     carrier_rules = CarrierRules(
@@ -106,11 +152,19 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     by_caller: dict[str, list[dict[str, Any]]] = {}
     for site in call_sites:
         by_caller.setdefault(str(site["caller"]), []).append(site)
+    # Both read once per run, the `field_facts`/`_rules_of` precedent, and
+    # both empty-and-inert for every catalog declaring neither word.
+    identity_facts = (
+        _identity_facts(workspace) if any(_IDENTITY in row for row in methods) else None
+    )
 
     # A list, not a set: the order call sites reach a shape decides the
     # order shape rows are written (NFR-1) — the same discipline
     # derive_endpoint_shapes keeps for its own `referenced` accumulator.
     referenced: list[str] = []
+    configured_addresses = _configured_addresses(
+        owner, default_address, call_sites, by_caller, field_sources, supertypes
+    )
     rows: list[dict[str, Any]] = []
     # Only a row whose identity is known dedups here: two calls whose paths
     # nobody could read carry nothing to compare, and SQL's `NULL = NULL` is
@@ -170,6 +224,19 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             url_argument = _arg_at(arguments, method.get("url_arg", method.get("channel_arg")))
             body_argument = _arg_at(arguments, method.get("body_arg"))
             body_declared = method.get("body_arg") is not None
+        # 2I design §4, form 2: a row that names no address position at all
+        # takes the one this client type was CONFIGURED with — the address is
+        # a property of the receiver, set once, and the call carrying none is
+        # not a call without an address. Only where the catalog declares the
+        # word AND the row names no position of its own: a declared position
+        # is the call's own answer and always wins.
+        configured = default_address is not None and not (
+            {"url_arg", "channel_arg", "record_arg"} & method.keys()
+        )
+        if configured:
+            declaring = _declaring_type(caller)
+            url_argument = None if declaring is None else configured_addresses.get(declaring)
+        address_declared = configured or bool({"url_arg", "channel_arg"} & method.keys())
         # `channel_arg` aliases `url_arg` in the grammar but not in the
         # READER (final review, IMPORTANT): a destination is an opaque
         # expression, never a URL to split. SQS's canonical destination is a
@@ -208,10 +275,29 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # read, `channel_via`, CP-2's split — behaves exactly as it does for a
         # url written at the call site. Where it cannot, the argument is
         # untouched and this is the pre-2F path unchanged.
-        url_argument = address_argument(url_argument, field_sources, facts)
+        url_argument = address_argument(url_argument, field_sources, facts, caller)
         destinations: Sequence[tuple[str | None, str | None, str]]
         read_destination = channel_of if "channel_arg" in method else url_of
-        if "channel_via" in method:
+        # 2I design §4, form 1: THE IDENTITY IS NOT AT THE CALL. Some
+        # protocols name the operation on the payload rather than in the
+        # address — the declared type of the argument the call hands over
+        # carries it, on an annotation this catalog names. Where a row asks
+        # for that, the address stops being an identity and becomes the peer
+        # alone (`peer_of`), and the `path` it would have filled is the
+        # identity's to fill instead. The two captures are independent: an
+        # unreadable address still leaves the operation named, and an
+        # unreadable operation still leaves the peer.
+        identity_type: str | None = None
+        if _IDENTITY in method:
+            peer, address_resolution = peer_of(url_argument)
+            path, identity_type = _argument_type_identity(
+                arguments, method[_IDENTITY], caller, identity_facts
+            )
+            resolved = path is not None and (
+                not address_declared or address_resolution == "resolved"
+            )
+            destinations = [(peer, path, "resolved" if resolved else "unresolved")]
+        elif "channel_via" in method:
             literal = read_destination(url_argument)
             forms = method["channel_via"]
             if literal[2] != "resolved" and forms:
@@ -238,6 +324,17 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # once per row rather than once per destination tuple keeps that
         # list from carrying the same shape root once per topic.
         request_shape = argument_descriptor(body_argument, facts, carrier_rules)
+        # The identity rule already resolved the DECLARED type of the argument
+        # handed over, so the payload is known even though the argument itself
+        # is a bare `parameter` naming no value (`_UNREAD_KINDS`). Describing
+        # it here rather than declaring `body_arg` beside the rule is what
+        # keeps the row `resolved`: a declared `body_arg` over a parameter is
+        # a capture that failed (I1), and it would fail on exactly the rows
+        # whose payload this pass DID read.
+        if request_shape is None and identity_type is not None:
+            request_shape = _payload_descriptor(
+                _bare_reference(identity_type), carrier_rules.rules, carrier_rules.enums, referenced
+            )
         response_shape = argument_descriptor(response_argument, facts, carrier_rules)
         # One row per destination tuple (the same multi-topic precedent
         # `annotation_driven._derive_replies` already keeps for a listener's
@@ -401,6 +498,7 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                     f"`record_arg` together with {', '.join(conflicts)} — the record IS "
                     f"the channel+payload source (D02 §2's `record_arg`)"
                 )
+        _validate_identity(row, catalog)
         direction = row.get("direction")
         if direction is not None and direction not in _DIRECTIONS:
             raise CatalogError(
@@ -408,6 +506,282 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                 f"`direction: {direction}`, which is not one of {', '.join(_DIRECTIONS)} "
                 f"— D00's closed sets are closed (NFR-5)"
             )
+
+
+@dataclass(frozen=True)
+class _IdentityFacts:
+    """What form 1's join reads, both loaded once per run rather than once per
+    call site (the `field_facts` precedent).
+
+    - `signatures` — every declared method's own signature, keyed by the FULL
+      symbol, which is what a call site's `caller` holds. The declared type of
+      the argument handed over lives here and nowhere else: the call's own
+      `target.descriptor` is the ERASED one every such API declares
+      (`(Ljava/lang/Object;)…`), so it names no payload at all.
+    - `annotations` — every annotation's arguments, keyed by its target's BARE
+      descriptor and its own fqn, because a signature's type reference carries
+      no module coordinates while an annotation target does (D00 §5a).
+    """
+
+    signatures: dict[str, dict[str, Any]]
+    annotations: dict[tuple[str, str], dict[str, Any]]
+
+
+def _identity_facts(workspace: Workspace) -> _IdentityFacts:
+    signatures: dict[str, dict[str, Any]] = {}
+    for row in workspace.query("method_declarations"):
+        signatures[str(row["symbol"])] = json.loads(str(row["signature"] or "{}")) or {}
+    annotations: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in workspace.query("annotations"):
+        # First use wins, in the query's own (target, annotation) order: a
+        # target cannot carry one annotation twice, so this is a total key and
+        # the `setdefault` only guards against a duplicated fact.
+        annotations.setdefault(
+            (bare_descriptor(str(row["target"])), str(row["annotation"])),
+            json.loads(str(row["args"] or "{}")) or {},
+        )
+    return _IdentityFacts(signatures=signatures, annotations=annotations)
+
+
+def _argument_type_identity(
+    arguments: list[dict[str, Any]],
+    rule: dict[str, Any],
+    caller: str,
+    facts: _IdentityFacts | None,
+) -> tuple[str | None, str | None]:
+    """Form 1's whole resolution: the wire identity a call's payload argument
+    names, and the declared type it named it through.
+
+    Four steps, each of which may honestly answer nothing:
+
+    1. the argument at the declared position must be a BARE parameter
+       reference (`parameter_index`) — a merged or computed value names no
+       single declared type, and the checkpoint's own ruling is that this
+       narrowness is the soundness rule;
+    2. the caller's own declared signature gives that parameter's type;
+    3. that type's own catalog-named annotation gives the name, and — where
+       the rule asks for one — the scope;
+    4. the two compose in the declared format.
+
+    The type is returned even when the identity is not — but only once the
+    catalog's own annotation has been FOUND on it. That is what makes the type
+    a payload rather than merely the thing at a declared position: an
+    annotated type whose attributes are absent is a payload nobody named, and
+    describing its shape while leaving the operation unresolved is the honest
+    pair. A type carrying no such annotation at all is not evidence of a
+    payload, and the row describes nothing rather than describing whatever
+    happened to sit there.
+
+    NO DEFAULTS ARE SYNTHESISED FOR AN ABSENT ATTRIBUTE, and that is a
+    decision rather than an omission (DR-6, and the checkpoint's item 5).
+    A framework whose annotation defaults the name to something derived from
+    the type, or the scope to whatever the surrounding schema declares, is
+    stating that default somewhere these facts do not reach — the schema is
+    not in the class file, and an attribute left at its default is simply
+    absent from the bytecode (item 4). Deriving a plausible one would publish
+    an operation nobody serves at `resolved`/`compiler`; the honest answer is
+    an unresolved identity, and it is the answer this returns."""
+    if facts is None:
+        return None, None
+    index = parameter_index(_arg_at(arguments, rule["arg"]))
+    if index is None:
+        return None, None
+    parameters = facts.signatures.get(caller, {}).get("parameters") or []
+    if index >= len(parameters):
+        return None, None
+    symbol = (parameters[index].get("type") or {}).get("symbol")
+    if not symbol:
+        return None, None
+    payload_type = bare_descriptor(str(symbol))
+    args = facts.annotations.get((payload_type, str(rule["annotation"])))
+    if args is None:
+        return None, None
+    name = _attribute(args, str(rule["name_from"]))
+    if name is None:
+        return None, payload_type
+    if "qualifier_from" not in rule:
+        return name, payload_type
+    qualifier = _attribute(args, str(rule["qualifier_from"]))
+    if qualifier is None:
+        return None, payload_type
+    return _composed(str(rule["format"]), qualifier, name), payload_type
+
+
+def _composed(declared: str, qualifier: str, name: str) -> str | None:
+    """The scope and the name joined in the DECLARED format — branching on the
+    word rather than assuming today's only one, the same shape
+    `derive_endpoints.sql` gives `$qualifier_format`.
+
+    `_validate_identity` already refused any word outside `_IDENTITY_FORMATS`,
+    so the fallthrough is unreachable today; it returns None rather than
+    composing anyway, so a second word added to the set but not here derives no
+    identity instead of silently deriving a `qname` one — an unresolved
+    operation rather than a wrong address."""
+    if declared == "qname":
+        return "{" + qualifier + "}" + name
+    return None
+
+
+def _attribute(args: dict[str, Any], name: str) -> str | None:
+    """One annotation attribute, read scalar-or-array — the Python mirror of
+    `derive_endpoints.sql`'s own `coalesce(a.args -> n ->> 0, a.args ->> n)`,
+    so a framework that arrays an attribute needs no second rule here either.
+    None where the attribute is absent, which is the only shape a defaulted
+    one can take (checkpoint item 4)."""
+    value = args.get(name)
+    if isinstance(value, list):
+        return str(value[0]) if value else None
+    return None if value is None else str(value)
+
+
+def _declaring_type(caller: str) -> str | None:
+    """The type whose body makes a call — the scope form 2's lookup is
+    confined to. None for a free function, which declares nothing to
+    configure."""
+    return owner_of(bare_descriptor(caller))
+
+
+def _configured_addresses(
+    owner: str,
+    setup: dict[str, Any] | None,
+    call_sites: list[dict[str, Any]],
+    by_caller: dict[str, list[dict[str, Any]]],
+    field_sources: FieldFacts | None,
+    supertypes: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any] | None]:
+    """Form 2's answer for every type that configures one of these clients:
+    the address argument its own calls to the declared setup method hand over,
+    read through the field ladder exactly as an address written at a call site
+    is.
+
+    CONFINED TO THE DECLARING TYPE, and that boundary is the whole soundness
+    argument. The facts carry no link from a call's receiver to the field
+    holding it — a receiver is a value id, meaningless outside its own method
+    (D00 §5) — so nothing can prove that THIS call's client is the one THAT
+    setup call configured. What can be said is narrower and true: the type
+    that makes the call also holds the client and configures it in its own
+    body. A client configured in one class and used from another is outside
+    this, honestly, and reads `unresolved`.
+
+    AMBIGUITY REFUSES. A type whose setup calls hand over two different
+    addresses, or one the ladder could not read at all, resolves to None — two
+    candidate addresses are not an address, and picking either would publish a
+    peer the code does not state. Empty for a catalog declaring no form 2."""
+    if setup is None:
+        return {}
+    candidates: dict[str, set[str | None]] = {}
+    for site in call_sites:
+        if site["owner"] != owner or site["name"] != setup["method"]:
+            continue
+        caller = str(site["caller"])
+        declaring = _declaring_type(caller)
+        if declaring is None:
+            continue
+        # `referenced` is EMPTY here rather than the run's own accumulator: the
+        # field ladder roots no payload, so nothing is ever appended, and
+        # threading the shared list in would suggest this pass contributes to
+        # shape order when it does not.
+        facts = CallFacts(
+            supertypes=supertypes, caller_call_sites=by_caller.get(caller, []), referenced=[]
+        )
+        argument = address_argument(
+            _arg_at(site["arguments"], setup["arg"]), field_sources, facts, caller
+        )
+        value = (
+            str(argument["value"])
+            if argument is not None
+            and argument.get("kind") == "string"
+            and isinstance(argument.get("value"), str)
+            else None
+        )
+        candidates.setdefault(declaring, set()).add(value)
+    return {
+        declaring: (
+            {"kind": "string", "value": next(iter(values))}
+            if len(values) == 1 and None not in values
+            else None
+        )
+        for declaring, values in candidates.items()
+    }
+
+
+def _default_address(matches: dict[str, Any], catalog: Catalog) -> dict[str, Any] | None:
+    """Form 2's declaration, refused at run start where its shape cannot be
+    honoured — the `_validate_methods` discipline. A block naming no method,
+    or naming a position that is not one, would silently resolve every
+    address-less call to nothing, which is indistinguishable from the catalog
+    never declaring the word at all."""
+    declared = matches.get(_DEFAULT_ADDRESS)
+    if declared is None:
+        return None
+    valid = (
+        isinstance(declared, dict)
+        and set(declared) == _DEFAULT_ADDRESS_KEYS
+        and isinstance(declared.get("method"), str)
+        and isinstance(declared.get("arg"), int)
+        and not isinstance(declared.get("arg"), bool)
+    )
+    if not valid:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{_DEFAULT_ADDRESS}` must be "
+            f"`{{method: str, arg: int}}`, got {declared!r} (2I design §4)"
+        )
+    return dict(declared)
+
+
+def _validate_identity(row: dict[str, Any], catalog: Catalog) -> None:
+    """Refuses a form 1 rule whose shape the resolution cannot honour — the
+    `_validate_methods` discipline, and the same stakes `annotation_driven.py::
+    _validate_naming` names: every check here catches a file that would derive
+    a quietly WRONG identity rather than fail, and a wrong one is published at
+    `resolved`/`compiler` where nothing downstream can tell it from an
+    observation.
+
+    A missing or misspelled key would leave the rule reading NULL and naming
+    nothing, which is indistinguishable from a catalog that never asked. An
+    unrecognised `format` would fall through to the bare name, silently
+    dropping the scope the file asked for. And a `format` without a
+    `qualifier_from` — or the reverse — states half a composition: the two
+    are declared together or not at all, exactly as `qualifier_format` and
+    `qualifier_from` are on the annotation-driven side."""
+    rule = row.get(_IDENTITY)
+    if rule is None:
+        return
+    if "record_arg" in row:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{row['name']}` declares `{_IDENTITY}` "
+            f"together with `record_arg` — the record IS the payload source, so the two "
+            f"name one capture twice (D02 §2's single_call style)"
+        )
+    keys = set(rule) if isinstance(rule, dict) else set()
+    valid = (
+        isinstance(rule, dict)
+        and _IDENTITY_REQUIRED <= keys <= (_IDENTITY_REQUIRED | _IDENTITY_OPTIONAL)
+        and isinstance(rule.get("arg"), int)
+        and not isinstance(rule.get("arg"), bool)
+        and isinstance(rule.get("annotation"), str)
+        and isinstance(rule.get("name_from"), str)
+        and isinstance(rule.get("qualifier_from", ""), str)
+    )
+    if not valid:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{row['name']}` declares `{_IDENTITY}` that "
+            f"must name `arg` (int), `annotation` and `name_from`, optionally "
+            f"`qualifier_from` and `format`, got {rule!r} (2I design §4)"
+        )
+    fmt = rule.get("format")
+    if ("qualifier_from" in rule) != ("format" in rule):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{row['name']}` declares one of "
+            f"`qualifier_from`/`format` on `{_IDENTITY}` without the other — a scope and "
+            f"how it composes are one declaration (2I design §4)"
+        )
+    if fmt is not None and fmt not in _IDENTITY_FORMATS:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{row['name']}` declares "
+            f"`{_IDENTITY}.format: {fmt}`, which is not one of "
+            f"{', '.join(sorted(_IDENTITY_FORMATS))} (2I design §4)"
+        )
 
 
 def _channel_via_entries(method: dict[str, Any]) -> list[Any]:

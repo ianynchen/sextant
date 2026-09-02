@@ -1,0 +1,70 @@
+id: wsdl-schema
+displayName: WSDL/XSD schema (SOAP root operations)
+style: schema_operations
+protocol: soap
+direction: inbound
+
+# Framework-neutral on purpose, and its own file rather than a block on
+# `spring-ws.yml` (`graphql-schema.yml`'s precedent, itself following
+# `spring-kafka-media.yml`'s: one file is one catalog is one style, so a
+# second style for a family is a second file). What this catalog reads is a
+# contract, and a contract belongs to no framework: a hand-built runtime
+# wiring serves the SAME `orders.wsdl` with no `@Endpoint`/`@WebService`
+# annotation anywhere — exactly the case that derives nothing without this
+# style (2H design §3, 2I Task 4).
+#
+# No `detect.coordinates`: the evidence is a schema file in the repository,
+# not a dependency the build declares. A module with no WSDL/XSD files
+# derives no rows here, which is the same answer a coordinate gate would give
+# and the only one this catalog can honestly state.
+detect:
+  coordinates: []
+
+# Nothing scanner-produced is read — the input is the `declared_shape` facts
+# the descriptor interpreter emits, which every scan produces or does not
+# regardless of its capabilities. A capability naming that would be a gate
+# with nothing behind it.
+requires: []
+
+matches:
+  # D02 §2's `schema_operations` vocabulary, and all of it. Root naming is
+  # deliberately absent, same reason `graphql-schema.yml` states it: nothing
+  # here parses a schema format.
+  schema_operations:
+    # Which declared shapes this catalog speaks for. `role` is neutral across
+    # formats, and this is what ties the rows below to the `protocol` above:
+    # a root declared by some other schema format is some other protocol's
+    # operation, not a soap one.
+    schema_format: wsdl
+    # A GATE, not a method table (schema_operations.py's own comment beside
+    # its `operations.get` call). Every other catalog owning this style maps
+    # a role to the `method` column value it derives; `"operation"` cannot,
+    # because a WSDL input element names no root-operation KIND for a
+    # `method` column to spell — the engine hardcodes NULL for this literal
+    # role instead (D02 §2, amended: SOAP is verbless). The value on the
+    # right is therefore a placeholder that satisfies `_validate_matches`'s
+    # non-empty-string rule and is never read for its content; it is written
+    # as the role's own name so a reader sees what it is guarding rather than
+    # mistaking it for a spelled-out method.
+    operations:
+      operation: operation
+
+# 2G design §7, rung 1: SOAP's wire is XML by definition — the envelope IS an
+# XML document, and no handler-level declaration can make it anything else —
+# so the format is a property of the protocol rather than of anything a
+# mapping annotation states. The ladder refuses a contradiction between two
+# catalogs rather than picking one, so any later catalog owning `soap` must
+# carry this identical entry — `spring-ws.yml`'s own copy states the same
+# rule, and this is the SECOND catalog to own the protocol: a schema-first
+# service pulls in no SOAP annotation library at all, so without this entry
+# its rows would reach rung 1 with nothing declared and fall through to a
+# later rung, where nothing describes `xml` either (this catalog's rows carry
+# no bytecode type for rung 4 or rung 5 to read).
+format_fixed:
+  soap: xml
+
+# No `wrappers`/`nullability`/`serialization`/`known_types`
+# (`graphql-schema.yml`'s identical omission, same reason): those blocks
+# describe how a JVM type reaches the wire, and every shape this catalog's
+# rows point at is a declared one, expanded from the schema's own element and
+# type declarations without consulting a single rule of theirs.
