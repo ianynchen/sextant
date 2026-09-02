@@ -821,17 +821,26 @@ def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(tmp_path: P
     `none recorded` rather than `unresolved`: the schema addressed this
     operation outright and names no code, an absence rather than a failed
     read. The request table is the schema's own fields, by its schema name;
-    there is no Response section at all, because no stamp reaches this row."""
+    there is no Response section at all, because no stamp reaches this row.
+
+    The identity itself renders `soap {ns}quoteOrderRequest`, no
+    `(unresolved)` marker — fix round 1's own ruling (spec §1): SOAP is
+    verbless, the same D02 §2/2D messaging shape as a Kafka topic, so its rows
+    belong in `document.py`'s VERBLESS set, not the verbed one. They sat in
+    the verbed half since 2H (when no catalog owned the protocol, so the
+    misclassification rendered nothing live) through 2I Task 2's own rows,
+    which is what let this row's first live pin carry the wrong,
+    `(unresolved)`-prefixed form until this fix."""
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     _run(tmp_path)  # analyze + render + export
     document = (tmp_path / "render" / "architecture.md").read_text()
 
     assert (
-        "| `(unresolved) {http://orders.example.com/ws}quoteOrderRequest` | "
+        "| `soap {http://orders.example.com/ws}quoteOrderRequest` | "
         "none recorded | - → - | xml | resolved |"
     ) in document
     assert (
-        "- `(unresolved) {http://orders.example.com/ws}quoteOrderRequest`\n"
+        "- `soap {http://orders.example.com/ws}quoteOrderRequest`\n"
         "  - Request:\n"
         "\n"
         "    | Field | Type | Required | Nullable |\n"

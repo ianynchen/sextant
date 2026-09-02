@@ -787,6 +787,28 @@ def test_an_operation_roles_fields_derive_no_rows_of_their_own(tmp_path: Path):
     assert {str(r["path"]) for r in rows} == {"{urn:invented}Op"}
 
 
+def test_an_operation_role_shape_of_another_schema_format_derives_nothing(tmp_path: Path):
+    """The format gate runs BEFORE the `role == "operation"` branch, not
+    after it — `test_a_root_declared_by_another_schema_format_derives_
+    nothing`'s own case, for the one role that fix round 1 flagged as
+    unpinned: a shape carrying the literal role string `"operation"` derives
+    no row through `wsdl-schema.yml` when its OWN `schema_format` is not
+    `wsdl`. `role` is neutral across every format (D00 §5); nothing about the
+    role's spelling exempts it from the gate every other role already meets."""
+    workspace = _workspace(
+        tmp_path,
+        _shape("{urn:invented}Op", _field("sku"), role="operation", schema_format=FORMAT),
+    )
+    _run(
+        workspace,
+        _catalog(operations={"operation": "operation"}, schema_format=WSDL_FORMAT, protocol="soap"),
+    )
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
 def test_a_query_role_shape_beside_an_operation_role_shape_still_derives_per_field(
     tmp_path: Path,
 ):

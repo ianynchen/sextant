@@ -87,14 +87,20 @@ _GAPS = [
 # `GET` does. `sse` is qualified for the mirror-image reason (2H design §6):
 # its verb IS an HTTP method, because an SSE stream is a route a client GETs,
 # and a bare `GET /events/stream` therefore reads as an ordinary REST route
-# and loses the one thing the reclassification established. HTTP, SOAP and
-# gRPC read correctly without the prefix, which is also what every pin
-# written before this expects.
+# and loses the one thing the reclassification established. HTTP and gRPC
+# read correctly without the prefix, which is also what every pin written
+# before this expects.
 _PROTOCOL_QUALIFIED = frozenset({"graphql", "sse"})
 
 # D00 §4 closed-set protocol names whose wire identity has no verb: a Kafka
 # topic, a JMS destination, an SQS queue or a Pub/Sub topic is addressed, not
-# called, so there is no method to render beside the path.
+# called, so there is no method to render beside the path. SOAP belongs here
+# too (spec §1, 2I Task 4 fix round 1, ruled) — an operation is addressed by
+# its payload root or its SOAPAction URI, never a verb, the same 2D messaging
+# shape as a Kafka topic. It sat in the verbed half from 2H (when no catalog
+# owned the protocol, so the misclassification rendered nothing) through 2I
+# Task 2's own live rows, which is what let every SOAP row render a phantom
+# `(unresolved)` verb nobody ever failed to read.
 #
 # Derived from D00's closed set by SUBTRACTING the verbed protocols, rather
 # than hand-listing the verbless ones. Two sets naming halves of one closed
@@ -111,7 +117,7 @@ _PROTOCOL_QUALIFIED = frozenset({"graphql", "sse"})
 # be added to one list and silently fall out of the other — a GET route
 # reclassified into the verbless half renders `sse /events/stream` and drops
 # the verb it does have.
-_VERBED_PROTOCOLS = frozenset({"http", "soap", "grpc"}) | _PROTOCOL_QUALIFIED
+_VERBED_PROTOCOLS = frozenset({"http", "grpc"}) | _PROTOCOL_QUALIFIED
 _VERBLESS_PROTOCOLS = frozenset(p.value for p in Protocol) - _VERBED_PROTOCOLS
 
 # The verbed protocols whose rows may legitimately carry NO verb. A GraphQL
