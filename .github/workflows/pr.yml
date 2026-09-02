@@ -46,9 +46,15 @@ jobs:
         # The suite compiles fixtures with `mvn -o`. Offline is deliberate —
         # ARCHITECTURE §9a makes it policy, so no test reaches the network and
         # a broken build cannot look like a slow one. A fresh runner has an
-        # empty ~/.m2, so this is the one step allowed to fetch.
-        working-directory: fixtures/orders-service
-        run: mvn -q -B compile
+        # empty ~/.m2, so this is the one step allowed to fetch. The stub
+        # library goes in first: `orders-service` declares it as a dependency,
+        # Maven resolves every dependency before compiling anything, and the
+        # stub exists nowhere but the local repository this script installs
+        # it into (the suite's conftest does the same, offline — too late for
+        # this step, which is why the script exists).
+        run: |
+          python tests/fixture_stub.py
+          mvn -q -B -f fixtures/orders-service/pom.xml compile
 
       - name: Gates
         # ruff, mypy, the import contracts, the extractor build and both test
