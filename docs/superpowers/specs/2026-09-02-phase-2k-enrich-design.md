@@ -163,6 +163,21 @@ render interleaves claims at their anchors under a provenance header
 ("Enrichment — `evidence: llm`, model …"), deterministically placed, machine text
 never touched or reordered. No overlay file → render behaves exactly as today.
 
+## 6b. Dual output — markdown and HTML, diagrams you can actually read
+
+**User-ruled:** render (and enrich's automatic assembly) emits BOTH
+`architecture.md` (unchanged — mermaid fences, GitHub- and diff-friendly) and
+`architecture.html`: the same content through the same deterministic assembly, one
+templated HTML emitter. The HTML is **self-contained and offline**: a pinned,
+vendored `mermaid.min.js` inlined into the file (no CDN — the doc must open
+airgapped), plus a small vanilla pan-zoom script of our own (wheel zoom, drag pan,
+`+`/`−`/`reset` controls on every diagram container — machine and LLM-simplified
+diagrams alike). Determinism holds: the vendored asset's bytes are fixed (version +
+license recorded beside it — a new asset class, pinned like a dependency, upgraded
+deliberately), the template is stable, so same workspace + same overlay →
+byte-identical HTML. Both files land in the rendered outputs and the bundle carries
+both.
+
 ## 7. The verification seat
 
 The brief carries every open question; the agent answers what it can ground:
