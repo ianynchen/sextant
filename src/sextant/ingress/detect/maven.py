@@ -59,20 +59,23 @@ def _no_version_reason(declared_as_a_dependency: bool) -> str:
     )
 
 
+def _repository_layout(coordinate: str, version: str) -> str:
+    """Where one coordinate sits WITHIN a Maven repository —
+    `<group as directories>/<artifact>/<version>/<artifact>-<version>.jar`,
+    relative to the repository root and never anchored to one.
+
+    The half of the location that is true on every machine, which is what makes
+    it safe to publish: the reader supplies the root they actually have.
+    """
+    group, _, artifact = coordinate.partition(":")
+    return f"{'/'.join(group.split('.'))}/{artifact}/{version}/{artifact}-{version}.jar"
+
+
 def _local_repository_archive(coordinate: str, version: str) -> Path:
     """Maven's own local-repository layout for one coordinate — resolved at
     call time rather than at import, so a test or a caller that moves `HOME`
     is not answered from whatever it was when this module loaded."""
-    group, _, artifact = coordinate.partition(":")
-    return (
-        Path.home()
-        / ".m2"
-        / "repository"
-        / Path(*group.split("."))
-        / artifact
-        / version
-        / f"{artifact}-{version}.jar"
-    )
+    return Path.home() / ".m2" / "repository" / _repository_layout(coordinate, version)
 
 
 _CONTAINER_FILES = (
@@ -187,8 +190,16 @@ class MavenDetector:
                 continue
             archive = _local_repository_archive(coordinate, version)
             if not archive.is_file():
+                # The RELATIVE layout path, never the absolute one. This string
+                # travels — metadata.json, the rendered gaps list, a published
+                # bundle — and D00 §2's rule holds for every one of them: a path
+                # under someone's home directory identifies nothing off the
+                # machine that wrote it. The layout is the useful half anyway,
+                # because it says where to look in whichever local repository
+                # the reader has.
                 unresolved.append(
-                    f"{coordinate}: no {version} archive in the local repository ({archive.parent})"
+                    f"{coordinate}: no {version} archive in the local repository "
+                    f"(expected at {_repository_layout(coordinate, version)})"
                 )
                 continue
             roots.append(LibraryRoot(coordinate=coordinate, version=version, archive=archive))

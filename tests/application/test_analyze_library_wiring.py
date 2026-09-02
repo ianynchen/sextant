@@ -237,6 +237,35 @@ def test_opting_a_library_out_retracts_its_rows_from_the_same_workspace(
     assert not any(
         json.loads(text.splitlines()[0]).get("origin") for text in _tree(root / "facts").values()
     )
+    # And the module's own half came back intact rather than being collateral:
+    # the discard runs BEFORE the module's scan, so anything it could reach is
+    # rewritten a line later.
+    assert _tree(root / "facts")
+
+
+def test_a_library_that_could_not_be_scanned_names_no_absolute_path(
+    tmp_path: Path, library: LibraryRoot
+):
+    """`libraries_not_scanned` travels the same road every other FR-17 list
+    does — metadata.json, the rendered gaps, a published bundle — so D00 §2's
+    rule holds for it too: a path under someone's home directory identifies
+    nothing off the machine that wrote it.
+
+    The reason here comes from the SCANNER, not from this stage, so this is the
+    pin that says the whole channel is clean and not merely the strings
+    `analyze` composes itself. It is deliberately the coordinate that must
+    appear and the archive path that must not."""
+    missing = LibraryRoot(
+        coordinate="com.example:gone",
+        version="1.0.0",
+        archive=tmp_path / "repository" / "gone-1.0.0.jar",
+    )
+
+    result = _analyzed(tmp_path / "run", (missing,))
+
+    [reported] = result.libraries_not_scanned
+    assert reported.startswith("com.example:gone: ")
+    assert str(tmp_path) not in reported
 
 
 def test_a_library_that_fails_mid_archive_leaves_no_partial_subtree(

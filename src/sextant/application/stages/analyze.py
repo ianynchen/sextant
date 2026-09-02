@@ -151,6 +151,13 @@ def analyze(
     # facts there (the same target collision `facts/config` and `facts/schema`
     # already live with). Discarding first means such a module rewrites them a
     # line later; discarding after would delete facts this run had just written.
+    #
+    # The delete-then-rewrite window assumes ONE analyze per fact root at a
+    # time. That is what a workspace is (M00: one module, one workspace, one
+    # command), and nothing here takes a lock — a second concurrent analyze
+    # into the same workspace would see the gap between the discard and the
+    # rewrite. Stated because it is load-bearing and free to satisfy, not
+    # because it is enforced.
     discard_library_facts(fact_root)
     scan_report = scanner.scan(
         ScanRequest(
@@ -199,7 +206,16 @@ def analyze(
             # through an archive leaves a fraction of a library on disk —
             # indistinguishable, once loaded, from all of a smaller one.
             discard_library_facts(fact_root, library.coordinate)
-            libraries_not_scanned.append(f"{library.coordinate}: {failure}")
+            # The archive PATH is replaced by the coordinate wherever the
+            # backend's own message names it. This string travels — into
+            # metadata.json, the rendered gaps list, a published bundle — and a
+            # path under someone's home directory identifies nothing off the
+            # machine that wrote it (D00 §2's rule, which holds for every
+            # reader-facing string and not only for the document record). The
+            # coordinate IS the portable name for exactly that path, so the
+            # substitution loses nothing and the reason survives intact.
+            reason = str(failure).replace(str(library.archive), library.coordinate)
+            libraries_not_scanned.append(f"{library.coordinate}: {reason}")
             continue
         scanned_facts += library_report.facts
         uncovered.extend(library_report.uncovered)

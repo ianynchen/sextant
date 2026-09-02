@@ -396,8 +396,17 @@ def test_a_library_that_resolves_to_no_archive_is_named_with_its_reason(
     "pin the version" and "install the artifact" are three different things to
     go and do, and a bare coordinate leaves a reader to guess which. Nothing
     raises: a library nobody could find is not a reason to refuse the module's
-    own analysis."""
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    own analysis.
+
+    **And no reason may carry an absolute path.** These strings travel — into
+    metadata.json, into the rendered gaps list, into a published bundle — and
+    D00 §2's rule holds for every one: a path under someone's home directory
+    identifies nothing off the machine that wrote it. The check is on the whole
+    reason rather than on a known offender, because the first version of the
+    "why" wording leaked the local repository directory back in through a
+    parenthetical that a substring assertion for the message never saw."""
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     root = tmp_path / "module"
     root.mkdir()
     _module(root, _LIBRARY_POM)
@@ -409,6 +418,27 @@ def test_a_library_that_resolves_to_no_archive_is_named_with_its_reason(
     [reported] = module.libraries_not_resolved
     assert reported.startswith(f"{coordinate}: ")
     assert expected_reason in reported
+    assert str(home) not in reported
+    assert ".m2" not in reported
+    assert not any(word.startswith("/") for word in reported.replace("(", " ").split())
+
+
+def test_a_missing_archive_names_where_to_look_without_naming_anyones_machine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The layout, relative to a repository root and anchored to none: it is the
+    half of the location that is true on every machine, so the reader supplies
+    the root they actually have. Naming the absolute directory instead told a
+    bundle's reader where the jar was not, on a computer they do not own."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    root = tmp_path / "module"
+    root.mkdir()
+    _module(root, _LIBRARY_POM)
+    (root / ".sextant.yml").write_text("extract_libraries: [com.example:stub]\n", encoding="utf-8")
+
+    [reported] = MavenDetector().detect(root).modules[0].libraries_not_resolved
+
+    assert "com/example/stub/2.1.0/stub-2.1.0.jar" in reported
 
 
 def test_the_sibling_library_fixture_detects_through_its_parents_coordinates():
