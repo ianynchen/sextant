@@ -11,11 +11,11 @@ storage | egress | agents -> application -> domain`: an outer group
 (`agents` included) depends on `application`, never the reverse, so this
 module cannot import `sextant.agents.claude_api` to build a name ->
 implementation mapping — only the composition root (`cli/app.py`, wired in
-2K Task 7) may import an adapter and construct it. `AGENT_REGISTRY` below
-is the one piece of that knowledge `application` is allowed to hold: the
-closed set of valid `--agent` names (spec §3: "unknown name refused with
-the known list"), so the CLI's validation and any test pin against one
-constant rather than a hand-copied literal.
+2K Task 7) may import an adapter and construct it. The name -> constructor
+registry therefore lives one layer out, at `sextant.agents.AGENT_REGISTRY`
+(an intra-package import inside `agents`, legal the way any package's
+`__init__` importing its own sibling module is) — this port stays a pure
+contract, holding no registry of its own.
 """
 
 from dataclasses import dataclass
@@ -47,11 +47,17 @@ class EnrichmentAnswers:
     every tool call and result (`ToolExecutor.transcript`, persisted by the
     caller to `enrich-transcript.jsonl`). `partial` states whether `text`
     is a clean final answer or whatever existed when a turn cap or the
-    no-progress guard ended the run early — never silent about which."""
+    no-progress guard ended the run early — never silent about which, and
+    `partial_reason` says WHY: `"max_turns"`, `"no_progress"`, a truncated
+    or otherwise non-`end_turn` finish as `"stop:<reason>"` (the model's own
+    `stop_reason`, verbatim), or `None` for a clean answer — so a caller
+    (2K Task 7) can persist an honest account of how a run ended rather
+    than just the fact that it did."""
 
     text: str
     transcript: list[dict[str, object]]
     partial: bool = False
+    partial_reason: str | None = None
 
 
 class EnrichmentAgentError(RuntimeError):
@@ -65,17 +71,11 @@ class EnrichmentAgentError(RuntimeError):
 
 
 class EnrichmentAgent(Protocol):
-    """Implementations are keyed by name in `AGENT_REGISTRY`, never
-    imported here. `run` is the one method: drive the brief through
-    whatever loop the adapter's runtime uses, but every tool call executes
-    through `executor` — the foreign runtime maps our tools into its own
-    protocol; our code serves the bytes (2K design §3)."""
+    """Implementations are keyed by name in `sextant.agents.AGENT_REGISTRY`
+    (this module cannot hold that registry itself — see the module
+    docstring). `run` is the one method: drive the brief through whatever
+    loop the adapter's runtime uses, but every tool call executes through
+    `executor` — the foreign runtime maps our tools into its own protocol;
+    our code serves the bytes (2K design §3)."""
 
     def run(self, brief: EnrichmentBrief, executor: ToolExecutor) -> EnrichmentAnswers: ...
-
-
-# The known `--agent` names (2K design §3). Extending this to a second
-# adapter (`claude-sdk`, `tradewind`) is a one-line addition here plus the
-# adapter's own file — no other change, which is the point of a registry
-# keyed by name rather than a chain of CLI conditionals.
-AGENT_REGISTRY: tuple[str, ...] = ("claude-api",)
