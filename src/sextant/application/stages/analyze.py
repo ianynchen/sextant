@@ -40,11 +40,12 @@ from sextant.domain.factfile import (
     write_fact_file,
 )
 from sextant.domain.facts import DeclaredShapeFact, Document, EmbeddedDescriptorFact, Fact
+from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import list_files
 
 
 def _config_files(
-    module: ModuleModel, root: Path, schema_readers: Sequence[ArtifactReader]
+    module: ModuleModel, root: Path, schema_readers: Sequence[ArtifactReader], ignore: IgnoreRules
 ) -> tuple[Path, ...]:
     """Everything under a resource root that the schema loop below is not
     already reading.
@@ -65,7 +66,7 @@ def _config_files(
     """
     return tuple(
         file
-        for file in list_files(root)
+        for file in list_files(root, module.root, ignore)
         if not (
             any(file.is_relative_to(schema_root) for schema_root in module.schema_roots)
             and any(reader.accepts(file_kind(file)) for reader in schema_readers)
@@ -182,6 +183,10 @@ def analyze(
     scanned_facts = scan_report.facts
     uncovered = list(scan_report.uncovered)
     libraries_not_scanned: list[str] = []
+    # `.sextantignore` is never consulted here: a library archive is not a
+    # repo file to enumerate, and its `.class` walk is out of scope for the
+    # ignore matcher by design (2K design §2) — `IgnoreRules` governs the
+    # repo's own file enumerations (config, schema, resource walks) only.
     for library in module.library_roots:
         try:
             library_report = scanner.scan(
@@ -227,6 +232,13 @@ def analyze(
     # Readers never see the Workspace port — this stage is the write.
     progress.start("read")
     entries = 0
+    # `.sextantignore` (2K design §2), loaded once and applied at both walk
+    # loops below through `list_files` — a file it excludes is read by
+    # neither loop, config or schema. `module.root` is the repo root a
+    # `.sextantignore` sits at and every pattern in it is written against
+    # (2K Task 2 binding), the same root `.sextant.yml`'s own reader already
+    # keys its lookup on.
+    ignore = IgnoreRules.load(module.root)
     # Which loop a reader serves is the reader's own declaration (the
     # `ArtifactReader` port's `reads_schema_sources`), never a guess from the
     # root a file was found under: since 2H one schema root lives inside a
@@ -234,7 +246,7 @@ def analyze(
     schema_readers = [reader for reader in readers if reader.reads_schema_sources]
     for root in module.resource_roots:
         for reader, owned in group_files_by_reader(
-            _config_files(module, root, schema_readers), readers
+            _config_files(module, root, schema_readers, ignore), readers
         ):
             request = ReadRequest(
                 module_id=module.module_id, version=module.version, files=owned, root=root
@@ -253,7 +265,9 @@ def analyze(
     # never compete with a same-named config file for one fact-file target).
     schema_sources_not_compiled: list[str] = []
     for root in module.schema_roots:
-        for reader, owned in group_files_by_reader(list_files(root), schema_readers):
+        for reader, owned in group_files_by_reader(
+            list_files(root, module.root, ignore), schema_readers
+        ):
             request = ReadRequest(
                 module_id=module.module_id, version=module.version, files=owned, root=root
             )

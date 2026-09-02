@@ -5,6 +5,7 @@ re-analyzes") plus what the exporter itself derived (the catalog hash, the
 tables and fact files it exported)."""
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
@@ -16,25 +17,32 @@ def write_manifest(
     metadata: dict[str, object],
     source: dict[str, object],
     catalog_hash: str,
+    redaction_set_hash: str,
     module_commit: str,
     tables: list[str],
     facts_files: int,
+    render: Sequence[str] = (),
 ) -> None:
     provenance = dict(cast(dict[str, object], metadata.get("provenance", {})))
     # `producer` carries exactly what analyze's provenance recorded, plus
     # graph_schema_version (provenance has none today) and what the exporter
-    # itself derived. `redaction_set_hash` has no producer yet (nothing
-    # redacts), so it is carried only if a future analyze starts writing it —
-    # never invented here.
+    # itself derived.
+    #
+    # `redaction_set_hash` is one of the exporter's own, beside `catalog_hash`
+    # and for the same reason (D05 §2 lists them together). It was reserved and
+    # unwritten while nothing redacted; 2K design §1 gives it a producer, and
+    # that producer is this exit — the workspace stays verbatim, so `analyze`
+    # applies no rule set and its provenance could not honestly claim one.
+    # What this field names is the set that masked THESE bytes, read from the
+    # module's `.sextant.yml` at the moment they were written.
     producer: dict[str, object] = {
         "sextant_version": provenance.get("sextant_version"),
         "fact_schema_version": provenance.get("fact_schema_version"),
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
         "scanners": provenance.get("scanners", []),
         "catalog_hash": catalog_hash,
+        "redaction_set_hash": redaction_set_hash,
     }
-    if "redaction_set_hash" in provenance:
-        producer["redaction_set_hash"] = provenance["redaction_set_hash"]
 
     coverage = dict(cast(dict[str, object], metadata.get("coverage", {})))
     partial = coverage.get("partial")
@@ -57,6 +65,15 @@ def write_manifest(
             "graph": True,
             "tables": list(tables),
             "facts_files": facts_files,
+            # What actually shipped under `render/` (2K Task 8 review, D06
+            # §3's "names what actually travelled" rule extended to it) —
+            # `[]` where `render` was never run, exactly like an empty
+            # `tables` list would read, never an absent key. Named by the
+            # caller (`cli/app.py`'s `module_export`) rather than derived
+            # here, the same never-re-analyze-or-re-derive discipline every
+            # other `contents` field already follows: this function writes
+            # what it is told, not what it goes and looks for on disk.
+            "render": list(render),
         },
         "gaps": metadata.get("gaps", []),
         "uncovered": metadata.get("uncovered", []),

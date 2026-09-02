@@ -30,7 +30,22 @@ instead of joining it anyway.
   manifest.json
   facts/**/*.parquet        one partition per source file
   graph/*.parquet           the derived tables of D01
+  render/                   architecture.md, architecture.html — present only when render ran
 ```
+
+> **Amendment (2026-09-02, Phase 2K design §6b — approved, delivered).** `render/` is new:
+> whichever of `architecture.md`/`architecture.html` `sextant module render` (or `enrich`'s
+> own auto-assembly, [ARCHITECTURE.md](../ARCHITECTURE.md) DR-2's amendment) already wrote to
+> the workspace, copied byte-for-byte into the bundle by the exporter — not re-rendered, so
+> the bundle and the workspace can never disagree about what a reader saw. `render` is not a
+> prerequisite for `export` ([M08](M08-exporter.md)'s own rule still holds: "**No analysis.**
+> It writes out what exists" — satisfied by copying `render/`'s output verbatim, never
+> deriving it), so an unrendered workspace exports with no `render/` at all, exactly as it
+> always has. `contents.render` in the manifest (§3) names exactly what shipped, so a
+> consumer never has to list the directory to find out. **The overlay file itself,
+> `.sextant-enrichment.json`, still never travels** — §7's rule is unchanged, and this
+> subsection does not relax it: what ships is the already-assembled, already-redacted
+> DOCUMENT an overlay produced, never the program artifact that produced it.
 
 **Parquet here, JSONL in the workspace.** In the workspace, facts are one small file per
 source file, and a columnar footer would cost more than the data. In a bundle the same
@@ -67,7 +82,8 @@ columnar need per fact kind is stated.
   "coverage": { "documents": 1283, "partial_documents": 0, "partial": false },
   "contents": { "facts": true, "graph": true, "tables": ["symbols", "edges", "endpoints",
                                                           "shapes", "shape_fields", "dispatch", "trace_summary"],
-                "facts_files": 1283 },
+                "facts_files": 1283,
+                "render": ["architecture.md", "architecture.html"] },
   "gaps": ["call_graph_not_implemented"],
   "uncovered": ["src/main/java/…/LegacyController.java"],
   "skipped_catalogs": [{ "catalog_id": "spring-webclient", "missing_capabilities": ["string_constants"] }]
@@ -82,9 +98,45 @@ invalidate different things at very different cost, and `sextant_version` change
 without either of them moving — a fixed bug in dispatch resolution produces a different graph
 from identical facts. See [D01](D01-graph-schema.md) §7.
 
-**`redaction_set_hash` does not appear in a produced manifest today.** `analyze` records no
-redaction set, so the field is omitted rather than written empty or invented; it joins
-`producer` the day redaction ships.
+**`redaction_set_hash` is written by the exporter**, beside `catalog_hash` and for the same
+reason: it is what the exporter itself applied, not what `analyze` recorded. Under 2K design
+§1 the workspace stays verbatim and masking happens at the exits, so `analyze` applies no
+rule set and its provenance could not honestly claim one; this field names the effective set
+— the built-ins widened by the module's `.sextant.yml` `redact:` section — that masked
+**these** bytes. It is the sha256 of that set canonically serialized, so it is stable across
+however a file happened to order its additions and moves the moment one changes.
+
+**Two hashes, two moments.** A bundle carries a `redaction_set_hash` on each *document*
+(`graph/documents.parquet`, from [D00](D00-fact-schema.md) §2) as well as this one on
+`producer`, and they answer different questions. The per-document hash describes **read**
+time — what was applied as those facts were produced — and it reads `sha256:none`, honestly,
+because nothing is: the workspace, `raw_facts` and the local fact files all stay verbatim so
+that resolution can substitute real addresses. `producer.redaction_set_hash` describes
+**export** time: the set that masked *this bundle*. A consumer checking what it may
+redistribute reads the producer field; a consumer reasoning about cache validity reads the
+document field.
+
+**What the bundle masks, precisely:**
+
+| Where | Rule applied |
+|---|---|
+| `graph/resolved_config.parquet` `value` | key patterns + value patterns + URL userinfo |
+| `facts/*.parquet` `config_entry` payload `value` | the same, keyed by the fact's own `key_path` |
+| `graph/endpoints.parquet` `path`, `peer` | URL userinfo + value patterns |
+| `graph/open_questions.parquet` `path` | the same, through the same map — a question and the row it asks about must mask identically |
+| `graph/call_sites.parquet` `arguments`, `graph/annotations.parquet` `args` | URL userinfo + value patterns, over every string leaf |
+
+The last row is deliberately **not** key-based. A call argument is not a configuration key,
+and the path and URL literals inside one are the wire identities the linking tier matches
+services on — masking them by key name would gut the bundle to remove a secret that is not
+there. What such a string does carry, when it carries anything, is an address with a
+credential in front of it, and that is what userinfo stripping removes.
+
+**The residual, stated rather than discovered:** an exotic hardcoded secret in a code
+literal — one no key names, no value pattern matches, and that is not a URL with userinfo —
+survives into the bundle. Closing it means value patterns, which is exactly what
+[D04](D04-config-and-exclusion.md) §2a's `redact:` gives a repository that knows the shape
+of its own secrets.
 
 **`module_commit`** is the last commit touching this module's own path, computed locally at
 scan time where a clone already exists. It is what lets the system tier judge staleness in a
@@ -94,6 +146,14 @@ monorepo without fetching history itself.
 list rather than hand-maintained — so `open_questions` (below) appears there beside
 `endpoints`, `shapes`, `shape_fields`, `resolved_config`, `documents`, `symbols`,
 `annotations` and `call_sites`, and the list is sorted so the manifest is deterministic.
+
+**`contents.render` names what actually shipped under `render/`** (2K Task 8), the same
+"declared, never discovered by listing the bundle" rule `tables` follows: `[]` on a
+workspace `export` was run against before `render` ever produced anything, `["architecture.md",
+"architecture.html"]` once both exist. The key is always present, exactly as
+`tables`/`facts_files` are — never absent merely because nothing shipped under it — so a
+consumer checking whether a rendered document travelled reads one field rather than probing
+the bundle's own directory listing.
 
 **`documents` carries `origin`** — the coordinate of the library a document was extracted
 from ([D00](D00-fact-schema.md) §2), NULL for the module's own output. Opting a library in
@@ -283,7 +343,9 @@ registry is the caller's business; Sextant does not talk to artifact stores.
 - **No absolute paths from the producing machine.** Paths are relative to the module root.
 - **No workspace database file.** Section 1.
 - **No overlay files.** Curations are inputs to the system tier and live in git beside
-  `system.yml`, not inside a module's bundle.
+  `system.yml`, not inside a module's bundle. The rule extends unchanged to 2K's
+  `.sextant-enrichment.json` — the program artifact enrich writes never travels; what
+  travels is the already-assembled, already-redacted `render/` output it produced (§2).
 
 ---
 

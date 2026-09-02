@@ -2,14 +2,17 @@ import json
 import subprocess
 from pathlib import Path
 
+import click
+import pytest
 from click.testing import CliRunner
 
 from sextant.application.ports.progress import NullProgress
 from sextant.application.ports.scanner import ScanReport, ScanRequest
 from sextant.application.stages.analyze import analyze
-from sextant.cli.app import cli
+from sextant.cli.app import _tool_executor_for, cli
 from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.domain.factfile import read_fact_tree
+from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import bare_descriptor, owner_of
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
@@ -265,12 +268,167 @@ def test_render_writes_the_document_after_analyze(tmp_path: Path):
     assert "POST" in document and "/v1/orders" in document
 
 
+def test_render_also_writes_a_self_contained_offline_html_document(tmp_path: Path):
+    """2K design §6b, the live pin over a real analysed module rather than a
+    synthetic one: `architecture.html` lands beside `architecture.md`, wraps
+    the real structure diagram in pan-zoom controls, and carries no CDN or
+    external script URL."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    result = runner.invoke(cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    html_path = tmp_path / "render" / "architecture.html"
+    assert html_path.is_file()
+    document = html_path.read_text(encoding="utf-8")
+    assert 'class="diagram"' in document
+    assert 'class="diagram-zoom-in"' in document
+    assert "<script src=" not in document
+    assert "cdn.jsdelivr.net" not in document
+    # M-6: the title carries the real module id, not a placeholder — two
+    # modules rendered in the same browser session must be distinguishable
+    # by their tab.
+    assert "<title>Sextant — com.acme:orders-service</title>" in document
+
+
+def test_rendering_the_same_workspace_twice_writes_a_byte_identical_html_document(
+    tmp_path: Path,
+):
+    """NFR-1's amendment note (2K design §8): re-running render over the same
+    workspace and the same (absent) overlay produces the same bytes — nothing
+    in the HTML path reads a clock or a dict in insertion-unstable order
+    either."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
+    html_path = tmp_path / "render" / "architecture.html"
+    assert (
+        runner.invoke(
+            cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    first = html_path.read_bytes()
+    assert (
+        runner.invoke(
+            cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    second = html_path.read_bytes()
+    assert first == second
+
+
+def test_export_carries_both_rendered_documents_into_the_bundle(tmp_path: Path):
+    """The bundle carries what `render` already wrote (2K design §6b) — copied
+    verbatim rather than re-rendered, so the bundle and the workspace can
+    never disagree about what a reader saw."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    bundle = Path(result.output.strip())
+    assert (bundle / "render" / "architecture.md").read_bytes() == (
+        tmp_path / "render" / "architecture.md"
+    ).read_bytes()
+    assert (bundle / "render" / "architecture.html").read_bytes() == (
+        tmp_path / "render" / "architecture.html"
+    ).read_bytes()
+    # The manifest declares what it shipped (2K Task 8 review, D06 §3):
+    # `render/` joins `facts`/`graph`/`tables`/`facts_files` as content the
+    # manifest names rather than leaves for a consumer to discover by
+    # listing the bundle itself.
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["contents"]["render"] == ["architecture.md", "architecture.html"]
+
+
+def test_export_without_a_prior_render_carries_no_render_directory(tmp_path: Path):
+    """`render` is not a prerequisite for `export` (M08: export only ever
+    reads what `analyze` left) — a workspace that skipped it must still
+    export cleanly, exactly as it did before this task."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    bundle = Path(result.output.strip())
+    assert not (bundle / "render").exists()
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["contents"]["render"] == []
+
+
 def test_render_exits_nonzero_with_a_message_when_no_workspace_exists(tmp_path: Path):
     result = CliRunner().invoke(
         cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
     )
     assert result.exit_code != 0
     assert "module analyze" in result.output
+
+
+def test_re_analyzing_clears_a_stale_rendered_document(tmp_path: Path):
+    """2K Task 8 review (Task 4's own review flagged the gap): `analyze`
+    never otherwise touches `render/` — that is `render`'s own output — so
+    a workspace re-analyzed after its code changed would, without this,
+    still carry the OLD `architecture.md`/`.html` on disk. Worse, `enrich`'s
+    own "no rendered document" refusal reads `render/architecture.md`'s
+    mere presence, so a stale render would let `enrich` compose a brief
+    from a document describing code that no longer exists rather than
+    guiding the user back to `render` first."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    assert (tmp_path / "render" / "architecture.md").is_file()
+
+    assert (
+        runner.invoke(
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    assert not (tmp_path / "render").exists()
+
+    # `enrich` reads render/architecture.md's presence to decide whether it
+    # can compose a brief at all — with the stale directory gone, it refuses
+    # loudly and names `render`, exactly as it does for a workspace that was
+    # never rendered at all.
+    result = runner.invoke(
+        cli, ["module", "enrich", str(FIXTURE), "--workspace", str(tmp_path), "--dry-run"]
+    )
+    assert result.exit_code != 0
+    assert "sextant module render" in result.output
 
 
 def test_render_names_the_catalog_and_capability_analyze_skipped(tmp_path: Path):
@@ -368,3 +526,105 @@ def test_a_malformed_sextant_yml_is_reported_as_a_message_not_a_stack_trace(tmp_
     assert "extract_libaries" in result.output
     assert "extract_libraries" in result.output
     assert "Traceback" not in result.output
+
+
+def test_a_malformed_overlay_is_reported_as_a_message_not_a_stack_trace(tmp_path: Path):
+    """The overlay is a program artifact (2K design §6), so a malformed one is
+    Sextant's own output written wrong — but the person who has to act on it
+    is still the one running the command, and a traceback would report it as a
+    crash in the tool. The message names the file and the offending field.
+
+    Written into its own directory, never the fixture: the fixture ships a
+    VALID golden overlay that the rest of the suite pins, and a broken one
+    left beside it would follow every other test around.
+
+    The workspace here is a stand-in — the overlay is read BEFORE the database
+    is opened, so a render that refuses one never touches it. That ordering is
+    the point: an overlay that cannot be validated is not a document to render
+    half of."""
+    module = tmp_path / "module"
+    module.mkdir()
+    (module / ".sextant-enrichment.json").write_text(
+        '{"produced_by": {}, "claims": []}', encoding="utf-8"
+    )
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "metadata.json").write_text(
+        json.dumps({"module": {"id": "a:module", "kind": "service", "languages": ["java"]}}),
+        encoding="utf-8",
+    )
+    (workspace / "workspace.duckdb").write_bytes(b"")
+
+    result = CliRunner().invoke(
+        cli, ["module", "render", str(module), "--workspace", str(workspace)]
+    )
+
+    assert result.exit_code == 1
+    assert ".sextant-enrichment.json is not a valid overlay" in result.output
+    assert "instructions_hash" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_a_redaction_rule_that_breaks_a_claim_is_a_message_at_the_render_exit(tmp_path: Path):
+    """The third refusal in this family (2K Task 3 review): a `.sextant.yml`
+    whose `redact:` widens far enough to eat a claim's own required fields.
+    It cannot be caught at load — the rule set is valid, the overlay is valid,
+    and only the two MEETING at the exit fails — so it surfaces where it
+    happens, as a message naming the claim rather than a traceback.
+
+    The module root here carries only the two files that decide the outcome —
+    the widened `redact:` and a copy of the fixture's own golden overlay —
+    while the graph is the fixture's, analysed once. `render` reads its rows
+    from `--workspace` and its configuration from the module path, so the two
+    can legitimately be different directories, and this is the cheapest way to
+    put a real claim in front of a pathological rule."""
+    workspace = tmp_path / "ws"
+    analyzed = CliRunner().invoke(
+        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(workspace)]
+    )
+    assert analyzed.exit_code == 0, analyzed.output
+
+    module = tmp_path / "module"
+    module.mkdir()
+    (module / ".sextant-enrichment.json").write_text(
+        (FIXTURE / ".sextant-enrichment.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (module / ".sextant.yml").write_text(
+        "redact:\n  value_patterns:\n    - llm\n", encoding="utf-8"
+    )
+
+    result = CliRunner().invoke(
+        cli, ["module", "render", str(module), "--workspace", str(workspace)]
+    )
+
+    assert result.exit_code == 1
+    assert "a redaction rule rewrote enrichment claim 0" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_a_missing_home_directory_is_reported_as_a_message_not_a_stack_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`ToolExecutor.__init__` (2K Task 7 fix round 3) calls `Path.home()`,
+    which raises `RuntimeError` — not `ValueError` — when no home directory
+    can be resolved (a container image with no `HOME` set, above all). Before
+    2K Task 8's review, `_tool_executor_for` caught `ValueError` alone, so
+    this would have escaped as an uncaught crash rather than reaching the
+    operator as the same kind of message every other jail-construction
+    refusal already gets.
+
+    A direct unit test of `_tool_executor_for` rather than a full `module
+    enrich` invocation: the jailed roots just need to exist and sit under
+    the repository root `IgnoreRules.load` reads, which `tmp_path` alone
+    already satisfies — no fixture compile required."""
+    (tmp_path / "facts").mkdir()
+    (tmp_path / "render").mkdir()
+
+    def _no_home() -> Path:
+        raise RuntimeError("could not determine the user's home directory")
+
+    monkeypatch.setattr(Path, "home", staticmethod(_no_home))
+
+    with pytest.raises(click.ClickException) as excinfo:
+        _tool_executor_for(tmp_path, tmp_path, Redactor.from_rules())
+    assert "could not determine the user's home directory" in str(excinfo.value)

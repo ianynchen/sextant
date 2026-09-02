@@ -8,6 +8,7 @@ from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve.pipeline import ResolveReport, resolve
 from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.domain.factfile import config_fact_target, write_fact_file
+from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import list_files
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.extract.jvm.scanner import AsmScanner
@@ -52,7 +53,8 @@ def resolved_fixture(
     # the compile/scan/resolve above it.
     root = FIXTURE / "src" / "main" / "resources"
     for reader, owned in group_files_by_reader(
-        list_files(root), [PropertiesReader(), YamlConfigReader()]
+        list_files(root, FIXTURE, IgnoreRules.load(FIXTURE)),
+        [PropertiesReader(), YamlConfigReader()],
     ):
         request = ReadRequest(
             module_id="com.acme:orders-service", version="1.0.0", files=owned, root=root

@@ -9,6 +9,28 @@
 orders:
   audit:
     topic: audit-events
+  # Two planted FAKE credentials — the live redaction pins (2K design §1).
+  # Neither is read by any code in this fixture; they exist so that a value a
+  # rule names travels the whole pipeline and can be checked where it comes
+  # out. `resolve_config` writes every declared key, so both reach
+  # `resolved_config` and therefore the export exit.
+  #
+  #   * `db.password` is matched by a BUILT-IN key pattern (`password`), so it
+  #     masks in a module that adds no rules at all.
+  #   * `internal.dsn` is matched by nothing built in — it is the pin for
+  #     `.sextant.yml`'s `redact:` addition beside this file, and it would
+  #     export verbatim if that section stopped being read. Deliberately NOT
+  #     written as a `scheme://user:pass@host` URL: userinfo stripping would
+  #     then mask the credential on its own and the repo addition would prove
+  #     nothing.
+  #
+  # `soap.billing.uri` below is the negative half of the same pin: an address
+  # no rule names, which must stay verbatim everywhere. A redactor that masked
+  # it would be indistinguishable in a diff from one that works.
+  db:
+    password: hunter2-fixture
+  internal:
+    dsn: host=db.internal;port=5432;database=orders;user=orders;pw=hunter2-fixture
 
 # billing.url — read by all three BillingClients half-2 clients (field
 # @Value, constructor @Value, @ConfigurationProperties). This is the

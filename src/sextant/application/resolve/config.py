@@ -64,6 +64,11 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 
+# The relaxed-binding rule this pass has always used, now in `domain` because
+# 2K's redactor needs the same one and cannot import this module — see
+# `domain/config_keys.py`. Moved, not copied.
+from sextant.domain.config_keys import normalize_key
+
 # D01's closed five-value unresolved-reason set. `multi_placeholder` is
 # listed for completeness only — this pass, by design, never emits it.
 UNRESOLVED_REASONS = (
@@ -75,16 +80,6 @@ UNRESOLVED_REASONS = (
 )
 
 _DEFAULT_PLACEHOLDERS = {"open": "${", "close": "}", "default_separator": ":"}
-
-
-def normalize_key(key: str) -> str:
-    """Spring's own RELAXED binding rule (D02 §2i's `key_matching: relaxed`):
-    case-insensitive, with `-` and `_` stripped, so kebab-case, camelCase and
-    `ENV_VAR` spellings of one key compare equal. A pure function so Task 8's
-    field ladder (2F design §4's `@ConfigurationProperties(prefix)` rung)
-    can reuse the exact same rule this pass uses for `${...}` references,
-    rather than a second, drifting copy of Spring's binding grammar."""
-    return key.lower().replace("-", "").replace("_", "")
 
 
 def resolve_config(workspace: Workspace, catalogs: list[Catalog]) -> None:

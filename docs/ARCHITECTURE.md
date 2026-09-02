@@ -48,6 +48,11 @@ Sextant never calls a language model. The overlay skill runs outside it, under t
 own model and subscription, and its output re-enters as validated overlay files. See
 [DR-2](#dr-2--no-language-model-inside-sextant).
 
+> **Amendment (2026-09-02, Phase 2K design §8 — approved, delivered).** The diagram and
+> paragraph above predate `enrich`, which is now the one call in the whole codebase that
+> breaks the "never calls a language model" statement — see DR-2's own amendment for the
+> current shape (an adapter behind a port, inside Sextant's process, not an external skill).
+
 ## 3. Containers
 
 ```mermaid
@@ -470,6 +475,38 @@ rather than most of it. Full documentation takes two commands rather than one. B
 overlay may name only symbols that exist, invention is prevented structurally rather than
 detected afterwards — an unvalidated inference stage will eventually report boundaries that
 exist in no code, and validation-by-construction is the only check that cannot be forgotten.
+
+> **Amendment (2026-09-02, Phase 2K design §8 — approved, delivered).** The deterministic
+> pipeline — `analyze`, `resolve`, `render`, `export` — still never calls a model, and stays
+> under [NFR-1](REQUIREMENTS.md#nfr-1--determinism) in full. `enrich` is the **one sanctioned
+> caller**, added behind a new port (`application/ports/enrichment.py`'s `EnrichmentAgent`),
+> never called from anywhere else in the pipeline. This replaces the external-skill design
+> above, not merely extends it: there is no skill running outside Sextant under the user's
+> own subscription any more — the call happens inside Sextant's own process, through an
+> adapter (`claude-api` in v1, one file, import-confined to it by a structural test), gated
+> by `ANTHROPIC_API_KEY` read from the environment alone. What DR-2 protected survives
+> unchanged: no invention (the overlay is validated by construction exactly as before,
+> `application/enrich/validate.py`), no provider dependency tree in the deterministic core
+> (the adapter lives in its own outer group, `src/sextant/agents/`, importing no other outer
+> group), model churn decoupled from releases (a registry-keyed `--agent`, `--model` passed
+> verbatim). `--dry-run`/`--ingest` remain the universal door DR-2's original external-skill
+> shape argued for: a human, Codex, Cursor or any other agent can still answer the brief
+> under its own permissions, entirely outside Sextant's process. See
+> [D04](components/D04-config-and-exclusion.md) §4b for the port, the adapter, the jail and
+> the two doors in full, and [D06](components/D06-bundle-format.md) §2 for what the
+> enrichment call actually produces in the rendered outputs.
+
+> **Amendment (2026-09-02, Phase 2K design §8 — approved, delivered), on
+> [NFR-1](REQUIREMENTS.md#nfr-1--determinism).** Only the model call inside `enrich` itself is
+> excluded from determinism — everything around it stays byte-deterministic: the brief
+> composed for a given workspace, the validation a returned answer is checked against, and
+> the assembly that interleaves a written overlay into the rendered document. Same workspace
+> plus same `.sextant-enrichment.json` produces the same `architecture.md`/`architecture.html`
+> every time, whether that overlay came from a live agent run, `--ingest`, or was committed by
+> a person editing nothing — `render`, re-run standalone over a workspace with an overlay
+> already on disk, takes the identical code path `enrich`'s own auto-assembly does, so the two
+> can never disagree. See [REQUIREMENTS.md](REQUIREMENTS.md#nfr-1--determinism) for the
+> requirement text with the same note.
 
 ### DR-3 — Three trust concepts rather than one confidence score
 

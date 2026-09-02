@@ -4,6 +4,7 @@ from pathlib import Path
 
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.pipeline import ResolveReport
+from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.render.document import _GAPS, render_module_document
 from sextant.egress.render.metadata import KNOWN_GAPS, write_metadata
 
@@ -932,3 +933,83 @@ def test_metadata_keeps_the_two_library_gap_lists_apart(tmp_path: Path):
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["libraries_not_resolved"] == ["com.example:missing: no such dependency"]
     assert written["libraries_not_scanned"] == ["com.example:broken: unreadable"]
+
+
+def test_the_document_strips_url_userinfo_from_both_address_columns():
+    """The render exit (2K design §1). A rendered document is shared — pasted
+    into a ticket, committed beside the code — so the two columns that can
+    carry a whole address carry it without its credential. `path` reaches the
+    Endpoint column through `_wire_identity`; `peer` is its own cell, and both
+    are the same 2I unsplit-expression shape."""
+    report = replace(
+        REPORT,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": "https://svc:s3cret@billing.internal/invoices",
+                "handler": None,
+                "caller": "s maven c 1 com/acme/BillingClient#invoices().",
+                "peer": "https://svc:s3cret@billing.internal",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            }
+        ],
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "s3cret" not in text
+    assert "`GET https://billing.internal/invoices`" in text
+    assert "| https://billing.internal |" in text
+
+
+def test_the_document_leaves_an_address_expression_exactly_as_the_row_carries_it():
+    """The negative half, and the 2I ruling restated: a `${...}` peer is a
+    REFERENCE to a value, never the value, so there is nothing in it to mask —
+    and masking it would delete the only thing the row says about where it
+    points."""
+    report = replace(
+        REPORT,
+        endpoints=[
+            {
+                "protocol": "soap",
+                "direction": "outbound",
+                "method": None,
+                "path": "{http://orders.example.com/ws}placeOrderRequest",
+                "handler": None,
+                "caller": "s maven c 1 com/acme/BillingSoapClient#place().",
+                "peer": "${soap.billing.uri}",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            }
+        ],
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| ${soap.billing.uri} |" in text
+    assert "`soap {http://orders.example.com/ws}placeOrderRequest`" in text
+
+
+def test_a_repo_value_pattern_reaches_the_rendered_addresses_too():
+    """`.sextant.yml`'s additions are not export-only: the composition root
+    hands the SAME redactor to both exits, so a repo that knows the shape of
+    its own secrets is protected in the document it shares as well as in the
+    bundle it ships."""
+    report = replace(
+        REPORT,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": "/v1/invoices?key=ACME_A1B2",
+                "handler": None,
+                "caller": "s maven c 1 com/acme/BillingClient#invoices().",
+                "peer": "billing.internal",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            }
+        ],
+    )
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=(r"ACME_[A-Z0-9]{4}",)))
+    text = render_module_document(MODULE, report, "a3f91c", redactor=redactor)
+    assert f"`GET /v1/invoices?key={REDACTED}`" in text

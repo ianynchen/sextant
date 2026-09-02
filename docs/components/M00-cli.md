@@ -40,7 +40,7 @@ Every command is *noun, verb, subject, options*.
 
 | Noun | Verbs |
 |---|---|
-| `module` | `analyze` `list` `status` `render` `export` `clean` |
+| `module` | `analyze` `list` `status` `render` `enrich` `export` `clean` |
 | `system` | `analyze` `status` `render` `clean` |
 | `symbol` | `find` `source` `callers` `callees` `implementations` `uses` `impact` `path` |
 | `endpoint` | `list` `find` `match` `trace` |
@@ -64,6 +64,18 @@ side effect out of a module.
 
 Pipeline stages are internal. `--from-stage` and `--to-stage` exist for debugging and are
 not part of the surface.
+
+### `module enrich` (2K design §3/§8)
+
+Requires a rendered workspace — refused, loudly, naming `render`, before composing anything,
+if `render/architecture.md` is absent (an unrendered analysis, or one whose render went
+stale after a re-analyze). Given one, it composes the brief, runs the requested `--agent`
+through the `EnrichmentAgent` port or takes the `--dry-run`/`--ingest` door instead
+([D04](D04-config-and-exclusion.md) §4b), validates the answer by construction, writes
+`.sextant-enrichment.json` at the module root, and **assembles both rendered outputs
+itself** — there is no second render command; `render`, run again later over a workspace
+that already carries an overlay, takes the identical assembly path and reproduces the same
+documents.
 
 ### Addressing
 

@@ -235,6 +235,24 @@ Independently, Sextant redacts values matching configured patterns at the moment
 are produced, so that a secret appearing inside a file that is otherwise analysed never
 reaches storage.
 
+> **Amendment (2026-09-02, Phase 2K design §2 — approved, Task 2 delivered).** The
+> exclusion list is a single **root-level** `.sextantignore` — not the cascading,
+> nearest-file-wins behaviour version-control ignore files have when nested; a
+> per-directory file is a stated fast-follow, not read today. Every pattern in it is
+> matched against a path relative to the repository root, whatever resource or schema
+> root a given walk started from. Underneath it, a fixed, **non-negatable** built-in
+> pattern set (`domain/ignorefile.py`'s `BUILTIN_PATTERNS`) always applies — a repository
+> `.sextantignore` cannot re-admit a file the built-ins exclude, only widen exclusion
+> further among its own patterns. See [D04](components/D04-config-and-exclusion.md) §3
+> for the full amendment, including the built-in set itself.
+
+> **Amendment (2026-09-02, Phase 2K design §1 — approved).** Redaction runs at the
+> **exits** — the rendered document, the exported bundle, and the enrichment tools' read
+> path — not at fact production. Masking values on the way in would empty the very table
+> the endpoint catalog resolves addresses against; the workspace is the analyst's own disk
+> and is not the trust boundary. See [D04](components/D04-config-and-exclusion.md) §4 for
+> the full amendment, including what is not yet covered.
+
 ### FR-20 — Command surface
 
 Every command takes the form *noun, verb, subject, options*. Subjects may be named
@@ -254,6 +272,18 @@ part of Sextant's output depends on a non-deterministic source.
 across repeated runs on fixed example repositories. The workspace database file itself is
 not byte-compared — no embedded database guarantees file-level stability — so its
 determinism is verified by comparing its exported tables instead.*
+
+> **Amendment (2026-09-02, Phase 2K design §8 — approved, delivered).** `sextant module
+> enrich` calls a language model, and that one call is the sole exclusion from this
+> requirement in the entire product. Everything else `enrich` does stays byte-deterministic:
+> the brief composed from a workspace, the validation an agent's (or `--ingest`'s) answer is
+> checked against, and the assembly that interleaves a written `.sextant-enrichment.json`
+> into `architecture.md`/`architecture.html`. Same workspace plus the same overlay produces
+> the same rendered documents on every run — `render`, invoked standalone over a workspace
+> with an overlay already on disk, takes the identical assembly code path `enrich`'s own
+> auto-render does, so the two outputs can never disagree. See
+> [ARCHITECTURE.md](ARCHITECTURE.md#dr-2--no-language-model-inside-sextant) DR-2's own
+> amendment for the port and adapter this call runs behind.
 
 ### NFR-2 — Honest failure
 
@@ -316,6 +346,13 @@ any fact, workspace, export, or rendered document.
 
 *Redaction occurs before anything reaches storage, because a value already written cannot
 be withdrawn from artifacts already distributed.*
+
+> **Amendment (2026-09-02, Phase 2K design §1 — approved).** The guarantee is scoped to
+> what **leaves**: the export and the rendered document, plus the enrichment tools' read
+> path. Facts and the workspace hold values verbatim, because resolution needs them and
+> the local disk is not the boundary — and because a value masked on the way in cannot be
+> resolved on the way out either. What a bundle was masked with is recorded on it
+> (`producer.redaction_set_hash`), so the claim is checkable rather than assumed.
 
 ### NFR-9 — Extension without modification
 

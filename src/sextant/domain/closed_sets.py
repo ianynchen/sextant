@@ -110,6 +110,28 @@ class Format(StrEnum):
 RESERVED_FORMATS = frozenset({"json_schema"})
 
 
+class Anchor(StrEnum):
+    """Where render is allowed to place an enrichment claim (2K design §6).
+
+    Not a D00 §4 fact-stream set like the rest of this module — an anchor is a
+    position in a rendered document, and it is the DOCUMENT that says which
+    positions exist. It lives here anyway, and deliberately: NFR-5's rule is
+    that a closed set has exactly one definition, and
+    `test_closed_sets_are_defined_only_where_the_schema_defines_them` enforces
+    that by file. A second home for closed sets would make the rule a
+    convention again.
+
+    Adding a value here is half a change: the other half is a placement rule
+    in `egress/render/document.py`'s `_Anchors`, without which render has an
+    anchor it cannot put anywhere.
+    """
+
+    AFTER_ENDPOINT_TABLE = "after-endpoint-table"
+    AFTER_COMPONENT_OVERVIEW = "after-component-overview"
+    BESIDE_OPEN_QUESTION = "beside-open-question"
+    END_OF_DOCUMENT = "end-of-document"
+
+
 _RANKS = {Evidence.HUMAN: 90, Evidence.LLM: 10}
 _CODE_DERIVED_RANK = 50
 

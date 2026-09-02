@@ -54,6 +54,15 @@ Module scope: the module architecture document, class diagrams, sequence diagram
 [D05](D05-manifest-and-state.md), so it can never be absent or stale when only analysis
 ran.)
 
+> **Amendment (2026-09-02, Phase 2K design §6b — approved, delivered).** Module scope now
+> writes the document TWICE — `architecture.md` (Mermaid fences, unchanged) and
+> `architecture.html`, the same assembled sections through one templated HTML emitter
+> (`egress/render/html.py`), self-contained and offline (a pinned, vendored `mermaid.min.js`,
+> a small pan-zoom script of Sextant's own). Same workspace and overlay produce byte-identical
+> bytes in both. `enrich` writes both itself as its own final step (2K design §8: "no second
+> render command"); a standalone `render` over a workspace an overlay is already sitting
+> beside reproduces the identical pair.
+
 System scope: the system architecture document, the service map, cross-service sequence
 diagrams, contract diagrams.
 
@@ -76,7 +85,7 @@ here; each is either derived now or carries its gap by name:
 | Inbound endpoints — contract field tables per endpoint | endpoints + descriptors + shapes | **built in 2B** |
 | Inbound endpoints — sequence diagram per endpoint | `edges` with control-flow, `dispatch`, `trace_of` | named gap `sequence_diagrams_pending_call_graph`; call-site/call-graph phases |
 | Outbound endpoints | 2B's rows | **built in 2B** |
-| Components, descriptions, algorithm design, extension guides | LLM-authored via overlay (M01), `evidence: llm` | later phase |
+| Components, descriptions, algorithm design, extension guides | LLM-authored via overlay, `evidence: llm` | **delivered, 2K** — not via M01: `.sextant-enrichment.json` ([D04](D04-config-and-exclusion.md) §4b, [ARCHITECTURE.md](../ARCHITECTURE.md) DR-2's amendment), a closed, pydantic-validated claim schema `enrich` writes and this renderer's own assembly (`egress/render/document.py`) interleaves at fixed anchors, never through M01's `Overlay` port |
 
 **A section whose machinery does not exist is never rendered empty.** It is named as a gap
 instead — the same NFR-7 corollary the rest of this document argues from: an empty section

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
-from sextant.application.resolve.config import normalize_key, resolve_config
+from sextant.application.resolve.config import resolve_config
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import ConfigEntryFact, Document
@@ -360,13 +360,6 @@ def test_running_resolve_config_twice_leaves_the_same_row_count(tmp_path: Path):
 
 
 # --- key_matching: relaxed and exact ---------------------------------------
-
-
-def test_normalize_key_strips_case_dash_and_underscore():
-    """Exported for reuse (2F design §4's field ladder, Task 8) — a pure
-    function, not a method on anything, so it can be imported without
-    pulling in the rest of this pass."""
-    assert normalize_key("my-key") == normalize_key("MY_KEY") == normalize_key("myKey")
 
 
 def test_relaxed_key_matching_resolves_a_placeholder_spelled_differently(tmp_path: Path):

@@ -2,6 +2,9 @@ from pathlib import Path
 
 import duckdb
 
+from sextant.domain.factfile import redact_config_entry_line
+from sextant.domain.redaction import Redactor
+
 _SQL_DIR = Path(__file__).parent
 
 _NAMED_QUERIES = {
@@ -193,6 +196,15 @@ _NAMED_QUERIES = {
         SELECT symbol, enclosing, signature FROM symbols
         WHERE construct_kind = 'constructor' ORDER BY symbol
     """,
+    # Every declared symbol, whatever its construct kind — the one thing
+    # `application/enrich/validate.py` needs to answer "does this exist?" about
+    # a member a claim names or a node a diagram draws (2K design §6). The
+    # kind-filtered queries above cannot serve it: a component's members are
+    # types, methods and fields together, and asking three queries to rebuild
+    # one set would make the answer depend on which kinds were remembered.
+    # One column, because existence is the whole question. Ordered by symbol
+    # for NFR-1, like every other projection here.
+    "declared_symbols": "SELECT symbol FROM symbols ORDER BY symbol",
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
@@ -338,9 +350,11 @@ _NAMED_QUERIES = {
 # The tables a bundle carries (D06 §5). `documents`, `endpoints`,
 # `resolved_config`, `shapes`, `shape_fields`, `call_sites` and
 # `open_questions` (2G Task 8) export through their named query, so the row
-# order is the one NFR-1 already fixed; `symbols` and `annotations` have no
-# named query and export through their own ordered SELECT below, for the same
-# reason. Sorted by name so the manifest's contents list is deterministic too.
+# order is the one NFR-1 already fixed; `symbols` and `annotations` export
+# through their own ordered SELECT below, for the same reason — `symbols` has
+# no whole-row named query to reuse (`declared_symbols` above projects the one
+# column existence checking needs, not the table). Sorted by name so the
+# manifest's contents list is deterministic too.
 _EXPORTED_TABLES = (
     "annotations",
     "call_sites",
@@ -353,19 +367,88 @@ _EXPORTED_TABLES = (
     "symbols",
 )
 
+# What the export PROJECTION masks (2K design §1) — five tables plus the fact
+# stream, each named where its own query below says why: `endpoints.path`/
+# `.peer` and `open_questions.path` (the address columns), `resolved_config`'s
+# `value` (the key-pattern rule), the JSON in `call_sites.arguments` and
+# `annotations.args` (userinfo over every string leaf), and `config_entry` fact
+# payloads on their way into the bundle's parquet (`_stage_fact_redactions`).
+# The masking is here and only here: the workspace itself keeps verbatim values,
+# because analysis needs them — peer resolution substitutes real addresses —
+# and the user's own disk is not the trust boundary. The bundle is.
+#
+# The mechanism is a LEFT JOIN against a staged substitution table, not a
+# scalar function: DuckDB's Python UDFs require numpy, which is not a
+# dependency here, and restating the redactor's rules as SQL would be a second
+# copy of `domain/redaction.py` drifting beside the first. `_stage_redactions`
+# computes the masked strings in Python, through the one redactor, and stages
+# only the ones that actually change; `coalesce` leaves every other value
+# exactly as the table holds it, byte for byte.
+_REDACTED_CONFIG_VALUES = "redacted_config_values"
+_REDACTED_ADDRESSES = "redacted_addresses"
+_REDACTED_JSON = "redacted_json"
+_REDACTED_PAYLOADS = "redacted_payloads"
+
 _EXPORT_QUERIES = {
     "documents": _NAMED_QUERIES["documents"],
-    "endpoints": _NAMED_QUERIES["endpoints"],
-    "open_questions": _NAMED_QUERIES["open_questions"],
-    "resolved_config": _NAMED_QUERIES["resolved_config"],
+    # `path` and `peer` are the columns that can carry a whole address (D01
+    # §3, 2I's unsplit-expression ruling), so they carry URL userinfo too.
+    # Ordered on the table's own columns — `e.path`, not the projected alias —
+    # so masking a row cannot reorder the file (NFR-1).
+    "endpoints": f"""
+        SELECT e.* REPLACE (coalesce(p.masked, e.path) AS path,
+                            coalesce(q.masked, e.peer) AS peer)
+        FROM endpoints e
+        LEFT JOIN {_REDACTED_ADDRESSES} p ON p.address = e.path
+        LEFT JOIN {_REDACTED_ADDRESSES} q ON q.address = e.peer
+        ORDER BY e.protocol, e.method, e.path, e.handler, e.caller
+    """,
+    # The ledger carries the SAME `path` an endpoint row does — it is keyed on
+    # a wire identity — so it masks by the same map. Render and export must
+    # agree about one address: a question rendered against a stripped address
+    # and exported against a bare one names two different rows.
+    "open_questions": f"""
+        SELECT o.protocol, o.method, coalesce(a.masked, o.path) AS path, o.question,
+               o.candidates, o.evidence
+        FROM open_questions o
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = o.path
+        ORDER BY o.protocol, o.method, o.path, o.question, o.candidates::VARCHAR, o.evidence
+    """,
+    # The live exposure 2K closes: this table's `value` column exported
+    # verbatim. Joined on (key, value) rather than key alone because one key
+    # resolves to different values in different environments, and the mask a
+    # key pattern produces is the same either way only by coincidence — a
+    # value pattern's is not.
+    "resolved_config": f"""
+        SELECT c.key, coalesce(m.masked, c.value) AS value, c.source, c.environment,
+               c.unresolved_reason
+        FROM resolved_config c
+        LEFT JOIN {_REDACTED_CONFIG_VALUES} m ON m.key = c.key AND m.value = c.value
+        ORDER BY c.environment, c.key
+    """,
     "shapes": _NAMED_QUERIES["shapes"],
     "shape_fields": _NAMED_QUERIES["shape_fields"],
-    "call_sites": _NAMED_QUERIES["call_sites"],
+    # `arguments` and `args` carry JSON the analysis read out of code, and a
+    # hardcoded `https://user:pass@host` literal lands in one whole. They pass
+    # `redact_json` — userinfo stripping over every string leaf — and NOT the
+    # key-based rule: a call argument is not a configuration key, and the path
+    # and URL literals in one ARE the wire identities the linking tier matches
+    # services on (2K Task 1 review, ruled). Joined on the column's own
+    # canonical JSON text, which is what `_stage_redactions` staged.
+    "call_sites": f"""
+        SELECT c.* REPLACE (coalesce(j.masked::JSON, c.arguments) AS arguments)
+        FROM call_sites c
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = c.arguments::VARCHAR
+        ORDER BY c.caller, c.ordinal
+    """,
     "symbols": "SELECT * FROM symbols ORDER BY symbol",
-    "annotations": (
-        "SELECT target, annotation, args, type_path, retention "
-        "FROM annotations ORDER BY target, annotation, type_path"
-    ),
+    "annotations": f"""
+        SELECT a.target, a.annotation, coalesce(j.masked::JSON, a.args) AS args,
+               a.type_path, a.retention
+        FROM annotations a
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = a.args::VARCHAR
+        ORDER BY a.target, a.annotation, a.type_path
+    """,
 }
 
 _NAMED_DERIVATIONS = {
@@ -426,36 +509,161 @@ class DuckDbWorkspace:
         columns = [column[0] for column in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-    def export_tables(self, destination: Path) -> list[str]:
+    def export_tables(self, destination: Path, redactor: Redactor) -> list[str]:
         graph = destination / "graph"
         graph.mkdir(parents=True, exist_ok=True)
-        for name in _EXPORTED_TABLES:
-            sql = _EXPORT_QUERIES[name]
-            self._connection.execute(
-                f"COPY ({sql}) TO ? (FORMAT parquet, COMPRESSION zstd)",
-                [str(graph / f"{name}.parquet")],
-            )
+        self._stage_redactions(redactor)
+        try:
+            for name in _EXPORTED_TABLES:
+                sql = _EXPORT_QUERIES[name]
+                self._connection.execute(
+                    f"COPY ({sql}) TO ? (FORMAT parquet, COMPRESSION zstd)",
+                    [str(graph / f"{name}.parquet")],
+                )
+        finally:
+            self._drop_staged(_REDACTED_CONFIG_VALUES, _REDACTED_ADDRESSES, _REDACTED_JSON)
         return list(_EXPORTED_TABLES)
 
-    def export_facts(self, destination: Path) -> int:
-        rows = self._connection.execute(
-            "SELECT DISTINCT document_id FROM raw_facts ORDER BY document_id"
+    def _drop_staged(self, *names: str) -> None:
+        """Dropped rather than left behind: these hold the very values the
+        export exists to keep out of a bundle, and a workspace reused by a
+        later command has no business carrying them."""
+        for staged in names:
+            self._connection.execute(f"DROP TABLE IF EXISTS {staged}")
+
+    def _stage_map(self, name: str, columns: str, rows: list[tuple[str, ...]]) -> None:
+        """One substitution table, holding only the rows that actually CHANGE.
+        An ordinary module stages nothing at all, which is what makes the join
+        free where there is nothing to mask and keeps every unmatched value
+        byte-identical to what the table holds."""
+        self._connection.execute(f"CREATE OR REPLACE TEMP TABLE {name}({columns})")
+        if rows:
+            placeholders = ", ".join("?" for _ in rows[0])
+            self._connection.executemany(f"INSERT INTO {name} VALUES ({placeholders})", rows)
+
+    def _stage_redactions(self, redactor: Redactor) -> None:
+        """The masked strings the export projections join against — computed
+        in Python, through the one redactor, over the DISTINCT values the
+        masked columns hold (a value repeated across environments, or a JSON
+        argument list repeated across call sites, is redacted once, not once
+        per row)."""
+        config_rows = self._connection.execute(
+            "SELECT DISTINCT key, value FROM resolved_config WHERE value IS NOT NULL"
         ).fetchall()
-        for (document_id,) in rows:
-            target = destination / "facts" / f"{document_id}.parquet"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            # Two bound values, not one: DuckDB's `?` positional binding does
-            # not carry through a COPY statement's TO clause when the query
-            # it wraps also binds a `?` (reproduced against duckdb 1.5.5) —
-            # `$1`/`$2` does. `?` still covers the single-parameter case in
-            # export_tables above.
-            self._connection.execute(
-                "COPY (SELECT kind, document_id, payload FROM raw_facts "
-                "WHERE document_id = $1 ORDER BY rowid) "
-                "TO $2 (FORMAT parquet, COMPRESSION zstd)",
-                [document_id, str(target)],
-            )
-        return len(rows)
+        self._stage_map(
+            _REDACTED_CONFIG_VALUES,
+            "key VARCHAR, value VARCHAR, masked VARCHAR",
+            [
+                (str(key), str(value), masked)
+                for key, value in config_rows
+                if (masked := redactor.redact_value(str(key), str(value))) != str(value)
+            ],
+        )
+
+        # `open_questions` is unioned in with the endpoint columns because it
+        # is keyed on a wire identity and carries the same `path` — one map,
+        # so a question and the row it asks about cannot mask differently.
+        address_rows = self._connection.execute(
+            "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
+            "UNION SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL "
+            "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL"
+        ).fetchall()
+        self._stage_map(
+            _REDACTED_ADDRESSES,
+            "address VARCHAR, masked VARCHAR",
+            [
+                (str(address), masked)
+                for (address,) in address_rows
+                if (masked := redactor.redact_text(str(address))) != str(address)
+            ],
+        )
+
+        json_rows = self._connection.execute(
+            "SELECT DISTINCT arguments::VARCHAR AS original FROM call_sites "
+            "WHERE arguments IS NOT NULL "
+            "UNION SELECT DISTINCT args::VARCHAR FROM annotations WHERE args IS NOT NULL"
+        ).fetchall()
+        self._stage_map(
+            _REDACTED_JSON,
+            "original VARCHAR, masked VARCHAR",
+            [
+                (str(original), masked)
+                for (original,) in json_rows
+                if (masked := redactor.redact_json(str(original))) != str(original)
+            ],
+        )
+
+    def export_facts(self, destination: Path, redactor: Redactor) -> int:
+        """The bundle's fact files, with `config_entry` payload VALUES masked
+        on the way out (2K Task 1 review, ruled): everything that LEAVES is
+        masked, and a bundle carrying `graph/resolved_config.parquet` masked
+        beside a `facts/` holding the same values in the clear masks nothing.
+
+        The **local** fact files under the workspace are untouched, and so is
+        `raw_facts` — the same verbatim-workspace rule the graph tables keep.
+        Hence the two hashes a bundle carries, which describe two different
+        moments: a document's own `redaction_set_hash` stays `sha256:none`
+        because nothing was applied when those facts were READ, and the
+        manifest's names the set that masked THIS bundle."""
+        self._stage_fact_redactions(redactor)
+        try:
+            rows = self._connection.execute(
+                "SELECT DISTINCT document_id FROM raw_facts ORDER BY document_id"
+            ).fetchall()
+            for (document_id,) in rows:
+                target = destination / "facts" / f"{document_id}.parquet"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                # Two bound values, not one: DuckDB's `?` positional binding does
+                # not carry through a COPY statement's TO clause when the query
+                # it wraps also binds a `?` (reproduced against duckdb 1.5.5) —
+                # `$1`/`$2` does. `?` still covers the single-parameter case in
+                # export_tables above.
+                self._connection.execute(
+                    "COPY (SELECT f.kind, f.document_id, "
+                    f"      coalesce(m.masked::JSON, f.payload) AS payload "
+                    f"FROM raw_facts f LEFT JOIN {_REDACTED_PAYLOADS} m "
+                    "     ON m.original = f.payload::VARCHAR "
+                    "WHERE f.document_id = $1 ORDER BY f.rowid) "
+                    "TO $2 (FORMAT parquet, COMPRESSION zstd)",
+                    [document_id, str(target)],
+                )
+            return len(rows)
+        finally:
+            self._drop_staged(_REDACTED_PAYLOADS)
+
+    def _stage_fact_redactions(self, redactor: Redactor) -> None:
+        """Masked `config_entry` payloads, keyed by the payload text the export
+        joins on. Each one is masked by `domain/factfile.redact_config_entry_line`
+        — the ONE place "a config_entry's value, masked by its own key" is
+        expressed (2K Task 7 fix round 2), shared with the enrichment jail's
+        fact-serving path (`application/enrich/tools.py`) rather than each
+        carrying its own copy of the same shape.
+
+        Only `config_entry` is rewritten. Every other fact kind copies through
+        untouched, which is why this reads the kind rather than walking every
+        payload: a symbol or a call-site fact is not a place a configuration
+        value can be, and the JSON columns those facts project into the graph
+        are masked at their own exit above.
+
+        **Residual, stated rather than discovered:** an exotic hardcoded
+        secret in a string constant — one no key names, no value pattern
+        matches, and that is not a URL with userinfo — survives into the
+        bundle. Closing that means value patterns, which is what `.sextant.yml`
+        gives a repository that knows the shape of its own secrets."""
+        entries = self._connection.execute(
+            "SELECT DISTINCT payload::VARCHAR AS original FROM raw_facts "
+            "WHERE kind = 'config_entry' "
+            # Parenthesised because `IS NOT NULL` binds tighter than `->>`
+            # in DuckDB (RUNBOOK) — unbracketed this reads as a boolean
+            # subscript and fails at run time naming the whole payload.
+            "AND (payload ->> 'value') IS NOT NULL"
+        ).fetchall()
+        staged: list[tuple[str, ...]] = [
+            (str(original), masked)
+            for (original,) in entries
+            if (masked := redact_config_entry_line(str(original), redactor)) != str(original)
+        ]
+        self._stage_map(_REDACTED_PAYLOADS, "original VARCHAR, masked VARCHAR", staged)
 
     def close(self) -> None:
         self._connection.close()

@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from sextant.ingress.detect.sextant_config import SextantConfigError, read_extract_libraries
+from sextant.domain.redaction import RedactionRules
+from sextant.ingress.detect.sextant_config import (
+    EnrichDefaults,
+    SextantConfigError,
+    read_enrich_defaults,
+    read_extract_libraries,
+    read_redaction_rules,
+)
 
 
 def _config(root: Path, text: str) -> Path:
@@ -95,3 +102,91 @@ def test_a_config_file_that_cannot_be_honoured_as_written_is_refused(
     except SextantConfigError:
         return
     pytest.fail(f"honoured a config it cannot honour as written — {because}")
+
+
+def test_a_module_declaring_no_redact_section_adds_no_rules(tmp_path: Path):
+    """Which is not the same as redacting nothing: these are ADDITIONS, and the
+    built-in set applies to every module whether or not it wrote a file (2K
+    design §1). The empty answer here is what a module gets for free."""
+    assert read_redaction_rules(tmp_path) == RedactionRules()
+    assert read_redaction_rules(_config(tmp_path, "extract_libraries: []\n")) == RedactionRules()
+
+
+def test_the_declared_redaction_patterns_are_returned_as_written(tmp_path: Path):
+    """Both lists, verbatim: the redactor normalizes and sorts the EFFECTIVE
+    set itself, so this reader's job is to say what the file asked for and
+    refuse what it cannot."""
+    root = _config(
+        tmp_path,
+        "redact:\n"
+        "  key_patterns:\n    - dsn\n    - internal-token\n"
+        "  value_patterns:\n    - 'ACME_[A-Z0-9]{24}'\n",
+    )
+    assert read_redaction_rules(root) == RedactionRules(
+        key_patterns=("dsn", "internal-token"),
+        value_patterns=("ACME_[A-Z0-9]{24}",),
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "because"),
+    [
+        ("redact: [dsn]\n", "`redact` is a mapping of named pattern lists"),
+        (
+            "redact:\n  key_pattern: [dsn]\n",
+            "a misspelled section would otherwise read as adding no patterns",
+        ),
+        ("redact:\n  key_patterns: dsn\n", "one pattern is still a list of one"),
+        ("redact:\n  value_patterns: [42]\n", "a pattern is a string"),
+    ],
+)
+def test_a_redact_section_that_cannot_be_honoured_as_written_is_refused(
+    tmp_path: Path, text: str, because: str
+):
+    """A redaction rule silently dropped is the one refusal that costs a
+    secret: the module looks exactly like one that never asked, and nothing
+    downstream can tell the difference (D04 §2a's refusal, 2K design §1)."""
+    try:
+        read_redaction_rules(_config(tmp_path, text))
+    except SextantConfigError:
+        return
+    pytest.fail(f"honoured a `redact:` it cannot honour as written — {because}")
+
+
+def test_a_misspelled_top_level_key_is_refused_by_the_redaction_reader_too(tmp_path: Path):
+    """Both readers share the file's own checks, so whichever command opens it
+    first reports the typo — a `redact:` section under a root key nobody reads
+    is not a section that runs."""
+    with pytest.raises(SextantConfigError):
+        read_redaction_rules(_config(tmp_path, "redactions:\n  key_patterns: [dsn]\n"))
+
+
+def test_a_module_with_no_enrich_section_has_every_default_unset(tmp_path: Path):
+    """The ordinary module: `sextant module enrich` falls back to its own
+    flags/CLI defaults entirely (2K design §3)."""
+    assert read_enrich_defaults(tmp_path) == EnrichDefaults()
+
+
+def test_the_declared_enrich_defaults_are_returned_as_written(tmp_path: Path):
+    defaults = read_enrich_defaults(
+        _config(tmp_path, "enrich:\n  agent: claude-api\n  model: claude-x\n  max_turns: 20\n")
+    )
+    assert defaults == EnrichDefaults(agent="claude-api", model="claude-x", max_turns=20)
+
+
+def test_an_unknown_enrich_key_is_refused(tmp_path: Path):
+    """A typo'd `max_turn` would read as "no default", indistinguishable from
+    a module that declared none — the same reasoning `redact:`'s own closed
+    set states."""
+    with pytest.raises(SextantConfigError):
+        read_enrich_defaults(_config(tmp_path, "enrich:\n  max_turn: 20\n"))
+
+
+def test_a_non_positive_max_turns_is_refused(tmp_path: Path):
+    with pytest.raises(SextantConfigError):
+        read_enrich_defaults(_config(tmp_path, "enrich:\n  max_turns: 0\n"))
+
+
+def test_an_enrich_section_that_is_not_a_mapping_is_refused(tmp_path: Path):
+    with pytest.raises(SextantConfigError):
+        read_enrich_defaults(_config(tmp_path, "enrich:\n  - claude-api\n"))

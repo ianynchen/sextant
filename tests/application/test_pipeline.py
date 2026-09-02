@@ -13,6 +13,7 @@ from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import config_fact_target, write_fact_file
 from sextant.domain.facts import Document
+from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import list_files
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.extract.jvm.scanner import AsmScanner
@@ -68,7 +69,8 @@ def _resolved_fixture(
     )
     root = FIXTURE / "src" / "main" / "resources"
     for reader, owned in group_files_by_reader(
-        list_files(root), [PropertiesReader(), YamlConfigReader()]
+        list_files(root, FIXTURE, IgnoreRules.load(FIXTURE)),
+        [PropertiesReader(), YamlConfigReader()],
     ):
         request = ReadRequest(
             module_id="com.acme:orders-service", version="1.0.0", files=owned, root=root
@@ -3400,7 +3402,8 @@ def test_config_documents_with_colliding_basenames_both_survive_to_the_workspace
 
     facts = tmp_path / "facts"
     for reader, owned in group_files_by_reader(
-        list_files(root), [PropertiesReader(), YamlConfigReader()]
+        list_files(root, tmp_path, IgnoreRules.load(tmp_path)),
+        [PropertiesReader(), YamlConfigReader()],
     ):
         request = ReadRequest(
             module_id="com.acme:orders-service", version="1.0.0", files=owned, root=root

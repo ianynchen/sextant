@@ -4005,7 +4005,7 @@ def test_rung_three_follows_a_getter_result_to_the_property_it_binds(tmp_path: P
 def test_rung_three_relaxed_binds_a_getter_onto_the_fields_own_spelling(tmp_path: Path):
     """The relaxed binding is the point of the rung, not decoration: the
     accessor is `getBaseUrl` and the declared field is `base_url`, one key
-    written two ways (`resolve/config.py`'s `normalize_key`, the very rule
+    written two ways (`domain/config_keys.py`'s `normalize_key`, the very rule
     §2i's own `${...}` lookups use). The expression carries the field's
     spelling, which is what the configuration key is written as."""
     caller = "com/acme/http/Client#relaxedGetterFed()."

@@ -2,14 +2,44 @@
 comes from `report`, and every omission — the call graph, a Maven POM the
 detector could not read correctly, a payload type nothing could expand, or a
 catalog skipped by capability gating — is named rather than silently absent
-(NFR-7)."""
+(NFR-7).
+
+**Two serializers, one assembly (2K design §6/§6b).**
+`assemble_module_document` produces the `AssembledDocument` — a list of typed
+sections — and `markdown_document` writes it out as `architecture.md`. The
+HTML emitter consumes the SAME list. Nothing downstream parses the finished
+markdown to find out where a claim went: placement is decided once, here, and
+a second serializer that had to re-derive it would eventually disagree.
+
+**Add-only.** An overlay's claims are INTERLEAVED at their anchors; machine
+text is never rewritten, reordered or replaced. The machine half of the
+document is emitted verbatim in the order it was built, and the only bytes an
+overlay can add outside its own block are the blank lines that keep a
+blockquote from swallowing the line after it. With no overlay the output is
+byte-identical to what this renderer produced before any of this existed.
+"""
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
+
+from pydantic import ValidationError
 
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.pipeline import ResolveReport
-from sextant.domain.closed_sets import Protocol
+from sextant.domain.closed_sets import Anchor, Protocol
+from sextant.domain.enrichment import (
+    UNANSWERED,
+    Claim,
+    ComponentClaim,
+    DiagramClaim,
+    EnrichmentOverlay,
+    Provenance,
+    SectionClaim,
+    VerdictClaim,
+    open_question_identity,
+)
+from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import bare_descriptor
 from sextant.egress.render.diagrams import class_diagram
 from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
@@ -128,17 +158,115 @@ _VERBLESS_PROTOCOLS = frozenset(p.value for p in Protocol) - _VERBED_PROTOCOLS
 # an HTTP method, so a NULL there genuinely is unread and must render as such.
 _VERB_OPTIONAL_PROTOCOLS = frozenset({"graphql"})
 
+# Redaction is DEFAULT-ON at this exit (2K design §1): a caller that names no
+# redactor still gets the built-in set, so the failure mode of forgetting to
+# wire one is a masked document, never a leaked one. The composition root
+# passes the module's own redactor, widened by its `.sextant.yml`.
+_DEFAULT_REDACTOR = Redactor.from_rules()
 
-def _wire_identity(endpoint: dict[str, object]) -> str:
+
+class ClaimRedactionError(ValueError):
+    """A redaction rule that leaves a claim unreadable.
+
+    The redactor is applied to a claim's own strings at assembly, and the
+    result is re-validated against the claim's schema. Almost every rule leaves
+    that intact — it rewrites prose. A pathological one (a value pattern
+    matching `llm`, say, or one that eats a required field whole) does not, and
+    the honest answer is to refuse the render and say which rule did what: the
+    alternative is publishing a claim with a field replaced by a marker, or
+    reporting a repository's own `redact:` section as a crash in the tool.
+    """
+
+
+@dataclass(frozen=True)
+class MachineSection:
+    """A run of machine-derived PROSE, as the markdown lines this renderer
+    built — verbatim, in order.
+
+    Deliberately NOT decomposed into typed headings, tables and paragraphs.
+    Byte-identity with the document Sextant rendered before the overlay existed
+    is a regression pin the whole phase leans on, and the cheapest way to keep
+    a promise about bytes is to carry the bytes. A second serializer renders
+    these lines as the markdown they are; what it must never do is read them to
+    work out where an enrichment claim belongs, and it never has to — the
+    claims are their own sections.
+
+    The one exception is a diagram, which is `MachineDiagram` below: a fence
+    buried in these lines would be a fence the HTML emitter could only find by
+    scanning markdown.
+    """
+
+    lines: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MachineDiagram:
+    """A machine-derived mermaid diagram, as its SOURCE rather than as a fenced
+    block inside `MachineSection.lines`.
+
+    This renderer builds the fence itself, so it already knows where the
+    diagram starts and ends; handing a serializer the source is free, and
+    handing it three opaque lines instead would force the HTML emitter to scan
+    markdown for ```` ```mermaid ```` to find the thing it has to wrap in a
+    pan-zoom container. With this, EVERY diagram in the assembled document —
+    this one and an overlay's `DiagramClaim` — reaches a serializer as data.
+
+    The markdown emitter re-fences it byte for byte, which is what the golden
+    document pins.
+    """
+
+    mermaid: str
+
+
+@dataclass(frozen=True)
+class EnrichmentSection:
+    """The overlay claims placed at one position, with the provenance of the
+    run that produced them. Typed rather than pre-rendered: this is the half
+    the HTML emitter styles differently — a badge, a pan-zoomable diagram
+    container — so it must reach a serializer as claims, not as prose it would
+    have to take apart again.
+
+    The claims are already REDACTED (`assemble_module_document`), so every
+    serializer inherits that without having to remember to ask.
+    """
+
+    provenance: Provenance
+    claims: tuple[Claim, ...]
+
+
+@dataclass(frozen=True)
+class StaleNoticeSection:
+    """The count of claims excluded because their referents no longer exist
+    (2K design §6). Visible, never silent: a claim quietly dropped is a
+    document that looks complete and is not (NFR-7). The overlay file keeps
+    the claim — only this render leaves it out.
+    """
+
+    provenance: Provenance
+    count: int
+
+
+type Section = MachineSection | MachineDiagram | EnrichmentSection | StaleNoticeSection
+type AssembledDocument = tuple[Section, ...]
+
+
+def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
     """A row's wire identity as one string. A protocol in `_VERBLESS_PROTOCOLS`
     defines no verb, so it renders `protocol path` with no method at all;
     every other protocol renders `method path`, prefixed by the protocol where
     its verb does not imply one. Any half of any shape may be NULL, and
     `(unresolved)` stays the marker for an identity the analysis could not
-    read — never a bare `None`."""
+    read — never a bare `None`.
+
+    `path` is one of the two columns that can carry a whole address (D01 §3,
+    2I's ruling that an expression lands in it unsplit), so it passes the
+    redactor: `https://user:pass@host/x` renders with its userinfo stripped,
+    and a repo value pattern masks whatever else it names. A `${...}`
+    expression passes through whole — it is a reference to a value, not the
+    value."""
     protocol = str(endpoint["protocol"])
     path = endpoint["path"]
-    rendered_path = "(unresolved)" if path is None else str(path)
+    rendered_path = "(unresolved)" if path is None else redactor.redact_text(str(path))
     if protocol in _VERBLESS_PROTOCOLS:
         return f"{protocol} {rendered_path}"
     method = endpoint["method"]
@@ -286,15 +414,74 @@ def render_module_document(
     resolved_config: Sequence[dict[str, object]] = (),
     open_questions: Sequence[dict[str, object]] = (),
     library_symbols: Sequence[dict[str, object]] = (),
+    libraries_not_scanned: tuple[str, ...] = (),
+    redactor: Redactor = _DEFAULT_REDACTOR,
+    overlay: EnrichmentOverlay | None = None,
+    stale: frozenset[int] = frozenset(),
+) -> str:
+    """`architecture.md` — the markdown serialization of the assembled
+    document. Kept as its own entry point because it is what every caller of
+    this renderer has always asked for; the assembly it composes is
+    `assemble_module_document`, and the HTML emitter serializes that same
+    list rather than re-reading these bytes."""
+    return markdown_document(
+        assemble_module_document(
+            module,
+            report,
+            commit,
+            uncovered,
+            shape_fields=shape_fields,
+            resolved_config=resolved_config,
+            open_questions=open_questions,
+            library_symbols=library_symbols,
+            libraries_not_scanned=libraries_not_scanned,
+            redactor=redactor,
+            overlay=overlay,
+            stale=stale,
+        )
+    )
+
+
+def assemble_module_document(
+    module: ModuleModel,
+    report: ResolveReport,
+    commit: str,
+    uncovered: tuple[str, ...] = (),
+    shape_fields: Sequence[dict[str, object]] = (),
+    resolved_config: Sequence[dict[str, object]] = (),
+    open_questions: Sequence[dict[str, object]] = (),
+    library_symbols: Sequence[dict[str, object]] = (),
     # Carried in rather than read off `module`, unlike `libraries_not_resolved`:
     # resolution is a property of the module the detector described, while a
     # scan failing is something that happened during one analysis of it.
     libraries_not_scanned: tuple[str, ...] = (),
-) -> str:
+    # The render EXIT's redactor (2K design §1). Defaulted rather than
+    # required so redaction is on for every caller, including one written
+    # before this existed — see `_DEFAULT_REDACTOR`.
+    redactor: Redactor = _DEFAULT_REDACTOR,
+    # The overlay, already schema-validated, or `None` for the ordinary module
+    # with no enrichment at all — which assembles to one machine section and
+    # therefore to exactly the document this renderer produced before 2K.
+    overlay: EnrichmentOverlay | None = None,
+    # The positions in `overlay.claims` whose referents no longer exist
+    # (`application/enrich/stale_claims`). Excluded from the document and
+    # counted in a visible notice; the overlay file keeps them. Indices rather
+    # than claims because the overlay is a list written wholesale, and a
+    # position is what locates one in the file a reader would go and look at.
+    stale: frozenset[int] = frozenset(),
+) -> AssembledDocument:
     """Adds no information. Every row comes from the graph, and every omission
     is stated (M07). Rendering the same report twice is byte-identical
     (NFR-1): nothing here reads a clock, and endpoint and shape order is
-    whatever the graph query already fixed."""
+    whatever the graph query already fixed.
+
+    The two columns that can carry an address — `path`, through
+    `_wire_identity`, and `peer` — pass `redactor` on their way into a line.
+    Nothing else here renders a configuration VALUE: the module document names
+    the expression a row carries and the KEYS pass 2 could not resolve, never
+    the values behind them, so the resolved-config exposure this redactor
+    closes is the export exit's (`storage/duckdb/workspace.py`), not this
+    one's."""
     fields_by_shape = _fields_by_shape(shape_fields)
     origin_by_symbol = {str(row["symbol"]): str(row["origin"]) for row in library_symbols}
     # Wire identities already carrying a library attribution, so the outbound
@@ -328,13 +515,28 @@ def render_module_document(
         "## Structure",
         "",
     ]
+    # The fence stays in `lines` so every offset below — and the byte-identity
+    # of the markdown — is unaffected; the SPAN is what lets assembly lift it
+    # back out as a `MachineDiagram`. Recording a span rather than splitting
+    # the list here keeps one line list and one set of anchor offsets, instead
+    # of two representations that could disagree about where anything is.
+    diagram_spans: list[tuple[int, int, str]] = []
     if report.shapes:
         nodes, edges = _contract_nodes(report.shapes, shape_fields)
+        mermaid = class_diagram(nodes, edges).rstrip("\n")
+        start = len(lines)
         lines += ["```mermaid"]
-        lines += class_diagram(nodes, edges).rstrip("\n").split("\n")
+        lines += mermaid.split("\n")
         lines += ["```"]
+        diagram_spans.append((start, len(lines), mermaid))
     else:
         lines.append("None derived.")
+    # `after-component-overview` (2K design §6). `## Structure` IS this
+    # document's component overview: the contract class diagram is the only
+    # place it draws the module's own types as a whole. An anchor is a
+    # position, so it is recorded here — where the section ends — rather than
+    # searched for afterwards in text that would then have to be parsed.
+    structure_end = len(lines)
 
     lines += ["", "## Inbound endpoints", ""]
     inbound = [e for e in report.endpoints if str(e["direction"]) in ("inbound", "both")]
@@ -343,7 +545,7 @@ def render_module_document(
         for endpoint in inbound:
             media = f"{_media(endpoint.get('consumes'))} → {_media(endpoint.get('produces'))}"
             lines.append(
-                f"| `{_wire_identity(endpoint)}` | {_handler(endpoint)} | {media} | "
+                f"| `{_wire_identity(endpoint, redactor)}` | {_handler(endpoint)} | {media} | "
                 f"{_format(endpoint)} | {endpoint['resolution']} |"
             )
         for endpoint in inbound:
@@ -353,12 +555,12 @@ def render_module_document(
             )
             via = _origin_lines(endpoint, origin_by_symbol)
             if request or response or via:
-                lines += ["", f"- `{_wire_identity(endpoint)}`"]
+                lines += ["", f"- `{_wire_identity(endpoint, redactor)}`"]
                 lines += via
                 lines += request
                 lines += response
             if via:
-                attributed.add(_wire_identity(endpoint))
+                attributed.add(_wire_identity(endpoint, redactor))
     else:
         lines.append("None found.")
 
@@ -372,8 +574,8 @@ def render_module_document(
             peer = endpoint.get("peer")
             caller = bare_descriptor(str(endpoint["caller"]))
             lines.append(
-                f"| `{_wire_identity(endpoint)}` | "
-                f"{'unresolved' if peer is None else peer} | "
+                f"| `{_wire_identity(endpoint, redactor)}` | "
+                f"{'unresolved' if peer is None else redactor.redact_text(str(peer))} | "
                 f"`{caller}` | {_format(endpoint)} | {endpoint['resolution']} |"
             )
         # The outbound half has no request/response detail to hang under, so
@@ -385,7 +587,7 @@ def render_module_document(
         # attribution already stated above must not be stated again here. The
         # same attribution twice reads as two findings.
         for endpoint in outbound:
-            identity = _wire_identity(endpoint)
+            identity = _wire_identity(endpoint, redactor)
             via = [] if identity in attributed else _origin_lines(endpoint, origin_by_symbol)
             if via:
                 lines += ["", f"- `{identity}`"]
@@ -393,18 +595,40 @@ def render_module_document(
                 attributed.add(identity)
     else:
         lines.append("None found.")
+    # `after-endpoint-table`: after BOTH tables and their detail blocks. The
+    # document's endpoint listing is one thing to a reader — a claim about "the
+    # endpoints" that landed between the inbound and outbound halves would read
+    # as a claim about the inbound ones alone.
+    endpoints_end = len(lines)
 
     # Rendered only when the ledger holds rows (2G design §8): a run with
     # nothing to ask leaves the section absent, the `## Catalogs skipped`
     # precedent below rather than the NFR-7 "looked and found nothing" one —
     # this is a hand-off inbox for 2K, and an empty inbox is not a finding.
+    beside_question: list[tuple[tuple[str | None, ...], int]] = []
     if open_questions:
         lines += ["", "## Open questions", ""]
         for row in open_questions:
             question = str(row["question"])
             candidates = json.loads(str(row["candidates"]))
             rendered = "; ".join(_candidate_line(question, c) for c in candidates)
-            lines.append(f"- `{_wire_identity(row)}` — {question}: {rendered}")
+            lines.append(f"- `{_wire_identity(row, redactor)}` — {question}: {rendered}")
+            # `beside-open-question`, per question: a verdict renders under the
+            # very line it answers. Keyed on the row's own values, NOT on the
+            # rendered line — matching on presentation would make placement
+            # depend on how a line happens to be formatted. The key is the
+            # SHARED `open_question_identity`, the very function validation
+            # matches a verdict on (2K final review, F3): keying on the RAW
+            # `path` here while validation canonicalized the redacted one meant
+            # a verdict on a question whose path changes under redaction
+            # validated cleanly and then rendered at `questions_end` instead of
+            # beside its question.
+            beside_question.append((open_question_identity(row, redactor), len(lines)))
+    # Where a `beside-open-question` claim goes when no single question owns
+    # it: after the last question, or — with no section at all — where the
+    # section would have been. Only a verdict names a question; every other
+    # kind anchored here is a claim about the open questions as a group.
+    questions_end = beside_question[-1][1] if beside_question else endpoints_end
 
     lines += ["", "## Known gaps", ""]
     lines += [f"- {gap}" for gap in _GAPS]
@@ -433,7 +657,14 @@ def render_module_document(
             lines.append(
                 f"- `{skipped.catalog_id}` requires {', '.join(skipped.missing_capabilities)}"
             )
-    return "\n".join(lines) + "\n"
+    return _interleave(
+        lines,
+        _Anchors(structure_end, endpoints_end, tuple(beside_question), questions_end, len(lines)),
+        tuple(diagram_spans),
+        overlay,
+        stale,
+        redactor,
+    )
 
 
 def _config_coverage_lines(resolved_config: Sequence[dict[str, object]]) -> list[str]:
@@ -589,3 +820,254 @@ def _descriptor_lines(
         nullable = "yes" if row["nullable"] else "no"
         lines.append(f"    | {wire_name} | {field_type} | {required} | {nullable} |")
     return lines
+
+
+@dataclass(frozen=True)
+class _Anchors:
+    """The offsets into the machine document's own line list that the four
+    anchors of `domain/enrichment.Anchor` name (2K design §6).
+
+    Recorded WHERE THEY HAPPEN, as the lines are built, rather than found
+    afterwards by searching the finished text for a heading. A search would
+    make placement depend on how a heading is spelled — and on whether an
+    earlier claim's prose happened to contain the same words — which is
+    precisely the markdown-parsing round trip §6b forbids.
+    """
+
+    structure_end: int
+    endpoints_end: int
+    # One entry per open question, in the order the section renders them: the
+    # row's identity and the offset just past its line.
+    beside_question: tuple[tuple[tuple[str | None, ...], int], ...]
+    questions_end: int
+    document_end: int
+
+    def offset_of(self, claim: Claim) -> int:
+        """Where `claim` goes. A `beside-open-question` verdict goes under the
+        line of the very question it answers; anything else anchored there
+        goes after the last question, since nothing in a component, section or
+        diagram claim names a single row."""
+        if claim.anchor is Anchor.AFTER_COMPONENT_OVERVIEW:
+            return self.structure_end
+        if claim.anchor is Anchor.AFTER_ENDPOINT_TABLE:
+            return self.endpoints_end
+        if claim.anchor is Anchor.END_OF_DOCUMENT:
+            return self.document_end
+        if isinstance(claim, VerdictClaim):
+            for identity, offset in self.beside_question:
+                if identity == claim.question.identity:
+                    return offset
+        return self.questions_end
+
+
+def _interleave(
+    lines: list[str],
+    anchors: _Anchors,
+    diagram_spans: tuple[tuple[int, int, str], ...],
+    overlay: EnrichmentOverlay | None,
+    stale: frozenset[int],
+    redactor: Redactor,
+) -> AssembledDocument:
+    """The machine lines, the machine diagrams and the overlay's claims as one
+    ordered section list.
+
+    **Deterministic by construction** (NFR-1): claims are grouped by the offset
+    their anchor resolves to, the boundaries are visited in ascending document
+    order, and within one offset the claims keep the order the overlay file
+    lists them in. Nothing here sorts by content, so re-running assembly over
+    the same workspace and the same overlay produces the same list.
+
+    Two kinds of boundary meet here: an offset where claims are INSERTED, and a
+    span that is LIFTED OUT of the line list as a `MachineDiagram`. Both are
+    positions in one list, so both are walked in one pass — the alternative,
+    splitting the document twice over, is two representations of where things
+    are and eventually two answers.
+    """
+    placed: dict[int, list[Claim]] = {}
+    if overlay is not None:
+        for index, claim in enumerate(overlay.claims):
+            if index in stale:
+                continue
+            placed.setdefault(anchors.offset_of(claim), []).append(
+                _redacted_claim(index, claim, redactor)
+            )
+    spans = {start: (end, mermaid) for start, end, mermaid in diagram_spans}
+
+    sections: list[Section] = []
+    previous = 0
+    for offset in sorted(set(placed) | set(spans)):
+        if offset > previous:
+            sections.append(MachineSection(tuple(lines[previous:offset])))
+            previous = offset
+        if offset in placed:
+            assert overlay is not None
+            sections.append(EnrichmentSection(overlay.produced_by, tuple(placed[offset])))
+        if offset in spans:
+            end, mermaid = spans[offset]
+            sections.append(MachineDiagram(mermaid))
+            previous = end
+    if previous < len(lines):
+        sections.append(MachineSection(tuple(lines[previous:])))
+    if stale and overlay is not None:
+        sections.append(StaleNoticeSection(overlay.produced_by, len(stale)))
+    return tuple(sections)
+
+
+def _redacted_claim(index: int, claim: Claim, redactor: Redactor) -> Claim:
+    """One claim with every string it carries passed through the redactor.
+
+    **Belt and braces, stated as such.** A claim's prose is model output that
+    already came back through Sextant's own tools, and those redact on read
+    (2K design §4) — so in the ordinary case this changes nothing. It is
+    applied anyway because the overlay has a second door: `--ingest` accepts
+    answers from an agent that ran under its own permissions and outside our
+    jail (design §3's honesty note), and render is a publishing exit. Masking
+    at ASSEMBLY rather than in a serializer is what makes it apply to both
+    outputs: the HTML emitter reads these same claims.
+
+    `redact_json` over the model's own JSON, rather than a hand-written walk
+    of the four claim shapes: one traversal that already knows to touch string
+    leaves and leave object keys alone, and a fifth claim kind inherits it
+    without anyone remembering to extend a walk.
+
+    Re-validated afterwards, and a failure is `ClaimRedactionError` naming the
+    claim: a repository's `redact:` section can widen masking into any value
+    pattern it likes, including one that eats a required field or the evidence
+    marker itself. That is the repository's own input written wrong (D04 §2a),
+    so it is refused with a message rather than raised as a pydantic traceback
+    from inside a renderer.
+    """
+    masked = redactor.redact_json(claim.model_dump_json())
+    try:
+        return type(claim).model_validate_json(masked)
+    except ValidationError as broken:
+        raise ClaimRedactionError(
+            f"a redaction rule rewrote enrichment claim {index} "
+            f"({claim.kind}) into something the claim schema refuses — "
+            f"widen the rule less, or narrow what it matches: {broken}"
+        ) from broken
+
+
+def markdown_document(sections: AssembledDocument) -> str:
+    """`architecture.md` from an assembled document.
+
+    Machine lines are emitted verbatim, in order, and a `MachineDiagram` is
+    re-fenced into exactly the three-plus-n lines it was lifted from — so with
+    no overlay the bytes are the ones this renderer produced before any of 2K
+    existed, which is what the golden document pins.
+
+    An enrichment block is separated from whatever surrounds it by exactly one
+    blank line — required, not cosmetic: a markdown blockquote followed
+    immediately by a list item swallows that item as a lazy continuation, so
+    the claim would eat the next open question. Where the neighbouring machine
+    lines already begin or end with a blank of their own, none is added, so an
+    overlay adds no blank lines it does not need.
+    """
+    lines: list[str] = []
+    for index, section in enumerate(sections):
+        if not isinstance(section, EnrichmentSection | StaleNoticeSection):
+            lines += _machine_lines(section) or ()
+            continue
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines += _enrichment_lines(section)
+        following = sections[index + 1] if index + 1 < len(sections) else None
+        # `following_lines` can be empty only for a machine section carrying
+        # none, which assembly does not build — guarded anyway, because
+        # indexing a serializer's input on the assumption that a producer
+        # never yields an empty one is a crash waiting for the day it does.
+        following_lines = () if following is None else (_machine_lines(following) or ())
+        if following_lines and following_lines[0] != "":
+            lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _machine_lines(section: Section) -> tuple[str, ...] | None:
+    """The markdown lines of a MACHINE section — prose as it was built, a
+    diagram re-fenced — or `None` for a section that is not machine text at
+    all. One place decides what "machine" means, so the emitter's blank-line
+    rule and its verbatim rule cannot disagree about a diagram."""
+    if isinstance(section, MachineSection):
+        return section.lines
+    if isinstance(section, MachineDiagram):
+        return ("```mermaid", *section.mermaid.split("\n"), "```")
+    return None
+
+
+def _provenance_line(provenance: Provenance) -> str:
+    """The header every enrichment block sits under: what the block is, the
+    evidence marker it carries, and the run that produced it. A blockquote, so
+    a reader scanning the document sees the mark before the words (2K design
+    §6, "clearly marked")."""
+    return f"> **Enrichment — evidence: llm** (model {provenance.model}, agent {provenance.agent})"
+
+
+def _enrichment_lines(section: EnrichmentSection | StaleNoticeSection) -> list[str]:
+    """One enrichment block as markdown: the provenance header, then each
+    claim, blank-line separated."""
+    if isinstance(section, StaleNoticeSection):
+        return [f"{_provenance_line(section.provenance)} — {_stale_sentence(section.count)}"]
+    lines = [_provenance_line(section.provenance)]
+    for claim in section.claims:
+        lines += ["", *_claim_lines(claim)]
+    return lines
+
+
+def _stale_sentence(count: int) -> str:
+    """The visible count of what is not shown (2K design §6). Never a silent
+    omission, and never a claim rendered from referents that no longer
+    exist."""
+    return f"{count} enrichment claim{'' if count == 1 else 's'} stale, not shown."
+
+
+def _claim_lines(claim: Claim) -> list[str]:
+    """One claim as markdown. Each kind renders as what it is — a component
+    with its members, prose with its citations, a mermaid fence with its
+    elision statement, an assessment with its grounding — and every one of
+    them reads as an addition beside the machine text, never as part of it."""
+    if isinstance(claim, ComponentClaim):
+        return [
+            f"**Component: {claim.name}**",
+            "",
+            claim.purpose,
+            "",
+            f"Members: {_ticked(claim.members)}",
+        ]
+    if isinstance(claim, SectionClaim):
+        return [
+            f"**{claim.title}**",
+            "",
+            *claim.body.split("\n"),
+            "",
+            f"Cites: {_ticked(claim.cites)}",
+        ]
+    if isinstance(claim, DiagramClaim):
+        return [
+            "```mermaid",
+            *claim.mermaid.rstrip("\n").split("\n"),
+            "```",
+            "",
+            f"Elides: {claim.elides}",
+        ]
+    return _verdict_lines(claim)
+
+
+def _verdict_lines(claim: VerdictClaim) -> list[str]:
+    """The verification seat's label (2K design §7). The question's own
+    identity is repeated on the line because a verdict does not always land
+    directly under its question — one anchored `end-of-document`, or one whose
+    row the section did not render, would otherwise name nothing."""
+    question = claim.question
+    identity = " ".join(
+        part for part in (question.protocol, question.method, question.path) if part
+    )
+    label = f"**LLM assessment** for `{identity}` ({question.kind}): {claim.assessment}"
+    if claim.assessment == UNANSWERED:
+        return [f"{label} — searched: {claim.searched}"]
+    return [f"{label} — because {claim.because}"]
+
+
+def _ticked(values: Sequence[str]) -> str:
+    """A claim's list of identifiers or paths, comma-joined and typeset as
+    code — they are names to look up, not prose."""
+    return ", ".join(f"`{value}`" for value in values)

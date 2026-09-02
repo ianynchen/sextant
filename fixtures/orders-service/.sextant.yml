@@ -4,3 +4,12 @@
 # it did before this existed.
 extract_libraries:
   - com.example:orders-soap-client
+
+# Repo-added redaction (2K design §1) — ADDITIVE ONLY: this widens the built-in
+# set, and there is no key here or anywhere that narrows it. `dsn` is matched
+# as a substring of a normalized key, so it names `orders.internal.dsn` in
+# application.yml — a key no built-in pattern reaches, which is what makes this
+# section observable in a live run rather than shadowed by the built-ins.
+redact:
+  key_patterns:
+    - dsn

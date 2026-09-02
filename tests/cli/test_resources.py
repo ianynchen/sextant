@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 
 from sextant.cli import resources
-from sextant.cli.resources import MissingResourceError, catalogs_dir, extractor_jar
+from sextant.cli.resources import (
+    MissingResourceError,
+    catalogs_dir,
+    extractor_jar,
+    instructions_path,
+)
 
 REPO = Path(__file__).parents[2]
 
@@ -23,6 +28,17 @@ def test_catalogs_resolve_inside_the_installed_package():
 
 def test_extractor_jar_is_found_where_the_build_puts_it():
     assert extractor_jar().is_file()
+
+
+def test_instructions_resolve_inside_the_installed_package():
+    """2K Task 7 fix round 1, minor: the enrichment instructions ship the
+    same way the catalogs and the extractor do — inside the package, so a
+    version mismatch between the text `instructions_hash` is computed from
+    and the code that reads it cannot happen."""
+    path = instructions_path()
+    assert path.is_file()
+    assert path.parent.name == "enrich"
+    assert path.parent.parent.name == "sextant"
 
 
 def test_a_missing_extractor_says_how_to_build_it(monkeypatch: pytest.MonkeyPatch):
@@ -50,3 +66,4 @@ def test_the_wheel_carries_the_catalogs_and_the_extractor():
 
     assert "sextant/catalogs/spring-web.yml" in names
     assert "sextant/extractor-jvm/sextant-extractor.jar" in names
+    assert "sextant/enrich/INSTRUCTIONS.md" in names

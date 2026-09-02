@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -5,8 +6,14 @@ from pathlib import Path
 import duckdb
 from click.testing import CliRunner
 
+from sextant.application.enrich.validate import validate_overlay
 from sextant.cli.app import cli
+from sextant.cli.resources import instructions_path
+from sextant.domain.enrichment import load_overlay
 from sextant.domain.factfile import read_fact_file
+from sextant.domain.ignorefile import IgnoreRules
+from sextant.domain.redaction import REDACTED, Redactor
+from sextant.ingress.detect.sextant_config import read_redaction_rules
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
@@ -1166,3 +1173,222 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # The library's whole fact subtree is discarded before the scan, so nothing
     # is left for the resolve to read back as if it were still configured.
     assert not (tmp_path / "facts" / "lib").exists()
+
+
+def test_the_planted_credentials_leave_masked_and_stay_verbatim_in_the_workspace(tmp_path: Path):
+    """2K design §1, live and end to end: the exposure this phase closes is
+    `resolved_config` values EXPORTING verbatim. The fixture plants two fake
+    credentials — one a built-in key pattern reaches, one only its own
+    `.sextant.yml` addition reaches — and one address (`soap.billing.uri`) no
+    rule names, which must survive untouched. The workspace keeps all three as
+    written, because resolution and peer substitution read the real values and
+    the analyst's own disk is not the trust boundary."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)
+    bundle = next((tmp_path / "bundles").iterdir())
+    exported = dict(
+        duckdb.sql(
+            "SELECT key, value FROM read_parquet("
+            f"'{bundle / 'graph' / 'resolved_config.parquet'}') WHERE environment = 'default'"
+        ).fetchall()
+    )
+    assert exported["orders.db.password"] == REDACTED
+    assert exported["orders.internal.dsn"] == REDACTED
+    assert exported["soap.billing.uri"] == "http://billing.internal.example.com/ws"
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    in_workspace = {
+        str(row["key"]): row["value"]
+        for row in workspace.query("resolved_config")
+        if row["environment"] == "default"
+    }
+    workspace.close()
+    assert in_workspace["orders.db.password"] == "hunter2-fixture"
+    assert "hunter2-fixture" in str(in_workspace["orders.internal.dsn"])
+
+    # The rendered document names the expression a row carries and the KEYS
+    # pass 2 could not resolve — never a resolved value — so no planted
+    # credential reaches it at all. Pinned rather than assumed: the day a
+    # config-value line is added, this fails and the redactor is wired into it.
+    document = (tmp_path / "render" / "architecture.md").read_text()
+    assert "hunter2-fixture" not in document
+
+    # And the bundle's FACT files, which carry the same values one derivation
+    # earlier (D00 §5c). Everything that leaves is masked: a masked
+    # `resolved_config.parquet` beside a `facts/` holding the plaintext would
+    # mask nothing. Read back through the parquet rather than grepped — zstd
+    # would hide the string from a byte search either way.
+    fact_values = set(
+        duckdb.sql(
+            "SELECT payload ->> 'key_path', payload ->> 'value' FROM read_parquet("
+            f"'{bundle / 'facts' / '*.parquet'}') WHERE kind = 'config_entry'"
+        ).fetchall()
+    )
+    assert ("orders.db.password", REDACTED) in fact_values
+    assert ("orders.internal.dsn", REDACTED) in fact_values
+    # Two facts, one per profile file — a key declared twice is two entries,
+    # so this is a set of pairs rather than a dict keyed on the key alone.
+    assert ("soap.billing.uri", "http://billing.internal.example.com/ws") in fact_values
+    assert ("soap.billing.uri", "http://billing.prod.internal.example.com/ws") in fact_values
+    leaked = duckdb.sql(
+        "SELECT count(*) FROM read_parquet("
+        f"'{bundle / 'facts' / '*.parquet'}') WHERE payload::VARCHAR LIKE '%hunter2-fixture%'"
+    ).fetchone()
+    assert leaked == (0,)
+
+    # The workspace's own fact rows are untouched, which is why a document's
+    # `redaction_set_hash` still reads `sha256:none`: it describes READ time,
+    # and nothing was applied then. The manifest's hash names the set that
+    # masked this bundle — two hashes, two moments (D06 §3).
+    local = (tmp_path / "facts").rglob("*.jsonl")
+    assert any("hunter2-fixture" in path.read_text(encoding="utf-8") for path in local)
+
+
+def test_the_manifest_names_the_rule_set_that_masked_the_bundle(tmp_path: Path):
+    """D06 §3 reserved `redaction_set_hash` and left it unwritten while nothing
+    redacted. It has a producer now, and what it names is the EFFECTIVE set —
+    the built-ins widened by this module's `redact:` — so a bundle masked under
+    one set is distinguishable from a bundle masked under another. The fixture
+    adds a rule, so its hash must differ from the built-in-only one; editing
+    that section changes the hash, and re-running without editing it does not
+    (the byte-identity test above covers the second half)."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)
+    bundle = next((tmp_path / "bundles").iterdir())
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    effective = Redactor.from_rules(read_redaction_rules(FIXTURE)).rule_set_hash
+    assert manifest["producer"]["redaction_set_hash"] == effective
+    assert effective != Redactor.from_rules().rule_set_hash
+
+
+def test_the_planted_decoy_config_file_never_reaches_resolved_config(tmp_path: Path):
+    """2K design §2, live: the fixture's `.sextantignore` names
+    `src/main/resources/application-secret.yml` — an ordinary, valid Spring
+    config source (`application{-profile}.yml` names it the "secret"
+    profile, exactly like `application-prod.yml`) that would otherwise
+    resolve its own key into its own environment. Ignoring it means the
+    file never reaches `YamlConfigReader` at all: not merely unresolved or
+    masked, its key and its whole profile are simply never there."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    rows = workspace.query("resolved_config")
+    keys = {str(row["key"]) for row in rows}
+    environments = {str(row["environment"]) for row in rows}
+    workspace.close()
+    assert "decoy.should-never-resolve" not in keys
+    assert "secret" not in environments
+
+
+def test_a_planted_dotenv_is_excluded_by_the_builtin_layer_alone(tmp_path: Path):
+    """The fixture's `.sextantignore` names no `.env` pattern anywhere in
+    it — `BUILTIN_PATTERNS` is what excludes the planted `.env` at the
+    fixture root, proven against the real fixture root, which DOES carry a
+    `.sextantignore` of its own (so this also proves the built-in layer
+    keeps applying alongside a repo file that never mentions it)."""
+    assert (FIXTURE / ".env").is_file()
+    ignorefile_patterns = [
+        line.strip()
+        for line in (FIXTURE / ".sextantignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert not any(".env" in pattern for pattern in ignorefile_patterns)
+    assert IgnoreRules.load(FIXTURE).matches(FIXTURE / ".env") is True
+
+
+# --- 2K Task 3: the golden overlay, live ----------------------------------
+
+
+def test_every_claim_in_the_golden_overlay_is_grounded_in_the_live_workspace(tmp_path: Path):
+    """The fixture overlay is hand-authored (fixture JSON is fine — it is a
+    program format, 2K design §9), which is exactly why it has to be checked
+    against a REAL analysis rather than a hand-built one: a golden file whose
+    symbols, files and question drifted out of the fixture would still parse,
+    still render, and pin nothing. Every one of the four claim kinds validates
+    against the workspace `analyze` just produced, or this fails.
+
+    2K Task 7 ruling 2: `produced_by` is genuine, not the placeholder
+    `sha256:0000...` this file carried through Task 3 — regenerated through
+    the real `--ingest` door against this same fixture, `--agent
+    fixture-agent --model fixture-model` to keep both pinned above
+    (`test_the_golden_overlay_assembles_into_the_rendered_document`).
+    `instructions_hash`/`workspace_fingerprint` are the real sha256 of
+    `enrich/INSTRUCTIONS.md`/`metadata.json` from that run; `run_at` is
+    wall-clock at ingest time and is hand-pinned to a fixed value afterward —
+    informational only, never compared, the same way every other field here
+    is checked by what it grounds rather than by its own bytes."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)
+    overlay = load_overlay(FIXTURE)
+    assert overlay is not None
+    assert {claim.kind for claim in overlay.claims} == {
+        "component",
+        "diagram",
+        "section",
+        "verdict",
+    }
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    try:
+        accepted, refusals = validate_overlay(overlay, workspace, FIXTURE)
+    finally:
+        workspace.close()
+    assert refusals == ()
+    assert len(accepted) == len(overlay.claims)
+
+
+def test_the_golden_overlays_instructions_hash_matches_the_shipped_instructions_file():
+    """2K Task 7 fix round 1, Important I2: pin genuine provenance to the
+    LIVE file rather than merely "some sha256-shaped string" — the next
+    edit to `enrich/INSTRUCTIONS.md` must fail this test loudly (a stale
+    golden overlay silently misreporting what produced it) rather than
+    pass by coincidence. No `analyze`/`render` needed: the overlay is
+    already checked into the fixture."""
+    overlay = load_overlay(FIXTURE)
+    assert overlay is not None
+    digest = hashlib.sha256(instructions_path().read_bytes()).hexdigest()
+    assert overlay.produced_by.instructions_hash == f"sha256:{digest}"
+
+
+def test_the_golden_overlay_assembles_into_the_rendered_document(tmp_path: Path):
+    """Add-only assembly, end to end (2K design §6): every claim reaches the
+    document under a provenance header, at its own anchor, and the machine
+    rows the rest of this suite pins are still exactly where they were —
+    `test_format_field_number_and_open_questions_reach_the_rendered_document`
+    asserts those same lines against this same document."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)
+    document = (tmp_path / "render" / "architecture.md").read_text()
+
+    header = "> **Enrichment — evidence: llm** (model fixture-model, agent fixture-agent)"
+    assert document.count(header) == 3  # two anchors plus the verdict's own question
+    assert "**Component: Legacy billing edge**" in document
+    assert "Members: `com/example/orders/soap/OrderSoapEndpoint#`" in document
+    assert "**Extending the legacy billing edge**" in document
+    assert "Cites: `src/main/java/com/example/orders/soap/OrderSoapEndpoint.java`" in document
+    assert "Elides: showing 3 of the module's types" in document
+
+    # The verdict renders directly under the question it answers — the row
+    # itself stays `unresolved`, because the graph is immutable (design §7).
+    question = "- `jms parsed-relay-queue` — payload_binding:"
+    verdict = "**LLM assessment** for `jms parsed-relay-queue` (payload_binding): likely"
+    assert document.index(question) < document.index(verdict)
+    assert document.index(verdict) < document.index(
+        "- `sqs parsed-mixed-inbound` — payload_binding:"
+    )
+
+    # Nothing is stale: every referent of every claim exists in the workspace
+    # this render read, so the notice is absent rather than reporting zero.
+    assert "stale, not shown" not in document
+
+    # Add-only, live: the machine rows this suite has always pinned are still
+    # exactly where they were. Every other test in this module asserts against
+    # this same enriched document — the overlay adds beside them and edits
+    # none of them, which is what makes those pins the regression guard.
+    assert "## Known gaps" in document
+    assert (
+        "| `jms parsed-relay-queue` | "
+        "`com/acme/orders/messaging/parse/ParsedPayloadListeners#onRelayed(sig_cb303bd1).` | "
+        "- → - | unresolved | resolved |"
+    ) in document
