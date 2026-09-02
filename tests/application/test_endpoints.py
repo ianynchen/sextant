@@ -3278,3 +3278,132 @@ def test_an_unrecognised_construct_gate_is_refused(tmp_path: Path):
         )
     assert "declared_on" in str(raised.value)
     assert "invented-gate-typo.yml" in str(raised.value)
+
+
+# --- 2I Task 5, fix round 1: the SEI fence -------------------------------
+#
+# `declared_on: interface` says a catalog's declarations sit on interfaces; an
+# OUTBOUND one saying that is describing client stubs. An interface the module
+# itself implements is the opposite claim, and the annotation family that marks
+# a generated stub marks a hand-written service endpoint interface too. The
+# fence is what makes the gate's own meaning true.
+
+
+def _sei_facts(root: Path, with_local_impl: bool) -> None:
+    """One `@Endpoint`-marked interface declaring one operation, optionally
+    implemented by a local class that carries the same marker — the shape a
+    JAX-WS SEI plus its `@WebService` implementation takes."""
+    port, impl = "com/acme/wsish/Port#", "com/acme/wsish/PortImpl#"
+    port_method = f"{port}charge(sig_1)."
+    facts: list = [
+        SymbolFact(document_id="doc_1", symbol=port, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=port_method,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=port,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=port,
+            retention="runtime",
+            use=AnnotationUse(annotation="com/acme/wsish/Endpoint#", args={}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=port_method,
+            retention="runtime",
+            use=AnnotationUse(annotation="com/acme/wsish/Operation#", args={"name": "charge"}),
+        ),
+    ]
+    if with_local_impl:
+        impl_method = f"{impl}charge(sig_1)."
+        facts += [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=impl,
+                construct_kind=ConstructKind.CLASS,
+                interfaces=[port],
+            ),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=impl_method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=impl,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=impl,
+                retention="runtime",
+                use=AnnotationUse(annotation="com/acme/wsish/Endpoint#", args={}),
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=impl_method,
+                retention="runtime",
+                use=AnnotationUse(annotation="com/acme/wsish/Operation#", args={"name": "charge"}),
+            ),
+        ]
+    write_fact_file(root / "Sei.jsonl", _GATE_DOCUMENT, facts)
+
+
+def _sei_rows(tmp_path: Path, with_local_impl: bool) -> list[tuple[str, str, str | None]]:
+    _sei_facts(tmp_path / "facts", with_local_impl)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalogs = [
+        _construct_gate_catalog("class", "inbound", "invented-sei-server"),
+        _construct_gate_catalog("interface", "outbound", "invented-sei-client"),
+    ]
+    assert derive_endpoints(workspace, catalogs, capabilities={"annotation_args"}) == []
+    rows = [
+        (str(e["direction"]), str(e["path"]), e["handler"] and str(e["handler"]))
+        for e in workspace.query("endpoints")
+    ]
+    workspace.close()
+    return sorted(rows)
+
+
+def test_an_interface_this_module_implements_derives_no_outbound_row(tmp_path: Path):
+    """An SEI plus its implementation is a SERVER, twice stated. Without the
+    fence the interface derives an outbound row, the class derives an inbound
+    one, the two share a wire identity, the merge folds them into `both`, and
+    the module is published as calling what it only serves.
+
+    With it, the operation derives exactly ONCE — from the implementing class,
+    inbound, handler intact — because a class-gated catalog is untouched by
+    the fence."""
+    rows = _sei_rows(tmp_path, with_local_impl=True)
+    assert rows == [("inbound", "charge", "com/acme/wsish/PortImpl#charge(sig_1).")]
+
+
+def test_the_same_interface_with_no_local_implementation_still_derives_outbound(
+    tmp_path: Path,
+):
+    """The stub case, unchanged — and the proof the fence subtracts on the
+    IMPLEMENTED fact rather than on being an interface at all. Identical
+    facts minus the implementing class: the outbound row derives, with no
+    handler, exactly as a generated stub in an opted-in jar will."""
+    rows = _sei_rows(tmp_path, with_local_impl=False)
+    assert rows == [("outbound", "charge", None)]
+
+
+def test_the_soap_template_catalog_skips_visibly_without_annotation_arguments(
+    tmp_path: Path,
+):
+    """`requires` is the mechanism that keeps degradation visible (D02 §1).
+    `spring-ws-template.yml`'s PRIMARY identity read is annotation attributes
+    — `path_from_argument_type` reads them off the payload type — so a scanner
+    that cannot report them derives no operation from any of its calls. The
+    catalog says so and is SKIPPED by name rather than running and quietly
+    producing address-only rows."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-ws-template")
+    skipped = derive_endpoints(
+        workspace, [catalog], capabilities={"call_site", "string_constants", "typed_signatures"}
+    )
+    workspace.close()
+
+    assert skipped == [SkippedCatalog("spring-ws-template", ("annotation_args",))]

@@ -252,6 +252,10 @@ _TOPIC_ENDPOINT_KWARGS = {
     # confines itself to one construct kind, so every declaration the fixture
     # annotates still derives regardless of what encloses it.
     "declared_on": None,
+    # 2I Task 5's SEI fence, inert as well: no catalog in this file is an
+    # outbound interface-gated one, so the fence's own `$direction`/
+    # `$declared_on` test never reaches this list.
+    "locally_implemented": [],
 }
 
 

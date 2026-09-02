@@ -448,6 +448,21 @@ matches:
   one.
 - **Absent means either**, which is what every catalog written before this word declares,
   and what keeps their derivations byte-identical.
+- **An OUTBOUND catalog declaring `declared_on: interface` subtracts every interface the
+  module's own classes implement** ([D00](D00-fact-schema.md) §5a's
+  `implemented_interfaces`). This is not extra vocabulary — it is what the gate already
+  *means*, made true. Such a catalog describes client stubs, declarations whose whole
+  content is "somebody else answers this"; an interface the module implements is the
+  opposite claim, and one annotation family marks both (a `wsimport` stub and a
+  hand-written service endpoint interface are annotated identically). Without the
+  subtraction the pair derives an outbound row from the interface and an inbound one from
+  its implementing class, the two merge (§3), and the module is published as CALLING an
+  operation it only serves. With it the operation derives exactly once, from the
+  implementing class, since a class-gated inbound catalog is untouched. **Scoped to the
+  interface gate rather than to every outbound catalog**, deliberately: a Spring Cloud
+  `@FeignClient(fallback = …)` names a local class implementing the client interface, and
+  that interface is still a client — widening the rule would delete every Feign client
+  declaring a fallback.
 
 **Three catalogs, one engine change.** The forms are stated in framework-neutral words for
 a reason that was tested rather than asserted: `spring-graphql.yml` introduced them, and

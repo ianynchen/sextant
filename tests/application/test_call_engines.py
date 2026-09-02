@@ -13,6 +13,7 @@ import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
+from sextant.application.resolve.engines import single_call as sc_engine
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.arguments import split_url
 from sextant.domain.closed_sets import OriginTier
@@ -4984,3 +4985,37 @@ def test_a_malformed_default_address_is_refused_at_run_start(tmp_path: Path, dec
     matches = _identity_matches(default_address=declared, field_sources=_SOAPISH_FIELD_SOURCES)
     with pytest.raises(CatalogError):
         _resolve(tmp_path, [], _soapish_catalog(matches, "invented-bad-default-address"))
+
+
+def test_the_declared_format_is_what_composes_the_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The composition branches on the DECLARED word rather than assuming
+    today's only one — `derive_endpoints.sql`'s own `$qualifier_format`
+    shape. Proved by widening the validated set without teaching the composer
+    the new word: validation accepts the rule, and the identity comes out
+    UNRESOLVED rather than silently composed as a QName. A hardcoded
+    composition would have published `{ns}name` for a format nobody
+    implemented."""
+    monkeypatch.setattr(sc_engine, "_IDENTITY_FORMATS", frozenset({"qname", "curie"}))
+    caller = _MODULE + SOAPISH_CLIENT + "place(sig_a)."
+    matches = {
+        "owner": "com.acme.soapish.Template",
+        "methods": [
+            {
+                "name": "send",
+                "arity": 1,
+                "path_from_argument_type": {**_SOAPISH_IDENTITY, "format": "curie"},
+            }
+        ],
+    }
+    facts = [
+        _soapish_send(caller, [CallArgument(kind="parameter", value=0)]),
+        _soapish_payload_method("place"),
+        _soapish_root_annotation({"name": "placeRequest", "namespace": "http://acme.example/ws"}),
+    ]
+    workspace = _resolve(tmp_path, facts, _soapish_catalog(matches, "invented-second-format"))
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")

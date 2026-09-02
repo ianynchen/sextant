@@ -259,6 +259,9 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         # declare no enclosing type at all, and NULL applies the rules to
         # every construct exactly as every pre-2I catalog gets.
         declared_on=None,
+        # 2I Task 5's SEI fence, inert for the same reason — this regression's
+        # catalog is inbound and gates on no construct kind.
+        locally_implemented=[],
     )
     rows = workspace.query("endpoints")
     workspace.close()

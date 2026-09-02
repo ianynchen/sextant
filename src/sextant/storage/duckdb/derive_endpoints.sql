@@ -131,6 +131,12 @@
 --                           identity, so without this each catalog derives
 --                           both and a module is published as calling the
 --                           operations it serves.
+--   $locally_implemented -- 2I design §4, the SEI fence: interface descriptors
+--                           this module's own classes implement, or an empty
+--                           list where the fence does not apply. Read from
+--                           D00 §5a's `implemented_interfaces` and passed as
+--                           BARE descriptors, the same strip every other
+--                           reader of that fact makes.
 --   $synthetic_annotations -- Task 6 (D02 §2, §3): rows the effective-
 --                           annotations pre-pass (`resolve/effective_annotations.py`)
 --                           synthesizes for a module-local composed annotation
@@ -613,6 +619,34 @@ derived AS (
     LEFT JOIN qualifier_scopes q ON q.type_symbol = s.enclosing
     WHERE ($type_annotation IS NULL OR c.type_symbol IS NOT NULL)
       AND ($declared_on IS NULL OR e.construct_kind = $declared_on)
+      -- THE IMPLEMENTED-INTERFACE FENCE (2I design §4). An outbound catalog
+      -- reading INTERFACE declarations is describing a client stub — a
+      -- declaration whose whole content is "somebody else answers this". An
+      -- interface THIS MODULE IMPLEMENTS is the opposite claim: the module
+      -- answers it. One annotation family can mark both, because a generated
+      -- stub and a hand-written interface a local class serves are annotated
+      -- identically. Without this, such a pair derives an outbound row here
+      -- and an inbound row from its implementing class, the two merge (D02
+      -- §3), and the module is published as CALLING an operation it only
+      -- serves.
+      --
+      -- Not new vocabulary — it is what `declared_on: interface` on an
+      -- outbound catalog already MEANS, made true. The operation still derives
+      -- exactly once, from the implementing class, because a class-gated
+      -- inbound catalog is untouched by this.
+      --
+      -- SCOPED to a catalog that declares the interface gate, and deliberately
+      -- not to every outbound catalog. Some client frameworks let a client
+      -- interface name a local FALLBACK class that implements it — the thing
+      -- that runs when the call fails, never the thing answering it — and the
+      -- interface there is still a client. Widening this to every outbound row
+      -- would silently delete every such client. Which catalogs make the
+      -- stub claim is catalog data, and `declared_on` is where they make it.
+      AND NOT (
+          $direction = 'outbound' AND $declared_on = 'interface'
+          AND list_contains($locally_implemented::VARCHAR[],
+                            regexp_extract(s.enclosing, '[^ ]*$'))
+      )
       -- A declaration whose annotation only means anything INSIDE a scope,
       -- with no scope found at either level, has no address — so it derives
       -- NO ROW rather than the bare member name. The bare name would read as

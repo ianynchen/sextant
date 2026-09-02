@@ -18,6 +18,7 @@ from sextant.application.resolve.effective_annotations import (
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.domain.symbols import bare_descriptor
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
@@ -66,6 +67,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # catalogs would each derive both, and a module would be reported as
         # calling the very operations it serves.
         declared_on=declared_on,
+        # 2I design §4's SEI fence — `derive_endpoints.sql`'s own comment
+        # states what it refuses and why it is scoped rather than universal.
+        # Read only for the one catalog shape that can be wrong without it, so
+        # every other catalog binds an empty list and the fence's own
+        # `$direction`/`$declared_on` test already evaluates false for it.
+        locally_implemented=(
+            _locally_implemented(workspace)
+            if catalog.direction == "outbound" and declared_on == "interface"
+            else []
+        ),
         prefix_annotation=prefix_fqn,
         # `method` is absent for an annotation that pre-sets none, and the
         # derivation reads that absence as "every method in all_methods".
@@ -218,6 +229,24 @@ def _declared_on(catalog: Catalog) -> str | None:
             f"{', '.join(sorted(_DECLARED_ON))} (2I design §4)"
         )
     return None if declared is None else str(declared)
+
+
+def _locally_implemented(workspace: Workspace) -> list[str]:
+    """Every interface this module's own classes declare they implement (D00
+    §5a's `implemented_interfaces`), as BARE descriptors.
+
+    The same strip `interface_implementation._implemented_interfaces` and
+    `config_join._implemented_interfaces` make, for the same reason: each
+    entry in the fact is itself module-prefixed, and only the descriptor is
+    ever compared (D00 §5a). Sorted and deduped so the bound parameter is one
+    value for one workspace regardless of read order (NFR-1).
+    """
+    found = {
+        bare_descriptor(str(entry))
+        for row in workspace.query("implementations")
+        for entry in json.loads(str(row["interfaces"]))
+    }
+    return sorted(found)
 
 
 def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:

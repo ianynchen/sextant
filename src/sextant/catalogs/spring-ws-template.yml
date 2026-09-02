@@ -7,7 +7,16 @@ direction: outbound
 detect:
   coordinates: ["org.springframework.ws:spring-ws-core"]
 
-requires: [call_site, string_constants, typed_signatures]
+# `annotation_args` is declared and it is not decoration: this catalog's
+# PRIMARY identity read is annotation attributes — `path_from_argument_type`
+# reads `@XmlRootElement`'s `name`/`namespace` off the payload type, and a
+# scanner that cannot report annotation arguments derives no operation at all
+# from a `marshalSendAndReceive` call. The `jakarta-jws.yml` precedent
+# governs, and `field_sources`' own omission of it elsewhere is a different
+# case: there the annotation read is a fallback rung under a literal, here it
+# is the whole identity. `typed_signatures` for the same reason one rung
+# further: the payload type is read off the caller's declared signature.
+requires: [call_site, string_constants, annotation_args, typed_signatures]
 
 # A SECOND FILE beside `spring-ws.yml`, not a second block inside it, and the
 # reason is a registry constraint rather than a preference: a catalog file

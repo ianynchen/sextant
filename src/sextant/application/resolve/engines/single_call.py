@@ -163,7 +163,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # derive_endpoint_shapes keeps for its own `referenced` accumulator.
     referenced: list[str] = []
     configured_addresses = _configured_addresses(
-        owner, default_address, call_sites, by_caller, field_sources, supertypes, referenced
+        owner, default_address, call_sites, by_caller, field_sources, supertypes
     )
     rows: list[dict[str, Any]] = []
     # Only a row whose identity is known dedups here: two calls whose paths
@@ -604,7 +604,22 @@ def _argument_type_identity(
     qualifier = _attribute(args, str(rule["qualifier_from"]))
     if qualifier is None:
         return None, payload_type
-    return "{" + qualifier + "}" + name, payload_type
+    return _composed(str(rule["format"]), qualifier, name), payload_type
+
+
+def _composed(declared: str, qualifier: str, name: str) -> str | None:
+    """The scope and the name joined in the DECLARED format — branching on the
+    word rather than assuming today's only one, the same shape
+    `derive_endpoints.sql` gives `$qualifier_format`.
+
+    `_validate_identity` already refused any word outside `_IDENTITY_FORMATS`,
+    so the fallthrough is unreachable today; it returns None rather than
+    composing anyway, so a second word added to the set but not here derives no
+    identity instead of silently deriving a `qname` one — an unresolved
+    operation rather than a wrong address."""
+    if declared == "qname":
+        return "{" + qualifier + "}" + name
+    return None
 
 
 def _attribute(args: dict[str, Any], name: str) -> str | None:
@@ -633,7 +648,6 @@ def _configured_addresses(
     by_caller: dict[str, list[dict[str, Any]]],
     field_sources: FieldFacts | None,
     supertypes: dict[str, dict[str, Any]],
-    referenced: list[str],
 ) -> dict[str, dict[str, Any] | None]:
     """Form 2's answer for every type that configures one of these clients:
     the address argument its own calls to the declared setup method hand over,
@@ -663,10 +677,12 @@ def _configured_addresses(
         declaring = _declaring_type(caller)
         if declaring is None:
             continue
+        # `referenced` is EMPTY here rather than the run's own accumulator: the
+        # field ladder roots no payload, so nothing is ever appended, and
+        # threading the shared list in would suggest this pass contributes to
+        # shape order when it does not.
         facts = CallFacts(
-            supertypes=supertypes,
-            caller_call_sites=by_caller.get(caller, []),
-            referenced=referenced,
+            supertypes=supertypes, caller_call_sites=by_caller.get(caller, []), referenced=[]
         )
         argument = address_argument(
             _arg_at(site["arguments"], setup["arg"]), field_sources, facts, caller

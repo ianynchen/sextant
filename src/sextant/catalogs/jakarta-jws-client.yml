@@ -34,20 +34,18 @@ matches:
   # a JAX-WS service endpoint INTERFACE is what a client is generated against,
   # and an implementation class is what a container publishes.
   #
-  # WHERE THAT AXIS IS WRONG, stated rather than left to be discovered: a
-  # hand-written service endpoint interface implemented IN THIS SAME MODULE by
-  # a `@WebService` class (`@WebService interface BillingPort` + `@WebService
-  # class BillingImpl implements BillingPort`) is a SERVER-side declaration
-  # through and through — but this file claims the interface, `jakarta-jws.yml`
-  # claims the class, the two rows carry one identity, and D02 §3's merge
-  # publishes the operation as `both`. The module is then reported as calling
-  # a service it only serves. Nothing in today's vocabulary tells that
-  # interface from a generated stub: what distinguishes them is that a stub is
-  # implemented by nothing in the module, which is an `implementations` join
-  # this style does not have. The failure is bounded — one direction added to
-  # a row that is otherwise correct, never a fabricated identity — and it is a
-  # COVERAGE boundary of this catalog, carried as a candidate fence rather
-  # than half-built here.
+  # AND THE FENCE THAT COMPLETES IT. A hand-written service endpoint interface
+  # implemented IN THIS SAME MODULE by a `@WebService` class (`@WebService
+  # interface BillingPort` + `@WebService class BillingImpl implements
+  # BillingPort`) is a SERVER-side declaration through and through, and it
+  # carries exactly the annotations a generated stub does. What tells the two
+  # apart is a fact rather than an annotation: a stub is implemented by nothing
+  # in the module. So an outbound interface-gated derivation SUBTRACTS every
+  # interface the module's own classes implement (D00 §5a's
+  # `implemented_interfaces`, `derive_endpoints.sql`'s own SEI-fence comment).
+  # That is not extra vocabulary — it is what `declared_on: interface` on an
+  # outbound catalog already means — and it leaves the operation derived
+  # exactly once, from `jakarta-jws.yml`'s row on the implementing class.
   declared_on: interface
   #
   # Deliberately NO `request_body` block, for `jakarta-jws.yml`'s reason

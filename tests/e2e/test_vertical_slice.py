@@ -881,6 +881,13 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
     result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
     assert result.exit_code == 0, result.output
 
+    # "Selected and derived nothing" is a different claim from "never
+    # selected", and only this distinguishes them: a catalog whose `requires`
+    # were unmet would be reported here by name, and the assertion below would
+    # then be proving nothing about `declared_on`.
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert metadata["skipped_catalogs"] == []
+
     workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
     try:
         soap = [row for row in workspace.query("endpoints") if row["protocol"] == "soap"]
