@@ -8,16 +8,24 @@ is counted out loud instead of quietly dropped.
 """
 
 import json
+from pathlib import Path
+
+import pytest
 
 # The same machine document the rest of the render suite pins, so "the machine
 # half is untouched" is checked against the very bytes those tests assert on.
 from test_render import MODULE, REPORT
 
 from sextant.application.enrich.validate import stale_claims, validate_overlay
+from sextant.application.ports.detector import ModuleModel
+from sextant.application.resolve.endpoints import SkippedCatalog
+from sextant.application.resolve.pipeline import ResolveReport
 from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_overlay
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.render.document import (
+    ClaimRedactionError,
     EnrichmentSection,
+    MachineDiagram,
     MachineSection,
     StaleNoticeSection,
     assemble_module_document,
@@ -128,15 +136,112 @@ def _position(text: str, needle: str) -> int:
 
 # --- the regression pin ---------------------------------------------------
 
+GOLDEN = Path(__file__).parent / "golden" / "architecture-minimal.md"
 
-def test_a_module_with_no_overlay_assembles_to_one_machine_section():
-    """ "No overlay file → render behaves exactly as today" (2K design §6),
-    made structural rather than hoped for: with nothing to interleave there is
-    one section, it holds every line, and the serializer has no decision left
-    to make."""
+# A small synthetic module, deliberately NOT the live fixture: the golden below
+# is a byte pin, and pinning bytes derived from a compiled fixture would make
+# every fixture edit a golden edit. Small, but it exercises every region the
+# assembler cuts at — a structure diagram, both endpoint tables, an open
+# question, the gap lists, and a skipped catalog.
+GOLDEN_MODULE = ModuleModel(
+    module_id="com.example:golden",
+    coordinates="com.example/golden",
+    version="1.0.0",
+    root=Path("golden"),
+    kind="service",
+    languages=frozenset({"java"}),
+    source_roots=(),
+    output_dirs=(),
+    libraries_not_resolved=("com.example:absent: no archive resolved the coordinate",),
+)
+GOLDEN_REPORT = ResolveReport(
+    facts_loaded=7,
+    endpoints=[
+        {
+            "protocol": "http",
+            "direction": "inbound",
+            "method": "GET",
+            "path": "/v1/orders",
+            "handler": "s maven c 1 com/example/golden/Api#list().",
+            "resolution": "resolved",
+            "consumes": None,
+            "produces": '["application/json"]',
+            "format": "json",
+            "format_resolution": "resolved",
+        },
+        {
+            "protocol": "http",
+            "direction": "outbound",
+            "method": "POST",
+            "path": "/billing/invoices",
+            "peer": "https://billing.internal",
+            "caller": "s maven c 1 com/example/golden/BillingClient#charge().",
+            "resolution": "resolved",
+            "format": None,
+        },
+    ],
+    coverage={"documents": 2, "partial_documents": 0},
+    shapes=[{"shape_id": "com/example/golden/OrderView#", "content_hash": "md5:0", "open": False}],
+    unexpanded_types=("com/example/golden/Opaque#",),
+    skipped_catalogs=[SkippedCatalog("a-catalog", ("a-capability",))],
+)
+GOLDEN_SHAPE_FIELDS = [
+    {
+        "shape_id": "com/example/golden/OrderView#",
+        "ordinal": 0,
+        "wire_name": "id",
+        "wire_type": "string",
+        "wire_format": None,
+        "field_number": None,
+        "required": True,
+        "nullable": False,
+        "item": None,
+    }
+]
+
+
+def _golden_document() -> str:
+    return render_module_document(
+        GOLDEN_MODULE,
+        GOLDEN_REPORT,
+        "0d17e2",
+        ("com/example/golden/Newer.class: metadata unreadable",),
+        shape_fields=GOLDEN_SHAPE_FIELDS,
+        open_questions=OPEN_QUESTIONS,
+    )
+
+
+def test_a_module_with_no_overlay_renders_the_checked_in_golden_document():
+    """**The regression pin.** "No overlay file → render behaves exactly as
+    today" (2K design §6) is a claim about BYTES, and the only thing that can
+    falsify it is bytes written down before the change and compared after.
+    Both sides of a same-run comparison move together; this file does not.
+
+    It covers every region the assembler cuts at, so a stray blank line, a
+    reordered section or a diagram that came back through `MachineDiagram`
+    differently all fail here rather than in a reader's document. The file's
+    own bytes were taken from the renderer as it stood BEFORE 2K Task 3
+    (verified against commit `f019e44`'s `document.py` over this same input),
+    so it guards the change that introduced it rather than recording it.
+
+    Regenerating is deliberate, never automatic — a golden that a test rewrites
+    pins nothing. When a machine-side change is intended (a new `_GAPS`
+    sentence, a column added), inspect the diff and rewrite the file with:
+
+        GOLDEN.write_text(_golden_document(), encoding="utf-8")
+    """
+    assert _golden_document() == GOLDEN.read_text(encoding="utf-8")
+
+
+def test_a_module_with_no_overlay_assembles_to_machine_sections_alone():
+    """The structural half of the pin above, which the bytes cannot state: with
+    nothing to interleave, NO enrichment section exists — the serializer has no
+    claim to place and no notice to print. The document is not one section any
+    more, because a machine diagram is lifted out as its own typed section for
+    the HTML emitter's sake, and that is exactly what the golden proves costs
+    no bytes."""
     sections = assemble_module_document(MODULE, REPORT, "a3f91c", open_questions=OPEN_QUESTIONS)
-    assert len(sections) == 1
-    assert isinstance(sections[0], MachineSection)
+    assert all(isinstance(section, MachineSection | MachineDiagram) for section in sections)
     assert markdown_document(sections) == _machine_only()
 
 
@@ -155,7 +260,38 @@ def test_the_machine_half_is_byte_identical_with_an_overlay_present():
     for section in sections:
         if isinstance(section, MachineSection):
             machine += section.lines
+        elif isinstance(section, MachineDiagram):
+            machine += ["```mermaid", *section.mermaid.split("\n"), "```"]
     assert "\n".join(machine) + "\n" == _machine_only()
+
+
+# --- the machine diagram, as data -----------------------------------------
+
+
+def test_the_machine_structure_diagram_reaches_a_serializer_as_source():
+    """2K design §6b: the HTML emitter wraps EVERY diagram in a pan-zoom
+    container — the machine one and an overlay's alike. It can only do that
+    without scanning markdown if this renderer, which built the fence itself,
+    hands the source over as data."""
+    sections = assemble_module_document(MODULE, REPORT, "a3f91c")
+    diagrams = [section for section in sections if isinstance(section, MachineDiagram)]
+    assert len(diagrams) == 1
+    assert diagrams[0].mermaid.startswith("classDiagram")
+    assert "```" not in diagrams[0].mermaid
+    # And no MachineSection still carries the fence it was lifted out of.
+    for section in sections:
+        if isinstance(section, MachineSection):
+            assert "```mermaid" not in section.lines
+
+
+def test_a_module_with_no_shapes_has_no_diagram_section_at_all():
+    """ "None derived." is prose, not an empty diagram: a serializer handed an
+    empty `MachineDiagram` would render an empty pan-zoom container where the
+    document says there is nothing to draw."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    sections = assemble_module_document(MODULE, report, "a3f91c")
+    assert not any(isinstance(section, MachineDiagram) for section in sections)
+    assert "None derived." in markdown_document(sections)
 
 
 # --- placement ------------------------------------------------------------
@@ -451,3 +587,60 @@ def test_a_golden_overlay_file_travels_from_disk_to_the_stale_count_line(tmp_pat
     assert "**Component: Kept**" in text
     assert "**Component: Doomed**" not in text
     assert "1 enrichment claim stale, not shown" in text
+
+
+# --- a redaction rule wide enough to break a claim ------------------------
+
+
+def test_a_redaction_rule_that_breaks_a_claims_schema_is_refused_by_name():
+    """A repository can widen redaction into any value pattern it likes, and
+    one wide enough to eat a required field — or the evidence marker itself —
+    leaves a claim its own schema refuses. That is the repository's input
+    written wrong (D04 §2a), so it comes back as `ClaimRedactionError` naming
+    the claim and what happened, never as a pydantic traceback out of the
+    middle of a renderer."""
+    pathological = Redactor.from_rules(RedactionRules(value_patterns=("llm",)))
+    with pytest.raises(ClaimRedactionError) as refused:
+        render_module_document(
+            MODULE, REPORT, "a3f91c", redactor=pathological, overlay=_overlay(_component())
+        )
+    assert "claim 0" in str(refused.value)
+    assert "component" in str(refused.value)
+
+
+def test_an_ordinary_rule_that_only_rewrites_prose_is_not_an_error():
+    """The other side, so the check above is a real boundary and not a
+    redactor that refuses whatever it touches: masking inside a claim's prose
+    is the ordinary case and must go through silently."""
+    ordinary = Redactor.from_rules(RedactionRules(value_patterns=(r"AKIA[A-Z0-9]+",)))
+    leaky = _component()
+    leaky["purpose"] = "Reads AKIAEXAMPLE0000 at boot."
+    text = render_module_document(
+        MODULE, REPORT, "a3f91c", redactor=ordinary, overlay=_overlay(leaky)
+    )
+    assert REDACTED in text
+
+
+# --- the serializer's own edges -------------------------------------------
+
+
+def test_the_serializer_survives_a_machine_section_carrying_no_lines():
+    """Assembly never builds one, but the emitter looks AHEAD at the next
+    section to decide whether to add a separating blank line, and looking at
+    `lines[0]` of a section that has none is a crash waiting for the day a
+    producer yields one. Guarded, and pinned here rather than trusted."""
+    overlay = _overlay(_component())
+    provenance = overlay.produced_by
+    sections = (
+        MachineSection(("# a module",)),
+        EnrichmentSection(provenance, tuple(overlay.claims)),
+        MachineSection(()),
+    )
+    assert markdown_document(sections).startswith("# a module\n\n> **Enrichment")
+
+
+def test_an_enrichment_block_is_the_last_thing_in_the_document():
+    """The other lookahead edge: nothing follows, so nothing is looked at. A
+    document ending in a claim is the ordinary `end-of-document` anchor."""
+    text = _rendered(_section())
+    assert text.endswith("Cites: `src/main/java/com/acme/orders/Ingest.java`\n")

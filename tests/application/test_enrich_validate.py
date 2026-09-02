@@ -170,6 +170,39 @@ def test_a_participant_alias_validates_the_identifier_and_not_the_label(tmp_path
     assert refusals == ()
 
 
+def test_a_dotted_node_is_validated_on_its_last_segment(tmp_path: Path):
+    """A model writing `participant com.acme.orders.Ingest` names a real type
+    in the notation its own sources use. Scanning to the first dot would take
+    `com` and refuse a VALID diagram as a phantom — the bug this widening
+    fixes. Comparison stays on the simple name, so the dotted spelling is
+    accepted exactly where the bare one is."""
+    overlay = _overlay(_diagram("sequenceDiagram\n    participant com.acme.orders.Ingest\n"))
+    accepted, refusals = validate_overlay(overlay, _Workspace(), tmp_path)
+    assert refusals == ()
+    assert len(accepted) == 1
+
+
+def test_a_dotted_node_whose_last_segment_is_invented_is_still_refused(tmp_path: Path):
+    """The other half: widening the identifier must not turn the check off.
+    `com.acme.orders.Ghost` is a phantom however many packages precede it."""
+    overlay = _overlay(_diagram("classDiagram\n    class com.acme.orders.Ghost\n"))
+    _, refusals = validate_overlay(overlay, _Workspace(), tmp_path)
+    assert len(refusals) == 1
+    assert "Ghost" in refusals[0].reason
+
+
+def test_a_flowchart_style_assignment_is_not_read_as_a_type_declaration(tmp_path: Path):
+    """`class A,B someStyle` applies a CSS class to nodes in a flowchart — it
+    shares a keyword with `classDiagram` and names no type at all. Reading it
+    as a declaration would refuse a valid flowchart over the styling line;
+    the rule is to skip any `class` line carrying a comma, which means the
+    nodes on it go unchecked rather than misread."""
+    overlay = _overlay(_diagram("flowchart LR\n    Ingest --> Relay\n    class Ingest,Relay hot\n"))
+    accepted, refusals = validate_overlay(overlay, _Workspace(), tmp_path)
+    assert refusals == ()
+    assert len(accepted) == 1
+
+
 def test_a_node_the_scan_cannot_see_is_not_validated_and_not_refused(tmp_path: Path):
     """**The honest limit, pinned.** The scan reads declaration lines and
     nothing else, so a node introduced only by an edge passes unchecked. That
@@ -250,23 +283,40 @@ def test_a_verdict_differing_only_in_question_kind_is_refused(tmp_path: Path):
     assert len(refusals) == 1
 
 
-def test_an_unanswered_verdict_is_valid_whatever_the_ledger_holds(tmp_path: Path):
-    """ "`unanswered` beats a guess" (2K design §5/§7) only if the honest
-    answer survives validation. It asserts nothing about the graph — it says
-    the model looked and could not ground an answer — so refusing it would
-    delete the one outcome the instructions ask for."""
-    unanswered = _verdict(
-        question={"protocol": "a-protocol", "method": None, "path": "gone", "kind": "a-question"},
+def _unanswered(**overrides: object) -> dict[str, object]:
+    claim = _verdict(
         assessment="unanswered",
         searched="read every listener in the module; none names a payload type",
-        because=None,
+        **overrides,
     )
-    del unanswered["because"]
-    accepted, refusals = validate_overlay(
-        _overlay(unanswered), _Workspace(open_questions=[]), tmp_path
-    )
+    del claim["because"]
+    return claim
+
+
+def test_an_unanswered_verdict_needs_no_grounding_for_its_answer(tmp_path: Path):
+    """ "`unanswered` beats a guess" (2K design §5/§7) only if the honest
+    answer survives validation. Nothing is demanded of the assessment itself —
+    the model looked and could not ground one, and refusing it would delete the
+    one outcome the instructions ask for."""
+    accepted, refusals = validate_overlay(_overlay(_unanswered()), _Workspace(), tmp_path)
     assert refusals == ()
     assert len(accepted) == 1
+
+
+def test_an_unanswered_verdict_still_has_to_answer_a_real_question(tmp_path: Path):
+    """**`unanswered` exempts the ANSWER, not the REFERENT** (Task 3 review,
+    ruled). The claim still names a question, still renders beside it, and
+    still counts as a claim in the file — so a verdict against a row nobody
+    raised is a phantom whichever way it is answered. Exempting the referent
+    too would leave the one channel by which an invented open question could
+    reach the document."""
+    invented = {"protocol": "a-protocol", "method": None, "path": "gone", "kind": "a-question"}
+    accepted, refusals = validate_overlay(
+        _overlay(_unanswered(question=invented)), _Workspace(), tmp_path
+    )
+    assert accepted == ()
+    assert len(refusals) == 1
+    assert "gone" in refusals[0].reason
 
 
 def test_refusals_carry_the_position_of_the_claim_in_the_file(tmp_path: Path):

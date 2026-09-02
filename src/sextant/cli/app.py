@@ -20,7 +20,7 @@ from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_o
 from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
 from sextant.domain.redaction import RedactionError, Redactor
 from sextant.egress.export.manifest import write_manifest
-from sextant.egress.render.document import render_module_document
+from sextant.egress.render.document import ClaimRedactionError, render_module_document
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
@@ -123,7 +123,9 @@ def _overlay_for(path: Path) -> EnrichmentOverlay | None:
     try:
         return load_overlay(path)
     except ValidationError as refused:
-        raise click.ClickException(f"{path / ENRICHMENT_FILE} is not a valid overlay: {refused}")
+        raise click.ClickException(
+            f"{path / ENRICHMENT_FILE} is not a valid overlay: {refused}"
+        ) from refused
 
 
 @click.group()
@@ -256,26 +258,34 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             # being re-derived here from rows that cannot answer.
             unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
         )
-        text = render_module_document(
-            reconstructed,
-            report,
-            _commit_of(path),
-            tuple(metadata.get("uncovered", [])),
-            shape_fields=workspace.query("shape_fields"),
-            resolved_config=workspace.query("resolved_config"),
-            open_questions=workspace.query("open_questions"),
-            library_symbols=workspace.query("library_symbols"),
-            libraries_not_scanned=tuple(metadata.get("libraries_not_scanned", [])),
-            redactor=_redactor_for(path),
-            overlay=overlay,
-            # Staleness is the ingest checks re-run against the workspace as it
-            # stands NOW (2K design §6): a claim grounded when it was written
-            # whose referents have since gone renders as a count, not as a
-            # claim about code that no longer exists.
-            stale=frozenset()
-            if overlay is None
-            else frozenset(refusal.index for refusal in stale_claims(overlay, workspace, path)),
-        )
+        try:
+            text = render_module_document(
+                reconstructed,
+                report,
+                _commit_of(path),
+                tuple(metadata.get("uncovered", [])),
+                shape_fields=workspace.query("shape_fields"),
+                resolved_config=workspace.query("resolved_config"),
+                open_questions=workspace.query("open_questions"),
+                library_symbols=workspace.query("library_symbols"),
+                libraries_not_scanned=tuple(metadata.get("libraries_not_scanned", [])),
+                redactor=_redactor_for(path),
+                overlay=overlay,
+                # Staleness is the ingest checks re-run against the workspace as
+                # it stands NOW (2K design §6): a claim grounded when it was
+                # written whose referents have since gone renders as a count,
+                # not as a claim about code that no longer exists.
+                stale=frozenset()
+                if overlay is None
+                else frozenset(refusal.index for refusal in stale_claims(overlay, workspace, path)),
+            )
+        # A `redact:` pattern wide enough to break a claim's own schema is the
+        # analysed repository's input written wrong, the same class of mistake
+        # `_redactor_for` and `_overlay_for` already turn into messages — and
+        # this one surfaces at the exit rather than at load, because it is the
+        # rule set MEETING a claim that fails, not either alone.
+        except ClaimRedactionError as refused:
+            raise click.ClickException(str(refused)) from refused
         target = workspace_dir / "render" / "architecture.md"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")

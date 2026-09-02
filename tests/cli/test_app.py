@@ -405,3 +405,40 @@ def test_a_malformed_overlay_is_reported_as_a_message_not_a_stack_trace(tmp_path
     assert ".sextant-enrichment.json is not a valid overlay" in result.output
     assert "instructions_hash" in result.output
     assert "Traceback" not in result.output
+
+
+def test_a_redaction_rule_that_breaks_a_claim_is_a_message_at_the_render_exit(tmp_path: Path):
+    """The third refusal in this family (2K Task 3 review): a `.sextant.yml`
+    whose `redact:` widens far enough to eat a claim's own required fields.
+    It cannot be caught at load — the rule set is valid, the overlay is valid,
+    and only the two MEETING at the exit fails — so it surfaces where it
+    happens, as a message naming the claim rather than a traceback.
+
+    The module root here carries only the two files that decide the outcome —
+    the widened `redact:` and a copy of the fixture's own golden overlay —
+    while the graph is the fixture's, analysed once. `render` reads its rows
+    from `--workspace` and its configuration from the module path, so the two
+    can legitimately be different directories, and this is the cheapest way to
+    put a real claim in front of a pathological rule."""
+    workspace = tmp_path / "ws"
+    analyzed = CliRunner().invoke(
+        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(workspace)]
+    )
+    assert analyzed.exit_code == 0, analyzed.output
+
+    module = tmp_path / "module"
+    module.mkdir()
+    (module / ".sextant-enrichment.json").write_text(
+        (FIXTURE / ".sextant-enrichment.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (module / ".sextant.yml").write_text(
+        "redact:\n  value_patterns:\n    - llm\n", encoding="utf-8"
+    )
+
+    result = CliRunner().invoke(
+        cli, ["module", "render", str(module), "--workspace", str(workspace)]
+    )
+
+    assert result.exit_code == 1
+    assert "a redaction rule rewrote enrichment claim 0" in result.output
+    assert "Traceback" not in result.output

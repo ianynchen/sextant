@@ -24,18 +24,21 @@ matters (accepted at ingest, invisible at render, or the reverse).
   descriptor, and only the descriptor is ever compared). A claim may spell a
   member either way, with coordinates or without; a claim may not name a type
   that is not in the workspace.
-- **Diagram nodes** are compared as SIMPLE names, because a mermaid node id is
-  an identifier and a descriptor is not one. That is a weaker check than the
-  member check by construction: two classes of the same name in different
-  packages are indistinguishable here, and this module does not pretend
-  otherwise. Stated rather than tightened — the alternative is refusing a
-  correct diagram over a notation the format cannot express.
+- **Diagram nodes** are compared as SIMPLE names — the last dotted segment of
+  whatever the scan extracted — because a mermaid node id is an identifier and
+  a descriptor is not one. That is a weaker check than the member check by
+  construction: two classes of the same name in different packages are
+  indistinguishable here, and this module does not pretend otherwise. Stated
+  rather than tightened — the alternative is refusing a correct diagram over a
+  notation the format cannot express. What the scan extracts, and what it
+  deliberately cannot see, is spelled out at `_NODE_DECLARATION` below.
 - **Cited files** must resolve to a file UNDER the module root. Containment is
   checked after resolution, so a cite escaping through `..` or a symlink is
   refused rather than followed.
 - **A verdict's question** must match an `open_questions` row on all four of
-  protocol, method, path and kind. Matching is against the row's own values as
-  the workspace holds them.
+  protocol, method, path and kind — including an `unanswered` one, whose
+  exemption is about the ANSWER and not the row it answers. Matching is against
+  the row's own values as the workspace holds them.
 """
 
 import re
@@ -44,7 +47,6 @@ from pathlib import Path
 
 from sextant.application.ports.workspace import Workspace
 from sextant.domain.enrichment import (
-    UNANSWERED,
     Claim,
     ComponentClaim,
     DiagramClaim,
@@ -61,22 +63,43 @@ from sextant.domain.symbols import bare_descriptor, simple_name
 #
 #   a line whose first word — leading whitespace aside — is `class`,
 #   `participant` or `actor` contributes the identifier that follows it, and
-#   nothing else on the line does.
+#   nothing else on the line does; a `class` line carrying a comma contributes
+#   nothing at all.
 #
 # That is a class declaration in a `classDiagram` (`class OrderView {`, `class
 # OrderView`) and a participant declaration in a `sequenceDiagram`
 # (`participant OrderView`, `participant OrderView as the view` — the alias is
 # a label for humans, so the identifier before `as` is what gets checked).
 #
+# **The identifier admits dots, and only the last dotted segment is compared.**
+# A model writing `participant com.acme.orders.Ingest` is naming a real type in
+# the notation its own sources use; scanning to the first dot would take `com`
+# and refuse a VALID diagram as a phantom. Comparison stays on the simple name
+# for the reason the docstring above gives — a mermaid node id is an
+# identifier, not a descriptor — so `com.acme.Ingest` and `other.pkg.Ingest`
+# are equally accepted wherever an `Ingest` exists. That is the same
+# same-name-different-package weakness the simple-name rule already has, one
+# notation wider; it is not a new one.
+#
+# A HYPHEN still truncates (`order-service` scans as `order`), and that is left
+# alone deliberately: `-` is mermaid's own edge syntax, and admitting it would
+# make `A-->B` scan as one identifier. A JVM type name cannot contain a hyphen,
+# so nothing this validator is meant to check can be spelled with one.
+#
+# The comma exclusion drops the flowchart `class A,B someStyle` form, which
+# applies a CSS class to nodes and names no type at all: scanning it would
+# refuse a valid flowchart over a keyword it shares with `classDiagram`.
+#
 # **Conservative on purpose: what the rule cannot see is not validated and not
 # refused.** A node introduced only by an edge (`A --> B`), a message arrow, a
 # note, a namespace block or a `class` line the model spelled unusually is
-# invisible here — it passes, unchecked. The alternative is a scan that guesses
-# at mermaid's grammar and refuses TRUE claims when it guesses wrong, and a
+# invisible here — it passes, unchecked, and so does every node on a
+# comma-carrying `class` line. The alternative is a scan that guesses at
+# mermaid's grammar and refuses TRUE claims when it guesses wrong, and a
 # validator that rejects correct work teaches its user to stop running it. The
 # claim still carries `evidence: llm` and the diagram still says what it elides;
 # this check catches the invented class name, not every possible one.
-_NODE_DECLARATION = re.compile(r"^[ \t]*(?:class|participant|actor)[ \t]+([A-Za-z_][\w$]*)")
+_NODE_DECLARATION = re.compile(r"^[ \t]*(?:class|participant|actor)[ \t]+([A-Za-z_][\w$.]*)")
 
 
 @dataclass(frozen=True)
@@ -191,13 +214,16 @@ def _first_missing_node(claim: DiagramClaim, names: set[str]) -> str | None:
 
 
 def _declared_nodes(mermaid: str) -> list[str]:
-    """Every identifier `_NODE_DECLARATION` can see, in source order — see the
-    module comment above it for what the rule covers and what it deliberately
-    does not."""
+    """Every identifier `_NODE_DECLARATION` can see, in source order, each
+    reduced to its last dotted segment — see the comment above the pattern for
+    what the rule covers and what it deliberately does not.
+
+    A line carrying a comma is skipped whole: that is the flowchart `class A,B
+    someStyle` form, which names a CSS class rather than a type."""
     return [
-        match.group(1)
+        match.group(1).rsplit(".", 1)[-1]
         for line in mermaid.splitlines()
-        if (match := _NODE_DECLARATION.match(line)) is not None
+        if "," not in line and (match := _NODE_DECLARATION.match(line)) is not None
     ]
 
 
@@ -211,13 +237,18 @@ def _first_missing_cite(claim: SectionClaim, module_root: Path) -> str | None:
 
 
 def _unmatched_question(claim: VerdictClaim, questions: set[tuple[str | None, ...]]) -> str | None:
-    """An `unanswered` verdict is valid whatever the ledger holds (2K design
-    §7): it asserts nothing about the graph — it says the model looked and
-    could not ground an answer — and refusing it would delete the one honest
-    outcome the instructions ask for. Every other verdict is an assessment OF a
-    row, so the row has to exist."""
-    if claim.assessment == UNANSWERED:
-        return None
+    """Every verdict answers a row in the ledger, and the row has to exist.
+
+    **`unanswered` exempts the ASSESSMENT, never the REFERENT** (Task 3 review,
+    ruled). "`unanswered` beats a guess" (2K design §5/§7) is a rule about the
+    answer: a model that looked and could not ground one is never refused for
+    saying so, and no grounding is demanded of the text it gives. But an
+    `unanswered` verdict still names a question, still renders beside it, and
+    still counts as a claim in the file — so a verdict against a question
+    nobody asked is a phantom whichever way it is answered, and exempting the
+    referent as well would leave open the one channel by which an invented row
+    could reach the document.
+    """
     question = claim.question
     if question.identity in questions:
         return None

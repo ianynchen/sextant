@@ -23,6 +23,8 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from pydantic import ValidationError
+
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.domain.closed_sets import Anchor, Protocol
@@ -163,9 +165,22 @@ _VERB_OPTIONAL_PROTOCOLS = frozenset({"graphql"})
 _DEFAULT_REDACTOR = Redactor.from_rules()
 
 
+class ClaimRedactionError(ValueError):
+    """A redaction rule that leaves a claim unreadable.
+
+    The redactor is applied to a claim's own strings at assembly, and the
+    result is re-validated against the claim's schema. Almost every rule leaves
+    that intact — it rewrites prose. A pathological one (a value pattern
+    matching `llm`, say, or one that eats a required field whole) does not, and
+    the honest answer is to refuse the render and say which rule did what: the
+    alternative is publishing a claim with a field replaced by a marker, or
+    reporting a repository's own `redact:` section as a crash in the tool.
+    """
+
+
 @dataclass(frozen=True)
 class MachineSection:
-    """A run of machine-derived document, as the markdown lines this renderer
+    """A run of machine-derived PROSE, as the markdown lines this renderer
     built — verbatim, in order.
 
     Deliberately NOT decomposed into typed headings, tables and paragraphs.
@@ -175,9 +190,32 @@ class MachineSection:
     these lines as the markdown they are; what it must never do is read them to
     work out where an enrichment claim belongs, and it never has to — the
     claims are their own sections.
+
+    The one exception is a diagram, which is `MachineDiagram` below: a fence
+    buried in these lines would be a fence the HTML emitter could only find by
+    scanning markdown.
     """
 
     lines: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MachineDiagram:
+    """A machine-derived mermaid diagram, as its SOURCE rather than as a fenced
+    block inside `MachineSection.lines`.
+
+    This renderer builds the fence itself, so it already knows where the
+    diagram starts and ends; handing a serializer the source is free, and
+    handing it three opaque lines instead would force the HTML emitter to scan
+    markdown for ```` ```mermaid ```` to find the thing it has to wrap in a
+    pan-zoom container. With this, EVERY diagram in the assembled document —
+    this one and an overlay's `DiagramClaim` — reaches a serializer as data.
+
+    The markdown emitter re-fences it byte for byte, which is what the golden
+    document pins.
+    """
+
+    mermaid: str
 
 
 @dataclass(frozen=True)
@@ -208,7 +246,7 @@ class StaleNoticeSection:
     count: int
 
 
-type Section = MachineSection | EnrichmentSection | StaleNoticeSection
+type Section = MachineSection | MachineDiagram | EnrichmentSection | StaleNoticeSection
 type AssembledDocument = tuple[Section, ...]
 
 
@@ -477,11 +515,20 @@ def assemble_module_document(
         "## Structure",
         "",
     ]
+    # The fence stays in `lines` so every offset below — and the byte-identity
+    # of the markdown — is unaffected; the SPAN is what lets assembly lift it
+    # back out as a `MachineDiagram`. Recording a span rather than splitting
+    # the list here keeps one line list and one set of anchor offsets, instead
+    # of two representations that could disagree about where anything is.
+    diagram_spans: list[tuple[int, int, str]] = []
     if report.shapes:
         nodes, edges = _contract_nodes(report.shapes, shape_fields)
+        mermaid = class_diagram(nodes, edges).rstrip("\n")
+        start = len(lines)
         lines += ["```mermaid"]
-        lines += class_diagram(nodes, edges).rstrip("\n").split("\n")
+        lines += mermaid.split("\n")
         lines += ["```"]
+        diagram_spans.append((start, len(lines), mermaid))
     else:
         lines.append("None derived.")
     # `after-component-overview` (2K design §6). `## Structure` IS this
@@ -614,6 +661,7 @@ def assemble_module_document(
     return _interleave(
         lines,
         _Anchors(structure_end, endpoints_end, tuple(beside_question), questions_end, len(lines)),
+        tuple(diagram_spans),
         overlay,
         stale,
         redactor,
@@ -816,46 +864,57 @@ class _Anchors:
 def _interleave(
     lines: list[str],
     anchors: _Anchors,
+    diagram_spans: tuple[tuple[int, int, str], ...],
     overlay: EnrichmentOverlay | None,
     stale: frozenset[int],
     redactor: Redactor,
 ) -> AssembledDocument:
-    """The machine lines and the overlay's claims as one ordered section list.
+    """The machine lines, the machine diagrams and the overlay's claims as one
+    ordered section list.
 
     **Deterministic by construction** (NFR-1): claims are grouped by the offset
-    their anchor resolves to, the offsets are visited in ascending document
+    their anchor resolves to, the boundaries are visited in ascending document
     order, and within one offset the claims keep the order the overlay file
     lists them in. Nothing here sorts by content, so re-running assembly over
     the same workspace and the same overlay produces the same list.
 
-    With no overlay this returns exactly one machine section — the whole
-    document, untouched — which is the regression pin the rest of the phase
-    rests on.
+    Two kinds of boundary meet here: an offset where claims are INSERTED, and a
+    span that is LIFTED OUT of the line list as a `MachineDiagram`. Both are
+    positions in one list, so both are walked in one pass — the alternative,
+    splitting the document twice over, is two representations of where things
+    are and eventually two answers.
     """
-    if overlay is None:
-        return (MachineSection(tuple(lines)),)
-
     placed: dict[int, list[Claim]] = {}
-    for index, claim in enumerate(overlay.claims):
-        if index in stale:
-            continue
-        placed.setdefault(anchors.offset_of(claim), []).append(_redacted_claim(claim, redactor))
+    if overlay is not None:
+        for index, claim in enumerate(overlay.claims):
+            if index in stale:
+                continue
+            placed.setdefault(anchors.offset_of(claim), []).append(
+                _redacted_claim(index, claim, redactor)
+            )
+    spans = {start: (end, mermaid) for start, end, mermaid in diagram_spans}
 
     sections: list[Section] = []
     previous = 0
-    for offset in sorted(placed):
+    for offset in sorted(set(placed) | set(spans)):
         if offset > previous:
             sections.append(MachineSection(tuple(lines[previous:offset])))
-        sections.append(EnrichmentSection(overlay.produced_by, tuple(placed[offset])))
-        previous = offset
+            previous = offset
+        if offset in placed:
+            assert overlay is not None
+            sections.append(EnrichmentSection(overlay.produced_by, tuple(placed[offset])))
+        if offset in spans:
+            end, mermaid = spans[offset]
+            sections.append(MachineDiagram(mermaid))
+            previous = end
     if previous < len(lines):
         sections.append(MachineSection(tuple(lines[previous:])))
-    if stale:
+    if stale and overlay is not None:
         sections.append(StaleNoticeSection(overlay.produced_by, len(stale)))
     return tuple(sections)
 
 
-def _redacted_claim(claim: Claim, redactor: Redactor) -> Claim:
+def _redacted_claim(index: int, claim: Claim, redactor: Redactor) -> Claim:
     """One claim with every string it carries passed through the redactor.
 
     **Belt and braces, stated as such.** A claim's prose is model output that
@@ -871,33 +930,69 @@ def _redacted_claim(claim: Claim, redactor: Redactor) -> Claim:
     of the four claim shapes: one traversal that already knows to touch string
     leaves and leave object keys alone, and a fifth claim kind inherits it
     without anyone remembering to extend a walk.
+
+    Re-validated afterwards, and a failure is `ClaimRedactionError` naming the
+    claim: a repository's `redact:` section can widen masking into any value
+    pattern it likes, including one that eats a required field or the evidence
+    marker itself. That is the repository's own input written wrong (D04 §2a),
+    so it is refused with a message rather than raised as a pydantic traceback
+    from inside a renderer.
     """
-    return type(claim).model_validate_json(redactor.redact_json(claim.model_dump_json()))
+    masked = redactor.redact_json(claim.model_dump_json())
+    try:
+        return type(claim).model_validate_json(masked)
+    except ValidationError as broken:
+        raise ClaimRedactionError(
+            f"a redaction rule rewrote enrichment claim {index} "
+            f"({claim.kind}) into something the claim schema refuses — "
+            f"widen the rule less, or narrow what it matches: {broken}"
+        ) from broken
 
 
 def markdown_document(sections: AssembledDocument) -> str:
     """`architecture.md` from an assembled document.
 
-    Machine lines are emitted verbatim, in order. An enrichment block is
-    separated from whatever surrounds it by exactly one blank line — required,
-    not cosmetic: a markdown blockquote followed immediately by a list item
-    swallows that item as a lazy continuation, so the claim would eat the next
-    open question. Where the neighbouring machine section already begins or
-    ends with its own blank line, none is added, so an overlay adds no blank
-    lines it does not need.
+    Machine lines are emitted verbatim, in order, and a `MachineDiagram` is
+    re-fenced into exactly the three-plus-n lines it was lifted from — so with
+    no overlay the bytes are the ones this renderer produced before any of 2K
+    existed, which is what the golden document pins.
+
+    An enrichment block is separated from whatever surrounds it by exactly one
+    blank line — required, not cosmetic: a markdown blockquote followed
+    immediately by a list item swallows that item as a lazy continuation, so
+    the claim would eat the next open question. Where the neighbouring machine
+    lines already begin or end with a blank of their own, none is added, so an
+    overlay adds no blank lines it does not need.
     """
     lines: list[str] = []
     for index, section in enumerate(sections):
-        if isinstance(section, MachineSection):
-            lines += section.lines
+        if not isinstance(section, EnrichmentSection | StaleNoticeSection):
+            lines += _machine_lines(section) or ()
             continue
         if lines and lines[-1] != "":
             lines.append("")
         lines += _enrichment_lines(section)
         following = sections[index + 1] if index + 1 < len(sections) else None
-        if isinstance(following, MachineSection) and following.lines[0] != "":
+        # `following_lines` can be empty only for a machine section carrying
+        # none, which assembly does not build — guarded anyway, because
+        # indexing a serializer's input on the assumption that a producer
+        # never yields an empty one is a crash waiting for the day it does.
+        following_lines = () if following is None else (_machine_lines(following) or ())
+        if following_lines and following_lines[0] != "":
             lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def _machine_lines(section: Section) -> tuple[str, ...] | None:
+    """The markdown lines of a MACHINE section — prose as it was built, a
+    diagram re-fenced — or `None` for a section that is not machine text at
+    all. One place decides what "machine" means, so the emitter's blank-line
+    rule and its verbatim rule cannot disagree about a diagram."""
+    if isinstance(section, MachineSection):
+        return section.lines
+    if isinstance(section, MachineDiagram):
+        return ("```mermaid", *section.mermaid.split("\n"), "```")
+    return None
 
 
 def _provenance_line(provenance: Provenance) -> str:
