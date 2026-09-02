@@ -185,9 +185,16 @@ by validation (an `unanswered` verdict is a valid claim; it renders as such).
 - **NFR-1, amendment note**: brief composition, answer validation, and overlay
   assembly are byte-deterministic (same workspace + same overlay → same document);
   only the agent call itself is excluded.
-- **Flow, stated**: `analyze → render (machine doc) → enrich (writes overlay) →
-  render (assembles)`. Render is idempotent and cheap; `enrich` refuses a workspace
-  with no rendered doc (tell the user to render first — loudly, with the command).
+- **Flow, stated (user-ruled: no second render command)**: `analyze → render
+  (machine doc) → enrich`. After validating and writing the overlay, **`enrich`
+  performs the assembly itself** — it invokes the same deterministic render-assembly
+  step internally and leaves the enriched document on disk; one command, done.
+  `render` remains independently capable of assembling (a standalone `render` over a
+  workspace with an overlay present produces the identical enriched document — same
+  code path, so the two can never disagree), which is what re-renders a committed
+  overlay after a later re-analyze. `enrich` still refuses a workspace with no
+  rendered doc (the brief needs it — tell the user to render first, loudly, with the
+  command).
 - **Layering**: the adapter lives in a new outer group (`src/sextant/agents/`),
   importing no other outer group; the port in `application/ports`; the redactor and
   ignore matcher in `domain` (pure); import contracts extended accordingly.
