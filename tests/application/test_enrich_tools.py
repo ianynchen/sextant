@@ -21,6 +21,7 @@ redaction-on-read pass that a config file's planted credential proves end
 to end.
 """
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -619,6 +620,45 @@ def test_a_file_created_after_construction_never_leaks_an_absolute_host_path(tmp
         assert not any(line.startswith("/") for line in result.splitlines())
 
 
+def test_read_file_strips_the_anchor_from_a_fact_files_own_origin_entry(tmp_path: Path):
+    """2K Task 7 fix round 2, IMPORTANT: a fact document's own `origin_entry`
+    (`ingress/read/__init__.py`, the JVM extractor's own classpath entry)
+    carries the anchor's absolute host path as CONTENT — the citation
+    contract (`_display_path`) only covers a NAME this class prints itself,
+    never a string a served file happens to contain. `read_file` has to
+    rewrite it to the relative spelling every citation already uses, or the
+    host's own directory layout reaches the model through a file's bytes."""
+    root = tmp_path / "root"
+    facts = root / ".sextant" / "facts" / "config"
+    facts.mkdir(parents=True)
+    origin = (root / "src" / "main" / "resources").as_posix()
+    (facts / "application.yml.jsonl").write_text(
+        f'{{"kind":"document","document_id":"d","origin_entry":"{origin}"}}\n',
+        encoding="utf-8",
+    )
+    executor = _executor((root,))
+    content = executor.execute("read_file", {"path": ".sextant/facts/config/application.yml.jsonl"})
+    assert str(root) not in content
+    assert '"origin_entry":"src/main/resources"' in content
+
+
+def test_grep_for_the_anchors_own_host_path_finds_nothing_anywhere_in_the_jail(tmp_path: Path):
+    """The jail-wide half of the same fix: a host path reaching the wire
+    through a MATCHED line's own text is the same leak as through
+    `read_file`, and the anchor rewrite runs for every tool result alike,
+    at the same exit `redact_text` does."""
+    root = tmp_path / "root"
+    facts = root / ".sextant" / "facts" / "config"
+    facts.mkdir(parents=True)
+    origin = (root / "src" / "main" / "resources").as_posix()
+    (facts / "application.yml.jsonl").write_text(
+        f'{{"kind":"document","document_id":"d","origin_entry":"{origin}"}}\n',
+        encoding="utf-8",
+    )
+    executor = _executor((root,))
+    assert executor.execute("grep", {"pattern": re.escape(str(root))}) == ""
+
+
 def test_the_four_tools_agree_about_a_file_created_after_construction(tmp_path: Path):
     """2K Task 5 fix round 4, S3: `find`/`grep` answered from a cached
     snapshot while `read_file`/`list_dir` walked the live tree, so a file
@@ -933,28 +973,91 @@ def test_a_value_no_redaction_rule_names_stays_verbatim_when_read():
 def test_grep_cannot_recover_a_value_read_file_would_have_masked():
     """Redaction-on-read has to hold for BOTH content-exposing tools, or a
     model that fails to guess `read_file`'s masking just calls `grep`
-    instead — the credential the read_file test proves is masked from
-    `application.yml` must also be absent from every grep match SCOPED to
-    that same file.
+    instead — the credential the read_file test proves is masked must also
+    be absent from every grep match, ANYWHERE in the jail.
 
-    Scoped, not jail-wide (2K Task 7 fix round 1, CRITICAL C1a): the raw
-    fact tree stores values VERBATIM by design (`domain/redaction.py`'s
-    "the workspace stays verbatim") and a `.jsonl` fact file is not itself
-    a config-bearing file by extension, so `.sextant/facts/config/
-    application.yml.jsonl` genuinely carries this value unmasked once the
-    fixture workspace is a real, full `analyze` — an unscoped grep WOULD
-    find it there. That is a stated boundary of the raw fact root being one
-    of the three jailed roots by design (2K design §4), not a masking
-    failure this test exists to catch; what redaction-on-read actually
-    promises — proven here, on the file it is proven for by `read_file` two
-    tests above — is scoped to where the promise is made."""
+    Jail-wide, restored (2K Task 7 fix round 2, CRITICAL — a fix round 1
+    narrowing of this assertion was reverted; its "stated boundary" claim
+    was false). The raw fact tree DOES carry `config_entry.value` verbatim
+    on disk (`domain/redaction.py`'s "the workspace stays verbatim" is still
+    true of the LOCAL fact file) — but the fact root is one of the three
+    jailed roots this class SERVES, and spec §1 names "config-entry facts
+    served by tools" as its own redaction target, distinct from the config
+    file itself. `_mask_fact_lines` (`application/enrich/tools.py`) closes
+    exactly that gap, so an unscoped grep over `.sextant/facts/config/
+    application.yml.jsonl` finds nothing here either — proven jail-wide,
+    the way the promise was always meant to read."""
     executor = _fixture_executor()
-    assert (
-        executor.execute(
-            "grep", {"pattern": "hunter2-fixture", "path": "src/main/resources/application.yml"}
-        )
-        == ""
+    assert executor.execute("grep", {"pattern": "hunter2-fixture"}) == ""
+
+
+def test_grep_also_masks_a_repo_added_key_pattern_row_in_the_fact_tree():
+    """The fixture's own second live pin, carried to the fact-serving route
+    (2K Task 7 fix round 2, CRITICAL): `.sextant.yml`'s `redact: key_patterns:
+    [dsn]` is additive, and it has to widen `_mask_fact_lines` the same way
+    it already widens `read_file`/`grep` on the config file itself — a
+    repo-added pattern masked one way and not the other would be an
+    additive rule that only partially took effect."""
+    executor = _fixture_executor()
+    assert executor.execute("grep", {"pattern": "port=5432;database=orders"}) == ""
+
+
+def test_a_config_entry_facts_value_is_masked_when_served_as_a_fact_line(tmp_path: Path):
+    """2K Task 7 fix round 2, CRITICAL, unit-level: the fact root is one of
+    the three jailed roots by design, and its `.jsonl` files carry
+    `config_entry` payloads verbatim on disk — spec §1 names "config-entry
+    facts served by tools" as its own redaction target, so `read_file` must
+    mask the SAME value the config file it was read from already masks."""
+    root = tmp_path / "root"
+    facts = root / ".sextant" / "facts" / "config"
+    facts.mkdir(parents=True)
+    fact_file = facts / "application.yml.jsonl"
+    fact_file.write_text(
+        '{"kind":"document","document_id":"d"}\n'
+        '{"kind":"config_entry","document_id":"d","key_raw":"db.password",'
+        '"key_path":"orders.db.password","value":"hunter2-fixture","doc_index":0}\n',
+        encoding="utf-8",
     )
+    executor = _executor((root,))
+    content = executor.execute("read_file", {"path": ".sextant/facts/config/application.yml.jsonl"})
+    assert "hunter2-fixture" not in content
+    assert REDACTED in content
+
+
+def test_a_non_config_entry_fact_line_is_served_unmodified(tmp_path: Path):
+    """The other half of the same fix: `_mask_fact_lines` is a targeted
+    rewrite of one fact kind's one field — a `document` header, a `symbol`,
+    or any other kind must reach `read_file`/`grep` byte for byte, since
+    nothing about them is a configuration value to begin with."""
+    root = tmp_path / "root"
+    facts = root / ".sextant" / "facts" / "com" / "acme"
+    facts.mkdir(parents=True)
+    document_line = '{"kind":"document","document_id":"d","origin_entry":"unrelated-root"}'
+    symbol_line = '{"kind":"symbol","document_id":"d","symbol":"com/acme/Order#","seq":0}'
+    (facts / "Order.jsonl").write_text(document_line + "\n" + symbol_line + "\n", encoding="utf-8")
+    executor = _executor((root,))
+    content = executor.execute("read_file", {"path": ".sextant/facts/com/acme/Order.jsonl"})
+    assert content == document_line + "\n" + symbol_line
+
+
+def test_masking_a_served_fact_file_is_deterministic(tmp_path: Path):
+    """Served twice, identical (2K Task 7 fix round 2, CRITICAL): nothing in
+    `_mask_fact_lines` reads a clock or an unordered structure, so the same
+    file read twice in one run — or by two different tool calls, `read_file`
+    then `grep` — masks the same way both times."""
+    root = tmp_path / "root"
+    facts = root / ".sextant" / "facts" / "config"
+    facts.mkdir(parents=True)
+    (facts / "application.yml.jsonl").write_text(
+        '{"kind":"document","document_id":"d"}\n'
+        '{"kind":"config_entry","document_id":"d","key_raw":"db.password",'
+        '"key_path":"orders.db.password","value":"hunter2-fixture","doc_index":0}\n',
+        encoding="utf-8",
+    )
+    executor = _executor((root,))
+    first = executor.execute("read_file", {"path": ".sextant/facts/config/application.yml.jsonl"})
+    second = executor.execute("read_file", {"path": ".sextant/facts/config/application.yml.jsonl"})
+    assert first == second
 
 
 def test_a_non_config_file_is_not_key_masked_but_still_gets_url_userinfo_stripped(

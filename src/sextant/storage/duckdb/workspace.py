@@ -1,8 +1,8 @@
-import json
 from pathlib import Path
 
 import duckdb
 
+from sextant.domain.factfile import redact_config_entry_line
 from sextant.domain.redaction import Redactor
 
 _SQL_DIR = Path(__file__).parent
@@ -628,9 +628,11 @@ class DuckDbWorkspace:
 
     def _stage_fact_redactions(self, redactor: Redactor) -> None:
         """Masked `config_entry` payloads, keyed by the payload text the export
-        joins on. Each one is masked by its OWN `key_path` through
-        `redact_value` — the same rules `resolved_config` gets, because it is
-        the same key naming the same value one derivation earlier (D00 §5c).
+        joins on. Each one is masked by `domain/factfile.redact_config_entry_line`
+        — the ONE place "a config_entry's value, masked by its own key" is
+        expressed (2K Task 7 fix round 2), shared with the enrichment jail's
+        fact-serving path (`application/enrich/tools.py`) rather than each
+        carrying its own copy of the same shape.
 
         Only `config_entry` is rewritten. Every other fact kind copies through
         untouched, which is why this reads the kind rather than walking every
@@ -644,22 +646,18 @@ class DuckDbWorkspace:
         bundle. Closing that means value patterns, which is what `.sextant.yml`
         gives a repository that knows the shape of its own secrets."""
         entries = self._connection.execute(
-            "SELECT DISTINCT payload::VARCHAR AS original, payload ->> 'key_path' AS key_path, "
-            "       payload ->> 'value' AS value "
-            "FROM raw_facts WHERE kind = 'config_entry' "
+            "SELECT DISTINCT payload::VARCHAR AS original FROM raw_facts "
+            "WHERE kind = 'config_entry' "
             # Parenthesised because `IS NOT NULL` binds tighter than `->>`
             # in DuckDB (RUNBOOK) — unbracketed this reads as a boolean
             # subscript and fails at run time naming the whole payload.
             "AND (payload ->> 'value') IS NOT NULL"
         ).fetchall()
-        staged: list[tuple[str, ...]] = []
-        for original, key_path, value in entries:
-            masked_value = redactor.redact_value(str(key_path), str(value))
-            if masked_value == str(value):
-                continue
-            document = json.loads(str(original))
-            document["value"] = masked_value
-            staged.append((str(original), json.dumps(document, ensure_ascii=False)))
+        staged: list[tuple[str, ...]] = [
+            (str(original), masked)
+            for (original,) in entries
+            if (masked := redact_config_entry_line(str(original), redactor)) != str(original)
+        ]
         self._stage_map(_REDACTED_PAYLOADS, "original VARCHAR, masked VARCHAR", staged)
 
     def close(self) -> None:

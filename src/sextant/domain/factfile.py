@@ -9,6 +9,7 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from sextant.domain.facts import Document, Fact
+from sextant.domain.redaction import Redactor
 
 _FACT_ADAPTER: TypeAdapter[Fact] = TypeAdapter(Fact)
 
@@ -26,6 +27,41 @@ def _line(model: Document | Fact) -> str:
     if isinstance(model, Document) and dumped["origin"] is None:
         del dumped["origin"]
     return json.dumps(dumped, sort_keys=True, separators=(",", ":"))
+
+
+def redact_config_entry_line(payload_json: str, redactor: Redactor) -> str:
+    """One fact-file LINE's own JSON payload, with its `value` masked by
+    `redactor.redact_value` when — and only when — the line is a
+    `config_entry` fact (2K Task 7 fix round 2, CRITICAL). The one place "a
+    config_entry's value, masked by its OWN key" is expressed, so the bundle
+    export path (`storage/duckdb/workspace.py`'s `_stage_fact_redactions`,
+    2K Task 1) and the enrichment jail's fact-serving path
+    (`application/enrich/tools.py`, 2K Task 5/7) call the SAME function
+    rather than each carrying its own copy of the same shape — a value
+    masked leaving through one door and not the other is exactly the gap
+    spec §1 names "config-entry facts served by tools" to close.
+
+    Anything else — a line that is not valid JSON, whose `kind` is not
+    `config_entry`, or whose `value` is absent — is returned UNCHANGED, byte
+    for byte: this is a targeted rewrite of one fact kind's one field, never
+    a JSON-wide transform, and a line this cannot parse is not this
+    function's business to reject (the caller decides what an unparseable
+    line means for its own purpose).
+    """
+    try:
+        payload = json.loads(payload_json)
+    except json.JSONDecodeError:
+        return payload_json
+    if not isinstance(payload, dict) or payload.get("kind") != "config_entry":
+        return payload_json
+    value = payload.get("value")
+    if value is None:
+        return payload_json
+    masked = redactor.redact_value(str(payload.get("key_path")), str(value))
+    if masked == str(value):
+        return payload_json
+    payload["value"] = masked
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def config_fact_target(fact_root: Path, relative_path: str) -> Path:

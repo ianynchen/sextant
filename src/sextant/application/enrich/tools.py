@@ -95,14 +95,25 @@ for the real `mod/notes.md`. So the round-trip contract holds both ways
 and unambiguously: every citation `find`/`grep` prints, `read_file` and a
 scoped `grep` accept unchanged, and return the file it named.
 
-**Redaction on read, twice over.** A config-bearing file's content — the
+**Redaction on read, three ways.** A config-bearing file's content — the
 extensions the config-reading `ArtifactReader`s claim, see
 `CONFIG_BEARING_EXTENSIONS` below for precisely where that rule comes from
-— is masked key-by-key before `read_file` or `grep` exposes it, so a model
-cannot recover a value through `grep` that `read_file` would have masked.
-Every result, from every tool (including a refusal), additionally passes
-`redactor.redact_text` (URL userinfo stripped, plus any repo-added value
-patterns) on its way out of `execute`, BEFORE the byte cap — cheap, safe,
+— is masked key-by-key before `read_file` or `grep` exposes it. The SAME
+value, one derivation earlier, reaches the wire a second way: the fact
+root is one of the three jailed roots by design (2K design §4), and its
+`.jsonl` files carry that same `config_entry.value` verbatim — spec §1
+names "config-entry facts served by tools" as its own redaction target,
+distinct from the config file itself, and `_mask_fact_lines`/
+`domain.factfile.redact_config_entry_line` is what closes it (2K Task 7
+fix round 2). Between the two, a model cannot recover a value through
+`grep` — over the config file OR over the fact file that describes it —
+that `read_file` would have masked from either. Every result, from every
+tool (including a refusal), additionally passes `redactor.redact_text`
+(URL userinfo stripped, plus any repo-added value patterns) AND an
+anchor-prefix rewrite (the display anchor's own absolute path, stripped
+wherever served CONTENT happens to carry it — a fact document's
+`origin_entry`, chiefly — never only the citations this class prints
+itself) on their way out of `execute`, BEFORE the byte cap — cheap, safe,
 and the one pass nothing here is allowed to skip, in the one order that
 keeps a secret from surviving half-truncated (see `execute`).
 """
@@ -114,6 +125,7 @@ from pathlib import Path
 
 from sextant.application.ports.artifacts import file_kind
 from sextant.domain.enrichment import ENRICHMENT_FILE
+from sextant.domain.factfile import redact_config_entry_line
 from sextant.domain.file_reads import list_directory, read_file_text
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import Redactor
@@ -156,6 +168,17 @@ MAX_GREP_MATCHES = 200
 # `accepts`/`reads_schema_sources` changing without this constant changing
 # with it fails a test rather than drifting silently.
 CONFIG_BEARING_EXTENSIONS = frozenset({"yml", "yaml", "properties"})
+
+# A fact file's own extension (D00 §7) — root-agnostic on purpose (2K Task 7
+# fix round 2, CRITICAL): rather than asking "is this path under the fact
+# root" (which `ToolExecutor` would have to start tracking root ROLES to
+# answer — a distinction nothing else here needs), any served `.jsonl` file
+# is offered to `_mask_fact_lines`, which only ever touches a line that
+# actually parses as a `config_entry` fact and leaves every other line,
+# valid JSON or not, byte-identical. A `.jsonl` file that is not one of
+# Sextant's own fact files pays one no-op parse attempt per line and
+# nothing else — safe by construction, not merely by the ordinary layout.
+FACT_LINE_EXTENSION = "jsonl"
 
 # Derived-output directories (2K Task 5 fix round 1 ruling): invisible and
 # unreadable everywhere in the jail, ancestry included, but NOT part of
@@ -385,6 +408,17 @@ class ToolExecutor:
                     "refused rather than building a jail that refuses every call"
                 ) from mismatch
             if not root.is_dir():
+                # Names the absolute path, unlike the mismatch message above
+                # (2K Task 7 fix round 2, minor) — deliberately, not an
+                # inconsistency: BOTH exceptions are raised here, at
+                # construction, before a single tool call exists to answer
+                # — neither is ever wrapped into an `execute()` result the
+                # model reads, only ever into a caller's own message (a
+                # ClickException, in `cli/app.py`) meant for the operator
+                # wiring this jail up. Naming the specific root is exactly
+                # what that operator needs to fix the wiring; the mismatch
+                # message stays generic because it names an ignore/root
+                # PAIRING, several roots deep, that no one path identifies.
                 raise ValueError(
                     f"ToolExecutor: jailed root {root} does not exist — construction "
                     "refused rather than building a jail whose calls degrade to opaque "
@@ -440,7 +474,10 @@ class ToolExecutor:
             # that offset would come back with its tail sliced off rather
             # than replaced by the marker — `redact_text` has to see the
             # WHOLE result at least once before any of it is thrown away.
-            result = _cap(self._redactor.redact_text(result))
+            # The anchor rewrite runs the same way, for the same reason,
+            # ahead of both (2K Task 7 fix round 2, IMPORTANT): a host path
+            # split by the byte cap is still a host path leaked in part.
+            result = _cap(self._redactor.redact_text(self._anchor_relative(result)))
         except Exception as unexpected:  # noqa: BLE001 — deliberate, see below
             # The one hard guarantee this class makes is that NOTHING
             # escapes `execute` (2K Task 5 brief) — a permissions error, a
@@ -746,21 +783,65 @@ class ToolExecutor:
             raise AssertionError(f"ToolExecutor: {path} is outside the display anchor")
         return path.relative_to(self._anchor).as_posix()
 
+    def _anchor_relative(self, text: str) -> str:
+        """`text` with every occurrence of the display anchor's own absolute
+        path rewritten to its relative spelling (2K Task 7 fix round 2,
+        IMPORTANT). `_display_path` already keeps every CITATION this class
+        prints anchor-relative, but a served FILE's own bytes can carry the
+        anchor as an absolute host path too — a fact document's
+        `origin_entry` (`ingress/read/__init__.py`, the JVM extractor's own
+        classpath entry) chiefly — and that is CONTENT, not a citation the
+        anchor contract covers.
+
+        Called from TWO places, deliberately: `_content_of` (so `grep`'s own
+        pattern search runs against already-relativized text — a caller
+        searching for the anchor's raw host path must find NOTHING, not
+        merely see a cleaned-up report of a match it should never have been
+        able to make) and `execute`'s own final pass, alongside
+        `redact_text` (so every OTHER result — `list_dir`/`find`'s own
+        names are already anchor-relative by construction, but nothing stops
+        a later tool from returning content `_content_of` never touched —
+        gets the same treatment). Idempotent: a text already relativized by
+        the first call is unchanged by the second.
+
+        `anchor/tail` becomes `tail`; a bare, standalone `anchor` (nothing
+        after it) becomes `.` — the same "root itself" spelling
+        `list_dir(path=".")` already accepts, so a value that happened to be
+        exactly the anchor's own path is never left as an untouched
+        absolute string. Word-bounded on the bare form so a SIBLING
+        directory that merely shares the anchor as a text prefix
+        (`.../orders-service-2`) is never mistaken for the anchor itself.
+        """
+        anchor = self._anchor.as_posix()
+        text = text.replace(anchor + "/", "")
+        bare = re.compile(r"(?<![\w./-])" + re.escape(anchor) + r"(?![\w-])")
+        return bare.sub(".", text)
+
     def _content_of(self, path: Path) -> str | None:
-        """`path`'s text, key-masked first when it is config-bearing (2K
-        design §4's "redaction-on-read") — BEFORE either `read_file` or
-        `grep` exposes it, so a `grep` for the very value `read_file` would
-        have masked cannot recover it. `None` for a file that cannot be
-        decoded as UTF-8 text or cannot be read at all: both tools skip it
-        rather than raising, the same silent-skip a real `grep` gives a
-        binary file."""
+        """`path`'s text, masked first when it is config-bearing OR a fact
+        file (2K design §4's "redaction-on-read"; the fact-file half is 2K
+        Task 7 fix round 2) — BEFORE either `read_file` or `grep` exposes
+        it, so a `grep` for the very value `read_file` would have masked
+        cannot recover it through EITHER route a value reaches the jail by.
+        The anchor rewrite (2K Task 7 fix round 2, IMPORTANT) runs here too,
+        unconditionally, for the same reason and not only at `execute`'s own
+        final pass: `grep`'s OWN pattern search runs against what this
+        method returns, so a caller searching for the anchor's raw host
+        path has to find NOTHING, not merely see a cleaned-up report of a
+        match it should never have been able to make. `None` for a file
+        that cannot be decoded as UTF-8 text or cannot be read at all: both
+        tools skip it rather than raising, the same silent-skip a real
+        `grep` gives a binary file."""
         try:
             text = read_file_text(path)
         except (UnicodeDecodeError, OSError):
             return None
-        if file_kind(path) in CONFIG_BEARING_EXTENSIONS:
-            return _mask_config_lines(text, self._redactor)
-        return text
+        kind = file_kind(path)
+        if kind in CONFIG_BEARING_EXTENSIONS:
+            text = _mask_config_lines(text, self._redactor)
+        elif kind == FACT_LINE_EXTENSION:
+            text = _mask_fact_lines(text, self._redactor)
+        return self._anchor_relative(text)
 
 
 def _has_traversal(raw_path: str) -> bool:
@@ -884,6 +965,19 @@ def _mask_config_lines(text: str, redactor: Redactor) -> str:
         else:
             masked_lines.append(f"{match.group('indent')}{key}{match.group('sep')}{masked_value}")
     return "\n".join(masked_lines)
+
+
+def _mask_fact_lines(text: str, redactor: Redactor) -> str:
+    """`text` (a `.jsonl` fact file's content, or a window of it) with every
+    line passed through `domain.factfile.redact_config_entry_line` (2K Task
+    7 fix round 2, CRITICAL) — the SAME function the bundle export path
+    calls, reused rather than reimplemented: a line that is not a
+    `config_entry` fact (a symbol, a call site, the document header, or
+    simply a line that does not parse as JSON at all — `read_file`'s own
+    windowing can cut a line in half) passes through byte-identical, and a
+    `config_entry` line's `value` is masked exactly as `read_file`/`grep`
+    already mask that same value from the config file it was read out of."""
+    return "\n".join(redact_config_entry_line(line, redactor) for line in text.splitlines())
 
 
 def _cap(text: str) -> str:
