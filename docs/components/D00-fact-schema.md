@@ -67,7 +67,9 @@ Written once per class file. Every fact points at one.
 | `scanner_id` | Which scanner produced these facts |
 | `scanner_version` | |
 | `content_hash` | Of the source of truth this was read from |
-| `origin` | **The classpath entry this was read from, and that entry's tier** — module output, first-party, third-party |
+| `origin_entry` | **The classpath entry this was read from** — the module's own output directory, or a library archive |
+| `origin_tier` | That entry's tier — module output, first-party, third-party |
+| `origin` | The **library** this document was extracted from, as its coordinate (`com.example:orders-soap-client`). Absent for the module's own output |
 | `redaction_set_hash` | From [D04](D04-config-and-exclusion.md) |
 | `partial` | True when the file was analysed incompletely, with a reason |
 
@@ -89,13 +91,21 @@ and the source file is the unit of incremental reuse, which is exactly where the
 `scanner_id` exists because multiple scanners per language is a supported operation. It is
 what allows two scanners to be compared.
 
-**`origin` is recorded here because this is the moment it is a fact.** The scanner is
+**Origin is recorded here because this is the moment it is a fact.** The scanner is
 holding the jar it read the class from, and [M02](M02-detector.md) already tiered that
 classpath entry. Every downstream question of the form "is this symbol first-party?" —
 noise filtering in diagrams and answers, the `narrowed`/`partial` boundary — reads this
 field. **Package names are never pattern-matched to decide it**: group patterns classify
 artifacts in M02, and shaded or oddly-grouped jars would make any name-based inference
 silently wrong.
+
+**`origin` is written only where there is a library to name**, and it is then the
+coordinate M02 resolved the archive from — never a path, so it survives being read on a
+machine whose local repository lives somewhere else. A document from the module's own
+output carries **no `origin` key at all** rather than one spelled null: a module with no
+library extraction configured produces exactly the fact files it produced before opt-in
+library extraction existed, which is what makes "did enabling this change my module's
+facts?" answerable by comparing bytes.
 
 **`sextant_version` and `fact_schema_version` are here because a result can change when the
 tool changes, even when the code does not.** A fixed bug in extraction produces different

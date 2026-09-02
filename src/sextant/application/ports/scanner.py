@@ -11,8 +11,16 @@ class ScanRequest:
     module_id: str
     coordinates: str
     version: str
+    # A directory tree of compiled classes, or a single library archive — the
+    # scanner backend says which forms it reads. Named `classes_dir` since
+    # Phase 1, when a directory was the only form.
     classes_dir: Path
     out_dir: Path
+    # The library this request scans, as its coordinate — recorded on every
+    # document the scan writes (D00 §2's `origin`). NULL for the module's own
+    # output, which is what a scan has always been, so an unset origin leaves
+    # a document exactly as it was.
+    origin: str | None = None
 
 
 @dataclass(frozen=True)

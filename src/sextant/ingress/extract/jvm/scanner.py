@@ -41,6 +41,10 @@ class AsmScanner:
         return 100
 
     def scan(self, request: ScanRequest) -> ScanReport:
+        # `--origin` is passed only when the request names one: the extractor
+        # writes the key only when it is given, so a module's own scan stays
+        # byte-for-byte what it was before library extraction existed.
+        origin = ["--origin", request.origin] if request.origin is not None else []
         completed = subprocess.run(
             [
                 "java",
@@ -56,6 +60,7 @@ class AsmScanner:
                 str(request.classes_dir),
                 "--out",
                 str(request.out_dir),
+                *origin,
             ],
             capture_output=True,
             text=True,

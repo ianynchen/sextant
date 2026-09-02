@@ -73,6 +73,11 @@ class Document(BaseModel):
     redaction_set_hash: str
     partial: bool = False
     partial_reason: str | None = None
+    # Which artifact outside this module's own output the document was read
+    # from, as that artifact's coordinate (D00 §2). NULL — and, on disk,
+    # absent — for the module's own output, which is what every document was
+    # until libraries could be scanned at all.
+    origin: str | None = None
 
 
 class ModuleFact(BaseModel):

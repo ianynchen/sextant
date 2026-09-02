@@ -14,7 +14,17 @@ _FACT_ADAPTER: TypeAdapter[Fact] = TypeAdapter(Fact)
 
 def _line(model: Document | Fact) -> str:
     # sort_keys and no whitespace: byte-identical output for identical facts (NFR-1).
-    return json.dumps(model.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    dumped = model.model_dump(mode="json")
+    # A document with no `origin` carries no `origin` KEY, rather than one
+    # spelled null: the extractor omits it for a module's own output, and this
+    # writer rewrites documents the extractor already wrote (`analyze`'s
+    # descriptor interpretation writes shape facts back into their own fact
+    # file). Dumping the field unconditionally would make every rewritten
+    # module document differ from the one on disk beside it — a byte change in
+    # a module that has no library to extract at all (NFR-1).
+    if isinstance(model, Document) and dumped["origin"] is None:
+        del dumped["origin"]
+    return json.dumps(dumped, sort_keys=True, separators=(",", ":"))
 
 
 def config_fact_target(fact_root: Path, relative_path: str) -> Path:

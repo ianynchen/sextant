@@ -231,6 +231,10 @@ derived from it says so.
 ## Honesty obligations
 
 - The uncovered-source list, in full.
+- An input the scan was pointed at that holds **no class file at all** — a readable
+  archive or directory with nothing in it to scan is a finding about the input, and goes
+  on the uncovered list rather than being reported as a clean scan of nothing. An input
+  that cannot be read at all is a different thing and fails the run outright.
 - Class files with no source attribution, which no ignore rule could be applied to.
 - Every capability the chosen scanner lacks, so a skipped catalog traces back to a cause.
 - Regions where control flow could not be structured.
