@@ -21,6 +21,7 @@ redaction-on-read pass that a config file's planted credential proves end
 to end.
 """
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -659,6 +660,163 @@ def test_grep_for_the_anchors_own_host_path_finds_nothing_anywhere_in_the_jail(t
     assert executor.execute("grep", {"pattern": re.escape(str(root))}) == ""
 
 
+def test_the_anchor_rewrite_does_not_touch_a_longer_name_sharing_its_prefix(tmp_path: Path):
+    """2K Task 7 fix round 3, minor 1 (reviewer probe): `<anchor>.bak` —
+    the anchor immediately followed by `.bak`, no separator — must stay
+    exactly that. The fix round 2 bare-form lookahead admitted `.`, so this
+    used to rewrite into `..bak`."""
+    root = tmp_path / "root"
+    facts = root / ".sextant" / "facts" / "config"
+    facts.mkdir(parents=True)
+    origin = root.as_posix() + ".bak"
+    (facts / "application.yml.jsonl").write_text(
+        f'{{"kind":"document","document_id":"d","origin_entry":"{origin}"}}\n',
+        encoding="utf-8",
+    )
+    executor = _executor((root,))
+    content = executor.execute("read_file", {"path": ".sextant/facts/config/application.yml.jsonl"})
+    assert f'"origin_entry":"{origin}"' in content
+
+
+def test_the_anchor_rewrite_does_not_touch_an_anchor_shaped_suffix_of_a_longer_path(
+    tmp_path: Path,
+):
+    """2K Task 7 fix round 3, minor 1 (reviewer probe): `/mnt/backup<anchor>/
+    file.txt` — the anchor's own spelling occurring as the TAIL of a longer,
+    unrelated path segment — must stay exactly that. The fix round 2
+    `anchor + "/"` replace had no left boundary and would strip it out of
+    the middle, losing `/mnt/backup`."""
+    root = tmp_path / "root"
+    facts = root / ".sextant" / "facts" / "config"
+    facts.mkdir(parents=True)
+    origin = f"/mnt/backup{root.as_posix()}/file.txt"
+    (facts / "application.yml.jsonl").write_text(
+        f'{{"kind":"document","document_id":"d","origin_entry":"{origin}"}}\n',
+        encoding="utf-8",
+    )
+    executor = _executor((root,))
+    content = executor.execute("read_file", {"path": ".sextant/facts/config/application.yml.jsonl"})
+    assert f'"origin_entry":"{origin}"' in content
+
+
+def test_a_library_facts_origin_entry_serves_with_the_home_directory_hidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2K Task 7 fix round 3, IMPORTANT remainder: a LIBRARY fact document's
+    `origin_entry` names the extracted jar's own absolute path, ordinarily
+    under `~/.m2/repository/...` — legitimate local provenance for
+    `analyze`, written verbatim by design, and never under the ANCHOR the
+    way a module's own resource root is, so `_anchor_relative` alone cannot
+    touch it. `_home_relative` closes it at the SERVING exit: the path stays
+    usable (`~/tail`, not stripped to nothing), only the username is gone."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    root = tmp_path / "root"
+    facts = root / ".sextant" / "facts" / "lib" / "com.example" / "orders-soap-client"
+    facts.mkdir(parents=True)
+    jar = (
+        home / ".m2" / "repository" / "com" / "example" / "orders-soap-client" / "1.0.0"
+    ).as_posix()
+    (facts / "BillingPort.jsonl").write_text(
+        f'{{"kind":"document","document_id":"d","origin_entry":"{jar}"}}\n',
+        encoding="utf-8",
+    )
+    executor = _executor((root,))
+    content = executor.execute(
+        "read_file",
+        {"path": ".sextant/facts/lib/com.example/orders-soap-client/BillingPort.jsonl"},
+    )
+    assert str(home) not in content
+    assert '"origin_entry":"~/.m2/repository/com/example/orders-soap-client/1.0.0"' in content
+
+
+def test_grep_for_the_home_directory_finds_nothing_anywhere_in_the_jail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The jail-wide half of the same fix — the reviewer's own failing
+    probe, generalized past one hardcoded `/Users/` spelling: a search for
+    the analyst's own home directory must find NOTHING, anywhere in the
+    jail, the same way a search for the anchor's own host path does."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    root = tmp_path / "root"
+    facts = root / ".sextant" / "facts" / "lib" / "com.example" / "orders-soap-client"
+    facts.mkdir(parents=True)
+    jar = (home / ".m2" / "repository" / "com" / "example" / "lib.jar").as_posix()
+    (facts / "BillingPort.jsonl").write_text(
+        f'{{"kind":"document","document_id":"d","origin_entry":"{jar}"}}\n',
+        encoding="utf-8",
+    )
+    executor = _executor((root,))
+    assert executor.execute("grep", {"pattern": re.escape(str(home))}) == ""
+
+
+def test_masking_the_home_directory_is_deterministic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Served twice, identical — the same promise `_anchor_relative` and
+    `_mask_fact_lines` already keep."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    root = tmp_path / "root"
+    facts = root / ".sextant" / "facts" / "lib" / "com.example" / "orders-soap-client"
+    facts.mkdir(parents=True)
+    jar = (home / ".m2" / "repository" / "com" / "example" / "lib.jar").as_posix()
+    (facts / "BillingPort.jsonl").write_text(
+        f'{{"kind":"document","document_id":"d","origin_entry":"{jar}"}}\n',
+        encoding="utf-8",
+    )
+    executor = _executor((root,))
+    args = {"path": ".sextant/facts/lib/com.example/orders-soap-client/BillingPort.jsonl"}
+    assert executor.execute("read_file", args) == executor.execute("read_file", args)
+
+
+def test_the_home_rewrite_does_not_touch_a_longer_name_sharing_its_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2K Task 7 fix round 3, minor 1: the same boundary discipline applied
+    to the home-directory pass — `<home>.bak` must stay exactly that."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    root = tmp_path / "root"
+    facts = root / ".sextant" / "facts" / "config"
+    facts.mkdir(parents=True)
+    origin = home.as_posix() + ".bak"
+    (facts / "application.yml.jsonl").write_text(
+        f'{{"kind":"document","document_id":"d","origin_entry":"{origin}"}}\n',
+        encoding="utf-8",
+    )
+    executor = _executor((root,))
+    content = executor.execute("read_file", {"path": ".sextant/facts/config/application.yml.jsonl"})
+    assert f'"origin_entry":"{origin}"' in content
+
+
+def test_the_home_rewrite_does_not_touch_a_home_shaped_suffix_of_a_longer_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2K Task 7 fix round 3, minor 1: the same boundary discipline applied
+    to the home-directory pass — `/mnt/backup<home>/file.txt` must stay
+    exactly that."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    root = tmp_path / "root"
+    facts = root / ".sextant" / "facts" / "config"
+    facts.mkdir(parents=True)
+    origin = f"/mnt/backup{home.as_posix()}/file.txt"
+    (facts / "application.yml.jsonl").write_text(
+        f'{{"kind":"document","document_id":"d","origin_entry":"{origin}"}}\n',
+        encoding="utf-8",
+    )
+    executor = _executor((root,))
+    content = executor.execute("read_file", {"path": ".sextant/facts/config/application.yml.jsonl"})
+    assert f'"origin_entry":"{origin}"' in content
+
+
 def test_the_four_tools_agree_about_a_file_created_after_construction(tmp_path: Path):
     """2K Task 5 fix round 4, S3: `find`/`grep` answered from a cached
     snapshot while `read_file`/`list_dir` walked the live tree, so a file
@@ -1021,7 +1179,12 @@ def test_a_config_entry_facts_value_is_masked_when_served_as_a_fact_line(tmp_pat
     executor = _executor((root,))
     content = executor.execute("read_file", {"path": ".sextant/facts/config/application.yml.jsonl"})
     assert "hunter2-fixture" not in content
-    assert REDACTED in content
+    # The escaped spelling (`«...»`), not the literal marker: the
+    # serving site re-serializes `compact=True` — `_line`'s own spelling,
+    # `ensure_ascii` at its default — so a masked line's non-ASCII marker is
+    # escaped exactly as an unmasked neighbour's own non-ASCII value would be
+    # (2K Task 7 fix round 3, minor 2).
+    assert json.loads(content.splitlines()[1])["value"] == REDACTED
 
 
 def test_a_non_config_entry_fact_line_is_served_unmodified(tmp_path: Path):

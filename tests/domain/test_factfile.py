@@ -60,3 +60,20 @@ def test_json_that_is_not_an_object_is_returned_byte_identical():
 def test_a_config_entry_with_no_value_is_returned_byte_identical():
     line = _line(value=None)
     assert redact_config_entry_line(line, _REDACTOR) == line
+
+
+def test_compact_masking_matches_the_writers_own_serialization_style():
+    """2K Task 7 fix round 3, minor 2: `compact=True` must reproduce
+    `_line`'s own spelling exactly — `sort_keys=True`, no whitespace after
+    `:`/`,`, `ensure_ascii` at its default (so a non-ASCII masking marker is
+    escaped the same way an unmasked neighbour's own non-ASCII value would
+    be) — so a masked line never stands out from the unmasked lines beside
+    it in the same served fact file. The DEFAULT (export) spelling stays
+    the byte-compatibility promise it always was, proven separately by
+    `tests/storage/test_workspace.py`."""
+    unmasked = _line()
+    compact = redact_config_entry_line(unmasked, _REDACTOR, compact=True)
+    default = redact_config_entry_line(unmasked, _REDACTOR)
+    assert compact != default  # sanity: the two spellings really do differ
+    assert compact == json.dumps(json.loads(compact), sort_keys=True, separators=(",", ":"))
+    assert "«" not in compact and "\\u00ab" in compact  # ensure_ascii at its default

@@ -433,6 +433,14 @@ class ToolExecutor:
         # cites — see `_display_path` and the module docstring's "One
         # anchor, one spelling".
         self._anchor = ignore.repo_root
+        # The user's home directory (2K Task 7 fix round 3, IMPORTANT
+        # remainder): a LIBRARY fact document's `origin_entry` names the
+        # extracted jar's own absolute path — legitimate local provenance
+        # for analysis, written verbatim by design, and never under the
+        # anchor (`~/.m2/repository/...`, ordinarily) — so `_anchor_relative`
+        # alone cannot touch it. Cached once, like `_anchor`, rather than
+        # recomputed per call.
+        self._home = Path.home()
         # Every call and its result, in call order — persisted by the
         # caller (2K design §3: "a full session transcript logged locally
         # for audit"). This class only ever appends to it; `args` is
@@ -474,10 +482,13 @@ class ToolExecutor:
             # that offset would come back with its tail sliced off rather
             # than replaced by the marker — `redact_text` has to see the
             # WHOLE result at least once before any of it is thrown away.
-            # The anchor rewrite runs the same way, for the same reason,
-            # ahead of both (2K Task 7 fix round 2, IMPORTANT): a host path
-            # split by the byte cap is still a host path leaked in part.
-            result = _cap(self._redactor.redact_text(self._anchor_relative(result)))
+            # The anchor and home-directory rewrites run the same way, for
+            # the same reason, ahead of both (2K Task 7 fix rounds 2-3): a
+            # host path split by the byte cap is still a host path leaked
+            # in part. Anchor before home, as `_content_of` explains.
+            result = _cap(
+                self._redactor.redact_text(self._home_relative(self._anchor_relative(result)))
+            )
         except Exception as unexpected:  # noqa: BLE001 — deliberate, see below
             # The one hard guarantee this class makes is that NOTHING
             # escapes `execute` (2K Task 5 brief) — a permissions error, a
@@ -806,16 +817,31 @@ class ToolExecutor:
 
         `anchor/tail` becomes `tail`; a bare, standalone `anchor` (nothing
         after it) becomes `.` — the same "root itself" spelling
-        `list_dir(path=".")` already accepts, so a value that happened to be
-        exactly the anchor's own path is never left as an untouched
-        absolute string. Word-bounded on the bare form so a SIBLING
-        directory that merely shares the anchor as a text prefix
-        (`.../orders-service-2`) is never mistaken for the anchor itself.
+        `list_dir(path=".")` already accepts. See `_rewrite_prefix` for the
+        boundary discipline that keeps this from touching `<anchor>.bak` or
+        `/mnt/backup<anchor>/...` (2K Task 7 fix round 3, minor 1).
         """
-        anchor = self._anchor.as_posix()
-        text = text.replace(anchor + "/", "")
-        bare = re.compile(r"(?<![\w./-])" + re.escape(anchor) + r"(?![\w-])")
-        return bare.sub(".", text)
+        return _rewrite_prefix(text, self._anchor.as_posix(), slash="", bare=".")
+
+    def _home_relative(self, text: str) -> str:
+        """`text` with every occurrence of the user's home directory
+        rewritten to `~` (2K Task 7 fix round 3, IMPORTANT remainder): a
+        LIBRARY fact document's `origin_entry` names the extracted jar's own
+        absolute path (`ingress/detect/maven.py`'s local-repository
+        resolution, ordinarily under `~/.m2/repository`) — legitimate local
+        provenance for `analyze`, written verbatim by design, and never
+        under the ANCHOR the way a module's own resource root is, so
+        `_anchor_relative` alone cannot touch it. The leak this closes is at
+        the SERVING exit, not the write site: the absolute path stays real
+        and useful on the analyst's own disk, and only the username is
+        stripped on its way to a model. `home/tail` becomes `~/tail`
+        (keeping the path usable, unlike the anchor's own "strip and lose
+        the root" rewrite — home is not this jail's root, so there is no
+        "the module itself" spelling to collapse to); a bare `home` becomes
+        `~` alone. Same boundary discipline as `_anchor_relative`
+        (`_rewrite_prefix`), and applied at the same two call sites.
+        """
+        return _rewrite_prefix(text, self._home.as_posix(), slash="~/", bare="~")
 
     def _content_of(self, path: Path) -> str | None:
         """`path`'s text, masked first when it is config-bearing OR a fact
@@ -823,15 +849,21 @@ class ToolExecutor:
         Task 7 fix round 2) — BEFORE either `read_file` or `grep` exposes
         it, so a `grep` for the very value `read_file` would have masked
         cannot recover it through EITHER route a value reaches the jail by.
-        The anchor rewrite (2K Task 7 fix round 2, IMPORTANT) runs here too,
-        unconditionally, for the same reason and not only at `execute`'s own
-        final pass: `grep`'s OWN pattern search runs against what this
-        method returns, so a caller searching for the anchor's raw host
-        path has to find NOTHING, not merely see a cleaned-up report of a
-        match it should never have been able to make. `None` for a file
-        that cannot be decoded as UTF-8 text or cannot be read at all: both
-        tools skip it rather than raising, the same silent-skip a real
-        `grep` gives a binary file."""
+        The anchor and home-directory rewrites (2K Task 7 fix rounds 2-3)
+        run here too, unconditionally, for the same reason and not only at
+        `execute`'s own final pass: `grep`'s OWN pattern search runs against
+        what this method returns, so a caller searching for a host path —
+        the anchor's own, or the analyst's home directory — has to find
+        NOTHING, not merely see a cleaned-up report of a match it should
+        never have been able to make. The anchor rewrite runs FIRST: the
+        anchor is ordinarily a subdirectory of home, so content that is the
+        anchor's own path must be claimed by the (root-collapsing) anchor
+        rule before the (username-hiding, root-preserving) home rule would
+        otherwise partially rewrite it into something that reads as merely
+        "somewhere under home" rather than "the module itself". `None` for
+        a file that cannot be decoded as UTF-8 text or cannot be read at
+        all: both tools skip it rather than raising, the same silent-skip a
+        real `grep` gives a binary file."""
         try:
             text = read_file_text(path)
         except (UnicodeDecodeError, OSError):
@@ -841,7 +873,7 @@ class ToolExecutor:
             text = _mask_config_lines(text, self._redactor)
         elif kind == FACT_LINE_EXTENSION:
             text = _mask_fact_lines(text, self._redactor)
-        return self._anchor_relative(text)
+        return self._home_relative(self._anchor_relative(text))
 
 
 def _has_traversal(raw_path: str) -> bool:
@@ -943,6 +975,46 @@ def _optional_int(args: dict[str, object], key: str, minimum: int) -> int | None
     return value
 
 
+def _rewrite_prefix(text: str, prefix: str, slash: str, bare: str) -> str:
+    """`text` with every occurrence of `prefix` — matched only as a whole
+    path segment, never a substring on EITHER side — rewritten: `prefix/
+    tail` becomes `slash + tail` (so `slash=""` strips the segment and its
+    separator entirely, `slash="~/"` keeps a shortened root), and a bare,
+    standalone `prefix` (nothing following it at all) becomes `bare` alone.
+    Shared by `ToolExecutor._anchor_relative` and `._home_relative` (2K Task
+    7 fix rounds 2-3): a text or JSON value the anchor's own absolute path
+    can appear in is exactly the shape the home directory's can appear in
+    too, so this is the one place the boundary rule is written.
+
+    **Bounded on both sides (2K Task 7 fix round 3, minor 1 — a fix round 2
+    regex admitted two false positives, reproduced and fixed here).** The
+    lookbehind `(?<![\\w./-])` refuses a match where `prefix` is merely the
+    TAIL of a longer segment — `/mnt/backup` immediately followed by
+    `prefix` with no separator between them must never have `prefix` (or
+    `prefix/...`) read out of the middle of `/mnt/backup<prefix>/...` and
+    rewritten, leaving `/mnt/backup...` behind. The lookahead
+    `(?![\\w.-])` (note the `.`, absent from fix round 2's version) refuses
+    a match where `prefix` is merely the HEAD of a longer name —
+    `<prefix>.bak` must never be read as "the bare prefix, then `.bak`" and
+    rewritten into `<bare>.bak`; a `.` right after `prefix` means `prefix`
+    was not the whole segment, the same way a `-` already excluded a
+    sibling directory (`<prefix>-2`) from fix round 2 on.
+
+    **Two residuals, stated rather than chased (2K Task 7 fix round 3, minor
+    3).** A case-VARIANT spelling of `prefix` in served content (an
+    uppercased drive-style prefix, say) survives this rewrite unrecognized:
+    every writer that puts a host path into a fact or a source file emits
+    the REAL spelling, so this has no known live case to reach from. A
+    `prefix` containing a `"` or a `\\` would be JSON-escaped as written to
+    disk and so never match `prefix`'s own un-escaped spelling here either
+    — a miss, not a corruption: the path is not rewritten, but it is not
+    mangled either, and nothing about that shape is plausible for a real
+    filesystem path in the first place.
+    """
+    pattern = re.compile(r"(?<![\w./-])" + re.escape(prefix) + r"(/|(?![\w.-]))")
+    return pattern.sub(lambda m: slash if m.group(1) == "/" else bare, text)
+
+
 def _mask_config_lines(text: str, redactor: Redactor) -> str:
     """`text` (a config-bearing file's content, or a window of it) with
     every `key: value` / `key = value` assignment line passed through
@@ -976,8 +1048,16 @@ def _mask_fact_lines(text: str, redactor: Redactor) -> str:
     simply a line that does not parse as JSON at all — `read_file`'s own
     windowing can cut a line in half) passes through byte-identical, and a
     `config_entry` line's `value` is masked exactly as `read_file`/`grep`
-    already mask that same value from the config file it was read out of."""
-    return "\n".join(redact_config_entry_line(line, redactor) for line in text.splitlines())
+    already mask that same value from the config file it was read out of.
+
+    `compact=True` (2K Task 7 fix round 3, minor 2): a masked line
+    re-serializes in `_line`'s OWN compact spelling, matching the style of
+    the unmasked neighbours around it in the same served file — the export
+    path's own default spelling is a byte-compatibility promise to 2K Task
+    1's pins and belongs there alone."""
+    return "\n".join(
+        redact_config_entry_line(line, redactor, compact=True) for line in text.splitlines()
+    )
 
 
 def _cap(text: str) -> str:

@@ -29,7 +29,9 @@ def _line(model: Document | Fact) -> str:
     return json.dumps(dumped, sort_keys=True, separators=(",", ":"))
 
 
-def redact_config_entry_line(payload_json: str, redactor: Redactor) -> str:
+def redact_config_entry_line(
+    payload_json: str, redactor: Redactor, *, compact: bool = False
+) -> str:
     """One fact-file LINE's own JSON payload, with its `value` masked by
     `redactor.redact_value` when — and only when — the line is a
     `config_entry` fact (2K Task 7 fix round 2, CRITICAL). The one place "a
@@ -47,6 +49,16 @@ def redact_config_entry_line(payload_json: str, redactor: Redactor) -> str:
     a JSON-wide transform, and a line this cannot parse is not this
     function's business to reject (the caller decides what an unparseable
     line means for its own purpose).
+
+    `compact` picks the re-serialization spelling (2K Task 7 fix round 3,
+    minor 2) — the two callers want two different ones, and getting either
+    wrong is observable: the bundle export's default (`ensure_ascii=False`,
+    default separators) is proven byte-compatible with 2K Task 1's own pins
+    and MUST NOT change; the jail's fact-serving path wants `compact=True`
+    — `_line`'s own spelling (`sort_keys=True, separators=(",", ":")`,
+    `ensure_ascii` at its default) — so a masked line matches the style of
+    the UNMASKED neighbours around it in the same served file, which
+    `_line` wrote in that style to begin with.
     """
     try:
         payload = json.loads(payload_json)
@@ -61,6 +73,8 @@ def redact_config_entry_line(payload_json: str, redactor: Redactor) -> str:
     if masked == str(value):
         return payload_json
     payload["value"] = masked
+    if compact:
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return json.dumps(payload, ensure_ascii=False)
 
 
