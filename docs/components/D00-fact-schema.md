@@ -440,11 +440,14 @@ links a schema runtime to do it.
   grammar (§1). It is what a gap names when a payload cannot be interpreted, and one
   holder emits one fact: a protobuf file's messages all share their file's descriptor, so
   a fact per message would be one payload copied once per type.
-- **`schema_format`** is `protobuf`, `avro` or `graphql`. It names the schema LANGUAGE
-  that described the payload, which is not the same question as what is on the wire:
-  protobuf and Avro define an encoding, GraphQL defines a type system and leaves the
+- **`schema_format`** is `protobuf`, `avro`, `graphql` or `wsdl`. It names the schema
+  LANGUAGE that described the payload, which is not the same question as what is on the
+  wire: protobuf and Avro define an encoding, GraphQL defines a type system and leaves the
   encoding to the transport. [D02](D02-catalog-schema.md) §2c's rung 4 turns on exactly
-  that distinction.
+  that distinction. `wsdl` covers both `.wsdl` and `.xsd` files, because they are one type
+  universe and not two formats: a WSDL declares its payload types by embedding XSD in its
+  `<types>` element, and an `.xsd` beside it is the same schema split across a file
+  boundary by an `xsd:import`.
 - **`payload`** is base64 for a binary format and the text itself for a textual one — a
   protobuf `FileDescriptorProto`'s bytes are base64; an Avro schema is JSON that was
   always JSON and travels verbatim, because re-encoding readable text costs a reader
@@ -473,11 +476,12 @@ Each such fact carries, beside its `fields`:
   shape's whole field list carries the one tier; a schema does not state some of its
   fields more confidently than others.
 - **`role`** — `query`, `mutation` or `subscription` where the schema names this type as
-  the entry point every operation of that kind is addressed against, and NULL for the
-  ordinary payload types, which is nearly all of them. It is a fact and not a derivation
-  because a schema may *rename* its roots, so which type holds the role cannot be
-  recovered from the type's own name by anything downstream — and only the interpreter
-  may read a schema format at all.
+  the entry point every operation of that kind is addressed against; `operation` where
+  the schema names the type as *being* an operation rather than a root operations hang
+  off; and NULL for the ordinary payload types, which is nearly all of them. It is a fact
+  and not a derivation because a schema may *rename* its roots, so which type holds the
+  role cannot be recovered from the type's own name by anything downstream — and only the
+  interpreter may read a schema format at all.
 
 Per field: the schema's own `name` and the encoded `wire_name` (a protobuf `json_name`,
 **read from the descriptor, never computed** — protoc puts the computed default and an

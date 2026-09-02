@@ -211,6 +211,27 @@ def test_schema_roots_reports_the_sdl_directory_under_resources(tmp_path: Path):
     assert module.languages == frozenset()
 
 
+def test_schema_roots_reports_the_three_contract_directories_under_resources(tmp_path: Path):
+    """A SOAP contract is served at runtime, so all three sit on the classpath
+    — `META-INF/wsdl` being where the JAX-WS packaging convention puts it.
+    Reported in the detector's own fixed order, never a directory listing's."""
+    _module(tmp_path)
+    resources = tmp_path / "src" / "main" / "resources"
+    # Reverse mkdir order, so a passing test cannot be an accident of
+    # directory-listing order rather than the detector's own fixed sequence.
+    packaged = resources / "META-INF" / "wsdl"
+    packaged.mkdir(parents=True)
+    xsd = resources / "xsd"
+    xsd.mkdir()
+    wsdl = resources / "wsdl"
+    wsdl.mkdir()
+
+    module = MavenDetector().detect(tmp_path).modules[0]
+
+    assert module.schema_roots == (wsdl, xsd, packaged)
+    assert module.languages == frozenset()
+
+
 def test_schema_roots_reports_every_one_of_the_real_fixtures_schema_directories():
     module = MavenDetector().detect(FIXTURE).modules[0]
 
@@ -218,6 +239,7 @@ def test_schema_roots_reports_every_one_of_the_real_fixtures_schema_directories(
         FIXTURE / "src" / "main" / "proto",
         FIXTURE / "src" / "main" / "avro",
         FIXTURE / "src" / "main" / "resources" / "graphql",
+        FIXTURE / "src" / "main" / "resources" / "wsdl",
     )
 
 

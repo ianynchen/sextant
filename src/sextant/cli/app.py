@@ -27,6 +27,7 @@ from sextant.ingress.read.avsc import AvscReader
 from sextant.ingress.read.graphql_sdl import GraphqlSdlReader
 from sextant.ingress.read.properties import PropertiesReader
 from sextant.ingress.read.proto_source import ProtoSourceReader
+from sextant.ingress.read.wsdl_xsd import WsdlXsdReader
 from sextant.ingress.read.yaml_config import YamlConfigReader
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -125,6 +126,7 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
                 AvscReader(),
                 ProtoSourceReader(),
                 GraphqlSdlReader(),
+                WsdlXsdReader(),
             ],
             interpret=_JvmDescriptorInterpreter(),
         )

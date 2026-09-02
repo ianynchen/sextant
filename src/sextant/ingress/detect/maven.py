@@ -26,8 +26,19 @@ _SCHEMA_DIRECTORIES = frozenset(_SCHEMA_ROOT_NAMES)
 # is not a sibling of the source roots: SDL ships on the classpath, so it
 # lives UNDER `src/main/resources`. It needs no entry in _SCHEMA_DIRECTORIES
 # for that reason — `resources` is already a non-source directory, so no
-# language was ever going to be reported from under it.
-_SCHEMA_ROOT_PATHS = (*((name,) for name in _SCHEMA_ROOT_NAMES), ("resources", "graphql"))
+# language was ever going to be reported from under it. The three WSDL/XSD
+# directories (2I design §3) are classpath resources for the same reason: a
+# SOAP contract is served at runtime, and `META-INF/wsdl` is where the JAX-WS
+# packaging convention puts it. Conventional directories only — Maven has no
+# declaration of a contract directory for this detector to read instead, so a
+# WSDL kept anywhere else is a stated boundary rather than a guess.
+_SCHEMA_ROOT_PATHS = (
+    *((name,) for name in _SCHEMA_ROOT_NAMES),
+    ("resources", "graphql"),
+    ("resources", "wsdl"),
+    ("resources", "xsd"),
+    ("resources", "META-INF", "wsdl"),
+)
 
 _CONTAINER_FILES = (
     "Dockerfile",
