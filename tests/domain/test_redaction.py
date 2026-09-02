@@ -4,6 +4,8 @@ else leaves byte-identical. Both halves matter — a redactor that masked too
 much would be turned off, and a redactor that reformats what it does not mask
 would rewrite every document it touched."""
 
+import json
+
 import pytest
 
 from sextant.domain.redaction import REDACTED, RedactionError, RedactionRules, Redactor
@@ -151,3 +153,51 @@ def test_the_rule_set_hash_changes_when_a_rule_changes():
     widened = Redactor.from_rules(RedactionRules(key_patterns=("dsn",))).rule_set_hash
     by_value = Redactor.from_rules(RedactionRules(value_patterns=("ACME_",))).rule_set_hash
     assert len({plain, widened, by_value}) == 3
+
+
+def test_a_benign_key_containing_a_pattern_substring_masks_anyway():
+    """Over-masking is the ACCEPTED side (2K Task 1 review, ruled).
+    `aws.secretsmanager.endpoint` names a hostname and carries `secret`, so it
+    masks. The two directions are not symmetric: under-masking leaks a
+    credential and cannot be undone once a bundle has left, while over-masking
+    hides a hostname from a document that still says the key is present — a
+    masked value counts as present, so NFR-7 survives it.
+
+    Pinned so the trade is a decision rather than an accident. The day it costs
+    a real workflow something, the fix is a MORE PRECISE built-in pattern —
+    never a reveal, exclude or unmask mechanism, of which this codebase has
+    none by construction."""
+    redactor = _plain()
+    assert redactor.redact_value("aws.secretsmanager.endpoint", "vpce-1.eu-west-1.vpc") == REDACTED
+    assert redactor.redact_value("orders.tokenizer.class", "com.acme.Tokenizer") == REDACTED
+
+
+def test_redact_json_strips_userinfo_from_every_string_leaf():
+    """The bundle's carried JSON columns (`call_sites.arguments`,
+    `annotations.args`): a hardcoded `https://user:pass@host` literal lands in
+    one whole, and stripping its userinfo removes the secret while leaving the
+    host — which is the wire identity the linking tier matches services on."""
+    redacted = _plain().redact_json(
+        '[{"kind":"string","value":"https://svc:s3cret@billing.internal/v1","symbol":null}]'
+    )
+    assert json.loads(redacted) == [
+        {"kind": "string", "value": "https://billing.internal/v1", "symbol": None}
+    ]
+
+
+def test_redact_json_never_applies_the_key_based_rule():
+    """Ruled: an argument is not a configuration key. A JSON object key
+    reading `password` is a field name in a fact schema, not a claim that the
+    string beside it is a credential — masking on it would gut the bundle of
+    the path and URL literals the linking tier needs."""
+    text = '{"password":"/billing/invoices","token":"order-events"}'
+    assert _plain().redact_json(text) == text
+
+
+def test_redact_json_returns_an_untouched_document_character_for_character():
+    """The same promise `redact_text` makes. Re-serializing a document nothing
+    matched would rewrite whitespace and escaping the caller never asked to
+    change — and at the export exit every one of those bytes would move for
+    nothing (NFR-1)."""
+    text = '[ {"kind": "string",  "value": "/billing/invoices"} ]'
+    assert _plain().redact_json(text) == text

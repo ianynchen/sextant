@@ -8,8 +8,8 @@ Write a workspace out as a bundle.
 
 ```
 Workspace
-  export_tables(destination) -> list[str]   # graph/<name>.parquet, one per table
-  export_facts(destination) -> int          # facts/<document>.parquet, one per document
+  export_tables(destination, redactor) -> list[str]  # graph/<name>.parquet, per table
+  export_facts(destination, redactor) -> int         # facts/<document>.parquet, per document
 ```
 
 `--what` is deferred (see below): export always writes both.

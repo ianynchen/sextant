@@ -4,8 +4,9 @@ The rule lived in `application/resolve/config.py` while resolution was its only
 caller. 2K's redactor is a second one, and it sits in `domain` — below
 `application`, so it cannot import the resolver — which leaves exactly two
 options: one rule here, or a second copy of Spring's binding grammar drifting
-beside the first. `resolve/config.py` re-exports this function, so every
-existing caller reads unchanged.
+beside the first. Every former caller imports it from here now — no module
+re-exports it, because an implicit re-export is a second name for one rule and
+the point of the move was to have one.
 """
 
 

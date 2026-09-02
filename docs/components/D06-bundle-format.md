@@ -90,12 +90,37 @@ rule set and its provenance could not honestly claim one; this field names the e
 **these** bytes. It is the sha256 of that set canonically serialized, so it is stable across
 however a file happened to order its additions and moves the moment one changes.
 
-What it covers, precisely: `graph/resolved_config.parquet`'s `value` column and
-`graph/endpoints.parquet`'s `path`/`peer` address columns. **`facts/` is not covered** — a
-`config_entry` payload still carries its value verbatim there. Ledgered, not silently
-omitted: masking a fact payload changes what a fact means (a document's own
-`redaction_set_hash` would have to stop reading `sha256:none`), which is a schema decision
-rather than an export projection.
+**Two hashes, two moments.** A bundle carries a `redaction_set_hash` on each *document*
+(`graph/documents.parquet`, from [D00](D00-fact-schema.md) §2) as well as this one on
+`producer`, and they answer different questions. The per-document hash describes **read**
+time — what was applied as those facts were produced — and it reads `sha256:none`, honestly,
+because nothing is: the workspace, `raw_facts` and the local fact files all stay verbatim so
+that resolution can substitute real addresses. `producer.redaction_set_hash` describes
+**export** time: the set that masked *this bundle*. A consumer checking what it may
+redistribute reads the producer field; a consumer reasoning about cache validity reads the
+document field.
+
+**What the bundle masks, precisely:**
+
+| Where | Rule applied |
+|---|---|
+| `graph/resolved_config.parquet` `value` | key patterns + value patterns + URL userinfo |
+| `facts/*.parquet` `config_entry` payload `value` | the same, keyed by the fact's own `key_path` |
+| `graph/endpoints.parquet` `path`, `peer` | URL userinfo + value patterns |
+| `graph/open_questions.parquet` `path` | the same, through the same map — a question and the row it asks about must mask identically |
+| `graph/call_sites.parquet` `arguments`, `graph/annotations.parquet` `args` | URL userinfo + value patterns, over every string leaf |
+
+The last row is deliberately **not** key-based. A call argument is not a configuration key,
+and the path and URL literals inside one are the wire identities the linking tier matches
+services on — masking them by key name would gut the bundle to remove a secret that is not
+there. What such a string does carry, when it carries anything, is an address with a
+credential in front of it, and that is what userinfo stripping removes.
+
+**The residual, stated rather than discovered:** an exotic hardcoded secret in a code
+literal — one no key names, no value pattern matches, and that is not a URL with userinfo —
+survives into the bundle. Closing it means value patterns, which is exactly what
+[D04](D04-config-and-exclusion.md) §2a's `redact:` gives a repository that knows the shape
+of its own secrets.
 
 **`module_commit`** is the last commit touching this module's own path, computed locally at
 scan time where a clone already exists. It is what lets the system tier judge staleness in a

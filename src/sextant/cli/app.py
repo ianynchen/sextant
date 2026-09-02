@@ -280,7 +280,7 @@ def module_export(path: Path, workspace_dir: Path | None, out_dir: Path | None) 
     workspace = DuckDbWorkspace(db_path)
     try:
         tables = workspace.export_tables(bundle, redactor)
-        facts_files = workspace.export_facts(bundle)
+        facts_files = workspace.export_facts(bundle, redactor)
     finally:
         workspace.close()
     write_manifest(

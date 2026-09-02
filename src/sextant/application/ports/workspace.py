@@ -36,7 +36,12 @@ class Workspace(Protocol):
         leave, and an implementation with nowhere to put the rule set would be
         one that cannot say what it masked."""
 
-    def export_facts(self, destination: Path) -> int:
-        """Write the raw facts as Parquet, one file per document."""
+    def export_facts(self, destination: Path, redactor: Redactor) -> int:
+        """Write the raw facts as Parquet, one file per document.
+
+        `redactor` masks on the way out, as `export_tables` does and for the
+        same reason: everything the bundle carries leaves, so a masked graph
+        table beside an unmasked fact file would mask nothing. The workspace's
+        own fact rows stay verbatim."""
 
     def close(self) -> None: ...

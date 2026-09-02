@@ -254,3 +254,14 @@ the tempting alternative — three lines of `lower().replace(...)` copied into t
 is exactly the drift this codebase spends comments preventing. The move is `normalize_key`
 into `domain/config_keys.py`, with both former callers repointed. When a second layer needs
 a pure rule, the rule was in the wrong layer.
+
+### Re-serializing JSON to mask one leaf moves bytes that had no reason to move
+
+The bundle exit masks string leaves inside `call_sites.arguments`, `annotations.args` and
+`config_entry` payloads. The obvious implementation — parse, map, `json.dumps` — rewrites
+whitespace and escaping for **every** document it touches, including the overwhelming
+majority nothing matched, and NFR-1's byte-identity claim then rests on Python's serializer
+agreeing with DuckDB's forever. `Redactor.redact_json` returns the input string unchanged
+when the mapped structure compares equal to the parsed original, so only genuinely masked
+documents are re-serialized and staged. Same rule for the fact payloads. When a projection
+is "mostly identity", make the identity path return the input, not an equal-looking copy.

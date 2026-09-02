@@ -1208,6 +1208,36 @@ def test_the_planted_credentials_leave_masked_and_stay_verbatim_in_the_workspace
     document = (tmp_path / "render" / "architecture.md").read_text()
     assert "hunter2-fixture" not in document
 
+    # And the bundle's FACT files, which carry the same values one derivation
+    # earlier (D00 §5c). Everything that leaves is masked: a masked
+    # `resolved_config.parquet` beside a `facts/` holding the plaintext would
+    # mask nothing. Read back through the parquet rather than grepped — zstd
+    # would hide the string from a byte search either way.
+    fact_values = set(
+        duckdb.sql(
+            "SELECT payload ->> 'key_path', payload ->> 'value' FROM read_parquet("
+            f"'{bundle / 'facts' / '*.parquet'}') WHERE kind = 'config_entry'"
+        ).fetchall()
+    )
+    assert ("orders.db.password", REDACTED) in fact_values
+    assert ("orders.internal.dsn", REDACTED) in fact_values
+    # Two facts, one per profile file — a key declared twice is two entries,
+    # so this is a set of pairs rather than a dict keyed on the key alone.
+    assert ("soap.billing.uri", "http://billing.internal.example.com/ws") in fact_values
+    assert ("soap.billing.uri", "http://billing.prod.internal.example.com/ws") in fact_values
+    leaked = duckdb.sql(
+        "SELECT count(*) FROM read_parquet("
+        f"'{bundle / 'facts' / '*.parquet'}') WHERE payload::VARCHAR LIKE '%hunter2-fixture%'"
+    ).fetchone()
+    assert leaked == (0,)
+
+    # The workspace's own fact rows are untouched, which is why a document's
+    # `redaction_set_hash` still reads `sha256:none`: it describes READ time,
+    # and nothing was applied then. The manifest's hash names the set that
+    # masked this bundle — two hashes, two moments (D06 §3).
+    local = (tmp_path / "facts").rglob("*.jsonl")
+    assert any("hunter2-fixture" in path.read_text(encoding="utf-8") for path in local)
+
 
 def test_the_manifest_names_the_rule_set_that_masked_the_bundle(tmp_path: Path):
     """D06 §3 reserved `redaction_set_hash` and left it unwritten while nothing

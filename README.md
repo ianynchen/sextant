@@ -44,9 +44,16 @@ redact:                                   # widens the built-in set; nothing nar
 Redaction is **on by default and needs no file**: configuration keys naming a password,
 secret, token, credential, API key, private key, authorization or passphrase mask as
 `«redacted»`, and `scheme://user:pass@host` addresses lose their userinfo — in the rendered
-document and in the exported bundle. The workspace keeps real values, because resolving an
-endpoint's address needs them and your own disk is not the boundary. A bundle records the
-rule set that masked it, as `producer.redaction_set_hash` in its manifest.
+document and everywhere in the exported bundle, its fact files included. The workspace keeps
+real values, because resolving an endpoint's address needs them and your own disk is not the
+boundary. A bundle records the rule set that masked it, as `producer.redaction_set_hash` in
+its manifest.
+
+A key pattern is matched as a substring, so it **over-masks on purpose**:
+`aws.secretsmanager.endpoint` masks a hostname. That is the safe direction — a leaked
+credential cannot be recalled, a masked hostname is an inconvenience, and the key is still
+listed as present. If it gets in your way, the answer is a narrower built-in pattern; there
+is no unmask switch, deliberately.
 
 Three things are worth knowing before using it.
 

@@ -127,6 +127,14 @@ value's text, masking the span it matched. **There is no key here or anywhere th
 the set**: the built-ins are not an argument the redactor accepts, so no file can remove
 one. A module with no `redact:` section is redacted by the built-in set exactly as before.
 
+**Substring matching over-masks, deliberately.** `aws.secretsmanager.endpoint` carries
+`secret` and therefore masks, though its value is a hostname. The two failure directions
+are not symmetric: under-masking leaks a credential and cannot be undone once a bundle has
+left, while over-masking hides a value from a document that still says the key is present —
+masked is not absent, so [NFR-7](../REQUIREMENTS.md) survives it. The day it costs a real
+workflow something, the fix is a **more precise built-in pattern**, never a reveal, unmask
+or exclude mechanism; none exists, by construction.
+
 **A malformed `.sextant.yml` fails the run** — the one input where Sextant refuses rather
 than degrading. DR-6's refusal-to-guess governs evidence read out of a codebase Sextant
 does not own, where an honest absence is the right answer. This file is an instruction
@@ -178,14 +186,16 @@ common build output directories that are not the module's own.
 > - **The marker is `«redacted»`**, one stable literal with no pattern class in it — a
 >   masked value still counts as present and still compares equal across runs. The
 >   `<redacted:key_pattern>` form below is not what is written.
-> - **The workspace stays verbatim**, so a document's own `redaction_set_hash` is
->   `sha256:none` and the cache-key paragraph below describes a mechanism nothing needs:
->   changing the rule set changes the next EXPORT, with no re-extraction at all.
+> - **The workspace stays verbatim** — the tables, `raw_facts`, and the local fact files
+>   alike — so a document's own `redaction_set_hash` is `sha256:none` and the cache-key
+>   paragraph below describes a mechanism nothing needs: changing the rule set changes the
+>   next EXPORT, with no re-extraction at all.
+> - **The bundle masks everything that leaves**, `facts/` included: a `config_entry`
+>   payload's value is masked by its own `key_path` through the same rules
+>   `resolved_config` gets ([D06](D06-bundle-format.md) §3 lists the exact coverage and the
+>   one residual).
 > - **`redaction_set_hash` is produced by the exporter**, beside `catalog_hash`, and names
 >   the effective set that masked those bytes ([D06](D06-bundle-format.md) §3).
-> - **Known and unclosed:** a bundle's `facts/` still carries `config_entry` payloads
->   verbatim. Masking a fact payload is a change to what a fact means, not a projection —
->   ledgered, not silently done.
 >
 > Section 2a below states the per-module `redact:` key that widens the set. Everything else
 > in this section — the two strategies, the built-in key patterns, and the

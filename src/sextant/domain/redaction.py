@@ -21,6 +21,7 @@ masked value still counts as present, compares equal across runs, and greps.
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sextant.domain.config_keys import normalize_key
@@ -33,6 +34,13 @@ REDACTED = "«redacted»"
 # to `apikey`, so one entry covers the spellings 2K design §1 writes as
 # `api[-_]?key` — the regex there describes matching against a RAW key, and
 # against a normalized one it is exactly this literal.
+#
+# A substring rule OVER-MASKS, and that is the accepted side (2K Task 1 review,
+# ruled): `aws.secretsmanager.endpoint` masks a hostname. Under-masking leaks a
+# credential and cannot be undone once a bundle has left; over-masking hides a
+# value from a document that still says the key is present. The day it costs a
+# real workflow something, the fix is a MORE PRECISE pattern here — never a
+# reveal mechanism, which this module has no way to express.
 BUILTIN_KEY_PATTERNS = (
     "apikey",
     "authorization",
@@ -61,6 +69,19 @@ _USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s@]*@")
 
 class RedactionError(ValueError):
     """A redaction rule that cannot be honoured as written."""
+
+
+def _mapped_strings(node: object, apply: Callable[[str], str]) -> object:
+    """`node` with `apply` over every string leaf, structure untouched. Keys
+    are not leaves — an object key is a schema, and rewriting one would change
+    what a document MEANS rather than what it discloses."""
+    if isinstance(node, str):
+        return apply(node)
+    if isinstance(node, list):
+        return [_mapped_strings(item, apply) for item in node]
+    if isinstance(node, dict):
+        return {key: _mapped_strings(value, apply) for key, value in node.items()}
+    return node
 
 
 @dataclass(frozen=True)
@@ -153,11 +174,51 @@ class Redactor:
         WHOLE — the key already says the value is a secret, so no amount of
         structure in it is safe to keep. Anything else falls through to
         `redact_text`, which still strips URL userinfo and applies the value
-        patterns."""
+        patterns.
+
+        **Substring matching over-masks, deliberately** (2K Task 1 review,
+        ruled): `aws.secretsmanager.endpoint` carries `secret` and therefore
+        masks, though the value is a hostname. The two failure directions are
+        not symmetric — under-masking leaks a credential, over-masking hides a
+        hostname from a document that still says the key is present (a masked
+        value counts as present, so NFR-7 survives) — so the loose side is the
+        safe side. The day it costs a real workflow something, the fix is a
+        MORE PRECISE built-in pattern, never a reveal or exclude mechanism:
+        this file has no mechanism that narrows, by construction.
+        """
         normalized = normalize_key(key)
         if any(pattern in normalized for pattern in self._key_patterns):
             return REDACTED
         return self.redact_text(value)
+
+    def redact_json(self, text: str) -> str:
+        """A JSON document with every STRING LEAF passed through
+        `redact_text` — userinfo stripping and the value patterns, never the
+        key-based rule.
+
+        For the bundle exit's carried JSON columns (`call_sites.arguments`,
+        `annotations.args`): a call argument is not a configuration key, and
+        the path and URL literals in one are the wire identities the linking
+        tier matches services on. Key-based masking there would gut the bundle
+        to remove a secret that is not in it; what those strings DO carry, when
+        they carry anything, is an address with a credential in front of it —
+        which is exactly what `redact_text` takes out.
+
+        Walks the parsed document rather than the raw text so the result is
+        always valid JSON. Object KEYS are left alone: they are a schema, not
+        a value.
+
+        A document no rule touches is returned **as given**, character for
+        character — the same promise `redact_text` makes, and it has to be
+        kept here too: re-serializing an untouched document would rewrite
+        whitespace and escaping the caller never asked to change, and every
+        exported byte would move for nothing.
+        """
+        parsed = json.loads(text)
+        masked = _mapped_strings(parsed, self.redact_text)
+        if masked == parsed:
+            return text
+        return json.dumps(masked, ensure_ascii=False)
 
     def redact_text(self, text: str) -> str:
         """Free text — an address expression, a rendered line, a tool result —
