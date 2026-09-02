@@ -20,7 +20,12 @@ from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_o
 from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
 from sextant.domain.redaction import RedactionError, Redactor
 from sextant.egress.export.manifest import write_manifest
-from sextant.egress.render.document import ClaimRedactionError, render_module_document
+from sextant.egress.render.document import (
+    ClaimRedactionError,
+    assemble_module_document,
+    markdown_document,
+)
+from sextant.egress.render.html import html_document
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
@@ -259,7 +264,13 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
         )
         try:
-            text = render_module_document(
+            # One assembly, two serializations of its result (2K design §6b) —
+            # `render_module_document` wrapped assembly and the markdown
+            # serializer together, which was fine while there was one output;
+            # dual output needs the assembled sections handed to both
+            # `markdown_document` and `html_document` rather than assembled
+            # twice or re-derived from either one's bytes.
+            sections = assemble_module_document(
                 reconstructed,
                 report,
                 _commit_of(path),
@@ -286,12 +297,16 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
         # rule set MEETING a claim that fails, not either alone.
         except ClaimRedactionError as refused:
             raise click.ClickException(str(refused)) from refused
-        target = workspace_dir / "render" / "architecture.md"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding="utf-8")
+        render_dir = workspace_dir / "render"
+        render_dir.mkdir(parents=True, exist_ok=True)
+        markdown_target = render_dir / "architecture.md"
+        markdown_target.write_text(markdown_document(sections), encoding="utf-8")
+        html_target = render_dir / "architecture.html"
+        html_target.write_text(html_document(sections), encoding="utf-8")
     finally:
         workspace.close()
-    click.echo(str(target))
+    click.echo(str(markdown_target))
+    click.echo(str(html_target))
 
 
 @module.command("export")
@@ -332,4 +347,17 @@ def module_export(path: Path, workspace_dir: Path | None, out_dir: Path | None) 
         tables=tables,
         facts_files=facts_files,
     )
+    # Both rendered documents travel with the bundle when `render` has already
+    # produced them (2K design §6b) — copied verbatim, already masked at the
+    # render exit, so this is a plain file carry rather than a second
+    # redaction pass. `render` is not a prerequisite for `export` (M08: export
+    # only ever reads what `analyze` left), so their absence is silent, not a
+    # failure — the same optionality a workspace with no render step has
+    # always had.
+    render_dir = workspace_dir / "render"
+    for rendered in ("architecture.md", "architecture.html"):
+        source = render_dir / rendered
+        if source.is_file():
+            (bundle / "render").mkdir(parents=True, exist_ok=True)
+            (bundle / "render" / rendered).write_bytes(source.read_bytes())
     click.echo(str(bundle))

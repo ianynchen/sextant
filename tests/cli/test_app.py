@@ -265,6 +265,105 @@ def test_render_writes_the_document_after_analyze(tmp_path: Path):
     assert "POST" in document and "/v1/orders" in document
 
 
+def test_render_also_writes_a_self_contained_offline_html_document(tmp_path: Path):
+    """2K design §6b, the live pin over a real analysed module rather than a
+    synthetic one: `architecture.html` lands beside `architecture.md`, wraps
+    the real structure diagram in pan-zoom controls, and carries no CDN or
+    external script URL."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    result = runner.invoke(cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    html_path = tmp_path / "render" / "architecture.html"
+    assert html_path.is_file()
+    document = html_path.read_text(encoding="utf-8")
+    assert 'class="diagram"' in document
+    assert 'class="diagram-zoom-in"' in document
+    assert "<script src=" not in document
+    assert "cdn.jsdelivr.net" not in document
+
+
+def test_rendering_the_same_workspace_twice_writes_a_byte_identical_html_document(
+    tmp_path: Path,
+):
+    """NFR-1's amendment note (2K design §8): re-running render over the same
+    workspace and the same (absent) overlay produces the same bytes — nothing
+    in the HTML path reads a clock or a dict in insertion-unstable order
+    either."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
+    html_path = tmp_path / "render" / "architecture.html"
+    assert (
+        runner.invoke(
+            cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    first = html_path.read_bytes()
+    assert (
+        runner.invoke(
+            cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    second = html_path.read_bytes()
+    assert first == second
+
+
+def test_export_carries_both_rendered_documents_into_the_bundle(tmp_path: Path):
+    """The bundle carries what `render` already wrote (2K design §6b) — copied
+    verbatim rather than re-rendered, so the bundle and the workspace can
+    never disagree about what a reader saw."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    bundle = Path(result.output.strip())
+    assert (bundle / "render" / "architecture.md").read_bytes() == (
+        tmp_path / "render" / "architecture.md"
+    ).read_bytes()
+    assert (bundle / "render" / "architecture.html").read_bytes() == (
+        tmp_path / "render" / "architecture.html"
+    ).read_bytes()
+
+
+def test_export_without_a_prior_render_carries_no_render_directory(tmp_path: Path):
+    """`render` is not a prerequisite for `export` (M08: export only ever
+    reads what `analyze` left) — a workspace that skipped it must still
+    export cleanly, exactly as it did before this task."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    bundle = Path(result.output.strip())
+    assert not (bundle / "render").exists()
+
+
 def test_render_exits_nonzero_with_a_message_when_no_workspace_exists(tmp_path: Path):
     result = CliRunner().invoke(
         cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]

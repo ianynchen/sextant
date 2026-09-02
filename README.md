@@ -168,3 +168,22 @@ exactly what `mvn install` of that fixture would write, and the only thing in th
 that writes outside the repository — once per session, so `pytest` remains the only command
 anyone runs. But `mvn -o compile` inside `fixtures/orders-service` on a fresh clone fails
 until that helper has run.
+
+### `architecture.html`'s vendored asset — pinned, not fetched
+
+`sextant module render` writes `architecture.html` beside `architecture.md` (2K design
+§6b): the same assembled document, with every diagram — machine and LLM-simplified alike —
+wrapped in pan-zoom controls. The page is self-contained and opens with no network access,
+which means the client-side diagram library it depends on, [mermaid](https://mermaid.js.org),
+ships inside the file rather than being fetched from a CDN at view time.
+
+`src/sextant/egress/render/assets/mermaid.min.js` is therefore vendored: downloaded once at
+dev time from the official npm/jsDelivr artifact and committed verbatim, pinned by version
+and sha256 in `src/sextant/egress/render/asset_pins.py` and recorded, with its MIT license,
+in `assets/LICENSE-mermaid`. `tests/egress/test_render_html.py` hashes the committed file
+against the pin, so an accidental swap for a different version — or a different library
+under the same file name — fails loudly instead of silently changing what a reader sees.
+Upgrading is deliberate: replace the file and bump both constants together.
+
+The pan-zoom script beside it, `assets/panzoom.js`, is not vendored — it is Sextant's own,
+a few dozen lines of vanilla JS with no dependency of its own to pin.
