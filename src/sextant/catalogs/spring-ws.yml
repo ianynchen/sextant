@@ -55,7 +55,7 @@ matches:
     # qualified name, and this is what keeps the two identity forms apart in
     # one catalog without a second mapping block.
     qualifier_from: [namespace]
-    # 2I design §2, form 3. A payload-root identity is `{namespace}localPart`
+    # 2I design §2, word 1. A payload-root identity is `{namespace}localPart`
     # — one bracketed token, which no `qualifier_separator` can spell (the
     # closing brace has no separator equivalent, and the engine refuses a
     # multi-character separator outright because its seam dedupe trims a SET

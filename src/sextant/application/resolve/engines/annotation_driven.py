@@ -41,7 +41,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # found. Absent (the default) on every annotation that names a
             # top-level identity, which is every annotation shipped before it.
             "requires_qualifier": bool(m.get("requires_qualifier", False)),
-            # 2I design §2, form 6: the attribute this rule withdraws itself on,
+            # 2I design §2, word 4: the attribute this rule withdraws itself on,
             # and the value that withdraws it. Both NULL on every annotation
             # that withdraws nothing, which is every annotation shipped before
             # this word — the pair is read as "no filter" and the rule derives
@@ -94,7 +94,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # NULL where the catalog declares no default, which is what keeps the
         # derivation below inert for every catalog but the ones that ask.
         namespace_template=_NAMESPACE_DEFAULTS.get(str(mapping.get("namespace_default"))),
-        # 2I design §2, form 5: the class-gate MEMBER rule. NULL where a
+        # 2I design §2, word 3: the class-gate MEMBER rule. NULL where a
         # catalog declares none, which is every catalog whose framework
         # exposes only what an annotation marks.
         members=mapping.get("members"),
@@ -131,7 +131,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 _PATH_FALLBACKS = frozenset({"construct_name"})
 
 # How a scope composes with the name it qualifies, where a single separator
-# cannot say it (2I design §2, form 3). Today's one word is 'qname': the
+# cannot say it (2I design §2, word 1). Today's one word is 'qname': the
 # XML-namespace notation `{scope}name`, one bracketed token whose closing
 # brace has no separator equivalent at all — which is exactly why it is a
 # format word and not a two-character `qualifier_separator`, a value
@@ -141,7 +141,7 @@ _PATH_FALLBACKS = frozenset({"construct_name"})
 _QUALIFIER_FORMATS = frozenset({"qname"})
 
 # What the scope IS when the attribute carrying it is absent (2I design §2,
-# form 4). Today's one word is 'reversed_package': the JAX-WS default
+# word 2). Today's one word is 'reversed_package': the JAX-WS default
 # `targetNamespace`, `"http://"` + the declaring type's package tokens
 # reversed and dot-joined + a trailing `"/"` — pinned against BOTH reference
 # implementations (Phase 2I Task 2 checkpoint item 2:
@@ -166,7 +166,7 @@ _QUALIFIER_FORMATS = frozenset({"qname"})
 _NAMESPACE_DEFAULTS = {"reversed_package": "http://%s/"}
 
 # What a CLASS GATE exposes on its own, with no member-level annotation
-# anywhere (2I design §2, form 5). Today's one word is 'public_methods': the
+# anywhere (2I design §2, word 3). Today's one word is 'public_methods': the
 # framework exposes the gated construct's public members, and a member-level
 # rule overrides the member rule for the member it names — one row per member,
 # never two.
@@ -178,7 +178,7 @@ _NAMESPACE_DEFAULTS = {"reversed_package": "http://%s/"}
 _MEMBER_RULES = frozenset({"public_methods"})
 
 # The two keys a `unless` filter may carry, and no others (2I design §2,
-# form 6). A closed SHAPE rather than a closed vocabulary, because the values
+# word 4). A closed SHAPE rather than a closed vocabulary, because the values
 # are catalog data: which attribute withdraws a declaration, and at which
 # value, is the framework's own convention.
 _UNLESS_KEYS = frozenset({"attribute", "equals"})

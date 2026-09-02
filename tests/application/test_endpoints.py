@@ -910,7 +910,7 @@ def _qname_mapping(**mapping: object) -> dict[str, object]:
 def test_a_qname_format_brackets_the_scope_in_front_of_the_name_it_qualifies(
     tmp_path: Path,
 ):
-    """Form 3. `{namespace}localName` is ONE token, not two halves joined by
+    """Word 1. `{namespace}localName` is ONE token, not two halves joined by
     punctuation: the braces are part of the notation, and the closing one has
     no separator equivalent at all. That is why it is a `qualifier_format`
     word rather than a two-character `qualifier_separator` — which
@@ -927,7 +927,7 @@ def test_a_qname_format_brackets_the_scope_in_front_of_the_name_it_qualifies(
 
 
 def test_an_absent_scope_attribute_falls_back_to_the_reversed_package(tmp_path: Path):
-    """Form 4, composing with form 3.
+    """Word 2, composing with word 1.
 
     The derivation is pinned to what JAX-WS actually computes (checkpoint item
     2, verified against BOTH `com.sun.xml.ws.model.RuntimeModeler#getNamespace`
@@ -963,7 +963,7 @@ def test_a_declared_scope_still_wins_over_the_reversed_package_default(tmp_path:
 
 
 def test_an_absent_scope_with_no_default_declared_invents_no_namespace(tmp_path: Path):
-    """The inertness pin for form 4, and the one that matters most: a catalog
+    """The inertness pin for word 2, and the one that matters most: a catalog
     that declares no `namespace_default` must derive the BARE name rather than
     a namespace the engine picked. A guessed namespace would be published at
     `resolved`/`compiler`, where nothing downstream can tell it from an
@@ -977,7 +977,7 @@ def test_an_absent_scope_with_no_default_declared_invents_no_namespace(tmp_path:
 
 
 def test_an_operation_needing_a_scope_with_none_derivable_derives_no_row(tmp_path: Path):
-    """`requires_qualifier` composing with form 4: where the annotation only
+    """`requires_qualifier` composing with word 2: where the annotation only
     means anything inside a namespace and no namespace is declared OR
     derivable, silence is the honest answer — the bare local name would read
     as a top-level identity, which is a different endpoint from the one the
@@ -1272,7 +1272,7 @@ def test_a_catalog_declaring_no_member_rule_derives_only_what_is_annotated(
 
 
 def test_a_class_gate_derives_every_public_member_that_no_rule_claims(tmp_path: Path):
-    """Form 5. `bare` carries NO annotation at all and is still an endpoint,
+    """Word 3. `bare` carries NO annotation at all and is still an endpoint,
     because the framework exposes what the class declares rather than what an
     author marked — the pattern no vocabulary before this could express (the
     2H class-level mechanism composes a PREFIX onto a row that a method-level
@@ -1327,7 +1327,7 @@ def test_a_member_level_rule_overrides_the_member_rule_for_the_member_it_names(
 def test_a_withdrawn_declaration_derives_nothing_even_inside_a_gated_class(
     tmp_path: Path,
 ):
-    """Form 6, and its interaction with form 5 — the one that would have been
+    """Word 4, and its interaction with word 3 — the one that would have been
     a silent no-op if the override had been written the obvious way.
 
     `withdrawn` carries the member-level rule with the withdrawing attribute

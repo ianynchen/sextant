@@ -24,7 +24,7 @@
 --                           that annotation pre-sets, or NULL where it pre-sets
 --                           none; the `unless_*` pair names the attribute whose
 --                           value makes the rule derive NOTHING (2I design §2,
---                           form 6), both NULL where it withdraws nothing.
+--                           word 4), both NULL where it withdraws nothing.
 --   $prefix_annotation   -- fqn of the type-level annotation carrying the path prefix
 --   $path_from           -- attribute names that alias one another, first present wins
 --   $prefix_from         -- attribute names the prefix annotation's address
@@ -70,7 +70,7 @@
 --                           composition instead; the two are mutually
 --                           exclusive by contract (`annotation_driven.py::
 --                           _validate_naming`).
---   $qualifier_format    -- 2I design §2, form 3: a whole composition of
+--   $qualifier_format    -- 2I design §2, word 1: a whole composition of
 --                           scope and name that no single separator can
 --                           state. Today's one word is 'qname' —
 --                           `{scope}name`, the XML-namespace notation, ONE
@@ -78,7 +78,7 @@
 --                           separator equivalent at all. NULL restores the
 --                           separator composition, which is what every
 --                           catalog written before this parameter gets.
---   $namespace_template  -- 2I design §2, form 4: the `printf` template the
+--   $namespace_template  -- 2I design §2, word 2: the `printf` template the
 --                           declaring type's own reversed package is composed
 --                           into, when the attribute carrying the scope is
 --                           absent — or NULL to leave the scope absent. A
@@ -110,7 +110,7 @@
 --                           dedupe below is `rtrim`/`ltrim`, which trim a SET
 --                           of characters, so a multi-character separator
 --                           would trim each of its characters individually.
---   $members             -- 2I design §2, form 5: what a GATED CLASS exposes
+--   $members             -- 2I design §2, word 3: what a GATED CLASS exposes
 --                           on its own, with no member-level annotation
 --                           anywhere, or NULL where a catalog declares no such
 --                           rule (every catalog whose framework exposes only
@@ -144,7 +144,7 @@ INSERT INTO endpoints (
 WITH mapping_catalog AS (
     SELECT s.fqn AS fqn, s.methods AS methods,
            coalesce(s.requires_qualifier, FALSE) AS requires_qualifier,
-           -- 2I design §2, form 6: the attribute whose value withdraws this
+           -- 2I design §2, word 4: the attribute whose value withdraws this
            -- rule, and that value as TEXT — the one representation `json ->>`
            -- reads every scalar back as, so a catalog's YAML boolean and a
            -- bytecode JSON boolean compare without either side guessing at the
@@ -235,7 +235,7 @@ declared AS (
         mc.requires_qualifier AS requires_qualifier
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
-    -- THE WITHDRAWAL FILTER (2I design §2, form 6). A declaration whose named
+    -- THE WITHDRAWAL FILTER (2I design §2, word 4). A declaration whose named
     -- attribute carries the withdrawing value derives NOTHING: the framework
     -- itself does not expose it, so a row here would be an endpoint nobody
     -- serves, published at `resolved`/`compiler` where nothing downstream can
@@ -255,7 +255,7 @@ declared AS (
        OR coalesce(a.args -> mc.unless_attribute ->> 0, a.args ->> mc.unless_attribute)
           IS DISTINCT FROM mc.unless_equals
 ),
--- THE CLASS GATE for the member rule below (2I design §2, form 5): every type
+-- THE CLASS GATE for the member rule below (2I design §2, word 3): every type
 -- carrying one of this catalog's own mapping annotations ON THE TYPE ITSELF.
 --
 -- The same type-level join `qualifier_scopes` performs, and deliberately the
@@ -274,7 +274,7 @@ gate_types AS (
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
 ),
--- THE MEMBER RULE (2I design §2, form 5). Where a catalog declares
+-- THE MEMBER RULE (2I design §2, word 3). Where a catalog declares
 -- `$members`, a gated class exposes members that carry no annotation at all,
 -- and each becomes a declaration with an empty name — which `$path_fallback`
 -- (required beside `$members` by `annotation_driven.py::_validate_naming`)
@@ -302,11 +302,30 @@ gate_types AS (
 -- AND THE OVERRIDE. A member that carries ANY of this catalog's mapping
 -- annotations is left entirely to that rule — one row per member, never two.
 -- The anti-join is against `annotations_effective`, NOT against `declared`,
--- and the difference is the whole of the interaction with form 6: a
+-- and the difference is the whole of the interaction with word 4: a
 -- declaration the withdrawal filter removed from `declared` is still an
 -- ANNOTATED declaration, so the member rule must not quietly re-derive the
 -- very row the framework withdrew. Joining `declared` instead would have
 -- turned every `unless` into a no-op on a gated class.
+--
+-- TWO KNOWN SOFT SPOTS, for whoever writes the second `members` catalog:
+--
+--   (i) The load-time class-gate check (`annotation_driven.py::
+--   _validate_naming`) accepts ANY non-empty `mapping.annotations`, because
+--   whether an annotation lands on a TYPE is a fact about the scanned code
+--   and not about the file. So a catalog whose annotations are all
+--   method-level declares `members` and is silently INERT — `gate_types`
+--   matches nothing and no member row is ever derived — rather than refused.
+--   That is the safe direction to fail in (nothing wrong is published), but
+--   it is a gap in the refusal, not a property of it.
+--
+--   (ii) `$all_methods` binds here directly, exactly as it does for an
+--   annotated declaration. Every catalog declaring `members` today is
+--   verbless (`all_methods: []`), which is what makes each member ONE row;
+--   a future one with a non-empty `$all_methods` would fan every member
+--   across every verb in that list. That may well be right for a framework
+--   whose exposed members really do answer several verbs — but it has never
+--   been exercised, so it is untested behaviour rather than a decision.
 member_declarations AS (
     SELECT
         s.symbol AS target,

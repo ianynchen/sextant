@@ -921,7 +921,10 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
 
 # --- 2H Task 2: the GraphQL surface, live on real bytecode ---------------
 #
-# Pinned from the live run this task froze: 110 endpoints, extractor 9.9.
+# Pinned from the live run THAT task froze: 110 endpoints, extractor 9.9.
+# The counts have moved with every task since (122 now); the extractor is
+# 9.10 as of 2I Task 2's method modifiers. Both numbers are kept as the
+# historical record of what this section was written against.
 
 
 def _graphql_rows(report: ResolveReport) -> dict[tuple[str | None, str | None], dict]:
@@ -1239,9 +1242,10 @@ def test_a_value_returning_stomp_handler_with_no_sendto_derives_an_unresolved_re
 
 # --- 2H Task 6: `protocol_hint`, live on real bytecode -------------------
 #
-# Pinned from the live run this task froze: still 115 endpoints, extractor
-# 9.9. Nothing here adds a row — every assertion below is about rows that
-# already existed reading a different protocol.
+# Pinned from the live run THAT task froze: still 115 endpoints, extractor
+# 9.9 (122 and 9.10 now — see the 2H Task 2 header above). Nothing here adds
+# a row — every assertion below is about rows that already existed reading a
+# different protocol.
 
 
 def _soap_row(report: ResolveReport, path: str) -> dict:
@@ -1252,7 +1256,7 @@ def _soap_row(report: ResolveReport, path: str) -> dict:
 def test_a_payload_root_derives_its_qname_identity_from_two_attributes_of_one_annotation(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """2I design §2, form 3, live. `OrderSoapEndpoint#placeOrder`'s
+    """2I design §2, word 1, live. `OrderSoapEndpoint#placeOrder`'s
     `@PayloadRoot(namespace, localPart)` states BOTH halves of one QName on
     one annotation, and `qualifier_format: qname` composes them into the one
     bracketed token a human would read back — `{namespace}localPart`.
