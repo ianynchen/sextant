@@ -215,3 +215,22 @@ whose entire purpose is to report rather than fail. Fix: `schema.sql` pre-declar
 whole with `CREATE OR REPLACE TABLE` whenever at least one catalog runs. A named query
 against a sometimes-created table needs the table declared unconditionally, not just
 populated conditionally.
+
+### `IS NOT NULL` binds tighter than `->>` in DuckDB
+
+`payload ->> 'origin' IS NOT NULL` parses as `payload ->> ('origin' IS NOT NULL)` — a
+boolean subscript — and fails at run time with `Failed to cast value to numerical`,
+naming the whole JSON payload and pointing at a caret in the WHERE clause. Nothing about
+the message says "precedence". Parenthesise the extraction: `(payload ->> 'origin') IS NOT
+NULL`. A JSON extraction in a projection needs no parentheses, because nothing follows the
+operator there — which is why every named query written before this one was fine.
+
+### `mvn install` is not available offline in this environment
+
+`maven-jar-plugin` is absent from `~/.m2`, and `install:install-file` cannot resolve its
+own dependencies offline either. A fixture library that must be installable therefore does
+the three steps by hand: `mvn -o compile` (the compiler plugin IS present), assemble the
+jar, and lay it into `~/.m2/repository` at Maven's own layout path together with a minimal
+`.pom` — offline resolution reads the POM, and a jar laid down without one is refused.
+Assembling the jar with Python's `zipfile` rather than the JDK's `jar` keeps entry order
+under the test's control, so the artifact is byte-identical between machines.

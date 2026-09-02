@@ -217,6 +217,26 @@ def _format(endpoint: dict[str, object]) -> str:
     return str(value)
 
 
+def _origin_lines(endpoint: dict[str, object], origin_by_symbol: dict[str, str]) -> list[str]:
+    """The `Via:` detail line for a row an extracted LIBRARY contributed, or
+    nothing at all for the ordinary case.
+
+    A library-contributed row is otherwise indistinguishable from one the
+    module's own code declares — same table, same columns, same resolution —
+    and the difference matters to a reader: the operation is real, but nothing
+    in this repository declares it, so the place to go and look is the
+    library's. The attribution is keyed on the row's own handler or caller
+    symbol, whose document is what carries the coordinate (D00 §2); a row
+    naming neither is a row nothing can attribute, and it is left unmarked
+    rather than guessed at.
+    """
+    for column in ("handler", "caller"):
+        symbol = endpoint.get(column)
+        if symbol is not None and str(symbol) in origin_by_symbol:
+            return [f"  - Via: `{origin_by_symbol[str(symbol)]}`"]
+    return []
+
+
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     """One open question's candidate, in the same prose the writing pass
     already puts in its own `evidence` trail (`resolve/format.py`,
@@ -246,12 +266,14 @@ def render_module_document(
     shape_fields: Sequence[dict[str, object]] = (),
     resolved_config: Sequence[dict[str, object]] = (),
     open_questions: Sequence[dict[str, object]] = (),
+    library_symbols: Sequence[dict[str, object]] = (),
 ) -> str:
     """Adds no information. Every row comes from the graph, and every omission
     is stated (M07). Rendering the same report twice is byte-identical
     (NFR-1): nothing here reads a clock, and endpoint and shape order is
     whatever the graph query already fixed."""
     fields_by_shape = _fields_by_shape(shape_fields)
+    origin_by_symbol = {str(row["symbol"]): str(row["origin"]) for row in library_symbols}
     lines = [
         f"# {module.module_id}",
         "",
@@ -302,8 +324,10 @@ def render_module_document(
             response = _descriptor_lines(
                 "Response", endpoint.get("response_shape"), fields_by_shape
             )
-            if request or response:
+            via = _origin_lines(endpoint, origin_by_symbol)
+            if request or response or via:
                 lines += ["", f"- `{_wire_identity(endpoint)}`"]
+                lines += via
                 lines += request
                 lines += response
     else:
@@ -323,6 +347,14 @@ def render_module_document(
                 f"{'unresolved' if peer is None else peer} | "
                 f"`{caller}` | {_format(endpoint)} | {endpoint['resolution']} |"
             )
+        # The outbound half has no request/response detail to hang under, so
+        # this is its whole detail block — written only where there is
+        # something to say, which is the same rule the inbound one keeps.
+        for endpoint in outbound:
+            via = _origin_lines(endpoint, origin_by_symbol)
+            if via:
+                lines += ["", f"- `{_wire_identity(endpoint)}`"]
+                lines += via
     else:
         lines.append("None found.")
 
@@ -351,6 +383,14 @@ def render_module_document(
     lines += [
         f"- Not expanded, so the shapes referring to it are open: `{symbol}`."
         for symbol in report.unexpanded_types
+    ]
+    # Named one by one for the same reason again: a library this module asked
+    # to extract and nobody could resolve is the difference between "nothing
+    # is called through it" and "nobody looked", and only the coordinate says
+    # which dependency to build or install to close it (FR-17, M02).
+    lines += [
+        f"- Not resolved, so nothing above accounts for it: library `{coordinate}`."
+        for coordinate in module.libraries_not_resolved
     ]
     if report.skipped_catalogs:
         lines += ["", "## Catalogs skipped", ""]

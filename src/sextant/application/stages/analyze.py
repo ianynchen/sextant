@@ -28,6 +28,7 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.pipeline import ResolveReport, resolve
 from sextant.domain.factfile import (
     config_fact_target,
+    library_fact_root,
     read_fact_tree,
     schema_fact_target,
     write_fact_file,
@@ -132,7 +133,33 @@ def analyze(
             out_dir=fact_root,
         )
     )
-    progress.finish("scan", f"{scan_report.facts} facts")
+    # Each opted-into library (D04 §2a) is scanned by the SAME scanner, through
+    # the same port, into its own subtree — nothing here knows it is reading an
+    # archive rather than a directory, which is the scanner's business. Three
+    # things differ from the module's own scan and each is deliberate: the
+    # library's OWN coordinates and version, so a scanned symbol's identity
+    # says which artifact declares it rather than borrowing this module's;
+    # `origin`, so every document it writes records the library it came from
+    # (D00 §2); and the fact subtree, so a library class can never compete with
+    # a module class for one fact-file target. `module_id` stays the analysed
+    # module's: these facts are part of THIS module's analysis, whoever
+    # compiled the bytecode.
+    scanned_facts = scan_report.facts
+    uncovered = list(scan_report.uncovered)
+    for library in module.library_roots:
+        library_report = scanner.scan(
+            ScanRequest(
+                module_id=module.module_id,
+                coordinates=library.coordinate.replace(":", "/"),
+                version=library.version,
+                classes_dir=library.archive,
+                out_dir=library_fact_root(fact_root, library.coordinate),
+                origin=library.coordinate,
+            )
+        )
+        scanned_facts += library_report.facts
+        uncovered.extend(library_report.uncovered)
+    progress.finish("scan", f"{scanned_facts} facts")
 
     # Ingress stays model-blind (design §1): every parseable config file
     # under every resource root is read, sorted by relative path (NFR-1),
@@ -230,7 +257,7 @@ def analyze(
         report,
         scan_report.scanner_id,
         scan_report.scanner_version,
-        scan_report.uncovered,
+        tuple(uncovered),
         tuple(schema_sources_not_compiled),
         descriptors_not_interpreted,
     )

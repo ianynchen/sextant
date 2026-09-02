@@ -91,6 +91,12 @@ def write_metadata(
         # interpreter could not turn into a shape can be acted on by name.
         "schema_sources_not_compiled": list(schema_sources_not_compiled),
         "descriptors_not_interpreted": list(descriptors_not_interpreted),
+        # The libraries `.sextant.yml` asked for that resolved to no archive
+        # (2I design §5), named the same way and for the same FR-17 reason: a
+        # coordinate nobody could find is the difference between "this module
+        # calls nothing through that library" and "nobody looked", and only
+        # the name says which dependency to build or install to close it.
+        "libraries_not_resolved": list(module.libraries_not_resolved),
         "endpoints": {"inbound": inbound, "outbound": outbound},
         # The count says how much was expanded; the list says what was not, by
         # name. Both, because a reader who only knows how many shapes exist

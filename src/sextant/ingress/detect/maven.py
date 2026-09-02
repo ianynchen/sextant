@@ -1,7 +1,8 @@
 from pathlib import Path
 from xml.etree import ElementTree
 
-from sextant.application.ports.detector import ModuleModel, RepositoryModel
+from sextant.application.ports.detector import LibraryRoot, ModuleModel, RepositoryModel
+from sextant.ingress.detect.sextant_config import read_extract_libraries
 
 _POM_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
 _MAIN_CLASS = f"{{{_POM_NS['m']}}}mainClass"
@@ -40,6 +41,23 @@ _SCHEMA_ROOT_PATHS = (
     ("resources", "META-INF", "wsdl"),
 )
 
+
+def _local_repository_archive(coordinate: str, version: str) -> Path:
+    """Maven's own local-repository layout for one coordinate — resolved at
+    call time rather than at import, so a test or a caller that moves `HOME`
+    is not answered from whatever it was when this module loaded."""
+    group, _, artifact = coordinate.partition(":")
+    return (
+        Path.home()
+        / ".m2"
+        / "repository"
+        / Path(*group.split("."))
+        / artifact
+        / version
+        / f"{artifact}-{version}.jar"
+    )
+
+
 _CONTAINER_FILES = (
     "Dockerfile",
     "Containerfile",
@@ -75,6 +93,7 @@ class MavenDetector:
         version = self._text(pom, "version", inherited=True)
         source_roots = self._source_roots(path, pom)
         resources = path / "src" / "main" / "resources"
+        library_roots, libraries_not_resolved = self._library_roots(path, pom)
         module = ModuleModel(
             module_id=f"{group}:{artifact}",
             coordinates=f"{group}/{artifact}",
@@ -101,8 +120,69 @@ class MavenDetector:
                 for parts in _SCHEMA_ROOT_PATHS
                 if (root := path.joinpath("src", "main", *parts)).is_dir()
             ),
+            library_roots=library_roots,
+            libraries_not_resolved=libraries_not_resolved,
         )
         return RepositoryModel(root=path, modules=(module,))
+
+    @staticmethod
+    def _library_roots(
+        path: Path, pom: ElementTree.Element
+    ) -> tuple[tuple[LibraryRoot, ...], tuple[str, ...]]:
+        """The libraries `.sextant.yml` names, resolved to the archives Maven
+        itself would put on this module's compile classpath — and the
+        coordinates that resolved to nothing.
+
+        **Two pieces of Maven convention, no invention.** The VERSION comes
+        from the module's own declared dependency on that coordinate, because
+        that is the only place the build states which release it compiles
+        against; a coordinate the POM never declares is not this module's
+        library at all, and one whose version a parent or BOM manages is not
+        readable here (the detector reads `pom.xml` directly rather than asking
+        Maven to resolve it — the standing `maven_parent_and_profile_resolution
+        _not_implemented` gap). The ARCHIVE is then the local repository's own
+        layout, `~/.m2/repository/<group as directories>/<artifact>/<version>/
+        <artifact>-<version>.jar`, which is where a successful build — M02's
+        stated prerequisite — has already left it.
+
+        Anything not found is REPORTED, never guessed at: no version scanned
+        for in the repository, no nearest match, no second location searched. A
+        local repository relocated by `settings.xml` is therefore a coordinate
+        that does not resolve, which is an answer a reader can act on, rather
+        than a wrong jar that nothing downstream could tell from a right one.
+        """
+        declared = read_extract_libraries(path)
+        if not declared:
+            return (), ()
+        versions = MavenDetector._dependency_versions(pom)
+        roots: list[LibraryRoot] = []
+        unresolved: list[str] = []
+        for coordinate in declared:
+            version = versions.get(coordinate)
+            archive = None if version is None else _local_repository_archive(coordinate, version)
+            if version is None or archive is None or not archive.is_file():
+                unresolved.append(coordinate)
+                continue
+            roots.append(LibraryRoot(coordinate=coordinate, version=version, archive=archive))
+        return tuple(roots), tuple(unresolved)
+
+    @staticmethod
+    def _dependency_versions(pom: ElementTree.Element) -> dict[str, str]:
+        """Every `groupId:artifactId` this POM declares a version for, mapped
+        to it. A dependency whose version is managed elsewhere carries no
+        `<version>` element and is simply absent here — the same "no path is
+        better than a wrong one" discipline `_source_roots` keeps."""
+        versions: dict[str, str] = {}
+        for dependency in pom.findall("m:dependencies/m:dependency", _POM_NS):
+            group = dependency.find("m:groupId", _POM_NS)
+            artifact = dependency.find("m:artifactId", _POM_NS)
+            version = dependency.find("m:version", _POM_NS)
+            if group is None or artifact is None or version is None:
+                continue
+            if group.text is None or artifact.text is None or version.text is None:
+                continue
+            versions[f"{group.text.strip()}:{artifact.text.strip()}"] = version.text.strip()
+        return versions
 
     @staticmethod
     def _source_roots(path: Path, pom: ElementTree.Element) -> tuple[Path, ...]:

@@ -310,6 +310,33 @@ _NAMED_QUERIES = {
         FROM open_questions
         ORDER BY protocol, method, path, question, candidates::VARCHAR, evidence
     """,
+    # Every symbol that came out of an extracted LIBRARY rather than the
+    # module's own output, with the coordinate it came from (D00 §2's
+    # `origin`). Read by the renderer, which has to mark a row a library
+    # contributed: an endpoint row names a handler or a caller and nothing
+    # else, so the attribution has to be joined back through the document the
+    # symbol was declared in.
+    #
+    # Over `raw_facts` rather than the `documents` view, the same way
+    # `supertypes`/`implementations` are: the view is the projection the
+    # bundle exports (D06 §5), and widening it for one renderer read would
+    # change every exported `documents.parquet` for a column nothing in the
+    # graph joins on. `origin` is absent, not null, on a module's own document,
+    # so `IS NOT NULL` is the whole filter. Ordered by symbol for NFR-1.
+    #
+    # The extraction in the WHERE clause is PARENTHESISED, and has to be:
+    # `IS NOT NULL` binds tighter than `->>` in this dialect, so the bare form
+    # parses as `payload ->> ('origin' IS NOT NULL)` — a boolean subscript,
+    # which fails at run time trying to cast the whole payload to a number
+    # (reproduced against duckdb 1.5.5). The projection above needs no
+    # parentheses because nothing follows the operator there.
+    "library_symbols": """
+        SELECT s.payload ->> 'symbol' AS symbol, d.payload ->> 'origin' AS origin
+        FROM raw_facts s
+        JOIN raw_facts d ON d.document_id = s.document_id AND d.kind = 'document'
+        WHERE s.kind = 'symbol' AND (d.payload ->> 'origin') IS NOT NULL
+        ORDER BY symbol
+    """,
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
     "facts": "SELECT count(*) AS facts FROM raw_facts",

@@ -385,6 +385,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # merges into that inbound one (D02 §3) and the identity becomes
     # `direction: both`, counted once in each bucket. The total stays 116 + 6
     # and `soap` stays 6 inbound; only the outbound side gains its 1.
+    # 2I Task 6 (opt-in library extraction): +1 soap OUTBOUND, `stubCharge` —
+    # an operation declared in a jar and in no source file here. `soap`
+    # outbound becomes 2; inbound is untouched, because a stub declares calls
+    # and never a service.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "graphql": 12,
@@ -402,7 +406,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "jms": 3,
         "kafka": 10,
         "pubsub": 4,
-        "soap": 1,
+        "soap": 2,
         "sqs": 3,
         "websocket": 2,
     }
@@ -540,7 +544,15 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # `http://billing.example.com/ws/direct` is the one dropped. Pinned as it
     # is rather than worked around: two addresses for one operation are two
     # peers on one identity, and the identity is what this table is keyed on.
-    assert rows == [("both", 6), ("inbound", 78), ("outbound", 40)]
+    # 2I Task 6 (opt-in library extraction): +1 outbound soap —
+    # `{http://billing.example.com/ws}stubCharge`, derived by
+    # `jakarta-jws-client.yml` from a `@WebService` interface that exists in NO
+    # source file of this module. It is the first row in this fixture whose
+    # evidence came out of a jar rather than out of `target/classes`, and it
+    # appears here only because `.sextant.yml` names the library — outbound
+    # 40 + 1 = 41 — the 125-endpoint total (6 + 78 + 41 = 125). Nothing merges:
+    # `stubCharge` is an operation nothing in this module serves.
+    assert rows == [("both", 6), ("inbound", 78), ("outbound", 41)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -798,14 +810,16 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
     finally:
         workspace.close()
 
-    # The whole SOAP surface: 2I Task 2's five annotation-driven rows beside
-    # this task's one schema-first row.
+    # The whole SOAP surface: 2I Task 2's five annotation-driven rows, this
+    # task's one schema-first row, and — since Task 6 — the one operation that
+    # reaches the graph from a jar rather than from a source file.
     assert set(soap) == {
         "{http://orders.example.com/ws}placeOrderRequest",
         "{http://orders.example.com/ws}quoteOrderRequest",
         "http://orders.example.com/action/cancelOrder",
         "{http://billing.example.com/ws}chargeOrder",
         "{http://billing.example.com/ws}refund",
+        "{http://billing.example.com/ws}stubCharge",
         "{http://soap.orders.example.com/}legacyCharge",
     }
     schema_first = [path for path, row in soap.items() if row["catalog_id"] == "wsdl-schema"]
@@ -870,11 +884,15 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
     * THE MERGE. The module both serves and calls that operation, so D02 §3's
       merge fires: one row, `direction: both`, the handler's own row surviving
       with the caller and peer carried onto it and the outbound twin deleted.
-    * `jakarta-jws-client.yml` derives NOTHING here, which is what
-      `declared_on` is for: every `@WebService` in this fixture is a CLASS, so
-      the stub catalog claims none of them and no served operation is
-      republished as one the module calls. Its live surface arrives with Task
-      6's stub jar.
+    * `jakarta-jws-client.yml` derives nothing FROM THIS MODULE'S OWN CODE,
+      which is what `declared_on` is for: every `@WebService` written in this
+      fixture is a CLASS, so the stub catalog claims none of them and no
+      served operation is republished as one the module calls. Since Task 6
+      it does derive one row — from the `@WebService` INTERFACE inside
+      `com.example:orders-soap-client`, which is the shape the word exists to
+      claim — and the assertion below is keyed on the deriving coordinate for
+      exactly that reason: "the stub catalog is inert" was only ever a claim
+      about local declarations.
     """
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     runner = CliRunner()
@@ -900,11 +918,20 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
         workspace.close()
 
     # The stub catalog is loaded and selected (the fixture depends on both
-    # `jakarta.jws` spellings) and still derives nothing, because it claims
-    # interfaces only.
-    assert [row for row in soap if row["catalog_id"] == "jakarta-jws-client"] == []
-    # Exactly one soap row carries a caller, and it is the merged one.
-    called = [row for row in soap if row["caller"] is not None]
+    # `jakarta.jws` spellings) and claims interfaces only — so its every row
+    # comes from the extracted library, and none from the `@WebService`
+    # CLASSES this module writes. Keyed on the caller's coordinate, which is
+    # the only thing that tells the two apart in this table.
+    stubbed = [row for row in soap if row["catalog_id"] == "jakarta-jws-client"]
+    assert [row["path"] for row in stubbed] == ["{http://billing.example.com/ws}stubCharge"]
+    assert all("com.example/orders-soap-client" in str(row["caller"]) for row in stubbed)
+    # Exactly one soap row written IN THIS MODULE carries a caller, and it is
+    # the merged one.
+    called = [
+        row
+        for row in soap
+        if row["caller"] is not None and "com.acme/orders-service" in str(row["caller"])
+    ]
     assert len(called) == 1
     [place] = called
     assert place["path"] == "{http://orders.example.com/ws}placeOrderRequest"
@@ -922,8 +949,17 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
     # no authority half to take.
     assert place["peer"] == "${soap.billing.uri}"
     # ... and it resolves per environment, both profiles, no gap.
+    #
+    # The library's `stubCharge` row rides along in each environment with a
+    # NULL peer and NO `unresolved_reason`, and that pair is the honest
+    # reading rather than a gap: `@WebService` names no address at all
+    # (`jakarta-jws-client.yml` says so in as many words), so there is no
+    # expression for the join to substitute — which is a different thing from
+    # an expression it substituted nothing into. It sorts first on `path`.
     assert peers == [
+        ("default", None, None),
         ("default", "http://billing.internal.example.com/ws", None),
+        ("prod", None, None),
         ("prod", "http://billing.prod.internal.example.com/ws", None),
     ]
 
@@ -1063,3 +1099,49 @@ def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_
         f"SELECT count(*) FROM read_parquet('{bundle / 'graph' / 'open_questions.parquet'}')"
     ).fetchone()
     assert rows == (2,)
+
+
+def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp_path: Path):
+    """2I Task 6, end to end through the real commands — and the only test in
+    this suite whose evidence comes from a jar.
+
+    `com.example:orders-soap-client` ships ONE `@WebService` interface, in no
+    source file of this module. With `.sextant.yml` naming it, the extractor
+    reads the archive, `jakarta-jws-client.yml` derives the operation it
+    declares, and the rendered document says which library it came from. With
+    the file moved away, the same commands on the same compiled module derive
+    nothing of the sort — which is the whole assertion: the row exists BECAUSE
+    of the opt-in, not because the dependency is on the classpath.
+
+    The module is NOT recompiled between the two halves. That is deliberate:
+    it makes the only difference between them the presence of one
+    configuration file.
+    """
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path / "with")
+    document = (tmp_path / "with" / "render" / "architecture.md").read_text()
+
+    # The row itself: verbless, address-less peer, and its caller a symbol
+    # whose identity carries the LIBRARY's coordinates rather than this
+    # module's — the operation `wsimport` would have generated a stub for.
+    assert "| `soap {http://billing.example.com/ws}stubCharge` | unresolved |" in document
+    assert "`com/example/billing/BillingPort#charge(sig_7b622a99).`" in document
+    # And the attribution, which is what tells a reader that no file in this
+    # repository declares the operation above.
+    assert "- `soap {http://billing.example.com/ws}stubCharge`" in document
+    assert "  - Via: `com.example:orders-soap-client`" in document
+
+    config = FIXTURE / ".sextant.yml"
+    moved = tmp_path / "sextant.yml.moved"
+    config.rename(moved)
+    try:
+        _run(tmp_path / "without")
+    finally:
+        moved.rename(config)
+    plain = (tmp_path / "without" / "render" / "architecture.md").read_text()
+    assert "stubCharge" not in plain
+    assert "Via:" not in plain
+    # The library's own fact subtree goes with it — nothing is left behind for
+    # a later resolve to read back as if it were still configured.
+    assert not (tmp_path / "without" / "facts" / "lib").exists()
+    assert (tmp_path / "with" / "facts" / "lib" / "com.example" / "orders-soap-client").is_dir()

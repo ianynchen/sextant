@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from sextant.ingress.detect.maven import MavenDetector
+from sextant.ingress.detect.sextant_config import SextantConfigError
 
 FIXTURE = Path(__file__).parents[2] / "fixtures" / "orders-service"
 
@@ -257,3 +258,110 @@ def test_a_declared_source_directory_wins_over_the_conventional_layout(tmp_path:
 
     assert module.source_roots == (tmp_path / "sources" / "scala",)
     assert module.languages == {"scala"}
+
+
+# --- Opt-in library extraction (2I Task 6) -------------------------------
+
+_LIBRARY_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.acme</groupId>
+  <artifactId>thing</artifactId>
+  <version>1.0.0</version>
+  <dependencies>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>stub</artifactId>
+      <version>2.1.0</version>
+    </dependency>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>managed</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+"""
+
+
+def _local_repository(home: Path, coordinate: str, version: str) -> Path:
+    group, _, artifact = coordinate.partition(":")
+    archive = (
+        home / ".m2" / "repository" / Path(*group.split(".")) / artifact / version
+    ) / f"{artifact}-{version}.jar"
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(b"")
+    return archive
+
+
+def test_a_module_with_no_config_names_no_library_roots(tmp_path: Path):
+    """The isolation guarantee at its source: opt-in means the file, so a
+    module without one reaches the scan loop with nothing extra to scan and
+    nothing unresolved to report."""
+    _module(tmp_path, _LIBRARY_POM)
+    module = MavenDetector().detect(tmp_path).modules[0]
+    assert module.library_roots == ()
+    assert module.libraries_not_resolved == ()
+
+
+def test_a_declared_library_resolves_to_the_archive_the_build_would_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Two pieces of Maven convention and no invention: the VERSION is the one
+    this module's own POM declares for that dependency — the only place the
+    build states which release it compiles against — and the ARCHIVE is the
+    local repository's own layout, where a successful build (M02's stated
+    prerequisite) has already left it."""
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    archive = _local_repository(home, "com.example:stub", "2.1.0")
+    root = tmp_path / "module"
+    root.mkdir()
+    _module(root, _LIBRARY_POM)
+    (root / ".sextant.yml").write_text("extract_libraries: [com.example:stub]\n", encoding="utf-8")
+
+    module = MavenDetector().detect(root).modules[0]
+
+    assert module.libraries_not_resolved == ()
+    [library] = module.library_roots
+    assert (library.coordinate, library.version, library.archive) == (
+        "com.example:stub",
+        "2.1.0",
+        archive,
+    )
+
+
+@pytest.mark.parametrize(
+    ("coordinate", "because"),
+    [
+        ("com.example:managed", "the POM declares no version, so nothing names a release"),
+        ("com.example:absent", "the POM declares no such dependency at all"),
+        ("com.example:stub", "no local repository holds the archive"),
+    ],
+)
+def test_a_library_that_resolves_to_no_archive_is_named_rather_than_guessed_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, coordinate: str, because: str
+):
+    """Three ways a coordinate can fail, one answer: it is REPORTED. No version
+    scanned for in the repository, no nearest match, no second location — a
+    wrong jar is indistinguishable downstream from a right one, while a named
+    coordinate is a gap a reader can close (FR-17). Nothing raises: a library
+    nobody could find is not a reason to refuse the module's own analysis."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    root = tmp_path / "module"
+    root.mkdir()
+    _module(root, _LIBRARY_POM)
+    (root / ".sextant.yml").write_text(f"extract_libraries: [{coordinate}]\n", encoding="utf-8")
+
+    module = MavenDetector().detect(root).modules[0]
+
+    assert module.library_roots == (), because
+    assert module.libraries_not_resolved == (coordinate,)
+
+
+def test_a_malformed_config_stops_detection_rather_than_extracting_nothing(tmp_path: Path):
+    """The DR-6 exemption. Every other unreadable input in this codebase
+    degrades to an honest absence, because it is evidence Sextant does not
+    own. `.sextant.yml` is an instruction written FOR Sextant, and "extract
+    nothing" is what a typo would otherwise mean — silently, and forever."""
+    root = _module(tmp_path, _LIBRARY_POM)
+    (root / ".sextant.yml").write_text("extract_libaries: [com.example:stub]\n", encoding="utf-8")
+    with pytest.raises(SextantConfigError):
+        MavenDetector().detect(root)

@@ -113,7 +113,11 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # TWO, not four, for the same reason the SDL pair above is two: that
     # directory is a schema root INSIDE the resource root, so only the schema
     # loop reads it.
-    assert metadata["coverage"]["documents"] == 105
+    # + 1: 2I Task 6's opt-in library extraction. `BillingPort` is one class
+    # file inside `com.example:orders-soap-client`, and a class file is a
+    # document wherever it was read from (D00 §2) — this is the count moving
+    # because a jar was scanned, which is the point of the feature.
+    assert metadata["coverage"]["documents"] == 106
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

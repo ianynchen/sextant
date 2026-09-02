@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from sextant.application.ports.detector import ModuleModel
@@ -759,3 +760,80 @@ def test_structure_and_outbound_sections_state_looked_and_found_nothing():
     assert "None derived." in text
     assert "## Outbound endpoints" in text
     assert "None found." in text
+
+
+# --- Opt-in library extraction (2I Task 6) -------------------------------
+
+_LIBRARY_ROW = {
+    "protocol": "soap",
+    "direction": "outbound",
+    "method": None,
+    "path": "{http://billing.example.com/ws}stubCharge",
+    "handler": None,
+    "caller": "s maven com.example/orders-soap-client 1 com/example/billing/BillingPort#charge().",
+    "peer": None,
+    "resolution": "resolved",
+    "evidence": "compiler",
+}
+_LIBRARY_SYMBOLS = [
+    {
+        "symbol": (
+            "s maven com.example/orders-soap-client 1 com/example/billing/BillingPort#charge()."
+        ),
+        "origin": "com.example:orders-soap-client",
+    }
+]
+
+
+def _report_with(row: dict[str, object]) -> ResolveReport:
+    return ResolveReport(
+        facts_loaded=42,
+        endpoints=[row],
+        coverage={"documents": 4, "partial_documents": 0},
+        shapes=[],
+        unexpanded_types=(),
+    )
+
+
+def test_a_row_a_library_contributed_says_which_library():
+    """An endpoint derived from an extracted jar is otherwise indistinguishable
+    from one this module's own code declares — same table, same resolution —
+    and the difference is what a reader has to know: the operation is real, and
+    nothing in this repository declares it."""
+    text = render_module_document(
+        MODULE, _report_with(_LIBRARY_ROW), "a3f91c", library_symbols=_LIBRARY_SYMBOLS
+    )
+    assert "- `soap {http://billing.example.com/ws}stubCharge`" in text
+    assert "  - Via: `com.example:orders-soap-client`" in text
+
+
+def test_a_row_the_module_itself_declares_carries_no_attribution():
+    """The mirror image, and the pin that keeps the mark meaningful: with no
+    library symbols to join against, the same row renders exactly as it did
+    before this existed. A `Via:` on every row would say nothing."""
+    text = render_module_document(MODULE, _report_with(_LIBRARY_ROW), "a3f91c")
+    assert "Via:" not in text
+
+
+def test_a_library_that_resolved_to_nothing_is_named_among_the_gaps():
+    """FR-17, the same rule an uncovered source keeps: a coordinate nobody
+    could resolve is the difference between "this module calls nothing through
+    that library" and "nobody looked", and only the name says which dependency
+    to build or install to close it."""
+    module = replace(MODULE, libraries_not_resolved=("com.example:missing-client",))
+    text = render_module_document(module, REPORT, "a3f91c")
+    assert (
+        "- Not resolved, so nothing above accounts for it: library `com.example:missing-client`."
+        in text
+    )
+
+
+def test_metadata_names_every_library_that_resolved_to_nothing(tmp_path: Path):
+    """Carried on metadata.json rather than re-derived at render time, the way
+    every other analyze-side gap is: `render` never re-runs detection, so a
+    coordinate that resolved to nothing would otherwise vanish from the
+    document it was recorded for."""
+    module = replace(MODULE, libraries_not_resolved=("com.example:missing-client",))
+    write_metadata(tmp_path / "metadata.json", module, REPORT, "asm", "9.7", "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+    assert written["libraries_not_resolved"] == ["com.example:missing-client"]

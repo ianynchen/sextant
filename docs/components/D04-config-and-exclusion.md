@@ -28,6 +28,7 @@ Different settings have different owners, so one file is not enough.
 |---|---|---|
 | `~/.sextant/config.yml` | The person | Workspace location, default output format, tool paths, scanner selection, personal redaction patterns |
 | `sextant.yml` at repository root | The repository | First-party group patterns, module classification overrides, extra catalogs, extra redaction patterns |
+| `.sextant.yml` beside a module | The module | Which dependencies' own bytecode is extracted with it (§2a) |
 
 **Precedence: flags, then repository, then user, then built-in defaults.** First-party group
 patterns are a property of the codebase, not of the person analysing it — which is the
@@ -68,6 +69,44 @@ scanners:
 
 **Lists merge, scalars override.** Repository redaction patterns add to the user's and to
 the built-in set; they never replace them. A repository cannot switch redaction off.
+
+---
+
+## 2a. `.sextant.yml` beside a module — opt-in library extraction
+
+A third file, owned by neither of the two above: it sits **beside one module's build file**,
+because what it declares is a property of that module and of nothing else.
+
+```yaml
+# fixtures/orders-service/.sextant.yml
+extract_libraries:
+  - com.example:orders-soap-client
+```
+
+`extract_libraries` names dependencies whose **own bytecode** is scanned alongside the
+module's output. Every fact it produces records the coordinate as its `origin`
+([D00](D00-fact-schema.md) §2), lands under `facts/lib/<groupId>/<artifactId>/`, and is
+marked in the rendered document as coming from that library.
+
+**Naming a library is an assertion, and it is why this is opt-in.** It says the library's
+declarations are part of *this module's* runtime surface — that a `@WebService` interface it
+ships is an operation this module calls, not merely a class on the classpath. The dependency
+tree is **never** walked: a transitive jar nobody named stays invisible, because scanning
+everything reachable would publish every framework's own annotated types as this module's
+endpoints. A module with no `.sextant.yml` produces exactly the facts it produced before
+this mechanism existed, byte for byte.
+
+Each coordinate is `groupId:artifactId` — no version, because the version is not the
+author's to restate: it comes from the module's own build, which is the only place that
+says which release this module compiles against. [M02](M02-detector.md) resolves the pair
+to an archive in the local repository. A coordinate that resolves to nothing is **named**,
+in `metadata.json` and in the document's gaps list, never silently skipped.
+
+**A malformed `.sextant.yml` fails the run** — the one input where Sextant refuses rather
+than degrading. DR-6's refusal-to-guess governs evidence read out of a codebase Sextant
+does not own, where an honest absence is the right answer. This file is an instruction
+written *for* Sextant, and a misspelled key that read as "extract nothing" would be
+indistinguishable from an unconfigured module for as long as nobody checked.
 
 ---
 

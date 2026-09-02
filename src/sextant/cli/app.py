@@ -174,6 +174,11 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
         languages=frozenset(module_info["languages"]),
         source_roots=(),
         output_dirs=(),
+        # Read back rather than re-detected, the same way a skipped catalog is:
+        # `render` never re-runs detection, so the coordinates that resolved to
+        # nothing would otherwise vanish from the document `analyze` recorded
+        # them for (FR-17).
+        libraries_not_resolved=tuple(metadata.get("libraries_not_resolved", [])),
     )
     # Read back what `analyze` already established, rather than re-deriving
     # it — a skipped catalog must stay visible on `render` too (M04, FR-17).
@@ -205,6 +210,7 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             shape_fields=workspace.query("shape_fields"),
             resolved_config=workspace.query("resolved_config"),
             open_questions=workspace.query("open_questions"),
+            library_symbols=workspace.query("library_symbols"),
         )
         target = workspace_dir / "render" / "architecture.md"
         target.parent.mkdir(parents=True, exist_ok=True)

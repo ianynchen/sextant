@@ -39,6 +39,24 @@ def config_fact_target(fact_root: Path, relative_path: str) -> Path:
     return fact_root / "config" / (relative_path + ".jsonl")
 
 
+def library_fact_root(fact_root: Path, coordinate: str) -> Path:
+    """Where one extracted library's fact files live: `facts/lib/<groupId>/
+    <artifactId>/`, with the scanner's own class-relative tree underneath.
+
+    Its own subtree, for `schema_fact_target`'s reason generalised: a library
+    is free to ship a class whose package matches one of the module's own, and
+    two documents competing for one fact-file target leave only the second on
+    disk. The coordinate's single `:` becomes the separator between the two
+    segments, which is collision-free rather than merely tidy — neither half of
+    a coordinate may contain a separator (`ingress/detect/sextant_config.py`
+    refuses one that does), so no two coordinates can compose one path.
+    """
+    if ":" not in coordinate or "/" in coordinate or "\\" in coordinate:
+        raise ValueError(f"not a library coordinate: {coordinate!r}")
+    group, _, artifact = coordinate.partition(":")
+    return fact_root / "lib" / group / artifact
+
+
 def write_fact_file(path: Path, document: Document, facts: Iterable[Fact]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [_line(document)] + [_line(fact) for fact in facts]

@@ -74,3 +74,9 @@ so the Python reader emits it verbatim and the extractor never sees it.
 `protobuf-maven-plugin` (which downloads the `protoc` it needs — there is no system
 `protoc` to install) and `avro-maven-plugin`. Building the fixture therefore needs Maven
 and a JDK, and nothing else.
+
+Since Phase 2I it also depends on `fixtures/orders-soap-client`, the stub library its
+`.sextant.yml` opts into extracting. `tests/conftest.py` builds that sibling and installs
+it into the local Maven repository once per session, so `pytest` remains the only command
+anyone runs — but `mvn -o compile` inside `fixtures/orders-service` on a fresh clone fails
+until that helper has run.

@@ -1,0 +1,26 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <!-- groupId and version are inherited, never restated: a reactor child that
+       declares neither is ordinary Maven, and it is what makes this fixture's
+       coordinate `com.example:orders-soap-client` a thing the build says rather
+       than a thing this file repeats. -->
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>fixtures</artifactId>
+    <version>1.0.0</version>
+    <relativePath>../pom.xml</relativePath>
+  </parent>
+  <artifactId>orders-soap-client</artifactId>
+  <!-- The whole library: one `wsimport`-shaped service endpoint interface and
+       the annotations it is declared with. It ships NO implementation, which is
+       the point — `jakarta-jws-client.yml`'s SEI fence subtracts every
+       interface the analysed module implements, so a stub that were implemented
+       locally would derive nothing at all. -->
+  <dependencies>
+    <dependency>
+      <groupId>jakarta.jws</groupId>
+      <artifactId>jakarta.jws-api</artifactId>
+      <version>3.0.0</version>
+    </dependency>
+  </dependencies>
+</project>

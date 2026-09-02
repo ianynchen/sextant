@@ -11,6 +11,25 @@ from sextant.application.ports.selection import NoAdapterError
 
 
 @dataclass(frozen=True)
+class LibraryRoot:
+    """One dependency a module opted into extracting (D04 §2a): the coordinate
+    it was named by, and the archive that coordinate resolved to.
+
+    Both halves are carried because they answer different questions. The
+    ARCHIVE is what the scanner reads, and it is a path on this machine — it
+    says nothing outside the machine that resolved it. The COORDINATE is what
+    every document extracted from it records as its `origin` (D00 §2), so it is
+    the half that survives into a bundle and into the rendered document. The
+    version is the one the module's build declares for that dependency, and it
+    rides along because a scanned symbol's identity carries it.
+    """
+
+    coordinate: str
+    version: str
+    archive: Path
+
+
+@dataclass(frozen=True)
 class ModuleModel:
     module_id: str
     coordinates: str
@@ -33,6 +52,19 @@ class ModuleModel:
     # what the real source roots compile, not the schema files themselves.
     # Defaulted for the same reason `resource_roots` is.
     schema_roots: tuple[Path, ...] = ()
+    # The libraries this module asked to have extracted alongside its own
+    # output, already resolved to archives (2I design §5). Empty for every
+    # module that names none, which is every module that ships no
+    # `.sextant.yml` — the opt-in is the file, so an empty tuple here is the
+    # default state and not a failure.
+    library_roots: tuple[LibraryRoot, ...] = ()
+    # The coordinates it named that could NOT be resolved to an archive — a
+    # dependency the build never declares a version for, or one no local
+    # repository holds. Carried rather than raised: a library nobody could find
+    # is a gap the artifacts must name (FR-17), the same way an uncovered
+    # source is, and refusing the whole analysis over it would answer a
+    # question nobody asked.
+    libraries_not_resolved: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
