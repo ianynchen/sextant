@@ -124,7 +124,17 @@ size-capped) — all in-process, read-only, and jailed:
   as a JAIL-specific rule joining `.sextant-enrichment.json`'s own precedent — NOT
   added to `.sextantignore`'s built-in patterns, which stay the short, non-negatable
   credential layer; analysis walks are unaffected, since the jail describes
-  human-authored source, never its compiled shadow.
+  human-authored source, never its compiled shadow. Exclusion ancestry is judged
+  against a path's own MOST SPECIFIC jailed root, never an ancestor root that merely
+  contains it too (2K Task 5 fix round 2): the ordinary layout nests the fact and
+  render roots inside the module root, and judging against the wrong one would blank
+  a module's own fact/render rows whenever its root happened to sit under a directory
+  literally named `target`.
+- **Nested roots, deduplicated**: the fact and render roots ordinarily sit inside the
+  module root, so `find`/an unscoped `grep` walking every root independently would
+  otherwise see a nested root's own files twice — 2K Task 5 fix round 2 dedupes by
+  file identity and displays/sorts every result relative to its own most specific
+  root, never an ancestor's.
 - **Redaction-on-read**: config-bearing content passes the §1 redactor before entering
   a tool result — the only bytes that ever reach the wire are the brief Sextant
   composed and tool results that passed the redactor.
@@ -260,5 +270,7 @@ for L. Instructions quality iterates by ordinary edits — its hash makes every
 overlay say which version produced it. Every jail exclusion (`.sextantignore`, the
 overlay, a derived-output directory) is PATH-SHAPED and content-blind: a copy of an
 excluded file sitting somewhere none of those rules name — outside a derived-output
-directory, under a different path than `.sextantignore` lists — still leaks, and
-that is a stated boundary rather than a bug to chase further.
+directory, under a different path than `.sextantignore` lists, or a hardlink included
+(the same inode under another name, readable in full once the jail resolves its own,
+un-excluded name for it) — still leaks, and that is a stated boundary rather than a
+bug to chase further.

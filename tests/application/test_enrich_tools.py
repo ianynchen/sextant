@@ -1,17 +1,21 @@
 """The enrichment tools and the jail (2K design §4, Task 5 brief + fix
-round 1).
+rounds 1 and 2).
 
 Security-sensitive: a bug here is a bug in the wall the rest of the
 enrichment loop is built behind, not a wrong document. The first half is
 about something the jail must NEVER show — outside its roots, through a
 symlink (direct or chained), under a spelling a case-insensitive filesystem
 would accept but `.sextantignore` never matches, `.sextantignore`'d
-outright, a derived-output directory (`target/`, ...), or Task 3's ruling
-that the overlay itself is invisible — coming back as a plain refusal
-STRING, never an exception, and never one that echoes raw diagnostic text
-at the model. The second half is ordinary behaviour: line-ranged reads,
-glob find, grep with a match cap, and the redaction-on-read pass that a
-config file's planted credential proves end to end.
+outright, a derived-output directory (`target/`, ...) — including one
+judged against the WRONG root when roots nest — or Task 3's ruling that the
+overlay itself is invisible — coming back as a plain refusal STRING, never
+an exception, and never one that echoes raw diagnostic text at the model.
+It also covers the two correctness bugs fix round 2 found in the nested
+layout itself (a file counted twice; a workspace path that happened to
+contain "target" blanking real content). The second half is ordinary
+behaviour: line-ranged reads, glob find, grep with a match cap, and the
+redaction-on-read pass that a config file's planted credential proves end
+to end.
 """
 
 from pathlib import Path
@@ -99,9 +103,12 @@ def test_an_absolute_path_outside_every_root_is_refused(tmp_path: Path):
 def test_a_symlink_inside_a_root_pointing_outside_is_refused(tmp_path: Path):
     """The jail never follows a symlink at all (2K Task 5 fix round 1,
     C1) — not "follow it, then refuse once the target turns out to be
-    outside": a symlink is refused the instant it is MET, so this test
-    cannot tell "escaped" from "any other symlink" by its wording, which
-    is the point (`_resolve_in_jail`'s own docstring)."""
+    outside": a symlink is refused the instant it is MET. The refusal is
+    the SAME "is not available" string every other invisible path gets
+    (2K Task 5 fix round 2, N4) — "outside the allowed roots" would be a
+    false statement for a symlink pointing back INSIDE the jail, and would
+    tell a model it specifically found a symlink, which "is not available"
+    deliberately does not."""
     root = tmp_path / "root"
     root.mkdir()
     outside = tmp_path / "outside"
@@ -110,7 +117,7 @@ def test_a_symlink_inside_a_root_pointing_outside_is_refused(tmp_path: Path):
     (root / "escape").symlink_to(outside)
     executor = _executor((root,))
     result = executor.execute("read_file", {"path": "escape/secret.txt"})
-    assert result == "refused: outside the allowed roots"
+    assert result == "refused: escape/secret.txt is not available"
     assert "not yours" not in result
 
 
@@ -152,7 +159,7 @@ def test_grep_cannot_read_through_a_symlink_aliasing_an_ignored_file(tmp_path: P
     assert executor.execute("find", {"pattern": ".env"}) == ""
     assert executor.execute("grep", {"pattern": "FAKE_SECRET"}) == ""
     assert executor.execute("read_file", {"path": "innocent.txt"}) == (
-        "refused: outside the allowed roots"
+        "refused: innocent.txt is not available"
     )
 
 
@@ -174,8 +181,8 @@ def test_a_symlink_chain_to_outside_the_jail_leaks_nothing_through_either_alias(
     assert executor.execute("find", {"pattern": "a"}) == ""
     assert executor.execute("find", {"pattern": "b"}) == ""
     assert executor.execute("grep", {"pattern": "outside-secret-marker"}) == ""
-    assert executor.execute("read_file", {"path": "a"}) == "refused: outside the allowed roots"
-    assert executor.execute("read_file", {"path": "b"}) == "refused: outside the allowed roots"
+    assert executor.execute("read_file", {"path": "a"}) == "refused: a is not available"
+    assert executor.execute("read_file", {"path": "b"}) == "refused: b is not available"
 
 
 # --- C2: a case-insensitive filesystem must not bypass an exclusion --------
@@ -326,6 +333,79 @@ def test_the_fixtures_own_compiled_decoy_under_target_is_also_invisible_and_unre
     assert executor.execute("find", {"pattern": "application-secret.yml"}) == ""
     result = executor.execute("read_file", {"path": "target/classes/application-secret.yml"})
     assert result == "refused: target/classes/application-secret.yml is not available"
+
+
+# --- N1 + N2: nested roots (2K Task 5 fix round 2) --------------------------
+
+
+def test_find_and_grep_do_not_double_count_a_file_under_a_nested_root(tmp_path: Path):
+    """2K Task 5 fix round 2, N1: the ordinary wiring nests the fact/render
+    roots INSIDE the module root — a real fixture walked 279 entries for
+    180 unique files without the fix, `find *.jsonl` printed each name
+    twice, and `MAX_GREP_MATCHES` counted double. Each file must appear
+    exactly once, displayed relative to its OWN most specific root
+    (`a.jsonl`, never `.sextant/facts/a.jsonl`)."""
+    module_root = tmp_path / "module"
+    module_root.mkdir()
+    (module_root / "Source.txt").write_text("module source\n")
+    fact_root = module_root / ".sextant" / "facts"
+    fact_root.mkdir(parents=True)
+    (fact_root / "a.jsonl").write_text("fact-a\n")
+    (fact_root / "b.jsonl").write_text("fact-b\n")
+    executor = _executor((module_root, fact_root))
+    assert executor.execute("find", {"pattern": "*.jsonl"}).splitlines() == [
+        "a.jsonl",
+        "b.jsonl",
+    ]
+    assert executor.execute("grep", {"pattern": "fact-"}).splitlines() == [
+        "a.jsonl:1:fact-a",
+        "b.jsonl:1:fact-b",
+    ]
+
+
+def test_derived_output_exclusion_is_judged_against_the_most_specific_root(tmp_path: Path):
+    """2K Task 5 fix round 2, N2 — the reviewer's exact reproduction:
+    `--workspace target/ws` puts the fact root under a directory literally
+    named `target`, and judging ancestry against the OUTER module root
+    (which genuinely has `target` in it) rather than the fact root itself
+    (which does not) silently blanked every fact/render file. A GENUINE
+    `target/` directory living directly inside the module root — not the
+    fact root's own ancestry — must still exclude, unchanged."""
+    module_root = tmp_path / "module"
+    module_root.mkdir()
+    (module_root / "Source.txt").write_text("module source\n")
+    # The fact root's OWN path happens to contain "target" — not Maven's
+    # build output, just wherever `--workspace` was pointed.
+    fact_root = module_root / "target" / "ws" / "facts"
+    fact_root.mkdir(parents=True)
+    (fact_root / "canary.jsonl").write_text("fact-canary\n")
+    executor = _executor((module_root, fact_root))
+    assert executor.execute("read_file", {"path": "canary.jsonl"}) == "fact-canary"
+    assert executor.execute("find", {"pattern": "canary.jsonl"}).splitlines() == ["canary.jsonl"]
+    assert executor.execute("grep", {"pattern": "fact-canary"}).splitlines() == [
+        "canary.jsonl:1:fact-canary"
+    ]
+    # A real build directory inside the MODULE root (not the fact root's
+    # own ancestry) still excludes exactly as before.
+    built = module_root / "target" / "classes"
+    built.mkdir(parents=True)
+    (built / "Decoy.txt").write_text("built artifact\n")
+    result = executor.execute("read_file", {"path": "target/classes/Decoy.txt"})
+    assert result == "refused: target/classes/Decoy.txt is not available"
+
+
+# --- N5: the tool descriptions state the symlink policy --------------------
+
+
+def test_tool_descriptions_tell_the_model_symlinks_are_never_followed(tmp_path: Path):
+    """2K Task 5 fix round 2, N5: a repository with a symlinked source
+    directory goes quietly invisible under the never-follow-symlinks
+    policy — the tool descriptions the model actually reads have to say
+    so, not only the spec, or the model has no way to explain what it is
+    seeing."""
+    executor = _executor((tmp_path,))
+    for tool in executor.definitions():
+        assert "symlink" in tool.description.lower(), tool.name
 
 
 # --- I4: a mis-wired ignore root fails construction, loudly, generically ---

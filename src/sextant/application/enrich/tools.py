@@ -31,22 +31,45 @@ first version of this file, and exactly what a symlink chained through two
 hops, or a lexically-innocent name aliasing an excluded one, got past. Not
 resolving at all — refusing the instant a symlink is MET, never mind where
 it points — removes the class of bug rather than patching one instance of
-it.
+it. A symlink is never followed even when it points somewhere INSIDE the
+jail: the tool descriptions below say so, because a repository with a
+symlinked source directory otherwise goes quietly invisible with nothing
+telling the model why (2K Task 5 fix round 2, N5).
 
-**Two invisibility layers, checked together at every walk site.**
-`ignore` (T2's `IgnoreRules`, already loaded for the repository the jailed
-roots live under) hides `.sextantignore` matches and the built-in
-credential patterns. `domain.enrichment.ENRICHMENT_FILE`
-(`.sextant-enrichment.json`) is excluded here as a JAIL-SPECIFIC rule, not a
-`.sextantignore` builtin (2K Task 3 ruling): the model must never read its
-own prior run's claims through these tools. A derived-output directory
-(`DERIVED_OUTPUT_DIRS` — `target/`, `build/`, `out/`, `node_modules/`,
-`.git/`) is excluded the same jail-specific way (2K Task 5 fix round 1
-ruling): the jail describes human-authored source, never its compiled
-shadow, and `BUILTIN_PATTERNS` stays the short, non-negatable credential
-layer it was designed as. All three are PATH-SHAPED and content-blind — a
-copy of an excluded file sitting somewhere `_is_excluded` does not name is
-not caught by it (2K design §11).
+**Two invisibility layers, checked together at every walk site, against
+the MOST SPECIFIC containing root.** `ignore` (T2's `IgnoreRules`, already
+loaded for the repository the jailed roots live under) hides
+`.sextantignore` matches and the built-in credential patterns.
+`domain.enrichment.ENRICHMENT_FILE` (`.sextant-enrichment.json`) is
+excluded here as a JAIL-SPECIFIC rule, not a `.sextantignore` builtin (2K
+Task 3 ruling): the model must never read its own prior run's claims
+through these tools. A derived-output directory (`DERIVED_OUTPUT_DIRS` —
+`target/`, `build/`, `out/`, `node_modules/`, `.git/`) is excluded the same
+jail-specific way (2K Task 5 fix round 1 ruling): the jail describes
+human-authored source, never its compiled shadow, and `BUILTIN_PATTERNS`
+stays the short, non-negatable credential layer it was designed as. All
+three are PATH-SHAPED and content-blind — a copy of an excluded file
+sitting somewhere `_is_excluded` does not name is not caught by it (2K
+design §11, which a fix round 2 sentence extends to a hardlink: readable
+outside content, but not an escape, since planting one needs write access
+inside the root already). The derived-output check judges a path's
+ancestry against its own MOST SPECIFIC jailed root (`_most_specific_root`),
+never an ancestor root that merely happens to contain it too — otherwise a
+module whose OWN root sits under a directory literally named `target`
+would blank its nested fact and render roots outright (2K Task 5 fix round
+2, N2 — a real, reviewer-reproduced bug, not a hypothetical one).
+
+**Nested roots, deduplicated.** The ordinary wiring nests the fact and
+render roots INSIDE the module root (`module_root/.sextant/facts`,
+`module_root/.sextant/render`), so a `find`/unscoped `grep` walking every
+root separately would otherwise see every fact and render file TWICE —
+once as part of the module root's own walk, once as that nested root's
+own — inflating `MAX_GREP_MATCHES` and breaking the "sorted, deterministic"
+contract (2K Task 5 fix round 2, N1). `_visible_files` collects every
+root's walk into a SET before sorting, and `_display_path` (what `find`/
+`grep` print, and what `_is_excluded` judges ancestry against) always
+picks the most specific containing root, so a nested root's own file reads
+and sorts by ITS OWN namespace, never its ancestor's.
 
 **Redaction on read, twice over.** A config-bearing file's content — the
 extensions the config-reading `ArtifactReader`s claim, see
@@ -171,7 +194,9 @@ _LIST_DIR = ToolDefinition(
         "outputs). Directories are suffixed with '/'. Anything "
         ".sextantignore or a built-in credential pattern excludes, "
         "Sextant's own prior enrichment overlay, and any build/dependency "
-        "directory (e.g. target/, node_modules/) never appears — use this "
+        "directory (e.g. target/, node_modules/) never appears. A SYMLINK "
+        "is never followed and never listed, even one pointing back inside "
+        "the jail at a file you could otherwise read directly — use this "
         "to orient yourself before find/read_file, not to enumerate every "
         "file on disk."
     ),
@@ -197,7 +222,9 @@ _FIND = ToolDefinition(
         "Search every jailed root for files whose BASE NAME matches a "
         "glob (e.g. '*.yml', 'Order*') — case-sensitive, recursive. "
         "Returns one path per line, relative to whichever root it was "
-        "found under, sorted."
+        "found under, sorted, each file listed once even if two roots "
+        "nest inside each other. A symlinked file or directory is never "
+        "followed or listed."
     ),
     schema={
         "type": "object",
@@ -217,11 +244,13 @@ _GREP = ToolDefinition(
     description=(
         "Search file CONTENT for a regular expression. One match per "
         "line of output, formatted 'path:line:text', sorted, capped at "
-        f"{MAX_GREP_MATCHES} matches. Omit 'path' to search every jailed "
+        f"{MAX_GREP_MATCHES} matches, each file searched once even if two "
+        "roots nest inside each other. Omit 'path' to search every jailed "
         "root; give a file or a directory to scope the search. Config "
         "files (.yml/.yaml/.properties) have credential-shaped values "
         "masked before matching, so grep cannot recover a value "
-        "read_file would have masked."
+        "read_file would have masked. A symlinked file or directory is "
+        "never followed, so its content is never searched."
     ),
     schema={
         "type": "object",
@@ -251,7 +280,10 @@ _READ_FILE = ToolDefinition(
         "when 'start'/'end' are omitted. Config files (.yml/.yaml/"
         ".properties) have their credential-shaped values masked before "
         "you see them; the value is still `«redacted»`, never removed, so "
-        "you can tell the setting exists."
+        "you can tell the setting exists. A symlinked path is never "
+        "followed — it reads as not available, even if it points "
+        "somewhere else inside the jail you could read directly by its "
+        "real name."
     ),
     schema={
         "type": "object",
@@ -472,21 +504,21 @@ class ToolExecutor:
         * "outside the allowed roots" — `raw_path` cannot possibly land
           under ANY root, decided from its own spelling alone (a `..`
           segment, or an absolute path lexically outside every root)
-          before the filesystem is even touched; OR a symlink stood
-          anywhere along the way to a real target (`_walk_segments`
-          raises this directly, short-circuiting every root still
-          untried) — a symlink is a containment question, the identical
-          category traversal and an out-of-bounds absolute path are in,
-          not an existence one.
+          before the filesystem is even touched. A pure SHAPE question,
+          answered without ever listing a directory.
         * "{raw_path} is not available" — every other reason a target does
           not come back: it does not exist, it exists under a different
-          case, or it exists but is excluded (`.sextantignore`, the
-          overlay, a derived-output directory). ONE message for all three
-          (2K Task 5 fix round 1, I3): "excluded" and "does not exist"
-          used to be two different strings, and that difference is an
-          EXISTENCE ORACLE for exactly the names an attacker would probe
-          — `.env`, `*.pem`, the overlay's own name — so this jail now
-          gives the model no way to tell them apart.
+          case, a symlink stood in the way, or it exists but is excluded
+          (`.sextantignore`, the overlay, a derived-output directory). ONE
+          message for all four (2K Task 5 fix round 1, I3; extended fix
+          round 2, N4): "excluded" and "does not exist" used to be two
+          different strings, an EXISTENCE ORACLE for exactly the names an
+          attacker would probe (`.env`, `*.pem`, the overlay's own name);
+          a symlink used to get its own THIRD string ("outside the
+          allowed roots"), which was also simply FALSE for a symlink that
+          resolves back inside the jail to a file the model could read
+          directly under its real name — so this jail now gives the model
+          no way to tell any of the four apart.
         """
         if _has_traversal(raw_path):
             raise _ToolRefusal("refused: outside the allowed roots")
@@ -508,20 +540,42 @@ class ToolExecutor:
         root — is invisible to every tool: `.sextantignore` plus the
         built-in credential patterns (`ignore`); the enrichment overlay
         itself (the Task 3 ruling); or a derived-output directory
-        (`DERIVED_OUTPUT_DIRS`) anywhere in its ancestry (2K Task 5 fix
-        round 1 ruling — the module docstring explains why this joins
-        `ENRICHMENT_FILE` as a jail-specific rule rather than a
-        `.sextantignore` builtin). Path-shaped and content-blind, like
-        every check here: a copy of an excluded file sitting somewhere
-        this does not name is not caught by it."""
+        (`DERIVED_OUTPUT_DIRS`) anywhere in `path`'s ancestry RELATIVE TO
+        ITS OWN MOST SPECIFIC ROOT (`_most_specific_root` — 2K Task 5 fix
+        round 2, N2). Judging ancestry against the wrong root is a real
+        bug, not a theoretical one: with the ordinary nested layout
+        (module root, its `.sextant/facts`, its `.sextant/render`), a
+        module whose OWN root happens to sit under a directory literally
+        named `target` (`--workspace target/ws`, say) previously blanked
+        every fact and render row, because their ancestry was checked
+        against the OUTER module root — which genuinely does have
+        `target` in it — rather than against the fact/render root itself,
+        which does not. Path-shaped and content-blind, like every check
+        here: a copy of an excluded file sitting somewhere this does not
+        name is not caught by it."""
         if path.name == ENRICHMENT_FILE:
             return True
         if self._ignore.matches(path):
             return True
-        for root in self._roots:
-            if path.is_relative_to(root):
-                return any(part in DERIVED_OUTPUT_DIRS for part in path.relative_to(root).parts)
-        return False
+        root = self._most_specific_root(path)
+        if root is None:
+            return False
+        return any(part in DERIVED_OUTPUT_DIRS for part in path.relative_to(root).parts)
+
+    def _most_specific_root(self, path: Path) -> Path | None:
+        """The NARROWEST jailed root that contains `path` — the root
+        `path`'s own ancestry is judged against, whether for the
+        derived-output exclusion (`_is_excluded`) or for display
+        (`_display_path`): 2K Task 5 fix round 2 ruling (N1 + N2). With
+        the ordinary nested layout, a fact-root file is contained by BOTH
+        the module root (its ancestor) and the fact root itself — the
+        module root is never the answer once a more specific root also
+        contains it, because a nested root's own files must never inherit
+        an ancestor root's path segments as their own. `None` only for a
+        path outside every root, which no caller of this method ever
+        passes (unreachable in practice)."""
+        containing = [root for root in self._roots if path.is_relative_to(root)]
+        return max(containing, key=lambda root: len(root.parts), default=None)
 
     def _visible(self, entry: Path) -> bool:
         """The one per-entry check both `_list_dir`'s children and
@@ -542,7 +596,12 @@ class ToolExecutor:
         `innocent.txt -> .env` or a symlink chain that leaves every root
         (2K Task 5 fix round 1, C1): an excluded or symlinked entry is
         skipped, and a directory that is either is never even descended
-        into."""
+        into. Deliberately unaware of `self._roots`' own nesting — a
+        fact/render root sitting inside the module root means THIS
+        method, called once per root by `_visible_files`, walks the same
+        nested files more than once; `_visible_files` is where that gets
+        deduplicated, not here, so this method stays a plain "everything
+        visible under one starting point" primitive."""
         visible: list[Path] = []
         for entry in list_directory(directory):
             if not self._visible(entry):
@@ -554,29 +613,39 @@ class ToolExecutor:
         return visible
 
     def _visible_files(self) -> list[Path]:
-        """Every visible file under every jailed root, in deterministic
-        order: sorted by path-relative-to-its-own-root within each root,
-        roots walked in the order `roots` was constructed with (2K design
-        §4: "sorted outputs everywhere")."""
-        files: list[Path] = []
+        """Every visible file under every jailed root, deduplicated and
+        sorted by its own `_display_path` (2K Task 5 fix round 2, N1): the
+        ordinary layout nests the fact/render roots INSIDE the module
+        root, so walking the module root already reaches every fact and
+        render file, and walking each of THOSE roots separately reaches
+        them again — a real fixture (module root plus its own
+        `.sextant/facts`) walks 279 entries for 180 unique files without
+        this. Collected into a SET first (Path equality — every entry here
+        is already real and resolved, no symlink involved, so identity is
+        unambiguous) precisely so `find`/`grep`'s downstream counts and
+        match caps see each file once, then sorted by the DISPLAY string
+        — the form relative to the file's own most specific root — rather
+        than by which root's pass happened to walk it first."""
+        files: set[Path] = set()
         for root in self._roots:
-            files.extend(
-                sorted(
-                    self._walk_visible(root),
-                    key=lambda candidate: candidate.relative_to(root).as_posix(),
-                )
-            )
-        return files
+            files.update(self._walk_visible(root))
+        return sorted(files, key=self._display_path)
 
     def _display_path(self, path: Path) -> str:
-        """`path`, relative to whichever jailed root contains it — the
-        form `find`/`grep` show and `read_file`/`grep`'s own `path` scoping
-        accepts back, so a citation this tool prints is a citation the
-        model can hand to another tool call unchanged."""
-        for root in self._roots:
-            if path.is_relative_to(root):
-                return path.relative_to(root).as_posix()
-        return path.as_posix()  # unreachable: every caller only passes jailed paths
+        """`path`, relative to whichever jailed root MOST SPECIFICALLY
+        contains it (`_most_specific_root` — 2K Task 5 fix round 2, N1) —
+        the form `find`/`grep` show and `read_file`/`grep`'s own `path`
+        scoping accepts back, so a citation this tool prints is a
+        citation the model can hand to another tool call unchanged. A
+        fact-root file displays relative to the fact root (`foo.jsonl`),
+        never relative to the module root that happens to be its
+        ancestor too (`.sextant/facts/foo.jsonl`) — the same specificity
+        rule `_is_excluded` uses, for the identical reason: a nested
+        root's own files belong to IT, not to whatever contains it."""
+        root = self._most_specific_root(path)
+        if root is None:
+            return path.as_posix()  # unreachable: every caller only passes jailed paths
+        return path.relative_to(root).as_posix()
 
     def _content_of(self, path: Path) -> str | None:
         """`path`'s text, key-masked first when it is config-bearing (2K
@@ -635,23 +704,25 @@ def _walk_segments(root: Path, parts: tuple[str, ...]) -> Path | None:
     matches).
 
     A segment that is a SYMLINK — `root` itself, an intermediate
-    directory, or the final target — RAISES `_ToolRefusal` immediately
-    ("outside the allowed roots", `_resolve_in_jail`'s own docstring):
-    this jail never follows one, in or out, so there is no second,
-    resolved identity for a target this walk accepted to differ from, a
-    chain of several symlinks is refused at the FIRST hop rather than
-    followed to see where it ends up, and every root still untried is
-    skipped too — a symlink is a containment failure, not a per-root
-    miss.
+    directory, or the final target — stops the walk (`None`), the SAME
+    outcome as not found or found under a different case: this jail never
+    follows one, in or out, and a chain of several symlinks is refused at
+    the FIRST hop rather than followed to see where it ends up. Folded
+    into `_resolve_in_jail`'s single "is not available" message rather
+    than its "outside the allowed roots" one (2K Task 5 fix round 2, N4):
+    a symlink pointing back INSIDE the jail at a file the model could
+    read directly is not "outside" — that word would be false — and a
+    separate wording would tell a model it is specifically a symlink,
+    which is one bit more than "not available" the model has no use for.
 
-    Returns the real path once every segment is confirmed; `None` for
-    anything else that stops the walk WITHOUT a symlink involved — not
-    found, or found under a different case — the SAME outcome on purpose
-    (I3: distinguishing "wrong case" from "does not exist" would let a
-    caller learn which named secrets exist)."""
+    Returns the real path once every segment is confirmed; `None`
+    otherwise — not found, found under a different case, or a symlink are
+    the SAME outcome here, on purpose (I3, extended by N4: distinguishing
+    any of them would let a caller learn more about what actually sits at
+    a name than "you cannot have this")."""
     current = root
     if current.is_symlink():
-        raise _ToolRefusal("refused: outside the allowed roots")
+        return None
     for part in parts:
         try:
             real_names = {entry.name for entry in list_directory(current)}
@@ -661,7 +732,7 @@ def _walk_segments(root: Path, parts: tuple[str, ...]) -> Path | None:
             return None
         current = current / part
         if current.is_symlink():
-            raise _ToolRefusal("refused: outside the allowed roots")
+            return None
     return current
 
 
