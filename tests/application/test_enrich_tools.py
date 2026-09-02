@@ -344,7 +344,9 @@ def test_find_and_grep_do_not_double_count_a_file_under_a_nested_root(tmp_path: 
     180 unique files without the fix, `find *.jsonl` printed each name
     twice, and `MAX_GREP_MATCHES` counted double. Each file must appear
     exactly once, displayed relative to its OWN most specific root
-    (`a.jsonl`, never `.sextant/facts/a.jsonl`)."""
+    (`a.jsonl`, never `.sextant/facts/a.jsonl`) — the NO-COLLISION case
+    `_display_map` (fix round 3, N1b) leaves alone, since neither name
+    collides with anything at the module root's own top level."""
     module_root = tmp_path / "module"
     module_root.mkdir()
     (module_root / "Source.txt").write_text("module source\n")
@@ -361,6 +363,52 @@ def test_find_and_grep_do_not_double_count_a_file_under_a_nested_root(tmp_path: 
         "a.jsonl:1:fact-a",
         "b.jsonl:1:fact-b",
     ]
+    # Round-trip: both citations read back the file they named.
+    assert executor.execute("read_file", {"path": "a.jsonl"}) == "fact-a"
+    assert executor.execute("read_file", {"path": "b.jsonl"}) == "fact-b"
+
+
+def test_a_display_name_collision_between_nested_roots_is_disambiguated(tmp_path: Path):
+    """2K Task 5 fix round 3, N1b (round-2 regression): the §5/§6b render
+    layout is the realistic trigger — `architecture.md` rendered at the
+    module root's `.sextant/render` AND a same-named file living directly
+    at the module root both named as bare `architecture.md` under
+    most-specific-root spelling alone, so `find` printed the identical
+    line twice and `read_file architecture.md` could only ever reach the
+    module-root copy — the render copy was unreachable by any name. Both
+    must now get DISTINCT citations, and each citation must round-trip
+    through BOTH `read_file` and `grep` to the exact file it named."""
+    module_root = tmp_path / "module"
+    module_root.mkdir()
+    (module_root / "architecture.md").write_text("module-level doc\n")
+    render_root = module_root / ".sextant" / "render"
+    render_root.mkdir(parents=True)
+    (render_root / "architecture.md").write_text("rendered doc\n")
+    executor = _executor((module_root, render_root))
+
+    found = executor.execute("find", {"pattern": "architecture.md"}).splitlines()
+    assert len(found) == 2
+    assert len(set(found)) == 2, "the two files must not print the identical citation"
+    assert set(found) == {"architecture.md", ".sextant/render/architecture.md"}
+
+    # Every citation `find` printed reads back, via `read_file`, the exact
+    # file it came from — not merely SOME file.
+    by_citation = {
+        citation: executor.execute("read_file", {"path": citation}) for citation in found
+    }
+    assert by_citation["architecture.md"] == "module-level doc"
+    assert by_citation[".sextant/render/architecture.md"] == "rendered doc"
+
+    # `grep` labels each match with the SAME two citations, and each
+    # match's own line is the right file's own content.
+    grepped: dict[str, str] = {}
+    for line in executor.execute("grep", {"pattern": "doc"}).splitlines():
+        path, _line_number, text = line.split(":", 2)
+        grepped[path] = text
+    assert grepped == {
+        "architecture.md": "module-level doc",
+        ".sextant/render/architecture.md": "rendered doc",
+    }
 
 
 def test_derived_output_exclusion_is_judged_against_the_most_specific_root(tmp_path: Path):
