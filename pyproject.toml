@@ -16,6 +16,11 @@ dependencies = [
   "grpcio-tools>=1.83.1",
   "graphql-core>=3.2.6",
   "pathspec==1.1.1",
+  # Import-confined to `src/sextant/agents/claude_api.py` (2K design §3/§8):
+  # the one sanctioned model-calling adapter, enforced by
+  # `tests/architecture/test_agents_confinement.py`. Pinned to the exact
+  # version a live resolve installed.
+  "anthropic==1.3.0",
 ]
 
 [project.optional-dependencies]
@@ -75,7 +80,11 @@ root_package = "sextant"
 name = "Layering: cli -> outer groups -> application -> domain"
 type = "layers"
 containers = ["sextant"]
-layers = ["cli", "ingress | storage | egress", "application", "domain"]
+# `agents` joins the outer-group rank (2K design §8): it imports
+# `application`/`domain` inward like `ingress`/`storage`/`egress`, and nothing
+# else outward — the one module it houses, `claude_api.py`, is the ONE
+# sanctioned model-calling adapter (DR-2's amendment).
+layers = ["cli", "ingress | storage | egress | agents", "application", "domain"]
 # Exhaustive so a new top-level package cannot land outside every contract:
 # an unlisted package is unlayered, and an unlayered package is unchecked.
 # The container form is what makes this option available.
@@ -84,7 +93,7 @@ exhaustive = true
 [[tool.importlinter.contracts]]
 name = "Outer groups never import one another"
 type = "independence"
-modules = ["sextant.ingress", "sextant.storage", "sextant.egress"]
+modules = ["sextant.ingress", "sextant.storage", "sextant.egress", "sextant.agents"]
 
 [[tool.importlinter.contracts]]
 name = "Ingress is write-only: it never depends on the Workspace port"
