@@ -10,29 +10,43 @@ model, a shell, or the network, and nothing here writes.
 **Every refusal is a RESULT, never an exception.** `execute` is the one
 public entry point a caller (Task 6's loop) uses, and its contract is that
 it always returns a string — an unknown tool name, malformed arguments, a
-jail violation, an excluded file, or a filesystem surprise `resolve` cannot
-unwind all become a `"refused: ..."` string the model reads like any other
-tool result. A crashed loop is a worse outcome than a puzzled model.
+jail violation, an excluded file, or a filesystem surprise all become a
+`"refused: ..."` string the model reads like any other tool result, worded
+generically (never the raw exception text — see `execute`). A crashed loop
+is a worse outcome than a puzzled model.
 
-**Containment is checked AFTER resolution.** `Path.resolve()` follows every
-symlink it encounters, so a path is accepted only once its fully-resolved,
-symlink-free form sits under one of the jailed roots' own resolved form —
-`..` segments, an absolute path elsewhere, and a symlink planted inside a
-root that points outside all fail the identical check and get the identical
-refusal, so the model learns the shape of the wall rather than which
-specific trick failed.
+**One policy, two routes, checked the same way (2K Task 5 fix round 1).** A
+caller reaches a file two ways — naming it (`read_file`, `list_dir`, the
+scoped `path` on `grep`) or discovering it (`find`, an unscoped `grep`) —
+and both routes enforce the identical rule: a path is visible only if it is
+the EXACT — case included — name of a REAL directory entry, reached without
+crossing a single symlink. `_walk_segments` is the naming route's walk (one
+caller-given string, verified segment by segment against `list_directory`);
+`_walk_visible`/`_visible` is the discovery route's walk (real directory
+entries only, so the case question never arises — only the symlink one
+does). Neither ever calls `Path.resolve()`: a build that trusted resolution
+would follow a symlink to see where it leads and could only refuse it
+AFTERWARD, by re-checking the target — which is exactly the shape of the
+first version of this file, and exactly what a symlink chained through two
+hops, or a lexically-innocent name aliasing an excluded one, got past. Not
+resolving at all — refusing the instant a symlink is MET, never mind where
+it points — removes the class of bug rather than patching one instance of
+it.
 
 **Two invisibility layers, checked together at every walk site.**
 `ignore` (T2's `IgnoreRules`, already loaded for the repository the jailed
 roots live under) hides `.sextantignore` matches and the built-in
-credential patterns. Independently, `domain.enrichment.ENRICHMENT_FILE`
+credential patterns. `domain.enrichment.ENRICHMENT_FILE`
 (`.sextant-enrichment.json`) is excluded here as a JAIL-SPECIFIC rule, not a
-`.sextantignore` builtin (2K Task 3 ruling, carried to Task 5 at dispatch):
-the model must never read its own prior run's claims through these tools,
-or a later run would be grounding its answers in what it already said
-rather than in the module — exactly the feedback/anchor-gaming loop the
-overlay's `evidence: llm` marker exists to keep out of the machine
-document.
+`.sextantignore` builtin (2K Task 3 ruling): the model must never read its
+own prior run's claims through these tools. A derived-output directory
+(`DERIVED_OUTPUT_DIRS` — `target/`, `build/`, `out/`, `node_modules/`,
+`.git/`) is excluded the same jail-specific way (2K Task 5 fix round 1
+ruling): the jail describes human-authored source, never its compiled
+shadow, and `BUILTIN_PATTERNS` stays the short, non-negatable credential
+layer it was designed as. All three are PATH-SHAPED and content-blind — a
+copy of an excluded file sitting somewhere `_is_excluded` does not name is
+not caught by it (2K design §11).
 
 **Redaction on read, twice over.** A config-bearing file's content — the
 extensions the config-reading `ArtifactReader`s claim, see
@@ -41,8 +55,9 @@ extensions the config-reading `ArtifactReader`s claim, see
 cannot recover a value through `grep` that `read_file` would have masked.
 Every result, from every tool (including a refusal), additionally passes
 `redactor.redact_text` (URL userinfo stripped, plus any repo-added value
-patterns) on its way out of `execute` — cheap, safe, and the one pass
-nothing here is allowed to skip.
+patterns) on its way out of `execute`, BEFORE the byte cap — cheap, safe,
+and the one pass nothing here is allowed to skip, in the one order that
+keeps a secret from surviving half-truncated (see `execute`).
 """
 
 import fnmatch
@@ -52,7 +67,7 @@ from pathlib import Path
 
 from sextant.application.ports.artifacts import file_kind
 from sextant.domain.enrichment import ENRICHMENT_FILE
-from sextant.domain.file_reads import list_directory, read_file_text, walk_files
+from sextant.domain.file_reads import list_directory, read_file_text
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import Redactor
 
@@ -77,21 +92,34 @@ MAX_GREP_MATCHES = 200
 # states is NOT invented here: it mirrors `reads_schema_sources = False` on
 # `sextant.ingress.read.yaml_config.YamlConfigReader` (`yml`, `yaml`) and
 # `sextant.ingress.read.properties.PropertiesReader` (`properties`), the two
-# `ArtifactReader`s `cli/app.py` registers that read ordinary configuration
-# rather than a schema source — as opposed to `AvscReader`, `GraphqlSdlReader`,
+# `ArtifactReader`s in `sextant.ingress.read.READERS` (the registry
+# `cli/app.py` hands `analyze`) that read ordinary configuration rather than
+# a schema source — as opposed to `AvscReader`, `GraphqlSdlReader`,
 # `ProtoSourceReader` and `WsdlXsdReader`, all `reads_schema_sources = True`,
 # which read shapes, not settings, and carry no credentials to mask.
 #
-# This module cannot import those readers to ask them directly: the import
+# This module cannot import that registry to ask it directly: the import
 # contracts (`.importlinter`) place `ingress` ABOVE `application` in the
 # layering (`cli -> ingress|storage|egress -> application -> domain`), so an
 # `application` module reaching into `ingress` is exactly the direction the
-# contract forbids. What follows is therefore a STATED MIRROR of that
+# contract forbids. What follows is therefore a STATED MIRROR of the
 # registry's own split, not a fresh guess at which extensions carry
-# configuration — if a reader's own `accepts`/`reads_schema_sources` ever
-# changes, this constant has to change with it, by hand, because nothing
-# enforces the two agreeing.
+# configuration — `tests/application/test_enrich_tools.py` pins both
+# directions against the real `READERS` tuple, so a reader's own
+# `accepts`/`reads_schema_sources` changing without this constant changing
+# with it fails a test rather than drifting silently.
 CONFIG_BEARING_EXTENSIONS = frozenset({"yml", "yaml", "properties"})
+
+# Derived-output directories (2K Task 5 fix round 1 ruling): invisible and
+# unreadable everywhere in the jail, ancestry included, but NOT part of
+# `ignorefile.BUILTIN_PATTERNS` — that set stays the short, non-negatable
+# CREDENTIAL layer; this is a separate, jail-specific exclusion for a
+# module's COMPILED SHADOW, joining `ENRICHMENT_FILE`'s own precedent.
+# Deliberately does not touch `.sextantignore`, `resource_files.list_files`,
+# or any analysis walk — a build directory is fair game for `analyze`
+# (D00 §2's origin tiering already answers whether ITS classes count), only
+# the enrichment jail refuses to describe it as source.
+DERIVED_OUTPUT_DIRS = frozenset({"target", "build", "out", "node_modules", ".git"})
 
 # A config-bearing file's `key: value` / `key = value` assignment lines
 # (YAML block style, and the `.properties` format), matched so ONLY an
@@ -141,8 +169,9 @@ _LIST_DIR = ToolDefinition(
         "List the immediate entries of a directory inside the jailed roots "
         "(the module's source root, its fact root, and its rendered "
         "outputs). Directories are suffixed with '/'. Anything "
-        ".sextantignore or a built-in credential pattern excludes, and "
-        "Sextant's own prior enrichment overlay, never appears — use this "
+        ".sextantignore or a built-in credential pattern excludes, "
+        "Sextant's own prior enrichment overlay, and any build/dependency "
+        "directory (e.g. target/, node_modules/) never appears — use this "
         "to orient yourself before find/read_file, not to enumerate every "
         "file on disk."
     ),
@@ -255,23 +284,38 @@ class ToolExecutor:
     (2K design §1), and the ignore rules T2 loaded for the repository those
     roots live under.
 
-    **Wiring assumption this class does not re-check:** `ignore` was
-    loaded (`IgnoreRules.load`) against a repository root that contains
-    every entry in `roots` — true of the module root together with its own
-    `.sextant/facts` and `.sextant/render` (the layout `_workspace_dir_of`
-    builds), which is the only wiring Task 6 is expected to construct this
-    with. `IgnoreRules.matches` resolves a path against the root it was
-    loaded for regardless of which jailed root the file happens to sit
-    under, which is what lets one `ignore` cover all three.
+    **Wiring assumption, enforced at construction, not merely stated:**
+    `ignore` must be loaded (`IgnoreRules.load`) against a repository root
+    that contains every entry in `roots` — true of the module root together
+    with its own `.sextant/facts` and `.sextant/render` (the layout
+    `_workspace_dir_of` builds), which is the only wiring Task 6 is
+    expected to construct this with. `__init__` checks this for every root
+    and raises rather than build a jail that silently refuses every call
+    (2K Task 5 fix round 1, I4): a mismatch here previously surfaced as an
+    ordinary-looking refusal on every single tool call, indistinguishable
+    from the jail actually working, with the raw mismatch — an absolute
+    host path — landing in the MODEL-visible refusal text.
     """
 
     def __init__(self, roots: tuple[Path, ...], redactor: Redactor, ignore: IgnoreRules) -> None:
-        self._roots = tuple(root.resolve() for root in roots)
+        resolved_roots = tuple(root.resolve() for root in roots)
+        for root in resolved_roots:
+            try:
+                ignore.matches(root)
+            except ValueError as mismatch:
+                raise ValueError(
+                    "ToolExecutor: `ignore` was not loaded (IgnoreRules.load) for a "
+                    "repository root that contains every jailed root — construction "
+                    "refused rather than building a jail that refuses every call"
+                ) from mismatch
+        self._roots = resolved_roots
         self._redactor = redactor
         self._ignore = ignore
         # Every call and its result, in call order — persisted by the
         # caller (2K design §3: "a full session transcript logged locally
-        # for audit"). This class only ever appends to it.
+        # for audit"). This class only ever appends to it; `args` is
+        # stored as a COPY (2K Task 5 fix round 1, minor) so a caller that
+        # mutates the dict it passed in afterward cannot rewrite history.
         self.transcript: list[dict[str, object]] = []
 
     def definitions(self) -> list[ToolDefinition]:
@@ -284,20 +328,47 @@ class ToolExecutor:
         an unknown tool name, malformed arguments, a jail refusal, or any
         unexpected filesystem error all become the same kind of thing — a
         refusal string in `result` — because the model reads results, not
-        exceptions."""
+        exceptions. An UNEXPECTED failure's own text never reaches the
+        model (2K Task 5 fix round 1, I4): it can carry an absolute host
+        path or other diagnostic detail that is fine for a transcript a
+        human reads and wrong for a tool result the model reads back as if
+        it described the repository; the real text goes to `transcript`
+        alone, under `error`."""
+        error_detail: str | None = None
         try:
-            result = self._dispatch(name, args)
-        except _ToolRefusal as refusal:
-            result = str(refusal)
+            # The inner `try` handles the EXPECTED outcome (a refusal);
+            # `redact_text`/`_cap` run inside the OUTER `try` too — not
+            # after it — because a redactor or the cap themselves raising
+            # (a caller-supplied `redactor` misbehaving, say) must land on
+            # the identical generic-message path as a dispatch failure,
+            # never escape past this method (2K Task 5 fix round 1, I4).
+            try:
+                result = self._dispatch(name, args)
+            except _ToolRefusal as refusal:
+                result = str(refusal)
+            # Redaction BEFORE the byte cap, always (2K Task 5 fix round
+            # 1, minor, pinning the existing order): `_cap` truncates at a
+            # raw byte offset, so if it ran first, a secret straddling
+            # that offset would come back with its tail sliced off rather
+            # than replaced by the marker — `redact_text` has to see the
+            # WHOLE result at least once before any of it is thrown away.
+            result = _cap(self._redactor.redact_text(result))
         except Exception as unexpected:  # noqa: BLE001 — deliberate, see below
             # The one hard guarantee this class makes is that NOTHING
             # escapes `execute` (2K Task 5 brief) — a permissions error, a
-            # symlink cycle `resolve` cannot unwind, or any other
-            # filesystem surprise becomes a refusal the model can read
-            # rather than a crash of the whole enrichment run.
-            result = f"refused: {name} failed: {unexpected}"
-        result = _cap(self._redactor.redact_text(result))
-        self.transcript.append({"name": name, "args": args, "result": result})
+            # symlink cycle, a misbehaving redactor, or any other
+            # surprise becomes a refusal the model can read rather than a
+            # crash of the whole enrichment run.
+            error_detail = str(unexpected)
+            result = f"refused: {name} could not be completed"
+        entry: dict[str, object] = {
+            "name": name,
+            "args": dict(args) if isinstance(args, dict) else args,
+            "result": result,
+        }
+        if error_detail is not None:
+            entry["error"] = error_detail
+        self.transcript.append(entry)
         return result
 
     def _dispatch(self, name: str, args: dict[str, object]) -> str:
@@ -321,7 +392,7 @@ class ToolExecutor:
         entries = sorted(
             child.name + "/" if child.is_dir() else child.name
             for child in list_directory(resolved)
-            if not self._is_excluded(child)
+            if self._visible(child)
         )
         return "\n".join(entries)
 
@@ -382,64 +453,119 @@ class ToolExecutor:
         content = self._content_of(resolved)
         if content is None:
             raise _ToolRefusal(f"refused: {path} is not a text file")
+        # Mask BEFORE slicing (2K Task 5 fix round 1, minor, pinning the
+        # existing order): `_content_of` key-masks the FULL text, and only
+        # then is the requested window cut out of it — cutting first would
+        # risk a config file's masking rule looking at a value with its
+        # own line missing the context (a continuation, a nearby key) a
+        # future, less line-local masking rule might need.
         lines = content.splitlines()
         last = start + DEFAULT_READ_LINES - 1 if end is None else end
         return "\n".join(lines[start - 1 : last])
 
     def _resolve_in_jail(self, raw_path: str) -> Path:
-        """`raw_path`'s real, EXISTING location under one of the jailed
-        roots — resolved after symlinks, tried against each root in turn,
-        first existing match wins.
+        """`raw_path`'s real location under one of the jailed roots, found
+        by `_walk_segments` — the naming route's half of the module
+        docstring's one symlink-and-case policy. Exactly two refusals, and
+        the caller can tell them apart no further than this:
 
-        A path that resolves inside a root but does not exist there is a
-        plain miss, reported as "does not exist"; a path that resolves
-        inside NO root at all — `..` escaping every one, an absolute path
-        elsewhere, or a symlink whose target lands outside — is the jail's
-        one security refusal, always the identical words regardless of
-        which of those three shapes triggered it."""
-        missing: str | None = None
+        * "outside the allowed roots" — `raw_path` cannot possibly land
+          under ANY root, decided from its own spelling alone (a `..`
+          segment, or an absolute path lexically outside every root)
+          before the filesystem is even touched; OR a symlink stood
+          anywhere along the way to a real target (`_walk_segments`
+          raises this directly, short-circuiting every root still
+          untried) — a symlink is a containment question, the identical
+          category traversal and an out-of-bounds absolute path are in,
+          not an existence one.
+        * "{raw_path} is not available" — every other reason a target does
+          not come back: it does not exist, it exists under a different
+          case, or it exists but is excluded (`.sextantignore`, the
+          overlay, a derived-output directory). ONE message for all three
+          (2K Task 5 fix round 1, I3): "excluded" and "does not exist"
+          used to be two different strings, and that difference is an
+          EXISTENCE ORACLE for exactly the names an attacker would probe
+          — `.env`, `*.pem`, the overlay's own name — so this jail now
+          gives the model no way to tell them apart.
+        """
+        if _has_traversal(raw_path):
+            raise _ToolRefusal("refused: outside the allowed roots")
+        reachable = False
         for root in self._roots:
-            resolved = (root / raw_path).resolve()
-            if not resolved.is_relative_to(root):
+            parts = _relative_parts(root, raw_path)
+            if parts is None:
                 continue
-            if not resolved.exists():
-                if missing is None:
-                    missing = raw_path
-                continue
-            if self._is_excluded(resolved):
-                raise _ToolRefusal(f"refused: {raw_path} is excluded from the enrichment jail")
-            return resolved
-        if missing is not None:
-            raise _ToolRefusal(f"refused: {missing} does not exist")
+            reachable = True
+            target = _walk_segments(root, parts)
+            if target is not None and not self._is_excluded(target):
+                return target
+        if reachable:
+            raise _ToolRefusal(f"refused: {raw_path} is not available")
         raise _ToolRefusal("refused: outside the allowed roots")
 
     def _is_excluded(self, path: Path) -> bool:
-        """Whether `path` (already jail-contained) is invisible to every
-        tool: `.sextantignore` plus the built-in credential patterns
-        (`ignore`), OR the enrichment overlay itself — the jail-specific
-        exclusion the module docstring explains."""
-        return path.name == ENRICHMENT_FILE or self._ignore.matches(path)
+        """Whether `path` — already confirmed real and inside a jailed
+        root — is invisible to every tool: `.sextantignore` plus the
+        built-in credential patterns (`ignore`); the enrichment overlay
+        itself (the Task 3 ruling); or a derived-output directory
+        (`DERIVED_OUTPUT_DIRS`) anywhere in its ancestry (2K Task 5 fix
+        round 1 ruling — the module docstring explains why this joins
+        `ENRICHMENT_FILE` as a jail-specific rule rather than a
+        `.sextantignore` builtin). Path-shaped and content-blind, like
+        every check here: a copy of an excluded file sitting somewhere
+        this does not name is not caught by it."""
+        if path.name == ENRICHMENT_FILE:
+            return True
+        if self._ignore.matches(path):
+            return True
+        for root in self._roots:
+            if path.is_relative_to(root):
+                return any(part in DERIVED_OUTPUT_DIRS for part in path.relative_to(root).parts)
+        return False
+
+    def _visible(self, entry: Path) -> bool:
+        """The one per-entry check both `_list_dir`'s children and
+        `_walk_visible`'s walk apply: real (not a symlink) and not
+        `_is_excluded`. The naming route (`_walk_segments`) enforces the
+        identical symlink rule its own way, one segment at a time, because
+        it resolves a caller's STRING rather than filtering entries
+        `list_directory` already handed it."""
+        return not entry.is_symlink() and not self._is_excluded(entry)
+
+    def _walk_visible(self, directory: Path) -> list[Path]:
+        """The discovery route's half of the module docstring's policy:
+        every visible file under `directory`, recursively, in whatever
+        order `list_directory` gives its entries (the caller sorts).
+        Every name here already comes from a REAL directory entry, so
+        case is never in question on this route — `_visible`'s symlink
+        check is what stops `find`/`grep` from walking through
+        `innocent.txt -> .env` or a symlink chain that leaves every root
+        (2K Task 5 fix round 1, C1): an excluded or symlinked entry is
+        skipped, and a directory that is either is never even descended
+        into."""
+        visible: list[Path] = []
+        for entry in list_directory(directory):
+            if not self._visible(entry):
+                continue
+            if entry.is_dir():
+                visible.extend(self._walk_visible(entry))
+            elif entry.is_file():
+                visible.append(entry)
+        return visible
 
     def _visible_files(self) -> list[Path]:
-        """Every file under every jailed root that `_is_excluded` does not
-        hide, in deterministic order: sorted by path-relative-to-its-own-root
-        within each root, roots walked in the order `roots` was constructed
-        with (2K design §4: "sorted outputs everywhere"). Hand-rolled
-        rather than `domain.resource_files.list_files`: that helper takes
-        an explicit `repo_root` and relativizes against it BEFORE calling
-        `ignore.matches`, which is only correct when the root being walked
-        IS the ignore's own repo root — true for the module source root
-        here, not for the fact/render roots nested under it. Calling
-        `ignore.matches` directly with each file's own resolved absolute
-        path lets `IgnoreRules` do that relativizing itself, correctly,
-        against whichever repo root it was actually loaded for."""
+        """Every visible file under every jailed root, in deterministic
+        order: sorted by path-relative-to-its-own-root within each root,
+        roots walked in the order `roots` was constructed with (2K design
+        §4: "sorted outputs everywhere")."""
         files: list[Path] = []
         for root in self._roots:
-            for path in sorted(
-                walk_files(root), key=lambda candidate: candidate.relative_to(root).as_posix()
-            ):
-                if not self._is_excluded(path):
-                    files.append(path)
+            files.extend(
+                sorted(
+                    self._walk_visible(root),
+                    key=lambda candidate: candidate.relative_to(root).as_posix(),
+                )
+            )
         return files
 
     def _display_path(self, path: Path) -> str:
@@ -467,6 +593,76 @@ class ToolExecutor:
         if file_kind(path) in CONFIG_BEARING_EXTENSIONS:
             return _mask_config_lines(text, self._redactor)
         return text
+
+
+def _has_traversal(raw_path: str) -> bool:
+    """Whether `raw_path` names a `..` segment anywhere — checked on the
+    STRING alone, before any root is even tried, because `..` means the
+    same thing (a bid to leave the jail) regardless of which root it is
+    weighed against. A bare `.` never reaches this check: `pathlib` drops
+    it while parsing, so `Path(".").parts` is already empty — which is
+    what lets `list_dir(path=".")` mean "the root itself"."""
+    return ".." in Path(raw_path).parts
+
+
+def _relative_parts(root: Path, raw_path: str) -> tuple[str, ...] | None:
+    """The segments to walk from `root` for `raw_path` — a STRING
+    computation only (`PurePath.relative_to`; no filesystem access, no
+    `Path.resolve()`, so this alone decides nothing about whether the
+    target exists, is real, or is visible — `_walk_segments` decides all
+    of that). An absolute `raw_path` not lexically prefixed by `root`'s own
+    resolved spelling cannot land under it: `None`, and the caller tries
+    the next root. A relative `raw_path` applies to every root alike —
+    `parts` is returned exactly as given, unresolved, for `_walk_segments`
+    to verify against real directory entries one segment at a time."""
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        try:
+            return candidate.relative_to(root).parts
+        except ValueError:
+            return None
+    return candidate.parts
+
+
+def _walk_segments(root: Path, parts: tuple[str, ...]) -> Path | None:
+    """The naming route's half of the module docstring's one
+    symlink-and-case policy (2K Task 5 fix round 1, C1+C2): descend from
+    `root` one segment at a time, requiring each to be the EXACT — case
+    included — name of a REAL directory entry (`list_directory`, never the
+    filesystem's own case-insensitive lookup, which a case-preserving-but-
+    insensitive filesystem such as macOS's default satisfies for `.ENV`
+    against a real `.env` and hands back a spelling `.sextantignore` never
+    matches).
+
+    A segment that is a SYMLINK — `root` itself, an intermediate
+    directory, or the final target — RAISES `_ToolRefusal` immediately
+    ("outside the allowed roots", `_resolve_in_jail`'s own docstring):
+    this jail never follows one, in or out, so there is no second,
+    resolved identity for a target this walk accepted to differ from, a
+    chain of several symlinks is refused at the FIRST hop rather than
+    followed to see where it ends up, and every root still untried is
+    skipped too — a symlink is a containment failure, not a per-root
+    miss.
+
+    Returns the real path once every segment is confirmed; `None` for
+    anything else that stops the walk WITHOUT a symlink involved — not
+    found, or found under a different case — the SAME outcome on purpose
+    (I3: distinguishing "wrong case" from "does not exist" would let a
+    caller learn which named secrets exist)."""
+    current = root
+    if current.is_symlink():
+        raise _ToolRefusal("refused: outside the allowed roots")
+    for part in parts:
+        try:
+            real_names = {entry.name for entry in list_directory(current)}
+        except OSError:
+            return None
+        if part not in real_names:
+            return None
+        current = current / part
+        if current.is_symlink():
+            raise _ToolRefusal("refused: outside the allowed roots")
+    return current
 
 
 def _require_str(args: dict[str, object], key: str) -> str:
@@ -525,7 +721,10 @@ def _cap(text: str) -> str:
     no single tool result can flood the model's context regardless of what
     the repository holds. Byte-safe: truncation never lands inside a
     multi-byte character (`errors="ignore"` drops a partial trailing byte
-    sequence rather than raising or emitting invalid UTF-8)."""
+    sequence rather than raising or emitting invalid UTF-8). Callers only
+    ever hand this the ALREADY-`redact_text`-ed result (see `execute`) —
+    the ordering that keeps a secret from surviving with its tail cut off
+    instead of replaced by the marker."""
     encoded = text.encode("utf-8")
     if len(encoded) <= MAX_RESULT_BYTES:
         return text

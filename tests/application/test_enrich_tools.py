@@ -1,17 +1,22 @@
-"""The enrichment tools and the jail (2K design §4, Task 5 brief).
+"""The enrichment tools and the jail (2K design §4, Task 5 brief + fix
+round 1).
 
 Security-sensitive: a bug here is a bug in the wall the rest of the
-enrichment loop is built behind, not a wrong document. Every test in the
-first half is about something the jail must NEVER show — outside its
-roots, `.sextantignore`'d, or Task 3's ruling that the overlay itself is
-invisible — coming back as a plain refusal STRING, never an exception. The
-second half is ordinary behaviour: line-ranged reads, glob find, grep with
-a match cap, and the redaction-on-read pass that a config file's planted
-credential (`fixtures/orders-service/src/main/resources/application.yml`)
-proves end to end.
+enrichment loop is built behind, not a wrong document. The first half is
+about something the jail must NEVER show — outside its roots, through a
+symlink (direct or chained), under a spelling a case-insensitive filesystem
+would accept but `.sextantignore` never matches, `.sextantignore`'d
+outright, a derived-output directory (`target/`, ...), or Task 3's ruling
+that the overlay itself is invisible — coming back as a plain refusal
+STRING, never an exception, and never one that echoes raw diagnostic text
+at the model. The second half is ordinary behaviour: line-ranged reads,
+glob find, grep with a match cap, and the redaction-on-read pass that a
+config file's planted credential proves end to end.
 """
 
 from pathlib import Path
+
+import pytest
 
 from sextant.application.enrich.tools import (
     CONFIG_BEARING_EXTENSIONS,
@@ -35,8 +40,8 @@ def _executor(
     `roots[0]` (the tmp_path-based security/behaviour tests never write a
     `.sextantignore` of their own, so this is the built-ins-only case) —
     correct whenever `roots[0]` is an ancestor of every other root, the
-    class's own stated wiring assumption; a test exercising SIBLING roots
-    passes an `ignore` loaded for their common parent explicitly."""
+    class's own construction-time invariant; a test exercising SIBLING
+    roots passes an `ignore` loaded for their common parent explicitly."""
     return ToolExecutor(
         roots=roots,
         redactor=redactor or Redactor.from_rules(),
@@ -58,7 +63,17 @@ def _fixture_executor() -> ToolExecutor:
     )
 
 
-# --- The jail: containment, checked after resolution -----------------------
+class _ExplodingRedactor:
+    """A redactor that always fails on `redact_text` — the one
+    deliberately UNEXPECTED failure this suite triggers on purpose (2K
+    Task 5 fix round 1, I4), to prove `execute` still never raises and
+    never lets the raw failure text reach the model."""
+
+    def redact_text(self, text: str) -> str:
+        raise RuntimeError(f"boom: cannot redact {text!r} — /private/host/path/leaked")
+
+
+# --- The jail: containment, never through a symlink -------------------------
 
 
 def test_traversal_outside_the_root_is_refused(tmp_path: Path):
@@ -81,11 +96,12 @@ def test_an_absolute_path_outside_every_root_is_refused(tmp_path: Path):
     assert result == "refused: outside the allowed roots"
 
 
-def test_a_symlink_inside_a_root_pointing_outside_is_refused_after_resolution(tmp_path: Path):
-    """Containment is checked POST-resolution (2K Task 5 brief): a symlink
-    that LOOKS like it stays inside the root, until you follow it, must
-    still be refused — checking containment before following the link
-    would let this one through."""
+def test_a_symlink_inside_a_root_pointing_outside_is_refused(tmp_path: Path):
+    """The jail never follows a symlink at all (2K Task 5 fix round 1,
+    C1) — not "follow it, then refuse once the target turns out to be
+    outside": a symlink is refused the instant it is MET, so this test
+    cannot tell "escaped" from "any other symlink" by its wording, which
+    is the point (`_resolve_in_jail`'s own docstring)."""
     root = tmp_path / "root"
     root.mkdir()
     outside = tmp_path / "outside"
@@ -95,11 +111,12 @@ def test_a_symlink_inside_a_root_pointing_outside_is_refused_after_resolution(tm
     executor = _executor((root,))
     result = executor.execute("read_file", {"path": "escape/secret.txt"})
     assert result == "refused: outside the allowed roots"
+    assert "not yours" not in result
 
 
 def test_a_path_genuinely_inside_the_root_is_accepted(tmp_path: Path):
-    """The positive control for the three refusals above: the jail is not
-    just a wall, it lets a real, contained path through."""
+    """The positive control for the refusals around it: the jail is not
+    just a wall, it lets a real, contained, non-symlinked path through."""
     root = tmp_path / "root"
     root.mkdir()
     (root / "safe.txt").write_text("hi\n")
@@ -107,14 +124,94 @@ def test_a_path_genuinely_inside_the_root_is_accepted(tmp_path: Path):
     assert executor.execute("read_file", {"path": "safe.txt"}) == "hi"
 
 
-def test_a_path_that_does_not_exist_in_any_root_is_a_plain_miss_not_a_security_refusal(
-    tmp_path: Path,
-):
+def test_a_path_that_does_not_exist_in_any_root_is_a_plain_miss(tmp_path: Path):
     root = tmp_path / "root"
     root.mkdir()
     executor = _executor((root,))
     result = executor.execute("read_file", {"path": "nope.txt"})
-    assert result == "refused: nope.txt does not exist"
+    assert result == "refused: nope.txt is not available"
+
+
+# --- C1: find/grep must not read (or reveal) through a symlink --------------
+
+
+def test_grep_cannot_read_through_a_symlink_aliasing_an_ignored_file(tmp_path: Path):
+    """The exact escape the reviewer reproduced live: `innocent.txt` is a
+    symlink to `.env`, and `.env` itself is separately excluded — but
+    that separate exclusion is not what closes this hole. Before the fix,
+    the WALK route (`find`/`grep`) never re-checked a walked candidate
+    for being a symlink at all, so `innocent.txt` sailed through as an
+    ordinary file and `grep` read straight through it to `.env`'s
+    content."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / ".env").write_text("FAKE_SECRET=must-not-leak\n")
+    (root / "innocent.txt").symlink_to(root / ".env")
+    executor = _executor((root,))
+    assert executor.execute("find", {"pattern": "innocent.txt"}) == ""
+    assert executor.execute("find", {"pattern": ".env"}) == ""
+    assert executor.execute("grep", {"pattern": "FAKE_SECRET"}) == ""
+    assert executor.execute("read_file", {"path": "innocent.txt"}) == (
+        "refused: outside the allowed roots"
+    )
+
+
+def test_a_symlink_chain_to_outside_the_jail_leaks_nothing_through_either_alias(tmp_path: Path):
+    """`root/a -> root/b -> /outside/secret`: TWO aliases, chained, both
+    living inside the jailed root. Before the fix, `find` listed both
+    names and `grep` read the outside file's content through EITHER one
+    (leaking it twice, once per alias) — `_walk_visible` now refuses to
+    even descend past the first symlink it meets, so the chain is never
+    walked at all."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("outside-secret-marker\n")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "b").symlink_to(outside / "secret.txt")
+    (root / "a").symlink_to(root / "b")
+    executor = _executor((root,))
+    assert executor.execute("find", {"pattern": "a"}) == ""
+    assert executor.execute("find", {"pattern": "b"}) == ""
+    assert executor.execute("grep", {"pattern": "outside-secret-marker"}) == ""
+    assert executor.execute("read_file", {"path": "a"}) == "refused: outside the allowed roots"
+    assert executor.execute("read_file", {"path": "b"}) == "refused: outside the allowed roots"
+
+
+# --- C2: a case-insensitive filesystem must not bypass an exclusion --------
+
+
+def test_a_case_insensitive_filesystem_cannot_bypass_the_builtin_ignore_pattern():
+    """`.ENV` against a real `.env`: on a case-preserving-but-insensitive
+    filesystem (macOS's default), the OS opens the file regardless of the
+    case the caller spelled — `_walk_segments` must not trust that lookup,
+    only the REAL directory entry's own spelling."""
+    executor = _fixture_executor()
+    result = executor.execute("read_file", {"path": ".ENV"})
+    assert result == "refused: .ENV is not available"
+    assert "FAKE_SECRET" not in result
+
+
+def test_a_case_insensitive_filesystem_cannot_bypass_a_repo_ignore_pattern(tmp_path: Path):
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / ".sextantignore").write_text("secret.txt\n")
+    (root / "secret.txt").write_text("do-not-leak\n")
+    executor = _executor((root,))
+    # Sanity: the correctly-cased path IS excluded.
+    assert executor.execute("read_file", {"path": "secret.txt"}) == (
+        "refused: secret.txt is not available"
+    )
+    result = executor.execute("read_file", {"path": "SECRET.TXT"})
+    assert result == "refused: SECRET.TXT is not available"
+    assert "do-not-leak" not in result
+
+
+def test_a_case_insensitive_filesystem_cannot_bypass_the_overlay_exclusion():
+    executor = _fixture_executor()
+    result = executor.execute("read_file", {"path": ".SEXTANT-ENRICHMENT.JSON"})
+    assert result == "refused: .SEXTANT-ENRICHMENT.JSON is not available"
+    assert "Legacy billing edge" not in result
 
 
 # --- Invisibility: .sextantignore (built-in AND repo), and the overlay -----
@@ -130,10 +227,7 @@ def test_a_builtin_ignored_file_is_invisible_everywhere_and_unreadable():
     assert ".env" not in listing
     assert executor.execute("find", {"pattern": ".env"}) == ""
     assert executor.execute("grep", {"pattern": "FAKE_SECRET"}) == ""
-    assert (
-        executor.execute("read_file", {"path": ".env"})
-        == "refused: .env is excluded from the enrichment jail"
-    )
+    assert executor.execute("read_file", {"path": ".env"}) == "refused: .env is not available"
 
 
 def test_a_repo_ignore_pattern_file_is_invisible_everywhere_and_unreadable():
@@ -142,13 +236,6 @@ def test_a_repo_ignore_pattern_file_is_invisible_everywhere_and_unreadable():
     executor = _fixture_executor()
     listing = executor.execute("list_dir", {"path": "src/main/resources"}).splitlines()
     assert "application-secret.yml" not in listing
-    # `find` is basename-only and searches every jailed root: it is not
-    # asserted empty here because a COMPILED copy of the fixture may sit
-    # under `target/classes` with the same base name (a `.sextantignore`
-    # pattern is a PATH, not a basename — it only ever excluded the
-    # source path below). What must never appear is that source path, and
-    # `grep` scoped to the source directory it lives in — never asserted
-    # over EVERY root, for the identical reason — must not see its content.
     found = executor.execute("find", {"pattern": "application-secret.yml"}).splitlines()
     assert "src/main/resources/application-secret.yml" not in found
     scoped = executor.execute(
@@ -156,9 +243,7 @@ def test_a_repo_ignore_pattern_file_is_invisible_everywhere_and_unreadable():
     )
     assert scoped == ""
     result = executor.execute("read_file", {"path": "src/main/resources/application-secret.yml"})
-    assert result == (
-        "refused: src/main/resources/application-secret.yml is excluded from the enrichment jail"
-    )
+    assert result == ("refused: src/main/resources/application-secret.yml is not available")
 
 
 def test_the_enrichment_overlay_is_excluded_as_a_jail_specific_rule_not_a_sextantignore_builtin():
@@ -178,7 +263,111 @@ def test_the_enrichment_overlay_is_excluded_as_a_jail_specific_rule_not_a_sextan
     # Task 3 fixture) — proves grep cannot see the FILE'S CONTENT either.
     assert executor.execute("grep", {"pattern": "Legacy billing edge"}) == ""
     result = executor.execute("read_file", {"path": ENRICHMENT_FILE})
-    assert result == f"refused: {ENRICHMENT_FILE} is excluded from the enrichment jail"
+    assert result == f"refused: {ENRICHMENT_FILE} is not available"
+
+
+def test_i3_excluded_and_missing_are_the_same_message_no_existence_oracle():
+    """2K Task 5 fix round 1, I3: a model refused on `.env` (which
+    exists, excluded) and a model refused on a name that plainly does not
+    exist must see the IDENTICAL string — the previous two-message split
+    was an existence oracle for exactly the file names an attacker would
+    probe for."""
+    executor = _fixture_executor()
+    excluded = executor.execute("read_file", {"path": ".env"})
+    missing = executor.execute("read_file", {"path": "there-is-truly-no-such-file.txt"})
+    assert excluded == "refused: .env is not available"
+    assert missing == "refused: there-is-truly-no-such-file.txt is not available"
+
+
+# --- Derived-output directories (2K Task 5 fix round 1 ruling) -------------
+
+
+def test_a_derived_output_directory_is_invisible_and_unreadable(tmp_path: Path):
+    """`target/` (also `build/`, `out/`, `node_modules/`, `.git/`):
+    invisible and unreadable everywhere in the jail, ancestry included —
+    a JAIL-specific exclusion joining `ENRICHMENT_FILE`'s own precedent,
+    NOT added to `.sextantignore`'s built-in patterns."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "src.txt").write_text("real source\n")
+    built = root / "target" / "classes"
+    built.mkdir(parents=True)
+    (built / "application-secret.yml").write_text("decoy: should-never-resolve\n")
+    executor = _executor((root,))
+    listing = executor.execute("list_dir", {"path": "."}).splitlines()
+    assert "target/" not in listing
+    assert "src.txt" in listing
+    assert executor.execute("find", {"pattern": "application-secret.yml"}) == ""
+    assert executor.execute("grep", {"pattern": "should-never-resolve"}) == ""
+    result = executor.execute("read_file", {"path": "target/classes/application-secret.yml"})
+    assert result == "refused: target/classes/application-secret.yml is not available"
+
+
+def test_the_fixtures_own_compiled_decoy_under_target_is_also_invisible_and_unreadable(
+    resolved_fixture: object,
+):
+    """The exact scenario reviewed live: `target/classes/
+    application-secret.yml` is Maven's own copy of the fixture's planted
+    decoy (`process-resources`, part of `mvn compile`'s lifecycle) — a
+    path `.sextantignore`'s pattern never named, since that pattern only
+    ever excluded the SOURCE path. `target/` is gitignored, so nothing
+    guarantees it exists in a fresh checkout; `resolved_fixture` (unused
+    beyond its side effect) is `tests/application/conftest.py`'s own
+    SESSION-cached `mvn compile`, reused here rather than this test
+    running a second, ad-hoc compile of its own — an extra compile call
+    site on the same shared fixture directory is exactly the kind of
+    thing that turned out to make an unrelated test flake once during
+    this fix round."""
+    compiled = FIXTURE / "target" / "classes" / "application-secret.yml"
+    assert compiled.is_file(), "resolved_fixture did not compile the fixture as expected"
+    executor = _fixture_executor()
+    listing = executor.execute("list_dir", {"path": "."}).splitlines()
+    assert "target/" not in listing
+    assert executor.execute("find", {"pattern": "application-secret.yml"}) == ""
+    result = executor.execute("read_file", {"path": "target/classes/application-secret.yml"})
+    assert result == "refused: target/classes/application-secret.yml is not available"
+
+
+# --- I4: a mis-wired ignore root fails construction, loudly, generically ---
+
+
+def test_construction_refuses_a_mis_wired_ignore_root(tmp_path: Path):
+    """`ignore` must be loaded for a repository root that CONTAINS every
+    jailed root. Before this check, a mismatch here made EVERY tool call
+    refuse with the raw `ValueError` text — an absolute host path —
+    echoed into the model-visible refusal, looking exactly like an
+    ordinary-but-broken jail rather than a wiring bug."""
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    root = tmp_path / "root"
+    root.mkdir()
+    with pytest.raises(ValueError):
+        ToolExecutor(
+            roots=(root,), redactor=Redactor.from_rules(), ignore=IgnoreRules.load(unrelated)
+        )
+
+
+def test_an_unexpected_failure_never_escapes_and_never_leaks_its_text_to_the_model(
+    tmp_path: Path,
+):
+    """A deliberately-broken `redactor` (any OTHER unforeseen failure
+    would behave identically) proves `execute`'s outer guarantee: the
+    MODEL-visible result is a generic message, never the raw exception —
+    which could carry an absolute host path — while the raw text is kept
+    ONLY in the transcript, under `error`, for a human to read later."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.txt").write_text("hello\n")
+    executor = ToolExecutor(
+        roots=(root,), redactor=_ExplodingRedactor(), ignore=IgnoreRules.load(root)
+    )
+    result = executor.execute("read_file", {"path": "a.txt"})
+    assert result == "refused: read_file could not be completed"
+    assert "boom" not in result
+    assert "/private/host/path" not in result
+    entry = executor.transcript[-1]
+    assert entry["result"] == result
+    assert "boom" in str(entry["error"])
 
 
 # --- Refusals are tool-result strings, never exceptions ---------------------
@@ -296,29 +485,36 @@ def test_grep_caps_the_number_of_matches(tmp_path: Path):
 # --- Redaction on read -------------------------------------------------------
 
 
-def test_config_bearing_extensions_mirrors_the_non_schema_artifact_readers():
+def test_config_bearing_extensions_pins_both_directions_against_the_real_registry():
     """2K Task 5 brief: "config-bearing detection ... reuse that registry
-    knowledge, state the rule." `tools.py` cannot IMPORT the registry
-    (`application` sits below `ingress` in `.importlinter`'s layering), so
-    this pins the mirror against the real readers instead — if
-    `YamlConfigReader`/`PropertiesReader` ever stop being the
-    `reads_schema_sources = False` readers, or a schema reader starts
-    claiming one of these extensions, this test catches the drift."""
-    from sextant.ingress.read.avsc import AvscReader
-    from sextant.ingress.read.graphql_sdl import GraphqlSdlReader
-    from sextant.ingress.read.properties import PropertiesReader
-    from sextant.ingress.read.proto_source import ProtoSourceReader
-    from sextant.ingress.read.wsdl_xsd import WsdlXsdReader
-    from sextant.ingress.read.yaml_config import YamlConfigReader
+    knowledge, state the rule." `tools.py` cannot IMPORT
+    `sextant.ingress.read.registry.READERS` (`application` sits below
+    `ingress` in `.importlinter`'s layering), so this test is where the
+    mirror is checked — against the SAME registry `cli/app.py` builds
+    `analyze()`'s readers from, not a second, independently-hardcoded
+    reader list (2K Task 5 fix round 1, minor) — in BOTH directions."""
+    from sextant.ingress.read.registry import READERS
 
-    config_readers = [PropertiesReader(), YamlConfigReader()]
-    schema_readers = [AvscReader(), GraphqlSdlReader(), ProtoSourceReader(), WsdlXsdReader()]
-    assert all(reader.reads_schema_sources is False for reader in config_readers)
-    assert all(reader.reads_schema_sources is True for reader in schema_readers)
-    assert CONFIG_BEARING_EXTENSIONS == frozenset({"yml", "yaml", "properties"})
-    for kind in CONFIG_BEARING_EXTENSIONS:
-        assert any(reader.accepts(kind) for reader in config_readers)
-        assert not any(reader.accepts(kind) for reader in schema_readers)
+    config_readers = [reader for reader in READERS if reader.reads_schema_sources is False]
+    schema_readers = [reader for reader in READERS if reader.reads_schema_sources is True]
+    assert {reader.__class__.__name__ for reader in config_readers} == {
+        "PropertiesReader",
+        "YamlConfigReader",
+    }
+    # Direction 1: every extension THIS MODULE claims is config-bearing is
+    # accepted by a config reader and by no schema reader.
+    for extension in CONFIG_BEARING_EXTENSIONS:
+        assert any(reader.accepts(extension) for reader in config_readers)
+        assert not any(reader.accepts(extension) for reader in schema_readers)
+    # Direction 2: every extension a SCHEMA reader claims is not also
+    # claimed by a config reader and is not in this module's set — the
+    # reverse drift (a schema reader gaining an extension this constant
+    # would then wrongly key-mask) `tools.py`'s own comment warns about.
+    known_schema_extensions = {"avsc", "graphqls", "graphql", "proto", "wsdl", "xsd"}
+    for extension in known_schema_extensions:
+        assert any(reader.accepts(extension) for reader in schema_readers)
+        assert not any(reader.accepts(extension) for reader in config_readers)
+        assert extension not in CONFIG_BEARING_EXTENSIONS
 
 
 def test_reading_the_fixtures_config_file_masks_the_planted_credentials():
@@ -360,16 +556,16 @@ def test_a_non_config_file_is_not_key_masked_but_still_gets_url_userinfo_strippe
     """The split 2K design §4 draws: KEY-based masking is only for
     config-bearing formats, but `redact_text`'s userinfo stripping is
     "applied to ALL tool results" (Task 5 brief) regardless of format —
-    so a `.java` source file keeps its own comment mentioning `password`
+    so a source file keeps its own comment mentioning `password`
     verbatim, while a credential riding a URL's userinfo still comes
     out."""
     root = tmp_path / "root"
     root.mkdir()
-    (root / "Client.java").write_text(
+    (root / "Client.txt").write_text(
         '// password: not-a-config-key, left alone\nString uri = "https://user:s3cret@host/path";\n'
     )
     executor = _executor((root,))
-    content = executor.execute("read_file", {"path": "Client.java"})
+    content = executor.execute("read_file", {"path": "Client.txt"})
     assert "password: not-a-config-key, left alone" in content
     assert "https://host/path" in content
     assert "s3cret" not in content
@@ -389,6 +585,20 @@ def test_every_call_and_result_is_appended_to_the_transcript(tmp_path: Path):
     assert executor.transcript[0]["args"] == {"path": "a.txt"}
     assert executor.transcript[0]["result"] == "hello"
     assert executor.transcript[1]["result"] == "a.txt"
+
+
+def test_transcript_args_are_stored_as_a_copy_not_a_reference(tmp_path: Path):
+    """2K Task 5 fix round 1, minor: a caller (Task 6's loop) that reuses
+    or mutates its own `args` dict after the call must not silently
+    rewrite the transcript's record of what was actually asked for."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.txt").write_text("hello\n")
+    executor = _executor((root,))
+    args = {"path": "a.txt"}
+    executor.execute("read_file", args)
+    args["path"] = "mutated-after-the-call"
+    assert executor.transcript[0]["args"] == {"path": "a.txt"}
 
 
 def test_definitions_returns_the_four_tools_each_with_a_json_schema(tmp_path: Path):

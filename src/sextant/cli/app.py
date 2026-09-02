@@ -33,12 +33,7 @@ from sextant.ingress.detect.sextant_config import SextantConfigError, read_redac
 from sextant.ingress.extract.jvm.generated_naming import JvmGeneratedNaming
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
-from sextant.ingress.read.avsc import AvscReader
-from sextant.ingress.read.graphql_sdl import GraphqlSdlReader
-from sextant.ingress.read.properties import PropertiesReader
-from sextant.ingress.read.proto_source import ProtoSourceReader
-from sextant.ingress.read.wsdl_xsd import WsdlXsdReader
-from sextant.ingress.read.yaml_config import YamlConfigReader
+from sextant.ingress.read.registry import READERS
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 # The registries the composition root builds (ARCHITECTURE §6). Order is the
@@ -189,14 +184,7 @@ def _analyzed(
             catalogs=YamlCatalogSource(catalogs_dir()),
             fact_root=workspace_dir / "facts",
             progress=progress,
-            readers=[
-                PropertiesReader(),
-                YamlConfigReader(),
-                AvscReader(),
-                ProtoSourceReader(),
-                GraphqlSdlReader(),
-                WsdlXsdReader(),
-            ],
+            readers=READERS,
             interpret=_JvmDescriptorInterpreter(),
         )
     except SextantConfigError as refused:

@@ -108,11 +108,23 @@ foreign runtime maps our tools into its protocol; our code serves the bytes.
 `list`, `find` (name patterns), `grep` (content), `read_file` (line-ranged,
 size-capped) — all in-process, read-only, and jailed:
 
-- **Path jail**: `realpath` containment against an explicit allowlist of roots — the
-  module source root, the fact root, and the rendered outputs. Never `$HOME`, never
-  repo siblings, no symlink escape (containment checked post-resolution).
+- **Path jail**: containment against an explicit allowlist of roots — the module
+  source root, the fact root, and the rendered outputs. Never `$HOME`, never repo
+  siblings, no symlink escape — and, since 2K Task 5's fix round 1, no symlink
+  followed AT ALL: a path is visible only if it is the exact, case-included name of
+  a real directory entry, reached without crossing a single symlink (root itself, an
+  intermediate directory, or the final target). A caller-given path is verified
+  against the real on-disk spelling segment by segment, never through the OS's own
+  case-insensitive lookup, which a case-preserving-but-insensitive filesystem
+  (macOS's default) would otherwise satisfy for the wrong case and hand back content
+  no exclusion rule ever saw the real name of.
 - **`.sextantignore` + built-ins enforced at the jail**: an ignored file is invisible
-  to `list`/`find`/`grep` and unreadable by `read_file`.
+  to `list`/`find`/`grep` and unreadable by `read_file`. A derived-output directory
+  (`target/`, `build/`, `out/`, `node_modules/`, `.git/`) is excluded the same way,
+  as a JAIL-specific rule joining `.sextant-enrichment.json`'s own precedent — NOT
+  added to `.sextantignore`'s built-in patterns, which stay the short, non-negatable
+  credential layer; analysis walks are unaffected, since the jail describes
+  human-authored source, never its compiled shadow.
 - **Redaction-on-read**: config-bearing content passes the §1 redactor before entering
   a tool result — the only bytes that ever reach the wire are the brief Sextant
   composed and tool results that passed the redactor.
@@ -245,4 +257,8 @@ in v1 (retired 2B §6 clause; revisit only on demonstrated need). Nested
 `.sextantignore` files and extractor-walk ignoring are fast-follows. The overlay
 never feeds resolve; only render consumes it. `system enrich` (cross-module) waits
 for L. Instructions quality iterates by ordinary edits — its hash makes every
-overlay say which version produced it.
+overlay say which version produced it. Every jail exclusion (`.sextantignore`, the
+overlay, a derived-output directory) is PATH-SHAPED and content-blind: a copy of an
+excluded file sitting somewhere none of those rules name — outside a derived-output
+directory, under a different path than `.sextantignore` lists — still leaks, and
+that is a stated boundary rather than a bug to chase further.
