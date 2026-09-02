@@ -287,6 +287,10 @@ def test_render_also_writes_a_self_contained_offline_html_document(tmp_path: Pat
     assert 'class="diagram-zoom-in"' in document
     assert "<script src=" not in document
     assert "cdn.jsdelivr.net" not in document
+    # M-6: the title carries the real module id, not a placeholder — two
+    # modules rendered in the same browser session must be distinguishable
+    # by their tab.
+    assert "<title>Sextant — com.acme:orders-service</title>" in document
 
 
 def test_rendering_the_same_workspace_twice_writes_a_byte_identical_html_document(

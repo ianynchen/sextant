@@ -3,6 +3,16 @@
 // +/-/reset controls, applied as a CSS transform on the element mermaid
 // rendered its SVG into. One instance per ".diagram" container, so a
 // document with many diagrams keeps them independent.
+//
+// Wheel convention: a PLAIN wheel over a diagram scrolls the page, exactly
+// as it would anywhere else — the page is usually taller than one screen,
+// and a diagram that ate every scroll gesture under the cursor would break
+// reading the document around it. Only ctrl/cmd+wheel zooms, and only that
+// combination calls preventDefault: the "maps" convention (Google Maps and
+// friends). It is also exactly right for a trackpad: a pinch gesture is
+// delivered to the browser as a wheel event with `ctrlKey` set, so
+// "ctrl+wheel zooms" already covers pinch-to-zoom with no separate touch
+// handling.
 (function () {
   "use strict";
 
@@ -39,17 +49,47 @@
       apply();
     }
 
+    // Zoom by `factor`, keeping the point at VIEWPORT coordinates (px, py)
+    // visually fixed — standard "zoom at the pointer" math: the translate is
+    // corrected by the ratio the scale actually changed by, which is not
+    // necessarily `factor` itself once `clamp` has capped it.
+    function zoomAt(px, py, factor) {
+      var nextScale = clamp(scale * factor);
+      var ratio = nextScale / scale;
+      x = px - (px - x) * ratio;
+      y = py - (py - y) * ratio;
+      scale = nextScale;
+      apply();
+    }
+
+    // The +/- buttons have no cursor position of their own, so they anchor
+    // at the viewport's center instead.
+    function zoomAtCenter(factor) {
+      var rect = viewport.getBoundingClientRect();
+      zoomAt(rect.width / 2, rect.height / 2, factor);
+    }
+
     viewport.addEventListener(
       "wheel",
       function (event) {
+        if (!event.ctrlKey && !event.metaKey) {
+          return; // plain wheel: let the page scroll, untouched
+        }
         event.preventDefault();
-        scale = clamp(scale * (event.deltaY < 0 ? 1.1 : 0.9));
-        apply();
+        var rect = viewport.getBoundingClientRect();
+        zoomAt(
+          event.clientX - rect.left,
+          event.clientY - rect.top,
+          event.deltaY < 0 ? 1.1 : 0.9,
+        );
       },
       { passive: false },
     );
 
     viewport.addEventListener("mousedown", function (event) {
+      // Without this, a drag starting over the rendered SVG's text nodes
+      // starts a native text selection instead of a pan.
+      event.preventDefault();
       dragging = true;
       lastX = event.clientX;
       lastY = event.clientY;
@@ -75,14 +115,12 @@
     var resetButton = container.querySelector(".diagram-reset");
     if (zoomIn) {
       zoomIn.addEventListener("click", function () {
-        scale = clamp(scale * 1.2);
-        apply();
+        zoomAtCenter(1.2);
       });
     }
     if (zoomOut) {
       zoomOut.addEventListener("click", function () {
-        scale = clamp(scale * 0.8);
-        apply();
+        zoomAtCenter(0.8);
       });
     }
     if (resetButton) {

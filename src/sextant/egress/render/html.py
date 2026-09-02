@@ -40,6 +40,15 @@ arrived in.
 `LLM` badge — the visual mirror of the markdown emitter's
 `> **Enrichment — evidence: llm**` blockquote — so a reader cannot mistake
 model output for derived fact by skimming past a heading.
+
+**Model prose renders literally.** A claim's own free-form text —
+`SectionClaim.body`, a verdict's `because`/`searched`, a backtick an agent
+wrote inline around a symbol name — is escaped and shown as plain text,
+never reinterpreted as markdown. This is the same no-parse rule applied to a
+second carrier of markdown-ish text: this module does not know what a
+backtick means in a claim's prose any more than it knows what a `#` means in
+`MachineSection.lines`, and treating one as syntax while leaving the other
+alone would be an arbitrary distinction with no rule behind it.
 """
 
 import html
@@ -74,7 +83,8 @@ pre.machine { background: #f6f8fa; padding: 1rem; overflow-x: auto; border-radiu
                      border-bottom: 1px solid #d0d7de; }
 .diagram-controls button { cursor: pointer; border: 1px solid #d0d7de; background: #fff;
                             border-radius: 4px; min-width: 2rem; padding: 0.15rem 0.5rem; }
-.diagram-viewport { overflow: hidden; height: 420px; cursor: grab; }
+.diagram-viewport { overflow: hidden; height: 420px; cursor: grab;
+                     user-select: none; -webkit-user-select: none; }
 .diagram-viewport.dragging { cursor: grabbing; }
 .diagram-canvas { width: max-content; transform-origin: 0 0; }
 .diagram-canvas pre.mermaid { margin: 0; background: transparent; padding: 1rem; }
@@ -92,12 +102,18 @@ pre.machine { background: #f6f8fa; padding: 1rem; overflow-x: auto; border-radiu
 """
 
 
-def html_document(sections: AssembledDocument) -> str:
-    """`architecture.html` from an assembled document. Byte-identical across
-    two calls over the same `sections` (NFR-1): every asset is read from the
-    same committed file, the template around them is a fixed string, and
-    nothing here iterates a dict whose order is not already fixed by
-    `sections` itself."""
+def html_document(sections: AssembledDocument, module_id: str) -> str:
+    """`architecture.html` from an assembled document. `module_id` names the
+    module in the page `<title>` (`ModuleModel.module_id`, the same identity
+    the markdown emitter opens the document with as `# {module_id}`) so two
+    modules' documents are distinguishable by their browser tab — passed in
+    explicitly rather than read back out of the assembled `MachineSection`
+    lines, which stay opaque prose this module does not scan.
+
+    Byte-identical across two calls over the same `sections`/`module_id`
+    (NFR-1): every asset is read from the same committed file, the template
+    around them is a fixed string, and nothing here iterates a dict whose
+    order is not already fixed by `sections` itself."""
     body = "\n".join(_section_html(section) for section in sections)
     mermaid_js = _asset("mermaid.min.js")
     panzoom_js = _asset("panzoom.js")
@@ -106,7 +122,7 @@ def html_document(sections: AssembledDocument) -> str:
         '<html lang="en">\n'
         "<head>\n"
         '<meta charset="utf-8">\n'
-        "<title>Sextant — module architecture</title>\n"
+        f"<title>Sextant — {html.escape(module_id)}</title>\n"
         f"<style>{_STYLE}</style>\n"
         "</head>\n"
         "<body>\n"
@@ -130,7 +146,27 @@ def _asset(name: str) -> str:
     the extractor jar: resolved through the installed package rather than a
     path relative to this file's position on disk, so a wheel install finds
     it too."""
-    return (resources.files(__package__) / "assets" / name).read_text(encoding="utf-8")
+    text = (resources.files(__package__) / "assets" / name).read_text(encoding="utf-8")
+    return _refused_if_unsafe_to_inline(name, text)
+
+
+def _refused_if_unsafe_to_inline(name: str, text: str) -> str:
+    """`text`, or a loud refusal if it contains `</script` in any case.
+
+    Every asset is inlined verbatim between `<script>`/`</script>` tags, so
+    that sequence would close the tag early and dump the rest of the asset
+    into the page as markup rather than JavaScript. Today's mermaid build is
+    clean; a future version bump that is not must fail this check rather
+    than silently break the page it ships in. Its own function, rather than
+    inline in `_asset`, so the refusal is testable directly against a
+    fabricated string without reaching into how `_asset` finds its bytes."""
+    if "</script" in text.lower():
+        raise ValueError(
+            f"asset {name!r} contains a `</script` sequence — inlining it verbatim "
+            "would break out of its <script> tag; escape or otherwise neutralize it "
+            "before vendoring"
+        )
+    return text
 
 
 def _section_html(section: Section) -> str:
@@ -277,7 +313,14 @@ def _verdict_claim_html(claim: VerdictClaim) -> str:
         f"({html.escape(question.kind)}): {html.escape(claim.assessment)}"
     )
     if claim.assessment == UNANSWERED:
-        tail = f" — searched: {html.escape(str(claim.searched))}"
+        # The schema's own validator (`domain/enrichment.py`,
+        # `_carries_the_half_its_assessment_requires`) guarantees `searched`
+        # is set on this branch and `because` on the other — asserted here so
+        # a claim that somehow violated that invariant fails loudly instead
+        # of silently rendering the literal word "None".
+        assert claim.searched is not None
+        tail = f" — searched: {html.escape(claim.searched)}"
     else:
-        tail = f" — because {html.escape(str(claim.because))}"
+        assert claim.because is not None
+        tail = f" — because {html.escape(claim.because)}"
     return f'<div class="claim claim-verdict"><p>{label}{tail}</p></div>'

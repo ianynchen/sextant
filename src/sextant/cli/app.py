@@ -302,7 +302,7 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
         markdown_target = render_dir / "architecture.md"
         markdown_target.write_text(markdown_document(sections), encoding="utf-8")
         html_target = render_dir / "architecture.html"
-        html_target.write_text(html_document(sections), encoding="utf-8")
+        html_target.write_text(html_document(sections, reconstructed.module_id), encoding="utf-8")
     finally:
         workspace.close()
     click.echo(str(markdown_target))
