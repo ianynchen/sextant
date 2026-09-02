@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
+from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import list_files
 from sextant.ingress.read.avsc import AvscReader
 from sextant.ingress.read.properties import PropertiesReader
@@ -280,7 +281,9 @@ def test_schema_readers_coexist_with_config_readers_without_claiming_config_exte
     proto_file = _write(tmp_path, "schema.proto", 'syntax = "proto3";\nmessage X {}\n')
 
     readers = [PropertiesReader(), YamlConfigReader(), AvscReader(), ProtoSourceReader()]
-    grouped = group_files_by_reader(list_files(tmp_path), readers)
+    grouped = group_files_by_reader(
+        list_files(tmp_path, tmp_path, IgnoreRules.load(tmp_path)), readers
+    )
 
     by_reader = {type(reader).__name__: owned for reader, owned in grouped}
     assert by_reader["PropertiesReader"] == (properties_file,)

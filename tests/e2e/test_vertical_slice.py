@@ -7,6 +7,7 @@ from click.testing import CliRunner
 
 from sextant.cli.app import cli
 from sextant.domain.factfile import read_fact_file
+from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import REDACTED, Redactor
 from sextant.ingress.detect.sextant_config import read_redaction_rules
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -1254,3 +1255,39 @@ def test_the_manifest_names_the_rule_set_that_masked_the_bundle(tmp_path: Path):
     effective = Redactor.from_rules(read_redaction_rules(FIXTURE)).rule_set_hash
     assert manifest["producer"]["redaction_set_hash"] == effective
     assert effective != Redactor.from_rules().rule_set_hash
+
+
+def test_the_planted_decoy_config_file_never_reaches_resolved_config(tmp_path: Path):
+    """2K design §2, live: the fixture's `.sextantignore` names
+    `src/main/resources/application-secret.yml` — an ordinary, valid Spring
+    config source (`application{-profile}.yml` names it the "secret"
+    profile, exactly like `application-prod.yml`) that would otherwise
+    resolve its own key into its own environment. Ignoring it means the
+    file never reaches `YamlConfigReader` at all: not merely unresolved or
+    masked, its key and its whole profile are simply never there."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    rows = workspace.query("resolved_config")
+    keys = {str(row["key"]) for row in rows}
+    environments = {str(row["environment"]) for row in rows}
+    workspace.close()
+    assert "decoy.should-never-resolve" not in keys
+    assert "secret" not in environments
+
+
+def test_a_planted_dotenv_is_excluded_by_the_builtin_layer_alone(tmp_path: Path):
+    """The fixture's `.sextantignore` names no `.env` pattern anywhere in
+    it — `BUILTIN_PATTERNS` is what excludes the planted `.env` at the
+    fixture root, proven against the real fixture root, which DOES carry a
+    `.sextantignore` of its own (so this also proves the built-in layer
+    keeps applying alongside a repo file that never mentions it)."""
+    assert (FIXTURE / ".env").is_file()
+    ignorefile_patterns = [
+        line.strip()
+        for line in (FIXTURE / ".sextantignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert not any(".env" in pattern for pattern in ignorefile_patterns)
+    assert IgnoreRules.load(FIXTURE).matches(FIXTURE / ".env") is True

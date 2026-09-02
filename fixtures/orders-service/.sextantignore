@@ -1,0 +1,13 @@
+# 2K Task 2 fixture: `.sextantignore` (design §2), root-level, git wildmatch
+# semantics via `pathspec`. Excludes this fixture's own planted decoy so its
+# would-be config row never reaches the fact tree or `resolved_config` — the
+# live pin in tests/e2e/test_vertical_slice.py. The pattern is written
+# against this file's own directory (the repo root a `.sextantignore` sits
+# at), matching `src/main/resources/application-secret.yml` exactly rather
+# than the bare filename, so a same-named file elsewhere would not also be
+# swept in.
+src/main/resources/application-secret.yml
+
+# No pattern is needed for `.env` at this root: `BUILTIN_PATTERNS` covers it
+# unconditionally, and its absence from this file — while a planted `.env`
+# still gets excluded — is itself the fixture's second live pin.

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
 from sextant.domain.closed_sets import OriginTier
+from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import list_files
 from sextant.ingress.read.properties import PropertiesReader
 from sextant.ingress.read.yaml_config import YamlConfigReader
@@ -216,7 +217,7 @@ def test_list_files_sorts_by_relative_path_string_not_path_parts(tmp_path: Path)
     a_yml = _write(tmp_path, "a.yml", "a: 1\n")
     a_b_yml = _write(tmp_path, "a/b.yml", "a: 1\n")
 
-    assert list_files(tmp_path) == (a_yml, a_b_yml)
+    assert list_files(tmp_path, tmp_path, IgnoreRules.load(tmp_path)) == (a_yml, a_b_yml)
 
 
 def test_list_files_returns_every_file_sorted_by_relative_path(tmp_path: Path):
@@ -224,7 +225,7 @@ def test_list_files_returns_every_file_sorted_by_relative_path(tmp_path: Path):
     _write(tmp_path, "a/b.yml", "a: 1\n")
     _write(tmp_path, "m.yml", "a: 1\n")
 
-    files = list_files(tmp_path)
+    files = list_files(tmp_path, tmp_path, IgnoreRules.load(tmp_path))
 
     assert files == (
         tmp_path / "a" / "b.yml",

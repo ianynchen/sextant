@@ -265,3 +265,37 @@ agreeing with DuckDB's forever. `Redactor.redact_json` returns the input string 
 when the mapped structure compares equal to the parsed original, so only genuinely masked
 documents are re-serialized and staged. Same rule for the fact payloads. When a projection
 is "mostly identity", make the identity path return the input, not an equal-looking copy.
+
+### A live "excluded, so absent from resolved_config" pin needs a filename Spring would resolve
+
+2K Task 2's fixture decoy had to prove `.sextantignore` keeps a file's config keys out of
+`resolved_config` specifically — not merely out of the raw fact tree. `resolve_config`
+only considers documents matching one of `config_model.sources`'s own filename patterns
+(`application{-profile}.yml`, `bootstrap{-profile}.yml`); a file named something else
+never reaches `resolved_config` regardless of whether it is ignored, so a decoy named
+arbitrarily (`ignored-secrets.yml`) would pass the pin whether or not the ignore wiring
+worked at all. The fixture decoy is `application-secret.yml` instead — a real, Spring-
+recognised profile variant — so ignoring it is what makes its `secret` environment and
+its key absent, and removing `.sextantignore` (checked by hand, not left to inference)
+makes the same test fail.
+
+### `.sextantignore` was designed once, before 2K, and drifted from what shipped
+
+`docs/components/D04-config-and-exclusion.md` §3 already existed (per-directory
+cascading ignore files, a JVM class-to-source resolution step, a different built-in
+pattern list that explicitly excluded `.env` from ever being built in) — written before
+2K's actual design (root-level only, no JVM resolution, `.env` IS built in) existed. Two
+sections of one component doc had gone stale in different directions before either was
+implemented. Amended in place with the same append-don't-rewrite pattern 2K Task 1 used
+for §4 — caught by reading the component doc before writing the matcher, not after.
+
+### `pathspec`'s `gitwildmatch` factory is deprecated in the pinned version, kept anyway
+
+`pathspec==1.1.1` warns `GitWildMatchPattern ('gitwildmatch') is deprecated. Use
+'gitignore' instead` at every `PathSpec.from_lines` call. The binding decision for this
+task named `gitwildmatch` specifically (mirroring git's own wildmatch semantics is the
+point DR-6 cares about), so the deprecated factory is used as instructed rather than
+swapped for `gitignore` on this agent's own judgment — a factory-name substitution is
+exactly the kind of unrequested deviation §1.1 rules against. The warning is harmless
+(non-fatal, no `filterwarnings=error` in this suite) and worth revisiting the day
+`gitwildmatch` is actually removed rather than merely deprecated.

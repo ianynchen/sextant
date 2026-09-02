@@ -12,6 +12,7 @@ the schema-format confinement rule already is.
 from pathlib import Path
 
 from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
+from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import list_files
 from sextant.ingress.read.avsc import AvscReader
 from sextant.ingress.read.graphql_sdl import GraphqlSdlReader
@@ -117,7 +118,9 @@ def test_the_sdl_reader_coexists_with_every_other_reader_in_the_registry(tmp_pat
         ProtoSourceReader(),
         GraphqlSdlReader(),
     ]
-    grouped = group_files_by_reader(list_files(tmp_path), readers)
+    grouped = group_files_by_reader(
+        list_files(tmp_path, tmp_path, IgnoreRules.load(tmp_path)), readers
+    )
 
     by_reader = {type(reader).__name__: owned for reader, owned in grouped}
     assert by_reader["PropertiesReader"] == (properties_file,)

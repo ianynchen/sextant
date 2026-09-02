@@ -145,6 +145,32 @@ indistinguishable from an unconfigured module for as long as nobody checked.
 
 ## 3. `.sextantignore`
 
+> **Amendment (2026-09-02, Phase 2K design §2 — approved, Task 2 delivered).** What ships
+> is narrower than the rest of this section describes, in three ways:
+>
+> - **Root-level file only.** Not "files cascade, nearest first" — a nested per-directory
+>   `.sextantignore` is a stated fast-follow, not read today. One file, at the repository
+>   root, and every pattern in it is matched against a path made relative to THAT root —
+>   never to whatever resource or schema root a given walk happens to start from.
+> - **The JVM subtlety below does not apply.** The extractor's `.class` walk is out of
+>   scope (ledgered, rarely wanted); `.sextantignore` governs the Python-side file
+>   enumerations only — config readers, schema readers, resource walks, and the
+>   enrichment jail (2K Task 5) — never a resolution back through a compiled class's
+>   source attribute.
+> - **The built-in set is the list in "Built-in defaults" below, amended.** See that
+>   subsection's own amendment note for the actual set — it neither contains nor omits
+>   quite what this section originally specified.
+>
+> What ships as written: git's own wildmatch semantics via the `pathspec` package
+> (negation, dir-only patterns, anchoring, `**` — mirroring git exactly rather than
+> hand-rolling it, DR-6's drift-trap argument), the exclude-entirely behaviour below, and
+> the two-layer safety rule — built-in patterns are **non-negatable**: a repo
+> `.sextantignore` carrying `!.env` re-admits nothing, because the built-in layer is
+> never given that line to evaluate against. Within the repo's own patterns, full
+> gitignore semantics apply, negation included. `domain/ignorefile.py`
+> (`IgnoreRules.load(repo_root)` / `.matches(path)`) is the one matcher, applied at every
+> walk site.
+
 Version-control ignore syntax, because nobody should have to learn a second one: glob
 patterns, `!` to re-include, a leading `/` to anchor, `**` to cross directories. A file in
 a subdirectory applies to that subtree. Files cascade, nearest first.
@@ -165,10 +191,28 @@ away.
 
 ### Built-in defaults
 
+> **Amendment (2026-09-02, Phase 2K design §2 — approved, Task 2 delivered).** The actual
+> set, `domain/ignorefile.py`'s `BUILTIN_PATTERNS`: `.env`, `.env.*`, `*.pem`, `*.p12`,
+> `*.jks`, `id_rsa*`, `id_ed25519*`, `secrets/**`, `*.keystore`. Differences from the list
+> below: `*.key`, bare `credentials`, `.git/` and build-output directories are NOT
+> built in (a repo names them in its own `.sextantignore` if it wants them excluded);
+> `.env.*`, `id_ed25519*` and `secrets/**` are added. Section 1's rule against excluding
+> `.env`/`application*.yml` is **retracted for `.env` specifically** — see below.
+
 `*.pem`, `*.key`, `*.p12`, `*.jks`, `*.keystore`, `id_rsa*`, `credentials`, `.git/`, and
 common build output directories that are not the module's own.
 
-**`.env` and `application*.yml` are deliberately absent from that list.** See section 1.
+**`.env` and `application*.yml` are deliberately absent from that list.**
+
+> **Amendment (2026-09-02, Phase 2K design §2 — approved, Task 2 delivered).** `.env` IS
+> in the built-in set that ships — Task 2's binding context named it explicitly, over
+> section 1's own instinct-is-a-trap argument. The two rules do not actually conflict:
+> section 1 is about `application.yml`, the file that carries the placeholder values the
+> endpoint catalog resolves against, and that file is still never excluded by anything
+> built in. `.env` is dotenv-format shell/process environment material — Spring does not
+> read it as a configuration source at all, so excluding it costs the catalog nothing,
+> while a leaked `.env` is exactly the shape of secret this section exists to keep out.
+> `application*.yml` remains outside the built-in set, unchanged.
 
 ---
 

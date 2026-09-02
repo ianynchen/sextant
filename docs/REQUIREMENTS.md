@@ -235,6 +235,17 @@ Independently, Sextant redacts values matching configured patterns at the moment
 are produced, so that a secret appearing inside a file that is otherwise analysed never
 reaches storage.
 
+> **Amendment (2026-09-02, Phase 2K design §2 — approved, Task 2 delivered).** The
+> exclusion list is a single **root-level** `.sextantignore` — not the cascading,
+> nearest-file-wins behaviour version-control ignore files have when nested; a
+> per-directory file is a stated fast-follow, not read today. Every pattern in it is
+> matched against a path relative to the repository root, whatever resource or schema
+> root a given walk started from. Underneath it, a fixed, **non-negatable** built-in
+> pattern set (`domain/ignorefile.py`'s `BUILTIN_PATTERNS`) always applies — a repository
+> `.sextantignore` cannot re-admit a file the built-ins exclude, only widen exclusion
+> further among its own patterns. See [D04](components/D04-config-and-exclusion.md) §3
+> for the full amendment, including the built-in set itself.
+
 > **Amendment (2026-09-02, Phase 2K design §1 — approved).** Redaction runs at the
 > **exits** — the rendered document, the exported bundle, and the enrichment tools' read
 > path — not at fact production. Masking values on the way in would empty the very table

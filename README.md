@@ -76,6 +76,35 @@ Maven's own layout, where a successful build has already left it. A coordinate t
 to nothing, and an archive that cannot be read, are both named with their reason in
 `metadata.json` and in the document's gaps list — never silently skipped.
 
+## `.sextantignore` — excluding files entirely
+
+A root-level file, git's own ignore syntax (negation, dir-only patterns, anchoring,
+`**` — via the `pathspec` package, so the semantics genuinely match git rather than a
+hand-rolled approximation of it):
+
+```
+# .sextantignore, beside pom.xml
+src/main/resources/legacy-vendor-dump.yml
+build/
+```
+
+A file it names is excluded from analysis **entirely** — no facts, no document, no
+coverage expectation, as if the file were not there. That is a stronger and riskier claim
+than redaction (above), which is why exclusion is opt-in and redaction is not: excluding
+`application.yml` would empty the endpoint catalog of the placeholder values it resolves
+against, so nothing built in excludes ordinary configuration.
+
+Beneath whatever a repository writes sits a fixed, **non-negatable** built-in set —
+`.env`, `.env.*`, `*.pem`, `*.p12`, `*.jks`, `id_rsa*`, `id_ed25519*`, `secrets/**`,
+`*.keystore`. A repository `.sextantignore` carrying `!.env` re-admits nothing: the
+built-in layer never sees that line. Within a repository's own patterns, ordinary
+gitignore negation works as expected — one pattern can re-admit what an earlier one in
+the same file excluded.
+
+Nested, per-directory `.sextantignore` files are not read today — one file, at the
+repository root, and every pattern in it matches against a path relative to that root,
+whichever resource or schema directory a given file was actually found under.
+
 ## Dependencies
 
 Three toolchains, deliberately kept apart. **The layering is the reason there are three
@@ -107,6 +136,11 @@ PyYAML (catalogs and configuration files), three exist for schema and wire-forma
   single descriptor interpreter imports it — the architecture test that confines
   `protobuf` confines this too, and the SDL *reader* hands the file's text on verbatim
   without importing a GraphQL runtime at all.
+- **`pathspec`** — `.sextantignore` matching. Git's own wildmatch semantics (negation,
+  dir-only patterns, anchoring, `**`) have corners a hand-rolled `fnmatch` or single
+  regex disagrees with git on; mirroring git's own implementation is the point, not
+  re-deriving it. Pinned to an exact version, unlike the others above — matching git
+  precisely is a property of one specific release, not a minimum.
 
 ### JVM extractor — no new dependency, on purpose
 
