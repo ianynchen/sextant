@@ -43,6 +43,8 @@ def test_the_manifest_carries_provenance_coverage_and_contents(tmp_path: Path):
         "graph": True,
         "tables": ["endpoints", "shapes"],
         "facts_files": 4,
+        # No render/ shipped — `[]`, never an absent key (2K Task 8 review).
+        "render": [],
     }
     # Carried from metadata.json's own field (2F Task 9), never re-derived —
     # `write_metadata` is the one place `resolved_config`'s distinct
@@ -76,3 +78,34 @@ def test_the_manifest_reports_no_environments_when_metadata_names_none(tmp_path:
     )
     written = json.loads((tmp_path / "manifest.json").read_text())
     assert written["environments"] == []
+
+
+def test_the_manifest_names_the_render_files_it_ships(tmp_path: Path):
+    """2K Task 8 review (Task 4's own review flagged the gap): the bundle
+    grew a `render/` subdirectory (2K design §6b) that `contents` never
+    declared. `write_manifest` writes exactly what the caller names — the
+    same never-re-derive discipline `tables`/`facts_files` already follow —
+    so this pins the field existing and carrying what was actually passed,
+    not that `cli/app.py` happened to copy the right files (that wiring is
+    `tests/cli/test_app.py`'s own job)."""
+    metadata = {
+        "module": {"id": "com.acme:orders-service", "kind": "service", "languages": ["java"]},
+        "provenance": {"commit": "a3f91c", "sextant_version": "0.1.0"},
+        "coverage": {"documents": 4, "partial_documents": 0},
+        "gaps": [],
+        "uncovered": [],
+        "skipped_catalogs": [],
+    }
+    write_manifest(
+        tmp_path / "manifest.json",
+        metadata,
+        source={"repo": "git@github.com:acme/orders.git", "commit": "a3f91c"},
+        catalog_hash="sha256:abc",
+        redaction_set_hash="sha256:rules",
+        module_commit="a3f91c",
+        tables=["endpoints"],
+        facts_files=4,
+        render=["architecture.md", "architecture.html"],
+    )
+    written = json.loads((tmp_path / "manifest.json").read_text())
+    assert written["contents"]["render"] == ["architecture.md", "architecture.html"]

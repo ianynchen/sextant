@@ -53,6 +53,14 @@ re-extraction of the estate.
 `schema_version`, source commit, producer versions, scanner identities, catalog hash,
 redaction pattern hash, coverage, and known gaps.
 
+> **Amendment (2026-09-02, Phase 2K design §6b — approved, delivered).** The exporter now
+> also copies whichever of `architecture.md`/`architecture.html` `render` (or `enrich`'s own
+> auto-assembly) already left in the workspace into the bundle's own `render/` — verbatim,
+> never re-rendered, so bundle and workspace can never disagree about what a reader saw. Not
+> a prerequisite: an unrendered workspace still exports cleanly, with no `render/` at all,
+> exactly as before. `contents.render` in the manifest names exactly what shipped
+> ([D06](D06-bundle-format.md) §2/§3).
+
 It is the mechanism by which a wrong system graph becomes an error rather than a silent
 result. Twelve bundles from three Sextant versions will join without complaint and produce
 an architecture that never existed. **[M05](M05-sync.md) can only refuse what the manifest
@@ -107,7 +115,8 @@ that travels.
 - **No absolute paths from the producing machine.** Paths are relative to the module root.
 - **No workspace database file.**
 - **No overlay files.** Curations are inputs to the system tier and live in git beside
-  `system.yml`.
+  `system.yml` — and 2K's own `.sextant-enrichment.json` never travels either; only the
+  already-assembled, already-redacted `render/` output it produced does ([D06](D06-bundle-format.md) §2/§7).
 
 ## Honesty obligations
 

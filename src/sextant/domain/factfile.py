@@ -59,6 +59,13 @@ def redact_config_entry_line(
     `ensure_ascii` at its default) — so a masked line matches the style of
     the UNMASKED neighbours around it in the same served file, which
     `_line` wrote in that style to begin with.
+
+    Leaving `ensure_ascii` at its default (True) means a `compact=True`
+    line's `«redacted»` marker is written JSON-escaped — `\\u00abredacted
+    \\u00bb`, never the literal guillemets — exactly as `_line` spells any
+    non-ASCII byte on disk: a grep over compact-served content (the jail's
+    own fact-serving path) has to match the escaped spelling, not
+    `REDACTED` itself.
     """
     try:
         payload = json.loads(payload_json)

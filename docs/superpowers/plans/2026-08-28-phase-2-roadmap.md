@@ -51,7 +51,7 @@ messaging) both exist.
 | **2G** | Wire formats | delivered — [spec](../specs/2026-08-31-phase-2g-wire-formats-design.md) | `format`/`format_resolution` on every endpoint row from a six-rung catalog-driven ladder; protobuf and Avro schemas — embedded descriptors and `.proto`/`.avsc` sources, compiled winning per DR-4 — landing in 2A's own `shapes`/`shape_fields` with `field_number` and `json_name` wire names; parse-call payload binding at the handler and one hop; the `open_questions` ledger (table, bundle artifact, document section) for what no pass could answer | format as an inferred channel property, stamped by one late pass rather than per match (D02 §2c) |
 | **2H** | HTTP-adjacent protocols | delivered — [spec](../specs/2026-09-01-phase-2h-http-adjacent-design.md) | GraphQL inbound across Spring GraphQL, Netflix DGS and MicroProfile plus the `.graphqls` SDL reader (the field is the endpoint); WebSocket/STOMP `@ServerEndpoint`/`@MessageMapping`/`@SubscribeMapping`/`@SendTo` and the programmatic `addHandler`; SSE by reclassification from a `produces` string or a return-type marker — nine §5 rows flipped | both reserved mechanisms, and neither landed as sketched: operation-as-endpoint identity became the `schema_operations` engine style (the ninth), and `protocol_hint` became a post-merge **resolve pass** rather than an engine |
 | **2I** | SOAP | delivered — [spec](../specs/2026-09-01-phase-2i-soap-design.md) | JAX-WS (`@WebService`/`@WebMethod`, both spellings, bare public methods included) and Spring-WS (`@PayloadRoot`, `@SoapAction`) inbound; `WebServiceTemplate` and generated client stubs outbound; a stdlib-XML `.wsdl`/`.xsd` reader and interpreter branch whose input elements derive schema-first operations — five §5.3 rows shipped, on the QName wire identity | **`.sextant.yml`** — opt-in, per-library extraction of a dependency's own bytecode, the first analysis-configuration file living in the analysed repository |
-| **2K** | Enrich | planned | `sextant module enrich` — LLM-written sections as overlay claims at `evidence: llm` ([2B spec](../specs/2026-08-29-phase-2b-outbound-and-export-design.md) §6); the LLM verification seat D02 §2d reserves for doubtful config joins (2F records the evidence, 2K judges it) | redaction-before-wire; first network dependency |
+| **2K** | Enrich | delivered — [spec](../specs/2026-09-02-phase-2k-enrich-design.md) | `sextant module enrich` — a jailed, tool-using agent behind the `EnrichmentAgent` port writes add-only overlay claims (components, sections, diagrams, verdicts) at `evidence: llm`, auto-assembled into `architecture.md`/`architecture.html`; the LLM verification seat D02 §2d reserved for doubtful config joins, now real (2F records the evidence, 2K judges it); internal redaction at every trust-boundary exit (render, export, the enrichment tools' own read path) and `.sextantignore`, both default-on | redaction-before-wire; the enrichment jail; first network dependency, wrapped behind a port with `--dry-run`/`--ingest` doors for any other agent |
 | **2J** | Second frameworks | planned | Micronaut, Quarkus/JAX-RS, MicroProfile REST Client — **zero engine changes is the acceptance test**; then the typed-Catalog refactor | none — that is the point |
 | **L** | Linking and system scope | planned | `participants`, `links`, DR-5 over bundles; the system document; shape provenance fixed structurally | M05/M06 over federated Parquet |
 
@@ -101,6 +101,15 @@ linking services into a system-level architecture begins):
    milestone 2's.
 2. After **2K**: the module-level flow is complete *end to end* — analyze → resolve →
    enrich → render → export, nothing stubbed.
+
+   **DECLARED, 2026-09-02.** 2K shipped: `analyze` derives the graph, `resolve` (inside
+   `analyze`) applies engines and catalogs, `enrich` runs a jailed agent (or the
+   `--dry-run`/`--ingest` door) to add LLM-authored sections behind validation-by-construction,
+   `render` assembles both `architecture.md` and `architecture.html` — machine text and
+   `evidence: llm` claims together, nothing stubbed in between — and `export` writes the D06
+   bundle, `render/` included when it exists. Every stage a module-level analysis needs runs
+   start to finish against a real, compiled fixture, with no manual step and no placeholder
+   output anywhere in the chain.
 3. After **2J**: the catalog thesis is proven on second frameworks and the
    **version-bump gate opens** (unchanged anchor — the gate is about Java coverage,
    which linking is not part of).

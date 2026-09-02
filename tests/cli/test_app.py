@@ -2,14 +2,17 @@ import json
 import subprocess
 from pathlib import Path
 
+import click
+import pytest
 from click.testing import CliRunner
 
 from sextant.application.ports.progress import NullProgress
 from sextant.application.ports.scanner import ScanReport, ScanRequest
 from sextant.application.stages.analyze import analyze
-from sextant.cli.app import cli
+from sextant.cli.app import _tool_executor_for, cli
 from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.domain.factfile import read_fact_tree
+from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import bare_descriptor, owner_of
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
@@ -348,6 +351,12 @@ def test_export_carries_both_rendered_documents_into_the_bundle(tmp_path: Path):
     assert (bundle / "render" / "architecture.html").read_bytes() == (
         tmp_path / "render" / "architecture.html"
     ).read_bytes()
+    # The manifest declares what it shipped (2K Task 8 review, D06 §3):
+    # `render/` joins `facts`/`graph`/`tables`/`facts_files` as content the
+    # manifest names rather than leaves for a consumer to discover by
+    # listing the bundle itself.
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["contents"]["render"] == ["architecture.md", "architecture.html"]
 
 
 def test_export_without_a_prior_render_carries_no_render_directory(tmp_path: Path):
@@ -366,6 +375,8 @@ def test_export_without_a_prior_render_carries_no_render_directory(tmp_path: Pat
     assert result.exit_code == 0, result.output
     bundle = Path(result.output.strip())
     assert not (bundle / "render").exists()
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["contents"]["render"] == []
 
 
 def test_render_exits_nonzero_with_a_message_when_no_workspace_exists(tmp_path: Path):
@@ -374,6 +385,50 @@ def test_render_exits_nonzero_with_a_message_when_no_workspace_exists(tmp_path: 
     )
     assert result.exit_code != 0
     assert "module analyze" in result.output
+
+
+def test_re_analyzing_clears_a_stale_rendered_document(tmp_path: Path):
+    """2K Task 8 review (Task 4's own review flagged the gap): `analyze`
+    never otherwise touches `render/` — that is `render`'s own output — so
+    a workspace re-analyzed after its code changed would, without this,
+    still carry the OLD `architecture.md`/`.html` on disk. Worse, `enrich`'s
+    own "no rendered document" refusal reads `render/architecture.md`'s
+    mere presence, so a stale render would let `enrich` compose a brief
+    from a document describing code that no longer exists rather than
+    guiding the user back to `render` first."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    assert (tmp_path / "render" / "architecture.md").is_file()
+
+    assert (
+        runner.invoke(
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+        ).exit_code
+        == 0
+    )
+    assert not (tmp_path / "render").exists()
+
+    # `enrich` reads render/architecture.md's presence to decide whether it
+    # can compose a brief at all — with the stale directory gone, it refuses
+    # loudly and names `render`, exactly as it does for a workspace that was
+    # never rendered at all.
+    result = runner.invoke(
+        cli, ["module", "enrich", str(FIXTURE), "--workspace", str(tmp_path), "--dry-run"]
+    )
+    assert result.exit_code != 0
+    assert "sextant module render" in result.output
 
 
 def test_render_names_the_catalog_and_capability_analyze_skipped(tmp_path: Path):
@@ -545,3 +600,31 @@ def test_a_redaction_rule_that_breaks_a_claim_is_a_message_at_the_render_exit(tm
     assert result.exit_code == 1
     assert "a redaction rule rewrote enrichment claim 0" in result.output
     assert "Traceback" not in result.output
+
+
+def test_a_missing_home_directory_is_reported_as_a_message_not_a_stack_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`ToolExecutor.__init__` (2K Task 7 fix round 3) calls `Path.home()`,
+    which raises `RuntimeError` — not `ValueError` — when no home directory
+    can be resolved (a container image with no `HOME` set, above all). Before
+    2K Task 8's review, `_tool_executor_for` caught `ValueError` alone, so
+    this would have escaped as an uncaught crash rather than reaching the
+    operator as the same kind of message every other jail-construction
+    refusal already gets.
+
+    A direct unit test of `_tool_executor_for` rather than a full `module
+    enrich` invocation: the jailed roots just need to exist and sit under
+    the repository root `IgnoreRules.load` reads, which `tmp_path` alone
+    already satisfies — no fixture compile required."""
+    (tmp_path / "facts").mkdir()
+    (tmp_path / "render").mkdir()
+
+    def _no_home() -> Path:
+        raise RuntimeError("could not determine the user's home directory")
+
+    monkeypatch.setattr(Path, "home", staticmethod(_no_home))
+
+    with pytest.raises(click.ClickException) as excinfo:
+        _tool_executor_for(tmp_path, tmp_path, Redactor.from_rules())
+    assert "could not determine the user's home directory" in str(excinfo.value)

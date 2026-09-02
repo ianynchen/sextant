@@ -273,6 +273,18 @@ across repeated runs on fixed example repositories. The workspace database file 
 not byte-compared — no embedded database guarantees file-level stability — so its
 determinism is verified by comparing its exported tables instead.*
 
+> **Amendment (2026-09-02, Phase 2K design §8 — approved, delivered).** `sextant module
+> enrich` calls a language model, and that one call is the sole exclusion from this
+> requirement in the entire product. Everything else `enrich` does stays byte-deterministic:
+> the brief composed from a workspace, the validation an agent's (or `--ingest`'s) answer is
+> checked against, and the assembly that interleaves a written `.sextant-enrichment.json`
+> into `architecture.md`/`architecture.html`. Same workspace plus the same overlay produces
+> the same rendered documents on every run — `render`, invoked standalone over a workspace
+> with an overlay already on disk, takes the identical assembly code path `enrich`'s own
+> auto-render does, so the two outputs can never disagree. See
+> [ARCHITECTURE.md](ARCHITECTURE.md#dr-2--no-language-model-inside-sextant) DR-2's own
+> amendment for the port and adapter this call runs behind.
+
 ### NFR-2 — Honest failure
 
 Sextant states what it could not do. Silent degradation is a defect.

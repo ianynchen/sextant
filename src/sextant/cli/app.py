@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -164,6 +165,18 @@ def module() -> None:
 @click.option("--workspace", "workspace_dir", type=click.Path(path_type=Path), default=None)
 def module_analyze(path: Path, workspace_dir: Path | None) -> None:
     workspace_dir = _workspace_dir_of(path, workspace_dir)
+    # A stale rendered document must never survive a re-analyze (2K Task 8
+    # review): `analyze` never otherwise touches `render/` — that is
+    # `render`'s own output — so without this, re-analyzing a module after
+    # its code changed would leave the OLD architecture.md/.html sitting on
+    # disk, and `module_enrich`'s own "no rendered document" refusal below
+    # would pass against it, handing an agent a brief composed against code
+    # that no longer exists. The whole directory is removed rather than its
+    # two known files, deliberately: whatever `render` ever writes there
+    # stops being trustworthy the moment the graph it describes changes.
+    render_dir = workspace_dir / "render"
+    if render_dir.is_dir():
+        shutil.rmtree(render_dir)
     progress = RichProgress()
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
@@ -377,7 +390,13 @@ def _jailed_roots_of(path: Path, workspace_dir: Path) -> tuple[Path, Path, Path]
 def _tool_executor_for(path: Path, workspace_dir: Path, redactor: Redactor) -> ToolExecutor:
     try:
         return ToolExecutor(_jailed_roots_of(path, workspace_dir), redactor, IgnoreRules.load(path))
-    except ValueError as refused:
+    # `ToolExecutor.__init__` also calls `Path.home()` (2K Task 7 fix round
+    # 3), which raises `RuntimeError` rather than `ValueError` when no home
+    # directory can be resolved — a container image with no `HOME` set,
+    # above all (2K Task 8 review). Caught into the same message, for the
+    # same reason every other refusal in this file is: an environment the
+    # operator wiring this jail up needs to fix, not a crash in the tool.
+    except (ValueError, RuntimeError) as refused:
         raise click.ClickException(str(refused)) from refused
 
 
@@ -684,6 +703,26 @@ def module_export(path: Path, workspace_dir: Path | None, out_dir: Path | None) 
         facts_files = workspace.export_facts(bundle, redactor)
     finally:
         workspace.close()
+
+    # Both rendered documents travel with the bundle when `render` has already
+    # produced them (2K design §6b) — copied verbatim, already masked at the
+    # render exit, so this is a plain file carry rather than a second
+    # redaction pass. `render` is not a prerequisite for `export` (M08: export
+    # only ever reads what `analyze` left), so their absence is silent, not a
+    # failure — the same optionality a workspace with no render step has
+    # always had. Collected before the manifest is written, not after (2K
+    # Task 8 review): `write_manifest`'s own `contents.render` names what
+    # actually shipped, the same "named by the caller, not re-derived" rule
+    # `tables`/`facts_files` already follow.
+    render_dir = workspace_dir / "render"
+    shipped_render: list[str] = []
+    for rendered in ("architecture.md", "architecture.html"):
+        source = render_dir / rendered
+        if source.is_file():
+            (bundle / "render").mkdir(parents=True, exist_ok=True)
+            (bundle / "render" / rendered).write_bytes(source.read_bytes())
+            shipped_render.append(rendered)
+
     write_manifest(
         bundle / "manifest.json",
         metadata,
@@ -693,18 +732,6 @@ def module_export(path: Path, workspace_dir: Path | None, out_dir: Path | None) 
         module_commit=_module_commit_of(path),
         tables=tables,
         facts_files=facts_files,
+        render=shipped_render,
     )
-    # Both rendered documents travel with the bundle when `render` has already
-    # produced them (2K design §6b) — copied verbatim, already masked at the
-    # render exit, so this is a plain file carry rather than a second
-    # redaction pass. `render` is not a prerequisite for `export` (M08: export
-    # only ever reads what `analyze` left), so their absence is silent, not a
-    # failure — the same optionality a workspace with no render step has
-    # always had.
-    render_dir = workspace_dir / "render"
-    for rendered in ("architecture.md", "architecture.html"):
-        source = render_dir / rendered
-        if source.is_file():
-            (bundle / "render").mkdir(parents=True, exist_ok=True)
-            (bundle / "render" / rendered).write_bytes(source.read_bytes())
     click.echo(str(bundle))

@@ -17,6 +17,7 @@ uv sync                                        # Python side
 
 uv run sextant module analyze <module-path>
 uv run sextant module render  <module-path>
+uv run sextant module enrich  <module-path> --agent claude-api --model <model-id>
 uv run sextant module export  <module-path>
 ```
 
@@ -43,11 +44,12 @@ redact:                                   # widens the built-in set; nothing nar
 
 Redaction is **on by default and needs no file**: configuration keys naming a password,
 secret, token, credential, API key, private key, authorization or passphrase mask as
-`«redacted»`, and `scheme://user:pass@host` addresses lose their userinfo — in the rendered
-document and everywhere in the exported bundle, its fact files included. The workspace keeps
-real values, because resolving an endpoint's address needs them and your own disk is not the
-boundary. A bundle records the rule set that masked it, as `producer.redaction_set_hash` in
-its manifest.
+`«redacted»`, and `scheme://user:pass@host` addresses lose their userinfo — at every point
+data crosses the trust boundary: the rendered document, everywhere in the exported bundle
+(its fact files included), and what `module enrich`'s own tools read back to the model (see
+below). The workspace keeps real values, because resolving an endpoint's address needs them
+and your own disk is not the boundary. A bundle records the rule set that masked it, as
+`producer.redaction_set_hash` in its manifest.
 
 A key pattern is matched as a substring, so it **over-masks on purpose**:
 `aws.secretsmanager.endpoint` masks a hostname. That is the safe direction — a leaked
@@ -104,6 +106,42 @@ the same file excluded.
 Nested, per-directory `.sextantignore` files are not read today — one file, at the
 repository root, and every pattern in it matches against a path relative to that root,
 whichever resource or schema directory a given file was actually found under.
+
+## `sextant module enrich` — the agentic overlay
+
+Requires a rendered module first (`sextant module render`) — the brief it composes reads the
+machine-rendered `architecture.md`. The model gets four read-only tools — `list_dir`,
+`find`, `grep`, `read_file` — jailed to the module's own source, its facts and its rendered
+outputs, with every result masked by the same redactor `render`/`export` use. Its answers
+land as **add-only** claims (components, sections, diagrams, verdicts on open questions) at
+`evidence: llm`, written to `.sextant-enrichment.json` at the module root and assembled
+straight into both `architecture.md` and `architecture.html` — one command, done; nothing
+here rewrites or reorders machine-derived text.
+
+```
+uv run sextant module enrich <module-path> --agent claude-api --model <provider's model id>
+```
+
+- **`--agent`** — a name in `AGENT_REGISTRY` (`claude-api` ships in v1); an unknown name is
+  refused, naming the known list. **`--model`** is passed to the adapter **verbatim** —
+  Sextant does not maintain a provider's model catalog. **`--max-turns`** caps the tool-use
+  loop (default 50); a no-progress guard ends the run early if the same call repeats three
+  times running.
+- **`.sextant.yml`'s `enrich:` section** supplies defaults for all three
+  (`agent`/`model`/`max_turns`), read only where the matching flag is absent — flags always
+  win.
+- **`ANTHROPIC_API_KEY` comes from the environment alone** — never a flag, never a config
+  file. Its absence is refused before any network attempt.
+- **Two doors skip the model call entirely**, and Sextant validates whatever comes back
+  through them exactly as it validates a live run's answer: **`--dry-run`** writes the
+  composed brief and the instructions document to the workspace and calls nothing, for any
+  other tool — Codex, Cursor, a person with an editor — to answer by hand; **`--ingest
+  answers.json`** reads an already-answered file and writes the overlay from it.
+
+**The jail and redaction guarantees hold only when Sextant's own loop is driving.** An agent
+working the brief through `--dry-run`/`--ingest` reads the repository under its **own**
+permissions, entirely outside Sextant's process — that is by design, the same "your own tool,
+your own control" stance the rest of Sextant takes, not a gap in the jail above.
 
 ## Dependencies
 

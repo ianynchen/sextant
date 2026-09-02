@@ -5,6 +5,7 @@ re-analyzes") plus what the exporter itself derived (the catalog hash, the
 tables and fact files it exported)."""
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
@@ -20,6 +21,7 @@ def write_manifest(
     module_commit: str,
     tables: list[str],
     facts_files: int,
+    render: Sequence[str] = (),
 ) -> None:
     provenance = dict(cast(dict[str, object], metadata.get("provenance", {})))
     # `producer` carries exactly what analyze's provenance recorded, plus
@@ -63,6 +65,15 @@ def write_manifest(
             "graph": True,
             "tables": list(tables),
             "facts_files": facts_files,
+            # What actually shipped under `render/` (2K Task 8 review, D06
+            # §3's "names what actually travelled" rule extended to it) —
+            # `[]` where `render` was never run, exactly like an empty
+            # `tables` list would read, never an absent key. Named by the
+            # caller (`cli/app.py`'s `module_export`) rather than derived
+            # here, the same never-re-analyze-or-re-derive discipline every
+            # other `contents` field already follows: this function writes
+            # what it is told, not what it goes and looks for on disk.
+            "render": list(render),
         },
         "gaps": metadata.get("gaps", []),
         "uncovered": metadata.get("uncovered", []),

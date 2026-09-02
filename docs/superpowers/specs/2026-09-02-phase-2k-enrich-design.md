@@ -287,3 +287,15 @@ directory, under a different path than `.sextantignore` lists, or a hardlink inc
 (the same inode under another name, readable in full once the jail resolves its own,
 un-excluded name for it) — still leaks, and that is a stated boundary rather than a
 bug to chase further.
+
+**Two mechanisms, two visibilities, both deliberate, ruled.** A derived-output directory
+(`target/`, `build/`, `out/`, `node_modules/`, `.git/`) is hidden in the jail by the
+directory's own path being excluded outright — the jail's ancestry rule covers the
+directory itself, so nothing under it is ever walked to in the first place. `secrets/**`
+hides differently: it is a `.sextantignore` pattern, so gitignore semantics decide what it
+covers, and what it covers is *contents* — everything matching under `secrets/`, not the
+directory name as a standalone entity the way the jail's own rule treats a derived-output
+name. The two answer different questions (a jail-specific exclusion the model must never
+even see the existence of, versus a file-level ignore rule a repository writes and a
+negation could in principle touch, were the built-in layer negatable) and neither is a
+weaker version of the other.

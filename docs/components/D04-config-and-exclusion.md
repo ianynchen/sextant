@@ -85,6 +85,11 @@ extract_libraries:
 redact:
   key_patterns:   [dsn]                    # matched against a normalized config key
   value_patterns: ["ACME_[A-Z0-9]{24}"]    # regular expressions, matched against values
+
+enrich:
+  agent:      claude-api                   # an AGENT_REGISTRY name; --agent overrides
+  model:      <provider's own model id>    # passed to the agent verbatim; --model overrides
+  max_turns:  50                           # --max-turns overrides
 ```
 
 `extract_libraries` names dependencies whose **own bytecode** is scanned alongside the
@@ -134,6 +139,14 @@ left, while over-masking hides a value from a document that still says the key i
 masked is not absent, so [NFR-7](../REQUIREMENTS.md) survives it. The day it costs a real
 workflow something, the fix is a **more precise built-in pattern**, never a reveal, unmask
 or exclude mechanism; none exists, by construction.
+
+`enrich` (2K design §3) reads its own **defaults** from this file: `agent`, `model`,
+`max_turns`, each `None` — no default declared — where the module names none. Precedence is
+flags, then this file, then nothing: `sextant module enrich`'s own `--agent`/`--model`/
+`--max-turns` flags win whenever given, and fall through to whatever `enrich:` declares only
+when the flag itself is absent. A module with no `enrich:` section supplies every value
+through its own flags, exactly as if this section did not exist. See §4b for the command
+this configures.
 
 **A malformed `.sextant.yml` fails the run** — the one input where Sextant refuses rather
 than degrading. DR-6's refusal-to-guess governs evidence read out of a codebase Sextant
@@ -307,6 +320,69 @@ Anything fetched under the flag is cached in `~/.sextant/cache/` and its **conte
 recorded as an input** — a remote document is an input Sextant does not control, so a
 change in it must surface as a change, never be silently absorbed. Without the flag, each
 refusal is a reported gap naming what was refused and what is incomplete because of it.
+
+---
+
+## 4b. The enrichment agent — the jail, four tools, and two doors
+
+`sextant module enrich` (2K design §3/§4) composes a brief from a rendered module and hands
+it to a model through the `EnrichmentAgent` port (`application/ports/enrichment.py`:
+`run(brief) -> EnrichmentAnswers`). The one adapter that ships, `claude-api`
+(`src/sextant/agents/claude_api.py`), lives in `agents/` — a new outer group, sibling to
+`ingress`/`storage`/`egress`, importing `application`/`domain` inward and nothing else
+outward. It is the **only** file in the codebase permitted to import the `anthropic` SDK,
+enforced by a structural test, mirroring how the `protobuf`/`graphql-core` dependencies are
+each confined to the one component that understands their format (§Dependencies,
+[README.md](../../README.md)). **`ANTHROPIC_API_KEY` is read from the environment alone** —
+never a flag, never a config file — and its absence refuses loudly, naming the variable,
+before any network attempt.
+
+**The jail is what makes the call safe to run against a real repository.** The model gets
+exactly four read-only, in-process tools (`application/enrich/tools.py`'s `ToolExecutor`) —
+`list_dir`, `find`, `grep`, `read_file` — and nothing else: no shell, no network, no write.
+Every call is checked against an explicit allowlist of roots (the module's own source, its
+fact root, its rendered outputs) with no exception:
+
+- **A symlink is never followed, anywhere in the walk** — not `root` itself, not an
+  intermediate directory, not the final target — even one that resolves back inside the
+  jail to a file readable directly under its real name. A path is visible only under the
+  exact, case-included spelling of a real directory entry.
+- **`.sextantignore` and its built-ins apply at the jail exactly as they do at every other
+  walk site** (§3): an excluded file is invisible to `list_dir`/`find`/`grep` and unreadable
+  by `read_file`.
+- **A derived-output directory** (`target/`, `build/`, `out/`, `node_modules/`, `.git/`) is
+  excluded the same way, as a jail-specific rule — not added to `.sextantignore`'s built-in
+  patterns, which stay the short, non-negatable credential layer §3 describes. The jail
+  describes human-authored source, never its compiled shadow; an ordinary `analyze` walk is
+  unaffected.
+- **Redaction-on-read.** A config-bearing file's content, and a fact file's own
+  `config_entry` value, are masked by the §4 redactor before either `read_file` or `grep`
+  exposes them — the same rule set the rendered document and the bundle apply, so a value
+  neither of those two exits would show is not recoverable through the jail either.
+- **Sextant's own prior `.sextant-enrichment.json`** is excluded as a jail-specific rule too:
+  the model must never read a previous run's own claims back as if they were source.
+
+Every tool result — including a refusal — additionally has the module's own absolute path
+and the analyst's home directory rewritten to relative and `~`-prefixed spellings before it
+reaches the model, so neither ever appears as a raw host path in a transcript a person later
+reads.
+
+**Two doors bypass the model call entirely, and Sextant validates either identically.**
+`--dry-run` writes the composed brief and calls no agent — any tool at all, Codex, Cursor, a
+human with an editor, can answer it under its own abilities. `--ingest answers.json` reads a
+file already answered and runs it through the exact same validation-by-construction
+(`application/enrich/validate.py`) a live run's answer gets, writing the identical overlay
+shape. Supporting a new external tool costs zero changes to Sextant.
+
+> **The external-door honesty note, stated rather than assumed.** The jail and redaction
+> guarantees above are enforceable only when Sextant's own loop is the one making the tool
+> calls — `--dry-run`/`--ingest`. An agent working the brief itself, outside Sextant's
+> process, reads the repository under **its own** permissions, which the jail has no reach
+> into. This is not a gap to close: it is the user's own tool under the user's own control,
+> the same stance [DR-2](../ARCHITECTURE.md#dr-2--no-language-model-inside-sextant)'s
+> original external-skill design took, carried forward into the door that replaces it. The
+> same note appears in [README.md](../../README.md), where a reader is more likely to meet
+> it first.
 
 ## 5. Scanner selection
 
