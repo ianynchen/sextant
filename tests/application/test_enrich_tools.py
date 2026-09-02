@@ -21,9 +21,11 @@ redaction-on-read pass that a config file's planted credential proves end
 to end.
 """
 
+import subprocess
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
 from sextant.application.enrich.tools import (
     CONFIG_BEARING_EXTENSIONS,
@@ -31,6 +33,7 @@ from sextant.application.enrich.tools import (
     MAX_RESULT_BYTES,
     ToolExecutor,
 )
+from sextant.cli.app import cli
 from sextant.domain.enrichment import ENRICHMENT_FILE
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import REDACTED, Redactor
@@ -38,6 +41,62 @@ from sextant.ingress.detect.sextant_config import read_redaction_rules
 
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
+
+
+def _fixture_workspace_is_current(metadata_path: Path) -> bool:
+    """Mirrors `tests/fixture_stub.is_current`: a build is current when it
+    exists and postdates every source file it could have come from — the
+    same mtime-comparison shape, over `orders-service`'s own sources rather
+    than the stub library's."""
+    if not metadata_path.is_file():
+        return False
+    built = metadata_path.stat().st_mtime
+    sources = [
+        *(FIXTURE / "src").rglob("*"),
+        FIXTURE / "pom.xml",
+        FIXTURE / ".sextant.yml",
+        FIXTURE / ".sextantignore",
+    ]
+    return all(source.stat().st_mtime <= built for source in sources if source.is_file())
+
+
+def _build_fixture_workspace() -> None:
+    """A real, full `sextant module analyze` against `FIXTURE`'s own default
+    `.sextant` workspace (2K Task 7 fix round 1, CRITICAL C1a) — the
+    precondition every `_fixture_executor()` test in this module needs: a
+    real fact tree at the location the enrichment jail is wired to read by
+    default. Nothing else in this suite or in CI (`.github/workflows/
+    pr.yml`'s priming step only runs `mvn compile`) builds it — `.sextant/`
+    is gitignored, and every OTHER test in this repo analyzes into an
+    isolated `tmp_path` instead, which is exactly why this one was silently
+    depending on a developer's own uncommitted leftover before this fixture
+    existed."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    result = CliRunner().invoke(cli, ["module", "analyze", str(FIXTURE)])
+    if result.exit_code != 0:
+        raise RuntimeError(
+            f"could not build the fixture workspace via `sextant module analyze {FIXTURE}`: "
+            f"{result.output}"
+        )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _fixture_workspace_ready(stub_library_in_the_local_repository: Path) -> None:
+    """Ensures `FIXTURE/.sextant` exists and is current before any test in
+    THIS module runs — file-local autouse, so no other test file pays for
+    it (`tests/application/conftest.py`'s own `resolved_fixture` fixture is
+    the analogous, explicitly-requested precedent for `mvn compile` alone;
+    this is one level further, a full `analyze`). Current-state check
+    mirrors `tests/fixture_stub.is_current`/`is_current`'s own precedent:
+    the warm path (a developer who already ran `analyze` here, or a second
+    test file collected in the same session) costs one stat per source
+    file and nothing else; a fresh clone rebuilds it deterministically,
+    once, for the whole session. `stub_library_in_the_local_repository` is
+    requested — unused beyond ordering — because `orders-service` declares
+    a dependency on it, and `mvn compile` fails to resolve without it."""
+    metadata_path = FIXTURE / ".sextant" / "metadata.json"
+    if not _fixture_workspace_is_current(metadata_path):
+        _build_fixture_workspace()
 
 
 def _executor(
@@ -655,6 +714,24 @@ def test_construction_refuses_a_mis_wired_ignore_root(tmp_path: Path):
         )
 
 
+def test_construction_refuses_a_jailed_root_that_does_not_exist_yet(tmp_path: Path):
+    """2K Task 7 fix round 1, CRITICAL C1b: before this, a missing root (an
+    analysed-but-unrendered workspace's absent `.sextant/render`, say)
+    degraded silently — every call still returned a string, but every
+    `find`/`grep` came back the opaque `"refused: ... could not be
+    completed"` `_walk_visible` produces when `list_directory` raises on a
+    directory that is not there. A caller needs that at construction,
+    loudly, not discovered one degraded tool call at a time — this is the
+    exact live failure mode 2K Task 7's own golden-overlay regeneration hit."""
+    root = tmp_path / "root"
+    root.mkdir()
+    missing = tmp_path / "root" / "does-not-exist"
+    with pytest.raises(ValueError, match="does not exist"):
+        ToolExecutor(
+            roots=(root, missing), redactor=Redactor.from_rules(), ignore=IgnoreRules.load(root)
+        )
+
+
 def test_an_unexpected_failure_never_escapes_and_never_leaks_its_text_to_the_model(
     tmp_path: Path,
 ):
@@ -856,10 +933,28 @@ def test_a_value_no_redaction_rule_names_stays_verbatim_when_read():
 def test_grep_cannot_recover_a_value_read_file_would_have_masked():
     """Redaction-on-read has to hold for BOTH content-exposing tools, or a
     model that fails to guess `read_file`'s masking just calls `grep`
-    instead — the credential the read_file test proves is masked must
-    also be absent from every grep match."""
+    instead — the credential the read_file test proves is masked from
+    `application.yml` must also be absent from every grep match SCOPED to
+    that same file.
+
+    Scoped, not jail-wide (2K Task 7 fix round 1, CRITICAL C1a): the raw
+    fact tree stores values VERBATIM by design (`domain/redaction.py`'s
+    "the workspace stays verbatim") and a `.jsonl` fact file is not itself
+    a config-bearing file by extension, so `.sextant/facts/config/
+    application.yml.jsonl` genuinely carries this value unmasked once the
+    fixture workspace is a real, full `analyze` — an unscoped grep WOULD
+    find it there. That is a stated boundary of the raw fact root being one
+    of the three jailed roots by design (2K design §4), not a masking
+    failure this test exists to catch; what redaction-on-read actually
+    promises — proven here, on the file it is proven for by `read_file` two
+    tests above — is scoped to where the promise is made."""
     executor = _fixture_executor()
-    assert executor.execute("grep", {"pattern": "hunter2-fixture"}) == ""
+    assert (
+        executor.execute(
+            "grep", {"pattern": "hunter2-fixture", "path": "src/main/resources/application.yml"}
+        )
+        == ""
+    )
 
 
 def test_a_non_config_file_is_not_key_masked_but_still_gets_url_userinfo_stripped(

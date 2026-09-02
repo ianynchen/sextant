@@ -174,6 +174,9 @@ beside `.sextant.yml`, versionable in git (a PR diff shows what the claims chang
 reading a diff is not editing). Regeneration replaces the file entirely; its
 provenance block states one run of one model against one graph
 (`{model, agent, instructions_hash, redaction_set_hash, run_at, workspace_fingerprint}`).
+`workspace_fingerprint` is the sha256 of `metadata.json`'s own bytes — informational,
+never compared by code, and not a content-identity hash (D06's own per-row manifest
+hash, Task 8, is the record for that).
 
 Claim kinds (closed set):
 - `component` — name, purpose, member **symbols that must exist**;

@@ -392,7 +392,16 @@ def _tool_definition_json(definition: ToolDefinition) -> dict[str, object]:
 @module.command("enrich")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("--workspace", "workspace_dir", type=click.Path(path_type=Path), default=None)
-@click.option("--agent", "agent_flag", default=None, help="An `AGENT_REGISTRY` name.")
+@click.option(
+    "--agent",
+    "agent_flag",
+    default=None,
+    help=(
+        "For a live run, an `AGENT_REGISTRY` name (refused if unknown). Under "
+        "--ingest/--dry-run, no adapter runs — a free-text label for the "
+        "overlay's provenance instead."
+    ),
+)
 @click.option("--model", "model_flag", default=None, help="Passed to the agent verbatim.")
 @click.option("--max-turns", "max_turns_flag", type=int, default=None)
 @click.option("--dry-run", is_flag=True, default=False, help="Write the brief; call no agent.")
@@ -439,26 +448,50 @@ def module_enrich(
 
     redactor = _redactor_for(path)
     defaults = _enrich_defaults_for(path)
-    agent_name = agent_flag or defaults.agent
-    model_name = model_flag or defaults.model
-    max_turns = max_turns_flag or defaults.max_turns or 50
+    # `is None`, never `or` (2K Task 7 fix round 1, minor): a flag's own
+    # falsy-but-meaningful value — `--max-turns 0` above all — must reach
+    # `ClaudeApiAgent`'s own `>= 1` validation as what it is, not silently
+    # read as "no flag given" and fall through to a config default or 50.
+    agent_name = agent_flag if agent_flag is not None else defaults.agent
+    model_name = model_flag if model_flag is not None else defaults.model
+    max_turns = (
+        max_turns_flag
+        if max_turns_flag is not None
+        else (defaults.max_turns if defaults.max_turns is not None else 50)
+    )
 
     instructions = instructions_path().read_text(encoding="utf-8")
     instructions_hash = "sha256:" + hashlib.sha256(instructions.encode("utf-8")).hexdigest()
-    executor = _tool_executor_for(path, workspace_dir, redactor)
-    roots = _jailed_roots_of(path, workspace_dir)
 
     # Read here, in the composition root — `application` reads no files
     # (`tests/architecture/test_source_rules.py`), so the stage decides
     # whether a missing rendered document is refused; this is only the read.
     architecture_md_path = workspace_dir / "render" / "architecture.md"
-    architecture_md = (
-        architecture_md_path.read_text(encoding="utf-8") if architecture_md_path.is_file() else None
-    )
+    if not architecture_md_path.is_file():
+        raise click.ClickException(
+            f"{path} has no rendered document at {architecture_md_path} — run "
+            f"`sextant module render {path}` first"
+        )
+    architecture_md = architecture_md_path.read_text(encoding="utf-8")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    # Built only now that a rendered document is confirmed on disk (2K Task 7
+    # fix round 1, CRITICAL C1b): `ToolExecutor` refuses a jailed root that
+    # does not exist, and `workspace_dir/"render"` genuinely does not exist
+    # for an analysed-but-unrendered workspace — the exact case just refused
+    # above, with this command's own message. Building the jail any earlier
+    # would trade that honest message for `ToolExecutor`'s generic
+    # missing-root one, which was the live failure the fix round 1 review
+    # actually reproduced.
+    executor = _tool_executor_for(path, workspace_dir, redactor)
+    roots = _jailed_roots_of(path, workspace_dir)
 
     workspace = DuckDbWorkspace(db_path)
     try:
+        # `architecture_md` is never `None` here — refused above — so this
+        # never actually raises in THIS call site; `compose`'s own check
+        # stays live and unit-tested (`test_enrich_stage.py`) as the stage's
+        # documented contract for any other caller.
         try:
             brief = enrich_stage.compose(
                 workspace,
@@ -496,11 +529,20 @@ def module_enrich(
             return
 
         # `metadata.json`'s own bytes stand in for "the graph" the run went
-        # against (D06 §3's "one run of one model against one graph"): a
-        # deterministic dump already covering coverage, endpoints, shapes and
-        # the environments this analysis resolved, cheaper than a bespoke
-        # whole-workspace hash and no less honest an answer to "did the graph
-        # change under this overlay".
+        # against (D06 §3's "one run of one model against one graph"),
+        # deterministic and already on disk — cheaper than a bespoke
+        # whole-workspace hash. Honestly imprecise both ways, stated rather
+        # than implied: OVER-sensitive, because the dump embeds
+        # `provenance.commit`, so the fingerprint moves on every commit even
+        # when nothing the overlay actually references changed — it is
+        # informational, read by a person, never compared bit-for-bit by any
+        # code in this repository; UNDER-sensitive, because it is a set of
+        # COUNTS (endpoint totals per protocol, gap lists), not identities —
+        # two graphs with the same shape but different symbols underneath
+        # (an endpoint swapped for another of the same protocol) hash
+        # identically. Detecting that would need a fingerprint over the
+        # actual rows, which is D06's own manifest-hash story (Task 8), not
+        # this field's job.
         workspace_fingerprint = "sha256:" + hashlib.sha256(metadata_path.read_bytes()).hexdigest()
 
         if ingest_path is not None:
@@ -522,7 +564,13 @@ def module_enrich(
                 )
             if model_name is None:
                 raise click.ClickException("--model is required")
-            agent = AGENT_REGISTRY[agent_name](model=model_name, max_turns=max_turns)
+            try:
+                agent = AGENT_REGISTRY[agent_name](model=model_name, max_turns=max_turns)
+            except ValueError as refused:
+                # `ClaudeApiAgent.__init__`'s own `max_turns >= 1` check
+                # (2K Task 7 fix round 1, minor): a bad flag value is the
+                # user's own input written wrong, not a crash.
+                raise click.ClickException(str(refused)) from refused
             try:
                 answers = agent.run(brief, executor)
             except EnrichmentAgentError as refused:
@@ -548,8 +596,19 @@ def module_enrich(
         except enrich_stage.MalformedAnswersError as refused:
             raise click.ClickException(str(refused)) from refused
 
+        # Written BEFORE assembly, deliberately (2K Task 7 fix round 1): the
+        # overlay IS the run's record — if the rendered assembly below fails
+        # (`ClaimRedactionError`, a `.sextant.yml` `redact:` rule wide enough
+        # to break a claim's own schema), the answer this run produced is
+        # still on disk, exactly as `render` would read it back and exactly
+        # as a later `render` recovers from without re-running the agent.
+        # Losing the overlay to an assembly failure would be worse than the
+        # asymmetry of writing it first: it is Sextant's own program
+        # artifact, not a byproduct of successfully rendering one.
         overlay_path = path / ENRICHMENT_FILE
-        overlay_path.write_text(result.overlay.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        overlay_path.write_text(
+            result.overlay.model_dump_json(indent=2, exclude_none=True) + "\n", encoding="utf-8"
+        )
 
         # The workspace record (2K Task 7 ruling 4): every tool call, and one
         # final line naming exactly how the run ended — persisted even when

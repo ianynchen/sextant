@@ -357,6 +357,20 @@ class ToolExecutor:
     ordinary-looking refusal on every single tool call, indistinguishable
     from the jail actually working, with the raw mismatch — an absolute
     host path — landing in the MODEL-visible refusal text.
+
+    **A root that does not exist is refused the same way, for the same
+    reason (2K Task 7 fix round 1, CRITICAL C1b).** Before this, a missing
+    root (an unrendered workspace's absent `.sextant/render`, say) degraded
+    silently: every call still "worked", but `list_directory` raised
+    inside `_walk_visible` on the first walk that reached it, caught by
+    `execute`'s own catch-all, and every `find`/`grep` came back an opaque
+    `"refused: ... could not be completed"` — indistinguishable, from
+    inside the jail, from a genuine unexpected failure, and observed
+    against exactly this fixture (2K Task 7's own golden-overlay
+    regeneration). A caller wiring a workspace that has not reached the
+    stage a root implies (analysed but not yet rendered, say) needs to know
+    that AT CONSTRUCTION, loudly, not discover it one degraded tool call at
+    a time.
     """
 
     def __init__(self, roots: tuple[Path, ...], redactor: Redactor, ignore: IgnoreRules) -> None:
@@ -370,6 +384,12 @@ class ToolExecutor:
                     "repository root that contains every jailed root — construction "
                     "refused rather than building a jail that refuses every call"
                 ) from mismatch
+            if not root.is_dir():
+                raise ValueError(
+                    f"ToolExecutor: jailed root {root} does not exist — construction "
+                    "refused rather than building a jail whose calls degrade to opaque "
+                    "refusals the moment a walk reaches it"
+                )
         self._roots = resolved_roots
         self._redactor = redactor
         self._ignore = ignore

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from sextant.application.enrich.validate import stale_claims, validate_overlay
 from sextant.domain.enrichment import EnrichmentOverlay
+from sextant.domain.redaction import Redactor
 
 PROVENANCE = {
     "model": "a-model",
@@ -281,6 +282,51 @@ def test_a_verdict_differing_only_in_question_kind_is_refused(tmp_path: Path):
     question = {"protocol": "a-protocol", "method": None, "path": "a-queue", "kind": "other-kind"}
     _, refusals = validate_overlay(_overlay(_verdict(question=question)), _Workspace(), tmp_path)
     assert len(refusals) == 1
+
+
+def test_a_userinfo_bearing_question_path_matches_after_the_same_redaction_the_brief_applied(
+    tmp_path: Path,
+):
+    """2K Task 7 ruling 1, "the brief IS the wire": `application/enrich/
+    brief.py`'s `_open_question_lines` redacts an `open_questions.path`
+    before the model ever reads it (userinfo stripped, here — the built-in
+    rule, live with no repo `redact:` additions needed), so a verdict
+    answering that question can only ever echo the REDACTED spelling back.
+    `validate_overlay` has to redact the WORKSPACE'S OWN (raw) row the same
+    way before comparing, or a model that did exactly what the brief taught
+    it — copy the row it was handed, verbatim — gets refused for a mismatch
+    neither side actually made. Reverting `validate.py`'s own `_row_identity`
+    (dropping its `redactor.redact_text(str(path))` call) breaks this test:
+    the claim's redacted path would then compare against the workspace's raw
+    one and never match."""
+    redactor = Redactor.from_rules()
+    raw_path = "https://user:pass@queue.example.com/orders"
+    redacted_path = redactor.redact_text(raw_path)
+    assert redacted_path != raw_path  # sanity: this redactor is not a no-op here
+
+    row = {
+        "protocol": "a-protocol",
+        "method": None,
+        "path": raw_path,
+        "question": "a-question",
+        "candidates": "[]",
+        "evidence": "compiler",
+    }
+    claim = _verdict(
+        question={
+            "protocol": "a-protocol",
+            "method": None,
+            "path": redacted_path,
+            "kind": "a-question",
+        }
+    )
+
+    accepted, refusals = validate_overlay(
+        _overlay(claim), _Workspace(open_questions=[row]), tmp_path, redactor
+    )
+
+    assert refusals == ()
+    assert len(accepted) == 1
 
 
 def _unanswered(**overrides: object) -> dict[str, object]:

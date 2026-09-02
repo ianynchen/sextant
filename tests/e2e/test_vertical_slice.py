@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -7,6 +8,7 @@ from click.testing import CliRunner
 
 from sextant.application.enrich.validate import validate_overlay
 from sextant.cli.app import cli
+from sextant.cli.resources import instructions_path
 from sextant.domain.enrichment import load_overlay
 from sextant.domain.factfile import read_fact_file
 from sextant.domain.ignorefile import IgnoreRules
@@ -1334,6 +1336,19 @@ def test_every_claim_in_the_golden_overlay_is_grounded_in_the_live_workspace(tmp
         workspace.close()
     assert refusals == ()
     assert len(accepted) == len(overlay.claims)
+
+
+def test_the_golden_overlays_instructions_hash_matches_the_shipped_instructions_file():
+    """2K Task 7 fix round 1, Important I2: pin genuine provenance to the
+    LIVE file rather than merely "some sha256-shaped string" — the next
+    edit to `enrich/INSTRUCTIONS.md` must fail this test loudly (a stale
+    golden overlay silently misreporting what produced it) rather than
+    pass by coincidence. No `analyze`/`render` needed: the overlay is
+    already checked into the fixture."""
+    overlay = load_overlay(FIXTURE)
+    assert overlay is not None
+    digest = hashlib.sha256(instructions_path().read_bytes()).hexdigest()
+    assert overlay.produced_by.instructions_hash == f"sha256:{digest}"
 
 
 def test_the_golden_overlay_assembles_into_the_rendered_document(tmp_path: Path):

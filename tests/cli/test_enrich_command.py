@@ -162,6 +162,35 @@ def test_claude_api_with_no_key_refuses_loudly_naming_the_variable(
     assert "ANTHROPIC_API_KEY" in result.output
 
 
+def test_max_turns_zero_refuses_via_the_agents_own_validation_not_a_silent_default(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2K Task 7 fix round 1, minor: `--max-turns 0` is a real, falsy-but-
+    meaningful flag value — `is None`, never `or`, is what lets it reach
+    `ClaudeApiAgent`'s own `>= 1` validation instead of silently reading as
+    "no flag given" and becoming 50. The real `claude-api` constructor is
+    used and never reaches the network: the `ValueError` fires in
+    `__init__`, before any `_send`."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _analyzed_and_rendered(module_root)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "enrich",
+            str(module_root),
+            "--agent",
+            "claude-api",
+            "--model",
+            "claude-x",
+            "--max-turns",
+            "0",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "max_turns" in result.output
+
+
 def test_dry_run_writes_only_the_brief_and_instructions_copy(module_root: Path):
     _analyzed_and_rendered(module_root)
     markdown_path = module_root / ".sextant" / "render" / "architecture.md"
@@ -186,6 +215,26 @@ def test_dry_run_writes_only_the_brief_and_instructions_copy(module_root: Path):
     # Calls nothing (2K design §3): no overlay, no changed rendered output.
     assert not (module_root / ENRICHMENT_FILE).is_file()
     assert markdown_path.read_bytes() == before
+
+
+def test_a_relative_path_argument_resolves_before_the_jail_is_built(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2K Task 7 fix round 1, Important I3: `path.resolve()` (cli/app.py) —
+    without it, a relative `path` argument (the ordinary way to invoke this
+    on a command line: `cd` somewhere and name the module relative to it)
+    makes `IgnoreRules.load(path)`'s own unresolved `repo_root` disagree
+    with `ToolExecutor`'s resolved roots — an absolute path is never
+    "relative to" a merely-relative one — and every jailed root is refused
+    as a wiring mismatch even though it is genuinely contained. A revert of
+    that one line breaks this test."""
+    _analyzed_and_rendered(module_root)
+    monkeypatch.chdir(module_root.parent)
+
+    result = CliRunner().invoke(cli, ["module", "enrich", module_root.name, "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert (module_root / ".sextant" / "enrich-brief.json").is_file()
 
 
 def test_the_happy_path_writes_the_overlay_and_both_assembled_outputs(
