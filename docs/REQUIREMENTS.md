@@ -64,6 +64,16 @@ request and response shapes, and its trust fields.
 data, never as code, so that supporting a new framework requires no change to Sextant
 itself.*
 
+**Status, as of Phase 2I: three of the four protocol families named above derive.** HTTP
+(both directions, plus GraphQL, WebSocket and SSE on top of it), SOAP, and the message
+brokers Kafka, JMS, SQS and Pub/Sub. **gRPC does not — no Java row for it has shipped**
+([COVERAGE.md](COVERAGE.md) §5.7): the JVM is the one ecosystem where a gRPC service is
+declared by inheriting a generated base class rather than by a registration call, which
+is a scanner capability question rather than a catalog one, and the two Spring-side
+annotation rows beside it are each a catalog away. This note records the position rather
+than changing it — gRPC remains in version-1 scope above, and whether it stays there is a
+scoping decision, not a documentation one.
+
 ### FR-4 — Shape catalog
 
 Sextant produces the shape of every payload crossing a boundary: its fields, their

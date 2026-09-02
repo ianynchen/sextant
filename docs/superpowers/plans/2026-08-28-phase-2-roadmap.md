@@ -65,25 +65,34 @@ linking services into a system-level architecture begins):
    form a Spring service uses derives, modulo the named A-tier catalog rows (RabbitMQ,
    Pulsar, Micronaut variants — one YAML file each) and the ledgered extractor
    candidates (vararg constants, batch-listener generics).
-   **DECLARED, 2026-09-02.** 2I shipped, and with it the last of the committed
-   protocols: REST in both directions, GraphQL, WebSocket, SSE, SOAP, Kafka, JMS, SQS
-   and Pub/Sub all derive from a Spring service's own declarations, carrying
-   configuration-resolved peers, wire formats and field-by-field payload contracts.
-   Forty-two of seventy-nine Java rows, and SOAP's §2a column joins GraphQL's and
-   WebSocket's as one with no unshipped row left in it.
+   **DECLARED, 2026-09-02.** 2I shipped, and with it the last protocol on **this
+   roadmap's** committed list: REST in both directions, GraphQL, WebSocket, SSE, SOAP,
+   Kafka, JMS, SQS and Pub/Sub all derive from a Spring service's own declarations,
+   carrying configuration-resolved peers, wire formats and field-by-field payload
+   contracts. Forty-two of seventy-nine Java rows, and SOAP's §2a column joins
+   GraphQL's and WebSocket's as one with no unshipped row left in it.
+
+   **That list is narrower than [REQUIREMENTS.md](../../REQUIREMENTS.md)'s version-1
+   scope, which also names gRPC** (§ Scope, and FR-3). gRPC has no shipped Java row at
+   all, so it is named in the modulo below rather than folded into this declaration.
+   Whether v1 scope should still carry it is the user's decision and is not taken here.
 
    **What the "modulo" actually covers, stated rather than waved at**, because the
    sentence above is a claim about *committed* coverage and not about every line a
    Spring codebase can contain. Still open and still Spring: the A-tier catalog rows
    this milestone always excepted (`@Scheduled`, `@RabbitListener`/`@PulsarListener`,
    the two older `@SqsListener` package spellings, Actuator `@Endpoint`, Spring 7's
-   `version =` and `ImportHttpServices`, Spring gRPC — one YAML file and a fixture
-   each); two B-tier Spring rows that need a catalog on an existing engine rather than
-   an engine (Spring Integration's channel adapters, Spring Cloud GCP's
-   `PubSubTemplate.subscribe`); the JVM's own inheritance-shaped gRPC server, leaving
-   gRPC with no shipped Java row at all; and the four C-tier REST forms where the
-   boundary is not a declaration at all (`@RepositoryRestResource`, `@ControllerAdvice`
-   error contracts, servlets and filters, environment-conditional controllers). The ledgered engine-side candidates are unchanged — vararg media
+   `version =` and `ImportHttpServices`, and both Spring-side gRPC rows —
+   `org.springframework.grpc.server.service.GrpcService` and the Spring Boot starter's
+   `net.devh.boot.grpc.{server.service.GrpcService, client.inject.GrpcClient}` — one
+   YAML file and a fixture each); two B-tier Spring rows that need a catalog on an
+   existing engine rather than an engine (Spring Integration's channel adapters, Spring
+   Cloud GCP's `PubSubTemplate.subscribe`); the JVM's own inheritance-shaped gRPC
+   server, which is the B-tier row under those two and leaves gRPC — a protocol
+   REQUIREMENTS' v1 scope names — with no shipped Java row at all; and the four C-tier
+   REST forms where the boundary is not a declaration at all (`@RepositoryRestResource`,
+   `@ControllerAdvice` error contracts, servlets and filters, environment-conditional
+   controllers). The ledgered engine-side candidates are unchanged — vararg media
    constants and batch-listener generics in the extractor — and 2I adds two on the
    interpreter side: `xsd:attribute` and `complexContent`, which gap a schema file
    today and are cheap to project.

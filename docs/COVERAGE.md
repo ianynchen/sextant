@@ -210,7 +210,10 @@ deliberate early run of 2J's acceptance test. `graphql-core` joined the core dep
 confined to the one descriptor interpreter like `protobuf` before it, and the format
 ladder's rung 1 got its first live surface.
 
-**Phase 2I closed SOAP — the last protocol this program committed to for Java.** A SOAP
+**Phase 2I closed SOAP — the last protocol on the coverage program's own committed list.**
+That list is the roadmap's, not [REQUIREMENTS.md](REQUIREMENTS.md)'s: version-1 scope names
+**gRPC** as well, and gRPC has no shipped Java row (§5.7) — it is enumerated in the
+milestone's own modulo rather than quietly folded into "done". A SOAP
 operation is `(soap, NULL, {namespace}localPart)` — verbless, the identity being the input
 element's QName rather than the one POST path every operation shares — with a second form
 on the same protocol for `@SoapAction`, whose address is the transport header's URI
@@ -410,7 +413,14 @@ identical in every language.
 ### Reading the matrices
 
 **Every cell is generated from §5** by `scripts/coverage_matrix.py`, so the summary cannot
-drift from the checklist it summarises. A cell counts libraries at each tier — `4A 3B 2C`
+drift from the checklist it summarises. **Three Java cells moved in Phase 2I and only one
+of them is a coverage change**: SOAP went from `2A` to `◐ —` because its rows shipped,
+while GraphQL and WebSocket went from a hand-written `✅` to the generated `◐ —`. Those two
+are a **correction, not a downgrade** — the generator never emits a bare `✅` for a protocol
+cell, and `◐ —` is what it writes for a cell whose rows are all shipped and whose gap
+spread is therefore empty. The matrices had simply been left stale since 2H. Anyone
+comparing against an older copy of this file should read `◐ —` as the stronger of the two
+markings, not the weaker. A cell counts libraries at each tier — `4A 3B 2C`
 means four need only a catalog, three need a scanner capability, and two are not in the code
 at all. **The spread is the point**: a single headline tier hides the gap, which is the thing
 worth seeing.
@@ -870,8 +880,9 @@ has nothing to match against them.
 
 ### 5.3 SOAP
 
-**Shipped in Phase 2I** — the last protocol committed to for Java's module-level
-surface. The boundary is not the HTTP route — one POST path fronts every
+**Shipped in Phase 2I** — the last protocol on the coverage roadmap's committed list, which
+is a narrower list than [REQUIREMENTS.md](REQUIREMENTS.md)'s version-1 scope: that also
+names gRPC, still unshipped for Java (§5.7). The boundary is not the HTTP route — one POST path fronts every
 operation — so the identity is the **input element's QName** in W3C notation
 (`{http://orders.example.com/ws}placeOrderRequest`), verbless, on
 [D01](components/D01-graph-schema.md) §3's operation-is-the-endpoint rule. The row that
