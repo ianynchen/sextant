@@ -53,8 +53,6 @@ own model and subscription, and its output re-enters as validated overlay files.
 > breaks the "never calls a language model" statement — see DR-2's own amendment for the
 > current shape (an adapter behind a port, inside Sextant's process, not an external skill).
 
-
-
 ## 3. Containers
 
 ```mermaid

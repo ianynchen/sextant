@@ -108,8 +108,9 @@ linking services into a system-level architecture begins):
    `render` assembles both `architecture.md` and `architecture.html` — machine text and
    `evidence: llm` claims together, nothing stubbed in between — and `export` writes the D06
    bundle, `render/` included when it exists. Every stage a module-level analysis needs runs
-   start to finish against a real, compiled fixture, with no manual step and no placeholder
-   output anywhere in the chain.
+   start to finish against a real, compiled fixture, with no manual step and no stubbed
+   stage — a Known-gaps section stating what a stage honestly could not do is the opposite
+   of a placeholder, and stays exactly where NFR-2 puts it.
 3. After **2J**: the catalog thesis is proven on second frameworks and the
    **version-bump gate opens** (unchanged anchor — the gate is about Java coverage,
    which linking is not part of).

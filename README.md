@@ -122,11 +122,12 @@ here rewrites or reorders machine-derived text.
 uv run sextant module enrich <module-path> --agent claude-api --model <provider's model id>
 ```
 
-- **`--agent`** — a name in `AGENT_REGISTRY` (`claude-api` ships in v1); an unknown name is
-  refused, naming the known list. **`--model`** is passed to the adapter **verbatim** —
-  Sextant does not maintain a provider's model catalog. **`--max-turns`** caps the tool-use
-  loop (default 50); a no-progress guard ends the run early if the same call repeats three
-  times running.
+- **`--agent`** — for a live run, a name in `AGENT_REGISTRY` (`claude-api` ships in v1); an
+  unknown name is refused, naming the known list. Under `--dry-run`/`--ingest` no adapter
+  runs, so this is a free-text label for the overlay's provenance instead, not validated
+  against the registry. **`--model`** is passed to the adapter **verbatim** — Sextant does
+  not maintain a provider's model catalog. **`--max-turns`** caps the tool-use loop (default
+  50); a no-progress guard ends the run early if the same call repeats three times running.
 - **`.sextant.yml`'s `enrich:` section** supplies defaults for all three
   (`agent`/`model`/`max_turns`), read only where the matching flag is absent — flags always
   win.

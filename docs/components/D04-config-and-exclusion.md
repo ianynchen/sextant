@@ -327,7 +327,11 @@ refusal is a reported gap naming what was refused and what is incomplete because
 
 `sextant module enrich` (2K design §3/§4) composes a brief from a rendered module and hands
 it to a model through the `EnrichmentAgent` port (`application/ports/enrichment.py`:
-`run(brief) -> EnrichmentAnswers`). The one adapter that ships, `claude-api`
+`run(self, brief: EnrichmentBrief, executor: ToolExecutor) -> EnrichmentAnswers`) — the
+`executor` parameter is the seam that makes "our code serves the bytes" true: the adapter
+drives whatever loop its runtime uses, but every tool call it makes runs through this same
+`ToolExecutor`, never a call the foreign runtime services itself. The one adapter that
+ships, `claude-api`
 (`src/sextant/agents/claude_api.py`), lives in `agents/` — a new outer group, sibling to
 `ingress`/`storage`/`egress`, importing `application`/`domain` inward and nothing else
 outward. It is the **only** file in the codebase permitted to import the `anthropic` SDK,
@@ -376,13 +380,14 @@ shape. Supporting a new external tool costs zero changes to Sextant.
 
 > **The external-door honesty note, stated rather than assumed.** The jail and redaction
 > guarantees above are enforceable only when Sextant's own loop is the one making the tool
-> calls — `--dry-run`/`--ingest`. An agent working the brief itself, outside Sextant's
-> process, reads the repository under **its own** permissions, which the jail has no reach
-> into. This is not a gap to close: it is the user's own tool under the user's own control,
-> the same stance [DR-2](../ARCHITECTURE.md#dr-2--no-language-model-inside-sextant)'s
-> original external-skill design took, carried forward into the door that replaces it. The
-> same note appears in [README.md](../../README.md), where a reader is more likely to meet
-> it first.
+> calls. `--dry-run`/`--ingest` are the external path: whatever answered the brief did so
+> outside Sextant's process, under **its own** permissions, which the jail has no reach
+> into — Sextant runs the identical validation over what comes back, but what an external
+> agent actually read is outside its control. This is not a gap to close: it is the user's
+> own tool under the user's own control, the same stance
+> [DR-2](../ARCHITECTURE.md#dr-2--no-language-model-inside-sextant)'s original
+> external-skill design took, carried forward into the door that replaces it. The same note
+> appears in [README.md](../../README.md), where a reader is more likely to meet it first.
 
 ## 5. Scanner selection
 

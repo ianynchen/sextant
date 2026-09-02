@@ -291,7 +291,7 @@ bug to chase further.
 **Two mechanisms, two visibilities, both deliberate, ruled.** A derived-output directory
 (`target/`, `build/`, `out/`, `node_modules/`, `.git/`) is hidden in the jail by the
 directory's own path being excluded outright — the jail's ancestry rule covers the
-directory itself, so nothing under it is ever walked to in the first place. `secrets/**`
+directory itself, so nothing under it is ever walked to in the first place. `**/secrets/**`
 hides differently: it is a `.sextantignore` pattern, so gitignore semantics decide what it
 covers, and what it covers is *contents* — everything matching under `secrets/`, not the
 directory name as a standalone entity the way the jail's own rule treats a derived-output

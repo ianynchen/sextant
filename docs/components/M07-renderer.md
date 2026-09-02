@@ -59,9 +59,9 @@ ran.)
 > `architecture.html`, the same assembled sections through one templated HTML emitter
 > (`egress/render/html.py`), self-contained and offline (a pinned, vendored `mermaid.min.js`,
 > a small pan-zoom script of Sextant's own). Same workspace and overlay produce byte-identical
-> bytes in both. `enrich` writes both itself as its own final step ([ARCHITECTURE.md](../ARCHITECTURE.md)
-> DR-2's amendment: "no second render command"); a standalone `render` over a workspace an
-> overlay is already sitting beside reproduces the identical pair.
+> bytes in both. `enrich` writes both itself as its own final step (2K design §8: "no second
+> render command"); a standalone `render` over a workspace an overlay is already sitting
+> beside reproduces the identical pair.
 
 System scope: the system architecture document, the service map, cross-service sequence
 diagrams, contract diagrams.

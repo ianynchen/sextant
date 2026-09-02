@@ -38,9 +38,10 @@ instead of joining it anyway.
 > own auto-assembly, [ARCHITECTURE.md](../ARCHITECTURE.md) DR-2's amendment) already wrote to
 > the workspace, copied byte-for-byte into the bundle by the exporter — not re-rendered, so
 > the bundle and the workspace can never disagree about what a reader saw. `render` is not a
-> prerequisite for `export` (§4 of [M08](M08-exporter.md) still holds: export only ever reads
-> what `analyze` left), so an unrendered workspace exports with no `render/` at all, exactly
-> as it always has. `contents.render` in the manifest (§3) names exactly what shipped, so a
+> prerequisite for `export` ([M08](M08-exporter.md)'s own rule still holds: "**No analysis.**
+> It writes out what exists" — satisfied by copying `render/`'s output verbatim, never
+> deriving it), so an unrendered workspace exports with no `render/` at all, exactly as it
+> always has. `contents.render` in the manifest (§3) names exactly what shipped, so a
 > consumer never has to list the directory to find out. **The overlay file itself,
 > `.sextant-enrichment.json`, still never travels** — §7's rule is unchanged, and this
 > subsection does not relax it: what ships is the already-assembled, already-redacted
