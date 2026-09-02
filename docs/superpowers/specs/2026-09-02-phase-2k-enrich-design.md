@@ -133,8 +133,18 @@ size-capped) — all in-process, read-only, and jailed:
 - **Nested roots, deduplicated**: the fact and render roots ordinarily sit inside the
   module root, so `find`/an unscoped `grep` walking every root independently would
   otherwise see a nested root's own files twice — 2K Task 5 fix round 2 dedupes by
-  file identity and displays/sorts every result relative to its own most specific
-  root, never an ancestor's.
+  file identity.
+- **One anchor, one spelling** (2K Task 5 fix round 4): every citation every tool
+  prints is the file's path relative to ONE directory — the repository root the
+  ignore rules were loaded for, which construction already proves contains every
+  jailed root — so distinct files get distinct citations by construction and no raw
+  host path can ever stand in for a name. A fact file therefore cites as
+  `.sextant/facts/...`, its ancestor's spelling, rather than by its own root's;
+  naming a file relative to whichever root contained it most specifically collided
+  in three separate ways (nested roots, sibling roots, and a naming cache that went
+  stale) before this replaced it. Resolution stays permissive — a caller-given path
+  is walked from every jailed root and from the anchor — so every citation printed is
+  a citation `read_file` and a scoped `grep` accept back unchanged.
 - **Redaction-on-read**: config-bearing content passes the §1 redactor before entering
   a tool result — the only bytes that ever reach the wire are the brief Sextant
   composed and tool results that passed the redactor.

@@ -82,6 +82,14 @@ class IgnoreRules:
         lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
         return cls(repo_root, pathspec.PathSpec.from_lines("gitwildmatch", lines))
 
+    @property
+    def repo_root(self) -> Path:
+        """The repository root these rules were loaded for — the directory
+        `matches` answers every question relative to, exposed because the
+        enrichment jail names every file it cites relative to that same
+        single directory (2K Task 5 fix round 4)."""
+        return self._repo_root
+
     def matches(self, path: Path) -> bool:
         """Whether `path` is ignored — an absolute path (made relative to
         the repo root this instance was loaded for) or a path already

@@ -1,5 +1,5 @@
 """The enrichment tools and the jail (2K design §4, Task 5 brief + fix
-rounds 1 and 2).
+rounds 1 to 4).
 
 Security-sensitive: a bug here is a bug in the wall the rest of the
 enrichment loop is built behind, not a wrong document. The first half is
@@ -12,7 +12,10 @@ overlay itself is invisible — coming back as a plain refusal STRING, never
 an exception, and never one that echoes raw diagnostic text at the model.
 It also covers the two correctness bugs fix round 2 found in the nested
 layout itself (a file counted twice; a workspace path that happened to
-contain "target" blanking real content). The second half is ordinary
+contain "target" blanking real content) and, since fix round 4, the
+DISPLAY contract every tool shares: one anchor, one spelling per file,
+distinct citations for distinct files, no absolute host path ever, and the
+four tools agreeing about a tree that changed mid-run. The second half is ordinary
 behaviour: line-ranged reads, glob find, grep with a match cap, and the
 redaction-on-read pass that a config file's planted credential proves end
 to end.
@@ -343,10 +346,10 @@ def test_find_and_grep_do_not_double_count_a_file_under_a_nested_root(tmp_path: 
     roots INSIDE the module root — a real fixture walked 279 entries for
     180 unique files without the fix, `find *.jsonl` printed each name
     twice, and `MAX_GREP_MATCHES` counted double. Each file must appear
-    exactly once, displayed relative to its OWN most specific root
-    (`a.jsonl`, never `.sextant/facts/a.jsonl`) — the NO-COLLISION case
-    `_display_map` (fix round 3, N1b) leaves alone, since neither name
-    collides with anything at the module root's own top level."""
+    exactly once — spelled, since fix round 4, relative to the ONE display
+    anchor (`.sextant/facts/a.jsonl`, the accepted cosmetic regression from
+    rounds 2/3's bare `a.jsonl`), and reading back through that citation as
+    well as through the fact root's own spelling."""
     module_root = tmp_path / "module"
     module_root.mkdir()
     (module_root / "Source.txt").write_text("module source\n")
@@ -356,16 +359,19 @@ def test_find_and_grep_do_not_double_count_a_file_under_a_nested_root(tmp_path: 
     (fact_root / "b.jsonl").write_text("fact-b\n")
     executor = _executor((module_root, fact_root))
     assert executor.execute("find", {"pattern": "*.jsonl"}).splitlines() == [
-        "a.jsonl",
-        "b.jsonl",
+        ".sextant/facts/a.jsonl",
+        ".sextant/facts/b.jsonl",
     ]
     assert executor.execute("grep", {"pattern": "fact-"}).splitlines() == [
-        "a.jsonl:1:fact-a",
-        "b.jsonl:1:fact-b",
+        ".sextant/facts/a.jsonl:1:fact-a",
+        ".sextant/facts/b.jsonl:1:fact-b",
     ]
-    # Round-trip: both citations read back the file they named.
+    # Round-trip: both citations read back the file they named...
+    assert executor.execute("read_file", {"path": ".sextant/facts/a.jsonl"}) == "fact-a"
+    assert executor.execute("read_file", {"path": ".sextant/facts/b.jsonl"}) == "fact-b"
+    # ...and resolution stays permissive, so the fact root's own spelling
+    # — what fix rounds 2 and 3 PRINTED — still reads too.
     assert executor.execute("read_file", {"path": "a.jsonl"}) == "fact-a"
-    assert executor.execute("read_file", {"path": "b.jsonl"}) == "fact-b"
 
 
 def test_a_display_name_collision_between_nested_roots_is_disambiguated(tmp_path: Path):
@@ -377,7 +383,10 @@ def test_a_display_name_collision_between_nested_roots_is_disambiguated(tmp_path
     line twice and `read_file architecture.md` could only ever reach the
     module-root copy — the render copy was unreachable by any name. Both
     must now get DISTINCT citations, and each citation must round-trip
-    through BOTH `read_file` and `grep` to the exact file it named."""
+    through BOTH `read_file` and `grep` to the exact file it named. Fix
+    round 4 keeps the identical expectations for a different reason: the
+    single anchor (here the module root) separates the two by
+    construction, with no collision pass to get right."""
     module_root = tmp_path / "module"
     module_root.mkdir()
     (module_root / "architecture.md").write_text("module-level doc\n")
@@ -411,6 +420,92 @@ def test_a_display_name_collision_between_nested_roots_is_disambiguated(tmp_path
     }
 
 
+def test_same_named_files_under_sibling_roots_get_distinct_round_tripping_citations(
+    tmp_path: Path,
+):
+    """2K Task 5 fix round 4, S1 — the shape rounds 2 and 3 could not name:
+    SIBLING roots (`repo/mod` and `repo/ws/render`, neither containing the
+    other) each holding an `Order.java`. Per-file naming, most-specific or
+    outermost, gave BOTH the bare name — the same collision, one file
+    unreachable. Under the one anchor both are distinct by construction,
+    and each citation must read back its own file through `read_file` and
+    through a scoped `grep`."""
+    repo = tmp_path / "repo"
+    module_root = repo / "mod"
+    module_root.mkdir(parents=True)
+    (module_root / "Order.java").write_text("class Order {} // module\n")
+    render_root = repo / "ws" / "render"
+    render_root.mkdir(parents=True)
+    (render_root / "Order.java").write_text("class Order {} // rendered\n")
+    executor = _executor((module_root, render_root), ignore=IgnoreRules.load(repo))
+
+    found = executor.execute("find", {"pattern": "Order.java"}).splitlines()
+    assert found == ["mod/Order.java", "ws/render/Order.java"]
+
+    reads = {citation: executor.execute("read_file", {"path": citation}) for citation in found}
+    assert reads == {
+        "mod/Order.java": "class Order {} // module",
+        "ws/render/Order.java": "class Order {} // rendered",
+    }
+    for citation, content in reads.items():
+        scoped = executor.execute("grep", {"pattern": "class Order", "path": citation})
+        assert scoped == f"{citation}:1:{content}"
+
+
+def test_a_file_created_after_construction_never_leaks_an_absolute_host_path(tmp_path: Path):
+    """2K Task 5 fix round 4, S2: the naming cache was built on first use,
+    so a file the live tree gained afterward was unknown to it, and the
+    fallback for an unknown file was `path.as_posix()` — an ABSOLUTE HOST
+    PATH in a model-visible scoped-`grep` result, the one thing this jail
+    never emits. With naming derived from the anchor alone there is no
+    fallback branch left; this asserts on the ABSENCE, over every tool,
+    whatever each one decides to report."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "existing.txt").write_text("needle existing\n")
+    executor = _executor((root,))
+    # Warm every path that used to populate the cache.
+    executor.execute("find", {"pattern": "*.txt"})
+    executor.execute("grep", {"pattern": "needle"})
+
+    (root / "created.txt").write_text("needle created\n")
+    results = [
+        executor.execute("list_dir", {"path": "."}),
+        executor.execute("find", {"pattern": "*.txt"}),
+        executor.execute("grep", {"pattern": "needle"}),
+        executor.execute("grep", {"pattern": "needle", "path": "created.txt"}),
+        executor.execute("read_file", {"path": "created.txt"}),
+    ]
+    for result in results:
+        assert str(tmp_path) not in result
+        assert not any(line.startswith("/") for line in result.splitlines())
+
+
+def test_the_four_tools_agree_about_a_file_created_after_construction(tmp_path: Path):
+    """2K Task 5 fix round 4, S3: `find`/`grep` answered from a cached
+    snapshot while `read_file`/`list_dir` walked the live tree, so a file
+    created mid-run was readable and listable while the search tools swore
+    it did not exist — a model told, by its own tools, two different
+    truths. Nothing is cached now, so all four see the same tree; this
+    pins that they agree."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "existing.txt").write_text("needle existing\n")
+    executor = _executor((root,))
+    assert executor.execute("find", {"pattern": "*.txt"}).splitlines() == ["existing.txt"]
+
+    (root / "created.txt").write_text("needle created\n")
+    assert executor.execute("find", {"pattern": "*.txt"}).splitlines() == [
+        "created.txt",
+        "existing.txt",
+    ]
+    assert executor.execute("grep", {"pattern": "needle created"}).splitlines() == [
+        "created.txt:1:needle created"
+    ]
+    assert "created.txt" in executor.execute("list_dir", {"path": "."}).splitlines()
+    assert executor.execute("read_file", {"path": "created.txt"}) == "needle created"
+
+
 def test_derived_output_exclusion_is_judged_against_the_most_specific_root(tmp_path: Path):
     """2K Task 5 fix round 2, N2 — the reviewer's exact reproduction:
     `--workspace target/ws` puts the fact root under a directory literally
@@ -429,10 +524,16 @@ def test_derived_output_exclusion_is_judged_against_the_most_specific_root(tmp_p
     (fact_root / "canary.jsonl").write_text("fact-canary\n")
     executor = _executor((module_root, fact_root))
     assert executor.execute("read_file", {"path": "canary.jsonl"}) == "fact-canary"
-    assert executor.execute("find", {"pattern": "canary.jsonl"}).splitlines() == ["canary.jsonl"]
-    assert executor.execute("grep", {"pattern": "fact-canary"}).splitlines() == [
-        "canary.jsonl:1:fact-canary"
+    # The citation is anchor-relative (fix round 4), so it SHOWS the
+    # `target` segment the fact root happens to live under — and still
+    # reads, because the exclusion is judged against the fact root itself.
+    assert executor.execute("find", {"pattern": "canary.jsonl"}).splitlines() == [
+        "target/ws/facts/canary.jsonl"
     ]
+    assert executor.execute("grep", {"pattern": "fact-canary"}).splitlines() == [
+        "target/ws/facts/canary.jsonl:1:fact-canary"
+    ]
+    assert executor.execute("read_file", {"path": "target/ws/facts/canary.jsonl"}) == "fact-canary"
     # A real build directory inside the MODULE root (not the fact root's
     # own ancestry) still excludes exactly as before.
     built = module_root / "target" / "classes"
@@ -576,6 +677,10 @@ def test_find_matches_by_glob_against_the_base_name_case_sensitively(tmp_path: P
 
 
 def test_grep_searches_every_jailed_root_and_reports_path_line_and_text(tmp_path: Path):
+    """Two SIBLING roots: every citation is relative to the one anchor
+    their `ignore` was loaded for (fix round 4), so each carries its own
+    root's segment — `a/one.txt`, not the bare `one.txt` rounds 1-3
+    printed."""
     root_a = tmp_path / "a"
     root_a.mkdir()
     root_b = tmp_path / "b"
@@ -584,7 +689,7 @@ def test_grep_searches_every_jailed_root_and_reports_path_line_and_text(tmp_path
     (root_b / "two.txt").write_text("needle again\nbeta\n")
     executor = _executor((root_a, root_b), ignore=IgnoreRules.load(tmp_path))
     result = executor.execute("grep", {"pattern": "needle"})
-    assert result.splitlines() == ["one.txt:2:needle here", "two.txt:1:needle again"]
+    assert result.splitlines() == ["a/one.txt:2:needle here", "b/two.txt:1:needle again"]
 
 
 def test_grep_scoped_to_a_path_only_searches_that_subtree(tmp_path: Path):

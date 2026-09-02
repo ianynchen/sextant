@@ -66,17 +66,30 @@ root separately would otherwise see every fact and render file TWICE —
 once as part of the module root's own walk, once as that nested root's
 own — inflating `MAX_GREP_MATCHES` and breaking the "sorted, deterministic"
 contract (2K Task 5 fix round 2, N1). `_visible_files` collects every
-root's walk into a SET before sorting, and `_display_path` (what `find`/
-`grep` print, and what `_is_excluded` judges ancestry against) picks the
-most specific containing root, so a nested root's own file reads and sorts
-by ITS OWN namespace, never its ancestor's — UNLESS that most-specific
-name collides with another file's (`.sextant/render/architecture.md` and
-a module-root `architecture.md` would both name as bare
-`architecture.md`), in which case `_display_map` (fix round 3, N1b) falls
-back to the OUTERMOST containing root's spelling for every file sharing
-that name, which is unambiguous by construction and which `_resolve_in_jail`
-already accepts unchanged — a citation this module prints always reads
-back the exact file it named.
+root's walk into a SET, keyed by real path, before sorting.
+
+**One anchor, one spelling** (2K Task 5 fix round 4, the ruled
+replacement for three rounds of per-file naming). EVERY citation EVERY
+tool prints is the file's path relative to ONE directory: the repository
+root `ignore` was loaded for, which `__init__` already proves contains
+every jailed root. Distinct real paths therefore get distinct citations
+BY CONSTRUCTION — no collision logic, no fallback, no cache, and
+`_visible_files`' sort key (the citation itself) is injective, so the
+order is fully determined. Three separate defects died with the scheme
+this replaces, all of them shapes of "the name depends on which root a
+file is measured against": two same-named files under SIBLING roots
+collided and left one unreachable; a file the naming cache had never seen
+fell through to an absolute HOST path in a model-visible `grep` result;
+and a cached name disagreed with a live `read_file` about what exists.
+The price, accepted and ruled: a fact file cites as
+`.sextant/facts/com/acme/Order.jsonl`, not `com/acme/Order.jsonl` — the
+ancestor's spelling, longer, and the same for every file. RESOLUTION
+stays permissive (a caller-given path is walked case-exact from every
+jailed root, and from the anchor — `_resolve_from_anchor` — for the
+sibling-root case where an anchor-relative citation names nothing under
+any single root), so the round-trip contract holds both ways: every
+citation `find`/`grep` prints, `read_file` and a scoped `grep` accept
+unchanged.
 
 **Redaction on read, twice over.** A config-bearing file's content — the
 extensions the config-reading `ArtifactReader`s claim, see
@@ -92,7 +105,6 @@ keeps a secret from surviving half-truncated (see `execute`).
 
 import fnmatch
 import re
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -214,8 +226,9 @@ _LIST_DIR = ToolDefinition(
             "path": {
                 "type": "string",
                 "description": (
-                    "A directory, relative to one of the jailed roots "
-                    "(or an absolute path already inside one)."
+                    "A directory, spelled the way find/grep print a path "
+                    "(a path relative to one of the jailed roots, or an "
+                    "absolute path already inside one, also works)."
                 ),
             }
         },
@@ -229,10 +242,11 @@ _FIND = ToolDefinition(
     description=(
         "Search every jailed root for files whose BASE NAME matches a "
         "glob (e.g. '*.yml', 'Order*') — case-sensitive, recursive. "
-        "Returns one path per line, relative to whichever root it was "
-        "found under, sorted, each file listed once even if two roots "
-        "nest inside each other. A symlinked file or directory is never "
-        "followed or listed."
+        "Returns one path per line, each relative to the single "
+        "repository root the jail is anchored to — so two different "
+        "files never print the same path — sorted, each file listed once "
+        "even if two roots nest inside each other. A symlinked file or "
+        "directory is never followed or listed."
     ),
     schema={
         "type": "object",
@@ -270,8 +284,9 @@ _GREP = ToolDefinition(
             "path": {
                 "type": "string",
                 "description": (
-                    "Optional: a file or directory (relative to a jailed root) "
-                    "to scope the search to; omitted searches every jailed root."
+                    "Optional: a file or directory to scope the search to — "
+                    "spelled the way find/grep print a path, or relative to a "
+                    "jailed root; omitted searches every jailed root."
                 ),
             },
         },
@@ -298,7 +313,10 @@ _READ_FILE = ToolDefinition(
         "properties": {
             "path": {
                 "type": "string",
-                "description": "A file, relative to one of the jailed roots.",
+                "description": (
+                    "A file, spelled the way find/grep print a path (a path "
+                    "relative to one of the jailed roots also works)."
+                ),
             },
             "start": {
                 "type": "integer",
@@ -351,19 +369,18 @@ class ToolExecutor:
         self._roots = resolved_roots
         self._redactor = redactor
         self._ignore = ignore
+        # THE display anchor (2K Task 5 fix round 4): the loop just above
+        # proves every jailed root sits under `ignore`'s own repository
+        # root, so that ONE directory can name every file every tool
+        # cites — see `_display_path` and the module docstring's "One
+        # anchor, one spelling".
+        self._anchor = ignore.repo_root
         # Every call and its result, in call order — persisted by the
         # caller (2K design §3: "a full session transcript logged locally
         # for audit"). This class only ever appends to it; `args` is
         # stored as a COPY (2K Task 5 fix round 1, minor) so a caller that
         # mutates the dict it passed in afterward cannot rewrite history.
         self.transcript: list[dict[str, object]] = []
-        # `_display_map`'s cache (2K Task 5 fix round 3, N1b): computed
-        # once, on first use, and kept for this executor's lifetime — the
-        # jail is read-only and this class writes nothing, so the set of
-        # visible files and their names cannot change mid-run, and
-        # recomputing the full walk on every single `grep` match would be
-        # wasteful.
-        self._display_cache: dict[Path, str] | None = None
 
     def definitions(self) -> list[ToolDefinition]:
         """The four tools, in the order a transcript reads most
@@ -513,8 +530,12 @@ class ToolExecutor:
     def _resolve_in_jail(self, raw_path: str) -> Path:
         """`raw_path`'s real location under one of the jailed roots, found
         by `_walk_segments` — the naming route's half of the module
-        docstring's one symlink-and-case policy. Exactly two refusals, and
-        the caller can tell them apart no further than this:
+        docstring's one symlink-and-case policy. Every jailed root is
+        tried in turn and then, only if none of them produced the target,
+        the display anchor (`_resolve_from_anchor`, fix round 4: what makes
+        an anchor-relative citation resolve when the roots are SIBLINGS).
+        Exactly two refusals, and the caller can tell them apart no further
+        than this:
 
         * "outside the allowed roots" — `raw_path` cannot possibly land
           under ANY root, decided from its own spelling alone (a `..`
@@ -546,9 +567,35 @@ class ToolExecutor:
             target = _walk_segments(root, parts)
             if target is not None and not self._is_excluded(target):
                 return target
+        anchored = self._resolve_from_anchor(raw_path)
+        if anchored is not None:
+            return anchored
         if reachable:
             raise _ToolRefusal(f"refused: {raw_path} is not available")
         raise _ToolRefusal("refused: outside the allowed roots")
+
+    def _resolve_from_anchor(self, raw_path: str) -> Path | None:
+        """`raw_path` walked from the DISPLAY ANCHOR rather than from a
+        jailed root — the other half of fix round 4's round-trip contract.
+        Citations are anchor-relative now, and with SIBLING roots
+        (`repo/mod` and `repo/ws/render` under an anchor of `repo`) an
+        anchor-relative citation (`mod/notes.md`) names nothing under
+        EITHER root's own walk, so a path `find` printed would otherwise be
+        a path `read_file` refuses.
+
+        Widens NAMING only, never the jail: the walk is the same case-exact,
+        never-through-a-symlink `_walk_segments`, and the target must still
+        land inside a jailed root and survive `_is_excluded` — so a file
+        outside every root stays unreadable under this spelling exactly as
+        it is under any other, and `None` here leaves the caller's own two
+        refusals (and their deliberate indistinguishability) untouched."""
+        parts = _relative_parts(self._anchor, raw_path)
+        if parts is None:
+            return None
+        target = _walk_segments(self._anchor, parts)
+        if target is None or not any(target.is_relative_to(root) for root in self._roots):
+            return None
+        return None if self._is_excluded(target) else target
 
     def _is_excluded(self, path: Path) -> bool:
         """Whether `path` — already confirmed real and inside a jailed
@@ -579,14 +626,15 @@ class ToolExecutor:
 
     def _most_specific_root(self, path: Path) -> Path | None:
         """The NARROWEST jailed root that contains `path` — the root
-        `path`'s own ancestry is judged against, whether for the
-        derived-output exclusion (`_is_excluded`) or for display
-        (`_display_path`): 2K Task 5 fix round 2 ruling (N1 + N2). With
-        the ordinary nested layout, a fact-root file is contained by BOTH
-        the module root (its ancestor) and the fact root itself — the
-        module root is never the answer once a more specific root also
-        contains it, because a nested root's own files must never inherit
-        an ancestor root's path segments as their own. `None` only for a
+        `path`'s own ancestry is judged against for the derived-output
+        exclusion (`_is_excluded`, its one caller since display stopped
+        depending on which root a file is measured against): 2K Task 5 fix
+        round 2 ruling (N2). With the ordinary nested layout, a fact-root
+        file is contained by BOTH the module root (its ancestor) and the
+        fact root itself — the module root is never the answer once a more
+        specific root also contains it, because a nested root's own files
+        must not be judged excluded by ancestry that belongs to an
+        ancestor root rather than to them. `None` only for a
         path outside every root, which no caller of this method ever
         passes (unreachable in practice)."""
         containing = [root for root in self._roots if path.is_relative_to(root)]
@@ -628,86 +676,40 @@ class ToolExecutor:
         return visible
 
     def _visible_files(self) -> list[Path]:
-        """Every visible file under every jailed root, deduplicated and
-        sorted by its own FINAL display string (2K Task 5 fix round 2, N1;
-        the sort key fixed to the collision-resolved string in fix round
-        3, N1b) — `_display_map` does both the dedup and the naming, so
-        this is just its keys in that order. The ordinary layout nests the
-        fact/render roots INSIDE the module root, so walking the module
-        root already reaches every fact and render file, and walking each
-        of THOSE roots separately reaches them again — a real fixture
-        (module root plus its own `.sextant/facts`) walked 279 entries for
-        180 unique files before the dedup."""
-        display = self._display_map()
-        return sorted(display, key=lambda path: display[path])
+        """Every visible file under every jailed root, deduplicated by real
+        path and sorted by its own citation (2K Task 5 fix round 2, N1; the
+        sort key is `_display_path`, injective since fix round 4, so the
+        order is fully determined rather than settled among ties by
+        `set`-iteration order). The ordinary layout nests the fact/render
+        roots INSIDE the module root, so walking the module root already
+        reaches every fact and render file, and walking each of THOSE roots
+        separately reaches them again — a real fixture (module root plus
+        its own `.sextant/facts`) walked 279 entries for 180 unique files
+        before the dedup.
 
-    def _display_path(self, path: Path) -> str:
-        """`path`'s final display string (`_display_map`) — the form
-        `find`/`grep` show and `read_file`/`grep`'s own `path` scoping
-        accepts back, so a citation this tool prints is a citation the
-        model can hand to another tool call unchanged."""
-        return self._display_map().get(path, path.as_posix())
-
-    def _display_map(self) -> dict[Path, str]:
-        """Every visible file's name, computed once and cached
-        (`self._display_cache`) for this executor's lifetime.
-
-        Two passes (2K Task 5 fix round 3, N1b): first, every file's
-        MOST SPECIFIC containing root (`_most_specific_root`) — a
-        fact-root file names as `foo.jsonl`, never `.sextant/facts/
-        foo.jsonl`, the ancestor root's own spelling for it. That alone
-        COLLIDES when the SAME leaf name exists at two different
-        specificities at once — `architecture.md` at the render root
-        (`module_root/.sextant/render/architecture.md`) and a SEPARATE
-        `architecture.md` living directly at the module root both name
-        as bare `architecture.md`, which broke this method's own
-        round-trip contract: `find` printed the identical line twice,
-        and `read_file architecture.md` could only ever reach one of the
-        two (whichever root `_resolve_in_jail` tries first) — the render
-        copy became unreachable by any name at all.
-
-        Second pass: every name shared by more than one file is
-        recomputed relative to that file's OUTERMOST containing root
-        instead — unambiguous by construction, since two distinct real
-        paths always differ once expressed relative to one fixed common
-        anchor (here, the module root, ancestor of the other two).
-        `architecture.md` at the module root keeps that name (it has no
-        other root to fall back FROM); the render copy becomes
-        `.sextant/render/architecture.md` — the same string
-        `_resolve_in_jail` already accepts, since a caller-given path is
-        walked from whichever root it is tried against, and the module
-        root's own walk reaches straight through `.sextant/render` to
-        the identical file (nothing stops that descent — `.sextant` is
-        not a derived-output name, not excluded, not a symlink)."""
-        if self._display_cache is not None:
-            return self._display_cache
+        Walked LIVE on every call, never cached (fix round 4): a cached
+        snapshot made `find`/`grep` disagree with `read_file`/`list_dir`
+        about what exists the moment anything wrote inside a root
+        mid-run, and told the model a file it could read did not exist."""
         files: set[Path] = set()
         for root in self._roots:
             files.update(self._walk_visible(root))
-        tentative = {path: self._relative_to_root(path, self._most_specific_root) for path in files}
-        counts: dict[str, int] = {}
-        for name in tentative.values():
-            counts[name] = counts.get(name, 0) + 1
-        final = {
-            path: name if counts[name] == 1 else self._relative_to_root(path, self._outermost_root)
-            for path, name in tentative.items()
-        }
-        self._display_cache = final
-        return final
+        return sorted(files, key=self._display_path)
 
-    def _relative_to_root(self, path: Path, pick_root: Callable[[Path], Path | None]) -> str:
-        root = pick_root(path)
-        if root is None:
-            return path.as_posix()  # unreachable: every caller only passes jailed paths
-        return path.relative_to(root).as_posix()
-
-    def _outermost_root(self, path: Path) -> Path | None:
-        """The WIDEST jailed root that contains `path` — `_display_map`'s
-        fallback for a name that collides under `_most_specific_root`.
-        `None` only for a path outside every root (unreachable in
-        practice, identically to `_most_specific_root`)."""
-        containing = [root for root in self._roots if path.is_relative_to(root)]
-        return min(containing, key=lambda root: len(root.parts), default=None)
+    def _display_path(self, path: Path) -> str:
+        """`path`'s citation: its path relative to THE anchor, the one and
+        only spelling any tool prints (module docstring, "One anchor, one
+        spelling"). Total by construction — `__init__` proved every jailed
+        root sits under the anchor, and every path that reaches here came
+        out of a walk from one of those roots — so there is deliberately NO
+        fallback branch: a path outside the anchor is a programming error
+        raised as one, never a model-visible string. The `path.as_posix()`
+        fallback this replaces is exactly how an absolute HOST path reached
+        a scoped `grep`'s result (2K Task 5 fix round 4, S2), and the
+        per-file, per-root naming it replaces is what collided (S1)."""
+        if not path.is_relative_to(self._anchor):
+            raise AssertionError(f"ToolExecutor: {path} is outside the display anchor")
+        return path.relative_to(self._anchor).as_posix()
 
     def _content_of(self, path: Path) -> str | None:
         """`path`'s text, key-masked first when it is config-bearing (2K
