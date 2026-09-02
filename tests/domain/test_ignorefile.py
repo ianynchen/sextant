@@ -35,12 +35,43 @@ def test_every_builtin_pattern_matches_with_no_repo_file_present(tmp_path: Path)
         "*.jks": "truststore.jks",
         "id_rsa*": "id_rsa",
         "id_ed25519*": "id_ed25519.pub",
-        "secrets/**": "secrets/db/password.txt",
+        "**/secrets/**": "secrets/db/password.txt",
         "*.keystore": "app.keystore",
     }
     assert set(samples) == set(BUILTIN_PATTERNS)
     for name, relative in samples.items():
         assert rules.matches(tmp_path / relative) is True, name
+
+
+def test_every_builtin_pattern_matches_at_every_depth_not_only_at_the_repo_root(
+    tmp_path: Path,
+):
+    """2K Task 5 fix round 5, A1: `matches` judges a path relative to the
+    REPOSITORY root, while the credential file it protects sits wherever a
+    module happens to live under it — so a built-in that only matched at
+    the top level protects nothing in a nested module. `secrets/**` was
+    exactly that: slash-containing, therefore root-anchored, therefore
+    blind to `mod/secrets/db.txt` (the jail's own `read_file` returned its
+    content). Every built-in is now checked one directory down as well as
+    at the root."""
+    rules = IgnoreRules.load(tmp_path)
+    nested = {
+        ".env": "mod/.env",
+        ".env.*": "mod/.env.local",
+        "*.pem": "mod/src/server.pem",
+        "*.p12": "mod/keystore.p12",
+        "*.jks": "mod/truststore.jks",
+        "id_rsa*": "mod/id_rsa",
+        "id_ed25519*": "mod/id_ed25519.pub",
+        "**/secrets/**": "mod/secrets/db/password.txt",
+        "*.keystore": "mod/app.keystore",
+    }
+    assert set(nested) == set(BUILTIN_PATTERNS)
+    for name, relative in nested.items():
+        assert rules.matches(tmp_path / relative) is True, name
+    # The widened secrets pattern stays a DIRECTORY pattern: a directory
+    # merely ending in `secrets` is not it.
+    assert rules.matches(tmp_path / "mod" / "mysecrets" / "db.txt") is False
 
 
 def test_a_repo_negation_cannot_re_admit_a_builtin_match(tmp_path: Path):
@@ -134,7 +165,7 @@ def test_a_directory_only_pattern_does_not_match_a_bare_file_of_the_same_name(
     tmp_path: Path, filename: str
 ):
     """git's directory patterns name a DIRECTORY, never a same-named file
-    sitting beside it: `build/`'s trailing slash and `secrets/**` (built
+    sitting beside it: `build/`'s trailing slash and `**/secrets/**` (built
     in) both require the named segment to be a directory something
     continues under. Verified live before pinning (2K Task 2 review round
     1) — this is the regression pin for a future `pathspec` version that

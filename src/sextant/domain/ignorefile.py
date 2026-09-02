@@ -32,6 +32,20 @@ IGNORE_FILE = ".sextantignore"
 # material a repository is least likely to remember to list itself —
 # `.sextant.yml`'s `redact:` widens VALUE masking the same way, but a file
 # this set names is never opened at all, additions or not.
+#
+# EVERY pattern here must match at EVERY DEPTH, because `matches` judges a
+# path relative to the REPOSITORY root while the thing being protected
+# sits wherever a module happens to live under it. A bare basename shape
+# (`.env`, `*.pem`, `id_rsa*`) already does — gitignore matches an
+# unanchored, slashless pattern in every directory — but a pattern
+# CONTAINING a slash is anchored to the repository root by the same
+# semantics, which is why `secrets/**` is spelled `**/secrets/**` (2K Task
+# 5 fix round 5, A1): as `secrets/**` it excluded `secrets/db.txt` and
+# missed `mod/secrets/db.txt` entirely, so a module nested one directory
+# under its repository root kept its whole `secrets/` tree readable. The
+# `**/` prefix matches the top level too, so nothing that was excluded
+# before stops being excluded; a bare FILE named `secrets` is still not
+# matched, which `tests/domain/test_ignorefile.py` pins.
 BUILTIN_PATTERNS = (
     ".env",
     ".env.*",
@@ -40,7 +54,7 @@ BUILTIN_PATTERNS = (
     "*.jks",
     "id_rsa*",
     "id_ed25519*",
-    "secrets/**",
+    "**/secrets/**",
     "*.keystore",
 )
 

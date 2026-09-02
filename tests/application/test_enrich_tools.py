@@ -452,6 +452,85 @@ def test_same_named_files_under_sibling_roots_get_distinct_round_tripping_citati
         assert scoped == f"{citation}:1:{content}"
 
 
+def test_a_nested_secrets_directory_is_excluded_like_one_at_the_anchor_top_level(
+    tmp_path: Path,
+):
+    """2K Task 5 fix round 5, A1 — a Task-2 gap the anchor wiring exposed:
+    `matches` judges a path relative to the REPOSITORY root, and the
+    built-in `secrets/**` contained a slash, which gitignore anchors to
+    that root. A module one directory down (`repo/mod`, the ordinary shape
+    once the anchor is the repository rather than the module) therefore
+    kept its whole `secrets/` tree readable — `read_file
+    "mod/secrets/s.txt"` returned the content. `**/secrets/**` matches at
+    every depth INCLUDING the top level, so both trees must now be
+    invisible to all four tools."""
+    repo = tmp_path / "repo"
+    top_secrets = repo / "secrets"
+    top_secrets.mkdir(parents=True)
+    (top_secrets / "top.txt").write_text("top-secret-marker\n")
+    module_root = repo / "mod"
+    nested_secrets = module_root / "secrets"
+    nested_secrets.mkdir(parents=True)
+    (nested_secrets / "nested.txt").write_text("nested-secret-marker\n")
+    (module_root / "Source.txt").write_text("real source\n")
+    executor = _executor((repo, module_root), ignore=IgnoreRules.load(repo))
+
+    assert executor.execute("find", {"pattern": "*.txt"}).splitlines() == ["mod/Source.txt"]
+    assert executor.execute("grep", {"pattern": "secret-marker"}) == ""
+    # The DIRECTORY entry itself still lists — `**/secrets/**` names what is
+    # UNDER it, exactly as `secrets/**` always did at the top level — but it
+    # lists as empty and nothing inside it can be read, at BOTH depths. The
+    # point of A1 is that the two depths now behave identically.
+    assert executor.execute("list_dir", {"path": "mod"}).splitlines() == [
+        "Source.txt",
+        "secrets/",
+    ]
+    assert executor.execute("list_dir", {"path": "."}).splitlines() == ["mod/", "secrets/"]
+    assert executor.execute("list_dir", {"path": "mod/secrets"}) == ""
+    assert executor.execute("list_dir", {"path": "secrets"}) == ""
+    assert executor.execute("read_file", {"path": "mod/secrets/nested.txt"}) == (
+        "refused: mod/secrets/nested.txt is not available"
+    )
+    assert executor.execute("read_file", {"path": "secrets/top.txt"}) == (
+        "refused: secrets/top.txt is not available"
+    )
+    # The convenience spelling (relative to the nested root) is refused too
+    # — one policy, every route.
+    assert executor.execute("read_file", {"path": "secrets/nested.txt"}) == (
+        "refused: secrets/nested.txt is not available"
+    )
+
+
+def test_a_decoy_under_a_root_cannot_shadow_an_anchor_relative_citation(tmp_path: Path):
+    """2K Task 5 fix round 5, A2: citations are minted anchor-relative, so
+    the ANCHOR's reading of a path has to be the canonical one. With an
+    anchor of `repo` and a root of `repo/mod`, trying the ROOT walk first
+    made the citation `mod/notes.md` — minted for `repo/mod/notes.md` —
+    resolve to `repo/mod/mod/notes.md` instead: a citation silently
+    returning a file it did not name, with the named file unreachable.
+    Each file must answer to its OWN citation, both round-tripping."""
+    repo = tmp_path / "repo"
+    module_root = repo / "mod"
+    module_root.mkdir(parents=True)
+    (module_root / "notes.md").write_text("the real notes\n")
+    decoy = module_root / "mod"
+    decoy.mkdir()
+    (decoy / "notes.md").write_text("the decoy notes\n")
+    executor = _executor((module_root,), ignore=IgnoreRules.load(repo))
+
+    found = executor.execute("find", {"pattern": "notes.md"}).splitlines()
+    assert found == ["mod/mod/notes.md", "mod/notes.md"]
+    assert executor.execute("read_file", {"path": "mod/notes.md"}) == "the real notes"
+    assert executor.execute("read_file", {"path": "mod/mod/notes.md"}) == "the decoy notes"
+    # `grep` scoped to each citation searches the file that citation names.
+    assert executor.execute("grep", {"pattern": "notes", "path": "mod/notes.md"}) == (
+        "mod/notes.md:1:the real notes"
+    )
+    assert executor.execute("grep", {"pattern": "notes", "path": "mod/mod/notes.md"}) == (
+        "mod/mod/notes.md:1:the decoy notes"
+    )
+
+
 def test_a_file_created_after_construction_never_leaks_an_absolute_host_path(tmp_path: Path):
     """2K Task 5 fix round 4, S2: the naming cache was built on first use,
     so a file the live tree gained afterward was unknown to it, and the

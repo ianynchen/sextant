@@ -84,12 +84,16 @@ and a cached name disagreed with a live `read_file` about what exists.
 The price, accepted and ruled: a fact file cites as
 `.sextant/facts/com/acme/Order.jsonl`, not `com/acme/Order.jsonl` — the
 ancestor's spelling, longer, and the same for every file. RESOLUTION
-stays permissive (a caller-given path is walked case-exact from every
-jailed root, and from the anchor — `_resolve_from_anchor` — for the
-sibling-root case where an anchor-relative citation names nothing under
-any single root), so the round-trip contract holds both ways: every
-citation `find`/`grep` prints, `read_file` and a scoped `grep` accept
-unchanged.
+stays permissive: a caller-given path is walked case-exact from the
+ANCHOR first (`_resolve_from_anchor` — the canonical reading, since that
+is the spelling citations are minted in, and the one that makes a
+citation resolve at all when the roots are SIBLINGS) and then from each
+jailed root as the convenience spelling. That order matters, not just the
+set of spellings accepted (fix round 5, A2): reading a root first let a
+decoy at `mod/mod/notes.md` answer to the citation `mod/notes.md` minted
+for the real `mod/notes.md`. So the round-trip contract holds both ways
+and unambiguously: every citation `find`/`grep` prints, `read_file` and a
+scoped `grep` accept unchanged, and return the file it named.
 
 **Redaction on read, twice over.** A config-bearing file's content — the
 extensions the config-reading `ArtifactReader`s claim, see
@@ -530,12 +534,21 @@ class ToolExecutor:
     def _resolve_in_jail(self, raw_path: str) -> Path:
         """`raw_path`'s real location under one of the jailed roots, found
         by `_walk_segments` — the naming route's half of the module
-        docstring's one symlink-and-case policy. Every jailed root is
-        tried in turn and then, only if none of them produced the target,
-        the display anchor (`_resolve_from_anchor`, fix round 4: what makes
-        an anchor-relative citation resolve when the roots are SIBLINGS).
-        Exactly two refusals, and the caller can tell them apart no further
-        than this:
+        docstring's one symlink-and-case policy. The DISPLAY ANCHOR is
+        walked FIRST (`_resolve_from_anchor`, fix round 4: what makes an
+        anchor-relative citation resolve when the roots are SIBLINGS), and
+        only if that finds nothing is each jailed root tried in turn as the
+        convenience spelling. That ORDER is the fix for 2K Task 5 fix round
+        5, A2: citations are minted anchor-relative, so the anchor's own
+        reading of a path is the canonical one, and trying a root first let
+        a decoy shadow a real citation — with an anchor of `/repo` and a
+        root of `/repo/mod`, the citation `mod/notes.md` (minted for
+        `/repo/mod/notes.md`) resolved through the ROOT walk to
+        `/repo/mod/mod/notes.md` instead, silently returning a different
+        file than the citation named and leaving the named one unreachable.
+        In the ordinary wiring the anchor IS `roots[0]`, so the two walks
+        are the same walk and the order changes nothing. Exactly two
+        refusals, and the caller can tell them apart no further than this:
 
         * "outside the allowed roots" — `raw_path` cannot possibly land
           under ANY root, decided from its own spelling alone (a `..`
@@ -558,6 +571,9 @@ class ToolExecutor:
         """
         if _has_traversal(raw_path):
             raise _ToolRefusal("refused: outside the allowed roots")
+        anchored = self._resolve_from_anchor(raw_path)
+        if anchored is not None:
+            return anchored
         reachable = False
         for root in self._roots:
             parts = _relative_parts(root, raw_path)
@@ -567,17 +583,16 @@ class ToolExecutor:
             target = _walk_segments(root, parts)
             if target is not None and not self._is_excluded(target):
                 return target
-        anchored = self._resolve_from_anchor(raw_path)
-        if anchored is not None:
-            return anchored
         if reachable:
             raise _ToolRefusal(f"refused: {raw_path} is not available")
         raise _ToolRefusal("refused: outside the allowed roots")
 
     def _resolve_from_anchor(self, raw_path: str) -> Path | None:
         """`raw_path` walked from the DISPLAY ANCHOR rather than from a
-        jailed root — the other half of fix round 4's round-trip contract.
-        Citations are anchor-relative now, and with SIBLING roots
+        jailed root — the CANONICAL reading of a path (fix round 5, A2:
+        tried before any root, because this is the spelling every citation
+        is minted in), and the other half of fix round 4's round-trip
+        contract. Citations are anchor-relative now, and with SIBLING roots
         (`repo/mod` and `repo/ws/render` under an anchor of `repo`) an
         anchor-relative citation (`mod/notes.md`) names nothing under
         EITHER root's own walk, so a path `find` printed would otherwise be

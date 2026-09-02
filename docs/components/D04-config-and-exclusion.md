@@ -193,10 +193,14 @@ away.
 
 > **Amendment (2026-09-02, Phase 2K design §2 — approved, Task 2 delivered).** The actual
 > set, `domain/ignorefile.py`'s `BUILTIN_PATTERNS`: `.env`, `.env.*`, `*.pem`, `*.p12`,
-> `*.jks`, `id_rsa*`, `id_ed25519*`, `secrets/**`, `*.keystore`. Differences from the list
+> `*.jks`, `id_rsa*`, `id_ed25519*`, `**/secrets/**`, `*.keystore`. Differences from the list
 > below: `*.key`, bare `credentials`, `.git/` and build-output directories are NOT
 > built in (a repo names them in its own `.sextantignore` if it wants them excluded);
-> `.env.*`, `id_ed25519*` and `secrets/**` are added. Section 1's rule against excluding
+> `.env.*`, `id_ed25519*` and `**/secrets/**` are added. The secrets pattern was spelled
+> `secrets/**` until 2K Task 5 fix round 5: a pattern containing a slash is anchored to
+> the repository root, so it protected only a `secrets/` directory sitting AT that root
+> and missed `mod/secrets/` in a module one directory down. `**/` restores the
+> every-depth matching every other built-in gets for free from being slashless. Section 1's rule against excluding
 > `.env`/`application*.yml` is **retracted for `.env` specifically** — see below.
 
 `*.pem`, `*.key`, `*.p12`, `*.jks`, `*.keystore`, `id_rsa*`, `credentials`, `.git/`, and
