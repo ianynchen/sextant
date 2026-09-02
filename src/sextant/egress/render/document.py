@@ -37,7 +37,7 @@ from sextant.domain.enrichment import (
     Provenance,
     SectionClaim,
     VerdictClaim,
-    question_identity,
+    open_question_identity,
 )
 from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import bare_descriptor
@@ -615,16 +615,15 @@ def assemble_module_document(
             lines.append(f"- `{_wire_identity(row, redactor)}` — {question}: {rendered}")
             # `beside-open-question`, per question: a verdict renders under the
             # very line it answers. Keyed on the row's own values, NOT on the
-            # rendered line — the line carries a redacted address, and matching
-            # on presentation would make placement depend on the redaction set.
-            beside_question.append(
-                (
-                    question_identity(
-                        row.get("protocol"), row.get("method"), row.get("path"), question
-                    ),
-                    len(lines),
-                )
-            )
+            # rendered line — matching on presentation would make placement
+            # depend on how a line happens to be formatted. The key is the
+            # SHARED `open_question_identity`, the very function validation
+            # matches a verdict on (2K final review, F3): keying on the RAW
+            # `path` here while validation canonicalized the redacted one meant
+            # a verdict on a question whose path changes under redaction
+            # validated cleanly and then rendered at `questions_end` instead of
+            # beside its question.
+            beside_question.append((open_question_identity(row, redactor), len(lines)))
     # Where a `beside-open-question` claim goes when no single question owns
     # it: after the last question, or — with no section at all — where the
     # section would have been. Only a verdict names a question; every other

@@ -53,7 +53,7 @@ from sextant.domain.enrichment import (
     EnrichmentOverlay,
     SectionClaim,
     VerdictClaim,
-    question_identity,
+    open_question_identity,
 )
 from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import bare_descriptor, simple_name
@@ -64,8 +64,8 @@ from sextant.domain.symbols import bare_descriptor, simple_name
 #
 #   a line whose first word — leading whitespace aside — is `class`,
 #   `participant` or `actor` contributes the identifier that follows it, and
-#   nothing else on the line does; a `class` line carrying a comma contributes
-#   nothing at all.
+#   nothing else on the line does; a DECLARATION line carrying a comma —
+#   `class`, `participant` or `actor` alike — contributes nothing at all.
 #
 # That is a class declaration in a `classDiagram` (`class OrderView {`, `class
 # OrderView`) and a participant declaration in a `sequenceDiagram`
@@ -95,7 +95,7 @@ from sextant.domain.symbols import bare_descriptor, simple_name
 # refused.** A node introduced only by an edge (`A --> B`), a message arrow, a
 # note, a namespace block or a `class` line the model spelled unusually is
 # invisible here — it passes, unchecked, and so does every node on a
-# comma-carrying `class` line. The alternative is a scan that guesses at
+# comma-carrying DECLARATION line of any of the three keywords. The alternative is a scan that guesses at
 # mermaid's grammar and refuses TRUE claims when it guesses wrong, and a
 # validator that rejects correct work teaches its user to stop running it. The
 # claim still carries `evidence: llm` and the diagram still says what it elides;
@@ -148,8 +148,9 @@ def validate_overlay(
     `redactor` canonicalizes a verdict's `question.path` match the same way
     on both sides (2K Task 7 ruling 1): the brief hands the model a
     `redact_text`-ed `open_questions` row, so a model copying that row back
-    into a `verdict` can only ever echo the redacted spelling — `_row_identity`
-    redacts the WORKSPACE row's own `path` before comparing, so a redaction
+    into a `verdict` can only ever echo the redacted spelling — the shared
+    `open_question_identity` redacts the WORKSPACE row's own `path` before
+    comparing (the same function assembly keys its placement on), so a redaction
     that changed nothing (the ordinary case) still matches on the raw value
     and a redaction that changed something still matches on the value the
     model actually saw.
@@ -160,7 +161,7 @@ def validate_overlay(
         descriptor = bare_descriptor(str(row["symbol"]))
         descriptors.add(descriptor)
         names.add(simple_name(descriptor))
-    questions = {_row_identity(row, redactor) for row in workspace.query("open_questions")}
+    questions = {open_question_identity(row, redactor) for row in workspace.query("open_questions")}
 
     accepted: list[Claim] = []
     refusals: list[Refusal] = []
@@ -197,22 +198,6 @@ def stale_claims(
     gives.
     """
     return validate_overlay(overlay, workspace, module_root, redactor)[1]
-
-
-def _row_identity(row: dict[str, object], redactor: Redactor) -> tuple[str | None, ...]:
-    """One `open_questions` row's identity. The row's own column is named
-    `question`; the claim's field is named `kind`, because on a claim
-    `question` is already the reference object.
-
-    `path` is redacted before the tuple is built (2K Task 7 ruling 1) — the
-    one column of the four that can carry a whole address, the same column
-    `egress/render/document._wire_identity` redacts on its way into a
-    rendered line."""
-    path = row.get("path")
-    redacted_path = None if path is None else redactor.redact_text(str(path))
-    return question_identity(
-        row.get("protocol"), row.get("method"), redacted_path, row.get("question")
-    )
 
 
 def _reason_to_refuse(

@@ -38,7 +38,7 @@ from sextant.application.enrich.tools import (
 from sextant.cli.app import cli
 from sextant.domain.enrichment import ENRICHMENT_FILE
 from sextant.domain.ignorefile import IgnoreRules
-from sextant.domain.redaction import REDACTED, Redactor
+from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.ingress.detect.sextant_config import read_redaction_rules
 
 REPO = Path(__file__).parents[2]
@@ -1242,6 +1242,94 @@ def test_a_non_config_file_is_not_key_masked_but_still_gets_url_userinfo_strippe
     assert "password: not-a-config-key, left alone" in content
     assert "https://host/path" in content
     assert "s3cret" not in content
+
+
+def test_grep_is_not_a_match_oracle_for_a_userinfo_secret_in_an_ordinary_file(
+    tmp_path: Path,
+):
+    """2K final review, F2 — the reviewer's live probe, pinned. `read_file`
+    strips a URL's userinfo out of an ordinary source file, but until the
+    fix `grep` searched the RAW bytes: `grep "svc:h"` matched and `grep
+    "svc:x"` did not, so match-versus-no-match handed back the password one
+    character at a time. Masking is worth nothing if a second tool answers
+    the question it refuses, so the search runs over exactly the text
+    `read_file` returns.
+
+    The second half is what stops the fix from being "mask everything": a
+    NON-secret fragment of the very same line still greps, so the tool
+    remains a search tool over a document a model can navigate."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "App.java").write_text(
+        'String broker = "amqp://svc:hunter2@broker/orders";\n', encoding="utf-8"
+    )
+    executor = _executor((root,))
+
+    # Every prefix of the secret: a match on ANY of them is the oracle.
+    for probe in ("svc:h", "svc:hu", "hunter2", "svc:hunter2@"):
+        assert executor.execute("grep", {"pattern": probe}) == ""
+    assert executor.execute("grep", {"pattern": "svc:x"}) == ""
+
+    surviving = executor.execute("grep", {"pattern": "amqp://broker/orders"})
+    assert surviving == 'App.java:1:String broker = "amqp://broker/orders";'
+
+
+def test_grep_and_read_file_agree_on_a_repo_value_pattern_in_an_ordinary_file(
+    tmp_path: Path,
+):
+    """The same F2 hole reached by the other rule `redact_text` carries: a
+    repository's own `redact: value_patterns` entry. It names a secret shape
+    rather than a config key, so neither line-masker looks at it and the
+    file need not be config-bearing at all — which is exactly why the
+    execute-exit pass alone left `grep` able to confirm the value was there.
+    Both tools now report the same masked line, character for character."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "Deploy.md").write_text(
+        "deploy key AKIA0123456789 is rotated weekly\n", encoding="utf-8"
+    )
+    executor = _executor(
+        (root,), redactor=Redactor.from_rules(RedactionRules(value_patterns=(r"AKIA[0-9]+",)))
+    )
+
+    assert executor.execute("grep", {"pattern": "AKIA0"}) == ""
+    read = executor.execute("read_file", {"path": "Deploy.md"})
+    assert read == f"deploy key {REDACTED} is rotated weekly"
+    assert executor.execute("grep", {"pattern": "rotated weekly"}) == f"Deploy.md:1:{read}"
+
+
+def test_redacting_an_ordinary_file_on_read_is_deterministic(tmp_path: Path):
+    """Served twice, identical, and identical across the two routes (2K
+    final review, F2): `_content_of` now masks with `redact_text` too, and
+    the exit pass re-applies the same patterns to the already-masked text —
+    a rule that were not idempotent would show up here as a second read
+    differing from the first, or as a `«redacted»` marker eaten by its own
+    pattern on the way out."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "App.java").write_text(
+        'String broker = "amqp://svc:hunter2@broker/orders";\n', encoding="utf-8"
+    )
+    executor = _executor((root,))
+    first = executor.execute("read_file", {"path": "App.java"})
+    second = executor.execute("read_file", {"path": "App.java"})
+    assert first == second == 'String broker = "amqp://broker/orders";'
+
+
+def test_a_line_range_is_cut_out_of_the_already_redacted_text(tmp_path: Path):
+    """The mask-then-slice order the `_read_file` comment states, carried to
+    the redaction pass (2K final review, F2): the window is cut out of text
+    `redact_text` has ALREADY seen whole, so a windowed read can never serve
+    a secret the same file's full read would have masked."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "App.java").write_text(
+        '// header\nString broker = "amqp://svc:hunter2@broker/orders";\n// footer\n',
+        encoding="utf-8",
+    )
+    executor = _executor((root,))
+    window = executor.execute("read_file", {"path": "App.java", "start": 2, "end": 2})
+    assert window == 'String broker = "amqp://broker/orders";'
 
 
 # --- The transcript -----------------------------------------------------

@@ -332,6 +332,80 @@ def test_a_verdict_renders_directly_under_the_question_it_answers():
     assert _position(text, "`sqs order-intake`") < _position(text, "**LLM assessment**")
 
 
+def test_a_verdict_on_a_question_whose_path_redaction_changes_still_lands_beside_it():
+    """2K final review, F3 — the drift the reviewer proved, pinned on both
+    sides at once. The brief hands the model a `redact_text`-ed row, so a
+    verdict can only ever name the STRIPPED spelling; validation canonicalized
+    the workspace row the same way and accepted it, but assembly keyed its
+    placement on the RAW `path`, so the two never met and the verdict fell
+    through to the after-the-last-question fallback — validated, rendered, and
+    nowhere near the question it answers. Both sides now key on the shared
+    `domain.enrichment.open_question_identity`.
+
+    The credentialled question is FIRST of two, so "beside its own question"
+    and "at the fallback" are different positions in the file: the assertion
+    would still pass at the fallback if it were last."""
+    raw_path = "tcp://svc:hunter2@broker:61616/orders"
+    questions = [
+        {
+            "protocol": "jms",
+            "method": None,
+            "path": raw_path,
+            "question": "payload_binding",
+            "candidates": json.dumps(
+                [
+                    {
+                        "payload_type": "com/acme/A#",
+                        "hops": "1",
+                        "seen_in": "R#r().",
+                        "why": "parseFrom",
+                    }
+                ]
+            ),
+            "evidence": "payload parsed beyond the one-hop horizon",
+        },
+        OPEN_QUESTIONS[1],
+    ]
+    verdict = _claim(
+        "verdict",
+        "beside-open-question",
+        question={
+            "protocol": "jms",
+            "method": None,
+            # The spelling the brief showed the model — never `raw_path`.
+            "path": "tcp://broker:61616/orders",
+            "kind": "payload_binding",
+        },
+        assessment="likely `com/acme/A#`",
+        because="`R#r()` parses it",
+    )
+    overlay = _overlay(verdict)
+
+    class _QuestionWorkspace:
+        """The workspace as it really is: the row keeps the RAW path (D04's
+        "the workspace stays verbatim"), which is the whole reason the two
+        sides have to canonicalize rather than compare what they hold."""
+
+        def query(self, name: str, **params: object) -> list[dict[str, object]]:
+            if name == "declared_symbols":
+                return []
+            if name == "open_questions":
+                return questions
+            raise AssertionError(f"unexpected query: {name}")
+
+    accepted, refusals = validate_overlay(overlay, _QuestionWorkspace(), Path("/nonexistent"))
+    assert (len(accepted), refusals) == (1, ())
+
+    text = render_module_document(
+        MODULE, REPORT, "a3f91c", open_questions=questions, overlay=overlay
+    )
+    assert "hunter2" not in text
+    assert _position(text, "`jms tcp://broker:61616/orders`") < _position(
+        text, "**LLM assessment**"
+    )
+    assert _position(text, "**LLM assessment**") < _position(text, "`sqs order-audit`")
+
+
 def test_a_non_verdict_claim_anchored_beside_the_questions_lands_after_them_all():
     """Only a verdict names a single row. A section anchored here is a claim
     about the open questions as a group, so it renders after the group rather

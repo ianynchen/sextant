@@ -217,6 +217,49 @@ def test_dry_run_writes_only_the_brief_and_instructions_copy(module_root: Path):
     assert markdown_path.read_bytes() == before
 
 
+def test_a_second_runs_brief_carries_the_machine_document_not_the_enriched_one(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2K final review, F1 — the reviewer's live scenario, pinned. Spec §5
+    says the brief carries the MACHINE-rendered document, and after one
+    `enrich` the file at `render/architecture.md` is the ENRICHED one:
+    composing the brief from those bytes would feed a second run its own
+    prior claims back as if they were machine findings, compounding run over
+    run. That is the very loop the Task 3 overlay-jail exclusion exists to
+    prevent, arriving by the other door.
+
+    So the brief is an in-memory, overlay-free assembly — and the pin is
+    exact rather than "no claim text visible": byte-for-byte the same
+    document `render` writes with no overlay present, which is what makes
+    "machine-only" a property of the assembly path rather than of this
+    fixture's particular claims."""
+    _analyzed_and_rendered(module_root)
+    markdown_path = module_root / ".sextant" / "render" / "architecture.md"
+    machine_only = markdown_path.read_text(encoding="utf-8")
+
+    fake = FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
+    _register_fake(monkeypatch, "fake-second-run", fake)
+    first = CliRunner().invoke(
+        cli,
+        ["module", "enrich", str(module_root), "--agent", "fake-second-run", "--model", "fake-x"],
+    )
+    assert first.exit_code == 0, first.output
+
+    # The on-disk document really is enriched now — otherwise this test would
+    # pass against the very bug it exists to catch.
+    enriched = markdown_path.read_text(encoding="utf-8")
+    assert "Legacy billing edge" in enriched
+    assert enriched != machine_only
+
+    second = CliRunner().invoke(cli, ["module", "enrich", str(module_root), "--dry-run"])
+    assert second.exit_code == 0, second.output
+    brief = json.loads((module_root / ".sextant" / "enrich-brief.json").read_text(encoding="utf-8"))
+
+    assert "Legacy billing edge" not in brief["prompt"]
+    assert "> **Enrichment — evidence: llm**" not in brief["prompt"]
+    assert machine_only.rstrip("\n") in brief["prompt"]
+
+
 def test_a_relative_path_argument_resolves_before_the_jail_is_built(
     module_root: Path, monkeypatch: pytest.MonkeyPatch
 ):

@@ -25,12 +25,14 @@ names must exist — is the application layer's (`application/enrich/validate.py
 it needs the workspace and the module root, and this module stays pure.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
 from sextant.domain.closed_sets import Anchor, Evidence
+from sextant.domain.redaction import Redactor
 
 # The overlay's name and place: the module root, beside `.sextant.yml` and
 # `.sextantignore`. One file per module, versionable in git.
@@ -128,6 +130,28 @@ def question_identity(
     and the other holds a query row's untyped columns.
     """
     return tuple(None if value is None else str(value) for value in (protocol, method, path, kind))
+
+
+def open_question_identity(row: Mapping[str, object], redactor: Redactor) -> tuple[str | None, ...]:
+    """One `open_questions` WORKSPACE row's identity, canonicalized (2K Task 7
+    ruling 1): `path` — the one column of the four that can carry a whole
+    address — is `redact_text`-ed before the tuple is built, so the row matches
+    on the spelling the model actually saw. The brief hands the model a redacted
+    row, so a verdict can only ever echo the redacted spelling; a redaction that
+    changed nothing (the ordinary case) still matches on the raw value.
+
+    Both passes that key on a workspace row call THIS, never `question_identity`
+    on `row["path"]` raw (2K final review, F3): validation matches a verdict to a
+    row and assembly places that verdict under the same row's rendered line, and
+    the two spellings had drifted — a verdict on a question whose path changes
+    under redaction validated cleanly and then rendered at the section fallback
+    instead of beside its question. One function, so they cannot drift again.
+    """
+    path = row.get("path")
+    redacted_path = None if path is None else redactor.redact_text(str(path))
+    return question_identity(
+        row.get("protocol"), row.get("method"), redacted_path, row.get("question")
+    )
 
 
 class OpenQuestionRef(BaseModel):

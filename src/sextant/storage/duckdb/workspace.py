@@ -367,10 +367,15 @@ _EXPORTED_TABLES = (
     "symbols",
 )
 
-# The two tables whose export PROJECTION masks (2K design §1). The masking is
-# here and only here: `resolved_config` and `endpoints` keep verbatim values in
-# the workspace, because analysis needs them — peer resolution substitutes real
-# addresses — and the user's own disk is not the trust boundary. The bundle is.
+# What the export PROJECTION masks (2K design §1) — five tables plus the fact
+# stream, each named where its own query below says why: `endpoints.path`/
+# `.peer` and `open_questions.path` (the address columns), `resolved_config`'s
+# `value` (the key-pattern rule), the JSON in `call_sites.arguments` and
+# `annotations.args` (userinfo over every string leaf), and `config_entry` fact
+# payloads on their way into the bundle's parquet (`_stage_fact_redactions`).
+# The masking is here and only here: the workspace itself keeps verbatim values,
+# because analysis needs them — peer resolution substitutes real addresses —
+# and the user's own disk is not the trust boundary. The bundle is.
 #
 # The mechanism is a LEFT JOIN against a staged substitution table, not a
 # scalar function: DuckDB's Python UDFs require numpy, which is not a

@@ -43,7 +43,16 @@ loaded for the repository the jailed roots live under) hides
 `domain.enrichment.ENRICHMENT_FILE` (`.sextant-enrichment.json`) is
 excluded here as a JAIL-SPECIFIC rule, not a `.sextantignore` builtin (2K
 Task 3 ruling): the model must never read its own prior run's claims
-through these tools. A derived-output directory (`DERIVED_OUTPUT_DIRS` —
+through these tools. One residual, accepted rather than closed (2K final
+review, F1): the jailed RENDER root still serves `architecture.md`, which
+after an `enrich` is the ENRICHED document, so a re-run's `read_file` can
+reach the prior run's claims by that route. Accepted because the two
+things that made it a loop are gone — the BRIEF is composed from an
+in-memory MACHINE-ONLY assembly (`cli/app.py`), never the on-disk file, so
+nothing feeds prior claims back unprompted; and every claim in that file
+is visibly labelled as model output, so a model that goes looking finds
+text marked as such rather than machine findings it might mistake for its
+own evidence. A derived-output directory (`DERIVED_OUTPUT_DIRS` —
 `target/`, `build/`, `out/`, `node_modules/`, `.git/`) is excluded the same
 jail-specific way (2K Task 5 fix round 1 ruling): the jail describes
 human-authored source, never its compiled shadow, and `BUILTIN_PATTERNS`
@@ -107,9 +116,14 @@ distinct from the config file itself, and `_mask_fact_lines`/
 `domain.factfile.redact_config_entry_line` is what closes it (2K Task 7
 fix round 2). Between the two, a model cannot recover a value through
 `grep` — over the config file OR over the fact file that describes it —
-that `read_file` would have masked from either. Every result, from every
-tool (including a refusal), additionally passes `redactor.redact_text`
-(URL userinfo stripped, plus any repo-added value patterns) AND an
+that `read_file` would have masked from either. The third way is
+`redactor.redact_text` (URL userinfo stripped, plus any repo-added value
+patterns), which covers the file kinds neither line-masker claims — an
+ORDINARY source file with a credentialled URL in it — and runs inside
+`_content_of` for exactly the reason the other two do: `grep` searches
+what `read_file` returns, so match/no-match can never answer a question
+the mask refuses (2K final review, F2). Every result, from every tool
+(including a refusal), additionally passes `redact_text` AND an
 anchor-prefix rewrite (the display anchor's own absolute path, stripped
 wherever served CONTENT happens to carry it — a fact document's
 `origin_entry`, chiefly — never only the citations this class prints
@@ -590,11 +604,14 @@ class ToolExecutor:
         if content is None:
             raise _ToolRefusal(f"refused: {path} is not a text file")
         # Mask BEFORE slicing (2K Task 5 fix round 1, minor, pinning the
-        # existing order): `_content_of` key-masks the FULL text, and only
-        # then is the requested window cut out of it — cutting first would
-        # risk a config file's masking rule looking at a value with its
-        # own line missing the context (a continuation, a nearby key) a
-        # future, less line-local masking rule might need.
+        # existing order): `_content_of` masks the FULL text — key by key,
+        # and now `redact_text` over the whole of it too (2K final review,
+        # F2) — and only then is the requested window cut out of it.
+        # Cutting first would risk a config file's masking rule looking at
+        # a value with its own line missing the context (a continuation, a
+        # nearby key) a future, less line-local masking rule might need,
+        # and would let a `redact:` pattern spanning the window boundary
+        # go unmatched on the half this call happens to return.
         lines = content.splitlines()
         last = start + DEFAULT_READ_LINES - 1 if end is None else end
         return "\n".join(lines[start - 1 : last])
@@ -860,10 +877,27 @@ class ToolExecutor:
         anchor's own path must be claimed by the (root-collapsing) anchor
         rule before the (username-hiding, root-preserving) home rule would
         otherwise partially rewrite it into something that reads as merely
-        "somewhere under home" rather than "the module itself". `None` for
-        a file that cannot be decoded as UTF-8 text or cannot be read at
-        all: both tools skip it rather than raising, the same silent-skip a
-        real `grep` gives a binary file."""
+        "somewhere under home" rather than "the module itself".
+
+        `redact_text` runs LAST, here and not only at `execute`'s exit (2K
+        final review, F2), for the identical reason and against a proven
+        leak: a `redact:`-pattern value or a URL's userinfo sitting in an
+        ORDINARY source file — neither config-bearing nor `.jsonl`, so
+        neither line-masker touches it — reached the exit pass masked, but
+        `grep` had already searched the RAW text, so match/no-match answered
+        the question the mask exists to refuse. `grep "svc:h"` matching
+        while `grep "svc:x"` did not extracted `amqp://svc:hunter2@…` out of
+        an ordinary source file one character at a time. Searching the bytes
+        `read_file` returns is what closes it; `execute` keeps its own pass
+        as belt-and-braces for results this method never saw. The exit pass
+        therefore re-applies the patterns to already-masked text, which is
+        safe by construction: userinfo stripping leaves no `user@` for a
+        second pass to find, and a value pattern's own replacement is the
+        `«redacted»` marker, chosen (D04) so no config value, URL or topic
+        name could legitimately carry it. `None` for a file that cannot be
+        decoded as UTF-8 text or cannot be read at all: both tools skip it
+        rather than raising, the same silent-skip a real `grep` gives a
+        binary file."""
         try:
             text = read_file_text(path)
         except (UnicodeDecodeError, OSError):
@@ -873,7 +907,7 @@ class ToolExecutor:
             text = _mask_config_lines(text, self._redactor)
         elif kind == FACT_LINE_EXTENSION:
             text = _mask_fact_lines(text, self._redactor)
-        return self._home_relative(self._anchor_relative(text))
+        return self._redactor.redact_text(self._home_relative(self._anchor_relative(text)))
 
 
 def _has_traversal(raw_path: str) -> bool:

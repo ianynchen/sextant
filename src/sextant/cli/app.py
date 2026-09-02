@@ -482,16 +482,16 @@ def module_enrich(
     instructions = instructions_path().read_text(encoding="utf-8")
     instructions_hash = "sha256:" + hashlib.sha256(instructions.encode("utf-8")).hexdigest()
 
-    # Read here, in the composition root — `application` reads no files
+    # Checked here, in the composition root — `application` reads no files
     # (`tests/architecture/test_source_rules.py`), so the stage decides
-    # whether a missing rendered document is refused; this is only the read.
+    # whether a missing rendered document is refused; this is only the check.
+    # The file is a GATE, never the brief's source (see below).
     architecture_md_path = workspace_dir / "render" / "architecture.md"
     if not architecture_md_path.is_file():
         raise click.ClickException(
             f"{path} has no rendered document at {architecture_md_path} — run "
             f"`sextant module render {path}` first"
         )
-    architecture_md = architecture_md_path.read_text(encoding="utf-8")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
     # Built only now that a rendered document is confirmed on disk (2K Task 7
@@ -507,6 +507,21 @@ def module_enrich(
 
     workspace = DuckDbWorkspace(db_path)
     try:
+        # The brief's document is assembled IN MEMORY, machine-only — never
+        # the bytes sitting at `architecture_md_path` (2K final review, F1).
+        # Spec §5 mandates the MACHINE-rendered document, and after one
+        # `enrich` the on-disk file is the ENRICHED one: reading it would
+        # feed a second run its own prior claims as if they were findings,
+        # the very loop the Task 3 overlay-jail exclusion exists to prevent,
+        # compounding run over run. `overlay=None` with an empty stale set
+        # is precisely "as `render` would have written it before any of this
+        # existed" (`_assembled_sections`' own contract), and it is the SAME
+        # single assembly path `render` and the post-run re-render use, so
+        # the brief can never describe a document assembly would not.
+        sections, _ = _assembled_sections(
+            path, workspace, metadata, redactor, overlay=None, stale=frozenset()
+        )
+        architecture_md = markdown_document(sections)
         # `architecture_md` is never `None` here — refused above — so this
         # never actually raises in THIS call site; `compose`'s own check
         # stays live and unit-tested (`test_enrich_stage.py`) as the stage's

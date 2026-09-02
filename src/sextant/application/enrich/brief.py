@@ -10,9 +10,9 @@ document, same overlay-free run → the same prompt bytes (NFR-1's one stated
 exception is the model's own response, never the brief that produced it).
 
 Nothing here talks to a model, a tool, or the filesystem beyond the plain
-strings it is handed — `architecture_md`/`metadata` are read by the caller
-(`application/stages/enrich.py`) so this module stays a pure function over
-data, testable without a rendered workspace on disk.
+strings it is handed — `architecture_md`/`metadata` are produced by the
+caller (`cli/app.py`) so this module stays a pure function over data,
+testable without a rendered workspace on disk.
 """
 
 import json
@@ -78,12 +78,15 @@ def compose_brief(
 ) -> EnrichmentBrief:
     """The brief for one enrichment run over `module_root`.
 
-    `architecture_md` and `metadata` are read off disk by the caller (the
-    enrich stage's own "refuse-if-unrendered" check, 2K design §8) — passed
-    in already-loaded so this function stays a pure projection of its
-    arguments, the same reason `egress/render/document.py`'s own assembly
-    takes its rows as plain sequences rather than reaching for a workspace
-    path itself.
+    `architecture_md` is the MACHINE-rendered document and nothing else (2K
+    design §5): the caller assembles it in memory with no overlay rather than
+    reading `render/architecture.md`, which after one `enrich` carries the
+    previous run's own claims (2K final review, F1). `metadata` is read off
+    disk by that same caller (`cli/app.py`, whose "refuse-if-unrendered"
+    check, 2K design §8, still gates on the file's presence) — both passed in
+    already-loaded so this function stays a pure projection of its arguments,
+    the same reason `egress/render/document.py`'s own assembly takes its rows
+    as plain sequences rather than reaching for a workspace path itself.
 
     `tool_definitions`/`jailed_roots` come from the same `ToolExecutor` the
     stage constructs to actually run the agent (or from a plain tuple for
