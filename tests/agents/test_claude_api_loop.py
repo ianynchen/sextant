@@ -52,7 +52,7 @@ class _Message:
     # Real `end_turn` for a genuine final answer; a scripted test overrides
     # this to prove the loop distrusts any OTHER finish (fix round 1,
     # Important 1) even when there is no tool request alongside it.
-    stop_reason: str = "end_turn"
+    stop_reason: str | None = "end_turn"
 
 
 class _ScriptedSend:
@@ -258,6 +258,21 @@ def test_a_clean_end_turn_finish_is_never_marked_partial(tmp_path: Path):
     assert answers.partial_reason is None
 
 
+def test_a_missing_stop_reason_reads_as_stop_unknown_not_stop_none(tmp_path: Path):
+    """2K Task 6 fix round 1 micro-round 2, minor 3: `f"stop:{None}"` would
+    read as the literal, misleading string `"stop:None"` — honesty about
+    an absent `stop_reason` means saying `"unknown"`, not printing Python's
+    own `repr` of the missing value."""
+    executor = _executor(tmp_path)
+    scripted = _ScriptedSend([_Message([_text('{"claims": []}')], stop_reason=None)])
+    agent = _agent(scripted)
+
+    answers = agent.run(_brief(executor), executor)
+
+    assert answers.partial is True
+    assert answers.partial_reason == "stop:unknown"
+
+
 def test_no_progress_guard_fires_on_three_identical_calls_then_ends_the_run(tmp_path: Path):
     executor = _executor(tmp_path)
     identical = _tool_use("find", {"pattern": "*.txt"})
@@ -421,6 +436,14 @@ def test_send_forwards_max_output_tokens_to_the_api(tmp_path: Path, monkeypatch)
         def __init__(self, api_key: str) -> None:
             self.messages = _FakeMessages()
 
+    # Patching the `anthropic` MODULE's `Anthropic` attribute is load-bearing
+    # for this test's offline safety, not just its assertion: `claude_api.py`
+    # calls `anthropic.Anthropic(...)` — a module-attribute lookup at call
+    # time — so this monkeypatch intercepts it. If the adapter ever switched
+    # to `from anthropic import Anthropic` (a bound local name resolved at
+    # IMPORT time), this same patch would silently miss, and `_send` would
+    # go on to construct the REAL client and place a real HTTPS request with
+    # the bogus key above.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
     monkeypatch.setattr(anthropic, "Anthropic", _FakeClient)
 

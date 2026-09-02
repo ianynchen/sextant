@@ -186,10 +186,14 @@ def _stop_reason_partial(response: Message) -> str | None:
     """`None` for a clean `"end_turn"` finish; `"stop:<reason>"` for
     anything else — a `max_tokens` truncation or a `refusal` both end a
     turn with no tool request, so `not tool_uses` alone cannot tell a
-    genuine final answer from a cut-off one (fix round 1, Important 1)."""
+    genuine final answer from a cut-off one (fix round 1, Important 1). A
+    missing `stop_reason` (fix round 1 micro-round 2, minor 3) reads as
+    `"stop:unknown"`, never the misleadingly literal `"stop:None"` —
+    still `partial=True` either way; only the honesty of the label
+    changes."""
     if response.stop_reason == "end_turn":
         return None
-    return f"stop:{response.stop_reason}"
+    return f"stop:{response.stop_reason or 'unknown'}"
 
 
 def _tool_param(definition: ToolDefinition) -> dict[str, object]:

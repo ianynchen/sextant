@@ -22,6 +22,8 @@ could not keep, now true: importing `sextant.agents` eagerly imports
 `claude_api`, and so `anthropic`, which is accepted (2K Task 7's CLI needs
 this registry built before it can validate `--agent` at all)."""
 
+from collections.abc import Callable
+
 from sextant.agents.claude_api import ClaudeApiAgent
 from sextant.application.ports.enrichment import EnrichmentAgent
 
@@ -30,4 +32,11 @@ from sextant.application.ports.enrichment import EnrichmentAgent
 # composition root) is the one caller expected to use this — it validates
 # the requested name against these keys and calls the constructor with
 # whatever `--model`/`--max-turns` flags it collected.
-AGENT_REGISTRY: dict[str, type[EnrichmentAgent]] = {"claude-api": ClaudeApiAgent}
+#
+# `Callable[..., EnrichmentAgent]`, not `type[EnrichmentAgent]` (fix round
+# 1 micro-round 2, Important 1): under mypy strict, `type[Protocol]` only
+# exposes `object.__init__` on the value — a real constructor call like
+# `AGENT_REGISTRY["claude-api"](model=..., max_turns=...)` (2K Task 7's own
+# dispatch) fails to type-check against it, even though `ClaudeApiAgent`
+# itself is a perfectly ordinary callable that returns one.
+AGENT_REGISTRY: dict[str, Callable[..., EnrichmentAgent]] = {"claude-api": ClaudeApiAgent}
