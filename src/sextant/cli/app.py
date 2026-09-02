@@ -7,13 +7,16 @@ from pathlib import Path
 from typing import cast
 
 import click
+from pydantic import ValidationError
 
+from sextant.application.enrich.validate import stale_claims
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.application.stages.analyze import AnalyzeResult, analyze
 from sextant.cli.progress import RichProgress
 from sextant.cli.resources import catalogs_dir, extractor_jar
+from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_overlay
 from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
 from sextant.domain.redaction import RedactionError, Redactor
 from sextant.egress.export.manifest import write_manifest
@@ -109,6 +112,18 @@ def _redactor_for(path: Path) -> Redactor:
         return Redactor.from_rules(read_redaction_rules(path))
     except (SextantConfigError, RedactionError) as refused:
         raise click.ClickException(str(refused)) from refused
+
+
+def _overlay_for(path: Path) -> EnrichmentOverlay | None:
+    """The module's enrichment overlay, or `None` where it has none (2K design
+    §6). An overlay that is present and malformed becomes the message a user
+    reads, for the reason `_redactor_for` turns a bad `redact:` section into
+    one: it is Sextant's own program artifact written wrong, and a stack trace
+    would report it as a crash in the tool."""
+    try:
+        return load_overlay(path)
+    except ValidationError as refused:
+        raise click.ClickException(f"{path / ENRICHMENT_FILE} is not a valid overlay: {refused}")
 
 
 @click.group()
@@ -220,6 +235,12 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
         for skipped in metadata.get("skipped_catalogs", [])
     ]
 
+    # Read here, before the workspace is opened, so a malformed overlay is
+    # refused without a half-run render behind it. `render` assembles an
+    # overlay the same way `enrich` does — the same code path, so the two can
+    # never disagree about a committed overlay (2K design §8).
+    overlay = _overlay_for(path)
+
     workspace = DuckDbWorkspace(db_path)
     try:
         report = ResolveReport(
@@ -246,6 +267,14 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             library_symbols=workspace.query("library_symbols"),
             libraries_not_scanned=tuple(metadata.get("libraries_not_scanned", [])),
             redactor=_redactor_for(path),
+            overlay=overlay,
+            # Staleness is the ingest checks re-run against the workspace as it
+            # stands NOW (2K design §6): a claim grounded when it was written
+            # whose referents have since gone renders as a count, not as a
+            # claim about code that no longer exists.
+            stale=frozenset()
+            if overlay is None
+            else frozenset(refusal.index for refusal in stale_claims(overlay, workspace, path)),
         )
         target = workspace_dir / "render" / "architecture.md"
         target.parent.mkdir(parents=True, exist_ok=True)

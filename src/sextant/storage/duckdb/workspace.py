@@ -196,6 +196,15 @@ _NAMED_QUERIES = {
         SELECT symbol, enclosing, signature FROM symbols
         WHERE construct_kind = 'constructor' ORDER BY symbol
     """,
+    # Every declared symbol, whatever its construct kind — the one thing
+    # `application/enrich/validate.py` needs to answer "does this exist?" about
+    # a member a claim names or a node a diagram draws (2K design §6). The
+    # kind-filtered queries above cannot serve it: a component's members are
+    # types, methods and fields together, and asking three queries to rebuild
+    # one set would make the answer depend on which kinds were remembered.
+    # One column, because existence is the whole question. Ordered by symbol
+    # for NFR-1, like every other projection here.
+    "declared_symbols": "SELECT symbol FROM symbols ORDER BY symbol",
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
@@ -341,9 +350,11 @@ _NAMED_QUERIES = {
 # The tables a bundle carries (D06 §5). `documents`, `endpoints`,
 # `resolved_config`, `shapes`, `shape_fields`, `call_sites` and
 # `open_questions` (2G Task 8) export through their named query, so the row
-# order is the one NFR-1 already fixed; `symbols` and `annotations` have no
-# named query and export through their own ordered SELECT below, for the same
-# reason. Sorted by name so the manifest's contents list is deterministic too.
+# order is the one NFR-1 already fixed; `symbols` and `annotations` export
+# through their own ordered SELECT below, for the same reason — `symbols` has
+# no whole-row named query to reuse (`declared_symbols` above projects the one
+# column existence checking needs, not the table). Sorted by name so the
+# manifest's contents list is deterministic too.
 _EXPORTED_TABLES = (
     "annotations",
     "call_sites",

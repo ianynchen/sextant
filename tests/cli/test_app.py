@@ -368,3 +368,40 @@ def test_a_malformed_sextant_yml_is_reported_as_a_message_not_a_stack_trace(tmp_
     assert "extract_libaries" in result.output
     assert "extract_libraries" in result.output
     assert "Traceback" not in result.output
+
+
+def test_a_malformed_overlay_is_reported_as_a_message_not_a_stack_trace(tmp_path: Path):
+    """The overlay is a program artifact (2K design §6), so a malformed one is
+    Sextant's own output written wrong — but the person who has to act on it
+    is still the one running the command, and a traceback would report it as a
+    crash in the tool. The message names the file and the offending field.
+
+    Written into its own directory, never the fixture: the fixture ships a
+    VALID golden overlay that the rest of the suite pins, and a broken one
+    left beside it would follow every other test around.
+
+    The workspace here is a stand-in — the overlay is read BEFORE the database
+    is opened, so a render that refuses one never touches it. That ordering is
+    the point: an overlay that cannot be validated is not a document to render
+    half of."""
+    module = tmp_path / "module"
+    module.mkdir()
+    (module / ".sextant-enrichment.json").write_text(
+        '{"produced_by": {}, "claims": []}', encoding="utf-8"
+    )
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "metadata.json").write_text(
+        json.dumps({"module": {"id": "a:module", "kind": "service", "languages": ["java"]}}),
+        encoding="utf-8",
+    )
+    (workspace / "workspace.duckdb").write_bytes(b"")
+
+    result = CliRunner().invoke(
+        cli, ["module", "render", str(module), "--workspace", str(workspace)]
+    )
+
+    assert result.exit_code == 1
+    assert ".sextant-enrichment.json is not a valid overlay" in result.output
+    assert "instructions_hash" in result.output
+    assert "Traceback" not in result.output

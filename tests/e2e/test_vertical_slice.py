@@ -5,7 +5,9 @@ from pathlib import Path
 import duckdb
 from click.testing import CliRunner
 
+from sextant.application.enrich.validate import validate_overlay
 from sextant.cli.app import cli
+from sextant.domain.enrichment import load_overlay
 from sextant.domain.factfile import read_fact_file
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import REDACTED, Redactor
@@ -1291,3 +1293,76 @@ def test_a_planted_dotenv_is_excluded_by_the_builtin_layer_alone(tmp_path: Path)
     ]
     assert not any(".env" in pattern for pattern in ignorefile_patterns)
     assert IgnoreRules.load(FIXTURE).matches(FIXTURE / ".env") is True
+
+
+# --- 2K Task 3: the golden overlay, live ----------------------------------
+
+
+def test_every_claim_in_the_golden_overlay_is_grounded_in_the_live_workspace(tmp_path: Path):
+    """The fixture overlay is hand-authored (fixture JSON is fine — it is a
+    program format, 2K design §9), which is exactly why it has to be checked
+    against a REAL analysis rather than a hand-built one: a golden file whose
+    symbols, files and question drifted out of the fixture would still parse,
+    still render, and pin nothing. Every one of the four claim kinds validates
+    against the workspace `analyze` just produced, or this fails."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)
+    overlay = load_overlay(FIXTURE)
+    assert overlay is not None
+    assert {claim.kind for claim in overlay.claims} == {
+        "component",
+        "diagram",
+        "section",
+        "verdict",
+    }
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    try:
+        accepted, refusals = validate_overlay(overlay, workspace, FIXTURE)
+    finally:
+        workspace.close()
+    assert refusals == ()
+    assert len(accepted) == len(overlay.claims)
+
+
+def test_the_golden_overlay_assembles_into_the_rendered_document(tmp_path: Path):
+    """Add-only assembly, end to end (2K design §6): every claim reaches the
+    document under a provenance header, at its own anchor, and the machine
+    rows the rest of this suite pins are still exactly where they were —
+    `test_format_field_number_and_open_questions_reach_the_rendered_document`
+    asserts those same lines against this same document."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)
+    document = (tmp_path / "render" / "architecture.md").read_text()
+
+    header = "> **Enrichment — evidence: llm** (model fixture-model, agent fixture-agent)"
+    assert document.count(header) == 3  # two anchors plus the verdict's own question
+    assert "**Component: Legacy billing edge**" in document
+    assert "Members: `com/example/orders/soap/OrderSoapEndpoint#`" in document
+    assert "**Extending the legacy billing edge**" in document
+    assert "Cites: `src/main/java/com/example/orders/soap/OrderSoapEndpoint.java`" in document
+    assert "Elides: showing 3 of the module's types" in document
+
+    # The verdict renders directly under the question it answers — the row
+    # itself stays `unresolved`, because the graph is immutable (design §7).
+    question = "- `jms parsed-relay-queue` — payload_binding:"
+    verdict = "**LLM assessment** for `jms parsed-relay-queue` (payload_binding): likely"
+    assert document.index(question) < document.index(verdict)
+    assert document.index(verdict) < document.index(
+        "- `sqs parsed-mixed-inbound` — payload_binding:"
+    )
+
+    # Nothing is stale: every referent of every claim exists in the workspace
+    # this render read, so the notice is absent rather than reporting zero.
+    assert "stale, not shown" not in document
+
+    # Add-only, live: the machine rows this suite has always pinned are still
+    # exactly where they were. Every other test in this module asserts against
+    # this same enriched document — the overlay adds beside them and edits
+    # none of them, which is what makes those pins the regression guard.
+    assert "## Known gaps" in document
+    assert (
+        "| `jms parsed-relay-queue` | "
+        "`com/acme/orders/messaging/parse/ParsedPayloadListeners#onRelayed(sig_cb303bd1).` | "
+        "- → - | unresolved | resolved |"
+    ) in document
