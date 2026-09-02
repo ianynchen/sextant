@@ -7,7 +7,9 @@ import pytest
 
 from sextant.domain.redaction import RedactionRules
 from sextant.ingress.detect.sextant_config import (
+    EnrichDefaults,
     SextantConfigError,
+    read_enrich_defaults,
     read_extract_libraries,
     read_redaction_rules,
 )
@@ -157,3 +159,34 @@ def test_a_misspelled_top_level_key_is_refused_by_the_redaction_reader_too(tmp_p
     is not a section that runs."""
     with pytest.raises(SextantConfigError):
         read_redaction_rules(_config(tmp_path, "redactions:\n  key_patterns: [dsn]\n"))
+
+
+def test_a_module_with_no_enrich_section_has_every_default_unset(tmp_path: Path):
+    """The ordinary module: `sextant module enrich` falls back to its own
+    flags/CLI defaults entirely (2K design §3)."""
+    assert read_enrich_defaults(tmp_path) == EnrichDefaults()
+
+
+def test_the_declared_enrich_defaults_are_returned_as_written(tmp_path: Path):
+    defaults = read_enrich_defaults(
+        _config(tmp_path, "enrich:\n  agent: claude-api\n  model: claude-x\n  max_turns: 20\n")
+    )
+    assert defaults == EnrichDefaults(agent="claude-api", model="claude-x", max_turns=20)
+
+
+def test_an_unknown_enrich_key_is_refused(tmp_path: Path):
+    """A typo'd `max_turn` would read as "no default", indistinguishable from
+    a module that declared none — the same reasoning `redact:`'s own closed
+    set states."""
+    with pytest.raises(SextantConfigError):
+        read_enrich_defaults(_config(tmp_path, "enrich:\n  max_turn: 20\n"))
+
+
+def test_a_non_positive_max_turns_is_refused(tmp_path: Path):
+    with pytest.raises(SextantConfigError):
+        read_enrich_defaults(_config(tmp_path, "enrich:\n  max_turns: 0\n"))
+
+
+def test_an_enrich_section_that_is_not_a_mapping_is_refused(tmp_path: Path):
+    with pytest.raises(SextantConfigError):
+        read_enrich_defaults(_config(tmp_path, "enrich:\n  - claude-api\n"))

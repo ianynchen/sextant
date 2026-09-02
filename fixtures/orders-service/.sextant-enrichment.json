@@ -2,16 +2,16 @@
   "produced_by": {
     "model": "fixture-model",
     "agent": "fixture-agent",
-    "instructions_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "instructions_hash": "sha256:9222bec90adaa55dc4bad9b093fd53bcf08cec52db01122ccb74160a23289331",
     "redaction_set_hash": "sha256:e52610fa9850ffab2482d3b77642d7b75640145a6589262386853b66aa05a480",
     "run_at": "2026-09-02T00:00:00Z",
-    "workspace_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    "workspace_fingerprint": "sha256:7065cfdfd21d3fbd06e44539fc622c14864202296701a030e42593ff8aaee49d"
   },
   "claims": [
     {
-      "kind": "component",
       "evidence": "llm",
       "anchor": "after-component-overview",
+      "kind": "component",
       "name": "Legacy billing edge",
       "purpose": "Everything this module exchanges with the billing system over the older XML transport lives here: one endpoint it exposes, one client it calls out through, and the request payload the two agree on. It exists because billing was never migrated to the newer transport the rest of the module speaks, and keeping the translation in one place is what stops that dialect leaking into the order flow.",
       "members": [
@@ -22,16 +22,16 @@
       ]
     },
     {
-      "kind": "diagram",
       "evidence": "llm",
       "anchor": "after-component-overview",
+      "kind": "diagram",
       "mermaid": "classDiagram\n    class OrderSoapEndpoint\n    class BillingSoapClient\n    class PlaceOrderRequest\n    OrderSoapEndpoint --> PlaceOrderRequest\n    BillingSoapClient --> PlaceOrderRequest\n",
       "elides": "showing 3 of the module's types; the generated payload classes, every error path, and the client's transport configuration are elided"
     },
     {
-      "kind": "section",
       "evidence": "llm",
       "anchor": "after-endpoint-table",
+      "kind": "section",
       "title": "Extending the legacy billing edge",
       "body": "To expose another operation on the existing endpoint, add a method to the endpoint class and give it the same payload-root annotation style its neighbours use; the operation's identity comes from the payload root, not from a verb, so the new method needs a new root type rather than a new path.\n\nTo call another billing operation, add a method to the client beside the existing one. The address it calls is configuration, not code — the client reads it rather than composing it — so a new operation needs no new address.",
       "cites": [
@@ -40,9 +40,9 @@
       ]
     },
     {
-      "kind": "verdict",
       "evidence": "llm",
       "anchor": "beside-open-question",
+      "kind": "verdict",
       "question": {
         "protocol": "jms",
         "method": null,
@@ -50,7 +50,8 @@
         "kind": "payload_binding"
       },
       "assessment": "likely `com/example/orders/proto/OrderProtos$OrderRequest#`",
-      "because": "`OrderRelay#forward` hands the message straight to `OrderIngest#process`, and that method is the only place in the module that calls `OrderProtos$OrderRequest#parseFrom` on a relayed body"
+      "because": "`OrderRelay#forward` hands the message straight to `OrderIngest#process`, and that method is the only place in the module that calls `OrderProtos$OrderRequest#parseFrom` on a relayed body",
+      "searched": null
     }
   ]
 }

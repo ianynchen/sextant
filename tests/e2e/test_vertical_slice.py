@@ -1304,7 +1304,18 @@ def test_every_claim_in_the_golden_overlay_is_grounded_in_the_live_workspace(tmp
     against a REAL analysis rather than a hand-built one: a golden file whose
     symbols, files and question drifted out of the fixture would still parse,
     still render, and pin nothing. Every one of the four claim kinds validates
-    against the workspace `analyze` just produced, or this fails."""
+    against the workspace `analyze` just produced, or this fails.
+
+    2K Task 7 ruling 2: `produced_by` is genuine, not the placeholder
+    `sha256:0000...` this file carried through Task 3 — regenerated through
+    the real `--ingest` door against this same fixture, `--agent
+    fixture-agent --model fixture-model` to keep both pinned above
+    (`test_the_golden_overlay_assembles_into_the_rendered_document`).
+    `instructions_hash`/`workspace_fingerprint` are the real sha256 of
+    `enrich/INSTRUCTIONS.md`/`metadata.json` from that run; `run_at` is
+    wall-clock at ingest time and is hand-pinned to a fixed value afterward —
+    informational only, never compared, the same way every other field here
+    is checked by what it grounds rather than by its own bytes."""
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     _run(tmp_path)
     overlay = load_overlay(FIXTURE)

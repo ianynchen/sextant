@@ -1,0 +1,407 @@
+"""`sextant module enrich` (2K design §5/§8), end to end through the real CLI
+command — `FakeEnrichmentAgent` standing in for the network so the suite
+never calls out (2K design §9). Every test here runs against a PRIVATE COPY
+of the `orders-service` fixture, never the tracked one: `enrich` writes
+`.sextant-enrichment.json` at the module root by design, and the tracked
+copy of that file is the golden fixture Task 7's own ruling regenerates
+through this same command — a test that ran against the tracked path would
+clobber it on every run.
+
+`ToolExecutor` (2K Task 5) requires its jailed roots to sit under the
+`.sextantignore` repo root it was loaded for — true of the default
+`--workspace` layout (`<module>/.sextant`) and nothing else — so every test
+here uses that default rather than an external `tmp_path`, the convention
+`test_vertical_slice.py`'s own tests use for `analyze`/`render`.
+"""
+
+import json
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import pytest
+from click.testing import CliRunner
+
+from sextant.agents import AGENT_REGISTRY
+from sextant.application.enrich.tools import ToolExecutor
+from sextant.application.ports.enrichment import EnrichmentAnswers, EnrichmentBrief
+from sextant.cli.app import cli
+from sextant.domain.enrichment import ENRICHMENT_FILE
+
+REPO = Path(__file__).parents[2]
+FIXTURE = REPO / "fixtures" / "orders-service"
+
+# Real, analysed symbols this fixture's own golden overlay already uses
+# (`fixtures/orders-service/.sextant-enrichment.json`) — proven present in
+# `declared_symbols`, so a component claim naming them is grounded rather
+# than incidentally correct.
+REAL_MEMBER = "com/example/orders/soap/OrderSoapEndpoint#"
+PHANTOM_MEMBER = "com/example/orders/soap/GhostClass#"
+
+
+def _component(name: str = "Legacy billing edge", members: list[str] | None = None) -> dict:
+    return {
+        "kind": "component",
+        "evidence": "llm",
+        "anchor": "after-component-overview",
+        "name": name,
+        "purpose": "Everything this module exchanges with the billing system lives here.",
+        "members": [REAL_MEMBER] if members is None else members,
+    }
+
+
+@dataclass
+class FakeEnrichmentAgent:
+    """The `EnrichmentAgent` port, driven by a canned answer instead of a
+    model — makes one real tool call first (so the transcript is not empty
+    and the jail actually runs), then returns the answer it was built with."""
+
+    answers_text: str
+    partial: bool = False
+    partial_reason: str | None = None
+    seen_briefs: list[EnrichmentBrief] = field(default_factory=list)
+
+    def run(self, brief: EnrichmentBrief, executor: ToolExecutor) -> EnrichmentAnswers:
+        self.seen_briefs.append(brief)
+        executor.execute("list_dir", {"path": "."})
+        return EnrichmentAnswers(
+            text=self.answers_text,
+            transcript=list(executor.transcript),
+            partial=self.partial,
+            partial_reason=self.partial_reason,
+        )
+
+
+def _register_fake(monkeypatch: pytest.MonkeyPatch, name: str, agent: FakeEnrichmentAgent) -> None:
+    """Registers `agent` under `name`, ignoring whatever `model`/`max_turns`
+    the CLI passes — `AGENT_REGISTRY` maps a name to a *constructor*
+    (`Callable[..., EnrichmentAgent]`), so the fake's own constructor just
+    hands back the one pre-built instance every test already configured."""
+    monkeypatch.setitem(AGENT_REGISTRY, name, lambda **kwargs: agent)
+
+
+@pytest.fixture(scope="module")
+def compiled_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A private, compiled copy of `orders-service` — shared read-only
+    ground (the compile) across every test in this module, since `mvn`
+    itself is the expensive part and analyze/render/enrich never touch the
+    source or `target/` a second time."""
+    root = tmp_path_factory.mktemp("orders-service")
+    # Neither travels: `.sextant/` is the checked-out repo's own gitignored
+    # scratch workspace, whose `workspace.duckdb` can predate the current
+    # schema (`CREATE TABLE IF NOT EXISTS` never migrates an existing file);
+    # `.sextant-enrichment.json` is the tracked GOLDEN overlay, and a test
+    # that inherited it would see one before `enrich` ever ran.
+    shutil.copytree(
+        FIXTURE,
+        root,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns(".sextant", ENRICHMENT_FILE),
+    )
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=root, check=True)
+    return root
+
+
+@pytest.fixture
+def module_root(compiled_fixture: Path, tmp_path: Path) -> Path:
+    """One test's own module root: the compiled tree is shared, but
+    `.sextant/` and `.sextant-enrichment.json` must not leak from one test
+    into the next, so each test gets a fresh copy of those two — the only
+    things `analyze`/`render`/`enrich` ever write."""
+    root = tmp_path / "orders-service"
+    shutil.copytree(compiled_fixture, root)
+    return root
+
+
+def _analyzed_and_rendered(root: Path) -> None:
+    runner = CliRunner()
+    for command in ("analyze", "render"):
+        result = runner.invoke(cli, ["module", command, str(root)])
+        assert result.exit_code == 0, result.output
+
+
+def test_enrich_refuses_a_workspace_with_no_rendered_document(module_root: Path):
+    """2K design §8: the brief is built from the machine-rendered document,
+    so a workspace that was only ever analysed is refused, loudly, naming
+    `render` — before composing anything or touching an agent."""
+    result = CliRunner().invoke(cli, ["module", "analyze", str(module_root)])
+    assert result.exit_code == 0, result.output
+
+    result = CliRunner().invoke(
+        cli, ["module", "enrich", str(module_root), "--agent", "claude-api", "--model", "x"]
+    )
+    assert result.exit_code != 0
+    assert "sextant module render" in result.output
+
+
+def test_an_unknown_agent_is_refused_naming_the_known_list(module_root: Path):
+    _analyzed_and_rendered(module_root)
+    result = CliRunner().invoke(
+        cli, ["module", "enrich", str(module_root), "--agent", "not-a-real-agent", "--model", "x"]
+    )
+    assert result.exit_code != 0
+    assert "not-a-real-agent" in result.output
+    assert "claude-api" in result.output
+
+
+def test_claude_api_with_no_key_refuses_loudly_naming_the_variable(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2K Task 7 ruling 5: the key is read from the environment alone, and
+    its absence is refused before any network attempt — `ClaudeApiAgent._send`
+    checks `ANTHROPIC_API_KEY` before constructing a client, so this makes no
+    network call even though it exercises the real adapter."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _analyzed_and_rendered(module_root)
+    result = CliRunner().invoke(
+        cli,
+        ["module", "enrich", str(module_root), "--agent", "claude-api", "--model", "claude-x"],
+    )
+    assert result.exit_code != 0
+    assert "ANTHROPIC_API_KEY" in result.output
+
+
+def test_dry_run_writes_only_the_brief_and_instructions_copy(module_root: Path):
+    _analyzed_and_rendered(module_root)
+    markdown_path = module_root / ".sextant" / "render" / "architecture.md"
+    before = markdown_path.read_bytes()
+
+    result = CliRunner().invoke(cli, ["module", "enrich", str(module_root), "--dry-run"])
+    assert result.exit_code == 0, result.output
+
+    brief_path = module_root / ".sextant" / "enrich-brief.json"
+    instructions_path = module_root / ".sextant" / "enrich-instructions.md"
+    assert brief_path.is_file()
+    assert instructions_path.is_file()
+    brief = json.loads(brief_path.read_text(encoding="utf-8"))
+    assert "prompt" in brief and "tool_definitions" in brief and "jailed_roots" in brief
+    assert {d["name"] for d in brief["tool_definitions"]} == {
+        "list_dir",
+        "find",
+        "grep",
+        "read_file",
+    }
+
+    # Calls nothing (2K design §3): no overlay, no changed rendered output.
+    assert not (module_root / ENRICHMENT_FILE).is_file()
+    assert markdown_path.read_bytes() == before
+
+
+def test_the_happy_path_writes_the_overlay_and_both_assembled_outputs(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _analyzed_and_rendered(module_root)
+    fake = FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
+    _register_fake(monkeypatch, "fake-happy-path", fake)
+
+    result = CliRunner().invoke(
+        cli,
+        ["module", "enrich", str(module_root), "--agent", "fake-happy-path", "--model", "fake-x"],
+    )
+    assert result.exit_code == 0, result.output
+
+    overlay = json.loads((module_root / ENRICHMENT_FILE).read_text(encoding="utf-8"))
+    assert overlay["produced_by"]["agent"] == "fake-happy-path"
+    assert overlay["produced_by"]["model"] == "fake-x"
+    assert [claim["name"] for claim in overlay["claims"]] == ["Legacy billing edge"]
+
+    # The agent actually made a tool call, and the transcript records it.
+    assert fake.seen_briefs and fake.seen_briefs[0].prompt
+    transcript_lines = (
+        (module_root / ".sextant" / "enrich-transcript.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    assert any(json.loads(line).get("name") == "list_dir" for line in transcript_lines)
+    summary = json.loads(transcript_lines[-1])
+    assert summary == {
+        "event": "run_summary",
+        "partial": False,
+        "partial_reason": None,
+        "refusals": [],
+    }
+
+    markdown = (module_root / ".sextant" / "render" / "architecture.md").read_text(encoding="utf-8")
+    html = (module_root / ".sextant" / "render" / "architecture.html").read_text(encoding="utf-8")
+    assert "> **Enrichment — evidence: llm**" in markdown
+    assert "Legacy billing edge" in markdown
+    assert 'class="llm-badge"' in html
+    assert "Legacy billing edge" in html
+
+
+def test_a_refused_claim_is_reported_and_excluded_from_the_written_overlay(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """spec §10's refused-at-ingest case, live through the CLI: the phantom
+    member is reported on stdout and never reaches the file (2K design §6)."""
+    _analyzed_and_rendered(module_root)
+    claims = [_component(), _component(name="Phantom", members=[PHANTOM_MEMBER])]
+    fake = FakeEnrichmentAgent(answers_text=json.dumps(claims))
+    _register_fake(monkeypatch, "fake-refusal", fake)
+
+    result = CliRunner().invoke(
+        cli, ["module", "enrich", str(module_root), "--agent", "fake-refusal", "--model", "x"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "refused claim 1" in result.output
+    assert PHANTOM_MEMBER in result.output
+
+    overlay = json.loads((module_root / ENRICHMENT_FILE).read_text(encoding="utf-8"))
+    assert [claim["name"] for claim in overlay["claims"]] == ["Legacy billing edge"]
+
+
+def test_the_checked_in_refused_at_ingest_fixture_pins_its_refusal_report(module_root: Path):
+    """Spec §10's own fixture requirement: a checked-in answers file whose
+    claims include at least one refusal (`fixtures/orders-service/
+    enrich-answers-refused.json` — a real component beside a `Phantom edge`
+    naming a class this module does not have), ingested for real and its
+    refusal report pinned — the `--ingest` door's own proof of spec §10,
+    independent of the dynamically-built refusal case above."""
+    _analyzed_and_rendered(module_root)
+    answers_path = FIXTURE / "enrich-answers-refused.json"
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "enrich",
+            str(module_root),
+            "--ingest",
+            str(answers_path),
+            "--agent",
+            "a-human",
+            "--model",
+            "n/a",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert (
+        "refused claim 1: component `Phantom edge` names member "
+        "`com/example/orders/soap/GhostClass#`, which is not a symbol in this workspace"
+    ) in result.output
+
+    overlay = json.loads((module_root / ENRICHMENT_FILE).read_text(encoding="utf-8"))
+    assert [claim["name"] for claim in overlay["claims"]] == [
+        "Billing edge (refused-at-ingest fixture)"
+    ]
+
+
+def test_a_partial_run_is_reported_and_recorded(module_root: Path, monkeypatch: pytest.MonkeyPatch):
+    """2K Task 7 ruling 4: an honest record of a truncated run reaches both
+    the user-visible report and the workspace's own transcript file."""
+    _analyzed_and_rendered(module_root)
+    fake = FakeEnrichmentAgent(
+        answers_text=json.dumps([_component()]), partial=True, partial_reason="max_turns"
+    )
+    _register_fake(monkeypatch, "fake-partial", fake)
+
+    result = CliRunner().invoke(
+        cli, ["module", "enrich", str(module_root), "--agent", "fake-partial", "--model", "x"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "partial" in result.output.lower()
+    assert "max_turns" in result.output
+
+    transcript_lines = (
+        (module_root / ".sextant" / "enrich-transcript.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    summary = json.loads(transcript_lines[-1])
+    assert (summary["partial"], summary["partial_reason"]) == (True, "max_turns")
+
+
+def test_ingest_validates_an_externally_authored_answers_file(module_root: Path, tmp_path: Path):
+    """The universal door (2K design §3): no adapter runs, so `--agent`/
+    `--model` label the overlay's provenance rather than selecting one."""
+    _analyzed_and_rendered(module_root)
+    answers_path = tmp_path / "answers.json"
+    answers_path.write_text(json.dumps([_component(name="Ingested claim")]), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "enrich",
+            str(module_root),
+            "--ingest",
+            str(answers_path),
+            "--agent",
+            "a-human",
+            "--model",
+            "n/a",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    overlay = json.loads((module_root / ENRICHMENT_FILE).read_text(encoding="utf-8"))
+    assert overlay["produced_by"]["agent"] == "a-human"
+    assert overlay["produced_by"]["model"] == "n/a"
+    assert [claim["name"] for claim in overlay["claims"]] == ["Ingested claim"]
+
+    transcript_lines = (
+        (module_root / ".sextant" / "enrich-transcript.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    # No agent ran, so the only line is the run summary — a clean,
+    # non-partial record (`--ingest` has no notion of a truncated run).
+    assert len(transcript_lines) == 1
+    assert json.loads(transcript_lines[0])["partial"] is False
+
+
+def test_ingest_without_agent_or_model_is_refused(module_root: Path, tmp_path: Path):
+    _analyzed_and_rendered(module_root)
+    answers_path = tmp_path / "answers.json"
+    answers_path.write_text(json.dumps([_component()]), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli, ["module", "enrich", str(module_root), "--ingest", str(answers_path)]
+    )
+    assert result.exit_code != 0
+    assert "--agent" in result.output and "--model" in result.output
+
+
+def test_dry_run_and_ingest_are_mutually_exclusive(module_root: Path, tmp_path: Path):
+    answers_path = tmp_path / "answers.json"
+    answers_path.write_text("[]", encoding="utf-8")
+    result = CliRunner().invoke(
+        cli,
+        ["module", "enrich", str(module_root), "--dry-run", "--ingest", str(answers_path)],
+    )
+    assert result.exit_code != 0
+    assert "--dry-run" in result.output and "--ingest" in result.output
+
+
+def test_config_defaults_are_used_and_a_flag_overrides_them(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`.sextant.yml`'s `enrich:` section (2K design §3) supplies `--agent`/
+    `--model`/`--max-turns` when a flag does not — flags win, live through
+    both a defaulted and an overridden field in the same run."""
+    _analyzed_and_rendered(module_root)
+    config_path = module_root / ".sextant.yml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + "enrich:\n  agent: fake-config-default\n  model: default-model\n  max_turns: 7\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def _constructor(**kwargs: object) -> FakeEnrichmentAgent:
+        captured.update(kwargs)
+        return FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
+
+    monkeypatch.setitem(AGENT_REGISTRY, "fake-config-default", _constructor)
+
+    # `--agent` is left to the config default; `--model` is overridden by a flag.
+    result = CliRunner().invoke(
+        cli, ["module", "enrich", str(module_root), "--model", "flag-model"]
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {"model": "flag-model", "max_turns": 7}
+
+    overlay = json.loads((module_root / ENRICHMENT_FILE).read_text(encoding="utf-8"))
+    assert overlay["produced_by"]["agent"] == "fake-config-default"
+    assert overlay["produced_by"]["model"] == "flag-model"

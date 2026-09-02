@@ -48,5 +48,17 @@ def extractor_jar() -> Path:
     return jar
 
 
+def instructions_path() -> Path:
+    """The enrichment instructions document (2K design §5) — the text every
+    `sextant module enrich` run reads as its system prompt, and whose sha256
+    is the overlay's `instructions_hash`. Shipped inside the package, one
+    location like the catalogs and the extractor: it travels with the code
+    that reads it, so a version mismatch cannot happen."""
+    path = _package_root() / "enrich" / "INSTRUCTIONS.md"
+    if not path.is_file():
+        raise MissingResourceError(f"the enrichment instructions are not at {path}")
+    return path
+
+
 def _package_root() -> Path:
     return Path(str(resources.files("sextant")))

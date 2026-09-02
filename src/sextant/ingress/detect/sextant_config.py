@@ -28,6 +28,7 @@ empty answer and look exactly like an unconfigured module.
 """
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -38,13 +39,19 @@ CONFIG_FILE = ".sextant.yml"
 
 # The only keys this file may carry. A closed set, so a misspelling fails rather
 # than being ignored — see the module docstring.
-_KEYS = frozenset({"extract_libraries", "redact"})
+_KEYS = frozenset({"extract_libraries", "redact", "enrich"})
 
 # And the only keys `redact:` may carry, closed for the same reason: a typo'd
 # `value_pattern` that read as "add no value patterns" would look exactly like
 # a module that asked for none, which is the failure this whole file exists to
 # refuse.
 _REDACT_KEYS = frozenset({"key_patterns", "value_patterns"})
+
+# `enrich:`'s own keys (2K design §3: "repo defaults in `.sextant.yml` under
+# `enrich:`; flags win"), closed for the same reason every other section here
+# is: a typo'd `max_turn` would read as "no default", indistinguishable from
+# a module that declared none.
+_ENRICH_KEYS = frozenset({"agent", "model", "max_turns"})
 
 # `groupId:artifactId`, optionally `:version`, over Maven's own identifier
 # charset. Each segment becomes a directory — under `facts/lib/`, or in the
@@ -166,3 +173,53 @@ def read_extract_libraries(module_root: Path) -> tuple[str, ...]:
                 f"`groupId:artifactId:version` coordinate"
             )
     return tuple(declared)
+
+
+@dataclass(frozen=True)
+class EnrichDefaults:
+    """`enrich:`'s own defaults (2K design §3) — each `None` where the module
+    declares none, which is the ordinary case: `sextant module enrich`'s own
+    `--agent`/`--model`/`--max-turns` flags win over whatever is set here,
+    and win over nothing when neither exists."""
+
+    agent: str | None = None
+    model: str | None = None
+    max_turns: int | None = None
+
+
+def read_enrich_defaults(module_root: Path) -> EnrichDefaults:
+    """This module's `enrich:` defaults, or every field `None` where it
+    declares none — the ordinary module, which supplies every flag itself or
+    takes the CLI's own defaults.
+
+    Raises `SextantConfigError` for anything else: unparseable YAML, a root
+    that is not a mapping, an unknown top-level or `enrich:` key, `agent`/
+    `model` not a string, or `max_turns` not a positive integer.
+    """
+    path, document = _document(module_root)
+    section = document.get("enrich", {})
+    if not isinstance(section, dict):
+        raise SextantConfigError(
+            f"{path}: `enrich` must be a mapping of defaults, not {type(section).__name__}"
+        )
+    unknown = sorted(set(section) - _ENRICH_KEYS)
+    if unknown:
+        raise SextantConfigError(
+            f"{path}: `enrich` declares {', '.join(repr(key) for key in unknown)}, which "
+            f"Sextant reads nowhere — the keys it reads are {', '.join(sorted(_ENRICH_KEYS))}"
+        )
+    agent = _optional_string(path, section, "agent")
+    model = _optional_string(path, section, "model")
+    max_turns = section.get("max_turns")
+    if max_turns is not None and (
+        not isinstance(max_turns, int) or isinstance(max_turns, bool) or max_turns < 1
+    ):
+        raise SextantConfigError(f"{path}: `enrich.max_turns` must be a positive integer")
+    return EnrichDefaults(agent=agent, model=model, max_turns=max_turns)
+
+
+def _optional_string(path: Path, section: dict[str, object], name: str) -> str | None:
+    value = section.get(name)
+    if value is not None and not isinstance(value, str):
+        raise SextantConfigError(f"{path}: `enrich.{name}` must be a string")
+    return value

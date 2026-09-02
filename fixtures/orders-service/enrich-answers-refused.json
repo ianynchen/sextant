@@ -1,0 +1,23 @@
+[
+  {
+    "kind": "component",
+    "evidence": "llm",
+    "anchor": "after-component-overview",
+    "name": "Billing edge (refused-at-ingest fixture)",
+    "purpose": "Everything this module exchanges with the billing system over the older XML transport lives here.",
+    "members": [
+      "com/example/orders/soap/OrderSoapEndpoint#",
+      "com/example/orders/soap/BillingSoapClient#"
+    ]
+  },
+  {
+    "kind": "component",
+    "evidence": "llm",
+    "anchor": "after-component-overview",
+    "name": "Phantom edge",
+    "purpose": "A component the model invented — no such class exists in this module.",
+    "members": [
+      "com/example/orders/soap/GhostClass#"
+    ]
+  }
+]

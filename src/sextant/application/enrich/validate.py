@@ -55,6 +55,7 @@ from sextant.domain.enrichment import (
     VerdictClaim,
     question_identity,
 )
+from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import bare_descriptor, simple_name
 
 # The diagram node scan (2K design §6, "every node/participant must validate
@@ -101,6 +102,16 @@ from sextant.domain.symbols import bare_descriptor, simple_name
 # this check catches the invented class name, not every possible one.
 _NODE_DECLARATION = re.compile(r"^[ \t]*(?:class|participant|actor)[ \t]+([A-Za-z_][\w$.]*)")
 
+# 2K Task 7 ruling 1: the brief IS the wire, so a redaction-sensitive
+# `open_questions.path` (an address that can carry userinfo, or match a
+# repo's own `redact:` value pattern) reaches the model already
+# `redact_text`-ed — the model never sees the raw value, and a verdict it
+# writes can only ever echo the redacted spelling back. Defaulted, like
+# `document._DEFAULT_REDACTOR`, so every existing caller of this module —
+# every test that builds an overlay by hand — keeps comparing against the
+# built-in set alone, unchanged.
+_DEFAULT_REDACTOR = Redactor.from_rules()
+
 
 @dataclass(frozen=True)
 class Refusal:
@@ -117,7 +128,10 @@ class Refusal:
 
 
 def validate_overlay(
-    overlay: EnrichmentOverlay, workspace: Workspace, module_root: Path
+    overlay: EnrichmentOverlay,
+    workspace: Workspace,
+    module_root: Path,
+    redactor: Redactor = _DEFAULT_REDACTOR,
 ) -> tuple[tuple[Claim, ...], tuple[Refusal, ...]]:
     """`overlay`'s claims split into the grounded and the refused.
 
@@ -130,6 +144,15 @@ def validate_overlay(
     `module_root` is the directory the module was analysed from — the root a
     `section` claim's citations are resolved against, and the boundary they
     must stay inside.
+
+    `redactor` canonicalizes a verdict's `question.path` match the same way
+    on both sides (2K Task 7 ruling 1): the brief hands the model a
+    `redact_text`-ed `open_questions` row, so a model copying that row back
+    into a `verdict` can only ever echo the redacted spelling — `_row_identity`
+    redacts the WORKSPACE row's own `path` before comparing, so a redaction
+    that changed nothing (the ordinary case) still matches on the raw value
+    and a redaction that changed something still matches on the value the
+    model actually saw.
     """
     descriptors = set()
     names = set()
@@ -137,7 +160,7 @@ def validate_overlay(
         descriptor = bare_descriptor(str(row["symbol"]))
         descriptors.add(descriptor)
         names.add(simple_name(descriptor))
-    questions = {_row_identity(row) for row in workspace.query("open_questions")}
+    questions = {_row_identity(row, redactor) for row in workspace.query("open_questions")}
 
     accepted: list[Claim] = []
     refusals: list[Refusal] = []
@@ -151,7 +174,10 @@ def validate_overlay(
 
 
 def stale_claims(
-    overlay: EnrichmentOverlay, workspace: Workspace, module_root: Path
+    overlay: EnrichmentOverlay,
+    workspace: Workspace,
+    module_root: Path,
+    redactor: Redactor = _DEFAULT_REDACTOR,
 ) -> tuple[Refusal, ...]:
     """The claims of `overlay` that no longer hold against `workspace` as it
     stands now — the ingest checks re-run at render time (2K design §6).
@@ -165,17 +191,27 @@ def stale_claims(
 
     Takes `module_root` for the reason `validate_overlay` does: a citation is
     resolved against a directory, and a file deleted since the run is exactly
-    the kind of staleness this is looking for.
+    the kind of staleness this is looking for. `redactor` should be the same
+    one the run was ingested with (ordinarily the module's own, since render
+    and enrich share one), for the reason `validate_overlay`'s own docstring
+    gives.
     """
-    return validate_overlay(overlay, workspace, module_root)[1]
+    return validate_overlay(overlay, workspace, module_root, redactor)[1]
 
 
-def _row_identity(row: dict[str, object]) -> tuple[str | None, ...]:
+def _row_identity(row: dict[str, object], redactor: Redactor) -> tuple[str | None, ...]:
     """One `open_questions` row's identity. The row's own column is named
     `question`; the claim's field is named `kind`, because on a claim
-    `question` is already the reference object."""
+    `question` is already the reference object.
+
+    `path` is redacted before the tuple is built (2K Task 7 ruling 1) — the
+    one column of the four that can carry a whole address, the same column
+    `egress/render/document._wire_identity` redacts on its way into a
+    rendered line."""
+    path = row.get("path")
+    redacted_path = None if path is None else redactor.redact_text(str(path))
     return question_identity(
-        row.get("protocol"), row.get("method"), row.get("path"), row.get("question")
+        row.get("protocol"), row.get("method"), redacted_path, row.get("question")
     )
 
 

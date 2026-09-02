@@ -4,23 +4,29 @@ import re
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import click
 from pydantic import ValidationError
 
+from sextant.agents import AGENT_REGISTRY
+from sextant.application.enrich.tools import ToolDefinition, ToolExecutor
 from sextant.application.enrich.validate import stale_claims
 from sextant.application.ports.detector import ModuleModel
+from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport
+from sextant.application.stages import enrich as enrich_stage
 from sextant.application.stages.analyze import AnalyzeResult, analyze
 from sextant.cli.progress import RichProgress
-from sextant.cli.resources import catalogs_dir, extractor_jar
+from sextant.cli.resources import catalogs_dir, extractor_jar, instructions_path
 from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_overlay
 from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
+from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import RedactionError, Redactor
 from sextant.egress.export.manifest import write_manifest
 from sextant.egress.render.document import (
+    AssembledDocument,
     ClaimRedactionError,
     assemble_module_document,
     markdown_document,
@@ -29,7 +35,12 @@ from sextant.egress.render.html import html_document
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
-from sextant.ingress.detect.sextant_config import SextantConfigError, read_redaction_rules
+from sextant.ingress.detect.sextant_config import (
+    EnrichDefaults,
+    SextantConfigError,
+    read_enrich_defaults,
+    read_redaction_rules,
+)
 from sextant.ingress.extract.jvm.generated_naming import JvmGeneratedNaming
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
@@ -128,6 +139,16 @@ def _overlay_for(path: Path) -> EnrichmentOverlay | None:
         ) from refused
 
 
+def _enrich_defaults_for(path: Path) -> EnrichDefaults:
+    """This module's `enrich:` defaults (2K design §3), or a message a user
+    reads instead of a stack trace — the same turn `_redactor_for` gives a
+    bad `redact:` section, for the same reason (D04 §2a's refusal)."""
+    try:
+        return read_enrich_defaults(path)
+    except SextantConfigError as refused:
+        raise click.ClickException(str(refused)) from refused
+
+
 @click.group()
 def cli() -> None:
     """Sextant — architecture from compiled code."""
@@ -191,6 +212,112 @@ def _analyzed(
         raise click.ClickException(str(refused)) from refused
 
 
+def _reconstructed_report(
+    path: Path, workspace: DuckDbWorkspace, metadata: dict[str, Any]
+) -> tuple[ModuleModel, ResolveReport]:
+    """`analyze`'s own `ModuleModel`/`ResolveReport`, read back from
+    `metadata.json` and the workspace rather than re-derived — the "no
+    analysis" rule (M00) `render` and `enrich` (2K design §8) both keep:
+    neither re-detects, re-scans, or re-resolves."""
+    module_info = metadata["module"]
+    reconstructed = ModuleModel(
+        module_id=module_info["id"],
+        coordinates=module_info["id"],
+        version="unknown",
+        root=path,
+        kind=module_info["kind"],
+        languages=frozenset(module_info["languages"]),
+        source_roots=(),
+        output_dirs=(),
+        # Read back rather than re-detected, the same way a skipped catalog is:
+        # neither reader re-runs detection, so the coordinates that resolved to
+        # nothing would otherwise vanish from the document `analyze` recorded
+        # them for (FR-17).
+        libraries_not_resolved=tuple(metadata.get("libraries_not_resolved", [])),
+    )
+    # Read back what `analyze` already established, rather than re-deriving
+    # it — a skipped catalog must stay visible here too (M04, FR-17).
+    skipped_catalogs = [
+        SkippedCatalog(skipped["catalog_id"], tuple(skipped["missing_capabilities"]))
+        for skipped in metadata.get("skipped_catalogs", [])
+    ]
+    report = ResolveReport(
+        facts_loaded=cast(int, workspace.query("facts")[0]["facts"]),
+        endpoints=workspace.query("endpoints"),
+        coverage=workspace.query("coverage")[0],
+        skipped_catalogs=skipped_catalogs,
+        shapes=workspace.query("shapes"),
+        # Not recoverable from the workspace: a type nothing could expand
+        # gets an open, zero-field shape row, which is indistinguishable
+        # from a class that genuinely has no fields. So it rides
+        # metadata.json the same way a skipped catalog does, rather than
+        # being re-derived here from rows that cannot answer.
+        unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
+    )
+    return reconstructed, report
+
+
+def _assembled_sections(
+    path: Path,
+    workspace: DuckDbWorkspace,
+    metadata: dict[str, Any],
+    redactor: Redactor,
+    overlay: EnrichmentOverlay | None,
+    stale: frozenset[int],
+) -> tuple[AssembledDocument, str]:
+    """One assembly, called by both `render` and `enrich` (2K design §8:
+    "the same code path, so the two can never disagree") — two serializations
+    of its result (2K design §6b): `render_module_document` wrapped assembly
+    and the markdown serializer together, which was fine while there was one
+    output; dual output needs the assembled sections handed to both
+    `markdown_document` and `html_document` rather than assembled twice or
+    re-derived from either one's bytes. Returns the module id alongside the
+    sections — the HTML emitter's `<title>`, read off the SAME reconstruction
+    rather than re-read from `metadata` a second time."""
+    reconstructed, report = _reconstructed_report(path, workspace, metadata)
+    sections = assemble_module_document(
+        reconstructed,
+        report,
+        _commit_of(path),
+        tuple(metadata.get("uncovered", [])),
+        shape_fields=workspace.query("shape_fields"),
+        resolved_config=workspace.query("resolved_config"),
+        open_questions=workspace.query("open_questions"),
+        library_symbols=workspace.query("library_symbols"),
+        libraries_not_scanned=tuple(metadata.get("libraries_not_scanned", [])),
+        redactor=redactor,
+        overlay=overlay,
+        stale=stale,
+    )
+    return sections, reconstructed.module_id
+
+
+def _write_rendered_outputs(
+    workspace_dir: Path, sections: AssembledDocument, module_id: str
+) -> tuple[Path, Path]:
+    render_dir = workspace_dir / "render"
+    render_dir.mkdir(parents=True, exist_ok=True)
+    markdown_target = render_dir / "architecture.md"
+    markdown_target.write_text(markdown_document(sections), encoding="utf-8")
+    html_target = render_dir / "architecture.html"
+    html_target.write_text(html_document(sections, module_id), encoding="utf-8")
+    return markdown_target, html_target
+
+
+def _stale_of(
+    overlay: EnrichmentOverlay | None, workspace: DuckDbWorkspace, path: Path, redactor: Redactor
+) -> frozenset[int]:
+    """The positions in `overlay.claims` whose referents no longer exist
+    against `workspace` as it stands now (2K design §6) — empty where there
+    is no overlay at all. Staleness is the ingest checks re-run against the
+    CURRENT workspace: a claim grounded when it was written whose referents
+    have since gone renders as a count, not as a claim about code that no
+    longer exists."""
+    if overlay is None:
+        return frozenset()
+    return frozenset(refusal.index for refusal in stale_claims(overlay, workspace, path, redactor))
+
+
 @module.command("render")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("--workspace", "workspace_dir", type=click.Path(path_type=Path), default=None)
@@ -207,29 +334,7 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
         )
 
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    module_info = metadata["module"]
-    reconstructed = ModuleModel(
-        module_id=module_info["id"],
-        coordinates=module_info["id"],
-        version="unknown",
-        root=path,
-        kind=module_info["kind"],
-        languages=frozenset(module_info["languages"]),
-        source_roots=(),
-        output_dirs=(),
-        # Read back rather than re-detected, the same way a skipped catalog is:
-        # `render` never re-runs detection, so the coordinates that resolved to
-        # nothing would otherwise vanish from the document `analyze` recorded
-        # them for (FR-17).
-        libraries_not_resolved=tuple(metadata.get("libraries_not_resolved", [])),
-    )
-    # Read back what `analyze` already established, rather than re-deriving
-    # it — a skipped catalog must stay visible on `render` too (M04, FR-17).
-    skipped_catalogs = [
-        SkippedCatalog(skipped["catalog_id"], tuple(skipped["missing_capabilities"]))
-        for skipped in metadata.get("skipped_catalogs", [])
-    ]
-
+    redactor = _redactor_for(path)
     # Read here, before the workspace is opened, so a malformed overlay is
     # refused without a half-run render behind it. `render` assembles an
     # overlay the same way `enrich` does — the same code path, so the two can
@@ -238,45 +343,10 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
 
     workspace = DuckDbWorkspace(db_path)
     try:
-        report = ResolveReport(
-            facts_loaded=cast(int, workspace.query("facts")[0]["facts"]),
-            endpoints=workspace.query("endpoints"),
-            coverage=workspace.query("coverage")[0],
-            skipped_catalogs=skipped_catalogs,
-            shapes=workspace.query("shapes"),
-            # Not recoverable from the workspace: a type nothing could expand
-            # gets an open, zero-field shape row, which is indistinguishable
-            # from a class that genuinely has no fields. So it rides
-            # metadata.json the same way a skipped catalog does, rather than
-            # being re-derived here from rows that cannot answer.
-            unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
-        )
         try:
-            # One assembly, two serializations of its result (2K design §6b) —
-            # `render_module_document` wrapped assembly and the markdown
-            # serializer together, which was fine while there was one output;
-            # dual output needs the assembled sections handed to both
-            # `markdown_document` and `html_document` rather than assembled
-            # twice or re-derived from either one's bytes.
-            sections = assemble_module_document(
-                reconstructed,
-                report,
-                _commit_of(path),
-                tuple(metadata.get("uncovered", [])),
-                shape_fields=workspace.query("shape_fields"),
-                resolved_config=workspace.query("resolved_config"),
-                open_questions=workspace.query("open_questions"),
-                library_symbols=workspace.query("library_symbols"),
-                libraries_not_scanned=tuple(metadata.get("libraries_not_scanned", [])),
-                redactor=_redactor_for(path),
-                overlay=overlay,
-                # Staleness is the ingest checks re-run against the workspace as
-                # it stands NOW (2K design §6): a claim grounded when it was
-                # written whose referents have since gone renders as a count,
-                # not as a claim about code that no longer exists.
-                stale=frozenset()
-                if overlay is None
-                else frozenset(refusal.index for refusal in stale_claims(overlay, workspace, path)),
+            stale = _stale_of(overlay, workspace, path, redactor)
+            sections, module_id = _assembled_sections(
+                path, workspace, metadata, redactor, overlay, stale
             )
         # A `redact:` pattern wide enough to break a claim's own schema is the
         # analysed repository's input written wrong, the same class of mistake
@@ -285,14 +355,244 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
         # rule set MEETING a claim that fails, not either alone.
         except ClaimRedactionError as refused:
             raise click.ClickException(str(refused)) from refused
-        render_dir = workspace_dir / "render"
-        render_dir.mkdir(parents=True, exist_ok=True)
-        markdown_target = render_dir / "architecture.md"
-        markdown_target.write_text(markdown_document(sections), encoding="utf-8")
-        html_target = render_dir / "architecture.html"
-        html_target.write_text(html_document(sections, reconstructed.module_id), encoding="utf-8")
+        markdown_target, html_target = _write_rendered_outputs(workspace_dir, sections, module_id)
     finally:
         workspace.close()
+    click.echo(str(markdown_target))
+    click.echo(str(html_target))
+
+
+def _jailed_roots_of(path: Path, workspace_dir: Path) -> tuple[Path, Path, Path]:
+    """The three roots 2K design §4 names: the module's own source, its fact
+    root, and its rendered outputs — the exact layout `ToolExecutor.__init__`
+    is built to accept (its own docstring: "the module root together with
+    its own `.sextant/facts` and `.sextant/render`"). `.sextantignore` is
+    loaded for `path` alone, so every root here has to sit under it — true of
+    the default `--workspace` layout, and refused loudly by `ToolExecutor`
+    itself (caught in `module_enrich`) for a `--workspace` pointed anywhere
+    else."""
+    return (path, workspace_dir / "facts", workspace_dir / "render")
+
+
+def _tool_executor_for(path: Path, workspace_dir: Path, redactor: Redactor) -> ToolExecutor:
+    try:
+        return ToolExecutor(_jailed_roots_of(path, workspace_dir), redactor, IgnoreRules.load(path))
+    except ValueError as refused:
+        raise click.ClickException(str(refused)) from refused
+
+
+def _tool_definition_json(definition: ToolDefinition) -> dict[str, object]:
+    return {
+        "name": definition.name,
+        "description": definition.description,
+        "schema": definition.schema,
+    }
+
+
+@module.command("enrich")
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option("--workspace", "workspace_dir", type=click.Path(path_type=Path), default=None)
+@click.option("--agent", "agent_flag", default=None, help="An `AGENT_REGISTRY` name.")
+@click.option("--model", "model_flag", default=None, help="Passed to the agent verbatim.")
+@click.option("--max-turns", "max_turns_flag", type=int, default=None)
+@click.option("--dry-run", is_flag=True, default=False, help="Write the brief; call no agent.")
+@click.option(
+    "--ingest",
+    "ingest_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Validate an externally-authored answers file instead of calling an agent.",
+)
+def module_enrich(
+    path: Path,
+    workspace_dir: Path | None,
+    agent_flag: str | None,
+    model_flag: str | None,
+    max_turns_flag: int | None,
+    dry_run: bool,
+    ingest_path: Path | None,
+) -> None:
+    """Composes the brief, runs the agent (or a `--dry-run`/`--ingest` door),
+    validates the answer by construction, writes `.sextant-enrichment.json`,
+    and auto-assembles both rendered outputs — one command, done (2K design
+    §8: "no second render command"). Refuses a workspace with no rendered
+    document, naming `render`, before composing anything."""
+    if dry_run and ingest_path is not None:
+        raise click.ClickException("--dry-run and --ingest are mutually exclusive")
+
+    # `ToolExecutor` resolves its jailed roots to absolute paths and checks
+    # them against `IgnoreRules.load`'s own `repo_root` unresolved (2K Task 5)
+    # — a relative `path` (ordinary on a command line: `sextant module enrich
+    # fixtures/orders-service`) would make every root fail that check even
+    # though it is genuinely contained, since an absolute path is never
+    # "relative to" a merely-relative one. Resolved once, here, so `path` and
+    # everything built from it (`workspace_dir`, `ignore`, the jailed roots)
+    # agree on one spelling for the rest of this command.
+    path = path.resolve()
+    workspace_dir = _workspace_dir_of(path, workspace_dir)
+    metadata_path = workspace_dir / "metadata.json"
+    db_path = workspace_dir / "workspace.duckdb"
+    if not metadata_path.is_file() or not db_path.is_file():
+        raise click.ClickException(
+            f"no analysis found at {workspace_dir} — run `sextant module analyze {path}` first."
+        )
+
+    redactor = _redactor_for(path)
+    defaults = _enrich_defaults_for(path)
+    agent_name = agent_flag or defaults.agent
+    model_name = model_flag or defaults.model
+    max_turns = max_turns_flag or defaults.max_turns or 50
+
+    instructions = instructions_path().read_text(encoding="utf-8")
+    instructions_hash = "sha256:" + hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+    executor = _tool_executor_for(path, workspace_dir, redactor)
+    roots = _jailed_roots_of(path, workspace_dir)
+
+    # Read here, in the composition root — `application` reads no files
+    # (`tests/architecture/test_source_rules.py`), so the stage decides
+    # whether a missing rendered document is refused; this is only the read.
+    architecture_md_path = workspace_dir / "render" / "architecture.md"
+    architecture_md = (
+        architecture_md_path.read_text(encoding="utf-8") if architecture_md_path.is_file() else None
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    workspace = DuckDbWorkspace(db_path)
+    try:
+        try:
+            brief = enrich_stage.compose(
+                workspace,
+                path,
+                instructions,
+                architecture_md,
+                metadata,
+                redactor,
+                tuple(executor.definitions()),
+                roots,
+            )
+        except enrich_stage.NotRenderedError as refused:
+            raise click.ClickException(str(refused)) from refused
+
+        if dry_run:
+            brief_path = workspace_dir / "enrich-brief.json"
+            brief_path.write_text(
+                json.dumps(
+                    {
+                        "prompt": brief.prompt,
+                        "tool_definitions": [
+                            _tool_definition_json(d) for d in brief.tool_definitions
+                        ],
+                        "jailed_roots": [str(r) for r in brief.jailed_roots],
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            instructions_copy = workspace_dir / "enrich-instructions.md"
+            instructions_copy.write_text(instructions, encoding="utf-8")
+            click.echo(str(brief_path))
+            click.echo(str(instructions_copy))
+            return
+
+        # `metadata.json`'s own bytes stand in for "the graph" the run went
+        # against (D06 §3's "one run of one model against one graph"): a
+        # deterministic dump already covering coverage, endpoints, shapes and
+        # the environments this analysis resolved, cheaper than a bespoke
+        # whole-workspace hash and no less honest an answer to "did the graph
+        # change under this overlay".
+        workspace_fingerprint = "sha256:" + hashlib.sha256(metadata_path.read_bytes()).hexdigest()
+
+        if ingest_path is not None:
+            if agent_name is None or model_name is None:
+                raise click.ClickException(
+                    "--ingest needs --agent and --model to label the overlay's provenance "
+                    "(no adapter runs, so nothing else can say who produced the answer)"
+                )
+            answers_text = ingest_path.read_text(encoding="utf-8")
+            transcript: tuple[dict[str, object], ...] = ()
+            partial, partial_reason = False, None
+        else:
+            known = ", ".join(sorted(AGENT_REGISTRY))
+            if agent_name is None:
+                raise click.ClickException(f"--agent is required — known agents: {known}")
+            if agent_name not in AGENT_REGISTRY:
+                raise click.ClickException(
+                    f"unknown --agent {agent_name!r} — known agents: {known}"
+                )
+            if model_name is None:
+                raise click.ClickException("--model is required")
+            agent = AGENT_REGISTRY[agent_name](model=model_name, max_turns=max_turns)
+            try:
+                answers = agent.run(brief, executor)
+            except EnrichmentAgentError as refused:
+                raise click.ClickException(str(refused)) from refused
+            answers_text = answers.text
+            transcript = tuple(answers.transcript)
+            partial, partial_reason = answers.partial, answers.partial_reason
+
+        try:
+            result = enrich_stage.validate_and_finish(
+                answers_text,
+                workspace,
+                path,
+                redactor,
+                agent_name,
+                model_name,
+                instructions_hash,
+                workspace_fingerprint,
+                partial=partial,
+                partial_reason=partial_reason,
+                transcript=transcript,
+            )
+        except enrich_stage.MalformedAnswersError as refused:
+            raise click.ClickException(str(refused)) from refused
+
+        overlay_path = path / ENRICHMENT_FILE
+        overlay_path.write_text(result.overlay.model_dump_json(indent=2) + "\n", encoding="utf-8")
+
+        # The workspace record (2K Task 7 ruling 4): every tool call, and one
+        # final line naming exactly how the run ended — persisted even when
+        # nothing is partial, so "clean" is a recorded fact and not merely
+        # the absence of a warning.
+        transcript_path = workspace_dir / "enrich-transcript.jsonl"
+        with transcript_path.open("w", encoding="utf-8") as handle:
+            for entry in result.transcript:
+                handle.write(json.dumps(entry, sort_keys=True, default=repr) + "\n")
+            handle.write(
+                json.dumps(
+                    {
+                        "event": "run_summary",
+                        "partial": result.partial,
+                        "partial_reason": result.partial_reason,
+                        "refusals": [
+                            {"index": r.index, "reason": r.reason} for r in result.refusals
+                        ],
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+        # The user-visible report (2K design §6/Task 7 ruling 4): a refused
+        # claim named by position and reason, and an honest word about a run
+        # that did not end cleanly — before either is buried in a file.
+        for refusal in result.refusals:
+            click.echo(f"refused claim {refusal.index}: {refusal.reason}")
+        if result.partial:
+            click.echo(f"partial answer ({result.partial_reason}) — overlay reflects what exists")
+
+        try:
+            stale = _stale_of(result.overlay, workspace, path, redactor)
+            sections, module_id = _assembled_sections(
+                path, workspace, metadata, redactor, result.overlay, stale
+            )
+        except ClaimRedactionError as refused:
+            raise click.ClickException(str(refused)) from refused
+        markdown_target, html_target = _write_rendered_outputs(workspace_dir, sections, module_id)
+    finally:
+        workspace.close()
+    click.echo(str(overlay_path))
     click.echo(str(markdown_target))
     click.echo(str(html_target))
 
