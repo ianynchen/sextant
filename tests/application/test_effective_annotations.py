@@ -255,6 +255,10 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         # Inert for the same reason: this regression is about WHETHER a
         # prefix joins at all, not what joins it.
         path_separator=None,
+        # 2I Task 5's construct gate, inert — this regression's own facts
+        # declare no enclosing type at all, and NULL applies the rules to
+        # every construct exactly as every pre-2I catalog gets.
+        declared_on=None,
     )
     rows = workspace.query("endpoints")
     workspace.close()

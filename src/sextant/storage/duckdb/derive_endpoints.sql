@@ -120,6 +120,17 @@
 --                           never two — and $path_fallback is required beside
 --                           it, since a member carries no name attribute at
 --                           all (`annotation_driven.py::_validate_naming`).
+--   $declared_on         -- 2I design §4: the construct kind the enclosing
+--                           type must be for this catalog's rules to apply,
+--                           or NULL to apply them to any — which is every
+--                           catalog written before this parameter, and what
+--                           keeps their derivations byte-identical. One
+--                           annotation family can mark both a served
+--                           interface and the generated client stub of one;
+--                           the two are opposite DIRECTIONS of the same wire
+--                           identity, so without this each catalog derives
+--                           both and a module is published as calling the
+--                           operations it serves.
 --   $synthetic_annotations -- Task 6 (D02 §2, §3): rows the effective-
 --                           annotations pre-pass (`resolve/effective_annotations.py`)
 --                           synthesizes for a module-local composed annotation
@@ -592,10 +603,16 @@ derived AS (
     -- A handler is a method OR a free function (D00 §4); the JVM extractor
     -- emits only 'method', which is what keeps this a no-op today.
     JOIN symbols s ON s.symbol = m.method_symbol AND s.construct_kind IN ('method', 'function')
+    -- The enclosing type's own kind, read only so $declared_on can gate on
+    -- it. A LEFT join because a free function has no enclosing type at all
+    -- (D00 §4) and must keep deriving exactly as it did — which is also why
+    -- the gate below tests the KIND rather than the join's success.
+    LEFT JOIN symbols e ON e.symbol = s.enclosing
     LEFT JOIN controllers c ON s.enclosing = c.type_symbol
     LEFT JOIN prefixes p ON p.type_symbol = s.enclosing
     LEFT JOIN qualifier_scopes q ON q.type_symbol = s.enclosing
     WHERE ($type_annotation IS NULL OR c.type_symbol IS NOT NULL)
+      AND ($declared_on IS NULL OR e.construct_kind = $declared_on)
       -- A declaration whose annotation only means anything INSIDE a scope,
       -- with no scope found at either level, has no address — so it derives
       -- NO ROW rather than the bare member name. The bare name would read as

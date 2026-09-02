@@ -45,17 +45,17 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.open_questions import record_open_questions
-from sextant.application.resolve.shapes.arguments import _bare_reference
+from sextant.application.resolve.shapes.arguments import _bare_reference, parameter_index
 from sextant.application.resolve.shapes.contracts import _body_parameter, _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of, derive_shapes
 from sextant.domain.symbols import bare_descriptor, method_name, type_descriptor
 
-# D00 §5's argument kinds this pass reads. `parameter` is the whole join:
-# it is the one kind that says "this argument is the value my own caller
-# handed me", and `arguments.py` deliberately treats it as naming no value
-# (its `_UNREAD_KINDS`), which is why resolving it is this module's job and
-# not that one's.
-_PARAMETER_KIND = "parameter"
+# D00 §5's argument kinds this pass reads. `parameter` is the whole join: it
+# is the one kind that says "this argument is the value my own caller handed
+# me", and `arguments.py` deliberately treats it as naming no value (its
+# `_UNREAD_KINDS`) — the read itself is `arguments.parameter_index`, one
+# primitive shared with the identity join `single_call` resolves through the
+# same kind, so the two can never disagree about what "bare" means.
 _CLASS_KIND = "class"
 
 # Where a matched call keeps the payload type (2G design §7). `receiver_owner`
@@ -307,11 +307,7 @@ def _names_parameter(argument: dict[str, Any] | None, parameter: int) -> bool:
     `unresolved` a value merged from this parameter and a literal reads as,
     which is the honest answer the checkpoint pinned and not a case to work
     around."""
-    return (
-        argument is not None
-        and argument.get("kind") == _PARAMETER_KIND
-        and argument.get("value") == parameter
-    )
+    return parameter_index(argument) == parameter
 
 
 def _argument_at(site: dict[str, Any], index: int | None) -> dict[str, Any] | None:

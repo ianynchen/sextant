@@ -10,6 +10,20 @@ detect:
 requires: [annotation_args, typed_signatures]
 
 matches:
+  # 2I design §4 (Task 5): the mirror image of `jakarta-jws-client.yml`'s own
+  # `declared_on: interface`. `@WebService` marks both a service and the
+  # generated client stub of one, and the two are opposite DIRECTIONS of the
+  # same wire identity — so the annotation is partitioned between the two
+  # files by what it sits on, and neither can reach the other's declarations.
+  # Without it, a module holding a stub interface would publish every stubbed
+  # operation as one it also SERVES, on the strength of an annotation that says
+  # only "this is a web service interface".
+  #
+  # It also fences the member rule below, which is the sharper half: `members:
+  # public_methods` over an unowned `@WebService` interface would derive an
+  # inbound row for each of its methods, with a handler that implements
+  # nothing.
+  declared_on: class
   # Deliberately NO `type_annotation`, and this is the one design decision the
   # whole file turns on. `annotation_driven.py::run` reads it as a SINGLE fqn,
   # and this gate has TWO spellings that are the same annotation either side of

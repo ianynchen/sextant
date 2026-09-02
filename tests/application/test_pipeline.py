@@ -1288,7 +1288,14 @@ def test_a_payload_root_derives_its_qname_identity_from_two_attributes_of_one_an
     row = _soap_row(report, "{http://orders.example.com/ws}placeOrderRequest")
 
     assert row["method"] is None
-    assert row["direction"] == "inbound"
+    # 2I Task 5: `both`, not `inbound` — `BillingSoapClient` calls the very
+    # operation this endpoint serves (its payload type's `@XmlRootElement`
+    # states the same QName), so D02 §3's merge folded the outbound row into
+    # this one. Everything this test is ABOUT is untouched by that: the merge
+    # keeps the handler's own row, its handler, its contracts and its
+    # `catalog_id`, and changes only the direction and the carried
+    # caller/peer.
+    assert row["direction"] == "both"
     assert row["handler"].endswith("OrderSoapEndpoint#placeOrder(sig_fd19bfc7).")
     assert row["resolution"] == "resolved"
     assert row["evidence"] == "compiler"

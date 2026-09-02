@@ -378,6 +378,13 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # (2I Task 2) and the insert-if-absent guard keeps THAT one — the same
     # first-writer agreement `auditTrail`'s own comment above states, now live
     # on a second protocol. `soap` becomes 6.
+    # 2I Task 5 (`spring-ws-template.yml`): +1 soap OUTBOUND and NO new row.
+    # `BillingSoapClient` calls `marshalSendAndReceive` twice, and both calls
+    # hand over a `PlaceOrderRequest`, whose `@XmlRootElement` names the very
+    # QName `OrderSoapEndpoint#placeOrder` already serves — so the outbound row
+    # merges into that inbound one (D02 §3) and the identity becomes
+    # `direction: both`, counted once in each bucket. The total stays 116 + 6
+    # and `soap` stays 6 inbound; only the outbound side gains its 1.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "graphql": 12,
@@ -395,6 +402,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "jms": 3,
         "kafka": 10,
         "pubsub": 4,
+        "soap": 1,
         "sqs": 3,
         "websocket": 2,
     }
@@ -512,7 +520,27 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # inbound 78 + 1 = 79 — the 124-endpoint total (5 + 79 + 40 = 124).
     # Nothing outbound and nothing `both`, for the same reason Task 2's own
     # row is neither.
-    assert rows == [("both", 5), ("inbound", 79), ("outbound", 40)]
+    # 2I Task 5 (`spring-ws-template.yml`): the SIXTH `both` row, and the first
+    # one on a non-http protocol that was not already a messaging destination.
+    # `BillingSoapClient` calls the very operation `OrderSoapEndpoint` serves —
+    # the payload type's own `@XmlRootElement` states the same QName
+    # `@PayloadRoot` does — so D02 §3's merge fires exactly as designed: the
+    # inbound row becomes `both` and keeps its handler, the outbound row is
+    # deleted and its caller and peer are carried onto the survivor. Inbound
+    # 79 - 1 = 78 and `both` 5 + 1 = 6, outbound unchanged at 40 — the total
+    # stays 124 (6 + 78 + 40), because a merge moves a row rather than adding
+    # one.
+    #
+    # BOTH of the fixture's `marshalSendAndReceive` calls carry that one
+    # identity (they hand over the same payload type), so the two collapse to
+    # ONE outbound row before the merge — D02 §5's insert-if-absent on wire
+    # identity, which does not compare `peer`. The surviving row is `place`'s,
+    # in `call_sites` order, so the `peer` recorded is the config-fed
+    # `${soap.billing.uri}` and `placeAt`'s literal
+    # `http://billing.example.com/ws/direct` is the one dropped. Pinned as it
+    # is rather than worked around: two addresses for one operation are two
+    # peers on one identity, and the identity is what this table is keyed on.
+    assert rows == [("both", 6), ("inbound", 78), ("outbound", 40)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -815,6 +843,84 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
     ]
 
 
+def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its_address(
+    tmp_path: Path,
+):
+    """2I Task 5 (`spring-ws-template.yml`), live and whole through the real
+    command — the outbound half of this phase's SOAP surface.
+
+    Four claims, each of which was a separate piece of machinery:
+
+    * THE OPERATION IS READ OFF THE PAYLOAD TYPE. `marshalSendAndReceive`'s
+      argument is a bare `parameter` and its own declared descriptor is the
+      erased `(Ljava/lang/Object;)…`, so the call site names no payload at
+      all. `path_from_argument_type` follows the one hop the facts already
+      support — caller → declared signature → parameter type — and reads
+      `@XmlRootElement(name, namespace)` off that type, deriving the same
+      `{http://orders.example.com/ws}placeOrderRequest` QName the handler's
+      `@PayloadRoot` states and `orders.wsdl` declares. Three independent
+      statements of one identity, meeting.
+    * THE ADDRESS IS READ OFF THE CONFIGURATION. `place` passes no URI: the
+      template's `defaultUri` was set in `BillingSoapClient`'s own
+      constructor from a `@Value("${soap.billing.uri}")` parameter, and
+      `default_address` plus the field ladder's parameter rung name that
+      expression. It lands in `peer` whole — a SOAP address is not the wire
+      identity here, and half of an expression is not an address — where the
+      per-environment join resolves it to a real URL per profile.
+    * THE MERGE. The module both serves and calls that operation, so D02 §3's
+      merge fires: one row, `direction: both`, the handler's own row surviving
+      with the caller and peer carried onto it and the outbound twin deleted.
+    * `jakarta-jws-client.yml` derives NOTHING here, which is what
+      `declared_on` is for: every `@WebService` in this fixture is a CLASS, so
+      the stub catalog claims none of them and no served operation is
+      republished as one the module calls. Its live surface arrives with Task
+      6's stub jar.
+    """
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    try:
+        soap = [row for row in workspace.query("endpoints") if row["protocol"] == "soap"]
+        peers = [
+            (str(row["environment"]), row["resolved_peer"], row["unresolved_reason"])
+            for row in workspace.query("resolved_peers")
+            if row["protocol"] == "soap"
+        ]
+    finally:
+        workspace.close()
+
+    # The stub catalog is loaded and selected (the fixture depends on both
+    # `jakarta.jws` spellings) and still derives nothing, because it claims
+    # interfaces only.
+    assert [row for row in soap if row["catalog_id"] == "jakarta-jws-client"] == []
+    # Exactly one soap row carries a caller, and it is the merged one.
+    called = [row for row in soap if row["caller"] is not None]
+    assert len(called) == 1
+    [place] = called
+    assert place["path"] == "{http://orders.example.com/ws}placeOrderRequest"
+    assert place["direction"] == "both"
+    assert place["method"] is None
+    assert place["resolution"] == "resolved"
+    # The handler survives the merge and the caller is carried onto it.
+    assert str(place["handler"]).endswith(
+        "com/example/orders/soap/OrderSoapEndpoint#placeOrder(sig_fd19bfc7)."
+    )
+    assert str(place["caller"]).endswith(
+        "com/example/orders/soap/BillingSoapClient#place(sig_b5d0d855)."
+    )
+    # `peer` is the expression whole, never split: `${soap.billing.uri}` has
+    # no authority half to take.
+    assert place["peer"] == "${soap.billing.uri}"
+    # ... and it resolves per environment, both profiles, no gap.
+    assert peers == [
+        ("default", "http://billing.internal.example.com/ws", None),
+        ("prod", "http://billing.prod.internal.example.com/ws", None),
+    ]
+
+
 def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
     """The same row at the document a reader actually sees — 2I's mirror of
     `test_a_schema_first_operation_reaches_the_rendered_document` above.
@@ -854,6 +960,17 @@ def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(tmp_path: P
     # coalesces a response here — the boundary is visible in the rendered
     # document, not just the endpoint table.
     assert "quoteOrderRequest`\n  - Response:" not in document
+    # 2I Task 5: the merged row appears in BOTH sections, and the outbound
+    # one carries the configuration expression as its peer — the address a
+    # reader needs, verbless like every other soap row.
+    assert (
+        "| `soap {http://orders.example.com/ws}placeOrderRequest` | ${soap.billing.uri} | "
+        "`com/example/orders/soap/BillingSoapClient#place(sig_b5d0d855).` | xml | resolved |"
+    ) in document
+    assert (
+        "| `soap {http://orders.example.com/ws}placeOrderRequest` | "
+        "`com/example/orders/soap/OrderSoapEndpoint#placeOrder(sig_fd19bfc7).` | "
+    ) in document
 
 
 def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_path: Path):

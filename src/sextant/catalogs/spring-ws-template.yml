@@ -1,0 +1,166 @@
+id: spring-ws-template
+displayName: Spring Web Services (WebServiceTemplate)
+style: single_call
+protocol: soap
+direction: outbound
+
+detect:
+  coordinates: ["org.springframework.ws:spring-ws-core"]
+
+requires: [call_site, string_constants, typed_signatures]
+
+# A SECOND FILE beside `spring-ws.yml`, not a second block inside it, and the
+# reason is a registry constraint rather than a preference: a catalog file
+# declares exactly one `style` and one `direction` (`ports/catalogs.py`,
+# `yaml_source.py`), so an `annotation_driven` inbound file cannot also carry
+# `single_call` outbound rows. The same constraint `graphql-schema.yml` proved
+# and `wsdl-schema.yml` restated this phase; the naming follows the
+# `spring-jms.yml`/`spring-jms-template.yml` and
+# `spring-kafka.yml`/`spring-kafka-template.yml` pairs already shipped.
+matches:
+  owner: org.springframework.ws.client.core.WebServiceTemplate
+  # 2I design §4, form 2. This client's address is a property of the TEMPLATE,
+  # set once, and the overloads that carry no URI are not calls without an
+  # address — they are calls to the one the template was configured with. The
+  # setter is named here rather than known by the engine, exactly as every
+  # other call this file claims is.
+  #
+  # WHAT THIS CAN AND CANNOT SEE, stated because the boundary is narrow: the
+  # facts carry no link from a call's receiver back to the field holding it (a
+  # receiver is a value id, meaningless outside its own method — D00 §5), so
+  # the lookup is confined to the type that makes the call and configures the
+  # template in its own body. A template configured in one class and injected
+  # into another resolves to nothing, honestly; so does a type that configures
+  # two templates with two different addresses, since two candidates are not
+  # an address.
+  default_address: { method: setDefaultUri, arg: 0 }
+  # 2F design §4's field ladder, declared verbatim as `spring-resttemplate.yml`
+  # declares it — the same Spring annotations carry the same configuration onto
+  # a field, a constructor parameter or a bound properties type, and the
+  # `defaultUri` this file reads is fed by exactly that machinery
+  # (`${soap.billing.uri}` → `application.yml`). Naming it here rather than
+  # inheriting it is the same discipline: no framework name reaches the engine.
+  field_sources:
+    value_annotation: org.springframework.beans.factory.annotation.Value
+    properties_annotation: org.springframework.boot.context.properties.ConfigurationProperties
+    prefix_from: prefix
+    getter_prefixes: [get, is]
+  methods:
+    # 2I design §4, form 1 — THE OPERATION IS NOT IN THE ADDRESS. Every call
+    # below goes to one URL; what distinguishes one operation from another is
+    # the root element of the payload, which JAXB states on the payload TYPE.
+    # So the identity is read one hop out: the argument names the calling
+    # method's own parameter, that parameter's declared type carries
+    # `@XmlRootElement`, and its `name`/`namespace` are the same
+    # `{namespace}localPart` QName `@PayloadRoot` states on the serving side
+    # (`spring-ws.yml`) and `orders.wsdl` declares a third time. That agreement
+    # is the point: a caller and a handler of one operation meet on one
+    # identity string.
+    #
+    # ABSENT ATTRIBUTES DERIVE NOTHING. JAXB defaults `name` to the
+    # decapitalized class name and `namespace` to the schema's own — neither is
+    # written into the class file (Phase 2I Task 2, checkpoint item 4), and the
+    # schema's namespace is not in the class file at all. Predicting the first
+    # while guessing the second would publish an operation nobody serves at
+    # `resolved`/`compiler`; an unresolved identity is the honest answer, and
+    # it is what a `@XmlRootElement` naming neither attribute derives here
+    # (DR-6's refusal-to-default).
+    #
+    # `marshalSendAndReceive(Object)` — no URI: the template's own default.
+    - { name: marshalSendAndReceive, arity: 1,
+        path_from_argument_type: { arg: 0,
+                                   annotation: jakarta.xml.bind.annotation.XmlRootElement,
+                                   name_from: name, qualifier_from: namespace,
+                                   format: qname } }
+    # `marshalSendAndReceive(String uri, Object payload)` — the URI-literal
+    # overload. Deliberately NO `body_arg`: the payload argument is a bare
+    # `parameter`, which names no value (`arguments._UNREAD_KINDS`), so a
+    # declared body capture would fail on exactly the rows whose payload the
+    # identity rule DID read (checkpoint ruling I1). The rule supplies both.
+    #
+    # ARITY IS NOT A DISCRIMINATOR HERE, and the cost is stated rather than
+    # hidden: `marshalSendAndReceive` also declares `(Object, WebServiceMessage
+    # Callback)` at arity 2 and `(String, Object, WebServiceMessageCallback)`
+    # at arity 3, and the fact stream identifies a call by owner, name and
+    # argument COUNT (`single_call._matching_method`). A callback-form call
+    # therefore reads its address where the payload is and its payload where
+    # the callback is — and both reads then fail, because a payload instance is
+    # not a string address and a callback type carries no `@XmlRootElement`. So
+    # the collision costs RECALL (that call's real identity is missed) and
+    # never publishes a wrong row, which is the direction this file is willing
+    # to fail in.
+    - { name: marshalSendAndReceive, arity: 2, url_arg: 0,
+        path_from_argument_type: { arg: 1,
+                                   annotation: jakarta.xml.bind.annotation.XmlRootElement,
+                                   name_from: name, qualifier_from: namespace,
+                                   format: qname } }
+    - { name: marshalSendAndReceive, arity: 3, url_arg: 0,
+        path_from_argument_type: { arg: 1,
+                                   annotation: jakarta.xml.bind.annotation.XmlRootElement,
+                                   name_from: name, qualifier_from: namespace,
+                                   format: qname } }
+  # DELIBERATELY NOT CLAIMED: `sendAndReceive`'s four callback overloads
+  # (`(callback, callback)`, `(uri, callback, callback)`, `(callback,
+  # extractor)`, `(uri, callback, extractor)` — read off the shipped
+  # `spring-ws-core` jar rather than assumed). None of them takes a payload
+  # ARGUMENT at all: the request message is written inside the callback, so no
+  # declared type carries `@XmlRootElement` for the identity rule to read, and
+  # a row for one could only ever be operation-less.
+  #
+  # Claiming them anyway is worse than the recall gap, and specifically so: a
+  # row declaring no `path_from_argument_type` reads its address through
+  # `url_of`, whose answer lands in `path` — which for this protocol is where
+  # the OPERATION goes (2I design §1: the path column carries a QName or an
+  # action URI). That would publish a transport address as an operation
+  # identity at `resolved`/`compiler`. So these calls are a stated boundary
+  # recorded here rather than half-derived, and a COVERAGE line rather than a
+  # `KNOWN_GAPS` key: nothing derives a row for them, so there is no row for a
+  # gap key to qualify.
+
+# 2G design §7, rung 1: SOAP's wire is XML by definition — the envelope IS an
+# XML document — so the format is a property of the protocol rather than of
+# anything a call states. IDENTICAL to `spring-ws.yml`'s and
+# `jakarta-jws.yml`'s entries by contract: the ladder refuses a contradiction
+# between two catalogs rather than picking one, so the copies cannot drift.
+format_fixed:
+  soap: xml
+
+# Deliberately NO `wrappers` block, for `spring-ws.yml`'s reason restated from
+# the client side: `marshalSendAndReceive` returns whatever the `Marshaller`
+# unmarshalled, and the transport never sees an HTTP envelope. The sibling
+# outbound HTTP catalogs' `{ResponseEntity, Optional}` pair would peel a type
+# this framework hands back whole.
+
+# The three describing blocks below are IDENTICAL to `spring-ws.yml`'s, and
+# that is load-bearing rather than tidy: a payload type is expanded by
+# whichever catalog reaches it first, and `PlaceOrderRequest` is reached from
+# both the handler side and the call side. Two different rule sets would
+# describe one type two ways depending on catalog order.
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

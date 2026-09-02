@@ -61,6 +61,30 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
     return None, None, "unresolved"
 
 
+def parameter_index(argument: dict[str, Any] | None) -> int | None:
+    """The caller parameter one argument names, BARE (D00 §5's `parameter`
+    kind) — or None for anything else.
+
+    The one primitive behind every pass that resolves a value living in
+    whatever called this method: `parse_binding`'s parse join asks whether an
+    argument is a KNOWN index, `single_call`'s argument-type identity asks
+    WHICH index it is, and both are this one read. Bare only, and that
+    narrowness is the soundness rule rather than a limitation to widen: a
+    value merged from a parameter and anything else reads `unresolved` (Phase
+    2G checkpoint), so a conditional producer names no parameter here and
+    resolves to nothing — which is the honest answer, since either branch
+    could have produced it."""
+    if argument is None or argument.get("kind") != _PARAMETER_KIND:
+        return None
+    value = argument.get("value")
+    return value if isinstance(value, int) else None
+
+
+# D00 §5's argument kind naming a value the caller was handed. Spelled once
+# here because two passes now compare against it.
+_PARAMETER_KIND = "parameter"
+
+
 def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any] | None:
     """The argument at a call site's declared position, or None where the
     caller names no position at all (`body_arg`/`response_arg` are optional)
@@ -146,6 +170,37 @@ def channel_of(argument: dict[str, Any] | None) -> tuple[None, str | None, str]:
     return None, None, "unresolved"
 
 
+def peer_of(argument: dict[str, Any] | None) -> tuple[str | None, str]:
+    """`url_of`'s counterpart for an address that is NOT the wire identity.
+
+    Some protocols name the operation somewhere other than the address: the
+    identity is read off the payload or the declaration, and the address the
+    call was sent to says only WHICH deployment answered it. For those, the
+    address contributes exactly one column — `peer`, D01 §3's "outbound target
+    hint … that the system tier later resolves against `participants`" — and
+    the `path` it would otherwise have carried belongs to the identity
+    instead.
+
+    WHOLE, never split, and for `channel_of`'s reason restated: an address
+    fed from configuration arrives as a `${...}` expression, which CP-2's
+    split cannot touch at all (the authority half of an expression is not an
+    authority), so splitting would answer one of the two shapes and silently
+    drop the other. Whole also keeps two deployments on one host apart, which
+    is the distinction a peer exists to draw. `resolved_peers` already reads a
+    placeholder out of `peer` exactly as it does out of `path`, so an
+    expression recorded here still resolves per environment.
+
+    Anything the scanner could not read as a string literal is the same
+    honest answer every other reader here gives: peer NULL, `unresolved`."""
+    if (
+        argument is not None
+        and argument.get("kind") == "string"
+        and isinstance(argument.get("value"), str)
+    ):
+        return str(argument["value"]), "resolved"
+    return None, "unresolved"
+
+
 @dataclass(frozen=True)
 class CarrierRules:
     """The catalog data `argument_descriptor` needs beyond the shared
@@ -218,7 +273,12 @@ class FieldFacts:
       a type to (rung 3);
     - `declared_fields` — each type's own field names, what a getter relaxed-
       binds against so the expression carries the property's DECLARED
-      spelling rather than the accessor's.
+      spelling rather than the accessor's;
+    - `declared_parameters` — every declared constructor's and method's own
+      parameter list, keyed by the FULL symbol (unlike every other key here),
+      because that is what a call site's `caller` holds: rung 2's terminal
+      read, reached directly by an address argument that is the enclosing
+      declaration's own parameter rather than a field written from one.
 
     Every key is a BARE descriptor (Task 6 checkpoint (2)'s join note): a
     `field` argument's own `symbol` and a `field_write`'s own `field` carry no
@@ -231,6 +291,7 @@ class FieldFacts:
     constructor_parameters: dict[str, list[list[dict[str, Any]]]]
     prefixes: dict[str, str]
     declared_fields: dict[str, list[str]]
+    declared_parameters: dict[str, list[dict[str, Any]]]
 
 
 # The annotation argument a single-valued annotation's own value arrives
@@ -315,14 +376,22 @@ def field_facts(workspace: Workspace, catalog: Catalog) -> FieldFacts | None:
         # pick without a fact linking a write to its constructor.
         written_from_parameter.setdefault(str(row["field"]), int(str(row["from_parameter"])))
     constructor_parameters: dict[str, list[list[dict[str, Any]]]] = {}
+    declared_parameters: dict[str, list[dict[str, Any]]] = {}
     for row in workspace.query("constructor_declarations"):
         enclosing = row["enclosing"]
         if enclosing is None:
             continue
         signature = json.loads(str(row["signature"] or "{}")) or {}
-        constructor_parameters.setdefault(bare_descriptor(str(enclosing)), []).append(
-            list(signature.get("parameters") or [])
-        )
+        parameters = list(signature.get("parameters") or [])
+        constructor_parameters.setdefault(bare_descriptor(str(enclosing)), []).append(parameters)
+        declared_parameters[str(row["symbol"])] = parameters
+    # Methods as well as constructors: a template configured from a
+    # `@Value`-annotated SETTER parameter is the same declaration shape as one
+    # configured from a constructor parameter, and which construct holds it is
+    # the framework's convention rather than a fact about the expression.
+    for row in workspace.query("method_declarations"):
+        signature = json.loads(str(row["signature"] or "{}")) or {}
+        declared_parameters[str(row["symbol"])] = list(signature.get("parameters") or [])
     declared_fields: dict[str, list[str]] = {}
     for row in workspace.query("fields"):
         descriptor = bare_descriptor(str(row["symbol"]))
@@ -337,6 +406,7 @@ def field_facts(workspace: Workspace, catalog: Catalog) -> FieldFacts | None:
         constructor_parameters=constructor_parameters,
         prefixes=prefixes,
         declared_fields=declared_fields,
+        declared_parameters=declared_parameters,
     )
 
 
@@ -372,6 +442,7 @@ def address_argument(
     argument: dict[str, Any] | None,
     facts: FieldFacts | None,
     workspace_types: CallFacts,
+    caller: str | None = None,
 ) -> dict[str, Any] | None:
     """The argument a `base`/`url`/`channel` capture should be READ as: the
     argument itself, unless the field ladder could name the configuration
@@ -379,8 +450,12 @@ def address_argument(
     expression spells (2F design §4). Everything downstream — CP-2's split,
     the verbless rules, dedup, `_capture_resolved` — then behaves for a
     resolved field exactly as it does for a url written as a literal, which
-    is the whole point of returning an expression from every rung."""
-    expression = field_expression(argument, facts, workspace_types)
+    is the whole point of returning an expression from every rung.
+
+    `caller` is the symbol of the declaration making this call, needed only by
+    the parameter rung below; omitting it leaves that rung silent and every
+    other one exactly as it was."""
+    expression = field_expression(argument, facts, workspace_types, caller)
     if expression is None:
         return argument
     return {"kind": "string", "value": expression}
@@ -390,6 +465,7 @@ def field_expression(
     argument: dict[str, Any] | None,
     facts: FieldFacts | None,
     workspace_types: CallFacts,
+    caller: str | None = None,
 ) -> str | None:
     """2F design §4's four-rung ladder, in order, for an address argument the
     scanner read as a field (or as the result of a property getter):
@@ -397,6 +473,14 @@ def field_expression(
     1. the field's own `value_annotation` expression, verbatim;
     2. the constructor parameter the field was assigned from (D00 §5's
        `field_write`) and ITS own `value_annotation` expression;
+    2a. the enclosing declaration's OWN parameter, where the address argument
+       is that parameter passed straight through (D00 §5's `parameter` kind),
+       and ITS own `value_annotation` expression. Rung 2's terminal read,
+       reached without the field: an injected value assigned to a field and an
+       injected value handed straight to a configuring call are the same
+       declaration, and only the second carries no `field_write` to follow.
+       Bare parameter references only — `parameter_index`'s own soundness
+       rule;
     3. a `properties_annotation` prefix plus the relaxed-bound property name —
        either the field's own name, where the address argument reads a
        properties field directly, or the name a zero-argument getter binds to,
@@ -424,6 +508,34 @@ def field_expression(
         )
     if kind == "unresolved":
         return _properties_getter_expression(argument.get("source"), facts, workspace_types)
+    if kind == _PARAMETER_KIND:
+        return _parameter_expression(argument, facts, caller)
+    return None
+
+
+def _parameter_expression(
+    argument: dict[str, Any], facts: FieldFacts, caller: str | None
+) -> str | None:
+    """Rung 2a: the address argument IS the enclosing declaration's parameter
+    N, and that parameter carries the expression on its own annotation — the
+    very read rung 2 ends with, minus the `field_write` hop that gets there.
+
+    None without a `caller`, and none where the declaration is not one this
+    module scanned: a parameter's annotations live inside its declaration's
+    signature and nowhere else (Task 6 checkpoint (3)), so a call whose caller
+    left the fact stream names an expression nothing here can see."""
+    index = parameter_index(argument)
+    if index is None or caller is None:
+        return None
+    parameters = facts.declared_parameters.get(caller, [])
+    if index >= len(parameters):
+        return None
+    for use in parameters[index].get("annotations") or []:
+        if use.get("annotation") != facts.sources.value_annotation:
+            continue
+        expression = (use.get("args") or {}).get(_ANNOTATION_VALUE_ARG)
+        if isinstance(expression, str):
+            return expression
     return None
 
 

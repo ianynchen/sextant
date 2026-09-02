@@ -424,6 +424,31 @@ mapping:
   back as, so a YAML `equals: true` matches a real JSON boolean in the bytecode without
   either side guessing at the other's type.
 
+**Phase 2I generalises it once more, at `matches` level rather than inside `mapping`,
+because the question is about the DECLARATION SITE rather than about naming:**
+
+```yaml
+matches:
+  declared_on: interface     # …or `class`; absent applies the rules to either
+```
+
+- **`declared_on` confines a catalog's rules to declarations enclosed by one kind of
+  construct.** It exists because one annotation family can mark two opposite things: a
+  JAX-WS `@WebService` marks both the class that SERVES an operation and the generated stub
+  INTERFACE through which a module CALLS one, and those are opposite directions of the same
+  wire identity. Without it each of the two catalogs derives both rows, the pair then
+  merges (§3), and a module is published as calling the very operations it serves. With it
+  the annotation is partitioned between the two files and neither reaches the other's
+  declarations.
+- **A closed set of two words, `class` and `interface`**, and deliberately not the whole of
+  D00's construct set: only a type encloses the methods this style derives from, so a
+  member kind here would gate every row out and let a file say "this catalog derives
+  nothing" by accident. An unrecognised word is refused rather than read as "no gate",
+  because that reading is the dangerous one — it republishes a served operation as a called
+  one.
+- **Absent means either**, which is what every catalog written before this word declares,
+  and what keeps their derivations byte-identical.
+
 **Three catalogs, one engine change.** The forms are stated in framework-neutral words for
 a reason that was tested rather than asserted: `spring-graphql.yml` introduced them, and
 `netflix-dgs.yml` and `microprofile-graphql.yml` then rode them with **zero further engine
@@ -447,7 +472,8 @@ matches:
 ```
 
 Each `methods` row is `{name, arity?, http_method | method_arg | neither, url_arg |
-channel_arg, body_arg?, response_arg?, record_arg?, direction?}`.
+channel_arg, body_arg?, response_arg?, record_arg?, direction?, path_from_argument_type?}`,
+beside the catalog-level `default_address?` both described below.
 **`http_method` is a literal when the catalog already knows the verb** — `postForObject` is
 always a POST, so the catalog states it once. **`method_arg` is a position when the call
 site carries it instead** — `exchange`'s verb is its own `HttpMethod` argument, an
@@ -513,6 +539,45 @@ payload** — `send(ProducerRecord)`'s one argument names the record, not the to
 value directly. It resolves through the catalog-level block `record_wrappers: [{type,
 channel_ctor_arg, payload_ctor_arg}]`, where `payload_ctor_arg` is an integer position or
 the string `last`.
+
+**`path_from_argument_type` names the operation off the PAYLOAD rather than the address**
+(2I design §4). Some protocols address every operation at one URL and distinguish them by
+what is sent: a SOAP call's identity is its payload's root element, stated on the payload
+*type*, and the call site itself names no type at all — its argument is a bare `parameter`
+([D00](D00-fact-schema.md) §5) and its target descriptor is the erased `Object` such APIs
+declare. The rule is `{arg, annotation, name_from, qualifier_from?, format?}`: the argument
+at `arg` must be a bare parameter reference, its declared type comes from the caller's own
+signature (one hop, the join `parse_binding` already makes for the same argument kind), and
+`annotation`'s attributes on that type give the name and, where declared, the scope it sits
+in. `qualifier_from` and `format` are declared together or not at all — a scope with no
+stated composition is half a rule — and `format`'s one word today is `qname`, the same
+`{scope}name` bracketing `annotation_driven`'s own `qualifier_format` composes.
+
+Three consequences follow, and each is a refusal rather than a convenience. **The address
+stops being the identity**: a row declaring this reads its url argument for `peer` only,
+WHOLE and unsplit (an address fed from configuration is a `${...}` expression with no
+authority half to take, and two deployments on one host are two peers), leaving `path` to
+the operation. **An absent attribute derives no operation** — a framework's own default
+for one is never written into the class file, and a scope defaulted from a schema is not in
+the class file at all, so the row is `unresolved` rather than carrying a plausible-looking
+address. **The resolved type is the payload**, so the row describes its request without a
+`body_arg` that would have failed on a bare parameter — but only once `annotation` has been
+found on it: a type carrying none is not evidence of a payload, whatever sits at that
+position. `path_from_argument_type` beside `record_arg` is a `CatalogError` (the record IS
+the payload source), as is any malformed or unrecognised rule.
+
+**`default_address: {method, arg}` is the address a client was CONFIGURED with**, for the
+overloads that carry none — a `WebServiceTemplate` whose `setDefaultUri` was called in its
+holder's constructor. Catalog-level, because it describes the `owner` rather than one of
+its methods, and applied only to rows naming no `url_arg`/`channel_arg`/`record_arg` of
+their own: a declared position is the call's own answer and always wins. The lookup is
+CONFINED TO THE TYPE THAT MAKES THE CALL, and that boundary is the soundness argument —
+nothing links a call's receiver back to the field holding it (a receiver is a value id,
+meaningless outside its own method), so what can honestly be said is that the type making
+the call also configures the client in its own body. A client configured in another class
+resolves to nothing; so does a type whose setup calls hand over two different addresses,
+because two candidates are not an address. The argument found is read through the field
+ladder (§2j) exactly as an address written at a call site is.
 
 Per matching call site: `path` is the url argument's string literal — the template
 verbatim, placeholders and all, because the template is the wire identity — and
@@ -1907,6 +1972,13 @@ a `field` ([D00](D00-fact-schema.md) §5) climbs four rungs, in order:
    ([D00](D00-fact-schema.md) §5's `field_write`) and ITS own `value_annotation`
    expression — a parameter's annotations live only inside the constructor's signature,
    never as an annotation fact of their own;
+   - **2a. the enclosing declaration's OWN parameter**, where the address argument IS that
+     parameter passed straight through ([D00](D00-fact-schema.md) §5's `parameter` kind):
+     rung 2's terminal read, reached without the field. An injected value assigned to a
+     field and an injected value handed straight to a configuring call are the same
+     declaration, and only the second carries no `field_write` to follow. Bare parameter
+     references only — a value merged from a parameter and anything else reads
+     `unresolved`, which is the honest answer and not a case to widen;
 3. a `properties_annotation` prefix (read from the annotation argument `prefix_from`
    names) plus the relaxed-bound property name — §2i's own `key_matching` rule, reused
    rather than re-implemented. The property is read either from a properties FIELD the

@@ -203,25 +203,45 @@ def test_every_graphql_catalog_declares_the_protocols_fixed_format():
 
 def test_every_soap_catalog_declares_the_protocols_fixed_format():
     """2G design §7, rung 1's SECOND live protocol (2I design §1), and the
-    same rule the graphql test above pins: all THREE catalogs owning `soap`
+    same rule the graphql test above pins: all FIVE catalogs owning `soap`
     declare the identical `format_fixed: {soap: xml}` entry, not one — the
     ladder unions the blocks across catalogs, so a module pulling in only
     `wsdl-schema` (no `@Endpoint`/`@WebService` annotation anywhere) must
     still get the answer, the same way a schema-first GraphQL module does.
 
     `wsdl-schema` (2I Task 4) is the third, and — like `graphql-schema`
-    before it — the only one of the three that is not `annotation_driven`: a
-    schema belongs to no framework, and without its own copy its rows would
-    reach rung 1 with nothing declared and fall through with no rung to
-    answer `xml` at all (its rows carry no bytecode type for rung 4 or rung 5
-    to read)."""
+    before it — the only one of the five that is not `annotation_driven` or
+    `single_call`: a schema belongs to no framework, and without its own copy
+    its rows would reach rung 1 with nothing declared and fall through with no
+    rung to answer `xml` at all (its rows carry no bytecode type for rung 4 or
+    rung 5 to read).
+
+    2I Task 5 adds the two OUTBOUND ones — the protocol's first — and the
+    direction assertion below splits accordingly. Each is a separate file
+    rather than a block on its inbound twin because a catalog declares exactly
+    one style and one direction (`yaml_source.py`), the registry constraint
+    `graphql-schema.yml` proved and `wsdl-schema.yml` restated this phase."""
     catalogs = YamlCatalogSource(CATALOGS).load()
     soap = [c for c in catalogs if c.protocol == "soap"]
 
-    assert {c.id for c in soap} == {"spring-ws", "jakarta-jws", "wsdl-schema"}
+    assert {c.id for c in soap} == {
+        "spring-ws",
+        "jakarta-jws",
+        "wsdl-schema",
+        "spring-ws-template",
+        "jakarta-jws-client",
+    }
     assert all(c.format_fixed == {"soap": "xml"} for c in soap)
-    assert all(c.direction == "inbound" for c in soap)
-    assert {c.style for c in soap} == {"annotation_driven", "schema_operations"}
+    assert {c.id for c in soap if c.direction == "outbound"} == {
+        "spring-ws-template",
+        "jakarta-jws-client",
+    }
+    assert all(c.direction == "inbound" for c in soap if c.direction != "outbound")
+    assert {c.style for c in soap} == {
+        "annotation_driven",
+        "schema_operations",
+        "single_call",
+    }
     assert next(c for c in soap if c.style == "schema_operations").id == "wsdl-schema"
 
 
@@ -3124,3 +3144,137 @@ class _UnusedWorkspace:
         raise AssertionError(f"no query for a refused catalog: {name}")
 
     def close(self) -> None: ...
+
+
+# --- 2I Task 5: `declared_on`, the construct gate -------------------------
+#
+# One annotation family can mark BOTH a served interface and the generated
+# client stub of one — `@WebService` does exactly that — and the two are
+# opposite DIRECTIONS of the same wire identity. Without a gate on the kind of
+# construct the declaration sits on, each catalog derives both and a module is
+# published as calling the very operations it serves. Invented framework, the
+# section above's own discipline.
+
+_GATE_DOCUMENT = Document(
+    document_id="doc_1",
+    relative_path="com/acme/wsish/Surface.java",
+    module_id="com.acme:orders-service",
+    language="java",
+    sextant_version="0.1.0",
+    fact_schema_version="1.0.0",
+    scanner_id="asm",
+    scanner_version="9.7",
+    content_hash="sha256:a",
+    origin_entry="target/classes",
+    origin_tier=OriginTier.MODULE_OUTPUT,
+    redaction_set_hash="sha256:b",
+)
+
+
+def _construct_gate_facts(root: Path) -> None:
+    """One annotation on two constructs: a service CLASS and a stub
+    INTERFACE, each declaring one operation."""
+    service, stub = "com/acme/wsish/Service#", "com/acme/wsish/Stub#"
+    facts = []
+    for enclosing, kind, operation in (
+        (service, ConstructKind.CLASS, "serve"),
+        (stub, ConstructKind.INTERFACE, "call"),
+    ):
+        method = f"{enclosing}{operation}(sig_1)."
+        facts += [
+            SymbolFact(document_id="doc_1", symbol=enclosing, construct_kind=kind),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=enclosing,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=enclosing,
+                retention="runtime",
+                use=AnnotationUse(annotation="com/acme/wsish/Endpoint#", args={}),
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=method,
+                retention="runtime",
+                use=AnnotationUse(annotation="com/acme/wsish/Operation#", args={"name": operation}),
+            ),
+        ]
+    write_fact_file(root / "Surface.jsonl", _GATE_DOCUMENT, facts)
+
+
+def _construct_gate_catalog(declared_on: object, direction: str, catalog_id: str) -> Catalog:
+    matches: dict = {
+        "type_annotation": "com.acme.wsish.Endpoint",
+        "mapping": {
+            "path_from": ["name"],
+            "prefix_from": [],
+            "peer_from": [],
+            "method_from": "method",
+            "all_methods": [],
+            "prefix_annotation": None,
+            "annotations": [{"fqn": "com.acme.wsish.Operation"}],
+        },
+    }
+    if declared_on is not None:
+        matches["declared_on"] = declared_on
+    return Catalog(
+        id=catalog_id,
+        style="annotation_driven",
+        protocol="soap",
+        direction=direction,
+        requires=("annotation_args",),
+        source=Path(f"tests/{catalog_id}.yml"),
+        matches=matches,
+    )
+
+
+def _construct_gate_rows(tmp_path: Path, catalogs: list[Catalog]) -> list[tuple[str, str]]:
+    _construct_gate_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    assert derive_endpoints(workspace, catalogs, capabilities={"annotation_args"}) == []
+    rows = [(str(e["direction"]), str(e["path"])) for e in workspace.query("endpoints")]
+    workspace.close()
+    return sorted(rows)
+
+
+def test_two_catalogs_partition_one_annotation_by_the_construct_it_sits_on(tmp_path: Path):
+    """The whole point of the word: an inbound catalog claiming classes and an
+    outbound one claiming interfaces divide the same annotation between them,
+    and neither reaches the other's declarations. Without it both catalogs
+    would derive both rows, the two identities would merge (D02 §3), and a
+    served operation would read as one the module also calls."""
+    rows = _construct_gate_rows(
+        tmp_path,
+        [
+            _construct_gate_catalog("class", "inbound", "invented-gate-class"),
+            _construct_gate_catalog("interface", "outbound", "invented-gate-interface"),
+        ],
+    )
+    assert rows == [("inbound", "serve"), ("outbound", "call")]
+
+
+def test_a_catalog_declaring_no_construct_gate_still_derives_both(tmp_path: Path):
+    """The inert value, and the regression that matters: every catalog written
+    before this word declares none, and NULL applies its rules to a
+    declaration regardless of what encloses it."""
+    rows = _construct_gate_rows(
+        tmp_path, [_construct_gate_catalog(None, "inbound", "invented-gate-none")]
+    )
+    assert rows == [("inbound", "call"), ("inbound", "serve")]
+
+
+def test_an_unrecognised_construct_gate_is_refused(tmp_path: Path):
+    """Read as "no gate", a typo would republish every served operation as one
+    the module calls — the confidently-wrong-row class this file's other
+    refusals exist for. Refused at run start instead, naming the file."""
+    with pytest.raises(CatalogError) as raised:
+        _construct_gate_rows(
+            tmp_path, [_construct_gate_catalog("klass", "outbound", "invented-gate-typo")]
+        )
+    assert "declared_on" in str(raised.value)
+    assert "invented-gate-typo.yml" in str(raised.value)

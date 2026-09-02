@@ -27,6 +27,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     forwards what the catalog declares."""
     mapping = catalog.matches["mapping"]
     _validate_naming(catalog, mapping)
+    declared_on = _declared_on(catalog)
     type_annotation = catalog.matches.get("type_annotation")
     type_annotation_fqn = None if type_annotation is None else _catalog_symbol(type_annotation)
     prefix_annotation = mapping["prefix_annotation"]
@@ -57,6 +58,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         direction=catalog.direction,
         # Optional (D02 §2, amended): absence means "no type-level gate".
         type_annotation=type_annotation_fqn,
+        # 2I design §4: WHICH KIND of construct this catalog's rules describe,
+        # or NULL where the catalog describes declarations on any construct —
+        # which is every catalog written before it. One annotation family can
+        # mark both a service and the generated client stub of one, and the
+        # two are opposite directions of the same wire; without this the two
+        # catalogs would each derive both, and a module would be reported as
+        # calling the very operations it serves.
+        declared_on=declared_on,
         prefix_annotation=prefix_fqn,
         # `method` is absent for an annotation that pre-sets none, and the
         # derivation reads that absence as "every method in all_methods".
@@ -182,6 +191,33 @@ _MEMBER_RULES = frozenset({"public_methods"})
 # are catalog data: which attribute withdraws a declaration, and at which
 # value, is the framework's own convention.
 _UNLESS_KEYS = frozenset({"attribute", "equals"})
+
+
+# WHICH construct kinds a catalog may confine itself to (2I design §4). A
+# subset of D00's own ConstructKind set rather than the whole of it, because
+# only a TYPE can enclose the methods this engine derives from — naming a
+# method kind here would gate every row out and read as "this catalog derives
+# nothing", which is not something a file should be able to say by accident.
+_DECLARED_ON = frozenset({"class", "interface"})
+
+
+def _declared_on(catalog: Catalog) -> str | None:
+    """The construct kind this catalog's declarations sit on, checked against
+    the closed set — the `_validate_naming` discipline, at the one place the
+    value is still cheap to fix (NFR-5, `yaml_source.py`'s own reason for
+    checking `protocol`/`direction` at the edge).
+
+    An unrecognised word read as "no gate" is the dangerous direction: a
+    catalog written to describe generated client stubs would derive an
+    OUTBOUND row for every server class carrying the same annotations, and a
+    module would be published as calling the operations it serves."""
+    declared = catalog.matches.get("declared_on")
+    if declared is not None and declared not in _DECLARED_ON:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `declared_on: {declared}` is not one of "
+            f"{', '.join(sorted(_DECLARED_ON))} (2I design §4)"
+        )
+    return None if declared is None else str(declared)
 
 
 def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
