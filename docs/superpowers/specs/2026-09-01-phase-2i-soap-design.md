@@ -72,8 +72,11 @@ exclusion filter, `unless: {attribute: <name>, equals: <value>}` (a declaration 
 framework itself withdraws derives nothing). The 2H precedent: vocabulary grows for a
 genuinely new declaration pattern; framework names stay in catalogs.
 
-Four vocabulary additions in all, closed words, refused-when-meaningless per the 2H
-validation pattern, no SOAP word in engine code:
+Four vocabulary additions land on the inbound side; seven in all across the phase
+(closed words, refused-when-meaningless per the 2H validation pattern, no SOAP word
+in engine code) — the other three (`declared_on`, `path_from_argument_type`,
+`default_address`) are outbound-only and land with Task 5 (§4's execution
+amendment). The inbound four:
 
 1. **`qualifier_format: qname`** — joins two attributes as `{a}b`. 2H's
    `qualifier_separator` is deliberately single-character; QName needs bracketing, and
@@ -144,6 +147,53 @@ if not, those rows ship with address and peer resolved and the operation honestl
 rows derive from the interface annotations exactly as Feign's did, identity
 `{ns}operationName` (defaults per §2's two vocabulary words) — whether the stubs sit
 in the module or in an opted-in jar (§5).
+
+**Execution amendment (Task 5, 2026-09-01):** three sentences above don't survive
+Task 5's shipped reality. First, neither outbound form lands as a block on an
+existing inbound file, as "`single_call` rows on `spring-ws.yml`" and an unqualified
+"outbound `annotation_driven`" both imply above — each ships on its OWN new catalog
+file instead: `WebServiceTemplate` rows are `single_call` on **`spring-ws-template.yml`**,
+and generated-stub rows are outbound `annotation_driven` on **`jakarta-jws-client.yml`**.
+The reason is the registry constraint, proven a third time this program: a catalog
+file declares exactly one `style` and one `direction` (`ports/catalogs.py`,
+`yaml_source.py`), so an inbound `annotation_driven` file cannot also carry outbound
+rows of either style — `graphql-schema.yml` and `wsdl-schema.yml` (§3) already forced
+this one-file-per-(style, direction) split; the outbound pair restates it, not a new
+finding.
+
+Second, the `field_sources` sentence above is false twice over, and review caught
+both: "the call's receiver is the template field" assumes a receiver→field link that
+does not exist in the fact stream — `call_site.receiver` is a bare value id,
+meaningless outside its own method (D00 §5), so no catalog can walk from a receiver
+to the field it came from — and "2F's ladder walks its constructor/`@Value`/config
+feed" names the wrong feed shape: the shipped fixture's `defaultUri` is fed through a
+bean CONSTRUCTOR PARAMETER, not a `@Value`-annotated field. The shipped mechanism
+reads instead: a NEW `single_call` word, **`default_address: {method, arg}`**, names
+an address-configuring call (`setDefaultUri`) declared in the SAME type as the
+template call it addresses — two such calls disagreeing on a value refuse rather
+than pick one — and the argument it names is then read through the field ladder's
+own NEW rung (2a, `arguments.py::_parameter_expression`): a bare `@Value`-annotated
+PARAMETER passed straight through, the same terminal read rung 2 already ends with,
+minus the `field_write` hop that gets there through a field.
+
+Third, §2's two vocabulary words are not the only ones the outbound catalogs ride.
+Both new files add `declared_on` (`class`|`interface`, scoping one annotation family
+to one construct kind — `jakarta-jws-client.yml`'s `declared_on: interface` versus
+`jakarta-jws.yml`'s `declared_on: class` partition the same `@WebService`/`@WebMethod`
+pair between server and client) and `path_from_argument_type` (a `single_call`-only
+word: identity read off the payload argument's own declared type's catalog-named
+annotation, `name`/`namespace` qname-composed exactly as `qualifier_format: qname`
+composes them on the annotation side; an attribute naming neither derives nothing —
+`unresolved`, never a guessed JAXB default — the checkpoint-3 "yes" branch,
+JAXB-default guessing deliberately unimplemented). And `jakarta-jws-client.yml`
+carries a fence `declared_on: interface` alone does not spell out:
+outbound interface-gated derivation excludes every interface the module's own
+classes implement (D00 §5a's `implemented_interfaces`, `derive_endpoints.sql`'s own
+SEI-fence comment) — a locally-implemented interface is a server-side declaration
+through and through, so the fence is what the style's own semantic already means,
+not new vocabulary — scoped to `outbound` + `interface` so a client of some OTHER
+framework's interface, reached only through a local fallback implementation, is
+untouched.
 
 ## 5. Opt-in library extraction (`.sextant.yml`)
 
