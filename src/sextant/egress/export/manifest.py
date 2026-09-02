@@ -16,6 +16,7 @@ def write_manifest(
     metadata: dict[str, object],
     source: dict[str, object],
     catalog_hash: str,
+    redaction_set_hash: str,
     module_commit: str,
     tables: list[str],
     facts_files: int,
@@ -23,18 +24,23 @@ def write_manifest(
     provenance = dict(cast(dict[str, object], metadata.get("provenance", {})))
     # `producer` carries exactly what analyze's provenance recorded, plus
     # graph_schema_version (provenance has none today) and what the exporter
-    # itself derived. `redaction_set_hash` has no producer yet (nothing
-    # redacts), so it is carried only if a future analyze starts writing it —
-    # never invented here.
+    # itself derived.
+    #
+    # `redaction_set_hash` is one of the exporter's own, beside `catalog_hash`
+    # and for the same reason (D05 §2 lists them together). It was reserved and
+    # unwritten while nothing redacted; 2K design §1 gives it a producer, and
+    # that producer is this exit — the workspace stays verbatim, so `analyze`
+    # applies no rule set and its provenance could not honestly claim one.
+    # What this field names is the set that masked THESE bytes, read from the
+    # module's `.sextant.yml` at the moment they were written.
     producer: dict[str, object] = {
         "sextant_version": provenance.get("sextant_version"),
         "fact_schema_version": provenance.get("fact_schema_version"),
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
         "scanners": provenance.get("scanners", []),
         "catalog_hash": catalog_hash,
+        "redaction_set_hash": redaction_set_hash,
     }
-    if "redaction_set_hash" in provenance:
-        producer["redaction_set_hash"] = provenance["redaction_set_hash"]
 
     coverage = dict(cast(dict[str, object], metadata.get("coverage", {})))
     partial = coverage.get("partial")

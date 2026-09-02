@@ -235,6 +235,13 @@ Independently, Sextant redacts values matching configured patterns at the moment
 are produced, so that a secret appearing inside a file that is otherwise analysed never
 reaches storage.
 
+> **Amendment (2026-09-02, Phase 2K design §1 — approved).** Redaction runs at the
+> **exits** — the rendered document, the exported bundle, and the enrichment tools' read
+> path — not at fact production. Masking values on the way in would empty the very table
+> the endpoint catalog resolves addresses against; the workspace is the analyst's own disk
+> and is not the trust boundary. See [D04](components/D04-config-and-exclusion.md) §4 for
+> the full amendment, including what is not yet covered.
+
 ### FR-20 — Command surface
 
 Every command takes the form *noun, verb, subject, options*. Subjects may be named
@@ -316,6 +323,13 @@ any fact, workspace, export, or rendered document.
 
 *Redaction occurs before anything reaches storage, because a value already written cannot
 be withdrawn from artifacts already distributed.*
+
+> **Amendment (2026-09-02, Phase 2K design §1 — approved).** The guarantee is scoped to
+> what **leaves**: the export and the rendered document, plus the enrichment tools' read
+> path. Facts and the workspace hold values verbatim, because resolution needs them and
+> the local disk is not the boundary — and because a value masked on the way in cannot be
+> resolved on the way out either. What a bundle was masked with is recorded on it
+> (`producer.redaction_set_hash`), so the claim is checkable rather than assumed.
 
 ### NFR-9 — Extension without modification
 

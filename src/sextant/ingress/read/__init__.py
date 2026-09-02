@@ -14,9 +14,13 @@ SCANNER_ID = "sextant-config-reader"
 SCANNER_VERSION = "0.1.0"
 FACT_SCHEMA_VERSION = "1.0.0"
 SEXTANT_VERSION = "0.1.0"
-# D04 redaction has no producer reaching readers yet (egress/export/manifest.py
-# carries the same absence) — this is the literal the JVM extractor writes for
-# the same reason: an honest "none", not a fabricated hash.
+# A document's own `redaction_set_hash` says which rule set was applied to THIS
+# document's facts (D01 §7's cache key: "a new pattern cannot clean values
+# already written"). Nothing is applied to them: 2K design §1 rules that the
+# workspace stays verbatim — analysis needs real values, and the analyst's own
+# disk is not the trust boundary — and masks at the EXITS instead, where the
+# bundle's manifest names the rule set that masked it. So `none` is the honest
+# answer here and stays one, the same literal the JVM extractor writes.
 NO_REDACTION_HASH = "sha256:none"
 
 

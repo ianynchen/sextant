@@ -16,6 +16,7 @@ from sextant.domain.facts import (
     Document,
     SymbolFact,
 )
+from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -650,14 +651,14 @@ def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tm
 
 def test_exported_tables_include_call_sites(tmp_path: Path):
     workspace = _workspace_with_a_call_site(tmp_path)
-    workspace.export_tables(tmp_path / "bundle")
+    workspace.export_tables(tmp_path / "bundle", Redactor.from_rules())
     workspace.close()
     assert (tmp_path / "bundle" / "graph" / "call_sites.parquet").exists()
 
 
 def test_exported_tables_read_back_equal_to_the_workspace_query(tmp_path: Path):
     workspace = _workspace_with_an_endpoint(tmp_path)
-    written = workspace.export_tables(tmp_path / "bundle")
+    written = workspace.export_tables(tmp_path / "bundle", Redactor.from_rules())
     assert written == [
         "annotations",
         "call_sites",
@@ -699,7 +700,7 @@ def test_exported_tables_include_open_questions(tmp_path: Path):
             }
         ],
     )
-    written = workspace.export_tables(tmp_path / "bundle")
+    written = workspace.export_tables(tmp_path / "bundle", Redactor.from_rules())
     workspace.close()
     assert "open_questions" in written
     back = duckdb.sql(
@@ -708,14 +709,149 @@ def test_exported_tables_include_open_questions(tmp_path: Path):
     assert len(back) == 1
 
 
+def _workspace_with_config_values(tmp_path: Path) -> DuckDbWorkspace:
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    workspace.derive(
+        "resolved_config_insert",
+        rows=[
+            {
+                "key": "orders.db.password",
+                "value": "hunter2",
+                "source": "application.yml",
+                "environment": "default",
+                "unresolved_reason": None,
+            },
+            {
+                "key": "orders.internal.dsn",
+                "value": "host=db.internal;user=orders;pw=hunter2",
+                "source": "application.yml",
+                "environment": "default",
+                "unresolved_reason": None,
+            },
+            {
+                "key": "soap.billing.uri",
+                "value": "http://billing.internal.example.com/ws",
+                "source": "application.yml",
+                "environment": "default",
+                "unresolved_reason": None,
+            },
+        ],
+    )
+    return workspace
+
+
+def _exported_config(bundle: Path) -> dict[str, object]:
+    rows = duckdb.sql(
+        f"SELECT key, value FROM read_parquet('{bundle / 'graph' / 'resolved_config.parquet'}')"
+    ).fetchall()
+    return dict(rows)
+
+
+def test_the_export_masks_config_values_and_the_workspace_keeps_them_verbatim(tmp_path: Path):
+    """2K design §1's live exposure, closed at the exit it leaks from: the
+    bundle is written to LEAVE, so it carries `«redacted»`; the workspace is
+    the analyst's own disk and keeps the real value, because resolution and
+    peer substitution need it. Masking the table instead would break analysis
+    to protect a boundary the table is not on.
+
+    A repo addition (`dsn`) is masked beside a built-in (`password`), and
+    `soap.billing.uri` — an address no rule names — travels verbatim, which is
+    what says the redactor discriminates rather than blanks a column."""
+    workspace = _workspace_with_config_values(tmp_path)
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules(RedactionRules(key_patterns=("dsn",))))
+    exported = _exported_config(bundle)
+    assert exported["orders.db.password"] == REDACTED
+    assert exported["orders.internal.dsn"] == REDACTED
+    assert exported["soap.billing.uri"] == "http://billing.internal.example.com/ws"
+    in_workspace = {row["key"]: row["value"] for row in workspace.query("resolved_config")}
+    assert in_workspace["orders.db.password"] == "hunter2"
+    assert in_workspace["orders.internal.dsn"] == "host=db.internal;user=orders;pw=hunter2"
+    workspace.close()
+
+
+def test_a_module_adding_no_rules_still_exports_masked(tmp_path: Path):
+    """Default-on, at the exit. The built-in set needs no `.sextant.yml`, so a
+    repository that never heard of redaction still does not ship its own
+    passwords — and the key nothing built in names ships as written, which is
+    exactly what the `redact:` section exists to change."""
+    workspace = _workspace_with_config_values(tmp_path)
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules())
+    exported = _exported_config(bundle)
+    assert exported["orders.db.password"] == REDACTED
+    assert exported["orders.internal.dsn"] == "host=db.internal;user=orders;pw=hunter2"
+    workspace.close()
+
+
+def test_the_export_strips_url_userinfo_from_the_address_columns(tmp_path: Path):
+    """`path` and `peer` are the two columns that can carry a whole address
+    (D01 §3, 2I's unsplit-expression ruling), so they are the two that can
+    carry `scheme://user:pass@host`. The host is the answer the bundle exists
+    to carry and the credential in front of it is not — and a `${...}`
+    expression beside it passes through whole, because an expression is a
+    reference to a value, never the value."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    workspace.derive(
+        "call_endpoints",
+        rows=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": "https://svc:s3cret@billing.internal/invoices",
+                "handler": None,
+                "caller": "com/acme/orders/BillingClient#invoices(sig_1).",
+                "peer": "https://svc:s3cret@billing.internal",
+                "handler_signature": None,
+                "resolution": "resolved",
+                "evidence": "test",
+                "catalog_id": "spring-web",
+                "request_shape": None,
+                "response_shape": None,
+                "consumes": None,
+                "produces": None,
+            },
+            {
+                "protocol": "soap",
+                "direction": "outbound",
+                "method": None,
+                "path": "{http://orders.example.com/ws}placeOrderRequest",
+                "handler": None,
+                "caller": "com/acme/orders/BillingSoapClient#place(sig_2).",
+                "peer": "${soap.billing.uri}",
+                "handler_signature": None,
+                "resolution": "resolved",
+                "evidence": "test",
+                "catalog_id": "spring-ws-template",
+                "request_shape": None,
+                "response_shape": None,
+                "consumes": None,
+                "produces": None,
+            },
+        ],
+    )
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules())
+    exported = dict(
+        duckdb.sql(
+            f"SELECT path, peer FROM read_parquet('{bundle / 'graph' / 'endpoints.parquet'}') "
+            "WHERE peer IS NOT NULL"
+        ).fetchall()
+    )
+    assert exported["https://billing.internal/invoices"] == "https://billing.internal"
+    assert exported["{http://orders.example.com/ws}placeOrderRequest"] == "${soap.billing.uri}"
+    workspace.close()
+
+
 def test_two_exports_of_one_workspace_are_byte_identical(tmp_path: Path):
     """NFR-1 at the bundle boundary (M08). A failure here on one machine and
     not another is DuckDB's Parquet writer differing between versions —
     environment drift, not code."""
     workspace = _loaded_workspace(tmp_path)
-    workspace.export_tables(tmp_path / "one")
+    workspace.export_tables(tmp_path / "one", Redactor.from_rules())
     workspace.export_facts(tmp_path / "one")
-    workspace.export_tables(tmp_path / "two")
+    workspace.export_tables(tmp_path / "two", Redactor.from_rules())
     workspace.export_facts(tmp_path / "two")
     one = {
         p.relative_to(tmp_path / "one"): p.read_bytes()

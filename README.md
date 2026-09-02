@@ -35,7 +35,18 @@ the dependencies whose **own bytecode** should be scanned alongside it:
 extract_libraries:
   - com.example:orders-soap-client        # version comes from the build
   - com.example:legacy-billing:2.4.0      # …or state it here
+
+redact:                                   # widens the built-in set; nothing narrows it
+  key_patterns:   [dsn]                   # substring of a config key, spelling-insensitive
+  value_patterns: ["ACME_[A-Z0-9]{24}"]   # regex, masks the span it matches
 ```
+
+Redaction is **on by default and needs no file**: configuration keys naming a password,
+secret, token, credential, API key, private key, authorization or passphrase mask as
+`«redacted»`, and `scheme://user:pass@host` addresses lose their userinfo — in the rendered
+document and in the exported bundle. The workspace keeps real values, because resolving an
+endpoint's address needs them and your own disk is not the boundary. A bundle records the
+rule set that masked it, as `producer.redaction_set_hash` in its manifest.
 
 Three things are worth knowing before using it.
 

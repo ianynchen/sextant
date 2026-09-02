@@ -15,12 +15,13 @@ from sextant.application.stages.analyze import AnalyzeResult, analyze
 from sextant.cli.progress import RichProgress
 from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
+from sextant.domain.redaction import RedactionError, Redactor
 from sextant.egress.export.manifest import write_manifest
 from sextant.egress.render.document import render_module_document
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
-from sextant.ingress.detect.sextant_config import SextantConfigError
+from sextant.ingress.detect.sextant_config import SextantConfigError, read_redaction_rules
 from sextant.ingress.extract.jvm.generated_naming import JvmGeneratedNaming
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
@@ -93,6 +94,21 @@ def _catalog_hash(catalogs: Path) -> str:
 
 def _workspace_dir_of(path: Path, workspace_dir: Path | None) -> Path:
     return workspace_dir or (path / ".sextant")
+
+
+def _redactor_for(path: Path) -> Redactor:
+    """The redactor both EXITS use (2K design §1): the built-in rule set,
+    widened by this module's own `.sextant.yml`. Built at the composition root
+    so render and export mask by one set and the manifest can name it.
+
+    Both refusals become the message a user reads, the same way `_analyzed`
+    turns a malformed `.sextant.yml` into one: a `redact:` section written
+    wrong is a mistake in the analysed repository, and a stack trace would
+    report it as a crash in the tool."""
+    try:
+        return Redactor.from_rules(read_redaction_rules(path))
+    except (SextantConfigError, RedactionError) as refused:
+        raise click.ClickException(str(refused)) from refused
 
 
 @click.group()
@@ -229,6 +245,7 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
             open_questions=workspace.query("open_questions"),
             library_symbols=workspace.query("library_symbols"),
             libraries_not_scanned=tuple(metadata.get("libraries_not_scanned", [])),
+            redactor=_redactor_for(path),
         )
         target = workspace_dir / "render" / "architecture.md"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -259,9 +276,10 @@ def module_export(path: Path, workspace_dir: Path | None, out_dir: Path | None) 
     bundle_name = re.sub(r"[^A-Za-z0-9._-]", "-", str(metadata["module"]["id"])) + "@" + commit
     bundle = (out_dir or workspace_dir / "bundles") / bundle_name
 
+    redactor = _redactor_for(path)
     workspace = DuckDbWorkspace(db_path)
     try:
-        tables = workspace.export_tables(bundle)
+        tables = workspace.export_tables(bundle, redactor)
         facts_files = workspace.export_facts(bundle)
     finally:
         workspace.close()
@@ -270,6 +288,7 @@ def module_export(path: Path, workspace_dir: Path | None, out_dir: Path | None) 
         metadata,
         source={"repo": _remote_of(path), "commit": commit},
         catalog_hash=_catalog_hash(catalogs_dir()),
+        redaction_set_hash=redactor.rule_set_hash,
         module_commit=_module_commit_of(path),
         tables=tables,
         facts_files=facts_files,

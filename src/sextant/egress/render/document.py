@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.domain.closed_sets import Protocol
+from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import bare_descriptor
 from sextant.egress.render.diagrams import class_diagram
 from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
@@ -128,17 +129,30 @@ _VERBLESS_PROTOCOLS = frozenset(p.value for p in Protocol) - _VERBED_PROTOCOLS
 # an HTTP method, so a NULL there genuinely is unread and must render as such.
 _VERB_OPTIONAL_PROTOCOLS = frozenset({"graphql"})
 
+# Redaction is DEFAULT-ON at this exit (2K design §1): a caller that names no
+# redactor still gets the built-in set, so the failure mode of forgetting to
+# wire one is a masked document, never a leaked one. The composition root
+# passes the module's own redactor, widened by its `.sextant.yml`.
+_DEFAULT_REDACTOR = Redactor.from_rules()
 
-def _wire_identity(endpoint: dict[str, object]) -> str:
+
+def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
     """A row's wire identity as one string. A protocol in `_VERBLESS_PROTOCOLS`
     defines no verb, so it renders `protocol path` with no method at all;
     every other protocol renders `method path`, prefixed by the protocol where
     its verb does not imply one. Any half of any shape may be NULL, and
     `(unresolved)` stays the marker for an identity the analysis could not
-    read — never a bare `None`."""
+    read — never a bare `None`.
+
+    `path` is one of the two columns that can carry a whole address (D01 §3,
+    2I's ruling that an expression lands in it unsplit), so it passes the
+    redactor: `https://user:pass@host/x` renders with its userinfo stripped,
+    and a repo value pattern masks whatever else it names. A `${...}`
+    expression passes through whole — it is a reference to a value, not the
+    value."""
     protocol = str(endpoint["protocol"])
     path = endpoint["path"]
-    rendered_path = "(unresolved)" if path is None else str(path)
+    rendered_path = "(unresolved)" if path is None else redactor.redact_text(str(path))
     if protocol in _VERBLESS_PROTOCOLS:
         return f"{protocol} {rendered_path}"
     method = endpoint["method"]
@@ -290,11 +304,23 @@ def render_module_document(
     # resolution is a property of the module the detector described, while a
     # scan failing is something that happened during one analysis of it.
     libraries_not_scanned: tuple[str, ...] = (),
+    # The render EXIT's redactor (2K design §1). Defaulted rather than
+    # required so redaction is on for every caller, including one written
+    # before this existed — see `_DEFAULT_REDACTOR`.
+    redactor: Redactor = _DEFAULT_REDACTOR,
 ) -> str:
     """Adds no information. Every row comes from the graph, and every omission
     is stated (M07). Rendering the same report twice is byte-identical
     (NFR-1): nothing here reads a clock, and endpoint and shape order is
-    whatever the graph query already fixed."""
+    whatever the graph query already fixed.
+
+    The two columns that can carry an address — `path`, through
+    `_wire_identity`, and `peer` — pass `redactor` on their way into a line.
+    Nothing else here renders a configuration VALUE: the module document names
+    the expression a row carries and the KEYS pass 2 could not resolve, never
+    the values behind them, so the resolved-config exposure this redactor
+    closes is the export exit's (`storage/duckdb/workspace.py`), not this
+    one's."""
     fields_by_shape = _fields_by_shape(shape_fields)
     origin_by_symbol = {str(row["symbol"]): str(row["origin"]) for row in library_symbols}
     # Wire identities already carrying a library attribution, so the outbound
@@ -343,7 +369,7 @@ def render_module_document(
         for endpoint in inbound:
             media = f"{_media(endpoint.get('consumes'))} → {_media(endpoint.get('produces'))}"
             lines.append(
-                f"| `{_wire_identity(endpoint)}` | {_handler(endpoint)} | {media} | "
+                f"| `{_wire_identity(endpoint, redactor)}` | {_handler(endpoint)} | {media} | "
                 f"{_format(endpoint)} | {endpoint['resolution']} |"
             )
         for endpoint in inbound:
@@ -353,12 +379,12 @@ def render_module_document(
             )
             via = _origin_lines(endpoint, origin_by_symbol)
             if request or response or via:
-                lines += ["", f"- `{_wire_identity(endpoint)}`"]
+                lines += ["", f"- `{_wire_identity(endpoint, redactor)}`"]
                 lines += via
                 lines += request
                 lines += response
             if via:
-                attributed.add(_wire_identity(endpoint))
+                attributed.add(_wire_identity(endpoint, redactor))
     else:
         lines.append("None found.")
 
@@ -372,8 +398,8 @@ def render_module_document(
             peer = endpoint.get("peer")
             caller = bare_descriptor(str(endpoint["caller"]))
             lines.append(
-                f"| `{_wire_identity(endpoint)}` | "
-                f"{'unresolved' if peer is None else peer} | "
+                f"| `{_wire_identity(endpoint, redactor)}` | "
+                f"{'unresolved' if peer is None else redactor.redact_text(str(peer))} | "
                 f"`{caller}` | {_format(endpoint)} | {endpoint['resolution']} |"
             )
         # The outbound half has no request/response detail to hang under, so
@@ -385,7 +411,7 @@ def render_module_document(
         # attribution already stated above must not be stated again here. The
         # same attribution twice reads as two findings.
         for endpoint in outbound:
-            identity = _wire_identity(endpoint)
+            identity = _wire_identity(endpoint, redactor)
             via = [] if identity in attributed else _origin_lines(endpoint, origin_by_symbol)
             if via:
                 lines += ["", f"- `{identity}`"]
@@ -404,7 +430,7 @@ def render_module_document(
             question = str(row["question"])
             candidates = json.loads(str(row["candidates"]))
             rendered = "; ".join(_candidate_line(question, c) for c in candidates)
-            lines.append(f"- `{_wire_identity(row)}` — {question}: {rendered}")
+            lines.append(f"- `{_wire_identity(row, redactor)}` — {question}: {rendered}")
 
     lines += ["", "## Known gaps", ""]
     lines += [f"- {gap}" for gap in _GAPS]

@@ -12,6 +12,8 @@ site outweighs it. Revisit if the sets grow or a second Workspace appears."""
 from pathlib import Path
 from typing import Protocol
 
+from sextant.domain.redaction import Redactor
+
 
 class Workspace(Protocol):
     def load_facts(self, fact_root: Path) -> int:
@@ -26,8 +28,13 @@ class Workspace(Protocol):
     def query(self, name: str, **params: object) -> list[dict[str, object]]:
         """Run one named query. Unknown names raise KeyError."""
 
-    def export_tables(self, destination: Path) -> list[str]:
-        """Write the bundle's graph tables as Parquet, one file per table."""
+    def export_tables(self, destination: Path, redactor: Redactor) -> list[str]:
+        """Write the bundle's graph tables as Parquet, one file per table.
+
+        `redactor` masks on the way out (2K design §1) — the tables themselves
+        stay verbatim, so the parameter is not optional: a bundle is written to
+        leave, and an implementation with nowhere to put the rule set would be
+        one that cannot say what it masked."""
 
     def export_facts(self, destination: Path) -> int:
         """Write the raw facts as Parquet, one file per document."""

@@ -14,8 +14,9 @@ from pathlib import Path
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
-from sextant.application.resolve.config import normalize_key, resolve_config
+from sextant.application.resolve.config import resolve_config
 from sextant.domain.closed_sets import OriginTier
+from sextant.domain.config_keys import normalize_key
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import ConfigEntryFact, Document
 from sextant.storage.duckdb.workspace import DuckDbWorkspace

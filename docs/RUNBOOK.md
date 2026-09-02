@@ -234,3 +234,23 @@ jar, and lay it into `~/.m2/repository` at Maven's own layout path together with
 `.pom` — offline resolution reads the POM, and a jar laid down without one is refused.
 Assembling the jar with Python's `zipfile` rather than the JDK's `jar` keeps entry order
 under the test's control, so the artifact is byte-identical between machines.
+
+### DuckDB's Python scalar UDFs require numpy
+
+`connection.create_function(...)` raises `Invalid Input Error: 'numpy' is required for this
+operation, but it wasn't installed` — before it ever calls the function, and with nothing in
+the message about UDFs being optional. numpy is not a Sextant dependency and adding one to
+mask a column would be a poor trade. So the export projections that mask
+(`resolved_config.value`, `endpoints.path`/`peer`) compute their masked strings **in
+Python**, stage the ones that actually change in a temp table, and `LEFT JOIN ... coalesce`
+against it. That keeps one redactor — restating its rules as SQL would be a second copy
+drifting beside `domain/redaction.py` — and leaves every unmatched value byte-identical.
+
+### A `domain` module cannot reuse an `application` one — move the rule down, don't copy it
+
+2K's redactor lives in `domain` and needs the relaxed config-key binding rule that had lived
+in `application/resolve/config.py` since 2F. The layering contract forbids the import, and
+the tempting alternative — three lines of `lower().replace(...)` copied into the redactor —
+is exactly the drift this codebase spends comments preventing. The move is `normalize_key`
+into `domain/config_keys.py`, with both former callers repointed. When a second layer needs
+a pure rule, the rule was in the wrong layer.

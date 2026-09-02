@@ -7,6 +7,8 @@ from click.testing import CliRunner
 
 from sextant.cli.app import cli
 from sextant.domain.factfile import read_fact_file
+from sextant.domain.redaction import REDACTED, Redactor
+from sextant.ingress.detect.sextant_config import read_redaction_rules
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
@@ -1166,3 +1168,59 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # The library's whole fact subtree is discarded before the scan, so nothing
     # is left for the resolve to read back as if it were still configured.
     assert not (tmp_path / "facts" / "lib").exists()
+
+
+def test_the_planted_credentials_leave_masked_and_stay_verbatim_in_the_workspace(tmp_path: Path):
+    """2K design §1, live and end to end: the exposure this phase closes is
+    `resolved_config` values EXPORTING verbatim. The fixture plants two fake
+    credentials — one a built-in key pattern reaches, one only its own
+    `.sextant.yml` addition reaches — and one address (`soap.billing.uri`) no
+    rule names, which must survive untouched. The workspace keeps all three as
+    written, because resolution and peer substitution read the real values and
+    the analyst's own disk is not the trust boundary."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)
+    bundle = next((tmp_path / "bundles").iterdir())
+    exported = dict(
+        duckdb.sql(
+            "SELECT key, value FROM read_parquet("
+            f"'{bundle / 'graph' / 'resolved_config.parquet'}') WHERE environment = 'default'"
+        ).fetchall()
+    )
+    assert exported["orders.db.password"] == REDACTED
+    assert exported["orders.internal.dsn"] == REDACTED
+    assert exported["soap.billing.uri"] == "http://billing.internal.example.com/ws"
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    in_workspace = {
+        str(row["key"]): row["value"]
+        for row in workspace.query("resolved_config")
+        if row["environment"] == "default"
+    }
+    workspace.close()
+    assert in_workspace["orders.db.password"] == "hunter2-fixture"
+    assert "hunter2-fixture" in str(in_workspace["orders.internal.dsn"])
+
+    # The rendered document names the expression a row carries and the KEYS
+    # pass 2 could not resolve — never a resolved value — so no planted
+    # credential reaches it at all. Pinned rather than assumed: the day a
+    # config-value line is added, this fails and the redactor is wired into it.
+    document = (tmp_path / "render" / "architecture.md").read_text()
+    assert "hunter2-fixture" not in document
+
+
+def test_the_manifest_names_the_rule_set_that_masked_the_bundle(tmp_path: Path):
+    """D06 §3 reserved `redaction_set_hash` and left it unwritten while nothing
+    redacted. It has a producer now, and what it names is the EFFECTIVE set —
+    the built-ins widened by this module's `redact:` — so a bundle masked under
+    one set is distinguishable from a bundle masked under another. The fixture
+    adds a rule, so its hash must differ from the built-in-only one; editing
+    that section changes the hash, and re-running without editing it does not
+    (the byte-identity test above covers the second half)."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)
+    bundle = next((tmp_path / "bundles").iterdir())
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    effective = Redactor.from_rules(read_redaction_rules(FIXTURE)).rule_set_hash
+    assert manifest["producer"]["redaction_set_hash"] == effective
+    assert effective != Redactor.from_rules().rule_set_hash

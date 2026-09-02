@@ -82,9 +82,20 @@ invalidate different things at very different cost, and `sextant_version` change
 without either of them moving — a fixed bug in dispatch resolution produces a different graph
 from identical facts. See [D01](D01-graph-schema.md) §7.
 
-**`redaction_set_hash` does not appear in a produced manifest today.** `analyze` records no
-redaction set, so the field is omitted rather than written empty or invented; it joins
-`producer` the day redaction ships.
+**`redaction_set_hash` is written by the exporter**, beside `catalog_hash` and for the same
+reason: it is what the exporter itself applied, not what `analyze` recorded. Under 2K design
+§1 the workspace stays verbatim and masking happens at the exits, so `analyze` applies no
+rule set and its provenance could not honestly claim one; this field names the effective set
+— the built-ins widened by the module's `.sextant.yml` `redact:` section — that masked
+**these** bytes. It is the sha256 of that set canonically serialized, so it is stable across
+however a file happened to order its additions and moves the moment one changes.
+
+What it covers, precisely: `graph/resolved_config.parquet`'s `value` column and
+`graph/endpoints.parquet`'s `path`/`peer` address columns. **`facts/` is not covered** — a
+`config_entry` payload still carries its value verbatim there. Ledgered, not silently
+omitted: masking a fact payload changes what a fact means (a document's own
+`redaction_set_hash` would have to stop reading `sha256:none`), which is a schema decision
+rather than an export projection.
 
 **`module_commit`** is the last commit touching this module's own path, computed locally at
 scan time where a clone already exists. It is what lets the system tier judge staleness in a

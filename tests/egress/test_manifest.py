@@ -25,12 +25,18 @@ def test_the_manifest_carries_provenance_coverage_and_contents(tmp_path: Path):
         metadata,
         source={"repo": "git@github.com:acme/orders.git", "commit": "a3f91c"},
         catalog_hash="sha256:abc",
+        redaction_set_hash="sha256:rules",
         module_commit="a3f91c",
         tables=["endpoints", "shapes"],
         facts_files=4,
     )
     written = json.loads((tmp_path / "manifest.json").read_text())
     assert written["producer"]["catalog_hash"] == "sha256:abc"
+    # D06 §3 reserved this field and left it unwritten while nothing redacted.
+    # 2K design §1 gives it a producer, and the producer is this exit: it names
+    # the rule set that masked THESE bytes, beside the catalog hash that
+    # derived them (D05 §2 lists the two together).
+    assert written["producer"]["redaction_set_hash"] == "sha256:rules"
     assert written["source"]["module_commit"] == "a3f91c"
     assert written["contents"] == {
         "facts": True,
@@ -63,6 +69,7 @@ def test_the_manifest_reports_no_environments_when_metadata_names_none(tmp_path:
         metadata,
         source={"repo": "git@github.com:acme/orders.git", "commit": "a3f91c"},
         catalog_hash="sha256:abc",
+        redaction_set_hash="sha256:rules",
         module_commit="a3f91c",
         tables=["endpoints"],
         facts_files=4,

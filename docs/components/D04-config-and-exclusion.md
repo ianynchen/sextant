@@ -72,7 +72,7 @@ the built-in set; they never replace them. A repository cannot switch redaction 
 
 ---
 
-## 2a. `.sextant.yml` beside a module — opt-in library extraction
+## 2a. `.sextant.yml` beside a module — opt-in library extraction, added redaction
 
 A third file, owned by neither of the two above: it sits **beside one module's build file**,
 because what it declares is a property of that module and of nothing else.
@@ -81,6 +81,10 @@ because what it declares is a property of that module and of nothing else.
 # fixtures/orders-service/.sextant.yml
 extract_libraries:
   - com.example:orders-soap-client
+
+redact:
+  key_patterns:   [dsn]                    # matched against a normalized config key
+  value_patterns: ["ACME_[A-Z0-9]{24}"]    # regular expressions, matched against values
 ```
 
 `extract_libraries` names dependencies whose **own bytecode** is scanned alongside the
@@ -114,6 +118,14 @@ skipped. They are two lists, not one: the first is closed by declaring, pinning 
 installing the dependency, the second by replacing a corrupt archive, and a reader should
 not have to work out which from prose. A library that fails to scan never takes the
 module's own analysis down with it, and leaves no partial fact subtree behind.
+
+`redact` (2K design §1) **widens** the built-in redaction set of §4, for this module only.
+A key pattern is matched as a substring of a *normalized* configuration key — the relaxed
+binding rule the resolver itself uses, so one written pattern covers `api-key`, `api_key`
+and `apiKey` at once — and a value pattern is a regular expression matched against a
+value's text, masking the span it matched. **There is no key here or anywhere that narrows
+the set**: the built-ins are not an argument the redactor accepts, so no file can remove
+one. A module with no `redact:` section is redacted by the built-in set exactly as before.
 
 **A malformed `.sextant.yml` fails the run** — the one input where Sextant refuses rather
 than degrading. DR-6's refusal-to-guess governs evidence read out of a codebase Sextant
@@ -153,6 +165,31 @@ common build output directories that are not the module's own.
 ---
 
 ## 4. Redaction
+
+> **Amendment (2026-09-02, Phase 2K design §1 — approved).** The rest of this section
+> describes redaction as it was designed to run: inside [M03](M03-scanner.md), before a
+> fact is written. **What ships runs at the EXITS instead** — the rendered document, the
+> exported bundle, and (2K Task 5) the enrichment tools' read path. The reason is
+> `resolved_config`: analysis needs the real values locally, because peer resolution
+> substitutes real addresses into endpoint expressions, and a workspace of masked values
+> is a workspace that cannot answer. The analyst's own disk is not the trust boundary; the
+> document and the bundle are. Four consequences, all live:
+>
+> - **The marker is `«redacted»`**, one stable literal with no pattern class in it — a
+>   masked value still counts as present and still compares equal across runs. The
+>   `<redacted:key_pattern>` form below is not what is written.
+> - **The workspace stays verbatim**, so a document's own `redaction_set_hash` is
+>   `sha256:none` and the cache-key paragraph below describes a mechanism nothing needs:
+>   changing the rule set changes the next EXPORT, with no re-extraction at all.
+> - **`redaction_set_hash` is produced by the exporter**, beside `catalog_hash`, and names
+>   the effective set that masked those bytes ([D06](D06-bundle-format.md) §3).
+> - **Known and unclosed:** a bundle's `facts/` still carries `config_entry` payloads
+>   verbatim. Masking a fact payload is a change to what a fact means, not a projection —
+>   ledgered, not silently done.
+>
+> Section 2a below states the per-module `redact:` key that widens the set. Everything else
+> in this section — the two strategies, the built-in key patterns, and the
+> widen-never-narrow rule — ships as written.
 
 Runs **inside [M03](M03-scanner.md), before a fact is written.** Not at load, not at
 render.

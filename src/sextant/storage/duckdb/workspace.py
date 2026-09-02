@@ -2,6 +2,8 @@ from pathlib import Path
 
 import duckdb
 
+from sextant.domain.redaction import Redactor
+
 _SQL_DIR = Path(__file__).parent
 
 _NAMED_QUERIES = {
@@ -353,11 +355,48 @@ _EXPORTED_TABLES = (
     "symbols",
 )
 
+# The two tables whose export PROJECTION masks (2K design §1). The masking is
+# here and only here: `resolved_config` and `endpoints` keep verbatim values in
+# the workspace, because analysis needs them — peer resolution substitutes real
+# addresses — and the user's own disk is not the trust boundary. The bundle is.
+#
+# The mechanism is a LEFT JOIN against a staged substitution table, not a
+# scalar function: DuckDB's Python UDFs require numpy, which is not a
+# dependency here, and restating the redactor's rules as SQL would be a second
+# copy of `domain/redaction.py` drifting beside the first. `_stage_redactions`
+# computes the masked strings in Python, through the one redactor, and stages
+# only the ones that actually change; `coalesce` leaves every other value
+# exactly as the table holds it, byte for byte.
+_REDACTED_CONFIG_VALUES = "redacted_config_values"
+_REDACTED_ADDRESSES = "redacted_addresses"
+
 _EXPORT_QUERIES = {
     "documents": _NAMED_QUERIES["documents"],
-    "endpoints": _NAMED_QUERIES["endpoints"],
+    # `path` and `peer` are the columns that can carry a whole address (D01
+    # §3, 2I's unsplit-expression ruling), so they carry URL userinfo too.
+    # Ordered on the table's own columns — `e.path`, not the projected alias —
+    # so masking a row cannot reorder the file (NFR-1).
+    "endpoints": f"""
+        SELECT e.* REPLACE (coalesce(p.masked, e.path) AS path,
+                            coalesce(q.masked, e.peer) AS peer)
+        FROM endpoints e
+        LEFT JOIN {_REDACTED_ADDRESSES} p ON p.address = e.path
+        LEFT JOIN {_REDACTED_ADDRESSES} q ON q.address = e.peer
+        ORDER BY e.protocol, e.method, e.path, e.handler, e.caller
+    """,
     "open_questions": _NAMED_QUERIES["open_questions"],
-    "resolved_config": _NAMED_QUERIES["resolved_config"],
+    # The live exposure 2K closes: this table's `value` column exported
+    # verbatim. Joined on (key, value) rather than key alone because one key
+    # resolves to different values in different environments, and the mask a
+    # key pattern produces is the same either way only by coincidence — a
+    # value pattern's is not.
+    "resolved_config": f"""
+        SELECT c.key, coalesce(m.masked, c.value) AS value, c.source, c.environment,
+               c.unresolved_reason
+        FROM resolved_config c
+        LEFT JOIN {_REDACTED_CONFIG_VALUES} m ON m.key = c.key AND m.value = c.value
+        ORDER BY c.environment, c.key
+    """,
     "shapes": _NAMED_QUERIES["shapes"],
     "shape_fields": _NAMED_QUERIES["shape_fields"],
     "call_sites": _NAMED_QUERIES["call_sites"],
@@ -426,18 +465,78 @@ class DuckDbWorkspace:
         columns = [column[0] for column in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-    def export_tables(self, destination: Path) -> list[str]:
+    def export_tables(self, destination: Path, redactor: Redactor) -> list[str]:
         graph = destination / "graph"
         graph.mkdir(parents=True, exist_ok=True)
-        for name in _EXPORTED_TABLES:
-            sql = _EXPORT_QUERIES[name]
-            self._connection.execute(
-                f"COPY ({sql}) TO ? (FORMAT parquet, COMPRESSION zstd)",
-                [str(graph / f"{name}.parquet")],
-            )
+        self._stage_redactions(redactor)
+        try:
+            for name in _EXPORTED_TABLES:
+                sql = _EXPORT_QUERIES[name]
+                self._connection.execute(
+                    f"COPY ({sql}) TO ? (FORMAT parquet, COMPRESSION zstd)",
+                    [str(graph / f"{name}.parquet")],
+                )
+        finally:
+            # Dropped rather than left behind: these hold the very values the
+            # export exists to keep out of a bundle, and a workspace reused by
+            # a later command has no business carrying them.
+            for staged in (_REDACTED_CONFIG_VALUES, _REDACTED_ADDRESSES):
+                self._connection.execute(f"DROP TABLE IF EXISTS {staged}")
         return list(_EXPORTED_TABLES)
 
+    def _stage_redactions(self, redactor: Redactor) -> None:
+        """The masked strings the export projections join against — computed
+        in Python, through the one redactor, over the DISTINCT values the two
+        masked tables hold (a value repeated across environments is redacted
+        once, not once per row).
+
+        Only the values that actually CHANGE are staged. An ordinary module
+        stages nothing at all, which is what makes the join free where there
+        is nothing to mask and keeps the exported bytes identical to what they
+        were for every value no rule names."""
+        self._connection.execute(
+            f"CREATE OR REPLACE TEMP TABLE {_REDACTED_CONFIG_VALUES}"
+            "(key VARCHAR, value VARCHAR, masked VARCHAR)"
+        )
+        config_rows = self._connection.execute(
+            "SELECT DISTINCT key, value FROM resolved_config WHERE value IS NOT NULL"
+        ).fetchall()
+        masked_config = [
+            (str(key), str(value), redactor.redact_value(str(key), str(value)))
+            for key, value in config_rows
+        ]
+        changed_config = [row for row in masked_config if row[2] != row[1]]
+        if changed_config:
+            self._connection.executemany(
+                f"INSERT INTO {_REDACTED_CONFIG_VALUES} VALUES (?, ?, ?)", changed_config
+            )
+
+        self._connection.execute(
+            f"CREATE OR REPLACE TEMP TABLE {_REDACTED_ADDRESSES}(address VARCHAR, masked VARCHAR)"
+        )
+        address_rows = self._connection.execute(
+            "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
+            "UNION SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL"
+        ).fetchall()
+        masked_addresses = [
+            (str(address), redactor.redact_text(str(address))) for (address,) in address_rows
+        ]
+        changed_addresses = [row for row in masked_addresses if row[1] != row[0]]
+        if changed_addresses:
+            self._connection.executemany(
+                f"INSERT INTO {_REDACTED_ADDRESSES} VALUES (?, ?)", changed_addresses
+            )
+
     def export_facts(self, destination: Path) -> int:
+        # KNOWN AND UNCLOSED: a `config_entry` fact's payload carries its value
+        # verbatim (D00 §5c), and this copies payloads through untouched, so a
+        # bundle's `facts/` still holds what `graph/resolved_config.parquet` no
+        # longer does. 2K design §1 scopes the redactor to the resolved_config
+        # values, the endpoint address columns and the enrichment tools' read
+        # path; masking a fact payload is a change to what a FACT means — a
+        # document's own `redaction_set_hash` would have to stop saying `none`
+        # — which is a schema decision, not a projection. Named here rather
+        # than left to be discovered (NFR-7).
         rows = self._connection.execute(
             "SELECT DISTINCT document_id FROM raw_facts ORDER BY document_id"
         ).fetchall()
