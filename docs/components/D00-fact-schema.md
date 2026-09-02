@@ -516,6 +516,23 @@ and NULL where it does not, the [§5b](#5b-the-wire-type-vocabulary) wire type a
 `required`, `nullable`, the declared `default`, and the `item`/`shape_ref` references
 that reach other shapes.
 
+**The file is the failure boundary, and a failed file's CONTENT never publishes.** A
+schema file the interpreter cannot read — text that does not parse, a name two
+declarations claim, a construct the branch has no word for — publishes *none* of its
+declarations rather than the ones read before the trouble, is named in the run's
+`descriptors_not_interpreted` list, and never stops a sibling from being interpreted.
+What differs between formats is only what a sibling is left holding, and it follows from
+how that format's projection reaches another file rather than from a policy choice: **a
+pointer to a shape this run did not publish stays an open reference** — a GraphQL field's
+`shape_ref` into a file that parsed but could not be projected reads downstream as a
+reference nothing answered — while a projection that **copies** what it names cannot
+leave a pointer at all, so the failed file's declarations leave the type universe and a
+sibling naming one becomes a dangling reference and its own gap. An XSD element typed by
+a named `complexType` carries that type's *fields*, which is exactly the copying case: an
+open reference there would have meant republishing a failed file's content under another
+file's name. A file whose text never parsed declared nothing the module can see in any
+format, so its names are not in the universe to be pointed at either.
+
 ### Why `module` is a fact and not a passing argument
 
 [M02](M02-detector.md) works out the module inventory and the classpath tiering, and

@@ -104,8 +104,31 @@ call, and does not rank candidates against one another.
 calls merges into one endpoint row rather than two — `handler` names the server method,
 `caller` names the client method, and both are populated. An outbound-only row carries
 `caller` with `handler` NULL, mirroring an inbound-only row's NULL `caller`. `peer` is the
-outbound target hint — a declared service name or a literal authority — that the system tier
-later resolves against `participants`; it carries no meaning on an inbound-only row.
+outbound target hint — a declared service name, a literal authority, or **a whole address
+expression where an operation-carrying protocol leaves nothing for the address to be split
+on** — that the system tier later resolves against `participants`; it carries no meaning on
+an inbound-only row.
+
+**The whole-address case is Phase 2I's, and it is a widening of this column rather than a
+new one.** A SOAP row's `path` carries the operation (below), so the url an outbound call
+states is only ever a peer: it is recorded WHOLE — `${soap.billing.uri}`, or a literal
+`http://billing.example.com/ws` — rather than split into an authority and a path the way an
+HTTP client's base address is. Two reasons, both refusals: a configuration expression has no
+authority half to take, and two deployments behind one host are two peers. `resolved_peers`
+substitutes such an expression per environment exactly as it does for any other, because it
+reads a placeholder out of `peer` and does not care what shape the rest of the string is.
+
+**A merged `both` row is the ordinary outcome where a module serves and calls one
+operation.** The fixture's `{http://orders.example.com/ws}placeOrderRequest` is derived
+twice — once from the handler's own `@PayloadRoot`, once from the payload type the client
+hands to a template call — and the two meet because both engines compose the same QName
+string from two different annotations. The handler's row survives with the caller and the
+caller's `peer` carried onto it, per [D02](D02-catalog-schema.md) §3. One consequence is
+worth stating because a real fixture shows it: **`peer` is not part of wire identity**, so
+two calls to one operation at two different addresses are one endpoint row carrying one
+address — the first derived, in the order the call sites were read. Recording both would
+mean putting the address into the identity of a protocol whose identity is the operation,
+which is the aggregation the rest of this section refuses.
 
 **`endpoints.catalog_id` is provenance, not identity.** It names the catalog whose rules
 produced the row, so a catalog describing an endpoint's request/response contract can
@@ -286,6 +309,21 @@ column with its own evidence, never this one.
 | GraphQL non-root resolver | `graphql` | NULL | `Type.field` (`Order.lines`) | the annotation catalogs |
 | WebSocket / STOMP | `websocket` | NULL | the connection path or destination (`/live`, `/orders/place`) | the WebSocket and STOMP catalogs |
 | SSE | `sse` | the HTTP verb (`GET`) | the route path (`/events/stream`) | an HTTP row, reclassified ([D02](D02-catalog-schema.md) §2's `protocol_hint`) |
+| SOAP operation | `soap` | NULL | the input element's QName in W3C notation (`{http://orders.example.com/ws}placeOrderRequest`) | the SOAP annotation catalogs, `single_call` off the payload type, and `schema_operations` from the WSDL |
+| SOAP action | `soap` | NULL | the action URI verbatim (`http://orders.example.com/action/cancelOrder`) | the Spring-WS catalog |
+
+**SOAP is verbless, and it carries TWO identity forms on one protocol** (Phase 2I). The
+verb goes because every operation on a port shares the transport binding's own POST, so a
+method column would distinguish nothing — the 2D messaging answer, reached by a different
+route. The two forms are a real split rather than a spelling difference: a QName is the
+identity of the payload's root element, which is what an annotation, a client's payload
+type and a WSDL input element all independently state and therefore what they meet on,
+while an action URI is a header the transport dispatches on. **The notation is W3C's own**
+(`{namespace}localPart`, `javax.xml.namespace.QName.toString`) precisely because it is
+framework-neutral: rows derived from a Spring-WS annotation, from a JAX-WS one and from a
+`.wsdl` file have to be one string to merge at all. An action row links only where a client
+states the same action, which code rarely does — a stated boundary
+([COVERAGE](../COVERAGE.md) §5.3), not a defect in the form.
 
 Three things follow, and each is a real distinction rather than a shading of one rule.
 **A GraphQL row's `method` is an OPERATION TYPE, not a verb** — a caller sending a

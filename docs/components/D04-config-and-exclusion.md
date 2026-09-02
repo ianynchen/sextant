@@ -94,7 +94,9 @@ ships is an operation this module calls, not merely a class on the classpath. Th
 tree is **never** walked: a transitive jar nobody named stays invisible, because scanning
 everything reachable would publish every framework's own annotated types as this module's
 endpoints. A module with no `.sextant.yml` produces exactly the facts it produced before
-this mechanism existed, byte for byte.
+this mechanism existed, byte for byte. What each engine style then derives from a
+library's bytecode — and how removing a coordinate retracts it again — is
+[D02](D02-catalog-schema.md) §4a.
 
 Each coordinate is `groupId:artifactId`, which defers to the build for the version — the
 only place that says which release this module compiles against — or

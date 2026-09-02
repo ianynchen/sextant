@@ -91,6 +91,22 @@ ASM over class files. See [ARCHITECTURE.md](../ARCHITECTURE.md) DR-1 for why thi
 than a source indexer. Two of its eleven capabilities are hard, and the rest are
 straightforward.
 
+**Two forms of class input, one answer.** The scan is pointed either at a directory tree of
+loose `.class` files — a module's own build output — or at a **jar**, read as a zip, which
+is what an opted-in library arrives as ([D04](D04-config-and-exclusion.md) §2a). Both yield
+class-relative names in one **sorted** order, and the sort is load-bearing rather than
+tidy: a zip's entry order is whatever the archiver happened to write, and declaration order
+in the workspace is derived from the order facts load in, so following the archive would
+make a scan's output depend on how the jar was built (NFR-1). Every `.class` entry is
+scanned and nothing else is opened, so a jar nested inside a jar is invisible and a
+multi-release jar's versioned copies are each their own document.
+
+**A library scan stamps its origin.** Where the scan was pointed at a library, each
+document records the coordinate it was extracted from and reads `origin_tier: dependency`
+([D00](D00-fact-schema.md) §2). A module's own scan writes no origin key at all — not one
+spelled null — so its fact files stay byte-identical to what they were before library
+extraction existed.
+
 ### The hard part: control flow
 
 [D00](D00-fact-schema.md) requires every call site to carry its position in the method's

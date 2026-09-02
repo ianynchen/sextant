@@ -65,9 +65,9 @@ Status values: `planned` · `in-progress` · `delivered` · `deferred` · `cance
 | Item | Status | Note |
 |---|---|---|
 | Python, Go, Rust, TypeScript scanners | deferred | Recorded in REQUIREMENTS § Scope |
-| WSDL reading, and therefore full SOAP matching | deferred | Tier 2 artifact. Version 1 SOAP is partial. |
-| Avro schema reading | deferred | Tier 2 artifact |
-| Terraform, XSD, JSON Schema, docker-compose, GraphQL | deferred | Tier 3 artifacts |
+| WSDL reading | **delivered** | Phase 2I — a reader and a stdlib-XML interpreter branch; SOAP operations derive at their QName. Cross-service *matching* is the linking tier's, not this row's |
+| Avro schema reading | **delivered** | Phase 2G, both origins — `.avsc` and the `SCHEMA$` a generated class embeds — with its two limits recorded in [COVERAGE.md](COVERAGE.md) §4.2 |
+| Terraform, JSON Schema, docker-compose | deferred | Tier 3 artifacts. XSD delivered with WSDL (2I) and GraphQL SDL in 2H — both read as the same declared shapes |
 | `module diff`, `system diff` | deferred | Stable identity is designed in for it |
 | VTA dispatch narrowing | deferred | **Expected to be needed.** The per-call-site candidate shape in D01 is already VTA-ready, so it lands as better `dispatch` rows with nothing downstream touched. |
 | Architecture-drift enforcement in CI | deferred | Needs measured false-positive rates first |

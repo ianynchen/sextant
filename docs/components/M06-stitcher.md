@@ -64,7 +64,7 @@ genuinely ambiguous.
 | Protocol | Key | Strength |
 |---|---|---|
 | gRPC | Fully-qualified service and method | **Strongest.** Both sides derive from one schema, and the field numbers must agree or the wire breaks. |
-| SOAP | Namespace and operation | Strong — **when the contract was read.** It is not in version 1, so SOAP falls back to step 3. |
+| SOAP | Namespace and operation | Strong — **when the contract was read.** Since Phase 2I it usually is: a `.wsdl`/`.xsd` in the repository derives the operation's QName, and an annotation-derived row carries the identical string. A module whose contract is served only from a runtime URL, and a `@SoapAction` row (a different identity axis), still fall back to step 3. |
 | Message | Topic name | Strong, once configuration resolved it |
 | HTTP with a declared client | The service-discovery name the client states | Strong |
 | HTTP with deployment artifacts | Configuration value, to Service name, to the module that owns it | Strong |

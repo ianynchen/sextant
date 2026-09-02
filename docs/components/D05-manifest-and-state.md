@@ -154,7 +154,7 @@ it, never by presentation.
                   "scanners": [{ "id": "asm", "version": "…" }] },
   "coverage": { "sources": 1283, "covered": 1283, "uncovered": 0, "partial": false },
   "resolution": { "resolved": 0.71, "narrowed": 0.22, "partial": 0.04, "unresolved": 0.03 },
-  "gaps": ["soap_contracts_not_read"],
+  "gaps": ["call_graph_not_implemented"],
   "endpoints": { "inbound": { "http": 8, "kafka": 3, "grpc": 1 },
                  "outbound": { "http": 5, "kafka": 2 } },
   "query": ["sextant endpoint list --scope module", "sextant symbol impact <symbol>"]

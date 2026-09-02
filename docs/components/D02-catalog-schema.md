@@ -125,7 +125,10 @@ from `@RequestMapping` lives in this module's own scanned bytecode, so the effec
 pre-pass (`resolve/effective_annotations.py`, spec §2, §3) widens the mapping-annotation set to
 every module-local annotation type transitively meta-annotated with one of the catalog's own
 declared fqns, before this table is ever consulted — no catalog author hand-copies a project's
-own composition. The jar half above is what remains open.
+own composition. The jar half above is what remains open — narrowed rather than closed by
+Phase 2I: `.sextant.yml` (§4a) scans a NAMED library's own bytecode, so a framework
+jar's class files are no longer unreachable in principle, but nothing has been tested
+against a framework jar and no shipped catalog stops hand-copying its table.
 
 **Outbound annotation clients generalise the same vocabulary rather than needing a new
 style.** Three parts of the shape above, previously assumed constant, become catalog data:
@@ -1176,6 +1179,32 @@ no code and the wiring that would is explicitly not read (a COVERAGE boundary).
 `request_shape` is NULL for the same kind of reason — a root field's ARGUMENTS are what
 the operation takes, and the interpreter deliberately does not project them.
 
+**A `role` of `operation` derives PER SHAPE instead, and the engine says so** (Phase 2I).
+Where `query`/`mutation`/`subscription` name a root type whose FIELDS are the operations,
+`operation` names a shape that IS one — a WSDL input element is the whole request payload,
+not a type some field returns — so iterating its fields would mint an endpoint per element
+of a request body. One row comes from the shape itself: `path` is the shape's own schema
+name (the QName), `method` is NULL because SOAP is verbless, and `request_shape` is **not**
+NULL here but a self-reference to that same shape, because the wrapper element is what
+goes on the wire. `response_shape` stays NULL and takes no stamp at all: the interpreter
+marks input elements only, so no fact links an operation to what its output message names,
+and an output join would be invented rather than read. `handler`, `caller`, `evidence` and
+`resolution` read exactly as above. This is the one place the engine matches a role name
+rather than reading it off catalog data; the catalog must still NAME the role to be read at
+all, but the value it maps the role to is never consulted, since a WSDL input element names
+no operation KIND for a `method` column to spell.
+
+```yaml
+# wsdl-schema.yml — framework-neutral, one file for one style, and its own
+# because a contract belongs to no framework.
+style: schema_operations
+protocol: soap
+matches:
+  schema_operations:
+    schema_format: wsdl
+    operations: { operation: operation }   # a GATE; the value is never read
+```
+
 **Agreement with the annotation catalogs rides two existing mechanics, not a new rule.**
 The style runs in the §3 runs-last group, so its rows meet the same insert-if-absent guard
 every call-site style meets, LAST — an operation an annotation already derived keeps
@@ -1515,8 +1544,11 @@ ladder itself.
 # catalog that owns the protocol, never hardcoded. LIVE SINCE PHASE 2H:
 # `format_fixed: {graphql: json}` ships on all four catalogs that own the
 # graphql protocol (the three annotation catalogs and `graphql-schema.yml`),
-# which closed this branch's documented dead end. gRPC and SOAP still have no
-# catalog, so `grpc: protobuf` remains an illustration.
+# which closed this branch's documented dead end. PHASE 2I added the second
+# such protocol: `format_fixed: {soap: xml}` ships on all five catalogs owning
+# `soap` — a SOAP envelope IS an XML document, so no handler-level declaration
+# can make it anything else. gRPC still has no catalog, so `grpc: protobuf`
+# remains an illustration.
 format_fixed:
   graphql: json
 
@@ -2073,6 +2105,47 @@ than one with a fixture, and the sentence above — "without this, a catalog is 
 assertion" — is exactly what it trades
 against, so the exception is for this one shape and does not generalise to an
 annotation or configuration catalog, where the fixture is cheap.
+
+**It is still the only instance, and Phase 2I is the reason that is worth recording.**
+`jakarta-jws-client.yml` — generated client stubs, whose declarations live in a dependency
+by definition — was pinned over synthetic facts for exactly one task, and then got a real
+fixture of a shape this document had not had before: a **sibling module built and consumed
+as a jar**, opted into by the analysed fixture's own `.sextant.yml` (§4a), deriving its one
+endpoint through the real commands in CI. A catalog whose subject matter is compiled
+libraries is fixturable after all; it just needs a library.
+
+---
+
+## 4a. Catalog rules over an extracted library
+
+Every style above reads facts, and since Phase 2I some of those facts can come from a
+**dependency's own bytecode** rather than from the module's output — the libraries a module
+names in `.sextant.yml` ([D04](D04-config-and-exclusion.md) §2a). No style changed to allow
+it and none is opted out of it, so what each one then claims has to be stated:
+
+- **A call-driven style derives only where the module's own call sites reach the library's
+  types.** `single_call`, `fluent`, `combinator` and `interface_implementation` all root in
+  a call this module makes, so opting a library in cannot fabricate call-evidenced rows; at
+  most it adds the declarations those calls resolve against.
+- **An annotation-driven OUTBOUND catalog derives from the interface alone**, which is the
+  mechanism's purpose: a generated client stub is annotated exactly as it would be inside
+  the module, and a row derived from it says the module calls that operation because the
+  module compiled against the stub.
+- **An annotation-driven INBOUND catalog derives from annotations alone too, and that is
+  the claim the opt-in has to carry.** A jar holding `@RestController` or `@Endpoint`
+  classes derives inbound rows whether or not component scanning ever reaches them, and
+  Sextant cannot see component scanning. So **naming a library asserts it is part of this
+  module's runtime surface** — the reader's own claim, made once, per library, never
+  inferred from the dependency tree. Every such derivation carries its origin coordinate
+  into the facts ([D00](D00-fact-schema.md) §2), the rendered document
+  ([D06](D06-bundle-format.md) §5b) and the exported `documents` table, so the assertion
+  stays visible instead of being laundered into module-observed evidence.
+
+**The assertion is retractable, which is what makes it a decision rather than a
+commitment.** Removing a coordinate from `.sextant.yml` removes its rows on the next run:
+the library fact subtree is discarded whole before anything is written, because a fact file
+is written whole and a library that is no longer scanned would otherwise overwrite nothing
+and be read straight back out of the same workspace.
 
 ---
 
