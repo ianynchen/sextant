@@ -68,7 +68,7 @@ Written once per class file. Every fact points at one.
 | `scanner_version` | |
 | `content_hash` | Of the source of truth this was read from |
 | `origin_entry` | **The classpath entry this was read from** — the module's own output directory, or a library archive |
-| `origin_tier` | That entry's tier — module output, first-party, third-party |
+| `origin_tier` | That entry's tier (§4) — module output, a declared dependency, first-party, third-party, platform |
 | `origin` | The **library** this document was extracted from, as its coordinate (`com.example:orders-soap-client`). Absent for the module's own output |
 | `redaction_set_hash` | From [D04](D04-config-and-exclusion.md) |
 | `partial` | True when the file was analysed incompletely, with a reason |
@@ -106,6 +106,14 @@ output carries **no `origin` key at all** rather than one spelled null: a module
 library extraction configured produces exactly the fact files it produced before opt-in
 library extraction existed, which is what makes "did enabling this change my module's
 facts?" answerable by comparing bytes.
+
+**`origin_tier` moves with it, to `dependency`.** A class this module did not build is
+not `module_output`, and saying so would be a claim known to be false. `dependency` is
+what the analysis actually observed — the class came out of a declared dependency's
+archive — and deliberately not `first_party` or `third_party`, which answer a different
+question (*whose* dependency) from the group patterns [D04](D04-config-and-exclusion.md)
+§2 declares and nothing yet implements. A tier is a factual origin; it is never a trust
+guess.
 
 **`sextant_version` and `fact_schema_version` are here because a result can change when the
 tool changes, even when the code does not.** A fixed bug in extraction produces different
@@ -159,6 +167,14 @@ goes in `ext`, never into a widened set.
 
 **`construct_kind`** — `class`, `interface`, `struct`, `trait`, `protocol`, `enum`,
 `record`, `alias`, `method`, `function`, `constructor`, `accessor`, `field`, `module`
+
+**`origin_tier`** — `module_output`, `dependency`, `first_party`, `third_party`,
+`platform`. Where a document's class file was read from (§2). `dependency` is the tier
+of a declared dependency's own archive, read because the module opted into it
+([D04](D04-config-and-exclusion.md) §2a); it says the class came out of a dependency and
+nothing about whose. `first_party`/`third_party` answer that second question from
+declared group patterns, and until those are read no producer writes either — a tier is
+an observation, never a trust judgement.
 
 **`relationship_kind`** — `extends`, `implements`, `type_of`
 

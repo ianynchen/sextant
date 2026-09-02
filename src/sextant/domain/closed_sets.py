@@ -39,6 +39,15 @@ class ConstructKind(StrEnum):
 
 class OriginTier(StrEnum):
     MODULE_OUTPUT = "module_output"
+    # A declared dependency's own archive, read because the module asked for it
+    # (D04 §2a's opt-in). A FACTUAL origin and never a trust judgement, which is
+    # exactly why it is its own member rather than one of the two below: the
+    # analysis knows the class came out of a dependency and does not know whose
+    # dependency it is. `first_party`/`third_party` are that second question,
+    # answered by the group patterns D04 §2 declares — unimplemented today, so
+    # writing either here would be a guess, while writing `module_output` would
+    # be a claim known to be false.
+    DEPENDENCY = "dependency"
     FIRST_PARTY = "first_party"
     THIRD_PARTY = "third_party"
     PLATFORM = "platform"

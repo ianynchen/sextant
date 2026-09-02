@@ -39,8 +39,16 @@ public final class Main {
                 // metadata.json and the rendered gaps list by itself. A jar of
                 // zero classes is legitimate-but-suspicious, and this is what
                 // makes it visible instead of silent.
+                //
+                // Named by the COORDINATE where one was given, and only by the
+                // path otherwise. An `uncovered` entry is read by a person, in
+                // metadata.json and in a published bundle: an absolute archive
+                // path under someone's home directory identifies nothing once
+                // it leaves the machine that produced it, while the coordinate
+                // is the same name the configuration used to ask for it.
                 if (classFiles.isEmpty()) {
-                    uncovered.add(options.get("classes") + ": no class files found");
+                    String named = options.getOrDefault("origin", options.get("classes"));
+                    uncovered.add(named + ": no class files found");
                 }
                 for (String classRelative : classFiles) {
                     byte[] bytes = source.read(classRelative);
@@ -172,17 +180,26 @@ public final class Main {
         document.put("sextant_version", JsonOut.string(options.getOrDefault("sextant-version", "0.1.0")));
         document.put("fact_schema_version", JsonOut.string("1.0.0"));
         document.put("scanner_id", JsonOut.string("asm"));
-        document.put("scanner_version", JsonOut.string("9.11"));
+        document.put("scanner_version", JsonOut.string("9.12"));
         document.put("content_hash", JsonOut.string("sha256:" + contentHash));
         document.put("origin_entry", JsonOut.string(options.get("classes")));
-        document.put("origin_tier", JsonOut.string("module_output"));
         // The library this document was extracted FROM, as its coordinate —
         // written only when `--origin` names one (D00 §2). Omitted entirely
         // for a module's own output, rather than written as null, so a scan
         // of a module is byte-for-byte the scan it was before opt-in library
         // extraction existed.
+        //
+        // The TIER moves with it, and must: `module_output` on a class this
+        // module did not build is a claim known to be false. `dependency` is
+        // the factual answer and deliberately not `first_party`/`third_party`
+        // — those need the group patterns D04 §2 declares and nothing
+        // implements, so either would be a guess about ownership dressed as
+        // an observation (D00 §4).
         if (options.get("origin") != null) {
             document.put("origin", JsonOut.string(options.get("origin")));
+            document.put("origin_tier", JsonOut.string("dependency"));
+        } else {
+            document.put("origin_tier", JsonOut.string("module_output"));
         }
         document.put("redaction_set_hash", JsonOut.string(options.getOrDefault("redaction-hash", "sha256:none")));
         document.put("partial", "false");
@@ -238,7 +255,7 @@ public final class Main {
         fields.put("documents", String.valueOf(documents));
         fields.put("facts", String.valueOf(facts));
         fields.put("scanner_id", JsonOut.string("asm"));
-        fields.put("scanner_version", JsonOut.string("9.11"));
+        fields.put("scanner_version", JsonOut.string("9.12"));
         fields.put("uncovered", JsonOut.array(quoted));
         return JsonOut.object(fields);
     }
