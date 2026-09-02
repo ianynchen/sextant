@@ -201,6 +201,30 @@ def test_every_graphql_catalog_declares_the_protocols_fixed_format():
     assert next(c for c in graphql if c.style == "schema_operations").id == "graphql-schema"
 
 
+def test_every_soap_catalog_declares_the_protocols_fixed_format():
+    """2G design §7, rung 1's SECOND live protocol (2I design §1), and the
+    same rule the graphql test above pins: all THREE catalogs owning `soap`
+    declare the identical `format_fixed: {soap: xml}` entry, not one — the
+    ladder unions the blocks across catalogs, so a module pulling in only
+    `wsdl-schema` (no `@Endpoint`/`@WebService` annotation anywhere) must
+    still get the answer, the same way a schema-first GraphQL module does.
+
+    `wsdl-schema` (2I Task 4) is the third, and — like `graphql-schema`
+    before it — the only one of the three that is not `annotation_driven`: a
+    schema belongs to no framework, and without its own copy its rows would
+    reach rung 1 with nothing declared and fall through with no rung to
+    answer `xml` at all (its rows carry no bytecode type for rung 4 or rung 5
+    to read)."""
+    catalogs = YamlCatalogSource(CATALOGS).load()
+    soap = [c for c in catalogs if c.protocol == "soap"]
+
+    assert {c.id for c in soap} == {"spring-ws", "jakarta-jws", "wsdl-schema"}
+    assert all(c.format_fixed == {"soap": "xml"} for c in soap)
+    assert all(c.direction == "inbound" for c in soap)
+    assert {c.style for c in soap} == {"annotation_driven", "schema_operations"}
+    assert next(c for c in soap if c.style == "schema_operations").id == "wsdl-schema"
+
+
 def test_only_spring_graphql_needed_the_qualifier_form():
     """2H design §1's amended acceptance test, read off the catalogs
     themselves rather than off the derived rows.

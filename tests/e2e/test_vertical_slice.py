@@ -370,6 +370,14 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # methods produce those three: `internalAudit`'s
     # `@WebMethod(exclude = true)` is JAX-WS withdrawing the operation, so it
     # derives nothing. `soap` becomes 5.
+    # 2I Task 4 (`wsdl-schema.yml`, `schema_operations`'s SOAP analog of 2H
+    # Task 4's `graphql-schema.yml`): +1 soap inbound —
+    # `{http://orders.example.com/ws}quoteOrderRequest`, the one WSDL input
+    # element in `orders.wsdl` that no `@PayloadRoot`/`@SoapAction` implements.
+    # `placeOrderRequest` shares its identity with `spring-ws.yml`'s own row
+    # (2I Task 2) and the insert-if-absent guard keeps THAT one — the same
+    # first-writer agreement `auditTrail`'s own comment above states, now live
+    # on a second protocol. `soap` becomes 6.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "graphql": 12,
@@ -377,7 +385,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
-        "soap": 5,
+        "soap": 6,
         "sqs": 4,
         "sse": 2,
         "websocket": 3,
@@ -498,7 +506,13 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # Nothing outbound and nothing `both`: the catalog is `direction: inbound`
     # with no `reply` block, and no soap row can merge with an http one
     # because wire identity is protocol-scoped (D01 §3).
-    assert rows == [("both", 5), ("inbound", 78), ("outbound", 40)]
+    # 2I Task 4 (`wsdl-schema.yml`): +1 inbound soap —
+    # `{http://orders.example.com/ws}quoteOrderRequest`, the schema's own
+    # unimplemented operation (comment above, `metadata["endpoints"]`) —
+    # inbound 78 + 1 = 79 — the 124-endpoint total (5 + 79 + 40 = 124).
+    # Nothing outbound and nothing `both`, for the same reason Task 2's own
+    # row is neither.
+    assert rows == [("both", 5), ("inbound", 79), ("outbound", 40)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -707,6 +721,130 @@ def test_a_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
 
     assert "| `graphql query auditTrail` | none recorded | - → - | json | resolved |" in document
     assert "- `graphql query auditTrail`\n  - Response: array of object AuditEntry" in document
+
+
+def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_full_analyze(
+    tmp_path: Path,
+):
+    """2I Task 4 (`schema_operations`'s SOAP branch), live and whole, through
+    the REAL command — the only path that reads `orders.wsdl` at all. The
+    SOAP mirror of `test_the_schemas_own_root_operations_reach_the_endpoint_
+    table_in_a_full_analyze` above, and the one that proves the per-SHAPE
+    branch this task adds is live, not just unit-tested.
+
+    Three claims:
+
+    * the per-shape pin — `quoteOrderRequest` is the one WSDL input element
+      in the fixture that no `@PayloadRoot`/`@SoapAction` implements, so it
+      is the one new row, at `declared` with no handler and no caller, and
+      its own FIELDS (`sku`/`count`/`status`/`cancelledAt`) derive no rows of
+      their own — the per-shape-not-per-field pin, live;
+    * first-writer agreement — `placeOrderRequest` already had an annotation
+      row (`spring-ws.yml`, 2I Task 2) when this style ran, and the
+      insert-if-absent guard kept it, handler and all — the exact live case
+      2I Task 3's own fixture note names;
+    * the wrapper is wire-true (2I design §4) — `quoteOrderRequest`'s
+      `request_shape` self-references its own shape, unlike a GraphQL root
+      field's NULL (whose arguments are never projected). Its
+      `response_shape` stays NULL and gets no stamp at all: 2I Task 3 marks
+      INPUT elements only, so there is no output linkage to honestly
+      coalesce a response from — this task's own stated boundary.
+    """
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    try:
+        soap = {
+            str(row["path"]): row
+            for row in workspace.query("endpoints")
+            if row["protocol"] == "soap"
+        }
+        quote_fields = [
+            (str(row["wire_name"]), row["wire_type"], row["nullable"])
+            for row in workspace.query("shape_fields")
+            if row["shape_id"] == "{http://orders.example.com/ws}quoteOrderRequest"
+        ]
+    finally:
+        workspace.close()
+
+    # The whole SOAP surface: 2I Task 2's five annotation-driven rows beside
+    # this task's one schema-first row.
+    assert set(soap) == {
+        "{http://orders.example.com/ws}placeOrderRequest",
+        "{http://orders.example.com/ws}quoteOrderRequest",
+        "http://orders.example.com/action/cancelOrder",
+        "{http://billing.example.com/ws}chargeOrder",
+        "{http://billing.example.com/ws}refund",
+        "{http://soap.orders.example.com/}legacyCharge",
+    }
+    schema_first = [path for path, row in soap.items() if row["catalog_id"] == "wsdl-schema"]
+    assert schema_first == ["{http://orders.example.com/ws}quoteOrderRequest"]
+
+    quote = soap["{http://orders.example.com/ws}quoteOrderRequest"]
+    assert (quote["method"], quote["direction"]) == (None, "inbound")
+    assert (quote["evidence"], quote["resolution"]) == ("declared", "resolved")
+    assert quote["handler"] is None and quote["caller"] is None
+    assert (quote["format"], quote["format_resolution"]) == ("xml", "resolved")
+    assert json.loads(str(quote["request_shape"])) == {
+        "wire_type": "object",
+        "wire_format": None,
+        "nullable": False,
+        "shape_id": "{http://orders.example.com/ws}quoteOrderRequest",
+    }
+    assert quote["response_shape"] is None
+    # None of the request shape's own FIELDS derives a row of its own.
+    assert not {"sku", "count", "status", "cancelledAt"} & set(soap)
+
+    # The annotated identity kept the annotation's row — the handler symbol
+    # is the thing only that side knows.
+    place = soap["{http://orders.example.com/ws}placeOrderRequest"]
+    assert place["catalog_id"] == "spring-ws"
+    assert place["handler"] is not None
+
+    # The shape `request_shape` self-references, expanded from the schema's
+    # own field declarations (2I Task 3) — pinned once more here as the live
+    # cross-check that the shape this row points at is real.
+    assert quote_fields == [
+        ("sku", "string", False),
+        ("count", "integer", False),
+        ("status", "enum", False),
+        ("cancelledAt", "string", True),
+    ]
+
+
+def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
+    """The same row at the document a reader actually sees — 2I's mirror of
+    `test_a_schema_first_operation_reaches_the_rendered_document` above.
+    `none recorded` rather than `unresolved`: the schema addressed this
+    operation outright and names no code, an absence rather than a failed
+    read. The request table is the schema's own fields, by its schema name;
+    there is no Response section at all, because no stamp reaches this row."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    _run(tmp_path)  # analyze + render + export
+    document = (tmp_path / "render" / "architecture.md").read_text()
+
+    assert (
+        "| `(unresolved) {http://orders.example.com/ws}quoteOrderRequest` | "
+        "none recorded | - → - | xml | resolved |"
+    ) in document
+    assert (
+        "- `(unresolved) {http://orders.example.com/ws}quoteOrderRequest`\n"
+        "  - Request:\n"
+        "\n"
+        "    | Field | Type | Required | Nullable |\n"
+        "    |---|---|---|---|\n"
+        "    | sku | string | yes | no |\n"
+        "    | count | integer (int32) | yes | no |\n"
+        "    | status | enum | yes | no |\n"
+        "    | cancelledAt | string (date-time) | yes | yes |\n"
+    ) in document
+    # No Response section: 2I Task 3 marks INPUT elements only, so nothing
+    # coalesces a response here — the boundary is visible in the rendered
+    # document, not just the endpoint table.
+    assert "quoteOrderRequest`\n  - Response:" not in document
 
 
 def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_path: Path):

@@ -50,6 +50,11 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 # named out of this catalog's protocol.
 FORMAT = "graphql"
 OTHER_FORMAT = "avro"
+# `role == "operation"` (2I Task 4) is the one role this engine hardcodes
+# rather than reading off catalog data, so its tests need a real schema
+# format beside `FORMAT` to gate on — `wsdl` is the one D00 actually closes
+# over, same reason `OTHER_FORMAT` above cannot be invented either.
+WSDL_FORMAT = "wsdl"
 
 
 def _document(document_id: str = "doc_1", path: str = "schema/orders.invented") -> Document:
@@ -114,6 +119,7 @@ def _catalog(
     operations: dict[str, str] | None = None,
     *,
     source: Path = Path("tests/invented-schema.yml"),
+    protocol: str = "graphql",
     **block: object,
 ) -> Catalog:
     declared: dict[str, object] = {
@@ -126,7 +132,7 @@ def _catalog(
     return Catalog(
         id="invented-schema",
         style="schema_operations",
-        protocol="graphql",
+        protocol=protocol,
         direction="inbound",
         requires=(),
         matches={"schema_operations": declared},
@@ -693,4 +699,178 @@ def test_the_shipped_catalog_declares_the_style_the_protocol_and_the_fixed_forma
     assert catalog.matches["schema_operations"] == {
         "schema_format": "graphql",
         "operations": {"query": "query", "mutation": "mutation", "subscription": "subscription"},
+    }
+
+
+# ---------------------------------------------------------------------------
+# 2I Task 4: `role == "operation"` derives one row per SHAPE, never per
+# field — the WSDL case, where the input element's shape IS the operation
+# (2I Task 3) rather than a root type whose fields are operations. `wsdl` is
+# the one real schema format this role is ever set on; every symbol and field
+# name below is still invented, same as every test above (this file's own
+# docstring rule) — the exact live QNames
+# (`{http://orders.example.com/ws}placeOrderRequest`/`quoteOrderRequest`) are
+# pinned against the real fixture in `test_pipeline.py` and
+# `tests/e2e/test_vertical_slice.py`, not here.
+# ---------------------------------------------------------------------------
+
+
+def test_an_operation_role_shape_derives_one_row_from_itself(tmp_path: Path):
+    """The whole ruling this task adds (2I design §3/§4): a WSDL input
+    element's shape IS the operation, so the row derives from the SHAPE
+    itself, never from one of its fields. `path` is the shape's own schema
+    name — `symbol` here, since `declared_shapes` does not select
+    `schema_name` and a schema-only fact writes the two identically
+    (`wsdl_xsd.py`'s own `_add_shape`); `method` is NULL, SOAP being verbless
+    like every other non-HTTP protocol (D02 §2, amended); and
+    `request_shape` self-references the shape by `shape_id` — the wrapper is
+    wire-true (2I design §4), unlike a GraphQL root field's un-projected
+    arguments, which is why the per-field branch above always leaves this
+    column NULL and this branch never does."""
+    workspace = _workspace(
+        tmp_path,
+        _shape(
+            "{urn:invented}Op",
+            _field("sku"),
+            _field("count"),
+            role="operation",
+            schema_format=WSDL_FORMAT,
+        ),
+    )
+    _run(
+        workspace,
+        _catalog(operations={"operation": "operation"}, schema_format=WSDL_FORMAT, protocol="soap"),
+    )
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert (row["protocol"], row["method"], row["path"]) == ("soap", None, "{urn:invented}Op")
+    assert (row["evidence"], row["resolution"]) == ("declared", "resolved")
+    assert row["handler"] is None and row["caller"] is None
+    # No stamp reaches this branch at all (2I Task 3 marks INPUT elements
+    # only, so no fact links an operation to an output message) — the
+    # boundary this task states rather than guesses past.
+    assert row["response_shape"] is None
+    assert json.loads(str(row["request_shape"])) == {
+        "wire_type": "object",
+        "wire_format": None,
+        "nullable": False,
+        "shape_id": "{urn:invented}Op",
+    }
+
+
+def test_an_operation_roles_fields_derive_no_rows_of_their_own(tmp_path: Path):
+    """The per-shape-not-per-field pin: deriving one row per FIELD (the
+    branch immediately below, for `query`/`mutation`/`subscription`) would
+    mint an endpoint per element of the request body — the same defect a
+    per-field pass over an ordinary payload type would commit. Two fields,
+    one row, and neither field's own name appears as a `path` anywhere."""
+    workspace = _workspace(
+        tmp_path,
+        _shape(
+            "{urn:invented}Op",
+            _field("sku"),
+            _field("count"),
+            role="operation",
+            schema_format=WSDL_FORMAT,
+        ),
+    )
+    _run(
+        workspace,
+        _catalog(operations={"operation": "operation"}, schema_format=WSDL_FORMAT, protocol="soap"),
+    )
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert {str(r["path"]) for r in rows} == {"{urn:invented}Op"}
+
+
+def test_a_query_role_shape_beside_an_operation_role_shape_still_derives_per_field(
+    tmp_path: Path,
+):
+    """The graphql regression this task must not touch, proven in the
+    presence of the new branch rather than merely beside it (the brief's own
+    contrast case): one catalog run holding both a `query`-role shape
+    (per-field, the pre-existing behaviour) and an `operation`-role shape
+    (per-shape, this task's own) derives BOTH correctly, byte-identical to
+    what the per-field branch alone would produce, and neither leaks a row
+    into the other's identity space."""
+    workspace = _workspace(
+        tmp_path,
+        _shape(
+            "Roots", _field("orders"), _field("orderById"), role="query", schema_format=WSDL_FORMAT
+        ),
+        _shape("{urn:invented}Op", _field("sku"), role="operation", schema_format=WSDL_FORMAT),
+    )
+    _run(
+        workspace,
+        _catalog(
+            operations={"query": "query", "operation": "operation"},
+            schema_format=WSDL_FORMAT,
+            protocol="soap",
+        ),
+    )
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert {(r["method"], r["path"]) for r in rows} == {
+        ("query", "orders"),
+        ("query", "orderById"),
+        (None, "{urn:invented}Op"),
+    }
+    # The per-field rows keep the per-field branch's own answer exactly —
+    # `request_shape` NULL, unlike the per-shape row beside them.
+    assert all(r["request_shape"] is None for r in rows if r["method"] == "query")
+    assert (
+        json.loads(str(next(r["request_shape"] for r in rows if r["path"] == "{urn:invented}Op")))[
+            "shape_id"
+        ]
+        == "{urn:invented}Op"
+    )
+
+
+def test_agreement_a_pre_existing_annotation_row_blocks_the_operation_twin(tmp_path: Path):
+    """First-writer, through the same insert-if-absent guard the per-field
+    branch already meets (`test_agreement_annotation_wins_identity`'s own
+    precedent) — and the live case this exercises: `wsdl-schema.yml`'s
+    `{http://orders.example.com/ws}placeOrderRequest` row is blocked by
+    `spring-ws.yml`'s own `@PayloadRoot` row at that identity (2I Task 2), so
+    only `quoteOrderRequest` — which carries no annotation twin — becomes a
+    new row live (pinned in `test_pipeline.py` /
+    `tests/e2e/test_vertical_slice.py`). Here: one shape, one pre-existing
+    row at its identity, and the schema-derived twin never lands."""
+    workspace = _workspace(
+        tmp_path,
+        _shape("{urn:invented}Op", _field("sku"), role="operation", schema_format=WSDL_FORMAT),
+    )
+    existing = _annotation_row(None, "{urn:invented}Op", protocol="soap", catalog_id="spring-ws")
+    _run(
+        workspace,
+        _catalog(operations={"operation": "operation"}, schema_format=WSDL_FORMAT, protocol="soap"),
+        existing,
+    )
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert len(rows) == 1
+    assert rows[0]["catalog_id"] == "spring-ws"
+    assert rows[0]["handler"] == "com/acme/orders/Resolvers#orders(sig_1)."
+
+
+def test_the_shipped_wsdl_catalog_declares_the_style_the_protocol_and_the_fixed_format():
+    """The one shipped `schema_operations` catalog for SOAP, read off the
+    file: same shape as `graphql-schema.yml`'s own regression pin above, and
+    the second live proof (2I design §1) that rung 1's `format_fixed`
+    mechanism is protocol-generic rather than a GraphQL special case."""
+    catalog = next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "wsdl-schema")
+
+    assert catalog.style == "schema_operations"
+    assert (catalog.protocol, catalog.direction) == ("soap", "inbound")
+    assert catalog.requires == ()
+    assert catalog.format_fixed == {"soap": "xml"}
+    assert catalog.matches["schema_operations"] == {
+        "schema_format": "wsdl",
+        "operations": {"operation": "operation"},
     }

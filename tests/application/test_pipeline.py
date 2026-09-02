@@ -787,6 +787,15 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # so it derives nothing — asserted explicitly below rather than left to
     # this count, since a row lost for the wrong reason counts the same.
     # 119 + 3 = 122.
+    #
+    # `wsdl-schema.yml` (2I Task 4) adds nothing to THIS particular count, for
+    # the exact reason `graphql-schema.yml` (2H Task 4) did not above: its one
+    # new row (`{http://orders.example.com/ws}quoteOrderRequest`) comes from
+    # the WSDL/XSD reader's own `declared_shape` facts, which this fixture
+    # never loads (`resolved_fixture` runs no reader or interpret step —
+    # `test_the_format_ladder_answers_every_live_row`'s own docstring) —
+    # pinned instead in `tests/e2e/test_vertical_slice.py`, where the
+    # interpreter runs. 122 stands unmoved through this task.
     assert len(report.endpoints) == 122
     assert report.skipped_catalogs == []
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
@@ -1519,7 +1528,11 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 2I Task 2: `spring-ws.yml`'s two inbound rows. Untouchable by this
         # pass for the same reason the graphql and messaging buckets are —
         # only an http row carries a `protocol_hint` to be reclassified by.
-        # 2 from `spring-ws.yml` + 3 from `jakarta-jws.yml`.
+        # 2 from `spring-ws.yml` + 3 from `jakarta-jws.yml`. `wsdl-schema.yml`
+        # (2I Task 4) adds nothing here — same reason `graphql-schema.yml`
+        # adds nothing to `graphql` above: this fixture loads no
+        # `declared_shape` facts at all (comment above `len(report.endpoints)
+        # == 122`).
         "soap": 5,
         "sse": 2,
         "websocket": 5,
@@ -2818,6 +2831,11 @@ def test_the_format_ladder_answers_every_live_row(
     # an XML document, so this is the protocol stating its wire rather than a
     # framework default being assumed.
     assert {answer for key, answer in answers.items() if key[0] == "soap"} == {("xml", "resolved")}
+    # `wsdl-schema.yml` (2I Task 4) carries the identical `format_fixed: {soap:
+    # xml}` entry and would answer a third live surface alike — but this
+    # fixture loads no `declared_shape` facts (comment above `len(report.
+    # endpoints) == 122`), so its one row never reaches this table; pinned
+    # instead in `tests/e2e/test_vertical_slice.py`.
     assert len([e for e in report.endpoints if e["protocol"] == "soap"]) == 5
 
     # Rung 2 — the only three HTTP routes whose mapping annotations declare a
