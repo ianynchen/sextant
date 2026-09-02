@@ -109,7 +109,15 @@ _XSD_SCALARS: dict[str, tuple[str, str | None]] = {
 # The model groups this projection reads. Anything else in a content model is
 # unknown, and unknown is a gap: see `_Unprojectable`.
 _XSD_GROUPS = frozenset({_xsd("sequence"), _xsd("all")})
-_XSD_IMPORTS = frozenset({_xsd("import"), _xsd("include"), _xsd("redefine")})
+# The two schema-level directives that pull another file's declarations in
+# unchanged, and the two that REPLACE them. Reading the first pair's location
+# is enough, because the declarations they bring arrive under their own file's
+# own identity and are registered from there. The second pair is a gap: they
+# rewrite a declaration in the file they name, and this branch reads that file
+# on its own terms — so publishing it would publish the definition the
+# contract explicitly replaced, which is a lie rather than a gap.
+_XSD_INCLUSIONS = frozenset({_xsd("import"), _xsd("include")})
+_XSD_REPLACEMENTS = frozenset({_xsd("redefine"), _xsd("override")})
 
 
 class _Unprojectable(Exception):
@@ -311,7 +319,7 @@ def _wsdl_universe(parsed: Sequence[_Contract]) -> tuple[_WsdlUniverse, frozense
     messages: dict[str, _Declaration] = {}
     scopes: dict[Element, Mapping[str, str]] = {}
     unusable: set[str] = set()
-    carried = {contract.fact.symbol for contract in parsed}
+    carried = {contract.fact.symbol: contract for contract in parsed}
 
     for contract in parsed:
         scopes.update(contract.scopes)
@@ -327,8 +335,17 @@ def _wsdl_universe(parsed: Sequence[_Contract]) -> tuple[_WsdlUniverse, frozense
         for schema in schemas:
             namespace = schema.get("targetNamespace", "")
             for node in schema:
-                if node.tag in _XSD_IMPORTS:
-                    if not _import_resolves(node, symbol, carried):
+                if node.tag in _XSD_REPLACEMENTS:
+                    # `redefine`/`override` rewrite a declaration in the file
+                    # they name, and this branch reads that file on its own
+                    # terms — so the replaced definition is the one that would
+                    # reach the fact stream. A gap, because publishing the
+                    # definition the contract explicitly replaced is not a
+                    # partial answer but a wrong one.
+                    unusable.add(symbol)
+                    continue
+                if node.tag in _XSD_INCLUSIONS:
+                    if not _inclusion_resolves(node, symbol, namespace, carried):
                         # Checked explicitly rather than left to surface as a
                         # dangling type reference: a WSDL whose `<types>` holds
                         # nothing BUT an import declares no type of its own, so
@@ -356,24 +373,38 @@ def _wsdl_universe(parsed: Sequence[_Contract]) -> tuple[_WsdlUniverse, frozense
                 message_owners.setdefault(qualified, []).append(symbol)
                 messages.setdefault(qualified, _Declaration(node, contract))
 
-    # A name claimed twice in one identity space is an ambiguity nothing here
-    # can settle, so every file claiming it is a gap — never a fold whose
-    # result depends on which file arrived first (NFR-1).
+    # A QName claimed twice in one identity space is a name this vocabulary
+    # cannot represent twice, so every file claiming it is a gap — never a
+    # fold whose result depends on which file arrived first (NFR-1). Two
+    # different situations reach this, and only one of them is an invalid
+    # schema. An element and a complex type of the same QName share the map
+    # because both become a shape under that one name: THAT case is valid XSD
+    # — the format has two symbol spaces where `DeclaredShapeFact.symbol` has
+    # one — and it is our representation that cannot hold both, not the
+    # contract that is wrong. Publishing two facts under one symbol would read
+    # downstream as one shape declared twice, which is worse than a reported
+    # gap.
     for claimed in (owners, simple_owners, message_owners):
         unusable.update(
             symbol for holders in claimed.values() if len(holders) > 1 for symbol in holders
         )
 
-    marks = _operation_elements(parsed, shapes, messages, scopes, unusable)
+    # A file that publishes nothing must not publish a DECLARATION into
+    # anybody else's shape either — the same guard the operation marks below
+    # already had, and the failure boundary is only symmetric with both. A
+    # sibling that referenced one of these names now finds nothing in the
+    # universe and gaps as a dangling reference, which is exactly what it is:
+    # this run published no such shape.
+    marks = _operation_elements(
+        parsed, _surviving(shapes, unusable), _surviving(messages, unusable), scopes, unusable
+    )
     return (
         _WsdlUniverse(
-            shapes=shapes,
-            simple_types=simple_types,
-            messages=messages,
-            # A file that publishes no shape publishes no operation mark
-            # either — without this, a gapped WSDL's operations would still
-            # reach a surviving schema's shapes, which is exactly the
-            # half-published contract the failure boundary exists to prevent.
+            # Filtered again, because resolving the operations above may have
+            # made a gap of a file that had contributed declarations.
+            shapes=_surviving(shapes, unusable),
+            simple_types=_surviving(simple_types, unusable),
+            messages=_surviving(messages, unusable),
             operations=frozenset(
                 qualified for symbol, qualified in marks if symbol not in unusable
             ),
@@ -383,18 +414,43 @@ def _wsdl_universe(parsed: Sequence[_Contract]) -> tuple[_WsdlUniverse, frozense
     )
 
 
-def _import_resolves(node: Element, symbol: str, carried: set[str]) -> bool:
-    """Whether an `xsd:import`/`include`/`redefine` names a file the module
-    actually carries. A `schemaLocation` is relative to the importing file,
-    which is why the reader's `symbol` is the file's path under the schema
-    root. An import with NO `schemaLocation` names no file at all — it
-    declares a namespace the runtime resolves by catalog — so nothing about it
-    can be missing, and a type it would have brought in still surfaces as an
-    unresolvable reference."""
+def _surviving(declared: Mapping[str, _Declaration], unusable: set[str]) -> dict[str, _Declaration]:
+    """Only what the files that still publish something declared."""
+    return {
+        name: declaration
+        for name, declaration in declared.items()
+        if declaration.contract.fact.symbol not in unusable
+    }
+
+
+def _inclusion_resolves(
+    node: Element, symbol: str, namespace: str, carried: Mapping[str, _Contract]
+) -> bool:
+    """Whether an `xsd:import`/`xsd:include` names a file the module actually
+    carries, on terms this branch can honour.
+
+    A `schemaLocation` is relative to the including file, which is why the
+    reader's `symbol` is the file's path under the schema root. One with NO
+    `schemaLocation` names no file at all — it declares a namespace the
+    runtime resolves by catalog — so nothing about it can be missing, and a
+    type it would have brought in still surfaces as an unresolvable reference.
+
+    A CHAMELEON include — a namespaced schema including one that declares no
+    `targetNamespace`, whose components then take on the includer's namespace —
+    is a stated boundary rather than a resolution: the included file is read
+    here on its own terms, so its declarations carry the bare names it wrote
+    and no QName the contract actually states. Reported as the including
+    file's gap.
+    """
     location = node.get("schemaLocation")
     if location is None:
         return True
-    return posixpath.normpath(posixpath.join(posixpath.dirname(symbol), location)) in carried
+    target = carried.get(posixpath.normpath(posixpath.join(posixpath.dirname(symbol), location)))
+    if target is None:
+        return False
+    if node.tag != _xsd("include") or not namespace:
+        return True
+    return not any(not schema.get("targetNamespace") for schema in _xsd_schemas(target.root) or ())
 
 
 def _operation_elements(
@@ -425,7 +481,7 @@ def _operation_elements(
         for operation in contract.root.iterfind(f"{_wsdl('portType')}/{_wsdl('operation')}"):
             for node in operation.findall(_wsdl("input")):
                 try:
-                    marks.extend(_input_element(node, symbol, shapes, messages, scopes))
+                    marks.append(_input_element(node, symbol, shapes, messages, scopes))
                 except (KeyError, _Unprojectable):
                     unusable.add(symbol)
     return marks
@@ -437,21 +493,30 @@ def _input_element(
     shapes: Mapping[str, _Declaration],
     messages: Mapping[str, _Declaration],
     scopes: Mapping[Element, Mapping[str, str]],
-) -> list[tuple[str, str]]:
+) -> tuple[str, str]:
+    """The one element an operation's input message carries, and the file that
+    said so."""
     message = messages[_qname(node, "message", scopes)]
-    marks = []
-    for part in message.node.findall(_wsdl("part")):
-        if part.get("element") is None:
-            # An `rpc`-style part is typed rather than element'd, so the
-            # operation has no element QName to be identified by. A stated
-            # boundary (2I design §3): inventing one would be a guess about
-            # what actually goes on the wire.
-            raise _Unprojectable(f"rpc-style message part in {symbol}")
-        qualified = _qname(part, "element", scopes)
-        if qualified not in shapes:
-            raise KeyError(qualified)
-        marks.append((symbol, qualified))
-    return marks
+    parts = message.node.findall(_wsdl("part"))
+    if len(parts) != 1:
+        # Document/literal WRAPPED — the style this branch projects — is
+        # exactly one part, and the wrapper element it names IS the operation.
+        # A message carrying several parts is a different wire shape, and
+        # marking each of its elements would silently turn ONE operation into
+        # several endpoints; a message carrying none names no request element
+        # at all. Either is a gap for the same reason the `rpc` case below is.
+        raise _Unprojectable(f"input message with {len(parts)} parts in {symbol}")
+    [part] = parts
+    if part.get("element") is None:
+        # An `rpc`-style part is typed rather than element'd, so the operation
+        # has no element QName to be identified by. A stated boundary (2I
+        # design §3): inventing one would be a guess about what actually goes
+        # on the wire.
+        raise _Unprojectable(f"rpc-style message part in {symbol}")
+    qualified = _qname(part, "element", scopes)
+    if qualified not in shapes:
+        raise KeyError(qualified)
+    return (symbol, qualified)
 
 
 def _contract_shapes(contract: _Contract, universe: _WsdlUniverse) -> list[DeclaredShapeFact]:
@@ -614,6 +679,15 @@ def _wsdl_field(node: Element, qualified: str, reading: _WsdlReading) -> Declare
         name=name,
         # Verbatim: an element's declared name IS its name on the wire, so
         # there is no second spelling for a wire name to disagree with.
+        #
+        # `elementFormDefault` and a local `form` are read by nothing here, on
+        # purpose. They decide whether a local element is namespace-QUALIFIED
+        # in the instance document, and `wire_name` is the local name in every
+        # format this vocabulary carries — a protobuf `json_name`, an SDL
+        # field name, an element name. Qualification changes how the name is
+        # spelled in an XML document, never which name the field has, so
+        # recording it would put a different KIND of answer in this slot than
+        # every other branch does.
         wire_name=name,
         # XSD has no field numbers — an element is matched by name.
         field_number=None,
@@ -708,15 +782,19 @@ def _simple_held(node: Element, reading: _WsdlReading) -> _Held:
 
 
 def _qname(node: Element, attribute: str, scopes: Mapping[Element, Mapping[str, str]]) -> str:
-    """One prefixed QName attribute, expanded against the prefixes in scope at
-    the element that wrote it. Raises `KeyError` for a missing attribute or an
+    """One QName attribute, expanded against the prefixes in scope at the
+    element that wrote it. Raises `KeyError` for a missing attribute or an
     undeclared prefix — a reference this file cannot even name."""
     value = node.get(attribute)
     if value is None:
         raise KeyError(attribute)
     prefix, separator, local = value.partition(":")
     if not separator:
-        prefix, local = "", value
+        # XML's own rule for an unprefixed name: the default namespace, and NO
+        # namespace when none is declared — which is an answer, unlike an
+        # unbound PREFIX. A schema with no `targetNamespace` writes every one
+        # of its own type references this way.
+        return _expand(scopes[node].get("", ""), value)
     namespace = scopes[node].get(prefix)
     if namespace is None:
         raise KeyError(value)

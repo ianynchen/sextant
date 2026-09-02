@@ -434,6 +434,327 @@ def test_a_type_name_two_files_declare_makes_gaps_of_both():
     assert [shape.symbol for shape in shapes] == ["{urn:c}other"]
 
 
+def test_a_gapped_files_declarations_reach_nobody_elses_shape():
+    """The failure boundary is only a boundary if it holds in BOTH directions.
+    A file that publishes nothing must not publish a DECLARATION into a
+    sibling's fields either — otherwise a shape read out of a file `failed`
+    reports as unpublishable is exactly the half-schema the boundary exists to
+    prevent, crossing it under another file's name.
+
+    The sibling gaps instead, as a dangling reference, which is what it now is:
+    this run published no such shape for its `shape_ref` to reach."""
+    # Duplicated across two files, so both of them gap and `Line` leaves the
+    # universe with them.
+    duplicate = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:a">
+      <xs:complexType name="Line">
+        <xs:sequence><xs:element name="sku" type="xs:string"/></xs:sequence>
+      </xs:complexType>
+    </xs:schema>"""
+    sibling = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                   xmlns:tns="urn:a" targetNamespace="urn:a">
+      <xs:element name="order">
+        <xs:complexType>
+          <xs:sequence><xs:element name="line" type="tns:Line"/></xs:sequence>
+        </xs:complexType>
+      </xs:element>
+    </xs:schema>"""
+    shapes, failed = _interpret(
+        [
+            _contract(duplicate, "one.xsd"),
+            _contract(duplicate, "two.xsd"),
+            _contract(sibling, "sibling.xsd"),
+        ]
+    )
+
+    assert failed == ["one.xsd", "sibling.xsd", "two.xsd"]
+    # Not a shape whose `line` field points at a `{urn:a}Line` nothing
+    # published.
+    assert shapes == []
+
+
+def test_a_global_element_never_inlines_the_fields_of_a_gapped_complex_type():
+    """The same leak by the other route, and the worse one: an element typed
+    by a named complex type carries that type's FIELDS, so a gapped file's
+    declarations would be copied wholesale into a surviving shape rather than
+    merely referenced."""
+    duplicate = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:a">
+      <xs:complexType name="Hidden">
+        <xs:sequence><xs:element name="secret" type="xs:string"/></xs:sequence>
+      </xs:complexType>
+    </xs:schema>"""
+    sibling = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                   xmlns:tns="urn:a" targetNamespace="urn:a">
+      <xs:element name="order" type="tns:Hidden"/>
+    </xs:schema>"""
+    shapes, failed = _interpret(
+        [
+            _contract(duplicate, "one.xsd"),
+            _contract(duplicate, "two.xsd"),
+            _contract(sibling, "sibling.xsd"),
+        ]
+    )
+
+    assert failed == ["one.xsd", "sibling.xsd", "two.xsd"]
+    assert shapes == []
+    assert "secret" not in repr(shapes)
+
+
+def test_an_input_message_carrying_several_parts_is_that_wsdls_gap():
+    """Document/literal WRAPPED is exactly one part, and the wrapper element
+    it names IS the operation. A multi-part message is legal and a different
+    wire shape — marking each of its elements would silently turn ONE
+    operation into two endpoints, which is a wrong answer rather than a
+    partial one."""
+    wsdl = """<wsdl:definitions targetNamespace="urn:a"
+        xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/" xmlns:tns="urn:a">
+      <wsdl:message name="m">
+        <wsdl:part name="head" element="tns:first"/>
+        <wsdl:part name="body" element="tns:second"/>
+      </wsdl:message>
+      <wsdl:portType name="P">
+        <wsdl:operation name="go"><wsdl:input message="tns:m"/></wsdl:operation>
+      </wsdl:portType>
+    </wsdl:definitions>"""
+    schema = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:a">
+      <xs:element name="first" type="xs:string"/>
+      <xs:element name="second" type="xs:string"/>
+    </xs:schema>"""
+    shapes, failed = _interpret([_contract(wsdl, "multi.wsdl"), _contract(schema, "multi.xsd")])
+
+    assert failed == ["multi.wsdl"]
+    # The schema still interprets, and NEITHER element is marked: one
+    # operation must never become two.
+    assert [shape.role for shape in shapes] == [None, None]
+
+
+def test_a_redefine_is_that_files_gap():
+    """`xsd:redefine` REPLACES a declaration in the file it names, and this
+    branch reads that file on its own terms — so the pre-redefine definition
+    is what would reach the fact stream. Publishing the definition the
+    contract explicitly replaced is a wrong answer, not a partial one."""
+    base = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:a">
+      <xs:complexType name="Line">
+        <xs:sequence><xs:element name="sku" type="xs:string"/></xs:sequence>
+      </xs:complexType>
+    </xs:schema>"""
+    redefining = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:a">
+      <xs:redefine schemaLocation="base.xsd">
+        <xs:complexType name="Line">
+          <xs:complexContent>
+            <xs:extension base="Line">
+              <xs:sequence><xs:element name="extra" type="xs:string"/></xs:sequence>
+            </xs:extension>
+          </xs:complexContent>
+        </xs:complexType>
+      </xs:redefine>
+    </xs:schema>"""
+    shapes, failed = _interpret(
+        [_contract(base, "base.xsd"), _contract(redefining, "redefine.xsd")]
+    )
+
+    assert failed == ["redefine.xsd"]
+    # The redefined `extra` reaches nothing. The base file still publishes its
+    # own `Line` under its own name, which is true of that file; what is
+    # reported missing is the redefinition that rewrites it.
+    assert "extra" not in repr(shapes)
+
+
+def test_an_override_is_that_files_gap():
+    """XSD 1.1's `xsd:override` replaces a declaration outright — the same lie
+    `redefine` would tell, by a newer spelling, and previously not a known
+    construct at all."""
+    base = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:a">
+      <xs:complexType name="Line">
+        <xs:sequence><xs:element name="sku" type="xs:string"/></xs:sequence>
+      </xs:complexType>
+    </xs:schema>"""
+    overriding = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:a">
+      <xs:override schemaLocation="base.xsd">
+        <xs:complexType name="Line">
+          <xs:sequence><xs:element name="extra" type="xs:string"/></xs:sequence>
+        </xs:complexType>
+      </xs:override>
+    </xs:schema>"""
+    shapes, failed = _interpret(
+        [_contract(base, "base.xsd"), _contract(overriding, "override.xsd")]
+    )
+
+    assert failed == ["override.xsd"]
+    assert "extra" not in repr(shapes)
+
+
+def test_a_same_namespace_include_resolves_like_an_import():
+    """The ordinary `xsd:include`: one namespace split across two files, and
+    the included file's declarations join the universe under their own QNames
+    exactly as an import's do."""
+    including = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      xmlns:tns="urn:a" targetNamespace="urn:a">
+      <xs:include schemaLocation="lines.xsd"/>
+      <xs:element name="order">
+        <xs:complexType>
+          <xs:sequence><xs:element name="line" type="tns:Line"/></xs:sequence>
+        </xs:complexType>
+      </xs:element>
+    </xs:schema>"""
+    lines = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:a">
+      <xs:complexType name="Line">
+        <xs:sequence><xs:element name="sku" type="xs:string"/></xs:sequence>
+      </xs:complexType>
+    </xs:schema>"""
+    shapes, failed = _interpret([_contract(including, "order.xsd"), _contract(lines, "lines.xsd")])
+
+    assert failed == []
+    assert _fields(_shape(shapes, "{urn:a}order"))["line"].shape_ref == "{urn:a}Line"
+
+
+def test_a_chameleon_include_is_the_including_files_gap():
+    """A namespaced schema including one that declares NO `targetNamespace`:
+    XSD says the included components take on the includer's namespace. This
+    branch reads the included file on its own terms, so its declarations carry
+    the bare names it wrote and no QName the contract actually states — a
+    stated boundary, reported rather than published under a name nothing
+    declared.
+
+    The including schema deliberately does NOT reference `Line`: a schema that
+    did would gap anyway, on the dangling reference, and would leave the real
+    hole open — an includer that merely PUBLISHES alongside a chameleon
+    include would otherwise report a complete contract while the module is
+    missing every type the include was supposed to supply under the includer's
+    namespace."""
+    including = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      targetNamespace="urn:a">
+      <xs:include schemaLocation="bare.xsd"/>
+      <xs:element name="order">
+        <xs:complexType>
+          <xs:sequence><xs:element name="sku" type="xs:string"/></xs:sequence>
+        </xs:complexType>
+      </xs:element>
+    </xs:schema>"""
+    bare = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+      <xs:complexType name="Line">
+        <xs:sequence><xs:element name="sku" type="xs:string"/></xs:sequence>
+      </xs:complexType>
+    </xs:schema>"""
+    shapes, failed = _interpret([_contract(including, "order.xsd"), _contract(bare, "bare.xsd")])
+
+    assert failed == ["order.xsd"]
+    # The included file itself is fine on its own terms and still publishes —
+    # under the bare name it actually wrote, which is the honest one.
+    assert [shape.symbol for shape in shapes] == ["Line"]
+
+
+def test_an_attribute_is_that_files_gap():
+    """An `xsd:attribute` is part of the payload and this vocabulary has no
+    field for one, so projecting the elements around it would report a payload
+    missing what the contract says it carries. A ruled boundary (Task 3
+    report §4.1) — reported, never dropped."""
+    schema = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:a">
+      <xs:element name="order">
+        <xs:complexType>
+          <xs:sequence><xs:element name="sku" type="xs:string"/></xs:sequence>
+          <xs:attribute name="id" type="xs:string" use="required"/>
+        </xs:complexType>
+      </xs:element>
+    </xs:schema>"""
+    shapes, failed = _interpret([_contract(schema, "attribute.xsd")])
+
+    assert failed == ["attribute.xsd"]
+    assert shapes == []
+
+
+def test_a_complex_content_model_is_that_files_gap():
+    """`complexContent` derives one type from another by extension or
+    restriction, and this branch resolves neither — the same ruled boundary,
+    and the one a `redefine` would otherwise smuggle in."""
+    schema = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                   xmlns:tns="urn:a" targetNamespace="urn:a">
+      <xs:complexType name="Base">
+        <xs:sequence><xs:element name="sku" type="xs:string"/></xs:sequence>
+      </xs:complexType>
+      <xs:complexType name="Derived">
+        <xs:complexContent>
+          <xs:extension base="tns:Base">
+            <xs:sequence><xs:element name="extra" type="xs:string"/></xs:sequence>
+          </xs:extension>
+        </xs:complexContent>
+      </xs:complexType>
+    </xs:schema>"""
+    shapes, failed = _interpret([_contract(schema, "derived.xsd")])
+
+    assert failed == ["derived.xsd"]
+    assert shapes == []
+
+
+def test_an_element_and_a_complex_type_sharing_a_qname_is_that_files_gap():
+    """VALID XSD — the format has two symbol spaces where
+    `DeclaredShapeFact.symbol` has one — and it is our representation that
+    cannot hold both, not the contract that is wrong. Two facts under one
+    symbol would read downstream as one shape declared twice, so the gap is
+    the safer answer and it is REPORTED, unlike a silent drop."""
+    schema = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                   xmlns:tns="urn:a" targetNamespace="urn:a">
+      <xs:complexType name="ping">
+        <xs:sequence><xs:element name="at" type="xs:dateTime"/></xs:sequence>
+      </xs:complexType>
+      <xs:element name="ping" type="tns:ping"/>
+    </xs:schema>"""
+    shapes, failed = _interpret([_contract(schema, "collision.xsd")])
+
+    assert failed == ["collision.xsd"]
+    assert shapes == []
+
+
+def test_a_schema_in_no_namespace_resolves_its_own_unprefixed_type_references():
+    """XML's own rule: an unprefixed name is in the default namespace, and in
+    NO namespace when none is declared. A schema without a `targetNamespace`
+    writes every one of its own references that way, so reading an unprefixed
+    name as unresolvable would gap the commonest schema there is."""
+    schema = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+      <xs:complexType name="Line">
+        <xs:sequence><xs:element name="sku" type="xs:string"/></xs:sequence>
+      </xs:complexType>
+      <xs:element name="order">
+        <xs:complexType>
+          <xs:sequence><xs:element name="line" type="Line"/></xs:sequence>
+        </xs:complexType>
+      </xs:element>
+    </xs:schema>"""
+    shapes, failed = _interpret([_contract(schema, "bare.xsd")])
+
+    assert failed == []
+    # No target namespace, so the QName IS the local name — W3C notation's own
+    # rule, and the spelling an annotation-derived row would meet it on.
+    assert _shape(shapes, "order").schema_name == "order"
+    assert _fields(_shape(shapes, "order"))["line"].shape_ref == "Line"
+
+
+def test_element_qualification_form_changes_no_recorded_name():
+    """`elementFormDefault` and a local `form` decide whether a local element
+    is namespace-QUALIFIED in the instance document. `wire_name` is the local
+    name in every format this vocabulary carries, so qualification changes how
+    a name is spelled in an XML document and never which name the field has —
+    deliberately unread, and pinned here so a later reading of it is a
+    decision rather than a drift."""
+    body = """<xs:element name="order">
+        <xs:complexType>
+          <xs:sequence><xs:element name="sku" type="xs:string"/></xs:sequence>
+        </xs:complexType>
+      </xs:element>"""
+    qualified = f"""<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                       targetNamespace="urn:a" elementFormDefault="qualified">{body}</xs:schema>"""
+    unqualified = f"""<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                         targetNamespace="urn:a"
+                         elementFormDefault="unqualified">{body}</xs:schema>"""
+    first, _ = _interpret([_contract(qualified, "q.xsd")])
+    second, _ = _interpret([_contract(unqualified, "u.xsd")])
+
+    [sku] = first[0].fields
+    assert (sku.name, sku.wire_name) == ("sku", "sku")
+    assert [field.model_dump() for field in first[0].fields] == [
+        field.model_dump() for field in second[0].fields
+    ]
+
+
 def test_a_choice_group_is_that_files_gap():
     """A choice is one of several elements, and this vocabulary has no word
     for that — the same answer a GraphQL union gets, for the same reason. A
