@@ -1,0 +1,1157 @@
+"""Sextant as a library (2N Task 5, spec §5b): the four verbs the CLI's own
+`module analyze`/`render`/`enrich`/`export` commands are thin wrappers over —
+`analyze`, `render`, `enrich`/`enrich_async`, `export` — each a plain,
+synchronous function returning a small frozen result object, never printing
+anything and never raising `SystemExit`.
+
+**Built by extraction, not duplication.** Every composition that used to live
+inline inside a `click` command body in `cli/app.py` — the reactor loop
+`module analyze` walks, the tool-jail and door logic `module enrich`
+composes, the read-back-and-reassemble `render`/`export` share — moved here
+unchanged, so `cli/app.py`'s own commands could shrink to: parse flags, call
+one function below, translate a `SextantError` into a `click.ClickException`
+carrying the SAME message, then print the result. The existing CLI test
+suite, untouched, is the proof (2M's own discipline, restated for this task):
+a refactor is safe when the pins around it never moved.
+
+**The v1 contract, stated plainly:**
+
+- **Synchronous.** `enrich_async` is the one exception (see below); every
+  other verb blocks until its work is done and returns.
+- **Quiet.** No progress callbacks, no `rich` console output — that stays a
+  `cli`-only concern (`RichProgress`, injected into the CLI's own calls
+  through the same `Progress` port `application.stages.analyze` already
+  defines, never imported by this module).
+- **Not thread-safe per module.** One workspace (`<module>/.sextant`) is one
+  file tree; two calls against the same module at the same time are
+  undefined, the same "one module, one workspace, one command" rule M00
+  already states for the CLI.
+- **Embedded `enrich` defaults to `auth="api-key"`.** The CLI's own default
+  is `subscription` (a developer's logged-in machine); a library host is a
+  service with no login to hand Tradewind, so the facade's own default is
+  the opposite one, deliberately — see the module's own `enrich` docstring.
+
+**`enrich_async`.** Task 4's own adapter review carried this forward
+(ledgered there, implemented here): `TradewindAgent.run` is `asyncio.run`
+wrapping the whole client/session/turn lifecycle, and `asyncio.run` raises
+when called from a thread that already has a running event loop — exactly
+the thread an async service's own request handler runs on. `enrich_async`
+awaits the very same `enrich` composition, run on a worker thread
+(`asyncio.to_thread`) — a thread with no event loop of its own, so the
+adapter's own `asyncio.run` succeeds there — rather than re-driving Tradewind
+through some second, parallel async code path this module would then have to
+keep in sync with the sync one by hand. Calling the plain, synchronous
+`enrich` FROM a running loop is left to fail exactly as it already does:
+`TradewindAgent.run`'s own `except Exception` wraps `asyncio.run`'s
+`RuntimeError` into an `EnrichmentAgentError`, which this module turns into
+an `EnrichmentError` the same way every other agent failure becomes one — no
+special-casing needed, and no `nest_asyncio` dependency added.
+
+**The `SextantError` family.** The spec asks for "a typed `SextantError`
+family", not naming the members — this module picks four, grouped by what a
+caller could sensibly want to catch and retry or report differently, not one
+subclass per refusal site:
+
+- `DetectionError` — `analyze`'s own refusals: a detector could not read the
+  repository (a malformed `pom.xml`, a `<modules>` cycle), a multi-module
+  root was asked for a single `--workspace`, or one module inside a reactor
+  walk failed (named, the walk stopped).
+- `NotAnalyzedError` — `render`/`enrich`/`export`, pointed at a workspace
+  `analyze` never wrote to, or at a multi-module root instead of one of its
+  modules.
+- `ConfigurationError` — Sextant's own on-disk artifacts written wrong: a
+  malformed `.sextant.yml` (`redact:`, `enrich:`), a malformed
+  `.sextant-enrichment.json` overlay, or a `redact:` rule that breaks a
+  claim's own schema when rendering.
+- `EnrichmentError` — everything specific to `enrich`'s own run: the
+  mutually-exclusive doors, a workspace with no rendered document, the tool
+  jail's own setup, an unknown `--agent` name, a missing model, the agent's
+  own construction or run failing, or an answer that will not validate.
+
+Every one of these carries the exact string the CLI already prints for the
+same refusal — this module raises it; `cli/app.py` is the only place that
+still turns it into a `click.ClickException`.
+"""
+
+import asyncio
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, cast
+from xml.etree.ElementTree import ParseError
+
+from pydantic import ValidationError
+
+from sextant.agents import AGENT_REGISTRY, DEFAULT_MAX_TURNS
+from sextant.application.enrich.tools import ToolDefinition, ToolExecutor
+from sextant.application.enrich.validate import stale_claims
+from sextant.application.ports.detector import (
+    Detector,
+    ModuleModel,
+    RepositoryModel,
+    select_detector,
+)
+from sextant.application.ports.enrichment import EnrichmentAgentError
+from sextant.application.ports.progress import NullProgress, Progress
+from sextant.application.resolve.endpoints import SkippedCatalog
+from sextant.application.resolve.pipeline import ResolveReport
+from sextant.application.stages import enrich as enrich_stage
+from sextant.application.stages.analyze import AnalyzeResult as _StageAnalyzeResult
+from sextant.application.stages.analyze import analyze as _analyze_stage
+from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_overlay
+from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
+from sextant.domain.ignorefile import IgnoreRules
+from sextant.domain.redaction import RedactionError, Redactor
+from sextant.egress.export.manifest import write_manifest
+from sextant.egress.render.document import (
+    AssembledDocument,
+    ClaimRedactionError,
+    assemble_module_document,
+    markdown_document,
+)
+from sextant.egress.render.html import html_document
+from sextant.egress.render.metadata import write_metadata
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.ingress.detect.gradle import GradleDetector
+from sextant.ingress.detect.maven import MavenDetector
+from sextant.ingress.detect.sextant_config import (
+    EnrichDefaults,
+    SextantConfigError,
+    read_enrich_defaults,
+    read_redaction_rules,
+)
+from sextant.ingress.extract.jvm.generated_naming import JvmGeneratedNaming
+from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.ingress.interpret.descriptors import interpret_descriptors
+from sextant.ingress.read.registry import READERS
+from sextant.resources import catalogs_dir, extractor_jar, instructions_path
+from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+# --------------------------------------------------------------------------
+# The SextantError family (module docstring above states the grouping).
+# --------------------------------------------------------------------------
+
+
+class SextantError(RuntimeError):
+    """Base of every refusal the four verbs below raise — never
+    `SystemExit`, never a bare `ValueError`/`RuntimeError` from underneath.
+    `str(error)` is always the exact message the CLI prints for the same
+    refusal."""
+
+
+class DetectionError(SextantError):
+    """`analyze` could not detect, or could not walk, the repository at
+    `path` — see the module docstring's family summary."""
+
+
+class NotAnalyzedError(SextantError):
+    """`render`/`enrich`/`export` were pointed at a workspace `analyze`
+    never wrote, or at a multi-module root instead of one of its modules."""
+
+
+class ConfigurationError(SextantError):
+    """One of Sextant's own on-disk artifacts — `.sextant.yml`,
+    `.sextant-enrichment.json` — is written in a way this module cannot
+    read, or (renderer-side) a `redact:` rule collides with a claim's own
+    schema."""
+
+
+class EnrichmentError(SextantError):
+    """`enrich` could not complete: a door conflict, a missing rendered
+    document, the tool jail's own setup, an unknown agent or missing model,
+    the agent's own construction or run, or an answer that will not
+    validate."""
+
+
+# --------------------------------------------------------------------------
+# Result objects — frozen, no methods, nothing printed by any of them.
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ModuleOutcome:
+    """One module's own row in an `AnalyzeResult` — the same information
+    `modules.json` records for a reactor's own walk (`dir`, `module_id`,
+    `kind`, `analyzed`, `skip_reason`), plus `endpoints`: the count
+    `analyze` found, or `None` for a module that was skip-listed rather than
+    analyzed. A true single-module `analyze` (no `<modules>` reactor at
+    `path`) still returns exactly one of these — the facade never special-
+    cases "one module" the way the CLI's own JSON-only line does."""
+
+    dir: str
+    module_id: str
+    kind: str
+    analyzed: bool
+    skip_reason: str | None
+    endpoints: int | None
+
+
+@dataclass(frozen=True)
+class AnalyzeResult:
+    """`analyze`'s own outcome: every module the walk considered, root-
+    relative, in the same order `modules.json` would list them (sorted by
+    `dir`) for a reactor, or the one module `path` itself is otherwise."""
+
+    modules: tuple[ModuleOutcome, ...]
+
+
+@dataclass(frozen=True)
+class RenderResult:
+    """`render`'s own outcome: the two documents it wrote, both already
+    masked by the module's own redaction rules."""
+
+    markdown: Path
+    html: Path
+
+
+@dataclass(frozen=True)
+class EnrichResult:
+    """`enrich`'s own outcome. `overlay` is the primary artifact the call
+    wrote: `.sextant-enrichment.json`'s path for a live run or an `--ingest`
+    run, or the composed brief's own path (`enrich-brief.json`) for
+    `dry_run=True`, which writes no overlay at all — `accepted`/`refused`/
+    `partial_reason` are all zero/`None` in that case, since no answer was
+    ever validated. `accepted`/`refused` count claims, not runs;
+    `partial_reason` is `None` for a clean answer."""
+
+    overlay: Path | None
+    accepted: int
+    refused: int
+    partial_reason: str | None
+
+
+@dataclass(frozen=True)
+class ExportResult:
+    """`export`'s own outcome: the bundle directory it wrote (Parquet, fact
+    files, the manifest, and either rendered document that already existed)."""
+
+    bundle: Path
+
+
+@dataclass(frozen=True)
+class _EnrichOutcome:
+    """The internal composition's own result — a superset of the public
+    `EnrichResult`, carrying what only `cli/app.py`'s thin wrapper needs to
+    print: both dry-run paths (the public result folds down to one), the
+    other two written documents, and the per-claim refusal list `module
+    enrich` echoes one line per entry of."""
+
+    overlay_path: Path | None
+    brief_path: Path | None
+    instructions_copy_path: Path | None
+    markdown: Path | None
+    html: Path | None
+    accepted: int
+    refused: int
+    refusals: tuple[tuple[int, str], ...]
+    partial: bool
+    partial_reason: str | None
+
+
+# --------------------------------------------------------------------------
+# The composition root's own registries and helpers — moved verbatim from
+# `cli/app.py` (2N Task 5): every detail below already carried its own
+# rationale as a docstring/comment there, kept unchanged here.
+# --------------------------------------------------------------------------
+
+# The one real `Detector` registry (2M Task 2 review): a future detector
+# added to only one of two hand-kept lists would send the other path to
+# `select_detector`'s own uncaught `NoAdapterError`. Order is precedence
+# (`select_detector` picks the first that `accepts()`): Maven before Gradle.
+_DETECTORS: list[Detector] = [MavenDetector(), GradleDetector()]
+
+
+def _modules_json_path(path: Path) -> Path:
+    """`modules.json`'s own location (ARCHITECTURE §8's file layout:
+    `<repo-root>/.sextant/modules.json`) — named once so the write site in
+    `_analyze_reactor` and the read site in `_refuse_if_unanalyzed`'s
+    refusal cannot drift apart."""
+    return path / ".sextant" / "modules.json"
+
+
+def _root_relative(root: Path, target: Path) -> str:
+    """`target`, spelled relative to `root` (2M Task 2 fix round 1, F5) —
+    `os.path.relpath`, never `Path.relative_to`: a `<module>` may climb OUT
+    of the aggregator's own directory, and `relative_to` refuses anything
+    that is not a strict descendant. Both resolved first, so the spelling
+    is the SAME regardless of whether `root`/`target` reached here as
+    relative or absolute strings."""
+    return os.path.relpath(target.resolve(), start=root.resolve())
+
+
+def _skip_reason(module: ModuleModel) -> str | None:
+    """Why a module is skip-listed rather than analyzed, or `None` when it
+    should be analyzed (2M design §2, ruled amendment). `library`
+    (Gradle-only — Maven never returns it) and a leaf
+    `<packaging>pom</packaging>` are the only two KNOWN-not-a-service
+    shapes; everything else, `kind == "undetermined"` included, is
+    analyzed."""
+    if module.kind == "library":
+        return "kind is library"
+    if module.packaging == "pom":
+        return "packaging is pom"
+    return None
+
+
+def _module_json_row(outcome: ModuleOutcome) -> dict[str, object]:
+    """One `modules.json` row — the same five keys the CLI's own
+    `_module_row` wrote before this task, unchanged: `endpoints` is not one
+    of them, since it never was (a committed, read-back artifact stays
+    byte-compatible across this refactor)."""
+    return {
+        "dir": outcome.dir,
+        "module_id": outcome.module_id,
+        "kind": outcome.kind,
+        "analyzed": outcome.analyzed,
+        "skip_reason": outcome.skip_reason,
+    }
+
+
+class _KnownModuleDetector:
+    """Adapts one already-detected `ModuleModel` back into the `Detector`
+    Protocol, so the stage's own internal `select_detector(...).detect(path)`
+    call (M00's "one module, one workspace, one command" contract) is
+    satisfied from data the caller already has, rather than invoking the
+    real detector a second time (2M Task 2 review's hard gate)."""
+
+    def __init__(self, module: ModuleModel, notes: tuple[str, ...]) -> None:
+        self._module = module
+        self._notes = notes
+
+    def accepts(self, path: Path) -> bool:
+        return True
+
+    def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
+        return RepositoryModel(root=self._module.root, modules=(self._module,), notes=self._notes)
+
+
+class _JvmDescriptorInterpreter:
+    """The `DescriptorInterpreter` port, adapted: binds the JVM's own
+    generated-class naming — constructed only here, per ARCHITECTURE §10's
+    JVM-confinement rule — into `interpret_descriptors`."""
+
+    def __init__(self) -> None:
+        self._naming = JvmGeneratedNaming()
+
+    def interpret(
+        self, descriptors: Sequence[EmbeddedDescriptorFact]
+    ) -> tuple[list[DeclaredShapeFact], list[str]]:
+        return interpret_descriptors(descriptors, self._naming)
+
+
+def _commit_of(path: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() or "unknown"
+
+
+def _remote_of(path: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(path), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() or "unknown"
+
+
+def _module_commit_of(path: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(path), "log", "-1", "--format=%H", "--", "."],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() or "unknown"
+
+
+def _catalog_hash(catalogs: Path) -> str:
+    digest = hashlib.sha256()
+    for catalog in sorted(catalogs.glob("*.yml")):
+        digest.update(catalog.name.encode("utf-8"))
+        digest.update(catalog.read_bytes())
+    return "sha256:" + digest.hexdigest()
+
+
+def _workspace_dir_of(path: Path, workspace_dir: Path | None) -> Path:
+    return workspace_dir or (path / ".sextant")
+
+
+def _refuse_if_unanalyzed(path: Path, workspace_dir: Path) -> None:
+    """The `no analysis found` refusal `render`/`enrich`/`export` share
+    (M00's "no analysis" rule). Widened for a multi-module root (2M design
+    §2): `modules.json`'s presence with no per-module workspace at
+    `workspace_dir` means the caller pointed at the reactor root rather than
+    at one of the modules it names, so the refusal reads out that list
+    instead of the generic message."""
+    metadata_path = workspace_dir / "metadata.json"
+    db_path = workspace_dir / "workspace.duckdb"
+    if metadata_path.is_file() and db_path.is_file():
+        return
+    modules_path = _modules_json_path(path)
+    if modules_path.is_file():
+        modules = json.loads(modules_path.read_text(encoding="utf-8"))["modules"]
+        dirs = ", ".join(sorted(str(module["dir"]) for module in modules))
+        raise NotAnalyzedError(
+            f"{path} is a multi-module root; analyze it, then run this command against "
+            f"one of: {dirs}"
+        )
+    raise NotAnalyzedError(
+        f"no analysis found at {workspace_dir} — run `sextant module analyze {path}` first."
+    )
+
+
+def _redactor_for(path: Path) -> Redactor:
+    """The redactor both EXITS use (2K design §1): the built-in rule set,
+    widened by this module's own `.sextant.yml`."""
+    try:
+        return Redactor.from_rules(read_redaction_rules(path))
+    except (SextantConfigError, RedactionError) as refused:
+        raise ConfigurationError(str(refused)) from refused
+
+
+def _overlay_for(path: Path) -> EnrichmentOverlay | None:
+    """The module's enrichment overlay, or `None` where it has none (2K
+    design §6)."""
+    try:
+        return load_overlay(path)
+    except ValidationError as refused:
+        raise ConfigurationError(
+            f"{path / ENRICHMENT_FILE} is not a valid overlay: {refused}"
+        ) from refused
+
+
+def _enrich_defaults_for(path: Path) -> EnrichDefaults:
+    """This module's `enrich:` defaults (2K design §3)."""
+    try:
+        return read_enrich_defaults(path)
+    except SextantConfigError as refused:
+        raise ConfigurationError(str(refused)) from refused
+
+
+# --------------------------------------------------------------------------
+# analyze
+# --------------------------------------------------------------------------
+
+
+def _run_analyze(
+    path: Path,
+    module: ModuleModel,
+    notes: tuple[str, ...],
+    workspace_dir: Path,
+    allow_resolve: bool,
+    progress_factory: Callable[[], AbstractContextManager[Progress]] | None,
+) -> _StageAnalyzeResult:
+    """One module, analyzed into one workspace, and its `metadata.json`
+    written — the body every `analyze` invocation shares, whether `path` is
+    a single-module root or one module inside a just-walked reactor."""
+    render_dir = workspace_dir / "render"
+    if render_dir.is_dir():
+        shutil.rmtree(render_dir)
+    factory = progress_factory or (lambda: nullcontext(NullProgress()))
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        with factory() as progress:
+            result = _analyzed(
+                path,
+                workspace,
+                workspace_dir,
+                progress,
+                [_KnownModuleDetector(module, notes)],
+                allow_resolve=allow_resolve,
+            )
+        write_metadata(
+            workspace_dir / "metadata.json",
+            result.module,
+            result.report,
+            result.scanner_id,
+            result.scanner_version,
+            _commit_of(path),
+            result.uncovered,
+            resolved_config=workspace.query("resolved_config"),
+            schema_sources_not_compiled=result.schema_sources_not_compiled,
+            descriptors_not_interpreted=result.descriptors_not_interpreted,
+            libraries_not_scanned=result.libraries_not_scanned,
+            detect_notes=result.notes,
+        )
+    finally:
+        workspace.close()
+    return result
+
+
+def _analyzed(
+    path: Path,
+    workspace: DuckDbWorkspace,
+    workspace_dir: Path,
+    progress: Progress,
+    detectors: Sequence[Detector],
+    allow_resolve: bool = False,
+) -> _StageAnalyzeResult:
+    """`analyze`, with the one failure a USER caused turned into the message
+    a user reads: a malformed `.sextant.yml` is Sextant's own input written
+    wrong (D04 §2a's refusal)."""
+    try:
+        return _analyze_stage(
+            path=path,
+            workspace=workspace,
+            detectors=detectors,
+            scanners=[AsmScanner(extractor_jar())],
+            catalogs=YamlCatalogSource(catalogs_dir()),
+            fact_root=workspace_dir / "facts",
+            progress=progress,
+            readers=READERS,
+            interpret=_JvmDescriptorInterpreter(),
+            allow_resolve=allow_resolve,
+        )
+    except SextantConfigError as refused:
+        raise ConfigurationError(str(refused)) from refused
+
+
+def _analyze_reactor(
+    path: Path,
+    model: RepositoryModel,
+    allow_resolve: bool,
+    progress_factory: Callable[[], AbstractContextManager[Progress]] | None,
+    on_module: Callable[[str], None] | None,
+) -> tuple[ModuleOutcome, ...]:
+    """Every module a just-walked reactor named that is not KNOWN not to be
+    a service, each analyzed into its own `<module-dir>/.sextant` workspace
+    exactly as a single-module run would (2M design §2). `modules.json` then
+    names every module found, analyzed or not. One failing module fails
+    loudly and stops the walk: `modules.json` is written only once every
+    module that was going to be analyzed has been, and any STALE inventory
+    from a PRIOR run is removed at the start."""
+    modules_path = _modules_json_path(path)
+    modules_path.unlink(missing_ok=True)
+
+    outcomes: list[ModuleOutcome] = []
+    for module in model.modules:
+        relative_dir = _root_relative(path, module.root)
+        reason = _skip_reason(module)
+        if reason is not None:
+            if on_module is not None:
+                on_module(f"skipped {relative_dir} ({module.module_id}): {reason}")
+            outcomes.append(
+                ModuleOutcome(relative_dir, module.module_id, module.kind, False, reason, None)
+            )
+            continue
+        workspace_dir = _workspace_dir_of(module.root, None)
+        try:
+            stage_result = _run_analyze(
+                module.root, module, model.notes, workspace_dir, allow_resolve, progress_factory
+            )
+        except Exception as failure:  # deliberately broad, see below
+            # A batch run's own failure must name WHICH module failed — left
+            # uncaught, the module's own exception would read as this
+            # command crashing rather than as that module's analysis
+            # failing, with no way to tell which of several modules it was.
+            raise DetectionError(
+                f"{relative_dir} ({module.module_id}) failed to analyze: {failure}"
+            ) from failure
+        endpoints = len(stage_result.report.endpoints)
+        if on_module is not None:
+            on_module(f"analyzed {relative_dir} ({module.module_id}): {endpoints} endpoints")
+        outcomes.append(
+            ModuleOutcome(relative_dir, module.module_id, module.kind, True, None, endpoints)
+        )
+
+    outcomes.sort(key=lambda outcome: outcome.dir)
+    modules_path.parent.mkdir(parents=True, exist_ok=True)
+    modules_path.write_text(
+        json.dumps({"modules": [_module_json_row(o) for o in outcomes]}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return tuple(outcomes)
+
+
+def _analyze(
+    path: Path,
+    *,
+    workspace_dir: Path | None,
+    allow_resolve: bool,
+    progress_factory: Callable[[], AbstractContextManager[Progress]] | None = None,
+    on_module: Callable[[str], None] | None = None,
+) -> tuple[AnalyzeResult, bool]:
+    """`analyze`'s own composition, shared by the public `analyze()` and
+    `cli/app.py`'s `module_analyze`. Returns `(result, multi_module)` —
+    `multi_module` is not part of the public `AnalyzeResult` (the facade
+    treats a single module and a one-child reactor identically), but the
+    CLI's own thin wrapper still needs it to pick its two different print
+    formats, the one difference between the CLI's and the library's own
+    idea of "done"."""
+    # Detection runs FIRST, before anything below creates so much as a
+    # directory (2M design §2): a refused detection must be discovered
+    # ahead of any workspace write, or a repository Sextant cannot analyze
+    # would still leave one behind.
+    try:
+        model = select_detector(_DETECTORS, path).detect(path, allow_resolve=allow_resolve)
+    except (SextantConfigError, ValueError, ParseError) as refused:
+        raise DetectionError(str(refused)) from refused
+
+    if model.multi_module:
+        # `--workspace` names ONE module's workspace (M00); a multi-module
+        # root has no single workspace of its own to name.
+        if workspace_dir is not None:
+            raise DetectionError(
+                f"{path} is a multi-module root — --workspace is refused there; it names "
+                "one module's workspace, and every module here gets its own"
+            )
+        modules = _analyze_reactor(path, model, allow_resolve, progress_factory, on_module)
+        return AnalyzeResult(modules=modules), True
+
+    module = model.modules[0]
+    resolved_workspace_dir = _workspace_dir_of(path, workspace_dir)
+    stage_result = _run_analyze(
+        path, module, model.notes, resolved_workspace_dir, allow_resolve, progress_factory
+    )
+    outcome = ModuleOutcome(
+        dir=_root_relative(path, module.root),
+        module_id=module.module_id,
+        kind=module.kind,
+        analyzed=True,
+        skip_reason=None,
+        endpoints=len(stage_result.report.endpoints),
+    )
+    return AnalyzeResult(modules=(outcome,)), False
+
+
+def analyze(path: Path, *, allow_resolve: bool = False) -> AnalyzeResult:
+    """Analyzes `path` into its own `.sextant` workspace (or, for a
+    multi-module root, every module it names into ITS own workspace) — the
+    library equivalent of `sextant module analyze`. Silent: no progress is
+    printed anywhere. Raises `DetectionError` where the CLI would refuse."""
+    result, _multi_module = _analyze(path, workspace_dir=None, allow_resolve=allow_resolve)
+    return result
+
+
+# --------------------------------------------------------------------------
+# render
+# --------------------------------------------------------------------------
+
+
+def _reconstructed_report(
+    path: Path, workspace: DuckDbWorkspace, metadata: dict[str, Any]
+) -> tuple[ModuleModel, ResolveReport]:
+    """`analyze`'s own `ModuleModel`/`ResolveReport`, read back from
+    `metadata.json` and the workspace rather than re-derived — the "no
+    analysis" rule (M00) `render` and `enrich` both keep: neither
+    re-detects, re-scans, or re-resolves."""
+    module_info = metadata["module"]
+    reconstructed = ModuleModel(
+        module_id=module_info["id"],
+        coordinates=module_info["id"],
+        version="unknown",
+        root=path,
+        kind=module_info["kind"],
+        languages=frozenset(module_info["languages"]),
+        source_roots=(),
+        output_dirs=(),
+        libraries_not_resolved=tuple(metadata.get("libraries_not_resolved", [])),
+    )
+    skipped_catalogs = [
+        SkippedCatalog(skipped["catalog_id"], tuple(skipped["missing_capabilities"]))
+        for skipped in metadata.get("skipped_catalogs", [])
+    ]
+    report = ResolveReport(
+        facts_loaded=cast(int, workspace.query("facts")[0]["facts"]),
+        endpoints=workspace.query("endpoints"),
+        coverage=workspace.query("coverage")[0],
+        skipped_catalogs=skipped_catalogs,
+        shapes=workspace.query("shapes"),
+        unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
+    )
+    return reconstructed, report
+
+
+def _assembled_sections(
+    path: Path,
+    workspace: DuckDbWorkspace,
+    metadata: dict[str, Any],
+    redactor: Redactor,
+    overlay: EnrichmentOverlay | None,
+    stale: frozenset[int],
+) -> tuple[AssembledDocument, str]:
+    """One assembly, called by both `render` and `enrich` (2K design §8:
+    "the same code path, so the two can never disagree")."""
+    reconstructed, report = _reconstructed_report(path, workspace, metadata)
+    sections = assemble_module_document(
+        reconstructed,
+        report,
+        _commit_of(path),
+        tuple(metadata.get("uncovered", [])),
+        shape_fields=workspace.query("shape_fields"),
+        resolved_config=workspace.query("resolved_config"),
+        open_questions=workspace.query("open_questions"),
+        library_symbols=workspace.query("library_symbols"),
+        libraries_not_scanned=tuple(metadata.get("libraries_not_scanned", [])),
+        redactor=redactor,
+        overlay=overlay,
+        stale=stale,
+    )
+    return sections, reconstructed.module_id
+
+
+def _write_rendered_outputs(
+    workspace_dir: Path, sections: AssembledDocument, module_id: str
+) -> tuple[Path, Path]:
+    render_dir = workspace_dir / "render"
+    render_dir.mkdir(parents=True, exist_ok=True)
+    markdown_target = render_dir / "architecture.md"
+    markdown_target.write_text(markdown_document(sections), encoding="utf-8")
+    html_target = render_dir / "architecture.html"
+    html_target.write_text(html_document(sections, module_id), encoding="utf-8")
+    return markdown_target, html_target
+
+
+def _stale_of(
+    overlay: EnrichmentOverlay | None, workspace: DuckDbWorkspace, path: Path, redactor: Redactor
+) -> frozenset[int]:
+    """The positions in `overlay.claims` whose referents no longer exist
+    against `workspace` as it stands now (2K design §6) — empty where there
+    is no overlay at all."""
+    if overlay is None:
+        return frozenset()
+    return frozenset(refusal.index for refusal in stale_claims(overlay, workspace, path, redactor))
+
+
+def _render(path: Path, *, workspace_dir: Path | None) -> RenderResult:
+    """`render`'s own composition, shared by the public `render()` and
+    `cli/app.py`'s `module_render`. Reads the workspace `analyze` left
+    behind — it never re-detects, re-scans, or re-resolves (M00)."""
+    resolved_workspace_dir = _workspace_dir_of(path, workspace_dir)
+    _refuse_if_unanalyzed(path, resolved_workspace_dir)
+    metadata_path = resolved_workspace_dir / "metadata.json"
+    db_path = resolved_workspace_dir / "workspace.duckdb"
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    redactor = _redactor_for(path)
+    overlay = _overlay_for(path)
+
+    workspace = DuckDbWorkspace(db_path)
+    try:
+        try:
+            stale = _stale_of(overlay, workspace, path, redactor)
+            sections, module_id = _assembled_sections(
+                path, workspace, metadata, redactor, overlay, stale
+            )
+        except ClaimRedactionError as refused:
+            raise ConfigurationError(str(refused)) from refused
+        markdown_target, html_target = _write_rendered_outputs(
+            resolved_workspace_dir, sections, module_id
+        )
+    finally:
+        workspace.close()
+    return RenderResult(markdown=markdown_target, html=html_target)
+
+
+def render(path: Path) -> RenderResult:
+    """Renders the workspace `analyze` left at `path` — the library
+    equivalent of `sextant module render`. Raises `NotAnalyzedError` where
+    the CLI would refuse for the same reason, `ConfigurationError` for a bad
+    `.sextant.yml`/overlay."""
+    return _render(path, workspace_dir=None)
+
+
+# --------------------------------------------------------------------------
+# enrich / enrich_async
+# --------------------------------------------------------------------------
+
+
+def _jailed_roots_of(path: Path, workspace_dir: Path) -> tuple[Path, Path, Path]:
+    """The three roots 2K design §4 names: the module's own source, its
+    fact root, and its rendered outputs."""
+    return (path, workspace_dir / "facts", workspace_dir / "render")
+
+
+def _tool_executor_for(path: Path, workspace_dir: Path, redactor: Redactor) -> ToolExecutor:
+    try:
+        return ToolExecutor(_jailed_roots_of(path, workspace_dir), redactor, IgnoreRules.load(path))
+    # `ToolExecutor.__init__` also calls `Path.home()` (2K Task 7 fix round
+    # 3), which raises `RuntimeError` rather than `ValueError` when no home
+    # directory can be resolved.
+    except (ValueError, RuntimeError) as refused:
+        raise EnrichmentError(str(refused)) from refused
+
+
+def _tool_definition_json(definition: ToolDefinition) -> dict[str, object]:
+    return {
+        "name": definition.name,
+        "description": definition.description,
+        "schema": definition.schema,
+    }
+
+
+def _enrich(
+    path: Path,
+    *,
+    workspace_dir: Path | None,
+    agent_flag: str | None,
+    model_flag: str | None,
+    max_turns_flag: int | None,
+    auth_flag: str | None,
+    dry_run: bool,
+    ingest_path: Path | None,
+) -> _EnrichOutcome:
+    """`enrich`'s own composition, shared by the public `enrich()`/
+    `enrich_async()` and `cli/app.py`'s `module_enrich`. Composes the brief,
+    runs the agent (or a `dry_run`/`ingest_path` door), validates the answer
+    by construction, writes `.sextant-enrichment.json`, and auto-assembles
+    both rendered outputs — one call, done (2K design §8: "no second render
+    command")."""
+    if dry_run and ingest_path is not None:
+        raise EnrichmentError("--dry-run and --ingest are mutually exclusive")
+
+    # `ToolExecutor` resolves its jailed roots to absolute paths and checks
+    # them against `IgnoreRules.load`'s own `repo_root` unresolved (2K Task
+    # 5) — a relative `path` would make every root fail that check even
+    # though it is genuinely contained. Resolved once, here, so `path` and
+    # everything built from it agree on one spelling for the rest of this
+    # call.
+    path = path.resolve()
+    resolved_workspace_dir = _workspace_dir_of(path, workspace_dir)
+    _refuse_if_unanalyzed(path, resolved_workspace_dir)
+    metadata_path = resolved_workspace_dir / "metadata.json"
+    db_path = resolved_workspace_dir / "workspace.duckdb"
+
+    redactor = _redactor_for(path)
+    defaults = _enrich_defaults_for(path)
+    # `is None`, never `or` (2K Task 7 fix round 1, minor): a flag's own
+    # falsy-but-meaningful value — `max_turns=0` above all — must reach
+    # `TradewindAgent`'s own validation as what it is.
+    agent_name = agent_flag if agent_flag is not None else defaults.agent
+    model_name = model_flag if model_flag is not None else defaults.model
+    max_turns = (
+        max_turns_flag
+        if max_turns_flag is not None
+        else (defaults.max_turns if defaults.max_turns is not None else DEFAULT_MAX_TURNS)
+    )
+    auth_name = auth_flag if auth_flag is not None else defaults.auth
+    session_store = Path(defaults.session_store) if defaults.session_store is not None else None
+
+    instructions = instructions_path().read_text(encoding="utf-8")
+    instructions_hash = "sha256:" + hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+
+    # Checked here, in the composition — a missing rendered document is a
+    # GATE, never the brief's source (see below).
+    architecture_md_path = resolved_workspace_dir / "render" / "architecture.md"
+    if not architecture_md_path.is_file():
+        raise EnrichmentError(
+            f"{path} has no rendered document at {architecture_md_path} — run "
+            f"`sextant module render {path}` first"
+        )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    executor = _tool_executor_for(path, resolved_workspace_dir, redactor)
+    roots = _jailed_roots_of(path, resolved_workspace_dir)
+
+    workspace = DuckDbWorkspace(db_path)
+    try:
+        # The brief's document is assembled IN MEMORY, machine-only — never
+        # the bytes already on disk (2K final review, F1): after one
+        # `enrich`, the on-disk file is the ENRICHED one, and reading it
+        # would feed a second run its own prior claims as if they were
+        # findings.
+        sections, _ = _assembled_sections(
+            path, workspace, metadata, redactor, overlay=None, stale=frozenset()
+        )
+        architecture_md = markdown_document(sections)
+        try:
+            brief = enrich_stage.compose(
+                workspace,
+                path,
+                instructions,
+                architecture_md,
+                metadata,
+                redactor,
+                tuple(executor.definitions()),
+                roots,
+            )
+        except enrich_stage.NotRenderedError as refused:
+            raise EnrichmentError(str(refused)) from refused
+
+        if dry_run:
+            brief_path = resolved_workspace_dir / "enrich-brief.json"
+            brief_path.write_text(
+                json.dumps(
+                    {
+                        "prompt": brief.prompt,
+                        "tool_definitions": [
+                            _tool_definition_json(d) for d in brief.tool_definitions
+                        ],
+                        "jailed_roots": [str(r) for r in brief.jailed_roots],
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            instructions_copy = resolved_workspace_dir / "enrich-instructions.md"
+            instructions_copy.write_text(instructions, encoding="utf-8")
+            return _EnrichOutcome(
+                overlay_path=None,
+                brief_path=brief_path,
+                instructions_copy_path=instructions_copy,
+                markdown=None,
+                html=None,
+                accepted=0,
+                refused=0,
+                refusals=(),
+                partial=False,
+                partial_reason=None,
+            )
+
+        # `metadata.json`'s own bytes stand in for "the graph" the run went
+        # against (D06 §3), deterministic and already on disk.
+        workspace_fingerprint = "sha256:" + hashlib.sha256(metadata_path.read_bytes()).hexdigest()
+
+        if ingest_path is not None:
+            if agent_name is None or model_name is None:
+                raise EnrichmentError(
+                    "--ingest needs --agent and --model to label the overlay's provenance "
+                    "(no adapter runs, so nothing else can say who produced the answer)"
+                )
+            answers_text = ingest_path.read_text(encoding="utf-8")
+            transcript: tuple[dict[str, object], ...] = ()
+            partial, partial_reason = False, None
+        else:
+            # Defaults only apply to a LIVE run — never to `ingest_path`'s
+            # own `agent_name is None` check just above, which stays a hard
+            # requirement.
+            if agent_name is None:
+                agent_name = "tradewind"
+            if auth_name is None:
+                auth_name = "subscription"
+            known = ", ".join(sorted(AGENT_REGISTRY))
+            if agent_name not in AGENT_REGISTRY:
+                raise EnrichmentError(f"unknown --agent {agent_name!r} — known agents: {known}")
+            if model_name is None:
+                raise EnrichmentError("--model is required")
+            try:
+                agent = AGENT_REGISTRY[agent_name](
+                    auth=auth_name,
+                    model=model_name,
+                    max_turns=max_turns,
+                    session_store=session_store,
+                )
+            except ValueError as refused:
+                # `TradewindAgent.__init__`'s own validation (the api-key
+                # ceiling above all): a bad flag value is the user's own
+                # input written wrong, not a crash.
+                raise EnrichmentError(str(refused)) from refused
+            try:
+                answers = agent.run(brief, executor)
+            except EnrichmentAgentError as refused:
+                raise EnrichmentError(str(refused)) from refused
+            answers_text = answers.text
+            transcript = tuple(answers.transcript)
+            partial, partial_reason = answers.partial, answers.partial_reason
+
+        try:
+            result = enrich_stage.validate_and_finish(
+                answers_text,
+                workspace,
+                path,
+                redactor,
+                agent_name,
+                model_name,
+                instructions_hash,
+                workspace_fingerprint,
+                partial=partial,
+                partial_reason=partial_reason,
+                transcript=transcript,
+            )
+        except (
+            enrich_stage.MalformedAnswersError,
+            enrich_stage.EmptyPartialAnswerError,
+        ) as refused:
+            raise EnrichmentError(str(refused)) from refused
+
+        # Written BEFORE assembly, deliberately (2K Task 7 fix round 1): the
+        # overlay IS the run's record — a later assembly failure must not
+        # lose it.
+        overlay_path = path / ENRICHMENT_FILE
+        overlay_path.write_text(
+            result.overlay.model_dump_json(indent=2, exclude_none=True) + "\n", encoding="utf-8"
+        )
+
+        # The workspace record (2K Task 7 ruling 4): every tool call, and
+        # one final line naming exactly how the run ended.
+        transcript_path = resolved_workspace_dir / "enrich-transcript.jsonl"
+        with transcript_path.open("w", encoding="utf-8") as handle:
+            for entry in result.transcript:
+                handle.write(json.dumps(entry, sort_keys=True, default=repr) + "\n")
+            handle.write(
+                json.dumps(
+                    {
+                        "event": "run_summary",
+                        "partial": result.partial,
+                        "partial_reason": result.partial_reason,
+                        "refusals": [
+                            {"index": r.index, "reason": r.reason} for r in result.refusals
+                        ],
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+        try:
+            stale = _stale_of(result.overlay, workspace, path, redactor)
+            sections, module_id = _assembled_sections(
+                path, workspace, metadata, redactor, result.overlay, stale
+            )
+        except ClaimRedactionError as refused:
+            raise EnrichmentError(str(refused)) from refused
+        markdown_target, html_target = _write_rendered_outputs(
+            resolved_workspace_dir, sections, module_id
+        )
+    finally:
+        workspace.close()
+
+    return _EnrichOutcome(
+        overlay_path=overlay_path,
+        brief_path=None,
+        instructions_copy_path=None,
+        markdown=markdown_target,
+        html=html_target,
+        accepted=len(result.overlay.claims),
+        refused=len(result.refusals),
+        refusals=tuple((r.index, r.reason) for r in result.refusals),
+        partial=result.partial,
+        partial_reason=result.partial_reason,
+    )
+
+
+def enrich(
+    path: Path,
+    *,
+    agent: str = "tradewind",
+    auth: str = "api-key",
+    max_turns: int | None = None,
+    dry_run: bool = False,
+    ingest: Path | None = None,
+) -> EnrichResult:
+    """Runs one enrichment over the workspace `analyze`/`render` left at
+    `path` — the library equivalent of `sextant module enrich`. `auth`
+    defaults to `"api-key"`, the opposite of the CLI's own `"subscription"`
+    default (module docstring: a library host is a service with no login).
+    `model` has no facade parameter — it comes from `path`'s own
+    `.sextant.yml enrich: model:`, the same source the CLI falls back to
+    when `--model` is absent; a module with neither is refused exactly as
+    the CLI refuses a bare `--agent`/no `--model` invocation.
+
+    Blocks until the run is done — including any network call the agent
+    makes. Calling this from inside an already-running event loop reaches
+    `TradewindAgent`'s own `asyncio.run` nested, which fails; use
+    `enrich_async` there instead (module docstring)."""
+    outcome = _enrich(
+        path,
+        workspace_dir=None,
+        agent_flag=agent,
+        model_flag=None,
+        max_turns_flag=max_turns,
+        auth_flag=auth,
+        dry_run=dry_run,
+        ingest_path=ingest,
+    )
+    return EnrichResult(
+        overlay=outcome.brief_path if dry_run else outcome.overlay_path,
+        accepted=outcome.accepted,
+        refused=outcome.refused,
+        partial_reason=outcome.partial_reason,
+    )
+
+
+async def enrich_async(
+    path: Path,
+    *,
+    agent: str = "tradewind",
+    auth: str = "api-key",
+    max_turns: int | None = None,
+    dry_run: bool = False,
+    ingest: Path | None = None,
+) -> EnrichResult:
+    """`enrich`, awaited — the same composition, run on a worker thread
+    (module docstring's own "`enrich_async`" section states why): safe to
+    call from inside an async service's own running event loop, unlike the
+    plain synchronous `enrich`."""
+    return await asyncio.to_thread(
+        enrich,
+        path,
+        agent=agent,
+        auth=auth,
+        max_turns=max_turns,
+        dry_run=dry_run,
+        ingest=ingest,
+    )
+
+
+# --------------------------------------------------------------------------
+# export
+# --------------------------------------------------------------------------
+
+
+def _export(path: Path, *, workspace_dir: Path | None, out_dir: Path | None = None) -> ExportResult:
+    """`export`'s own composition, shared by the public `export()` and
+    `cli/app.py`'s `module_export`. Reads what `analyze` left — it never
+    re-analyzes (M08)."""
+    resolved_workspace_dir = _workspace_dir_of(path, workspace_dir)
+    _refuse_if_unanalyzed(path, resolved_workspace_dir)
+    metadata_path = resolved_workspace_dir / "metadata.json"
+    db_path = resolved_workspace_dir / "workspace.duckdb"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    commit = str(metadata["provenance"]["commit"])
+    bundle_name = re.sub(r"[^A-Za-z0-9._-]", "-", str(metadata["module"]["id"])) + "@" + commit
+    bundle = (out_dir or resolved_workspace_dir / "bundles") / bundle_name
+
+    redactor = _redactor_for(path)
+    workspace = DuckDbWorkspace(db_path)
+    try:
+        tables = workspace.export_tables(bundle, redactor)
+        facts_files = workspace.export_facts(bundle, redactor)
+    finally:
+        workspace.close()
+
+    # Both rendered documents travel with the bundle when `render` has
+    # already produced them (2K design §6b) — copied verbatim, already
+    # masked at the render exit.
+    render_dir = resolved_workspace_dir / "render"
+    shipped_render: list[str] = []
+    for rendered in ("architecture.md", "architecture.html"):
+        source = render_dir / rendered
+        if source.is_file():
+            (bundle / "render").mkdir(parents=True, exist_ok=True)
+            (bundle / "render" / rendered).write_bytes(source.read_bytes())
+            shipped_render.append(rendered)
+
+    write_manifest(
+        bundle / "manifest.json",
+        metadata,
+        source={"repo": _remote_of(path), "commit": commit},
+        catalog_hash=_catalog_hash(catalogs_dir()),
+        redaction_set_hash=redactor.rule_set_hash,
+        module_commit=_module_commit_of(path),
+        tables=tables,
+        facts_files=facts_files,
+        render=shipped_render,
+    )
+    return ExportResult(bundle=bundle)
+
+
+def export(path: Path) -> ExportResult:
+    """Exports the workspace `analyze` left at `path` as a D06 bundle
+    (Parquet plus a manifest) — the library equivalent of `sextant module
+    export`. Raises `NotAnalyzedError` where the CLI would refuse for the
+    same reason."""
+    return _export(path, workspace_dir=None)

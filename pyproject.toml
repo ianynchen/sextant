@@ -94,14 +94,23 @@ testpaths = ["tests"]
 root_package = "sextant"
 
 [[tool.importlinter.contracts]]
-name = "Layering: cli -> outer groups -> application -> domain"
+name = "Layering: cli -> api -> outer groups -> application -> domain -> resources"
 type = "layers"
 containers = ["sextant"]
 # `agents` joins the outer-group rank (2K design §8): it imports
 # `application`/`domain` inward like `ingress`/`storage`/`egress`, and nothing
 # else outward — the one module it houses, `claude_api.py`, is the ONE
 # sanctioned model-calling adapter (DR-2's amendment).
-layers = ["cli", "ingress | storage | egress | agents", "application", "domain"]
+#
+# `api` (2N Task 5, §5b — the library facade) sits directly below `cli`:
+# `cli/app.py`'s own commands became thin wrappers over `sextant.api`'s
+# extracted composition, so `cli` is the one layer allowed to import it,
+# never the reverse. `resources` (a second, small copy of `cli.resources`'s
+# own four names — `sextant.resources`'s own module docstring says why a
+# re-export did not work) sits at the very bottom, alongside `domain` — a
+# leaf with no `sextant`-internal imports of its own, needed by `api`
+# directly; `cli.resources` keeps its own separate copy and is unaffected.
+layers = ["cli", "api", "ingress | storage | egress | agents", "application", "domain", "resources"]
 # Exhaustive so a new top-level package cannot land outside every contract:
 # an unlisted package is unlayered, and an unlayered package is unchecked.
 # The container form is what makes this option available.

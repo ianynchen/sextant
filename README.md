@@ -25,6 +25,42 @@ uv run sextant module export  <module-path>
 extractor's own build and tests, then the Python suite. `scripts/check.sh --lint` runs
 the lint gates alone, which is what the pre-commit hook in `.githooks/` runs.
 
+## Embedding Sextant as a library
+
+`sextant.api` exposes the same four verbs as the CLI's own `module` commands —
+`analyze`, `render`, `enrich`/`enrich_async`, `export` — as plain Python functions, for a
+service that wants Sextant's output without shelling out to it:
+
+```python
+from pathlib import Path
+from sextant import api
+
+module = Path("services/orders")
+try:
+    api.analyze(module)
+    api.render(module)
+    result = api.enrich(module)  # auth="api-key" by default — see below
+    print(result.overlay, result.accepted, result.refused)
+except api.SextantError as refused:
+    raise SystemExit(f"sextant: {refused}") from refused
+```
+
+**The v1 contract:** synchronous — each call blocks until its work is done and returns a
+small frozen result object (`AnalyzeResult`, `RenderResult`, `EnrichResult`,
+`ExportResult`); quiet — no progress output, unlike the CLI's own live console display;
+not thread-safe per module — one workspace (`<module>/.sextant`) is one file tree, and two
+calls against the same module at the same time are undefined, same as the CLI's own "one
+module, one workspace, one command" rule. Every refusal raises a typed `SextantError`
+subclass (`DetectionError`, `NotAnalyzedError`, `ConfigurationError`, `EnrichmentError`) —
+never `SystemExit` — carrying the exact message the CLI prints for the same refusal.
+
+`enrich`'s own default is `auth="api-key"`, the opposite of the CLI's own `subscription`
+default: a library host is a service with no login to hand the agent, where the CLI runs
+on a developer's own logged-in machine. Calling the synchronous `enrich` from inside an
+already-running event loop fails the way any nested `asyncio.run` does; `enrich_async`
+awaits the same composition on a worker thread instead, for an async service's own request
+handler.
+
 ## Build systems and multi-module repositories
 
 Maven and Gradle are both detected behind the same `Detector` port
