@@ -18,9 +18,15 @@
 // fixture suite compiles Maven fixtures with `mvn`. Gradle also writes
 // `.gradle/` state into the repository it runs against and may start a
 // daemon; neither is filesystem-read-only behaviour, and GradleDetector's
-// own docstring says so in those words.
+// own docstring says so in those words. Nor is this a narrow, cheap probe
+// (2M Task 3 fix round 1, I4): `sextantModel` depends on EVERY Java-plugin
+// project's own `classes` task (below), so running it compiles the ENTIRE
+// target build in one invocation — every project, including ones the CLI
+// will go on to skip-list — and one project's compile failure fails this
+// whole task, refusing detection for every project, not only that one.
 import groovy.json.JsonOutput
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 
 gradle.rootProject { rp ->
     def sextantModel = rp.tasks.register("sextantModel") {
@@ -60,14 +66,22 @@ gradle.rootProject { rp ->
                             def entry = [path: artifact.file.absolutePath]
                             // Gradle reports a coordinate only where it HAS one
                             // (2M design §1): a `ModuleComponentIdentifier` is
-                            // an external Maven-style dependency; anything else
-                            // (a project dependency, a flat file() dependency)
-                            // carries none, and this entry stays path-only
-                            // rather than a guessed one.
+                            // an external Maven-style dependency. A
+                            // `ProjectComponentIdentifier` (2M Task 3 fix round
+                            // 1, I3) is an INTER-PROJECT dependency
+                            // (`project(":other")`) — internal wiring Gradle
+                            // resolved just fine, marked `internal` rather than
+                            // given a group/name/version this identifier does
+                            // not carry, so GradleDetector can tell it apart
+                            // from a genuinely unresolved one. Anything else (a
+                            // flat file() dependency) carries neither and
+                            // stays path-only.
                             if (id instanceof ModuleComponentIdentifier) {
                                 entry.group = id.group
                                 entry.name = id.module
                                 entry.version = id.version
+                            } else if (id instanceof ProjectComponentIdentifier) {
+                                entry.internal = true
                             }
                             classpath << entry
                         }
@@ -87,7 +101,14 @@ gradle.rootProject { rp ->
                     classpath: classpath,
                 ]
             }
-            new File(outPath).text = JsonOutput.toJson([projects: projectRecords])
+            // Composite builds (2M design §1c / Task 3 fix round 1, I1):
+            // `includeBuild`d projects are invisible to `allprojects` above —
+            // named here instead, so GradleDetector can state the boundary
+            // as a note rather than dropping it silently.
+            def includedBuilds = gradle.includedBuilds.collect { it.name }.sort()
+            new File(outPath).text = JsonOutput.toJson(
+                [projects: projectRecords, includedBuilds: includedBuilds]
+            )
         }
     }
     // "The compiled-classes output directories" (2M design §1) means what it

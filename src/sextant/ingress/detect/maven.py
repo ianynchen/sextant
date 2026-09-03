@@ -3,25 +3,25 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from sextant.application.ports.detector import LibraryRoot, ModuleModel, RepositoryModel
+from sextant.ingress.detect.conventions import (
+    CONTAINER_FILES,
+    RESOURCE_SCHEMA_SUFFIXES,
+    SOURCE_SCHEMA_NAMES,
+)
 from sextant.ingress.detect.sextant_config import read_extract_libraries
 
 _POM_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
 _MAIN_CLASS = f"{{{_POM_NS['m']}}}mainClass"
 
-# Files that declare how the module is packaged to run. Names, not contents:
-# M02 forbids the detector from reading code, and these are build files.
 # Maven's own non-code build directories. Named here because they are build
 # layout, not languages: everything else under src/main is a source root, and
 # the name of that directory is what the build says is compiled there.
 _NON_SOURCE_DIRECTORIES = frozenset({"resources", "webapp", "filters"})
 
-# Schema-source directory names (protobuf-maven-plugin / avro-maven-plugin
-# convention): schema dirs are not languages, so this detector must not
-# report one from them. Ordered, unlike a set, because `schema_roots` reports
-# them in this fixed order (protobuf before Avro) rather than whatever order
-# a directory listing would give.
-_SCHEMA_ROOT_NAMES = ("proto", "avro")
-_SCHEMA_DIRECTORIES = frozenset(_SCHEMA_ROOT_NAMES)
+# Schema dirs are not languages, so this detector must not report one from
+# them (protobuf-maven-plugin/avro-maven-plugin convention) — shared with
+# `GradleDetector` (2M Task 3 fix round 1, M2).
+_SCHEMA_DIRECTORIES = frozenset(SOURCE_SCHEMA_NAMES)
 
 # Every schema root, as its path segments under `src/main`, in the order
 # `schema_roots` reports them. Spring GraphQL's SDL directory is the one that
@@ -35,11 +35,8 @@ _SCHEMA_DIRECTORIES = frozenset(_SCHEMA_ROOT_NAMES)
 # declaration of a contract directory for this detector to read instead, so a
 # WSDL kept anywhere else is a stated boundary rather than a guess.
 _SCHEMA_ROOT_PATHS = (
-    *((name,) for name in _SCHEMA_ROOT_NAMES),
-    ("resources", "graphql"),
-    ("resources", "wsdl"),
-    ("resources", "xsd"),
-    ("resources", "META-INF", "wsdl"),
+    *((name,) for name in SOURCE_SCHEMA_NAMES),
+    *(("resources", *suffix) for suffix in RESOURCE_SCHEMA_SUFFIXES),
 )
 
 
@@ -78,15 +75,6 @@ def _local_repository_archive(coordinate: str, version: str) -> Path:
     is not answered from whatever it was when this module loaded."""
     return Path.home() / ".m2" / "repository" / _repository_layout(coordinate, version)
 
-
-_CONTAINER_FILES = (
-    "Dockerfile",
-    "Containerfile",
-    "compose.yaml",
-    "compose.yml",
-    "docker-compose.yaml",
-    "docker-compose.yml",
-)
 
 # Gradle's own build/settings files (2M design §1): when a directory this
 # detector accepts ALSO holds one of these, Maven still wins outright — one
@@ -405,7 +393,7 @@ class MavenDetector:
         anything is published or not — reading that as evidence would be the
         guess this method exists to refuse.
         """
-        if any((path / name).is_file() for name in _CONTAINER_FILES):
+        if any((path / name).is_file() for name in CONTAINER_FILES):
             return "service"
         if any(node.tag == _MAIN_CLASS for node in pom.iter()):
             return "service"
