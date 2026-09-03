@@ -7,10 +7,21 @@ with 15 local defects; round 3 verdicted those 15 closed with 9 residuals
 (whole-address slash guard, wire method names from generated constants not
 casing, the published-stubs-jar boundary, the interface/implementor
 double-derivation ruling, Integration's built-in scoped to
-enumeration-plus-questions). All folded in here. This revision names the real work: two extractor
-capability candidates, one fact-schema amendment, five new engine styles, and
-three engine extensions. 2O is the largest phase yet — the user chose full gRPC,
-full Data REST, and Spring Integration kept aboard, twice affirmed.
+enumeration-plus-questions). All folded in here, and a controller self-review then closed nine more
+(the identity-authority contradiction CP-8 introduced, §5's tableless "channel
+row", the fence/published-jar interaction, COVERAGE deliverables, the
+Framework-version scope CP-1 needs, Evo Inflector's Apache-2.0 attribution).
+
+**The real work this phase names:** ONE certain extractor capability (9.14,
+generic superinterface references — Data REST cannot read an entity type
+without it) plus ONE probe-gated candidate (9.13, extends relationships);
+one fact-schema amendment; three closed-set amendments; five new engine
+styles; and six engine extensions — `config_join`'s `annotation_value`
+binding source, `single_call`'s secondary address capture,
+`schema_operations` reading the operation sub-record, `resolves.direction`
+implemented at last, `annotation_driven`'s `path_prefix`, and rung 5's marker
+read. 2O is the largest phase yet — the user chose full gRPC, full Data REST,
+and Spring Integration kept aboard, twice affirmed.
 
 Closes gap B of the 2026-09-02 gap program. Branch `feat/phase-2o-spring-surface`,
 stacked on `feat/phase-2n-enrichment-polish` (PR #16) — retarget when it merges.
@@ -59,7 +70,14 @@ ruling. Each CP commits its probe + expectation table.
 - **CP-1 Spring path combination.** `@RequestMapping("users")` and `"/users"`
   serve the same URL; class+method combine inserts exactly one `/`; empty method
   path adds nothing; a trailing slash is DISTINCT since Framework 6. Verified
-  against a live Boot app before §8's seam is written.
+  against a live Boot app before §8's seam is written. **Version scope, stated
+  because DR-6 demands it:** the mirrored rule is Framework 6+ / Boot 3+ (where
+  `setUseTrailingSlashMatch` was removed), which is what Sextant's fixtures and
+  field validations run. Boot 2 / Framework 5 matched a trailing slash to the
+  slashless mapping, so on such a project our trailing-slash distinctness
+  over-reports — the probe records both behaviors, COVERAGE states the version
+  scope, and a per-version rule waits until a Boot 2 corpus is a real
+  requirement rather than a hypothetical.
 - **CP-2 Data REST derivation.** Two-part prediction: (a) with
   `org.atteo:evo-inflector` on the app's classpath, the collection path is the
   Evo Inflector pluralization of the uncapitalized entity simple name; WITHOUT
@@ -110,9 +128,21 @@ ruling. Each CP commits its probe + expectation table.
 ## 1. gRPC — the FR-3 closure
 
 `grpc` is ALREADY in the closed protocol set (D00 §4) — no protocol change here.
-What is missing is everything above it. The design is **descriptor-first**: the
-descriptor is the identity authority (it alone knows the proto package D01 §
-requires in `package.Service/Method`), and bytecode attaches handlers to it.
+What is missing is everything above it.
+
+**Where identity comes from, stated once** (revision 4's CP-8 discovery changed
+this, and the rest of §1 now follows it): the wire identity D01's identity table
+requires — `<protoPackage>.<Service>/<Method>` — is available from EITHER side
+independently. The descriptor knows it because it declares it; the generated
+bytecode knows it because protoc compiles `SERVICE_NAME` and the wire method
+names into the generated class as string constants, and that class compiles into
+the module's own output. Neither side is the sole authority, and that redundancy
+is the design's strength: each derives the same identity, so where both exist
+they merge exactly on it, and where only one exists the rows still publish a
+true identity rather than a degraded one. What each side contributes ALONE is
+different — the descriptor contributes the full method inventory and the
+request/response shapes; the bytecode contributes the handler symbols and proves
+which methods are actually implemented.
 
 ### 1a. Descriptor services — the identity layer
 
@@ -169,9 +199,12 @@ matches:
 - With a descriptor present, the 1a row and this row carry the same
   `(protocol, direction, method, path)` by construction and MERGE on the real
   key — D01's only join. The bytecode side contributes the handler symbol.
-- If CP-8(b) or (d) falsifies (constants unreadable): rows derive with the
-  path UNRESOLVED (expression = the supertype fqn verbatim) and a gap names
-  the missing descriptor — never a fabricated package, never a half identity.
+- If CP-8(b) or (d) falsifies (the generated constants are unreadable) AND no
+  descriptor covers the service, rows derive with the path UNRESOLVED
+  (expression = the supertype fqn verbatim) and a gap names BOTH absent
+  sources — never a fabricated package, never a half identity. When a
+  descriptor IS present it supplies the identity by itself, so the falsified
+  constants cost only the standalone case.
 - **Stated boundary — stubs from a PUBLISHED jar:** a module consuming
   `*-grpc-stubs` as a dependency has no generated classes in its own output,
   so the extends target is not in module facts and the style sees nothing.
@@ -220,6 +253,16 @@ matches:
   makes it per-method — DR-5 matches identities exactly.
 - **The fence** (SEI precedent): outbound rows derive only for services NOT
   locally implemented (no local class extends that service's `ImplBase`).
+  **The fence and §1b's published-jar boundary interact, and the ruling is
+  explicit:** the fence's evidence is the very supertype edge the boundary says
+  can be invisible, so a module that implements a service against PUBLISHED
+  stubs would pass the fence and derive a self-directed outbound row. The
+  guard is a second, cheaper test that survives the boundary — the module
+  declares a `@GrpcService`-annotated (or otherwise service-marked) class
+  whose stub type shares the injected stub's outer class. Where even that is
+  absent (unannotated Spring gRPC + published stubs — the same cell §1b sends
+  to COVERAGE), no outbound row derives at all: the fence fails CLOSED, since
+  a missing boundary is cheaper than a fabricated one.
 - **Bare `newBlockingStub(channel)` without `@GrpcClient` is a STATED BOUNDARY
   this phase**: no engine derives from a type reference alone, and the call's
   argument is a Channel object, not an address. COVERAGE gets the row.
@@ -275,7 +318,12 @@ depends on which CRUD interface is extended, not on any member's own annotations
   Inflector pluralization when the app's recorded classpath carries
   `org.atteo:evo-inflector` (`domain/pluralize.py`, the FULL published
   algorithm ported, deterministic), else the uncapitalized simple name
-  verbatim. All rows publish at resolution **`resolved`** with evidence
+  verbatim. **Attribution:** Evo Inflector is Apache-2.0, and a port of its
+  rule set is a derivative of it — `domain/pluralize.py` carries the Apache-2.0
+  attribution header naming the origin project, and the repo's dependency/
+  licence documentation gains the row. (Porting rather than depending is still
+  right: the rules are English pluralization, we take no new Python dependency,
+  and the port must mirror the exact library the JVM app resolved.) All rows publish at resolution **`resolved`** with evidence
   **`declared`** — endpoints use only `resolved`/`unresolved` today, `narrowed`
   and `partial` are defined by candidate-set semantics this column does not
   carry, and DR-6's precedent is exactly this shape: 2I's `reversed_package`
@@ -397,9 +445,14 @@ EXTENSION, kept in 2O per the user's ruling with its cost now stated:
   in BEAN DEFINITIONS (`AmqpInboundChannelAdapter` beans), and any key
   template would be a PROJECT convention, which D02 places in a repo's own
   `sextant.yml` project catalog, never in a built-in. So the BUILT-IN
-  `spring-integration.yml` ships channel-enumeration-plus-open-questions ONLY:
-  every activator/adapter derives its channel row and files an **open
-  question** naming the channel — that visibility IS the product. The wire
+  `spring-integration.yml` ships open questions ONLY: every activator/adapter
+  files a `channel_destination` **open question** carrying the channel name and
+  the handler symbol, and that visibility IS the product. **There is no
+  "channel row" and no third table** — the open-questions ledger already has a
+  table, a bundle artifact and a rendered section, and a channel with no
+  resolved destination is precisely the "something no pass could answer" that
+  ledger exists for. (Revision 4 said "derives its channel row", implying
+  storage this spec never specified; withdrawn.) The wire
   half is documented as a project-catalog PATTERN (a project whose config does
   carry destinations declares its own key template and rides the same
   `annotation_value` extension); the fixture proves the pattern end to end
@@ -534,6 +587,25 @@ against the fake seam. Retrying is the operator's re-run, by design.
   collision-detector interface/implementor exemption in D01's
   routing-ambiguity rule) each carry a D00/D01 amendment note and a migration
   line in the manifest discipline.
+- **COVERAGE.md is a first-class deliverable of this phase, not an
+  afterthought** — the spec defers to it a dozen times and gap B's whole point
+  is the ratings it carries. Every task that ships a surface updates its rows
+  in the same commit: the A-tier rows this phase closes (`@RabbitListener`,
+  `@PulsarListener`, gRPC's Java rows, Actuator, `@Scheduled`, servlets,
+  legacy `@SqsListener`, Spring Integration), the C-tier rows it closes
+  (`@RepositoryRestResource`, `@ControllerAdvice`), the §5.7 gRPC section
+  rewritten around what actually ships, and a NEW row for every boundary this
+  spec states (published-stub jars, unannotated Spring gRPC on published
+  stubs, bare `newBlockingStub`, `bindings=`, SpEL destinations, `@Selector`
+  segments, `ResponseEntity` statuses, Integration DSL and its bean-wired
+  destinations, AMQP producer↔consumer non-linking, the Framework-version
+  scope of §8). The headline count is re-derived, never carried forward
+  (2H/2I discipline), and `scripts/coverage_matrix.py --check` passes.
+- **The golden churn is ONE audited pass, not three.** §3a's protocol
+  migration, §7's format flips and §8's path canonicalization all change
+  recorded output; they land in a single reviewed golden update whose diff is
+  read line by line (2M's discipline), because three separate passes would let
+  each hide in the others' noise.
 - The final review re-runs the petclinic real-example validation both flavors,
   plus a gRPC-bearing example if present in `examples/`; byte-identity e2e
   extends to the two new tables' exports.
