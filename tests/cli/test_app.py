@@ -526,6 +526,73 @@ def test_a_malformed_sextant_yml_is_reported_as_a_message_not_a_stack_trace(tmp_
     assert "extract_libaries" in result.output
     assert "extract_libraries" in result.output
     assert "Traceback" not in result.output
+    # 2M Task 1: detection now runs before the workspace is created at all, so
+    # a refused detection must leave no trace of one — today's order created
+    # `ws/` (and `ws/workspace.duckdb`) via `DuckDbWorkspace.__init__` before
+    # the detector's own refusal was ever reached.
+    assert not (tmp_path / "ws").exists()
+
+
+def test_allow_resolve_flag_reaches_the_detector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The CLI's own half of 2M Task 1's plumbing: `--allow-resolve` must
+    reach the detector `analyze` selects, not stop at the command's own
+    argument parsing. Spies on `MavenDetector.detect` itself rather than on
+    any Sextant-internal wiring, so the pin is about the value a real detector
+    receives."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    calls: list[bool] = []
+    original = MavenDetector.detect
+
+    def spy(self: MavenDetector, path: Path, allow_resolve: bool = False):
+        calls.append(allow_resolve)
+        return original(self, path, allow_resolve=allow_resolve)
+
+    monkeypatch.setattr(MavenDetector, "detect", spy)
+
+    result = CliRunner().invoke(
+        cli,
+        ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path), "--allow-resolve"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls
+    assert all(call is True for call in calls)
+
+
+def test_allow_resolve_defaults_to_false_when_the_flag_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    calls: list[bool] = []
+    original = MavenDetector.detect
+
+    def spy(self: MavenDetector, path: Path, allow_resolve: bool = False):
+        calls.append(allow_resolve)
+        return original(self, path, allow_resolve=allow_resolve)
+
+    monkeypatch.setattr(MavenDetector, "detect", spy)
+
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls
+    assert all(call is False for call in calls)
+
+
+def test_analyze_writes_an_empty_detect_notes_list_for_a_plain_maven_fixture(tmp_path: Path):
+    """`detect_notes` is a key that is always present (empty where the
+    detector had nothing to remark on), not one that appears only once a note
+    exists — a reader parsing `metadata.json` must never special-case a
+    missing key."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert metadata["detect_notes"] == []
 
 
 def test_a_malformed_overlay_is_reported_as_a_message_not_a_stack_trace(tmp_path: Path):

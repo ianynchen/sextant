@@ -244,6 +244,38 @@ def test_schema_roots_reports_every_one_of_the_real_fixtures_schema_directories(
     )
 
 
+# --- Detect notes (2M Task 1) --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "gradle_file", ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]
+)
+def test_gradle_files_beside_a_pom_are_a_note_maven_still_wins(tmp_path: Path, gradle_file: str):
+    """One build system per run, stated, never merged (2M design §1): a `pom.xml`
+    still wins outright over any Gradle file sitting beside it, and the
+    coexistence is recorded rather than silently dropped — the exact string is
+    pinned because it is what `metadata.json`'s `detect_notes` carries out to a
+    reader deciding which build actually ran."""
+    _module(tmp_path)
+    (tmp_path / gradle_file).write_text("", encoding="utf-8")
+
+    model = MavenDetector().detect(tmp_path)
+
+    assert model.notes == ("gradle build files present; maven selected",)
+    # Maven still won: the module it reports is the POM's, untouched by the
+    # Gradle files sitting beside it.
+    assert model.modules[0].module_id == "com.acme:thing"
+
+
+def test_no_gradle_files_means_no_notes(tmp_path: Path):
+    model = MavenDetector().detect(_module(tmp_path))
+    assert model.notes == ()
+
+
+def test_the_real_fixture_has_no_gradle_files_and_no_notes():
+    assert MavenDetector().detect(FIXTURE).notes == ()
+
+
 def test_a_declared_source_directory_wins_over_the_conventional_layout(tmp_path: Path):
     """M02: the detector reads the build, never a convention."""
     pom = _BARE_POM.replace(

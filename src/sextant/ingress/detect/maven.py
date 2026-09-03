@@ -87,6 +87,18 @@ _CONTAINER_FILES = (
     "docker-compose.yml",
 )
 
+# Gradle's own build/settings files (2M design §1): when a directory this
+# detector accepts ALSO holds one of these, Maven still wins outright — one
+# build system per run, stated, never merged — and the coexistence becomes a
+# detect note rather than a silent choice.
+_GRADLE_BUILD_FILES = (
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
+)
+_GRADLE_COEXISTENCE_NOTE = "gradle build files present; maven selected"
+
 
 class MavenDetector:
     """Reads the build, never a convention. Offline by default (M02): the
@@ -143,7 +155,19 @@ class MavenDetector:
             library_roots=library_roots,
             libraries_not_resolved=libraries_not_resolved,
         )
-        return RepositoryModel(root=path, modules=(module,))
+        return RepositoryModel(root=path, modules=(module,), notes=self._notes(path))
+
+    @staticmethod
+    def _notes(path: Path) -> tuple[str, ...]:
+        """Detect-time observations, sorted (RepositoryModel's own
+        determinism rule) — today the one Gradle-coexistence note, since this
+        detector reads nothing else worth remarking on."""
+        notes = (
+            [_GRADLE_COEXISTENCE_NOTE]
+            if any((path / name).is_file() for name in _GRADLE_BUILD_FILES)
+            else []
+        )
+        return tuple(sorted(notes))
 
     @staticmethod
     def _library_roots(

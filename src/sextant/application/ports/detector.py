@@ -71,6 +71,13 @@ class ModuleModel:
 class RepositoryModel:
     root: Path
     modules: tuple[ModuleModel, ...] = field(default_factory=tuple)
+    # Detect-time observations that are neither a module fact nor a refusal
+    # (2M design §1c): build-system coexistence, a wrapper fallback, a
+    # boundary Sextant refuses but does not fail the whole detection over.
+    # Carried into `metadata.json` verbatim. A sorted tuple, never a set or a
+    # list — determinism (NFR-1) applies to notes exactly as it does to every
+    # other reader-facing sequence this model produces.
+    notes: tuple[str, ...] = ()
 
 
 class Detector(Protocol):

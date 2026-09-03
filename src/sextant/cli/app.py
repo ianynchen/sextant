@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from sextant.agents import AGENT_REGISTRY
 from sextant.application.enrich.tools import ToolDefinition, ToolExecutor
 from sextant.application.enrich.validate import stale_claims
-from sextant.application.ports.detector import ModuleModel
+from sextant.application.ports.detector import ModuleModel, select_detector
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport
@@ -163,8 +163,26 @@ def module() -> None:
 @module.command("analyze")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("--workspace", "workspace_dir", type=click.Path(path_type=Path), default=None)
-def module_analyze(path: Path, workspace_dir: Path | None) -> None:
+@click.option(
+    "--allow-resolve",
+    "allow_resolve",
+    is_flag=True,
+    default=False,
+    help="Permit one online dependency-resolution retry when the detector needs it.",
+)
+def module_analyze(path: Path, workspace_dir: Path | None, allow_resolve: bool) -> None:
     workspace_dir = _workspace_dir_of(path, workspace_dir)
+    # Detection runs FIRST, before anything below creates so much as a
+    # directory (2M design §2): `DuckDbWorkspace`'s own constructor is what
+    # makes `workspace_dir` and its `.duckdb` file exist, so a refused
+    # detection must be discovered here, ahead of that call, or a repository
+    # Sextant cannot analyze would still leave a workspace behind. `analyze`
+    # below detects again — the same read-only, side-effect-free call — this
+    # one exists only to gate what follows on it succeeding first.
+    try:
+        select_detector([MavenDetector()], path).detect(path, allow_resolve=allow_resolve)
+    except SextantConfigError as refused:
+        raise click.ClickException(str(refused)) from refused
     # A stale rendered document must never survive a re-analyze (2K Task 8
     # review): `analyze` never otherwise touches `render/` — that is
     # `render`'s own output — so without this, re-analyzing a module after
@@ -180,7 +198,7 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
     progress = RichProgress()
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
-        result = _analyzed(path, workspace, workspace_dir, progress)
+        result = _analyzed(path, workspace, workspace_dir, progress, allow_resolve=allow_resolve)
         write_metadata(
             workspace_dir / "metadata.json",
             result.module,
@@ -193,6 +211,7 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
             schema_sources_not_compiled=result.schema_sources_not_compiled,
             descriptors_not_interpreted=result.descriptors_not_interpreted,
             libraries_not_scanned=result.libraries_not_scanned,
+            detect_notes=result.notes,
         )
     finally:
         workspace.close()
@@ -201,7 +220,11 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
 
 
 def _analyzed(
-    path: Path, workspace: DuckDbWorkspace, workspace_dir: Path, progress: RichProgress
+    path: Path,
+    workspace: DuckDbWorkspace,
+    workspace_dir: Path,
+    progress: RichProgress,
+    allow_resolve: bool = False,
 ) -> AnalyzeResult:
     """`analyze`, with the one failure a USER caused turned into the message a
     user reads. A malformed `.sextant.yml` is Sextant's own input written
@@ -220,6 +243,7 @@ def _analyzed(
             progress=progress,
             readers=READERS,
             interpret=_JvmDescriptorInterpreter(),
+            allow_resolve=allow_resolve,
         )
     except SextantConfigError as refused:
         raise click.ClickException(str(refused)) from refused
