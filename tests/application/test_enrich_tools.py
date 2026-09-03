@@ -374,6 +374,28 @@ def test_a_derived_output_directory_is_invisible_and_unreadable(tmp_path: Path):
     assert result == "refused: target/classes/application-secret.yml is not available"
 
 
+def test_the_tradewind_session_mirror_directory_is_invisible_and_unreadable(tmp_path: Path):
+    """`.tradewind/` (2N design §1): the api-key auth profile's session
+    mirror, excluded the identical jail-specific way `target/` is — the
+    model reading its own prior conversation is the same feedback loop that
+    excluded the enrichment overlay itself (Task 3 ruling), just planted by
+    a different adapter."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "src.txt").write_text("real source\n")
+    mirror = root / ".tradewind"
+    mirror.mkdir()
+    (mirror / "sessions.sqlite").write_text("not real sqlite bytes, secret-marker\n")
+    executor = _executor((root,))
+    listing = executor.execute("list_dir", {"path": "."}).splitlines()
+    assert ".tradewind/" not in listing
+    assert "src.txt" in listing
+    assert executor.execute("find", {"pattern": "sessions.sqlite"}) == ""
+    assert executor.execute("grep", {"pattern": "secret-marker"}) == ""
+    result = executor.execute("read_file", {"path": ".tradewind/sessions.sqlite"})
+    assert result == "refused: .tradewind/sessions.sqlite is not available"
+
+
 def test_the_fixtures_own_compiled_decoy_under_target_is_also_invisible_and_unreadable(
     resolved_fixture: object,
 ):

@@ -55,6 +55,16 @@ class MalformedAnswersError(RuntimeError):
     """
 
 
+class EmptyPartialAnswerError(RuntimeError):
+    """A partial answer whose text is empty (2N design §1) — a capped run
+    that produced no final text at all, reachable on any adapter whose loop
+    can end mid-turn with nothing yet written. Distinct from
+    `MalformedAnswersError`: an empty string is not "text that exists and
+    does not parse" — it is the honest absence `partial_reason` already
+    explains, so the failure names THAT reason rather than describing a JSON
+    parse that was never attempted."""
+
+
 @dataclass(frozen=True)
 class EnrichResult:
     """One run's outcome, whichever door supplied the answers.
@@ -136,6 +146,15 @@ def validate_and_finish(
     pinning a golden fixture's run_at need only pass one through rather than
     patch a clock).
     """
+    if partial and not answers_text.strip():
+        # 2N design §1: a capped run that produced no final text is a loud
+        # failure NAMING the partial reason, never `MalformedAnswersError`
+        # — there is no JSON to have failed to parse. Checked before the
+        # `json.loads` below, which an empty string would otherwise fail on
+        # the wrong way (a decode error, not this honest absence).
+        raise EmptyPartialAnswerError(
+            f"the run ended early ({partial_reason}) and returned no answers"
+        )
     try:
         raw = json.loads(answers_text)
         claims = _CLAIMS.validate_python(raw)

@@ -146,6 +146,63 @@ def test_partial_and_its_reason_carry_through_to_the_result_unchanged():
     assert result.transcript == ({"name": "read_file", "args": {}, "result": "ok"},)
 
 
+def test_a_textless_partial_is_a_loud_failure_naming_the_reason_not_a_malformed_answer():
+    """2N design §1: a capped run that produced no final text is reported
+    naming WHY it ended early, never laundered into `MalformedAnswersError`
+    — there is no JSON here that failed to parse, only an honest absence."""
+    with pytest.raises(stage.EmptyPartialAnswerError) as raised:
+        stage.validate_and_finish(
+            "",
+            _Workspace(),
+            Path("/module"),
+            Redactor.from_rules(),
+            "an-agent",
+            "a-model",
+            "sha256:instructions",
+            "sha256:workspace",
+            partial=True,
+            partial_reason="no_progress",
+        )
+    assert "no_progress" in str(raised.value)
+
+
+def test_a_whitespace_only_partial_is_also_treated_as_textless():
+    with pytest.raises(stage.EmptyPartialAnswerError):
+        stage.validate_and_finish(
+            "   \n",
+            _Workspace(),
+            Path("/module"),
+            Redactor.from_rules(),
+            "an-agent",
+            "a-model",
+            "sha256:instructions",
+            "sha256:workspace",
+            partial=True,
+            partial_reason="max_turns",
+        )
+
+
+def test_a_non_empty_partial_answer_is_still_validated_normally():
+    """The textless ruling only fires on EMPTY text — a partial run that did
+    produce a real (if incomplete-context) answer is validated exactly as a
+    clean run's answer would be, `partial`/`partial_reason` carried through
+    unchanged (the existing `test_partial_and_its_reason_carry_through_to_
+    the_result_unchanged` pin)."""
+    result = stage.validate_and_finish(
+        json.dumps([_component()]),
+        _Workspace(),
+        Path("/module"),
+        Redactor.from_rules(),
+        "an-agent",
+        "a-model",
+        "sha256:instructions",
+        "sha256:workspace",
+        partial=True,
+        partial_reason="stop:max_tokens",
+    )
+    assert (result.partial, result.partial_reason) == (True, "stop:max_tokens")
+
+
 def test_an_ingested_answer_defaults_to_a_clean_non_partial_record():
     result = stage.validate_and_finish(
         json.dumps([_component()]),

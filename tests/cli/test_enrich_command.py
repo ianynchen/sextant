@@ -142,35 +142,17 @@ def test_an_unknown_agent_is_refused_naming_the_known_list(module_root: Path):
     )
     assert result.exit_code != 0
     assert "not-a-real-agent" in result.output
-    assert "claude-api" in result.output
+    assert "tradewind" in result.output
 
 
-def test_claude_api_with_no_key_refuses_loudly_naming_the_variable(
+def test_tradewind_api_key_with_no_key_refuses_loudly_naming_the_variable(
     module_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """2K Task 7 ruling 5: the key is read from the environment alone, and
-    its absence is refused before any network attempt — `ClaudeApiAgent._send`
-    checks `ANTHROPIC_API_KEY` before constructing a client, so this makes no
-    network call even though it exercises the real adapter."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    _analyzed_and_rendered(module_root)
-    result = CliRunner().invoke(
-        cli,
-        ["module", "enrich", str(module_root), "--agent", "claude-api", "--model", "claude-x"],
-    )
-    assert result.exit_code != 0
-    assert "ANTHROPIC_API_KEY" in result.output
-
-
-def test_max_turns_zero_refuses_via_the_agents_own_validation_not_a_silent_default(
-    module_root: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """2K Task 7 fix round 1, minor: `--max-turns 0` is a real, falsy-but-
-    meaningful flag value — `is None`, never `or`, is what lets it reach
-    `ClaudeApiAgent`'s own `>= 1` validation instead of silently reading as
-    "no flag given" and becoming 50. The real `claude-api` constructor is
-    used and never reaches the network: the `ValueError` fires in
-    `__init__`, before any `_send`."""
+    """2K Task 7 ruling 5, kept for Tradewind (2N design §1): the key is
+    read from the environment alone by SEXTANT, and its absence is refused
+    before any client is built — `TradewindAgent.run`'s own pre-client check
+    — so this makes no network call even though it exercises the real
+    adapter."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     _analyzed_and_rendered(module_root)
     result = CliRunner().invoke(
@@ -180,15 +162,81 @@ def test_max_turns_zero_refuses_via_the_agents_own_validation_not_a_silent_defau
             "enrich",
             str(module_root),
             "--agent",
-            "claude-api",
+            "tradewind",
+            "--auth",
+            "api-key",
             "--model",
             "claude-x",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "ANTHROPIC_API_KEY" in result.output
+
+
+def test_max_turns_above_the_api_key_ceiling_refuses_via_the_agents_own_validation(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2N design §1: the langchain (api-key) backend's own hard ceiling is
+    24 `--max-turns` (25 model iterations) — `--max-turns 25` is refused
+    through `TradewindAgent.__init__`'s own `ValueError`, not a silent late
+    failure. The real `tradewind` constructor is used and never reaches the
+    network: the `ValueError` fires in `__init__`, before `run` even checks
+    for a key."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _analyzed_and_rendered(module_root)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "enrich",
+            str(module_root),
+            "--agent",
+            "tradewind",
+            "--auth",
+            "api-key",
+            "--model",
+            "claude-x",
+            "--max-turns",
+            "25",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--max-turns 25 exceeds the api-key backend's own ceiling of 24" in result.output
+
+
+def test_max_turns_zero_reaches_the_agent_honestly_not_silently_defaulted(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2K Task 7 fix round 1, minor, kept for Tradewind: `--max-turns 0` is
+    a real, falsy-but-meaningful flag value — `is None`, never `or`, is what
+    lets it reach the agent's own constructor as `0` rather than silently
+    reading as "no flag given" and becoming the CLI's own default of 20."""
+    _analyzed_and_rendered(module_root)
+    captured: dict[str, object] = {}
+
+    def _constructor(**kwargs: object) -> FakeEnrichmentAgent:
+        captured.update(kwargs)
+        return FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
+
+    monkeypatch.setitem(AGENT_REGISTRY, "fake-zero-turns", _constructor)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "enrich",
+            str(module_root),
+            "--agent",
+            "fake-zero-turns",
+            "--model",
+            "x",
             "--max-turns",
             "0",
         ],
     )
-    assert result.exit_code != 0
-    assert "max_turns" in result.output
+
+    assert result.exit_code == 0, result.output
+    assert captured["max_turns"] == 0
 
 
 def test_dry_run_writes_only_the_brief_and_instructions_copy(module_root: Path):
@@ -492,7 +540,12 @@ def test_config_defaults_are_used_and_a_flag_overrides_them(
         cli, ["module", "enrich", str(module_root), "--model", "flag-model"]
     )
     assert result.exit_code == 0, result.output
-    assert captured == {"model": "flag-model", "max_turns": 7}
+    assert captured == {
+        "auth": "subscription",
+        "model": "flag-model",
+        "max_turns": 7,
+        "session_store": None,
+    }
 
     overlay = json.loads((module_root / ENRICHMENT_FILE).read_text(encoding="utf-8"))
     assert overlay["produced_by"]["agent"] == "fake-config-default"

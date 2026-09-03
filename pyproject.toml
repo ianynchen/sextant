@@ -16,15 +16,24 @@ dependencies = [
   "grpcio-tools>=1.83.1",
   "graphql-core>=3.2.6",
   "pathspec==1.1.1",
-  # Import-confined to `src/sextant/agents/claude_api.py` (2K design §3/§8):
-  # the one sanctioned model-calling adapter, enforced by
-  # `tests/architecture/test_agents_confinement.py`. Pinned to the exact
-  # version a live resolve installed.
-  "anthropic==1.3.0",
+  # Import-confined to `src/sextant/agents/tradewind.py` (2N design §1): the
+  # one sanctioned model-calling adapter, enforced by
+  # `tests/architecture/test_agents_confinement.py`. Pinned by commit sha —
+  # no version tags exist past 0.6.0 — via `[tool.uv.sources]` below.
+  # `anthropic` is no longer a direct dependency: it stays installed
+  # transitively through tradewind's own `langchain-anthropic`, which is
+  # what the api-key auth profile actually talks to.
+  "tradewind",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10", "import-linter>=2.0"]
+
+[tool.uv.sources]
+# Commit-sha pin (2N design §1): the exact commit `examples/tradewind` is a
+# read-only clone of, for the source questions this adapter's tests and
+# docstrings answer against.
+tradewind = { git = "https://github.com/ianynchen/Tradewind.git", rev = "9a23e45356e22dcc0005a31edf0a344d04a1b6a6" }
 
 [project.scripts]
 sextant = "sextant.cli.app:cli"
@@ -67,6 +76,14 @@ ignore_missing_imports = true
 # `descriptors.py` annotates its own surface.
 [[tool.mypy.overrides]]
 module = "google.protobuf.*"
+ignore_missing_imports = true
+
+# `tradewind` ships no `py.typed` marker (its own source is typed, but mypy
+# only trusts that for an installed package carrying the marker file) — the
+# same untyped-runtime treatment as `yaml`, confined to the one module
+# (`src/sextant/agents/tradewind.py`) permitted to import it.
+[[tool.mypy.overrides]]
+module = "tradewind.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

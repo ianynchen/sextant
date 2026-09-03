@@ -712,6 +712,17 @@ def _tool_definition_json(definition: ToolDefinition) -> dict[str, object]:
 )
 @click.option("--model", "model_flag", default=None, help="Passed to the agent verbatim.")
 @click.option("--max-turns", "max_turns_flag", type=int, default=None)
+@click.option(
+    "--auth",
+    "auth_flag",
+    type=click.Choice(["subscription", "api-key"]),
+    default=None,
+    help=(
+        "Tradewind's backend for a live run: `subscription` (the machine's "
+        "logged-in Claude Code), `api-key` (ANTHROPIC_API_KEY, read by Sextant). "
+        "Default: subscription."
+    ),
+)
 @click.option("--dry-run", is_flag=True, default=False, help="Write the brief; call no agent.")
 @click.option(
     "--ingest",
@@ -726,6 +737,7 @@ def module_enrich(
     agent_flag: str | None,
     model_flag: str | None,
     max_turns_flag: int | None,
+    auth_flag: str | None,
     dry_run: bool,
     ingest_path: Path | None,
 ) -> None:
@@ -755,15 +767,20 @@ def module_enrich(
     defaults = _enrich_defaults_for(path)
     # `is None`, never `or` (2K Task 7 fix round 1, minor): a flag's own
     # falsy-but-meaningful value — `--max-turns 0` above all — must reach
-    # `ClaudeApiAgent`'s own `>= 1` validation as what it is, not silently
-    # read as "no flag given" and fall through to a config default or 50.
+    # `TradewindAgent`'s own validation as what it is, not silently read as
+    # "no flag given" and fall through to a config default or 20.
     agent_name = agent_flag if agent_flag is not None else defaults.agent
     model_name = model_flag if model_flag is not None else defaults.model
     max_turns = (
         max_turns_flag
         if max_turns_flag is not None
-        else (defaults.max_turns if defaults.max_turns is not None else 50)
+        else (defaults.max_turns if defaults.max_turns is not None else 20)
     )
+    auth_name = auth_flag if auth_flag is not None else defaults.auth
+    # `session_store` has no CLI flag counterpart (2N design §1) — its only
+    # source besides the agent's own per-auth default is `.sextant.yml
+    # enrich: session_store:`.
+    session_store = Path(defaults.session_store) if defaults.session_store is not None else None
 
     instructions = instructions_path().read_text(encoding="utf-8")
     instructions_hash = "sha256:" + hashlib.sha256(instructions.encode("utf-8")).hexdigest()
@@ -875,9 +892,17 @@ def module_enrich(
             transcript: tuple[dict[str, object], ...] = ()
             partial, partial_reason = False, None
         else:
-            known = ", ".join(sorted(AGENT_REGISTRY))
+            # Defaults only apply to a LIVE run (2N design §1: `--agent
+            # tradewind --auth subscription`) — never to `--ingest`'s own
+            # `agent_name is None` check just above, which stays a hard
+            # requirement: an ingested answer's provenance label must be
+            # given, not silently defaulted to the name of an adapter that
+            # never ran.
             if agent_name is None:
-                raise click.ClickException(f"--agent is required — known agents: {known}")
+                agent_name = "tradewind"
+            if auth_name is None:
+                auth_name = "subscription"
+            known = ", ".join(sorted(AGENT_REGISTRY))
             if agent_name not in AGENT_REGISTRY:
                 raise click.ClickException(
                     f"unknown --agent {agent_name!r} — known agents: {known}"
@@ -885,11 +910,16 @@ def module_enrich(
             if model_name is None:
                 raise click.ClickException("--model is required")
             try:
-                agent = AGENT_REGISTRY[agent_name](model=model_name, max_turns=max_turns)
+                agent = AGENT_REGISTRY[agent_name](
+                    auth=auth_name,
+                    model=model_name,
+                    max_turns=max_turns,
+                    session_store=session_store,
+                )
             except ValueError as refused:
-                # `ClaudeApiAgent.__init__`'s own `max_turns >= 1` check
-                # (2K Task 7 fix round 1, minor): a bad flag value is the
-                # user's own input written wrong, not a crash.
+                # `TradewindAgent.__init__`'s own validation (the api-key
+                # ceiling above all): a bad flag value is the user's own
+                # input written wrong, not a crash.
                 raise click.ClickException(str(refused)) from refused
             try:
                 answers = agent.run(brief, executor)
@@ -913,7 +943,10 @@ def module_enrich(
                 partial_reason=partial_reason,
                 transcript=transcript,
             )
-        except enrich_stage.MalformedAnswersError as refused:
+        except (
+            enrich_stage.MalformedAnswersError,
+            enrich_stage.EmptyPartialAnswerError,
+        ) as refused:
             raise click.ClickException(str(refused)) from refused
 
         # Written BEFORE assembly, deliberately (2K Task 7 fix round 1): the

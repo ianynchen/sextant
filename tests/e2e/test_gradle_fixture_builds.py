@@ -5,7 +5,7 @@ the one place the real `./gradlew` actually runs, offline, over
 `fixtures/gradle-orders`, through `sextant module analyze` end to end.
 
 **Self-skipping, the same mechanism the suite already has** (no marker, no
-collection-time magic — `tests/integration/test_claude_api_live.py`'s own
+collection-time magic — `tests/integration/test_tradewind_live.py`'s own
 docstring names the precedent): if the offline run fails because the
 wrapper distribution or the fixture's dependencies are not already in the
 local Gradle caches, this test skips rather than failing red on an
