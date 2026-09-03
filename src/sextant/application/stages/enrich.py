@@ -123,6 +123,31 @@ def compose(
     )
 
 
+def _extracted_array(answers_text: str) -> str:
+    """The JSON array inside `answers_text`, tolerating the one wrapper a
+    live engine actually produces.
+
+    INSTRUCTIONS says "a single JSON array and nothing else", and the
+    api-key path obeys. But the subscription path runs the Claude Code
+    ENGINE, whose persona narrates — the first live flight (2026-09-03)
+    returned a perfect claims array wrapped in one line of prose and a
+    ```json fence, and a strict parse threw the whole run away at char 0.
+    Leniency here is bounded and honest: text that already parses is
+    returned untouched; otherwise the slice from the first `[` to the last
+    `]` is tried — the narrowest rule that unwraps prose and fences without
+    ever INVENTING structure. Anything else still fails as malformed, and
+    validation-by-construction downstream judges every claim exactly as
+    before; nothing about leniency loosens what a claim must prove."""
+    stripped = answers_text.strip()
+    if stripped.startswith("["):
+        return stripped
+    start = stripped.find("[")
+    end = stripped.rfind("]")
+    if start != -1 and end > start:
+        return stripped[start : end + 1]
+    return stripped
+
+
 def validate_and_finish(
     answers_text: str,
     workspace: Workspace,
@@ -156,7 +181,7 @@ def validate_and_finish(
             f"the run ended early ({partial_reason}) and returned no answers"
         )
     try:
-        raw = json.loads(answers_text)
+        raw = json.loads(_extracted_array(answers_text))
         claims = _CLAIMS.validate_python(raw)
     except (json.JSONDecodeError, ValidationError) as broken:
         raise MalformedAnswersError(

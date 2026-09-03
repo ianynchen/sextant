@@ -215,3 +215,39 @@ def test_an_ingested_answer_defaults_to_a_clean_non_partial_record():
         "sha256:workspace",
     )
     assert (result.partial, result.partial_reason) == (False, None)
+
+
+def _claim() -> dict:
+    return {
+        "kind": "component",
+        "evidence": "llm",
+        "anchor": "after-component-overview",
+        "name": "A part",
+        "purpose": "What it does.",
+        "members": ["com/acme/orders/OrderController#"],
+    }
+
+
+def test_a_narrated_fenced_answer_still_parses_the_first_live_flight_shape():
+    """The 2026-09-03 subscription flight returned a perfect claims array
+    wrapped in one narration line and a ```json fence — the Claude Code
+    persona narrating despite INSTRUCTIONS. `_extracted_array` unwraps
+    exactly that shape; the claims inside are judged unchanged."""
+    wrapped = (
+        "Now I have full grounding. Writing the final answer.\n\n"
+        "```json\n" + json.dumps([_claim()]) + "\n```\n"
+    )
+    assert json.loads(stage._extracted_array(wrapped)) == [_claim()]
+
+
+def test_prose_with_no_array_is_still_malformed():
+    """Leniency unwraps; it never invents. Pure narration with no array
+    anywhere fails exactly as before."""
+    assert stage._extracted_array("I could not produce an answer.") == (
+        "I could not produce an answer."
+    )
+
+
+def test_an_array_answer_passes_through_untouched():
+    text = json.dumps([_claim()])
+    assert stage._extracted_array(text) == text

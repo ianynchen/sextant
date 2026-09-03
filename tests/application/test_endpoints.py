@@ -6,7 +6,6 @@ import yaml
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
-from sextant.cli.resources import catalogs_dir
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -18,6 +17,7 @@ from sextant.domain.facts import (
     TypeRef,
 )
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CATALOGS = catalogs_dir()

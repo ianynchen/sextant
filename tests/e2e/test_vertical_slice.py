@@ -8,12 +8,12 @@ from click.testing import CliRunner
 
 from sextant.application.enrich.validate import validate_overlay
 from sextant.cli.app import cli
-from sextant.cli.resources import instructions_path
 from sextant.domain.enrichment import load_overlay
 from sextant.domain.factfile import read_fact_file
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import REDACTED, Redactor
 from sextant.ingress.detect.sextant_config import read_redaction_rules
+from sextant.resources import instructions_path
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]

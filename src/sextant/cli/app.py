@@ -15,10 +15,8 @@ from pathlib import Path
 import click
 
 from sextant import api
-from sextant.application.enrich.tools import ToolExecutor
 from sextant.application.ports.progress import Progress
 from sextant.cli.progress import RichProgress
-from sextant.domain.redaction import Redactor
 
 
 @click.group()
@@ -43,23 +41,6 @@ def _rich_progress() -> Iterator[Progress]:
         yield progress
     finally:
         progress.close()
-
-
-# Backward-compatible re-exports (2N Task 5): `tests/cli/test_app.py` unit-
-# tests both directly. `_skip_reason` has no refusal to translate, so it is
-# `sextant.api`'s own function under this name, unchanged; `_tool_executor_for`
-# raised `click.ClickException` before this task's extraction moved its real
-# body into `sextant.api` (which raises `EnrichmentError` instead, like every
-# other API-level refusal) — kept here as the CLI's own translation, so a
-# direct call still raises what it always raised.
-_skip_reason = api._skip_reason
-
-
-def _tool_executor_for(path: Path, workspace_dir: Path, redactor: Redactor) -> ToolExecutor:
-    try:
-        return api._tool_executor_for(path, workspace_dir, redactor)
-    except api.EnrichmentError as refused:
-        raise click.ClickException(str(refused)) from refused
 
 
 # The table's dir column (2M Task 2 fix round 1, F8): a cap, not a guess at

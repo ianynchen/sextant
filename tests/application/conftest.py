@@ -6,7 +6,6 @@ import pytest
 from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
 from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve.pipeline import ResolveReport, resolve
-from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.domain.factfile import config_fact_target, write_fact_file
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import list_files
@@ -14,6 +13,7 @@ from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.ingress.read.properties import PropertiesReader
 from sextant.ingress.read.yaml_config import YamlConfigReader
+from sextant.resources import catalogs_dir, extractor_jar
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]

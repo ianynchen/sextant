@@ -7,23 +7,20 @@ exist — and a catalog directory that is merely absent globs to nothing, so a
 packaged Sextant would report no endpoints and no skipped catalogs. That is the
 failure capability reporting exists to prevent, arriving through packaging.
 
-**The one real implementation; `sextant.cli.resources` delegates to it**
-(2N Task 5, §5b, fix round 1 MAJOR-2): the library facade (`sextant.api`)
-needs these same lookups, and the import-linter layering puts `api` BELOW
-`cli` (`cli` is the one thing allowed to import `api`, never the reverse) —
-so a lookup both sides need cannot live inside the `cli` package itself. A
-straight re-export was the first attempt; it broke
+**The one implementation, full stop** (2N Task 5, §5b introduced it because
+the library facade, `sextant.api`, needed these lookups and the import-linter
+layering puts `api` BELOW `cli` — a lookup both sides needed could not live
+inside the `cli` package alone; 2N Task 6 finished the move by retiring
+`sextant.cli.resources`, the delegating copy that briefly existed for fix
+round 1's `_package_root` whitebox reasons, once its one unique test —
 `tests/cli/test_resources.py::test_a_missing_extractor_says_how_to_build_it`,
-which whiteboxes `cli.resources._package_root` directly with
-`monkeypatch.setattr` — a re-exported `extractor_jar` still closes over
-`_package_root` in the module it was actually DEFINED in, so patching the
-name in `cli.resources` had no effect on it. The fix is this module's own
-`root` parameter: every lookup below takes an optional `root`, defaulting to
-THIS module's `_package_root()` when omitted (every call `sextant.api`
-itself makes). `cli/resources.py` keeps its own `_package_root` — the one
-`monkeypatch` still reaches — and delegates by passing ITS OWN result in as
-`root`, so each message and path-join lives in exactly one place, and the
-existing whitebox test needed no edit.
+which whiteboxed `_package_root` with `monkeypatch.setattr` — was ported to
+target THIS module's own `_package_root` instead, in
+`tests/test_sextant_resources.py`). Every lookup below still takes an
+optional `root`, defaulting to THIS module's `_package_root()` when omitted
+(every real caller's own path, `sextant.api` included) — the parameter
+remains as the seam that test uses to point at a directory with nothing in
+it, without touching the installed package.
 """
 
 from importlib import resources
@@ -40,8 +37,8 @@ def catalogs_dir(root: Path | None = None) -> Path:
     One location, checkout and wheel alike, because they live inside the
     package — they travel with the code that interprets them or a version
     mismatch becomes possible. `root` overrides where "the package" is taken
-    to be — `cli.resources.catalogs_dir()` passes its own `_package_root()`
-    here (module docstring); omitted, it is this module's own.
+    to be (module docstring); omitted, it is this module's own
+    `_package_root()`.
     """
     package_root = root if root is not None else _package_root()
     directory = package_root / "catalogs"

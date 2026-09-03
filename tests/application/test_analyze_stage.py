@@ -10,8 +10,8 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.detector import ModuleModel, RepositoryModel
 from sextant.application.ports.progress import NullProgress
 from sextant.application.stages.analyze import analyze
-from sextant.cli.resources import extractor_jar
 from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.resources import extractor_jar
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]

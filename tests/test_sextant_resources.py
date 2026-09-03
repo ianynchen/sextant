@@ -1,8 +1,12 @@
-"""`sextant.resources` (2N Task 5 fix round 1, MAJOR-2): the one real
-implementation `sextant.cli.resources` now delegates to — direct tests
-here, on top of `tests/cli/test_resources.py`'s own untouched whitebox pin
-(`cli.resources._package_root`, still reached through the `root` parameter
-this module's own docstring explains)."""
+"""`sextant.resources` (2N Task 5 fix round 1, MAJOR-2 — this module's own
+docstring has the full delegation story): the ONE implementation, since 2N
+Task 6 retired `sextant.cli.resources`, its delegating copy, and repointed
+every importer here directly. `test_a_missing_extractor_says_how_to_build_it_via_package_root`
+below is `tests/cli/test_resources.py`'s own whitebox pin, ported verbatim
+(2N Task 6 carry (a)) — `cli.resources._package_root` no longer exists to
+whitebox, so it now monkeypatches THIS module's own `_package_root`,
+exercising the `root=None` default path the `tmp_path`-override test just
+above does not."""
 
 import zipfile
 from pathlib import Path
@@ -35,12 +39,30 @@ def test_instructions_resolve_inside_the_installed_package():
 
 
 def test_a_missing_extractor_says_how_to_build_it(tmp_path: Path):
-    """The `root` override — not `_package_root`, which stays private to
-    each caller (`cli.resources` keeps its own, whiteboxed by
-    `tests/cli/test_resources.py`) — is this module's own seam for a
-    caller that wants a different package root."""
+    """The `root` override — this module's own seam for a caller that wants
+    a different package root, distinct from `_package_root` itself, which
+    the test below whiteboxes directly."""
     with pytest.raises(resources.MissingResourceError) as raised:
         resources.extractor_jar(root=tmp_path)
+    assert "gradlew build" in str(raised.value)
+
+
+def test_a_missing_extractor_says_how_to_build_it_via_package_root(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Ported from `tests/cli/test_resources.py` (2N Task 6 carry (a),
+    retired along with `cli.resources`): silence is the defect being fixed
+    here — the old code resolved to a path that was simply not there, and
+    the run continued. A clone that has not built the extractor is an
+    ordinary state, so the error carries the remedy. Unlike the `root=`
+    override test above, this exercises the `root=None` default — the path
+    every real caller (`cli.resources` while it existed, `sextant.api`
+    today) actually takes."""
+    monkeypatch.setattr(resources, "_package_root", lambda: Path("/nonexistent/package"))
+
+    with pytest.raises(resources.MissingResourceError) as raised:
+        resources.extractor_jar()
+
     assert "gradlew build" in str(raised.value)
 
 
@@ -54,16 +76,6 @@ def test_missing_instructions_say_so(tmp_path: Path):
     with pytest.raises(resources.MissingResourceError) as raised:
         resources.instructions_path(root=tmp_path)
     assert str(tmp_path / "enrich" / "INSTRUCTIONS.md") in str(raised.value)
-
-
-def test_cli_resources_raises_the_same_missingresourceerror_class():
-    """`cli.resources.MissingResourceError` is an IMPORT of this module's
-    own class, never a second definition (MAJOR-2's own fix) — so
-    `tests/cli/test_resources.py`'s `pytest.raises(MissingResourceError)`
-    still catches what `sextant.resources` actually raises."""
-    from sextant.cli.resources import MissingResourceError as CliMissingResourceError
-
-    assert CliMissingResourceError is resources.MissingResourceError
 
 
 def test_the_wheel_carries_the_catalogs_and_the_extractor():
