@@ -1,0 +1,16 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-reactor</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <!-- Aggregation-only (2M design §4): neither module below declares this pom
+       as its `<parent>`, so walking `<modules>` here adopts
+       `fixtures/orders-service` completely unchanged — by relative path,
+       which Maven permits — rather than granting it a parent it must never
+       have (see `fixtures/pom.xml`'s own comment on that fixture). -->
+  <modules>
+    <module>../orders-service</module>
+    <module>billing-lib</module>
+  </modules>
+</project>

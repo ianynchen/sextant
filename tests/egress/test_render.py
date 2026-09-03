@@ -72,6 +72,20 @@ def test_metadata_environments_are_empty_when_pass_2_resolved_nothing(tmp_path: 
     assert written["environments"] == []
 
 
+def test_metadata_detect_notes_are_written_sorted_regardless_of_call_order(tmp_path: Path):
+    """`detect_notes` is carried out of the detector verbatim (2M design
+    §1c) — never sorted at the source, since a detector may find its notes
+    in whatever order it happens to read them. `write_metadata` is the one
+    place that owes the reader a deterministic key (NFR-1), so the sort has
+    to happen HERE, at the write, not merely look sorted by accident because
+    every caller so far has passed it in order."""
+    write_metadata(
+        tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c", detect_notes=("b", "a")
+    )
+    written = json.loads((tmp_path / "metadata.json").read_text())
+    assert written["detect_notes"] == ["a", "b"]
+
+
 def test_metadata_names_every_type_expansion_could_not_open(tmp_path: Path):
     """The count says how much was expanded; only the names say what was not,
     and a count cannot be acted on (FR-17, the same rule as `uncovered`)."""

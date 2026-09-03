@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -105,33 +106,78 @@ class MavenDetector:
     prerequisite is a successful build, so the local cache already has the
     classpath.
 
-    Phase 1 detects a single module by reading its POM directly. Multi-module
-    discovery (walking <modules>) and classpath resolution via `mvn -o` land
-    when a fixture needs them; any future `mvn` invocation this detector
-    makes must pass `-o` unless `allow_resolve` is set.
+    A single-module POM is read directly. An aggregation-only POM (one
+    declaring `<modules>`, never a module in its own right — 2M design §2)
+    is walked recursively instead, each child read by the same
+    `_module_of` every leaf goes through, so a reactor child is detected
+    identically whether it was reached through the walk or handed to
+    `detect` on its own. Classpath resolution via `mvn -o` lands when a
+    fixture needs it; any future `mvn` invocation this detector makes must
+    pass `-o` unless `allow_resolve` is set.
     """
 
     def accepts(self, path: Path) -> bool:
         return (path / "pom.xml").is_file()
 
     def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
+        modules = self._walk(path, visited=())
+        return RepositoryModel(root=path, modules=modules, notes=self._notes(path))
+
+    def _walk(self, path: Path, visited: tuple[Path, ...]) -> tuple[ModuleModel, ...]:
+        """Every buildable module reachable from `path` (2M design §2): a leaf
+        POM (no `<modules>`) becomes one `ModuleModel`, exactly as `detect`
+        always read a single module; a POM declaring `<modules>` is
+        AGGREGATION-ONLY — it names no module of its own, only the children
+        named there, walked recursively so a reactor of reactors is read the
+        same way a flat one is.
+
+        `visited` is every aggregator directory already on this walk's own
+        path to `path`, checked before `path` is read again: a `<modules>`
+        entry that leads back to one of them is a cycle, refused loudly
+        (DR-6's own discipline — a cycle is not a shape this detector can
+        silently skip past) rather than walked forever.
+        """
+        resolved = path.resolve()
+        if resolved in visited:
+            chain = " -> ".join(str(step) for step in (*visited, resolved))
+            raise ValueError(f"pom.xml <modules> cycle: {chain}")
         pom = ElementTree.parse(path / "pom.xml").getroot()
+        modules_element = pom.find("m:modules", _POM_NS)
+        if modules_element is None:
+            return (self._module_of(path, pom),)
+        children: list[ModuleModel] = []
+        for module_element in modules_element.findall("m:module", _POM_NS):
+            if module_element.text is None:
+                continue
+            # `normpath`, not `resolve`: a `<module>` path collapses its own
+            # `..` segments lexically, the same way Maven itself reads one,
+            # without following symlinks or forcing every `ModuleModel.root`
+            # to absolute — `path` stays in whatever form the caller passed
+            # `detect` (2M Task 2 review: `fixtures/orders-service`, adopted
+            # by `../orders-service`, must report the identical root a
+            # direct `detect(FIXTURE)` call would).
+            child = Path(os.path.normpath(path / module_element.text.strip()))
+            children.extend(self._walk(child, (*visited, resolved)))
+        return tuple(children)
+
+    @staticmethod
+    def _module_of(path: Path, pom: ElementTree.Element) -> ModuleModel:
         # A reactor child inherits groupId and version from <parent> and may
         # omit its own elements entirely (Maven's inheritance rule) —
         # artifactId alone is never inherited. Reading the parent's value is
         # Maven convention data, not a guess.
-        group = self._text(pom, "groupId", inherited=True)
-        artifact = self._text(pom, "artifactId")
-        version = self._text(pom, "version", inherited=True)
-        source_roots = self._source_roots(path, pom)
+        group = MavenDetector._text(pom, "groupId", inherited=True)
+        artifact = MavenDetector._text(pom, "artifactId")
+        version = MavenDetector._text(pom, "version", inherited=True)
+        source_roots = MavenDetector._source_roots(path, pom)
         resources = path / "src" / "main" / "resources"
-        library_roots, libraries_not_resolved = self._library_roots(path, pom)
-        module = ModuleModel(
+        library_roots, libraries_not_resolved = MavenDetector._library_roots(path, pom)
+        return ModuleModel(
             module_id=f"{group}:{artifact}",
             coordinates=f"{group}/{artifact}",
             version=version,
             root=path,
-            kind=self._classify(path, pom),
+            kind=MavenDetector._classify(path, pom),
             # Observed, never asserted: a module records the languages
             # present (M02), and this detector is keyed by build system, so
             # it has no business naming one.
@@ -155,7 +201,6 @@ class MavenDetector:
             library_roots=library_roots,
             libraries_not_resolved=libraries_not_resolved,
         )
-        return RepositoryModel(root=path, modules=(module,), notes=self._notes(path))
 
     @staticmethod
     def _notes(path: Path) -> tuple[str, ...]:

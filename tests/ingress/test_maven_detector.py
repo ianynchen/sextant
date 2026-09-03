@@ -500,3 +500,74 @@ def test_a_malformed_config_stops_detection_rather_than_extracting_nothing(tmp_p
     (root / ".sextant.yml").write_text("extract_libaries: [com.example:stub]\n", encoding="utf-8")
     with pytest.raises(SextantConfigError):
         MavenDetector().detect(root)
+
+
+# --- Reactor discovery (2M Task 2) ---------------------------------------
+
+REACTOR = FIXTURE.parent / "orders-reactor"
+
+
+def test_the_reactor_walk_yields_every_leaf_module_in_declaration_order():
+    """`fixtures/orders-reactor/pom.xml` is aggregation-only (2M design §2):
+    it is never a module in its own right, only the two `<modules>` entries
+    it names — `orders-service`, adopted completely unchanged by a relative
+    `<module>` path, and `billing-lib`, a real reactor child declaring
+    `<parent>`. `library` is never returned from coordinates alone
+    (`_classify`), so the sibling with no service evidence is
+    `undetermined`, never guessed at."""
+    model = MavenDetector().detect(REACTOR)
+
+    assert [module.module_id for module in model.modules] == [
+        "com.acme:orders-service",
+        "com.acme:billing-lib",
+    ]
+    orders_service, billing_lib = model.modules
+    assert orders_service.root == FIXTURE
+    # No Dockerfile, no `<mainClass>`: same as `test_kind_is_undetermined_
+    # when_no_evidence_decides_it` already pins for this fixture detected
+    # alone — the reactor walk must not change what evidence `_classify`
+    # reads for a module it adopts unchanged.
+    assert orders_service.kind == "undetermined"
+    assert billing_lib.root == REACTOR / "billing-lib"
+    assert billing_lib.version == "1.0.0"
+    assert billing_lib.kind == "undetermined"
+
+
+def test_the_reactor_walk_reads_orders_service_exactly_as_detecting_it_alone_would():
+    """The whole point of adopting it by relative path rather than copying it:
+    detecting it through the reactor and detecting it directly read the SAME
+    `pom.xml`, so the two must agree on every field, not merely on the parts
+    this test happens to check."""
+    through_reactor = MavenDetector().detect(REACTOR).modules[0]
+    alone = MavenDetector().detect(FIXTURE).modules[0]
+    assert through_reactor == alone
+
+
+_AGGREGATOR_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.acme</groupId>
+  <artifactId>agg</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <modules>
+    <module>MODULE</module>
+  </modules>
+</project>
+"""
+
+
+def test_a_modules_cycle_is_refused_with_the_cycle_named(tmp_path: Path):
+    """Every other unreadable input in this codebase degrades to an honest
+    absence (DR-6); a cycle is not a shape a directory can honestly have, so
+    it is refused loudly, with the cycle itself in the message, rather than
+    walked forever."""
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (a / "pom.xml").write_text(_AGGREGATOR_POM.replace("MODULE", "../b"), encoding="utf-8")
+    (b / "pom.xml").write_text(_AGGREGATOR_POM.replace("MODULE", "../a"), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="cycle") as failure:
+        MavenDetector().detect(a)
+    assert str(a.resolve()) in str(failure.value)
+    assert str(b.resolve()) in str(failure.value)
