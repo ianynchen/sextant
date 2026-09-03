@@ -59,7 +59,11 @@ def test_tradewind_api_key_enriches_the_fixture_module_live(tmp_path: Path):
     shutil.copytree(
         FIXTURE,
         module_root,
-        ignore=shutil.ignore_patterns(".sextant", ENRICHMENT_FILE),
+        # `.tradewind` excluded for the same reason `.sextant`/the golden
+        # overlay are: a stale one inherited from a prior local run would
+        # make this test's own `store_path.is_file()` assertion below pass
+        # VACUOUSLY, against a file this run never wrote.
+        ignore=shutil.ignore_patterns(".sextant", ENRICHMENT_FILE, ".tradewind"),
     )
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=module_root, check=True)
 

@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 # `tradewind.adapters.langchain_backend` (and `tradewind` itself) is
 # import-confined to `sextant.agents.tradewind` everywhere in Sextant's OWN
@@ -38,8 +38,8 @@ from langchain_core.messages import AIMessage
 # chat_model_factory=...)").
 from tradewind.adapters.langchain_backend import LangchainBackend
 
-from sextant.agents.tradewind import TradewindAgent
-from sextant.application.enrich.tools import ToolExecutor
+from sextant.agents.tradewind import TradewindAgent, _NudgeGuard, _tool
+from sextant.application.enrich.tools import MAX_RESULT_BYTES, ToolDefinition, ToolExecutor
 from sextant.application.ports.enrichment import EnrichmentAgentError, EnrichmentBrief
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import Redactor
@@ -99,6 +99,21 @@ def _tool_call(name: str, args: dict[str, object], call_id: str = "t1") -> dict[
     return {"name": name, "args": args, "id": call_id}
 
 
+def _capturing_fake(responses: list[AIMessage], calls: list[list[object]]) -> _ToolFake:
+    """A `_ToolFake` that records the `messages` list every `.astream()`
+    call receives into `calls`, then delegates to the real fake behavior —
+    the seam request-content pins need, since the fake itself ignores its
+    input entirely (fix round 1, I1b)."""
+
+    class _Capturing(_ToolFake):
+        async def astream(self, input, **kwargs):
+            calls.append(list(input))
+            async for chunk in super().astream(input, **kwargs):
+                yield chunk
+
+    return _Capturing(responses=responses)
+
+
 def test_happy_path_runs_one_tool_round_then_returns_the_final_answer(tmp_path: Path):
     executor = _executor(tmp_path)
     scripted = _ToolFake(
@@ -119,6 +134,78 @@ def test_happy_path_runs_one_tool_round_then_returns_the_final_answer(tmp_path: 
     # persists that one list, not a copy the loop assembled itself.
     assert answers.transcript is not executor.transcript
     assert answers.transcript == executor.transcript
+
+
+def test_a_max_tokens_truncated_finish_is_marked_partial(tmp_path: Path):
+    """Fix round 1, I1a: this scenario moved from claude-api's own suite,
+    not died — a provider-truncated response (no tool request, `end_reason`
+    `"max_tokens"`) is a mid-object JSON fragment, marked partial rather
+    than accepted as a whole answer. Scriptable via `AIMessage.response_
+    metadata["stop_reason"]`, which `langchain_backend.py`'s own
+    `_stop_reason` reads off the gathered response."""
+    executor = _executor(tmp_path)
+    scripted = _ToolFake(
+        responses=[
+            AIMessage(
+                content='{"claims": [{"kind": "component", "na',
+                response_metadata={"stop_reason": "max_tokens"},
+            )
+        ]
+    )
+
+    answers = _agent(scripted).run(_brief(executor), executor)
+
+    assert answers.partial is True
+    assert answers.partial_reason == "stop:max_tokens"
+    assert answers.text == '{"claims": [{"kind": "component", "na'
+
+
+def test_the_system_prompt_and_user_message_reach_tradewind_as_the_brief_states(
+    tmp_path: Path,
+):
+    """Fix round 1, I1b: `brief.instructions` becomes the SYSTEM message,
+    `brief.prompt` the USER message — pinned by capturing the messages
+    `.astream()` actually receives, since `_ToolFake` otherwise ignores its
+    own input entirely and a scripted response alone cannot prove what was
+    SENT."""
+    executor = _executor(tmp_path)
+    calls: list[list[object]] = []
+    scripted = _capturing_fake([AIMessage(content="[]")], calls)
+    brief = _brief(executor)
+
+    _agent(scripted).run(brief, executor)
+
+    assert len(calls) == 1
+    messages = calls[0]
+    assert isinstance(messages[0], SystemMessage)
+    assert messages[0].content == brief.instructions
+    assert isinstance(messages[-1], HumanMessage)
+    assert messages[-1].content == brief.prompt
+
+
+def test_a_tool_definition_maps_to_a_tradewind_tool_with_input_schema_not_schema(
+    tmp_path: Path,
+):
+    """Fix round 1, I1c: `ToolDefinition(name, description, schema)` ->
+    `Tool(name, description, input_schema, handler)` — the field RENAME is
+    the one thing worth pinning directly (`_tool`'s only mapping decision);
+    the handler's own behavior is covered by every other test in this file
+    that actually runs a turn."""
+    executor = _executor(tmp_path)
+    definition = ToolDefinition(
+        name="find",
+        description="Search for files.",
+        schema={"type": "object", "properties": {"pattern": {"type": "string"}}},
+    )
+
+    tool = _tool(definition, executor, _NudgeGuard())
+
+    assert tool.name == "find"
+    assert tool.description == "Search for files."
+    assert tool.input_schema == {
+        "type": "object",
+        "properties": {"pattern": {"type": "string"}},
+    }
 
 
 def test_a_multi_call_turn_keeps_every_call_distinct_for_the_no_progress_guard(tmp_path: Path):
@@ -195,6 +282,46 @@ def test_nudged_then_capped_ends_with_no_progress_and_the_nudge_sentence_recorde
     # the fourth or fifth.
     assert not results[3].endswith(nudge)
     assert not results[4].endswith(nudge)
+
+
+def test_the_nudge_never_pushes_a_result_past_the_byte_cap(tmp_path: Path):
+    """Fix round 1, M1: `ToolExecutor.execute` already caps every result at
+    `MAX_RESULT_BYTES` (`_cap`, tools.py) — appending the nudge sentence
+    UNCONDITIONALLY to a result already sitting at that cap would let the
+    nudged entry exceed it by the nudge's own length, breaking the one
+    invariant every other tool result honors. The nudge itself must stay
+    intact (never truncated) and the persisted transcript must show exactly
+    what the model was handed."""
+    root = tmp_path / "root"
+    root.mkdir()
+    # A file large enough that `read_file`'s own result is capped at
+    # `MAX_RESULT_BYTES` before the guard ever sees it.
+    (root / "big.txt").write_text(
+        "\n".join(f"line {i} " + "x" * 80 for i in range(2000)), encoding="utf-8"
+    )
+    executor = ToolExecutor(
+        roots=(root,), redactor=Redactor.from_rules(), ignore=IgnoreRules.load(root)
+    )
+    call = _tool_call("read_file", {"path": "big.txt", "end": 2000}, call_id="same")
+    scripted = _ToolFake(responses=[AIMessage(content="", tool_calls=[call]) for _ in range(4)])
+    brief = EnrichmentBrief(
+        prompt="Describe.",
+        instructions="INSTR",
+        tool_definitions=tuple(executor.definitions()),
+        jailed_roots=(root,),
+    )
+
+    answers = _agent(scripted, max_turns=4).run(brief, executor)
+
+    assert answers.partial_reason == "no_progress"
+    third = executor.transcript[2]["result"]
+    assert len(third.encode("utf-8")) <= MAX_RESULT_BYTES
+    assert third.endswith("write your answers with what you have, or try a different call.")
+    # The un-nudged rounds either side of it are genuinely AT the cap —
+    # proof this scenario actually exercises the trim, not merely a result
+    # that was always short enough to fit either way.
+    assert len(executor.transcript[0]["result"].encode("utf-8")) == MAX_RESULT_BYTES
+    assert len(executor.transcript[1]["result"].encode("utf-8")) == MAX_RESULT_BYTES
 
 
 def test_the_no_progress_guards_key_building_never_raises_on_unserializable_args():
@@ -290,6 +417,22 @@ def test_max_turns_above_the_api_key_ceiling_is_refused_at_construction():
     TradewindAgent(auth="api-key", model="fake-model", max_turns=24)
 
 
+def test_a_negative_max_turns_is_refused_up_front_naming_the_flag():
+    """Fix round 1, M2: a negative `--max-turns` used to fail LATE, inside
+    Tradewind's own `TurnRunner` (`ConfigError`, wrapped into an unnamed
+    `EnrichmentAgentError`) without ever naming `--max-turns` — refused here
+    instead, at construction, the same way the ceiling is. `0` stays legal
+    on EITHER auth mode: Tradewind ends it honestly (one model response, no
+    tool execution permitted), not an error."""
+    with pytest.raises(ValueError, match="--max-turns must be >= 0"):
+        TradewindAgent(auth="api-key", model="fake-model", max_turns=-1)
+    with pytest.raises(ValueError, match="--max-turns must be >= 0"):
+        TradewindAgent(auth="subscription", model="fake-model", max_turns=-1)
+
+    TradewindAgent(auth="api-key", model="fake-model", max_turns=0)
+    TradewindAgent(auth="subscription", model="fake-model", max_turns=0)
+
+
 def test_the_api_key_ceiling_does_not_apply_to_subscription_auth():
     """The claude (subscription) backend has no equivalent hard ceiling —
     only `auth="api-key"` is checked."""
@@ -307,6 +450,18 @@ def test_api_key_store_lands_at_the_module_local_path(tmp_path: Path):
     # `TradewindConfig`'s sqlite store does not mkdir its own parent — the
     # adapter must (module docstring).
     assert path.parent.is_dir()
+
+
+def test_api_key_store_with_no_jailed_roots_is_a_named_failure_not_an_index_error():
+    """Fix round 1, M8: the one production caller (`cli/app.py`) never
+    builds a brief with no jailed roots, but a bare `IndexError: tuple
+    index out of range` would tell a caller nothing about WHAT went wrong —
+    named here instead, the same honesty every other refusal in this
+    adapter has."""
+    agent = TradewindAgent(auth="api-key", model="fake-model")
+
+    with pytest.raises(EnrichmentAgentError, match="no jailed roots"):
+        agent._store_path(())
 
 
 def test_subscription_auth_writes_no_store(tmp_path: Path):

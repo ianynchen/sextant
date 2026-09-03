@@ -12,7 +12,7 @@ from xml.etree.ElementTree import ParseError
 import click
 from pydantic import ValidationError
 
-from sextant.agents import AGENT_REGISTRY
+from sextant.agents import AGENT_REGISTRY, DEFAULT_MAX_TURNS
 from sextant.application.enrich.tools import ToolDefinition, ToolExecutor
 from sextant.application.enrich.validate import stale_claims
 from sextant.application.ports.detector import (
@@ -768,13 +768,13 @@ def module_enrich(
     # `is None`, never `or` (2K Task 7 fix round 1, minor): a flag's own
     # falsy-but-meaningful value — `--max-turns 0` above all — must reach
     # `TradewindAgent`'s own validation as what it is, not silently read as
-    # "no flag given" and fall through to a config default or 20.
+    # "no flag given" and fall through to a config default or DEFAULT_MAX_TURNS.
     agent_name = agent_flag if agent_flag is not None else defaults.agent
     model_name = model_flag if model_flag is not None else defaults.model
     max_turns = (
         max_turns_flag
         if max_turns_flag is not None
-        else (defaults.max_turns if defaults.max_turns is not None else 20)
+        else (defaults.max_turns if defaults.max_turns is not None else DEFAULT_MAX_TURNS)
     )
     auth_name = auth_flag if auth_flag is not None else defaults.auth
     # `session_store` has no CLI flag counterpart (2N design §1) — its only

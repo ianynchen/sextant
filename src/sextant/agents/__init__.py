@@ -37,12 +37,22 @@ from typing import Literal
 
 from sextant.application.ports.enrichment import EnrichmentAgent
 
+# The CLI's own `--max-turns` default (2N design §1 fix round 1, M6):
+# single-sited here rather than repeated as a literal at each of its three
+# consumers — `_tradewind_agent`'s own keyword default below,
+# `TradewindAgent.__init__`'s (imported lazily, but importing a constant
+# from THIS module costs nothing extra, since `cli/app.py` already imports
+# `sextant.agents` eagerly to reach `AGENT_REGISTRY`), and `cli/app.py`'s
+# own fallback when neither `--max-turns` nor `.sextant.yml enrich:
+# max_turns:` is given.
+DEFAULT_MAX_TURNS = 20
+
 
 def _tradewind_agent(
     *,
     auth: Literal["subscription", "api-key"],
     model: str,
-    max_turns: int = 20,
+    max_turns: int = DEFAULT_MAX_TURNS,
     session_store: Path | None = None,
 ) -> EnrichmentAgent:
     from sextant.agents.tradewind import TradewindAgent
@@ -54,13 +64,17 @@ def _tradewind_agent(
 # name refused with the known list"). `cli/app.py` (2K Task 7, the
 # composition root) is the one caller expected to use this — it validates
 # the requested name against these keys and calls the constructor with
-# whatever `--model`/`--max-turns`/`--auth` flags it collected.
+# whatever `--model`/`--max-turns`/`--auth` flags it collected, plus the
+# `session_store` its own `.sextant.yml enrich:` reading resolved (2N design
+# §1 fix round 1, M3) — every value `TradewindAgent.__init__` accepts, since
+# this registry has exactly one entry and `cli/app.py`'s one call site always
+# passes all four kwargs by name.
 #
 # `Callable[..., EnrichmentAgent]`, not `type[EnrichmentAgent]` (fix round
 # 1 micro-round 2, Important 1): under mypy strict, `type[Protocol]` only
 # exposes `object.__init__` on the value — a real constructor call like
-# `AGENT_REGISTRY["tradewind"](auth=..., model=..., max_turns=...)` (2K
-# Task 7's own dispatch) fails to type-check against it, even though
-# `_tradewind_agent` itself is a perfectly ordinary callable that returns
-# one.
+# `AGENT_REGISTRY["tradewind"](auth=..., model=..., max_turns=...,
+# session_store=...)` (2K Task 7's own dispatch) fails to type-check against
+# it, even though `_tradewind_agent` itself is a perfectly ordinary callable
+# that returns one.
 AGENT_REGISTRY: dict[str, Callable[..., EnrichmentAgent]] = {"tradewind": _tradewind_agent}

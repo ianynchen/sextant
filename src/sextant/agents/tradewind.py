@@ -92,6 +92,22 @@ own exclusions (`application/enrich/tools.py`'s `DERIVED_OUTPUT_DIRS`) so a
 model can never read its own prior conversation back — the identical
 feedback loop the enrichment overlay's own exclusion (2K Task 3) closes.
 
+Two caveats, accepted rather than closed (fix round 1, M4 — the two only
+reachable through an EXPLICIT `session_store` override, never the per-auth
+default this module computes on its own): a RELATIVE `session_store`
+resolves against the process's own current working directory, whatever
+that happens to be when `run` executes, not against the module root — the
+default path is always absolute (built from `jailed_roots[0]`), so this
+only bites a caller of `.sextant.yml enrich: session_store:` who writes a
+relative one. And an override that names a path OUTSIDE `.tradewind/` — or
+outside the module root entirely — sits outside the jail's exclusion (which
+only ever names the literal directory `.tradewind`), so the four tools
+could in principle list or read that file back: not a content leak (the
+mirror's own entries are already redacted on the way in, 2N design §1's
+"Everything in the mirror already passed the jail's redaction" ruling), but
+a real reader-back path this module does not close for a caller who
+deliberately points the override somewhere else.
+
 **`history_scope` is never passed.** Sextant's own usage never spawns
 subagents or forks, so Tradewind's `"tree"` scope has nothing to fold; an
 enrichment session is single-turn, so even `"flat"` would read nothing back;
@@ -131,7 +147,8 @@ from tradewind.domain.models import (
     TurnResult,
 )
 
-from sextant.application.enrich.tools import ToolDefinition, ToolExecutor
+from sextant.agents import DEFAULT_MAX_TURNS
+from sextant.application.enrich.tools import MAX_RESULT_BYTES, ToolDefinition, ToolExecutor
 from sextant.application.ports.enrichment import (
     EnrichmentAgentError,
     EnrichmentAnswers,
@@ -167,6 +184,23 @@ _NUDGE = (
 )
 
 
+def _cap_aware_nudge(result: str) -> str:
+    """`result` with `_NUDGE` appended, trimmed so the combined string still
+    fits `ToolExecutor`'s own `MAX_RESULT_BYTES` cap (fix round 1, M1).
+    `result` can already SIT at that cap — `ToolExecutor.execute`'s own
+    `_cap` already ran over it — so appending the nudge unconditionally let
+    a nudged entry exceed the cap by the nudge's own length, breaking the
+    one invariant every other tool result honors. The nudge is never the
+    part that gets cut: it is the one sentence a model that keeps repeating
+    must actually read, so `result` gives up whatever bytes it needs to.
+    Byte-safe the same way `_cap` is (`errors="ignore"` drops a partial
+    trailing multi-byte sequence rather than raising or emitting invalid
+    UTF-8); a no-op when `result` already fits."""
+    budget = max(0, MAX_RESULT_BYTES - len(_NUDGE.encode("utf-8")))
+    trimmed = result.encode("utf-8")[:budget].decode("utf-8", errors="ignore")
+    return trimmed + _NUDGE
+
+
 class _NudgeGuard:
     """Tracks every `(name, canonical-json args)` key this run's handlers
     have seen. `nudged` becomes `True` the moment any key is seen a third
@@ -181,13 +215,21 @@ class _NudgeGuard:
         # `default=repr` (claude-api's own precedent): this bookkeeping must
         # never be able to raise ahead of `ToolExecutor.execute`'s own
         # never-raises guarantee over an argument shape `json.dumps` cannot
-        # serialize on its own.
+        # serialize on its own. Accepted, as written (fix round 1, M5): two
+        # DIFFERENT unserializable args objects that happen to `repr()`
+        # identically would collide onto the same guard key — unreachable
+        # in practice, since every call this adapter's own tests or
+        # Tradewind's real langchain backend can produce arrives with
+        # JSON-plain args (str/int/float/bool/list/dict/None) that never
+        # reach the `default=repr` fallback at all; `repr` exists only so
+        # THIS bookkeeping cannot crash if that ever stopped being true, not
+        # because a real collision is expected.
         key = (name, json.dumps(args, sort_keys=True, default=repr))
         count = self._counts.get(key, 0) + 1
         self._counts[key] = count
         if count == 3:
             self.nudged = True
-            return result + _NUDGE
+            return _cap_aware_nudge(result)
         return result
 
 
@@ -195,9 +237,12 @@ class TradewindAgent:
     """`auth` selects the backend (module docstring); `model` is passed to
     Tradewind's `ModelSpec` verbatim — a bad name is the provider's own
     error, surfaced as `EnrichmentAgentError`. `max_turns` is Tradewind's
-    `max_tool_rounds` (default 20, matching the CLI's own default); refused
-    above 24 for `auth="api-key"` at construction (module docstring).
-    `session_store` overrides the per-auth default store path outright.
+    `max_tool_rounds` (default `DEFAULT_MAX_TURNS`, matching the CLI's own
+    default — single-sited in `sextant.agents`); refused below 0 naming the
+    flag, and above 24 for `auth="api-key"` at construction (module
+    docstring) — `0` itself stays legal, an honest single-response run with
+    no tool execution permitted. `session_store` overrides the per-auth
+    default store path outright.
 
     `backend_factories` (keyword-only) is a TEST-ONLY seam — Tradewind's own
     public injection point, forwarded verbatim (module docstring's "Testing
@@ -208,11 +253,20 @@ class TradewindAgent:
         self,
         auth: Literal["subscription", "api-key"],
         model: str,
-        max_turns: int = 20,
+        max_turns: int = DEFAULT_MAX_TURNS,
         session_store: Path | None = None,
         *,
         backend_factories: dict[BackendName, BackendFactory] | None = None,
     ) -> None:
+        if max_turns < 0:
+            # Named after the flag, not the parameter (fix round 1, M2): the
+            # one caller of this constructor is `cli/app.py`, and a bad
+            # value here is that flag written wrong, not a crash. `0` stays
+            # legal — Tradewind's own `max_tool_rounds=0` ends honestly
+            # (one model response, no tool execution permitted), so this
+            # only refuses what Tradewind itself would refuse late (a
+            # `ConfigError` from `TurnRunner`) — up front, naming the flag.
+            raise ValueError(f"--max-turns must be >= 0, got {max_turns}")
         if auth == "api-key" and max_turns > _API_KEY_MAX_TURNS_CEILING:
             raise ValueError(
                 f"--max-turns {max_turns} exceeds the api-key backend's own ceiling of "
@@ -265,6 +319,15 @@ class TradewindAgent:
         if self._session_store is not None:
             path = self._session_store
         elif self._auth == "api-key":
+            if not jailed_roots:
+                # A named failure (fix round 1, M8) — the one production
+                # caller (`cli/app.py`) never builds a brief with no jailed
+                # roots, but `IndexError: tuple index out of range` would
+                # tell a caller nothing about WHAT went wrong; this does.
+                raise EnrichmentAgentError(
+                    "tradewind: no jailed roots to derive the api-key session store's "
+                    "module-local path from — pass session_store explicitly"
+                )
             module_root = jailed_roots[0]
             path = module_root / _STORE_DIRNAME / _STORE_FILENAME
         else:

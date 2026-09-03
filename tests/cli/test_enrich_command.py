@@ -92,12 +92,15 @@ def compiled_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
     # scratch workspace, whose `workspace.duckdb` can predate the current
     # schema (`CREATE TABLE IF NOT EXISTS` never migrates an existing file);
     # `.sextant-enrichment.json` is the tracked GOLDEN overlay, and a test
-    # that inherited it would see one before `enrich` ever ran.
+    # that inherited it would see one before `enrich` ever ran; `.tradewind`
+    # is the api-key session store (2N design §1) — a stale one inherited
+    # from a prior local run would make a test asserting the store gets
+    # WRITTEN pass vacuously against a file that was already there.
     shutil.copytree(
         FIXTURE,
         root,
         dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns(".sextant", ENRICHMENT_FILE),
+        ignore=shutil.ignore_patterns(".sextant", ENRICHMENT_FILE, ".tradewind"),
     )
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=root, check=True)
     return root
@@ -550,3 +553,63 @@ def test_config_defaults_are_used_and_a_flag_overrides_them(
     overlay = json.loads((module_root / ENRICHMENT_FILE).read_text(encoding="utf-8"))
     assert overlay["produced_by"]["agent"] == "fake-config-default"
     assert overlay["produced_by"]["model"] == "flag-model"
+
+
+def test_config_auth_and_session_store_reach_the_agent_and_the_auth_flag_wins(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Fix round 1, I3: `.sextant.yml enrich: auth:`/`session_store:`
+    (2N design §1) reach the agent's own constructor kwargs the same way
+    `agent:`/`model:`/`max_turns:` already do — `--auth` (a real flag)
+    beats the config's `auth: api-key` the same way every other flag wins
+    over its default here, and `session_store` (config-only, no flag
+    counterpart) reaches the agent as a `Path` (cli/app.py's own
+    conversion), not the raw string `.sextant.yml` carries."""
+    _analyzed_and_rendered(module_root)
+    config_path = module_root / ".sextant.yml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8") + "enrich:\n"
+        "  agent: fake-config-auth\n"
+        "  model: default-model\n"
+        "  auth: api-key\n"
+        "  session_store: custom/sessions.sqlite\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def _constructor(**kwargs: object) -> FakeEnrichmentAgent:
+        captured.update(kwargs)
+        return FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
+
+    monkeypatch.setitem(AGENT_REGISTRY, "fake-config-auth", _constructor)
+
+    result = CliRunner().invoke(
+        cli,
+        ["module", "enrich", str(module_root), "--auth", "subscription"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "auth": "subscription",  # the flag, never the config's "api-key"
+        "model": "default-model",
+        "max_turns": 20,
+        "session_store": Path("custom/sessions.sqlite"),
+    }
+
+
+def test_no_agent_flag_defaults_to_tradewind_so_the_run_fails_at_model_not_agent(
+    module_root: Path,
+):
+    """Fix round 1, M7: `--agent` defaults to `tradewind` (2N design §1)
+    when neither the flag nor `.sextant.yml enrich: agent:` names one — a
+    bare `enrich` with no flags at all fails on the NEXT missing
+    requirement (`--model`), never on an unset `--agent`, which is the only
+    way to prove the default actually applies rather than merely being
+    documented."""
+    _analyzed_and_rendered(module_root)
+
+    result = CliRunner().invoke(cli, ["module", "enrich", str(module_root)])
+
+    assert result.exit_code != 0
+    assert "--model is required" in result.output
+    assert "--agent is required" not in result.output
