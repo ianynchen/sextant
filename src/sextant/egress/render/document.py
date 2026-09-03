@@ -20,6 +20,7 @@ byte-identical to what this renderer produced before any of this existed.
 """
 
 import json
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -40,7 +41,7 @@ from sextant.domain.enrichment import (
     open_question_identity,
 )
 from sextant.domain.redaction import Redactor
-from sextant.domain.symbols import bare_descriptor, method_name, owner_of
+from sextant.domain.symbols import bare_descriptor, method_name, owner_of, without_type_marker
 from sextant.egress.render.diagrams import class_diagram
 from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
 
@@ -549,16 +550,30 @@ def _handler_cell(endpoint: dict[str, object]) -> tuple[Run, ...]:
 
 def _handler_identity(endpoint: dict[str, object]) -> tuple[Run, ...]:
     """The full identity that used to be the Handler column's whole content —
-    package path, `sig_` hash and all — now the FIRST line of the endpoint's
-    own detail block (2M design §5c): moved, not deleted, and still the one
-    place two same-named overloads read as the two different methods they
-    are. Where there is no symbol, the same fallback text the column itself
-    would have shown stands in — there is nothing to move for a row that had
-    no symbol to begin with."""
+    package path, `sig_` hash and all — now the SYMBOL half of the endpoint's
+    own detail header (`_detail_header`, fix round 1 MEDIUM 1): moved, not
+    deleted, and still the one place two same-named overloads read as the
+    two different methods they are. Where there is no symbol, the same
+    fallback text the column itself would have shown stands in — there is
+    nothing to move for a row that had no symbol to begin with."""
     symbol = _handler_symbol(endpoint)
     if symbol is not None:
         return _code(symbol)
     return _text(_handler_fallback(endpoint))
+
+
+def _detail_header(identity: str, symbol_or_fallback: tuple[Run, ...]) -> DetailEntry:
+    """A detail block's own header line: the wire identity, then the full
+    symbol (or its fallback text) that used to be a table column's whole
+    content, joined by ` — ` — ONE convention regardless of direction (fix
+    round 1, MEDIUM 1: a two-conventions split, where an inbound header
+    carried the symbol alone and an outbound one carried the identity alone,
+    left three handler-less rows reading the indistinguishable `- unresolved`
+    three times over, naming no endpoint at all). The identity says WHICH
+    endpoint the block documents; the symbol is what moved out of the table.
+    `entries[0]` stays a bare title — no body or table — matching every
+    other detail header."""
+    return DetailEntry(_code(identity) + _text(" — ") + symbol_or_fallback, None, None)
 
 
 _MEDIA_NONE_RECORDED = "—"  # em dash — never a bare blank cell.
@@ -797,12 +812,18 @@ def assemble_module_document(
 
     sections.append(MachineHeading(2, "Inbound endpoints"))
     inbound = [e for e in report.endpoints if str(e["direction"]) in ("inbound", "both")]
-    # Shapes cited by a NAMED descriptor below, keyed by shape id in
-    # FIRST-SEEN order (`_named_shape_reference` mutates this in place) — read
-    # back once every inbound endpoint has been visited, to build `### Shapes`
-    # exactly once per shape rather than once per citation (2M design §5c).
-    named_shapes: dict[str, MachineTable] = {}
     if inbound:
+        # Two passes (fix round 1, MEDIUM 2): a citation needs the shape's
+        # FINAL display name, and two different shapes sharing one simple
+        # name can only be told apart once every shape this section will
+        # cite is already known — a citation built inline, endpoint by
+        # endpoint, could not yet know a same-named collision two endpoints
+        # later was coming. `_cited_named_shapes` is pass one, over ALL of
+        # `inbound`; `shape_names` is the disambiguated registry both the
+        # per-endpoint citations and `### Shapes` itself read from pass two.
+        cited_shapes = _cited_named_shapes(inbound, fields_by_shape)
+        shape_names = _disambiguated_shape_names(cited_shapes)
+
         headers = ("Endpoint", "Handler", "Media", "Format", "Resolution")
         rows = []
         for endpoint in inbound:
@@ -826,25 +847,26 @@ def assemble_module_document(
         # identity between them.
         for endpoint in inbound:
             request = _descriptor_entry(
-                "Request", endpoint.get("request_shape"), fields_by_shape, named_shapes
+                "Request", endpoint.get("request_shape"), fields_by_shape, shape_names
             )
             response = _descriptor_entry(
-                "Response", endpoint.get("response_shape"), fields_by_shape, named_shapes
+                "Response", endpoint.get("response_shape"), fields_by_shape, shape_names
             )
             via = _via_entry(endpoint, origin_by_symbol)
             entries = [entry for entry in (via, request, response) if entry is not None]
-            header = DetailEntry(_handler_identity(endpoint), None, None)
+            identity = _wire_identity(endpoint, redactor)
+            header = _detail_header(identity, _handler_identity(endpoint))
             sections.append(MachineDetail((header, *entries)))
             if via is not None:
-                attributed.add(_wire_identity(endpoint, redactor))
-        if named_shapes:
+                attributed.add(identity)
+        if cited_shapes:
             sections.append(MachineHeading(3, "Shapes"))
-            for shape_id, table in named_shapes.items():
-                name = simple_name(shape_id)
+            for shape_id, shape_rows in cited_shapes.items():
+                name = shape_names[shape_id]
                 shape_header = DetailEntry(_code(name), None, None)
-                fields_entry = DetailEntry(_text("Fields"), None, table)
+                fields_entry = DetailEntry(_text("Fields"), None, _shape_fields_table(shape_rows))
                 sections.append(
-                    MachineDetail((shape_header, fields_entry), anchor=_shape_anchor_id(shape_id))
+                    MachineDetail((shape_header, fields_entry), anchor=_shape_anchor_id(name))
                 )
     else:
         sections.append(MachineParagraph(_runs("None found.")))
@@ -881,7 +903,13 @@ def assemble_module_document(
             identity = _wire_identity(endpoint, redactor)
             via = None if identity in attributed else _via_entry(endpoint, origin_by_symbol)
             if via is not None:
-                header = DetailEntry(_code(identity), None, None)
+                # One convention with inbound (fix round 1, MEDIUM 1): the
+                # identity, then the caller's own full symbol — the same
+                # unshortened form the Caller column already carries (2M
+                # §5c never touches that column, only the inbound Handler
+                # one), not a second spelling invented for this line alone.
+                caller_symbol = _code(bare_descriptor(str(endpoint["caller"])))
+                header = _detail_header(identity, caller_symbol)
                 sections.append(MachineDetail((header, via)))
                 attributed.add(identity)
     else:
@@ -1131,62 +1159,121 @@ def _shape_fields_table(rows: Sequence[dict[str, object]]) -> MachineTable:
     return MachineTable(_SHAPE_FIELD_HEADERS, tuple(table_rows))
 
 
-def _shape_anchor_id(shape_id_or_name: str) -> str:
-    """The in-page HTML anchor a named shape's `### Shapes` entry is
-    addressed by, derived from its DISPLAY name (`simple_name`) — idempotent
-    over an already-simple name, so `document.py` (which has the full shape
-    id on hand while assembling) and `html.py` (which only ever sees the
-    already-shortened name a `shaperef` run carries) compute the exact same
-    string without either re-deriving the other's input. A document with two
-    same-named shapes from different packages already draws them as one node
-    in `## Structure`'s class diagram (`diagrams.class_diagram`'s own
-    `simple_name` use); a second point of that same collision here is not a
-    new limitation this task introduces."""
-    return f"shape-{simple_name(shape_id_or_name)}"
+_ANCHOR_UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
 
 
-def _named_shape_reference(
-    shape_id: str,
+def _shape_anchor_id(display_name: str) -> str:
+    """The in-page HTML `id` a `### Shapes` entry's header carries, and a
+    `shaperef` run's `<a href="#...">` targets — both built from the SAME
+    already-FINAL display name (`_disambiguated_shape_names`), never
+    re-derived independently at each end, so the two can never name two
+    different anchors for one shape (2M design §5c) or, the mirror mistake,
+    the same anchor for two different ones (fix round 1, MEDIUM 2). Every
+    character an HTML id cannot safely carry — a QName's `{`/`}`, a
+    disambiguated fallback's own `/` — is replaced with `-`, since a display
+    name is no longer always a bare SCIP simple name once `#5c`'s per-shape
+    disambiguation can fall back to something closer to the raw id."""
+    return f"shape-{_ANCHOR_UNSAFE.sub('-', display_name)}"
+
+
+def _shape_display_name(shape_id: str) -> str:
+    """One shape id's own display name, honestly — never blindly
+    `simple_name`, which reads the last `/`-segment and assumes every shape
+    id is a SCIP symbol. A SOAP element's shape id is a QName wire identity,
+    `{uri}local` (D00 §4's own verbless-protocol shape), and the URI's own
+    path segments make `simple_name` land mid-URI —
+    `{http://orders.example.com/ws}quoteOrderRequest` reads back as
+    `ws}quoteOrderRequest`, not `quoteOrderRequest` (fix round 1, LOW
+    finding). A QName's own grammar says a local part is whatever follows
+    the LAST `}`; an ordinary package-path shape id has none, and keeps
+    `simple_name`'s existing convention exactly. `domain.symbols.simple_name`
+    itself is untouched — this is local to the two `### Shapes` call sites
+    that are the first to ever display a shape id that might not be SCIP at
+    all."""
+    if "}" in shape_id:
+        return shape_id.rsplit("}", 1)[-1]
+    return simple_name(shape_id)
+
+
+def _disambiguated_shape_names(cited_shapes: dict[str, list[dict[str, object]]]) -> dict[str, str]:
+    """Every cited shape id's FINAL display name: `_shape_display_name`
+    ordinarily, or — within a group of shape ids whose OWN display names
+    collide — the shape id itself (trailing `#` stripped, otherwise
+    verbatim) for every member of that group (fix round 1, MEDIUM 2). Two
+    shapes reading as the same name is not a cosmetic near-miss: their
+    `### Shapes` entries become indistinguishable and their citations'
+    anchors collide (an invalid, duplicate HTML `id`, and a link that can no
+    longer promise which table it lands on) — so a collision falls all the
+    way back to something already guaranteed unique, the very key this dict
+    (and `cited_shapes`) is built on, rather than a half-measure that only
+    postpones the next collision."""
+    by_display: dict[str, list[str]] = {}
+    for shape_id in cited_shapes:
+        by_display.setdefault(_shape_display_name(shape_id), []).append(shape_id)
+    names: dict[str, str] = {}
+    for display, colliding in by_display.items():
+        if len(colliding) == 1:
+            names[colliding[0]] = display
+        else:
+            for shape_id in colliding:
+                names[shape_id] = without_type_marker(shape_id)
+    return names
+
+
+def _cited_named_shapes(
+    endpoints: Sequence[dict[str, object]],
     fields_by_shape: dict[str, list[dict[str, object]]],
-    shapes: dict[str, MachineTable],
-) -> tuple[Run, ...]:
-    """One endpoint's citation of a NAMED shape (a descriptor carrying a
-    `shape_id`) — `_shape_ref`'s runs where the shape has recorded fields,
-    registering the shape's table into `shapes` (keyed by id, in FIRST-SEEN
-    order) the one time it is first cited so `### Shapes` can emit it exactly
-    once afterward; plain fallback text for an empty shape, which registers
-    nothing (2M design §5c: no header-only table anywhere, including under
-    `### Shapes`)."""
-    rows = fields_by_shape.get(shape_id, [])
-    if not rows:
-        return _text(_SHAPE_NONE_RECORDED)
-    if shape_id not in shapes:
-        shapes[shape_id] = _shape_fields_table(rows)
-    return _shape_ref(simple_name(shape_id))
+) -> dict[str, list[dict[str, object]]]:
+    """Every NAMED shape (a `request_shape`/`response_shape` descriptor
+    carrying a `shape_id`) with recorded fields, cited by at least one of
+    `endpoints`, keyed by shape id in FIRST-SEEN order — pass ONE of the two
+    `### Shapes` needs (fix round 1, MEDIUM 2's own reasoning): the full set
+    of cited shapes must be known before ANY citation can pick a (possibly
+    disambiguated) display name, so nothing here builds an entry yet. An
+    empty-fields shape (`Response: none recorded`, NFR-7) is deliberately
+    excluded: nothing about it is ever named or linked."""
+    cited: dict[str, list[dict[str, object]]] = {}
+    for endpoint in endpoints:
+        for key in ("request_shape", "response_shape"):
+            descriptor_json = endpoint.get(key)
+            if descriptor_json is None:
+                continue
+            shape_id = json.loads(str(descriptor_json)).get("shape_id")
+            if not shape_id:
+                continue
+            shape_id = str(shape_id)
+            rows = fields_by_shape.get(shape_id, [])
+            if rows and shape_id not in cited:
+                cited[shape_id] = rows
+    return cited
 
 
 def _descriptor_entry(
     label: str,
     descriptor_json: object,
     fields_by_shape: dict[str, list[dict[str, object]]],
-    shapes: dict[str, MachineTable],
+    shape_names: dict[str, str],
 ) -> DetailEntry | None:
     """One endpoint's request or response, nested under its detail block's
-    header entry: a citation of the shape's own `### Shapes` entry when the
-    payload is itself a NAMED shape (`_named_shape_reference`), or an inline
-    label when it is a scalar or a collection of one (anonymous — nothing to
-    tabulate, so nothing to name or move). `None` (no descriptor) contributes
-    nothing. `shapes` is mutated in place — the caller reads it back once
-    every endpoint has been visited, to build `### Shapes` itself."""
+    header entry: a citation of the shape's own `### Shapes` entry (by its
+    FINAL, already-disambiguated `shape_names` entry) when the payload is
+    itself a NAMED shape with recorded fields, the `Response: none recorded`
+    one-liner for a shape with none (NFR-7), or an inline label when it is a
+    scalar or a collection of one (anonymous — nothing to tabulate, so
+    nothing to name or move). `None` (no descriptor) contributes nothing.
+    `shape_names` is READ ONLY here — pass two of the two `### Shapes` needs,
+    over the registry `_cited_named_shapes`/`_disambiguated_shape_names`
+    already finished building from every inbound endpoint at once."""
     if descriptor_json is None:
         return None
     descriptor = json.loads(str(descriptor_json))
     shape_id = descriptor.get("shape_id")
     if not shape_id:
         return DetailEntry(_text(label), _text(_inline_descriptor(descriptor)), None)
-    return DetailEntry(
-        _text(label), _named_shape_reference(str(shape_id), fields_by_shape, shapes), None
-    )
+    shape_id = str(shape_id)
+    if not fields_by_shape.get(shape_id):
+        return DetailEntry(_text(label), _text(_SHAPE_NONE_RECORDED), None)
+    return DetailEntry(_text(label), _shape_ref(shape_names[shape_id]), None)
 
 
 @dataclass(frozen=True)
@@ -1336,33 +1423,67 @@ def markdown_document(sections: AssembledDocument) -> str:
     no overlay the bytes are the ones this renderer produced before any of 2K
     existed, which is what the golden document pins.
 
-    An enrichment block is separated from whatever surrounds it by exactly one
-    blank line — required, not cosmetic: a markdown blockquote followed
-    immediately by a list item swallows that item as a lazy continuation, so
-    the claim would eat the next open question. Where the neighbouring machine
-    lines already begin or end with a blank of their own, none is added, so an
-    overlay adds no blank lines it does not need.
+    **Exactly one blank line between ANY two adjacent sections whose own
+    lines do not already touch one** (fix round 1, HIGH — generalized past
+    2K's own enrichment-only rule below, which is now this rule's special
+    case rather than a second one living beside it). Required, not cosmetic,
+    for two different reasons that both land on the same fix: an enrichment
+    blockquote followed immediately by a list item swallows that item as a
+    lazy continuation, so a claim would eat the next open question; and a
+    plain paragraph landing immediately under a pipe table with no blank
+    line between them is read by GFM as one more row of the table itself —
+    four empty cells a reader never wrote (the media legend under the
+    inbound endpoint table is exactly this, since a `MachineTable` and the
+    `MachineParagraph` after it were the first two adjacent sections in this
+    document that both actually need a separator neither already supplies).
+    Where the neighbouring lines already begin or end with a blank of their
+    own — a heading's own leading blank, `### Shapes` right before its first
+    entry — none is added, so this never doubles what a section already
+    provides for itself.
+
+    **One deliberate exception: two adjacent `MachineList` sections stay
+    tight, no blank forced between them.** `## Open questions` builds ONE
+    single-item `MachineList` per question (`_Anchors`'s own docstring: a
+    `beside-open-question` claim has to land right after THIS question and
+    no other, which is only possible if each question owns its own section
+    index) — several of those, with no claim landing between any two of
+    them, are meant to read as ONE continuous bulleted list, the same way
+    `## Coverage`'s bullets do from inside a single `MachineList`. The
+    general rule would otherwise read consecutive questions as two
+    paragraphs' worth of unrelated bullets rather than one list.
     """
     lines: list[str] = []
     for index, section in enumerate(sections):
-        if not isinstance(section, EnrichmentSection | StaleNoticeSection):
+        if isinstance(section, EnrichmentSection | StaleNoticeSection):
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines += _enrichment_lines(section)
+        else:
             lines += _machine_lines(section, is_first=index == 0) or ()
-            continue
-        if lines and lines[-1] != "":
-            lines.append("")
-        lines += _enrichment_lines(section)
         following = sections[index + 1] if index + 1 < len(sections) else None
-        # `following_lines` can be empty only for a machine section carrying
-        # none, which assembly does not build — guarded anyway, because
-        # indexing a serializer's input on the assumption that a producer
-        # never yields an empty one is a crash waiting for the day it does.
-        # `following` is never the document's own first section (something
-        # always precedes an enrichment block), so `is_first` is left at its
-        # default here.
-        following_lines = () if following is None else (_machine_lines(following) or ())
-        if following_lines and following_lines[0] != "":
+        following_lines = () if following is None else _opening_lines(following)
+        both_lists = isinstance(section, MachineList) and isinstance(following, MachineList)
+        if (
+            not both_lists
+            and lines
+            and lines[-1] != ""
+            and following_lines
+            and following_lines[0] != ""
+        ):
             lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def _opening_lines(section: Section) -> Sequence[str]:
+    """The lines `section` would render as, machine or enrichment alike —
+    used ONLY to peek at whether the NEXT section already opens on a blank
+    line of its own, from `markdown_document`'s blank-line rule above. Each
+    section still renders through its own branch when its own turn comes;
+    this never decides what gets written, only whether a separator is still
+    needed before it."""
+    if isinstance(section, EnrichmentSection | StaleNoticeSection):
+        return _enrichment_lines(section)
+    return _machine_lines(section) or ()
 
 
 def _machine_lines(section: Section, is_first: bool = False) -> tuple[str, ...] | None:
@@ -1407,13 +1528,19 @@ def _table_lines(table: MachineTable, indent: str = "") -> tuple[str, ...]:
 
 
 def _detail_lines(detail: MachineDetail) -> tuple[str, ...]:
-    """One `MachineDetail` as the two-level markdown list it always was: a
-    leading blank line (every detail block in the document follows either an
-    endpoint table or another detail block, never opens one), the header
-    entry (`entries[0]`) as the unindented bullet, and every entry after it
-    nested one level, either as an inline `label: body` or as a `label:`
-    followed by its table indented four spaces."""
-    lines: list[str] = [""]
+    """One `MachineDetail` as the two-level markdown list it always was: the
+    header entry (`entries[0]`) as the unindented bullet, then every entry
+    after it nested one level, either as an inline `label: body` or as a
+    `label:` followed by its table indented four spaces.
+
+    No leading blank line of its own (fix round 1, HIGH): `markdown_document`
+    now guarantees exactly one between this block and whatever precedes it —
+    an endpoint table, the media legend, another detail block, a heading —
+    so a leading blank hardcoded here on top of that would double up
+    whenever the block right before this one ALSO ends on non-blank content
+    that the shared rule would already have separated (this is what fixed
+    the double blank line between `### Shapes` and its first entry)."""
+    lines: list[str] = []
     for index, entry in enumerate(detail.entries):
         prefix = "-" if index == 0 else "  -"
         title = _runs_to_markdown(entry.title)

@@ -101,8 +101,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # catalog's method name — now lives in the endpoint's own detail block,
     # every endpoint's own row in the document below the table.
     assert "`pubsub raw-notify` | `RawPubSubReceiver#receiveMessage`" in document
+    # The detail header carries both the wire identity and the full symbol
+    # (fix round 1, MEDIUM 1) — one convention regardless of direction.
     assert (
-        "- `com/acme/orders/messaging/raw/RawPubSubReceiver#receiveMessage(sig_bb1c3cf6).`"
+        "- `pubsub raw-notify` — "
+        "`com/acme/orders/messaging/raw/RawPubSubReceiver#receiveMessage(sig_bb1c3cf6).`"
     ) in document
     # 2F Task 9: the coverage section names environments resolved, every
     # unresolved `resolved_config` key with its reason and environment (the
@@ -764,15 +767,19 @@ def test_a_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
     names no code, which is an absence rather than a failed read — and the
     response the reader gets is the schema's own type, by its schema name.
 
-    2M design §5c: the row's own detail block now heads with the same
-    `none recorded` fallback the Handler column shows — there is no full
-    symbol to move for a row with no handler."""
+    2M design §5c: the row's own detail block names the endpoint by its wire
+    identity and then reads the same `none recorded` fallback the Handler
+    column shows — there is no full symbol to move for a row with no
+    handler (fix round 1, MEDIUM 1: the identity stays in the header even
+    where there is no symbol to append after it)."""
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     _run(tmp_path)  # analyze + render + export
     document = (tmp_path / "render" / "architecture.md").read_text()
 
     assert "| `graphql query auditTrail` | none recorded | — → — | json | resolved |" in document
-    assert "- none recorded\n  - Response: array of object AuditEntry" in document
+    assert (
+        "- `graphql query auditTrail` — none recorded\n  - Response: array of object AuditEntry"
+    ) in document
 
 
 def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_full_analyze(
@@ -1004,18 +1011,21 @@ def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(tmp_path: P
     # `### Shapes`, and the endpoint's own entry names it instead of
     # repeating it — the boundary this docstring describes (no Response
     # section) is visible in the per-endpoint reference below, not in a
-    # nested table any more.
+    # nested table any more. The header carries the wire identity too (fix
+    # round 1, MEDIUM 1) — one convention regardless of direction.
     #
-    # `simple_name`'s slash-splitting display convention (already the class
-    # diagram's own naming rule) reads a QName shape id's LAST path segment,
-    # which for this WSDL element's `{uri}local` spelling lands mid-URI —
-    # `ws}quoteOrderRequest`, not `quoteOrderRequest`. A pre-existing quirk
-    # of that shared convention for a non-SCIP shape id, not something this
-    # task's rulings introduce or are scoped to fix; pinned as it actually
-    # renders.
-    assert "- none recorded\n  - Request: ws}quoteOrderRequest" in document
+    # `_shape_display_name` (fix round 1, LOW) reads a QName shape id — this
+    # WSDL element's own `{uri}local` wire identity — by its own grammar
+    # (whatever follows the LAST `}`), not `simple_name`'s slash-splitting
+    # convention (still used, unchanged, by the class diagram's own node
+    # names, which is why `## Structure` still draws this same shape as
+    # `ws}quoteOrderRequest` — out of this task's scope, a background task
+    # owns that fix). The `### Shapes` subsection and this citation both
+    # read the honest `quoteOrderRequest` instead.
+    identity = "- `soap {http://orders.example.com/ws}quoteOrderRequest` — none recorded"
+    assert f"{identity}\n  - Request: quoteOrderRequest" in document
     assert (
-        "- `ws}quoteOrderRequest`\n"
+        "- `quoteOrderRequest`\n"
         "  - Fields:\n"
         "\n"
         "    | Field | Type | Required | Nullable |\n"
@@ -1028,8 +1038,7 @@ def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(tmp_path: P
     # No Response reference at all: 2I Task 3 marks INPUT elements only, so
     # nothing coalesces a response here.
     assert (
-        "- Response:"
-        not in document.split("- none recorded\n  - Request:", 1)[1].split("\n\n", 1)[0]
+        "- Response:" not in document.split(f"{identity}\n  - Request:", 1)[1].split("\n\n", 1)[0]
     )
     # 2I Task 5: the merged row appears in BOTH sections, and the outbound
     # one carries the configuration expression as its peer — the address a

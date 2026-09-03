@@ -892,16 +892,15 @@ def test_an_attribution_is_stated_once_per_identity_not_once_per_section():
     table must not be written again under the outbound one. The same finding
     twice reads as two.
 
-    The detail block's own header no longer carries the wire identity (2M
-    design §5c moved that line's content to the handler's full symbol, or —
-    as here, with no handler — its fallback text), so the dedup is checked
-    against the attribution line itself rather than the header bullet that
-    used to carry the identity."""
+    The detail block's own header still carries the wire identity (fix
+    round 1, MEDIUM 1 restores it beside the full symbol — or, as here with
+    no handler, beside the fallback text), so the header bullet itself is
+    once again the thing to check for dedup, the same way it always was."""
     row = {**_LIBRARY_ROW, "direction": "both", "handler": None, "caller": _LIBRARY_CALLER}
     text = render_module_document(
         MODULE, _report_with(row), "a3f91c", library_symbols=_LIBRARY_SYMBOLS
     )
-    assert text.count("Via: `com.example:orders-soap-client`") == 1
+    assert text.count("- `soap {http://billing.example.com/ws}stubCharge` — unresolved") == 1
 
 
 def test_a_library_that_could_not_be_scanned_is_named_beside_one_that_did_not_resolve():

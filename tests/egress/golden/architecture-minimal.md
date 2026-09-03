@@ -27,9 +27,10 @@ classDiagram
 | Endpoint | Handler | Media | Format | Resolution |
 |---|---|---|---|---|
 | `GET /v1/orders` | `Api#list` | — → application/json | json | resolved |
+
 Media reads `consumes → produces`; `—` means none recorded.
 
-- `com/example/golden/Api#list().`
+- `GET /v1/orders` — `com/example/golden/Api#list().`
 
 ## Outbound endpoints
 

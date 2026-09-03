@@ -27,6 +27,8 @@ from sextant.egress.render.document import (
     DetailEntry,
     EnrichmentSection,
     MachineDiagram,
+    MachineList,
+    MachineParagraph,
     MachineSection,
     MachineTable,
     StaleNoticeSection,
@@ -35,6 +37,7 @@ from sextant.egress.render.document import (
     _interleave,
     _runs,
     _runs_to_markdown,
+    _shape_display_name,
     _text,
     assemble_module_document,
     markdown_document,
@@ -189,6 +192,55 @@ def test_several_stray_backticks_still_round_trip():
     assert _runs_to_markdown(_runs("a`b`c`d")) == "a`b`c`d"
     assert _runs("a`b`c`d") == (("text", "a"), ("code", "b"), ("text", "c`d"))
     assert _runs_to_markdown(_runs("`")) == "`"
+
+
+# --- blank-line separation between adjacent sections (fix round 1, HIGH) --
+
+
+def test_a_table_directly_followed_by_a_paragraph_gets_a_blank_line():
+    """The exact mechanism behind the media-legend fix, isolated from the
+    whole assembly pipeline: a `MachineTable` with NOTHING of its own that
+    would separate it from what comes next, followed by a bare
+    `MachineParagraph`, must not let the paragraph land as a ghost row of
+    the table in GFM (verified against cmark-gfm) — ZERO blank lines
+    between them is exactly the broken shape this pins against."""
+    table = MachineTable(("A",), ((_text("1"),),))
+    paragraph = MachineParagraph(_text("a caption"))
+    text = markdown_document((table, paragraph))
+    assert "| 1 |\n\na caption\n" in text
+    assert "| 1 |\na caption" not in text
+
+
+def test_two_adjacent_machine_lists_stay_one_continuous_list():
+    """The one deliberate exception the general rule carves out: `## Open
+    questions` builds one single-item `MachineList` per question so a
+    `beside-open-question` claim can anchor on any one of them, and several
+    with no claim between them must still read as ONE bulleted list, not as
+    two paragraphs' worth of bullets with a blank line splitting them."""
+    first = MachineList((_text("first question"),))
+    second = MachineList((_text("second question"),))
+    text = markdown_document((first, second))
+    assert text == "- first question\n- second question\n"
+
+
+# --- shape display names (fix round 1, LOW and MEDIUM 2) -------------------
+
+
+def test_shape_display_name_reads_a_qnames_local_part_not_a_url_path_segment():
+    """LOW finding: `simple_name` assumes a SCIP symbol's slash-delimited
+    package path; a SOAP element's shape id is a QName wire identity instead
+    (`{uri}local`, D00 §4), and its own URI happens to contain real `/`
+    characters — `simple_name` reads the LAST one and lands mid-URI
+    (`{http://orders.example.com/ws}quoteOrderRequest` becomes
+    `ws}quoteOrderRequest`, not `quoteOrderRequest`). `_shape_display_name`
+    reads a QName by its own grammar — whatever follows the LAST `}` — and
+    keeps `simple_name`'s existing convention for every ordinary
+    package-path shape id, unchanged."""
+    assert (
+        _shape_display_name("{http://orders.example.com/ws}quoteOrderRequest")
+        == "quoteOrderRequest"
+    )
+    assert _shape_display_name("com/example/golden/OrderView#") == "OrderView"
 
 
 # --- the regression pin ---------------------------------------------------

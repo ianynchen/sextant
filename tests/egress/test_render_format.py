@@ -133,14 +133,18 @@ def test_every_inbound_endpoint_carries_the_full_symbol_in_its_own_detail_block(
     """Moved, not deleted: the full symbol the Handler column no longer
     spells out lives in the endpoint's own detail block instead, and EVERY
     inbound endpoint gets one now — not only the ones with a `Via`/
-    `Request`/`Response` line to hang under it (adversarial review C3)."""
+    `Request`/`Response` line to hang under it (adversarial review C3).
+
+    The header carries BOTH the wire identity and the full symbol (fix
+    round 1, MEDIUM 1): the identity alone could not otherwise distinguish
+    which endpoint a handler-less block belongs to."""
     report = ResolveReport(
         facts_loaded=1,
         endpoints=[_endpoint()],
         coverage={"documents": 1, "partial_documents": 0},
     )
     text = render_module_document(MODULE, report, "a3f91c")
-    assert "- `com/acme/C#list().`" in text
+    assert "- `GET /v1/orders` — `com/acme/C#list().`" in text
 
 
 def test_two_overloads_sharing_a_short_spelling_stay_distinguishable_in_their_details():
@@ -166,14 +170,15 @@ def test_two_overloads_sharing_a_short_spelling_stay_distinguishable_in_their_de
     )
     text = render_module_document(MODULE, report, "a3f91c")
     assert text.count("| `C#save` |") == 2
-    assert "- `com/acme/C#save(sig_1111aaaa).`" in text
-    assert "- `com/acme/C#save(sig_2222bbbb).`" in text
+    assert "- `GET /v1/orders` — `com/acme/C#save(sig_1111aaaa).`" in text
+    assert "- `PUT /v1/orders/{id}` — `com/acme/C#save(sig_2222bbbb).`" in text
 
 
 def test_a_handler_less_row_carries_the_same_fallback_in_its_detail_block():
-    """A row with nothing to move still gets a block — its identity line
-    reads the same fallback text the Handler column shows, never a bare
-    symbol that was never there."""
+    """A row with nothing to move still gets a block — its header names the
+    endpoint by its wire identity and then reads the same fallback text the
+    Handler column shows, never a bare `- unresolved` naming no endpoint at
+    all (fix round 1, MEDIUM 1)."""
     report = ResolveReport(
         facts_loaded=1,
         endpoints=[_endpoint(handler=None, resolution="unresolved")],
@@ -181,7 +186,7 @@ def test_a_handler_less_row_carries_the_same_fallback_in_its_detail_block():
     )
     text = render_module_document(MODULE, report, "a3f91c")
     assert "| `GET /v1/orders` | unresolved |" in text
-    assert "- unresolved" in text.split("## Inbound endpoints", 1)[1]
+    assert "- `GET /v1/orders` — unresolved" in text
 
 
 def test_an_empty_shape_renders_one_line_with_no_header_only_table():
@@ -258,6 +263,70 @@ def test_a_shape_named_by_two_endpoints_is_emitted_once_under_shapes():
     assert text.count("- Response: OrderView") == 2
     assert text.count("| id | string | yes | no |") == 1
     assert text.count("- `OrderView`") == 1
+    # Fix round 1, NIT: exactly ONE blank line between the heading and its
+    # first entry — the heading's own trailing blank plus the entry's own
+    # (formerly hardcoded) leading blank used to stack into two.
+    assert "### Shapes\n\n- `OrderView`" in text
+    assert "### Shapes\n\n\n" not in text
+
+
+def test_two_shapes_sharing_a_simple_name_get_disambiguated_entries():
+    """Fix round 1, MEDIUM 2: `com/a/Order#` and `com/b/Order#` share the
+    simple name `Order` — left alone, `### Shapes` would carry two
+    indistinguishable `Order` entries and every citation would read as
+    ambiguous as to which one it names. Both fall back to their own full id
+    (trailing `#` stripped) instead, which is already guaranteed unique, so
+    a reader — and, in HTML, a link's own href
+    (`test_two_shapes_sharing_a_simple_name_get_distinct_anchors_and_links`
+    in test_render_html.py) — can always tell the two apart."""
+    descriptor_a = json.dumps(
+        {"wire_type": "object", "wire_format": "", "nullable": False, "shape_id": "com/a/Order#"}
+    )
+    descriptor_b = json.dumps(
+        {"wire_type": "object", "wire_format": "", "nullable": False, "shape_id": "com/b/Order#"}
+    )
+    report = ResolveReport(
+        facts_loaded=2,
+        endpoints=[
+            _endpoint(path="/a/orders", response_shape=descriptor_a),
+            _endpoint(path="/b/orders", response_shape=descriptor_b),
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+        shapes=[
+            {"shape_id": "com/a/Order#", "content_hash": "md5:1", "open": False},
+            {"shape_id": "com/b/Order#", "content_hash": "md5:2", "open": False},
+        ],
+    )
+    shape_fields = [
+        {
+            "shape_id": "com/a/Order#",
+            "ordinal": 0,
+            "wire_name": "a_field",
+            "wire_type": "string",
+            "wire_format": None,
+            "field_number": None,
+            "required": True,
+            "nullable": False,
+            "item": None,
+        },
+        {
+            "shape_id": "com/b/Order#",
+            "ordinal": 0,
+            "wire_name": "b_field",
+            "wire_type": "string",
+            "wire_format": None,
+            "field_number": None,
+            "required": True,
+            "nullable": False,
+            "item": None,
+        },
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", shape_fields=shape_fields)
+    assert "- `com/a/Order`" in text
+    assert "- `com/b/Order`" in text
+    assert "- `Order`" not in text
+    assert "- Response: com/a/Order" in text
+    assert "- Response: com/b/Order" in text
 
 
 def test_media_glyph_forms_the_legend_states():
@@ -277,6 +346,13 @@ def test_media_glyph_forms_the_legend_states():
 
 
 def test_the_media_legend_appears_once_directly_under_the_inbound_table():
+    """Fix round 1, HIGH: a paragraph landing IMMEDIATELY under a pipe table
+    with no blank line between them is read by GFM as one more row of the
+    table itself (verified against cmark-gfm) — four empty cells a reader
+    never wrote. The legend must be separated from the table by a real blank
+    line, not merely follow it somewhere in the text: the substring-ordering
+    checks below would have passed even on the broken, blank-less output, so
+    this pins the literal adjacency a GFM parser actually keys on."""
     report = ResolveReport(
         facts_loaded=1,
         endpoints=[_endpoint()],
@@ -284,9 +360,16 @@ def test_the_media_legend_appears_once_directly_under_the_inbound_table():
     )
     text = render_module_document(MODULE, report, "a3f91c")
     assert text.count("Media reads `consumes → produces`; `—` means none recorded.") == 1
+    # The exact, literal table-row-then-blank-then-legend adjacency: no line
+    # of the table's own body sits directly against the legend text.
+    assert (
+        "| `GET /v1/orders` | `C#list` | — → — | unresolved | resolved |\n"
+        "\n"
+        "Media reads `consumes → produces`; `—` means none recorded.\n"
+    ) in text
     table_end = text.index("| `GET /v1/orders` |")
     legend_index = text.index("Media reads `consumes → produces`")
-    assert table_end < legend_index < text.index("- `com/acme/C#list().`")
+    assert table_end < legend_index < text.index("- `GET /v1/orders` — `com/acme/C#list().`")
 
 
 def test_the_open_questions_section_lists_wire_identity_question_and_candidates():

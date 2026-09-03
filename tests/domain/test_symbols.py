@@ -5,6 +5,7 @@ from sextant.domain.symbols import (
     owner_of,
     simple_name,
     type_descriptor,
+    without_type_marker,
 )
 
 ORDER_SERVICE = Symbol(
@@ -67,3 +68,14 @@ def test_type_descriptor_round_trips_the_docstring_example():
 
 def test_simple_name_unchanged_behavior():
     assert simple_name("com/acme/OrderService#") == "OrderService"
+
+
+def test_without_type_marker_strips_only_the_trailing_hash():
+    assert without_type_marker("com/acme/OrderService#") == "com/acme/OrderService"
+
+
+def test_without_type_marker_is_the_whole_string_when_there_is_no_marker():
+    assert without_type_marker("com/acme/OrderService#save().") == ("com/acme/OrderService#save().")
+    assert without_type_marker("{http://orders.example.com/ws}quoteOrderRequest") == (
+        "{http://orders.example.com/ws}quoteOrderRequest"
+    )

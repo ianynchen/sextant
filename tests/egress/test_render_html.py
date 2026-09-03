@@ -333,10 +333,13 @@ def test_an_endpoint_detail_renders_as_a_definition_block_with_a_nested_table():
     ]
     sections = assemble_module_document(MODULE, report, "a3f91c", shape_fields=shape_fields)
     document = _html(sections)
+    # Fix round 1, MEDIUM 1: the header carries BOTH the wire identity and
+    # the full symbol, joined by " — " — one convention for inbound and
+    # outbound alike, so a handler-less block still names its own endpoint.
     assert (
-        '<p class="detail-identity"><code>com/acme/C#create().</code></p><dl class="detail">'
-        in document
-    )
+        '<p class="detail-identity"><code>POST /v1/orders</code> — '
+        '<code>com/acme/C#create().</code></p><dl class="detail">'
+    ) in document
     assert '<dt>Request</dt><dd><a href="#shape-OrderRequest">OrderRequest</a></dd>' in document
     assert "<td>customer_id</td>" in document
     assert "<td>string</td>" in document
@@ -391,6 +394,80 @@ def test_a_named_shape_is_linked_from_its_endpoint_and_declared_once_under_shape
         document
     )
     assert document.count("<td>customer_id</td>") == 1
+
+
+def test_two_shapes_sharing_a_simple_name_get_distinct_anchors_and_links():
+    """Fix round 1, MEDIUM 2: `shape-Order` twice would be an invalid,
+    duplicate HTML id, and a citation's own link could no longer promise
+    which of the two tables it lands on. Once `com/a/Order#` and
+    `com/b/Order#` collide on the simple name `Order`, each disambiguates to
+    its own full id (`document._disambiguated_shape_names`), which is what
+    both the anchor and the display text are built from — so the two ids
+    differ, and each citation's href targets the one table that actually
+    carries its own field."""
+    descriptor_a = json.dumps(
+        {"wire_type": "object", "wire_format": "", "nullable": False, "shape_id": "com/a/Order#"}
+    )
+    descriptor_b = json.dumps(
+        {"wire_type": "object", "wire_format": "", "nullable": False, "shape_id": "com/b/Order#"}
+    )
+    report = ResolveReport(
+        facts_loaded=2,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "GET",
+                "path": "/a/orders",
+                "handler": "s maven c 1 com/acme/C#a().",
+                "resolution": "resolved",
+                "response_shape": descriptor_a,
+            },
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "GET",
+                "path": "/b/orders",
+                "handler": "s maven c 1 com/acme/C#b().",
+                "resolution": "resolved",
+                "response_shape": descriptor_b,
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    shape_fields = [
+        {
+            "shape_id": "com/a/Order#",
+            "ordinal": 0,
+            "wire_name": "a_field",
+            "wire_type": "string",
+            "wire_format": None,
+            "field_number": None,
+            "required": True,
+            "nullable": False,
+            "item": None,
+        },
+        {
+            "shape_id": "com/b/Order#",
+            "ordinal": 0,
+            "wire_name": "b_field",
+            "wire_type": "string",
+            "wire_format": None,
+            "field_number": None,
+            "required": True,
+            "nullable": False,
+            "item": None,
+        },
+    ]
+    sections = assemble_module_document(MODULE, report, "a3f91c", shape_fields=shape_fields)
+    document = _html(sections)
+    assert document.count('id="shape-com-a-Order"') == 1
+    assert document.count('id="shape-com-b-Order"') == 1
+    assert '<a href="#shape-com-a-Order">com/a/Order</a>' in document
+    assert '<a href="#shape-com-b-Order">com/b/Order</a>' in document
+    a_section = document.split('id="shape-com-a-Order"', 1)[1].split('id="shape-com-b-Order"', 1)[0]
+    assert "<td>a_field</td>" in a_section
+    assert "<td>b_field</td>" not in a_section
 
 
 def test_a_header_only_detail_block_renders_as_just_the_identity_paragraph():
