@@ -28,18 +28,28 @@ from sextant.domain.redaction import Redactor
 # (§7) — stated once, verbatim in every brief, so the request never drifts
 # from run to run or reader to reader.
 _CONTENT_REQUESTS = """Write whatever of the following you can genuinely ground in what you
-read through the tools below — skip a kind entirely rather than restate
-what the rendered document above already says, or write something you
-cannot back with a real citation:
+read through the tools below, for a developer on their first day with
+this codebase — plain English, jargon defined or avoided, explanation
+over inventory. Skip a kind entirely rather than write something you
+cannot back with a real citation. Retelling a machine fact is fine when
+an explanation needs it to read well — what is banned is a claim that
+ADDS nothing the document does not already say:
 
-1. Components and their purposes — named groupings of the module's own
-   types, and why they exist together.
+1. Components and their purposes — what each part of the module actually
+   does, why it exists as a separate thing, and what a reader would touch
+   it for. Explain the way a colleague would while pointing at the
+   screen, not as a list of class responsibilities.
 2. Extension guides — how to add another operation, listener, or client
-   call, following the pattern the module's own code already uses.
+   call, walked through concretely ("suppose you need to add X: open Y,
+   look at how its neighbours do it, then…"), following the pattern the
+   module's own code already uses.
 3. Algorithm descriptions — how a non-obvious piece of logic actually
-   works, in prose.
+   works, told as what happens, in order, to a real input; name the
+   design choices a reader would otherwise puzzle over (why the expiry,
+   why the always-success response).
 4. Simplified class or sequence diagrams — a mermaid diagram showing the
-   shape of something without reproducing the whole module.
+   shape of something without reproducing the whole module; prefer the
+   one flow a newcomer most needs to see.
 
 And for every open question above that you can look into: a verdict —
 an assessment grounded in what you found, or an honest `unanswered` with

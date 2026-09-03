@@ -2,7 +2,7 @@
   "produced_by": {
     "model": "fixture-model",
     "agent": "fixture-agent",
-    "instructions_hash": "sha256:8859d983fe5e1f9dc8f2eefab5b4c30f65129ef7b8c208b4683d0db18b148eb3",
+    "instructions_hash": "sha256:fdf7ff0d40cb72c37a51992d1c28e6c0f94db6d8030509b9411c05c8086f43a4",
     "redaction_set_hash": "sha256:e52610fa9850ffab2482d3b77642d7b75640145a6589262386853b66aa05a480",
     "run_at": "2026-09-02T00:00:00Z",
     "workspace_fingerprint": "sha256:1093c825ae643bed8c7032f220416a5b28498eccf57dadff3017af0d805fe6f5"
