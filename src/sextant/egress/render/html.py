@@ -176,7 +176,7 @@ def html_document(sections: AssembledDocument, module_id: str) -> str:
 
 def _asset(name: str) -> str:
     """One vendored or hand-written front-end asset's text, read from package
-    data — the same reasoning `cli/resources.py` states for the catalogs and
+    data — the same reasoning `sextant/resources.py` states for the catalogs and
     the extractor jar: resolved through the installed package rather than a
     path relative to this file's position on disk, so a wheel install finds
     it too."""

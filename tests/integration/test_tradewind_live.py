@@ -5,7 +5,7 @@ presence, skipped otherwise (and skipped in the standard suite run)" — the
 identical 2K design §9 rule, carried over to the api-key auth path.
 
 **Skipped by default, on purpose, via the mechanism this suite already has.**
-`tests/cli/test_resources.py::test_the_wheel_carries_the_catalogs_and_the_extractor`
+`tests/test_sextant_resources.py::test_the_wheel_carries_the_catalogs_and_the_extractor`
 self-skips when its own precondition (a built wheel) is not on disk — the
 "N skipped" a plain `pytest -q` already shows before this file exists. This
 test follows the identical mechanism (`pytest.skip` at the top of the test

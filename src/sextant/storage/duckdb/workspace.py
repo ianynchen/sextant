@@ -59,10 +59,13 @@ _NAMED_QUERIES = {
     # (`resolve/effective_annotations.py`), which needs a composing type's
     # own declared attributes and not just which annotation it carries.
     # Ordered so two fields under the same scope read its claim the same way.
-    # The ORDER BY must be TOTAL (every selected column): the parallel
-    # parquet writer preserves only the ordered prefix, so a partial sort
-    # left (target, annotation) ties in nondeterministic order — the
-    # byte-identity e2e caught it twice (2026-09-03/04) before this widened.
+    # The ORDER BY must uniquely determine row order: the parallel parquet
+    # writer preserves only what the sort fixes, so tied rows land in
+    # nondeterministic order. (target, annotation) ties are real — 6 of 11
+    # field-checked workspaces carry them (review audit, 2026-09-04) — so
+    # this widening is genuine hardening. It is NOT the identified cause of
+    # the byte-identity e2e's two observed flakes: that fixture has zero
+    # tied groups, and the flake's cause remains unidentified and open.
     "annotations": """
         SELECT target, annotation, args, type_path FROM annotations
         ORDER BY target, annotation, type_path, args

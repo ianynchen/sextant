@@ -251,3 +251,22 @@ def test_prose_with_no_array_is_still_malformed():
 def test_an_array_answer_passes_through_untouched():
     text = json.dumps([_claim()])
     assert stage._extracted_array(text) == text
+
+
+def test_a_claims_keyed_object_unwraps_to_its_array():
+    """`{"claims": [...]}` unwraps — the slice rule finds the inner array;
+    sibling keys are dropped by the slice, never read. Documented leniency,
+    pinned so it cannot silently widen further."""
+    text = '{"claims": ' + json.dumps([_claim()]) + "}"
+    assert json.loads(stage._extracted_array(text)) == [_claim()]
+
+
+def test_a_mis_sliced_answer_fails_closed_as_malformed():
+    """Prose containing a bracket before the real array mis-slices — and the
+    wrong slice is not valid JSON, so the run fails closed with the same
+    MalformedAnswersError a strict parse raises. A false negative is the
+    accepted cost; a silent mis-ingest is not possible on this path."""
+    text = "I looked at [several] files before answering.\n\n```json\n[]\n```"
+    extracted = stage._extracted_array(text)
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(extracted)

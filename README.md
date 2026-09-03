@@ -205,13 +205,13 @@ uv run sextant module enrich <module-path> --model <provider's model id>
   against the registry. **`--model`** is passed to the adapter **verbatim** — Sextant does
   not maintain a provider's model catalog. **`--max-turns`** caps the tool-use loop (default
   20, and on `api-key` a value above 24 is refused up front — the backend's own ceiling); a
-  no-progress nudge fires when the same call repeats three times running, and a run that
+  no-progress nudge fires on the third identical call across the whole run, and a run that
   keeps repeating burns rounds to the cap, reported honestly as `no_progress`.
 - **`.sextant.yml`'s `enrich:` section** supplies defaults for all three
   (`agent`/`model`/`max_turns`), read only where the matching flag is absent — flags always
-  win, and `auth`/`session_store` may be set the same way (though through the library
-  facade only `model`/`max_turns` are consulted — `sextant.api.enrich`'s own parameters
-  carry the rest).
+  win, and `auth`/`session_store` may be set the same way. Through the library facade,
+  `model`, `max_turns` and `session_store` are consulted from `.sextant.yml`; `agent` and
+  `auth` are not — `sextant.api.enrich`'s own parameters carry those two.
 - **`--auth`** selects how the model is reached: `subscription` (the default — Tradewind's
   claude backend, the machine's logged-in Claude Code; its engine's own dev tools are
   disabled, so only the four jailed tools exist) or `api-key` (Tradewind's langchain

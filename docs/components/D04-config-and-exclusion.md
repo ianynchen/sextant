@@ -91,7 +91,7 @@ enrich:
   auth:       subscription                 # or api-key; --auth overrides
   session_store: .tradewind/sessions.sqlite  # api-key only; ':memory:' opts out
   model:      <provider's own model id>    # passed to the agent verbatim; --model overrides
-  max_turns:  50                           # --max-turns overrides
+  max_turns:  20                           # --max-turns overrides
 ```
 
 `extract_libraries` names dependencies whose **own bytecode** is scanned alongside the
