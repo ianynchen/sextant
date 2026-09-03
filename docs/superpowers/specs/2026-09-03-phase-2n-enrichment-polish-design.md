@@ -194,9 +194,35 @@ its pin requires.
   the sanctioned caller's implementation; the committed Maven-gap-sentence fix
   (e7eab1b, already on this branch) rides; COVERAGE/ARCHITECTURE untouched otherwise.
 
+## §5b The library facade
+
+Sextant becomes embeddable: `src/sextant/api.py` exposes the four verbs —
+`analyze(path, *, allow_resolve=False)`, `render(path)`, `enrich(path, *, agent,
+auth, max_turns=None, dry_run=False, ingest=None)`, `export(path)` — each returning
+a small frozen result object (workspace paths, endpoint counts, a reactor's modules
+inventory) and raising a typed `SextantError` family, never `ClickException` or
+`SystemExit`. Built by EXTRACTION, not duplication: the composition living inside
+`cli/app.py`'s command bodies moves into functions both the CLI and the API call,
+and the click commands become thin wrappers — the existing CLI test suite is the
+byte-identical safety net (2M's discipline: refactor proven by unchanged pins, no
+behavior moves in the same commit).
+
+The v1 contract, stated plainly where the API is documented: synchronous; quiet (no
+progress callbacks until a real embedder asks); not thread-safe per module — one
+workspace per module at a time, concurrent calls on one module are undefined; and
+embedded `enrich` is effectively `api-key`-profile territory, because subscription
+auth belongs to a logged-in workstation, not a service host. A ten-line embedding
+example lands in the README.
+
+Risks accepted knowingly: this refactors the repo's most-reviewed file, so the task
+is sequenced AFTER the Tradewind adapter task (which touches the same enrich
+composition) and its review treats any CLI behavior change as a Critical.
+
 ## §6 Non-goals
 
 Codex/Cursor profiles (Tradewind supports them; Sextant wires them when wanted),
+progress callbacks / an async API / a multi-module orchestration API (§5b is four
+synchronous verbs; orchestration is L-adjacent),
 `history_scope`/subagent features, new open-question detection beyond §3's
 re-addressing, INSTRUCTIONS rewrites beyond §4's named sentences, any resolve-engine
 change, and the call-graph phase (scheduled after 2J).
