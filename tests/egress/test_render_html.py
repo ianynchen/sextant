@@ -32,11 +32,15 @@ from test_render_assembly import (
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.egress.render.asset_pins import MERMAID_SHA256, MERMAID_VERSION
 from sextant.egress.render.document import (
+    DetailEntry,
     EnrichmentSection,
+    MachineDetail,
+    MachineHeading,
     MachineSection,
+    _code,
     assemble_module_document,
 )
-from sextant.egress.render.html import html_document
+from sextant.egress.render.html import _STYLE, html_document
 
 # Read through the same `importlib.resources` mechanism `html._asset` uses
 # (fix M-11) rather than a path relative to this file — the two must hash
@@ -238,10 +242,12 @@ def test_every_markdown_heading_becomes_its_own_html_heading():
     # Scoped to the document's own body, before the vendored mermaid script:
     # the pinned asset's own minified text happens to contain a literal
     # `"## "` (an unrelated string constant), which is not this renderer's
-    # markdown leaking through.
+    # markdown leaking through — and, coincidentally, no `<h1>`/`<h2>` of its
+    # own, but the count assertions are scoped too now rather than relying on
+    # that coincidence (fix round 1, MINOR 9).
     body = document.split("<script>", 1)[0]
-    assert document.count("<h1>") == 1
-    assert document.count("<h2>") == 7
+    assert body.count("<h1>") == 1
+    assert body.count("<h2>") == 7
     assert "## " not in body
 
 
@@ -278,11 +284,15 @@ def test_the_endpoint_table_is_a_real_table_with_one_row_per_endpoint():
 
 
 def test_an_endpoint_detail_renders_as_a_definition_block_with_a_nested_table():
-    """`MachineDetail`'s HTML shape: a bare `<dt>` for the block's own header
-    (the endpoint identity), then a `<dt>`/`<dd>` pair per nested line — here
-    a `Request` entry whose payload is a shape, so its `<dd>` holds a real
-    nested `<table>` rather than the four-space-indented markdown block the
-    old `<pre>` emitter would have shown verbatim."""
+    """`MachineDetail`'s HTML shape (fix round 1, IMPORTANT 2): the block's
+    own header — the endpoint identity — renders OUTSIDE the definition list
+    as its own `<p class="detail-identity">`, never a sibling `<dt>` beside
+    `Request`/`Response` where the content model would read the identity as
+    just another name for the same table. Every entry after it is a
+    `<dt>`/`<dd>` pair — here a `Request` entry whose payload is a shape, so
+    its `<dd>` holds a real nested `<table>` rather than the
+    four-space-indented markdown block the old `<pre>` emitter would have
+    shown verbatim."""
     report = ResolveReport(
         facts_loaded=1,
         endpoints=[
@@ -320,10 +330,26 @@ def test_an_endpoint_detail_renders_as_a_definition_block_with_a_nested_table():
     ]
     sections = assemble_module_document(MODULE, report, "a3f91c", shape_fields=shape_fields)
     document = _html(sections)
-    assert '<dl class="detail"><dt><code>POST /v1/orders</code></dt>' in document
+    assert (
+        '<p class="detail-identity"><code>POST /v1/orders</code></p><dl class="detail">' in document
+    )
     assert "<dt>Request</dt><dd><table>" in document
     assert "<td>customer_id</td>" in document
     assert "<td>string</td>" in document
+    # The identity never leaks into the list itself as a `<dt>` of its own.
+    assert "<dt><code>POST /v1/orders</code></dt>" not in document
+
+
+def test_a_header_only_detail_block_renders_as_just_the_identity_paragraph():
+    """The orphan-`<dt>` case IMPORTANT 2 also fixes: a `MachineDetail` whose
+    entries are ONLY the bare header (reachable once 2M §5c makes every
+    endpoint emit one, even with nothing else to say) renders as the `<p>`
+    alone — never an empty `<dl class="detail"></dl>` sitting under it."""
+    detail = MachineDetail((DetailEntry(_code("GET /v1/orders"), None, None),))
+    document = _html((detail,))
+    body = document.split("<script>", 1)[0]
+    assert body.endswith('<p class="detail-identity"><code>GET /v1/orders</code></p>\n')
+    assert "<dl" not in body
 
 
 def test_enrichment_sections_render_unchanged_alongside_typed_machine_structure():
@@ -449,6 +475,30 @@ def test_rendering_the_same_sections_twice_is_byte_identical():
         overlay=_overlay(_component(), _diagram(), _verdict(), _section()),
     )
     assert _html(sections) == _html(sections)
+
+
+# --- fix round 1 minors -----------------------------------------------
+
+
+def test_a_heading_level_outside_the_shared_bound_is_a_hard_error():
+    """MINOR 4: `<h4>` is syntactically valid HTML, so without a bound of its
+    own this emitter would happily render a level markdown's
+    `_HEADING_MARKERS` has no marker for at all — the two serializers must
+    fail on the SAME bound (`document.HEADING_LEVELS`) rather than one
+    `KeyError`-ing in markdown while HTML stays silently permissive."""
+    with pytest.raises(ValueError, match="heading level"):
+        _html((MachineHeading(4, "Too deep"),))
+
+
+def test_a_bare_code_style_rule_gives_every_code_run_the_same_chip():
+    """MINOR 5: one typography per meaning — a machine code run (a table
+    cell, a detail identity) must carry the same chip a claim's own `<code>`
+    already does, from ONE rule both share rather than a class-scoped one
+    that only some code runs happen to sit inside."""
+    assert (
+        "\ncode { background: rgba(0, 0, 0, 0.06); border-radius: 4px; padding: 0 0.25rem; }\n"
+        in _STYLE
+    )
 
 
 # --- the serializer's own edges: a hard error, never a skip ---------------

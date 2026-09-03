@@ -24,10 +24,18 @@ from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_o
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.render.document import (
     ClaimRedactionError,
+    DetailEntry,
     EnrichmentSection,
     MachineDiagram,
     MachineSection,
+    MachineTable,
     StaleNoticeSection,
+    _Anchors,
+    _code,
+    _interleave,
+    _runs,
+    _runs_to_markdown,
+    _text,
     assemble_module_document,
     markdown_document,
     render_module_document,
@@ -132,6 +140,44 @@ def _position(text: str, needle: str) -> int:
     index = text.find(needle)
     assert index >= 0, f"not in the document: {needle}"
     return index
+
+
+# --- runs: the text/code split, and exactly how far its round-trip goes ---
+# Fix round 1, IMPORTANT 1: `_runs` claimed to be lossless for ANY input. It
+# was not — `if part` dropped an EMPTY *code* run (an odd-index part) right
+# alongside a genuinely droppable empty *text* run, so a double backtick with
+# nothing between it (an empty code span, or the boundary two adjacent spans
+# share) silently vanished. Reachable through any repo-authored evidence text
+# this renderer passes through `_runs` unvalidated: an unresolved-config
+# reason, a `config_join` site, a candidate's `why`/`seen_in`.
+
+
+def test_an_empty_code_span_round_trips_instead_of_vanishing():
+    """The reviewer's own break: 'a``b' used to reconstruct as 'ab' — the
+    empty code run between the two backtick pairs was dropped along with
+    every genuinely-empty text run, losing two backticks outright rather than
+    merely misplacing them."""
+    assert _runs_to_markdown(_runs("a``b")) == "a``b"
+    assert _runs("a``b") == (("text", "a"), ("code", ""), ("text", "b"))
+
+
+def test_a_bare_empty_code_span_round_trips():
+    assert _runs_to_markdown(_runs("``")) == "``"
+    assert _runs("``") == (("code", ""),)
+
+
+def test_two_empty_code_spans_round_trip():
+    assert _runs_to_markdown(_runs("x``y``z")) == "x``y``z"
+
+
+def test_an_odd_backtick_count_does_not_round_trip_and_the_docstring_says_so():
+    """The honest half of the fix: `_runs` round-trips an EVEN backtick count
+    (every span this renderer opened, it closed) and never claims more than
+    that. An unbalanced count is not refused or silently corrected — the
+    trailing text after the last backtick lands at an odd index and comes
+    back out wrapped in a backtick pair it never had, pinned here as the
+    actual (documented) behaviour rather than left as a surprise."""
+    assert _runs_to_markdown(_runs("a`b")) == "a`b`"
 
 
 # --- the regression pin ---------------------------------------------------
@@ -279,10 +325,12 @@ def test_the_machine_structure_diagram_reaches_a_serializer_as_source():
     assert len(diagrams) == 1
     assert diagrams[0].mermaid.startswith("classDiagram")
     assert "```" not in diagrams[0].mermaid
-    # And no MachineSection still carries the fence it was lifted out of.
-    for section in sections:
-        if isinstance(section, MachineSection):
-            assert "```mermaid" not in section.lines
+    # And the fence appears in the rendered document exactly once — as the
+    # `MachineDiagram` above, never a second time duplicated into some other
+    # section's own text. (Assembly builds no `MachineSection` at all any
+    # more — see `test_a_module_with_no_overlay_assembles_to_machine_sections_alone`
+    # — so a loop over `sections` checking that type would now be vacuous.)
+    assert markdown_document(sections).count("```mermaid") == 1
 
 
 def test_a_module_with_no_shapes_has_no_diagram_section_at_all():
@@ -719,3 +767,42 @@ def test_an_enrichment_block_is_the_last_thing_in_the_document():
     document ending in a claim is the ordinary `end-of-document` anchor."""
     text = _rendered(_section())
     assert text.endswith("Cites: `src/main/java/com/acme/orders/Ingest.java`\n")
+
+
+# --- fix round 1, MINOR 3: a claim anchored out of range is a loud failure -
+
+
+def test_a_claim_anchored_outside_the_document_range_is_refused_not_dropped():
+    """Unreachable through the public `assemble_module_document` path — every
+    `_Anchors` field it builds is `len(sections)` at some point during
+    assembly — so this drives `_interleave` directly with a broken one, the
+    same way a future anchor kind might compute a bad index. This file's own
+    discipline (NFR-7, the stale-claim notice) never drops a claim quietly;
+    an out-of-range index must fail exactly as loudly."""
+    machine = (MachineSection(("# a module",)),)
+    broken_anchors = _Anchors(
+        structure_end=99, endpoints_end=99, beside_question=(), questions_end=99, document_end=99
+    )
+    overlay = _overlay(_component())
+    with pytest.raises(ValueError, match="outside the document's own"):
+        _interleave(machine, broken_anchors, overlay, frozenset(), Redactor.from_rules())
+
+
+# --- fix round 1, MINOR 7: a DetailEntry never carries both a body and a --
+# --- table -------------------------------------------------------------
+
+
+def test_a_detail_entry_refuses_to_carry_both_a_body_and_a_table():
+    """The markdown renderer's `if entry.table is not None` branch would
+    otherwise let a table silently win over a body the entry also carried —
+    the same "no rendering rule silently wins" refusal
+    `ClaimRedactionError`/the html emitter's unrecognised-kind checks already
+    take elsewhere in this file."""
+    with pytest.raises(ValueError, match="EITHER a body OR a table"):
+        DetailEntry(_text("Request"), _text("string"), MachineTable(("Field",), ()))
+
+
+def test_a_detail_entry_with_neither_a_body_nor_a_table_is_still_allowed():
+    """The header entry every `MachineDetail` opens with — a bare title,
+    deliberately neither — must not trip the new refusal."""
+    DetailEntry(_code("GET /v1/orders"), None, None)

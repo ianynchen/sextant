@@ -190,13 +190,30 @@ backtick means on its own (2M design §5b)."""
 def _runs(markdown: str) -> tuple[Run, ...]:
     """`markdown` split into alternating text/code runs on backtick-delimited
     spans — the inverse of how every machine string below is already built.
-    Lossless by construction for ANY input, balanced or not: splitting on
-    `` ` `` and rewrapping the odd-indexed parts in backticks reproduces the
-    original string exactly, so this never has to validate or refuse a
-    stray backtick in evidence text (a reason, a candidate's `why`) — it only
-    ever has to be reversible, and `str.split`/rejoin already is."""
+
+    **Round-trips exactly when `markdown` carries an EVEN number of
+    backticks** — every code span this renderer ever opened, it closed, so
+    its own output always qualifies, and so does any evidence text (a
+    reason, a candidate's `why`/`seen_in`) that happens to contain a
+    complete, or no, backtick pair. An ODD (unbalanced) count does NOT
+    round-trip: the trailing part after the last backtick lands at an ODD
+    index and is read back as a code run, so `_runs_to_markdown(_runs("a`b"))`
+    produces `` a`b` `` — a spurious closing backtick the input never had —
+    never a raised error or a dropped character. This function does not
+    validate; it only ever has to be reversible for the balanced case that is
+    every string it actually receives in practice.
+
+    Kept EVEN for an empty code span (`` `` ``, two adjacent backticks): `if
+    part or i % 2` — never `if part` alone, which would silently drop an
+    empty *code* run (odd index) along with every genuinely empty text run
+    (even index) and, for `` a``b ``, reconstruct as `ab` — two backticks lost
+    outright, not merely misplaced. Dropping an EMPTY text run is always
+    safe: an empty string contributes nothing to `_runs_to_markdown` whether
+    kept or dropped."""
     return tuple(
-        ("code" if i % 2 else "text", part) for i, part in enumerate(markdown.split("`")) if part
+        ("code" if i % 2 else "text", part)
+        for i, part in enumerate(markdown.split("`"))
+        if part or i % 2
     )
 
 
@@ -241,6 +258,15 @@ class MachineHeading:
 # apart.
 _HEADING_MARKERS = {1: "# ", 2: "## ", 3: "### "}
 
+# The only levels a `MachineHeading` may carry — this dict's own keys, so
+# there is exactly one place that decides the bound rather than two that
+# could drift. Exported (no leading underscore) so `html._heading_html`
+# checks the SAME bound instead of trusting `<h{level}>` to accept anything:
+# a level outside it fails identically in both serializers rather than one
+# `KeyError`-ing here and the other silently emitting a tag markdown has no
+# heading for.
+HEADING_LEVELS = tuple(_HEADING_MARKERS)
+
 
 @dataclass(frozen=True)
 class MachineParagraph:
@@ -279,6 +305,18 @@ class DetailEntry:
     title: tuple[Run, ...]
     body: tuple[Run, ...] | None
     table: MachineTable | None
+
+    def __post_init__(self) -> None:
+        # Enforced, not merely documented above: a builder that ever passed
+        # both would hand both serializers a shape neither actually renders
+        # (markdown's `if entry.table is not None` branch would silently
+        # swallow a body it also carried) — a hard error here, the same
+        # stance `ClaimRedactionError`/the html emitter's "no rendering
+        # rule" refusals already take, beats a table quietly winning.
+        if self.body is not None and self.table is not None:
+            raise ValueError(
+                f"a DetailEntry carries EITHER a body OR a table, never both: {self!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -997,7 +1035,7 @@ class _Anchors:
     questions_end: int
     document_end: int
 
-    def offset_of(self, claim: Claim) -> int:
+    def index_of(self, claim: Claim) -> int:
         """Where `claim` goes. A `beside-open-question` verdict goes under the
         line of the very question it answers; anything else anchored there
         goes after the last question, since nothing in a component, section or
@@ -1009,9 +1047,9 @@ class _Anchors:
         if claim.anchor is Anchor.END_OF_DOCUMENT:
             return self.document_end
         if isinstance(claim, VerdictClaim):
-            for identity, offset in self.beside_question:
+            for identity, index in self.beside_question:
                 if identity == claim.question.identity:
-                    return offset
+                    return index
         return self.questions_end
 
 
@@ -1043,8 +1081,24 @@ def _interleave(
         for index, claim in enumerate(overlay.claims):
             if index in stale:
                 continue
-            placed.setdefault(anchors.offset_of(claim), []).append(
+            placed.setdefault(anchors.index_of(claim), []).append(
                 _redacted_claim(index, claim, redactor)
+            )
+
+    # A claim dropped silently is exactly what this file's own discipline
+    # refuses everywhere else (NFR-7's visible stale-claim notice, below): a
+    # section index outside the document's own range would otherwise sit in
+    # `placed` unvisited by either loop below and vanish with no trace. Every
+    # `_Anchors.index_of` result is built from `len(sections)` at some point
+    # during assembly, so this never fires in practice — it is here for the
+    # day a future anchor kind computes one wrong, so that bug is a loud
+    # failure here rather than a claim quietly missing from the page.
+    for section_index in placed:
+        if not 0 <= section_index <= len(machine_sections):
+            raise ValueError(
+                f"claim anchor resolved to section index {section_index}, outside "
+                f"the document's own 0..{len(machine_sections)} range — a claim must "
+                "never be silently dropped"
             )
 
     sections: list[Section] = []

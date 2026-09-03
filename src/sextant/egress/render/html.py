@@ -64,6 +64,7 @@ from sextant.domain.enrichment import (
     VerdictClaim,
 )
 from sextant.egress.render.document import (
+    HEADING_LEVELS,
     AssembledDocument,
     EnrichmentSection,
     MachineDetail,
@@ -99,7 +100,14 @@ pre.machine { background: #f6f8fa; padding: 1rem; overflow-x: auto; border-radiu
 table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
 th, td { border: 1px solid #d0d7de; padding: 0.35rem 0.6rem; text-align: left; }
 th { background: #f6f8fa; }
-dl.detail { border-left: 2px solid #d0d7de; margin: 0.5rem 0 1rem; padding-left: 1rem; }
+/* One typography per meaning: a code run is a code run, whether it sits in a
+   table cell, a definition-block identity or a claim's own prose — so this
+   is the ONE rule that gives every `<code>` its chip, and `.claim code`
+   below is redundant with it rather than a second definition to keep in
+   sync. */
+code { background: rgba(0, 0, 0, 0.06); border-radius: 4px; padding: 0 0.25rem; }
+.detail-identity { font-weight: 600; margin: 1rem 0 0.25rem; }
+dl.detail { border-left: 2px solid #d0d7de; margin: 0 0 1rem; padding-left: 1rem; }
 dl.detail dt { font-weight: 600; margin-top: 0.5rem; }
 dl.detail dd { margin: 0.15rem 0 0.5rem; }
 .enrichment { border-left: 4px solid #8250df; background: #faf5ff; padding: 0.25rem 1rem 0.75rem;
@@ -221,6 +229,12 @@ def _runs_html(runs: tuple[Run, ...]) -> str:
 
 def _heading_html(section: MachineHeading) -> str:
     level = section.level
+    if level not in HEADING_LEVELS:
+        # Bounded against the SAME table markdown's `_HEADING_MARKERS` reads
+        # (`document.HEADING_LEVELS`), so a level neither serializer knows
+        # fails identically in both — `<h{level}>` would otherwise happily
+        # emit a tag for a level markdown has no marker for at all.
+        raise ValueError(f"heading level {level!r} outside {HEADING_LEVELS}")
     return f"<h{level}>{html.escape(section.text)}</h{level}>"
 
 
@@ -239,20 +253,30 @@ def _table_html(table: MachineTable) -> str:
 
 
 def _detail_html(section: MachineDetail) -> str:
-    """A definition block: the header entry (`entries[0]`, never carrying a
-    body or a table) is a bare `<dt>`; every entry after it is a `<dt>`/`<dd>`
-    pair, the `<dd>` holding either the inline body or a real nested
-    `<table>` — never the indented markdown block this used to be scanned out
-    of a `<pre>`."""
+    """The header entry (`entries[0]`, always bare — no body or table) is the
+    block's own NAME, not one of its nested facts, so it renders OUTSIDE the
+    definition list as its own `<p>` — never a sibling `<dt>` next to `Via`/
+    `Request`/`Response`, which read the identity as just another name for
+    the same table a reader is meant to look up. Every entry after it is a
+    `<dt>`/`<dd>` pair, the `<dd>` holding either the inline body or a real
+    nested `<table>` — never the indented markdown block this used to be
+    scanned out of a `<pre>`.
+
+    A header with no entries after it (reachable once every endpoint gets
+    one — 2M §5c) renders as just the `<p>`, never an empty `<dl></dl>`."""
+    header, *rest = section.entries
+    identity = f'<p class="detail-identity">{_runs_html(header.title)}</p>'
+    if not rest:
+        return identity
     parts = ['<dl class="detail">']
-    for entry in section.entries:
+    for entry in rest:
         parts.append(f"<dt>{_runs_html(entry.title)}</dt>")
         if entry.table is not None:
             parts.append(f"<dd>{_table_html(entry.table)}</dd>")
         elif entry.body is not None:
             parts.append(f"<dd>{_runs_html(entry.body)}</dd>")
     parts.append("</dl>")
-    return "".join(parts)
+    return identity + "".join(parts)
 
 
 def _machine_html(section: MachineSection) -> str:
