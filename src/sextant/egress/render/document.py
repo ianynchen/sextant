@@ -178,18 +178,135 @@ class ClaimRedactionError(ValueError):
     """
 
 
+type Run = tuple[str, str]
+"""One inline span of machine text: `("code", content)` for a backtick-quoted
+identifier, path or key, `("text", content)` for everything else. The
+builders below already know which is which — every code span they ever wrote
+was wrapped in backticks by hand — so a `Run` never has to be guessed at
+after the fact by an HTML emitter that would otherwise have to decide what a
+backtick means on its own (2M design §5b)."""
+
+
+def _runs(markdown: str) -> tuple[Run, ...]:
+    """`markdown` split into alternating text/code runs on backtick-delimited
+    spans — the inverse of how every machine string below is already built.
+    Lossless by construction for ANY input, balanced or not: splitting on
+    `` ` `` and rewrapping the odd-indexed parts in backticks reproduces the
+    original string exactly, so this never has to validate or refuse a
+    stray backtick in evidence text (a reason, a candidate's `why`) — it only
+    ever has to be reversible, and `str.split`/rejoin already is."""
+    return tuple(
+        ("code" if i % 2 else "text", part) for i, part in enumerate(markdown.split("`")) if part
+    )
+
+
+def _runs_to_markdown(runs: Sequence[Run]) -> str:
+    """The exact inverse of `_runs`: a code run is rewrapped in backticks, a
+    text run passes through unchanged, and the two concatenate back into the
+    original markdown."""
+    return "".join(f"`{content}`" if kind == "code" else content for kind, content in runs)
+
+
+def _text(content: str) -> tuple[Run, ...]:
+    """A single run of plain text — for a value this renderer never wraps in
+    backticks (a resolution enum, a media type, a peer address), so splitting
+    it for embedded backticks would be answering a question that was never
+    asked."""
+    return (("text", content),)
+
+
+def _code(content: str) -> tuple[Run, ...]:
+    """A single run of code — for a value that is ALWAYS a whole code span on
+    its own (a wire identity, a bare descriptor), never text mixed with one."""
+    return (("code", content),)
+
+
+@dataclass(frozen=True)
+class MachineHeading:
+    """A `#`-to-`###` heading, as the level and its plain text — never runs,
+    since every heading this renderer writes is a literal title with no code
+    span in it."""
+
+    level: int
+    text: str
+
+
+# The markdown marker each heading level opens with, INCLUDING its trailing
+# space — a lookup table rather than repeating a single hash-mark literal by
+# `level`, which would put that one bare character on its own between quotes
+# in this file and trip `test_symbol_grammar_confinement.py`'s check for
+# SCIP-symbol-splitting parses outside its one seam (`domain/symbols.py`).
+# Markdown's heading marker is a different grammar entirely; the table
+# sidesteps the false match rather than asking that check to tell the two
+# apart.
+_HEADING_MARKERS = {1: "# ", 2: "## ", 3: "### "}
+
+
+@dataclass(frozen=True)
+class MachineParagraph:
+    """One line of machine prose, as runs."""
+
+    runs: tuple[Run, ...]
+
+
+@dataclass(frozen=True)
+class MachineList:
+    """A run of `-` bullets with no blank line between them — one list, one
+    section. An item that must sit beside its OWN placement anchor (an open
+    question a verdict answers) is instead its own single-item `MachineList`,
+    which is what lets `_Anchors` key on it directly."""
+
+    items: tuple[tuple[Run, ...], ...]
+
+
+@dataclass(frozen=True)
+class MachineTable:
+    """A markdown table: plain-text headers (never code — a column name is
+    never a value to look up) and rows of cells, each cell its own runs."""
+
+    headers: tuple[str, ...]
+    rows: tuple[tuple[tuple[Run, ...], ...], ...]
+
+
+@dataclass(frozen=True)
+class DetailEntry:
+    """One line of a `MachineDetail` — a title, and EITHER an inline body OR
+    a nested table, never both (the shape `_descriptor_entry`/`_via_entry`
+    already builds one of). `table is None and body is None` is the bare
+    title of the block's own header line (`- `{identity}``), which has
+    neither."""
+
+    title: tuple[Run, ...]
+    body: tuple[Run, ...] | None
+    table: MachineTable | None
+
+
+@dataclass(frozen=True)
+class MachineDetail:
+    """One endpoint's nested detail block — the two-level list markdown
+    already wrote (`- `{identity}`` then indented `Via:`/`Request:`/
+    `Response:` lines), typed rather than carried as opaque text (2M design
+    §5b, adversarial review C2). `entries[0]` is always the block's own
+    header (a bare title, no body or table); every entry after it is one
+    nested line, indented one level in markdown and rendered as its own
+    `<dt>`/`<dd>` pair in HTML.
+
+    A `MachineTable` entry serializes as a real nested `<table>` rather than
+    the indented markdown block scanned back apart — the whole point of
+    typing this instead of leaving it as `MachineSection` lines."""
+
+    entries: tuple[DetailEntry, ...]
+
+
 @dataclass(frozen=True)
 class MachineSection:
-    """A run of machine-derived PROSE, as the markdown lines this renderer
-    built — verbatim, in order.
-
-    Deliberately NOT decomposed into typed headings, tables and paragraphs.
-    Byte-identity with the document Sextant rendered before the overlay existed
-    is a regression pin the whole phase leans on, and the cheapest way to keep
-    a promise about bytes is to carry the bytes. A second serializer renders
-    these lines as the markdown they are; what it must never do is read them to
-    work out where an enrichment claim belongs, and it never has to — the
-    claims are their own sections.
+    """A run of machine-derived PROSE, as markdown lines — verbatim, in
+    order. The escape hatch left behind by the 2M §5b typed-section refactor:
+    `assemble_module_document` no longer builds one (every region it used to
+    emit as opaque lines is now one of the typed kinds above), but the type —
+    and `markdown_document`/`html_document`'s support for it — stays, for
+    machine text a future region has no typed shape for yet rather than one
+    this renderer would otherwise have to invent a shape for on the spot.
 
     The one exception is a diagram, which is `MachineDiagram` below: a fence
     buried in these lines would be a fence the HTML emitter could only find by
@@ -246,7 +363,17 @@ class StaleNoticeSection:
     count: int
 
 
-type Section = MachineSection | MachineDiagram | EnrichmentSection | StaleNoticeSection
+type Section = (
+    MachineHeading
+    | MachineParagraph
+    | MachineList
+    | MachineTable
+    | MachineDetail
+    | MachineSection
+    | MachineDiagram
+    | EnrichmentSection
+    | StaleNoticeSection
+)
 type AssembledDocument = tuple[Section, ...]
 
 
@@ -345,9 +472,9 @@ def _format(endpoint: dict[str, object]) -> str:
     return str(value)
 
 
-def _origin_lines(endpoint: dict[str, object], origin_by_symbol: dict[str, str]) -> list[str]:
-    """The `Via:` detail line for a row an extracted LIBRARY contributed, or
-    nothing at all for the ordinary case.
+def _via_entry(endpoint: dict[str, object], origin_by_symbol: dict[str, str]) -> DetailEntry | None:
+    """The `Via:` detail entry for a row an extracted LIBRARY contributed, or
+    `None` at all for the ordinary case.
 
     A library-contributed row is otherwise indistinguishable from one the
     module's own code declares — same table, same columns, same resolution —
@@ -366,12 +493,13 @@ def _origin_lines(endpoint: dict[str, object], origin_by_symbol: dict[str, str])
     """
     deriving = endpoint.get("handler") or endpoint.get("caller")
     origin = None if deriving is None else origin_by_symbol.get(str(deriving))
-    return [] if origin is None else [f"  - Via: `{origin}`"]
+    return None if origin is None else DetailEntry(_text("Via"), _code(origin), None)
 
 
-def _library_gap_line(what: str, entry: str) -> str:
-    """One unreachable library, as `<what>, so nothing above accounts for it:
-    library `<coordinate>` — <reason>.`
+def _library_gap_item(what: str, entry: str) -> tuple[Run, ...]:
+    """One unreachable library, as the runs of `<what>, so nothing above
+    accounts for it: library `<coordinate>` — <reason>.` (minus the bullet's
+    own leading `- `, which `MachineList` supplies).
 
     The producer writes `<coordinate>: <reason>` — the shape `uncovered`
     already uses — and only the coordinate is set in code here: a reason is a
@@ -381,7 +509,7 @@ def _library_gap_line(what: str, entry: str) -> str:
     """
     coordinate, _, reason = entry.partition(": ")
     tail = f" — {reason}" if reason else ""
-    return f"- {what}, so nothing above accounts for it: library `{coordinate}`{tail}."
+    return _runs(f"{what}, so nothing above accounts for it: library `{coordinate}`{tail}.")
 
 
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
@@ -488,96 +616,103 @@ def assemble_module_document(
     # section does not repeat one the inbound section stated (a `both` row is
     # listed in both).
     attributed: set[str] = set()
-    lines = [
-        f"# {module.module_id}",
-        "",
-        f"Generated from commit `{commit}`.",
-        "",
-        "## Coverage",
-        "",
-        f"- Documents analysed: {report.coverage.get('documents', 0)}",
-        f"- Partial documents: {report.coverage.get('partial_documents', 0)}",
-        f"- Facts loaded: {report.facts_loaded}",
+
+    # Typed sections, built at the sites that already know the structure (2M
+    # design §5b) — the flat line list this used to be is gone, and with it
+    # the need to lift a diagram back out of one: `MachineDiagram` is
+    # appended directly where the fence used to be spliced in.
+    sections: list[Section] = [
+        MachineHeading(1, module.module_id),
+        MachineParagraph(_runs(f"Generated from commit `{commit}`.")),
+        MachineHeading(2, "Coverage"),
     ]
-    lines += _config_coverage_lines(resolved_config)
-    lines += _unresolved_derivation_lines(report.endpoints)
-    lines += [
-        # Per-environment peer AUTHORITIES — one substituted address per
-        # environment for a resolved outbound row — are the system-scope
-        # document's material (M06 stitcher, M07 system scope): this module
-        # document names the expression a row carries (`path`/`peer`), never
-        # the per-environment values `resolved_peers` joins them against.
-        (
-            "- Per-environment peer resolution is the system architecture "
+    coverage_items = [
+        _runs(f"Documents analysed: {report.coverage.get('documents', 0)}"),
+        _runs(f"Partial documents: {report.coverage.get('partial_documents', 0)}"),
+        _runs(f"Facts loaded: {report.facts_loaded}"),
+    ]
+    coverage_items += _config_coverage_items(resolved_config)
+    coverage_items += _unresolved_derivation_items(report.endpoints)
+    # Per-environment peer AUTHORITIES — one substituted address per
+    # environment for a resolved outbound row — are the system-scope
+    # document's material (M06 stitcher, M07 system scope): this module
+    # document names the expression a row carries (`path`/`peer`), never the
+    # per-environment values `resolved_peers` joins them against.
+    coverage_items.append(
+        _runs(
+            "Per-environment peer resolution is the system architecture "
             "document's material, not repeated per module here."
-        ),
-        "",
-        "## Structure",
-        "",
-    ]
-    # The fence stays in `lines` so every offset below — and the byte-identity
-    # of the markdown — is unaffected; the SPAN is what lets assembly lift it
-    # back out as a `MachineDiagram`. Recording a span rather than splitting
-    # the list here keeps one line list and one set of anchor offsets, instead
-    # of two representations that could disagree about where anything is.
-    diagram_spans: list[tuple[int, int, str]] = []
+        )
+    )
+    sections.append(MachineList(tuple(coverage_items)))
+
+    sections.append(MachineHeading(2, "Structure"))
     if report.shapes:
         nodes, edges = _contract_nodes(report.shapes, shape_fields)
         mermaid = class_diagram(nodes, edges).rstrip("\n")
-        start = len(lines)
-        lines += ["```mermaid"]
-        lines += mermaid.split("\n")
-        lines += ["```"]
-        diagram_spans.append((start, len(lines), mermaid))
+        sections.append(MachineDiagram(mermaid))
     else:
-        lines.append("None derived.")
+        sections.append(MachineParagraph(_runs("None derived.")))
     # `after-component-overview` (2K design §6). `## Structure` IS this
     # document's component overview: the contract class diagram is the only
     # place it draws the module's own types as a whole. An anchor is a
     # position, so it is recorded here — where the section ends — rather than
     # searched for afterwards in text that would then have to be parsed.
-    structure_end = len(lines)
+    structure_end = len(sections)
 
-    lines += ["", "## Inbound endpoints", ""]
+    sections.append(MachineHeading(2, "Inbound endpoints"))
     inbound = [e for e in report.endpoints if str(e["direction"]) in ("inbound", "both")]
     if inbound:
-        lines += ["| Endpoint | Handler | Media | Format | Resolution |", "|---|---|---|---|---|"]
+        headers = ("Endpoint", "Handler", "Media", "Format", "Resolution")
+        rows = []
         for endpoint in inbound:
             media = f"{_media(endpoint.get('consumes'))} → {_media(endpoint.get('produces'))}"
-            lines.append(
-                f"| `{_wire_identity(endpoint, redactor)}` | {_handler(endpoint)} | {media} | "
-                f"{_format(endpoint)} | {endpoint['resolution']} |"
+            rows.append(
+                (
+                    _code(_wire_identity(endpoint, redactor)),
+                    _runs(_handler(endpoint)),
+                    _text(media),
+                    _text(_format(endpoint)),
+                    _text(str(endpoint["resolution"])),
+                )
             )
+        sections.append(MachineTable(headers, tuple(rows)))
         for endpoint in inbound:
-            request = _descriptor_lines("Request", endpoint.get("request_shape"), fields_by_shape)
-            response = _descriptor_lines(
+            request = _descriptor_entry("Request", endpoint.get("request_shape"), fields_by_shape)
+            response = _descriptor_entry(
                 "Response", endpoint.get("response_shape"), fields_by_shape
             )
-            via = _origin_lines(endpoint, origin_by_symbol)
-            if request or response or via:
-                lines += ["", f"- `{_wire_identity(endpoint, redactor)}`"]
-                lines += via
-                lines += request
-                lines += response
-            if via:
+            via = _via_entry(endpoint, origin_by_symbol)
+            entries = [entry for entry in (via, request, response) if entry is not None]
+            if entries:
+                identity = _wire_identity(endpoint, redactor)
+                header = DetailEntry(_code(identity), None, None)
+                sections.append(MachineDetail((header, *entries)))
+            if via is not None:
                 attributed.add(_wire_identity(endpoint, redactor))
     else:
-        lines.append("None found.")
+        sections.append(MachineParagraph(_runs("None found.")))
 
     # An empty section is now a real statement rather than a stand-in for
     # "not implemented" — outbound derivation exists (NFR-7).
-    lines += ["", "## Outbound endpoints", ""]
+    sections.append(MachineHeading(2, "Outbound endpoints"))
     outbound = [e for e in report.endpoints if str(e["direction"]) in ("outbound", "both")]
     if outbound:
-        lines += ["| Endpoint | Peer | Caller | Format | Resolution |", "|---|---|---|---|---|"]
+        headers = ("Endpoint", "Peer", "Caller", "Format", "Resolution")
+        rows = []
         for endpoint in outbound:
             peer = endpoint.get("peer")
             caller = bare_descriptor(str(endpoint["caller"]))
-            lines.append(
-                f"| `{_wire_identity(endpoint, redactor)}` | "
-                f"{'unresolved' if peer is None else redactor.redact_text(str(peer))} | "
-                f"`{caller}` | {_format(endpoint)} | {endpoint['resolution']} |"
+            rows.append(
+                (
+                    _code(_wire_identity(endpoint, redactor)),
+                    _text("unresolved" if peer is None else redactor.redact_text(str(peer))),
+                    _code(caller),
+                    _text(_format(endpoint)),
+                    _text(str(endpoint["resolution"])),
+                )
             )
+        sections.append(MachineTable(headers, tuple(rows)))
         # The outbound half has no request/response detail to hang under, so
         # this is its whole detail block — written only where there is
         # something to say, which is the same rule the inbound one keeps.
@@ -588,18 +723,18 @@ def assemble_module_document(
         # same attribution twice reads as two findings.
         for endpoint in outbound:
             identity = _wire_identity(endpoint, redactor)
-            via = [] if identity in attributed else _origin_lines(endpoint, origin_by_symbol)
-            if via:
-                lines += ["", f"- `{identity}`"]
-                lines += via
+            via = None if identity in attributed else _via_entry(endpoint, origin_by_symbol)
+            if via is not None:
+                header = DetailEntry(_code(identity), None, None)
+                sections.append(MachineDetail((header, via)))
                 attributed.add(identity)
     else:
-        lines.append("None found.")
+        sections.append(MachineParagraph(_runs("None found.")))
     # `after-endpoint-table`: after BOTH tables and their detail blocks. The
     # document's endpoint listing is one thing to a reader — a claim about "the
     # endpoints" that landed between the inbound and outbound halves would read
     # as a claim about the inbound ones alone.
-    endpoints_end = len(lines)
+    endpoints_end = len(sections)
 
     # Rendered only when the ledger holds rows (2G design §8): a run with
     # nothing to ask leaves the section absent, the `## Catalogs skipped`
@@ -607,12 +742,18 @@ def assemble_module_document(
     # this is a hand-off inbox for 2K, and an empty inbox is not a finding.
     beside_question: list[tuple[tuple[str | None, ...], int]] = []
     if open_questions:
-        lines += ["", "## Open questions", ""]
+        sections.append(MachineHeading(2, "Open questions"))
         for row in open_questions:
             question = str(row["question"])
             candidates = json.loads(str(row["candidates"]))
             rendered = "; ".join(_candidate_line(question, c) for c in candidates)
-            lines.append(f"- `{_wire_identity(row, redactor)}` — {question}: {rendered}")
+            item = _runs(f"`{_wire_identity(row, redactor)}` — {question}: {rendered}")
+            # One question, one single-item `MachineList`: a `beside-open-
+            # question` verdict has to land right after THIS question and no
+            # other, so the question needs its own section index to anchor
+            # on — a shared list covering every question would only ever let
+            # a claim land after the last one.
+            sections.append(MachineList((item,)))
             # `beside-open-question`, per question: a verdict renders under the
             # very line it answers. Keyed on the row's own values, NOT on the
             # rendered line — matching on presentation would make placement
@@ -623,25 +764,27 @@ def assemble_module_document(
             # a verdict on a question whose path changes under redaction
             # validated cleanly and then rendered at `questions_end` instead of
             # beside its question.
-            beside_question.append((open_question_identity(row, redactor), len(lines)))
+            beside_question.append((open_question_identity(row, redactor), len(sections)))
     # Where a `beside-open-question` claim goes when no single question owns
     # it: after the last question, or — with no section at all — where the
     # section would have been. Only a verdict names a question; every other
     # kind anchored here is a claim about the open questions as a group.
     questions_end = beside_question[-1][1] if beside_question else endpoints_end
 
-    lines += ["", "## Known gaps", ""]
-    lines += [f"- {gap}" for gap in _GAPS]
+    sections.append(MachineHeading(2, "Known gaps"))
+    gap_items = [_runs(gap) for gap in _GAPS]
     # Named one by one, because a compiled source nothing read is the one gap
     # a reader can act on: it says which part of the module this document is
     # silent about (FR-17, M03).
-    lines += [f"- Not read, so nothing above accounts for it: `{source}`." for source in uncovered]
+    gap_items += [
+        _runs(f"Not read, so nothing above accounts for it: `{source}`.") for source in uncovered
+    ]
     # Named one by one for the same reason: a payload type nothing could open
     # is the gap between "this shape is the contract" and "this shape is as
     # much of the contract as anyone could see", and only the name says which
     # catalog entry would close it (FR-17).
-    lines += [
-        f"- Not expanded, so the shapes referring to it are open: `{symbol}`."
+    gap_items += [
+        _runs(f"Not expanded, so the shapes referring to it are open: `{symbol}`.")
         for symbol in report.unexpanded_types
     ]
     # Named one by one for the same reason again: a library this module asked
@@ -649,49 +792,61 @@ def assemble_module_document(
     # called through it" and "nobody looked" (FR-17, M02). Both lists carry
     # `<coordinate>: <reason>`, and the reason is the point — it says what to
     # go and do, which a bare coordinate never could.
-    lines += [_library_gap_line("Not resolved", entry) for entry in module.libraries_not_resolved]
-    lines += [_library_gap_line("Not scanned", entry) for entry in libraries_not_scanned]
+    gap_items += [
+        _library_gap_item("Not resolved", entry) for entry in module.libraries_not_resolved
+    ]
+    gap_items += [_library_gap_item("Not scanned", entry) for entry in libraries_not_scanned]
+    sections.append(MachineList(tuple(gap_items)))
+
     if report.skipped_catalogs:
-        lines += ["", "## Catalogs skipped", ""]
-        for skipped in report.skipped_catalogs:
-            lines.append(
-                f"- `{skipped.catalog_id}` requires {', '.join(skipped.missing_capabilities)}"
-            )
+        sections.append(MachineHeading(2, "Catalogs skipped"))
+        skipped_items = [
+            _runs(f"`{skipped.catalog_id}` requires {', '.join(skipped.missing_capabilities)}")
+            for skipped in report.skipped_catalogs
+        ]
+        sections.append(MachineList(tuple(skipped_items)))
+
     return _interleave(
-        lines,
-        _Anchors(structure_end, endpoints_end, tuple(beside_question), questions_end, len(lines)),
-        tuple(diagram_spans),
+        tuple(sections),
+        _Anchors(
+            structure_end, endpoints_end, tuple(beside_question), questions_end, len(sections)
+        ),
         overlay,
         stale,
         redactor,
     )
 
 
-def _config_coverage_lines(resolved_config: Sequence[dict[str, object]]) -> list[str]:
+def _config_coverage_items(
+    resolved_config: Sequence[dict[str, object]],
+) -> list[tuple[Run, ...]]:
     """Coverage's own view of pass 2 (2F design §2): which profiles resolved,
     and which declared keys did not — named with their reason and
     environment, never just counted, so a reader can act on the same row
     `resolved_config` itself carries (spec §5). An empty answer is stated,
-    never a section that silently has nothing to say (NFR-7)."""
+    never a section that silently has nothing to say (NFR-7). Items, not
+    lines: the bullet's own leading `- ` is `MachineList`'s job now."""
     environments = list(dict.fromkeys(str(row["environment"]) for row in resolved_config))
     if environments:
         rendered = ", ".join(f"`{e}`" for e in environments)
-        lines = [f"- Environments resolved: {rendered}."]
+        items = [_runs(f"Environments resolved: {rendered}.")]
     else:
-        lines = ["- Environments resolved: none."]
+        items = [_runs("Environments resolved: none.")]
     unresolved = [row for row in resolved_config if row.get("value") is None]
     if not unresolved:
-        lines.append("- Configuration keys unresolved: none.")
-        return lines
+        items.append(_runs("Configuration keys unresolved: none."))
+        return items
     for row in unresolved:
-        lines.append(
-            f"- Configuration key unresolved: {row['key']} — "
-            f"{row['unresolved_reason']} in {row['environment']}."
+        items.append(
+            _runs(
+                f"Configuration key unresolved: {row['key']} — "
+                f"{row['unresolved_reason']} in {row['environment']}."
+            )
         )
-    return lines
+    return items
 
 
-def _unresolved_derivation_lines(endpoints: Sequence[dict[str, object]]) -> list[str]:
+def _unresolved_derivation_items(endpoints: Sequence[dict[str, object]]) -> list[tuple[Run, ...]]:
     """Every endpoint row a catalog derived but could not address (`path`
     NULL, `resolution: unresolved`) — named by the catalog that derived it
     and the site it read, since neither is visible from the wire-identity
@@ -708,15 +863,15 @@ def _unresolved_derivation_lines(endpoints: Sequence[dict[str, object]]) -> list
     rather than a filter this data cannot make honestly — and the lead-in
     line below says so on the page itself, not only in this docstring."""
     rows = [e for e in endpoints if e.get("path") is None and e.get("resolution") == "unresolved"]
-    lines = [
-        (
-            "- Unresolved endpoint derivations — across every engine, whatever "
+    items = [
+        _runs(
+            "Unresolved endpoint derivations — across every engine, whatever "
             "their evidence, not configuration alone:"
         )
     ]
     if not rows:
-        lines.append("- None.")
-        return lines
+        items.append(_runs("None."))
+        return items
     for row in rows:
         catalog_id = row.get("catalog_id")
         catalog = "unresolved" if catalog_id is None else str(catalog_id)
@@ -728,8 +883,8 @@ def _unresolved_derivation_lines(endpoints: Sequence[dict[str, object]]) -> list
             site = f"caller `{bare_descriptor(str(caller))}`"
         else:
             site = "a composed selection expression"
-        lines.append(f"- Unresolved endpoint derivation: `{catalog}` — {site}.")
-    return lines
+        items.append(_runs(f"Unresolved endpoint derivation: `{catalog}` — {site}."))
+    return items
 
 
 def _fields_by_shape(
@@ -782,27 +937,25 @@ def _inline_descriptor(descriptor: dict[str, object]) -> str:
     return wire_type
 
 
-def _descriptor_lines(
+_SHAPE_FIELD_HEADERS = ("Field", "Type", "Required", "Nullable")
+
+
+def _descriptor_entry(
     label: str,
     descriptor_json: object,
     fields_by_shape: dict[str, list[dict[str, object]]],
-) -> list[str]:
-    """One endpoint's request or response, indented under its summary row: a
-    contract table of the referenced shape's fields when the payload is
-    itself a shape, or an inline label when it is a scalar or a collection of
-    one. `None` (no descriptor) contributes nothing."""
+) -> DetailEntry | None:
+    """One endpoint's request or response, nested under its detail block's
+    header entry: a contract table of the referenced shape's fields when the
+    payload is itself a shape, or an inline label when it is a scalar or a
+    collection of one. `None` (no descriptor) contributes nothing."""
     if descriptor_json is None:
-        return []
+        return None
     descriptor = json.loads(str(descriptor_json))
     shape_id = descriptor.get("shape_id")
     if not shape_id:
-        return [f"  - {label}: {_inline_descriptor(descriptor)}"]
-    lines = [
-        f"  - {label}:",
-        "",
-        "    | Field | Type | Required | Nullable |",
-        "    |---|---|---|---|",
-    ]
+        return DetailEntry(_text(label), _text(_inline_descriptor(descriptor)), None)
+    rows = []
     for row in fields_by_shape.get(str(shape_id), []):
         # The schema's own field number (protobuf), shown the same
         # unobtrusive way `wire_format` already rides beside `wire_type` —
@@ -818,26 +971,28 @@ def _descriptor_lines(
         field_type = f"{row['wire_type']} ({wire_format})" if wire_format else str(row["wire_type"])
         required = "yes" if row["required"] else "no"
         nullable = "yes" if row["nullable"] else "no"
-        lines.append(f"    | {wire_name} | {field_type} | {required} | {nullable} |")
-    return lines
+        rows.append((_text(wire_name), _text(field_type), _text(required), _text(nullable)))
+    return DetailEntry(_text(label), None, MachineTable(_SHAPE_FIELD_HEADERS, tuple(rows)))
 
 
 @dataclass(frozen=True)
 class _Anchors:
-    """The offsets into the machine document's own line list that the four
-    anchors of `domain/enrichment.Anchor` name (2K design §6).
+    """The indices into the assembled `sections` list that the four anchors of
+    `domain/enrichment.Anchor` name (2K design §6; keyed on SECTION INDEX
+    rather than line offset since 2M design §5b's typed-section refactor —
+    the flat line list these used to be offsets into is gone).
 
-    Recorded WHERE THEY HAPPEN, as the lines are built, rather than found
-    afterwards by searching the finished text for a heading. A search would
-    make placement depend on how a heading is spelled — and on whether an
-    earlier claim's prose happened to contain the same words — which is
+    Recorded WHERE THEY HAPPEN, as the sections are built, rather than found
+    afterwards by searching the finished document for a heading. A search
+    would make placement depend on how a heading is spelled — and on whether
+    an earlier claim's prose happened to contain the same words — which is
     precisely the markdown-parsing round trip §6b forbids.
     """
 
     structure_end: int
     endpoints_end: int
     # One entry per open question, in the order the section renders them: the
-    # row's identity and the offset just past its line.
+    # row's identity and the index just past its own single-item section.
     beside_question: tuple[tuple[tuple[str | None, ...], int], ...]
     questions_end: int
     document_end: int
@@ -861,27 +1016,27 @@ class _Anchors:
 
 
 def _interleave(
-    lines: list[str],
+    machine_sections: tuple[Section, ...],
     anchors: _Anchors,
-    diagram_spans: tuple[tuple[int, int, str], ...],
     overlay: EnrichmentOverlay | None,
     stale: frozenset[int],
     redactor: Redactor,
 ) -> AssembledDocument:
-    """The machine lines, the machine diagrams and the overlay's claims as one
-    ordered section list.
+    """The typed machine sections and the overlay's claims as one ordered
+    section list.
 
-    **Deterministic by construction** (NFR-1): claims are grouped by the offset
-    their anchor resolves to, the boundaries are visited in ascending document
-    order, and within one offset the claims keep the order the overlay file
-    lists them in. Nothing here sorts by content, so re-running assembly over
-    the same workspace and the same overlay produces the same list.
+    **Deterministic by construction** (NFR-1): claims are grouped by the
+    section index their anchor resolves to, the indices are visited in
+    ascending document order, and within one index the claims keep the order
+    the overlay file lists them in. Nothing here sorts by content, so
+    re-running assembly over the same workspace and the same overlay produces
+    the same list.
 
-    Two kinds of boundary meet here: an offset where claims are INSERTED, and a
-    span that is LIFTED OUT of the line list as a `MachineDiagram`. Both are
-    positions in one list, so both are walked in one pass — the alternative,
-    splitting the document twice over, is two representations of where things
-    are and eventually two answers.
+    With 2M design §5b's typed sections, there is no line list left to slice:
+    a claim at index N is simply inserted before `machine_sections[N]` (or
+    after everything, at `N == len(machine_sections)`), which is what makes
+    this a single pass over the machine list rather than the line-splitting
+    this used to be.
     """
     placed: dict[int, list[Claim]] = {}
     if overlay is not None:
@@ -891,23 +1046,18 @@ def _interleave(
             placed.setdefault(anchors.offset_of(claim), []).append(
                 _redacted_claim(index, claim, redactor)
             )
-    spans = {start: (end, mermaid) for start, end, mermaid in diagram_spans}
 
     sections: list[Section] = []
-    previous = 0
-    for offset in sorted(set(placed) | set(spans)):
-        if offset > previous:
-            sections.append(MachineSection(tuple(lines[previous:offset])))
-            previous = offset
-        if offset in placed:
+    for index, section in enumerate(machine_sections):
+        if index in placed:
             assert overlay is not None
-            sections.append(EnrichmentSection(overlay.produced_by, tuple(placed[offset])))
-        if offset in spans:
-            end, mermaid = spans[offset]
-            sections.append(MachineDiagram(mermaid))
-            previous = end
-    if previous < len(lines):
-        sections.append(MachineSection(tuple(lines[previous:])))
+            sections.append(EnrichmentSection(overlay.produced_by, tuple(placed[index])))
+        sections.append(section)
+    if len(machine_sections) in placed:
+        assert overlay is not None
+        sections.append(
+            EnrichmentSection(overlay.produced_by, tuple(placed[len(machine_sections)]))
+        )
     if stale and overlay is not None:
         sections.append(StaleNoticeSection(overlay.produced_by, len(stale)))
     return tuple(sections)
@@ -966,7 +1116,7 @@ def markdown_document(sections: AssembledDocument) -> str:
     lines: list[str] = []
     for index, section in enumerate(sections):
         if not isinstance(section, EnrichmentSection | StaleNoticeSection):
-            lines += _machine_lines(section) or ()
+            lines += _machine_lines(section, is_first=index == 0) or ()
             continue
         if lines and lines[-1] != "":
             lines.append("")
@@ -976,22 +1126,76 @@ def markdown_document(sections: AssembledDocument) -> str:
         # none, which assembly does not build — guarded anyway, because
         # indexing a serializer's input on the assumption that a producer
         # never yields an empty one is a crash waiting for the day it does.
+        # `following` is never the document's own first section (something
+        # always precedes an enrichment block), so `is_first` is left at its
+        # default here.
         following_lines = () if following is None else (_machine_lines(following) or ())
         if following_lines and following_lines[0] != "":
             lines.append("")
     return "\n".join(lines) + "\n"
 
 
-def _machine_lines(section: Section) -> tuple[str, ...] | None:
-    """The markdown lines of a MACHINE section — prose as it was built, a
-    diagram re-fenced — or `None` for a section that is not machine text at
-    all. One place decides what "machine" means, so the emitter's blank-line
-    rule and its verbatim rule cannot disagree about a diagram."""
+def _machine_lines(section: Section, is_first: bool = False) -> tuple[str, ...] | None:
+    """The markdown lines of a MACHINE section — or `None` for a section that
+    is not machine text at all. One place decides what "machine" means, so
+    the emitter's blank-line rule and its per-kind rendering rule cannot
+    disagree about a diagram — or, now, about a heading, a list, a table or a
+    detail block.
+
+    `is_first` matters only for `MachineHeading`: every heading is preceded
+    by a blank line EXCEPT the module title, which opens the document."""
+    if isinstance(section, MachineHeading):
+        lines = () if is_first else ("",)
+        return (*lines, f"{_HEADING_MARKERS[section.level]}{section.text}", "")
+    if isinstance(section, MachineParagraph):
+        return (_runs_to_markdown(section.runs),)
+    if isinstance(section, MachineList):
+        return tuple(f"- {_runs_to_markdown(item)}" for item in section.items)
+    if isinstance(section, MachineTable):
+        return _table_lines(section)
+    if isinstance(section, MachineDetail):
+        return _detail_lines(section)
     if isinstance(section, MachineSection):
         return section.lines
     if isinstance(section, MachineDiagram):
         return ("```mermaid", *section.mermaid.split("\n"), "```")
     return None
+
+
+def _table_lines(table: MachineTable, indent: str = "") -> tuple[str, ...]:
+    """One `MachineTable` as markdown pipe-table lines, `indent` spaces before
+    every `|` — `""` for a top-level endpoint table, four spaces for a shape
+    table nested inside a `MachineDetail` entry, matching the indent the
+    line-based renderer this replaces always used for a nested one."""
+    header = f"{indent}| " + " | ".join(table.headers) + " |"
+    separator = f"{indent}|" + "|".join("---" for _ in table.headers) + "|"
+    rows = tuple(
+        f"{indent}| " + " | ".join(_runs_to_markdown(cell) for cell in row) + " |"
+        for row in table.rows
+    )
+    return (header, separator, *rows)
+
+
+def _detail_lines(detail: MachineDetail) -> tuple[str, ...]:
+    """One `MachineDetail` as the two-level markdown list it always was: a
+    leading blank line (every detail block in the document follows either an
+    endpoint table or another detail block, never opens one), the header
+    entry (`entries[0]`) as the unindented bullet, and every entry after it
+    nested one level, either as an inline `label: body` or as a `label:`
+    followed by its table indented four spaces."""
+    lines: list[str] = [""]
+    for index, entry in enumerate(detail.entries):
+        prefix = "-" if index == 0 else "  -"
+        title = _runs_to_markdown(entry.title)
+        if entry.table is not None:
+            lines.append(f"{prefix} {title}:")
+            lines.append("")
+            lines += _table_lines(entry.table, indent="    ")
+        elif entry.body is not None:
+            lines.append(f"{prefix} {title}: {_runs_to_markdown(entry.body)}")
+        else:
+            lines.append(f"{prefix} {title}")
+    return tuple(lines)
 
 
 def _provenance_line(provenance: Provenance) -> str:

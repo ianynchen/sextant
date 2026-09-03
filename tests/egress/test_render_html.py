@@ -8,12 +8,16 @@ sections, and a second set of fixtures would leave that unchecked.
 """
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from importlib import resources
 
 import pytest
 from test_render_assembly import (
+    GOLDEN_MODULE,
+    GOLDEN_REPORT,
+    GOLDEN_SHAPE_FIELDS,
     MODULE,
     OPEN_QUESTIONS,
     REPORT,
@@ -25,8 +29,13 @@ from test_render_assembly import (
     _verdict,
 )
 
+from sextant.application.resolve.pipeline import ResolveReport
 from sextant.egress.render.asset_pins import MERMAID_SHA256, MERMAID_VERSION
-from sextant.egress.render.document import EnrichmentSection, assemble_module_document
+from sextant.egress.render.document import (
+    EnrichmentSection,
+    MachineSection,
+    assemble_module_document,
+)
 from sextant.egress.render.html import html_document
 
 # Read through the same `importlib.resources` mechanism `html._asset` uses
@@ -189,14 +198,165 @@ def test_the_diagram_viewport_disables_native_text_selection():
     assert "user-select: none" in document
 
 
-# --- machine and enrichment sections, the badge -----------------------
+# --- typed machine sections render real structure (2M design §5b) --------
+
+
+def test_the_fixture_workspace_assembles_with_zero_untyped_machine_sections():
+    """The emitter test the spec calls for by name: a document that exercises
+    every region the assembler cuts at (the golden fixture — a structure
+    diagram, both endpoint tables, an open question, the gap lists, a skipped
+    catalog) carries no `MachineSection` at all. `MachineSection` is the
+    escape hatch left behind for machine text with no typed shape of its own
+    (`document.MachineSection`'s own docstring); a real document reaching it
+    would be exactly the "0 headings, 0 tables" defect this task fixes."""
+    sections = assemble_module_document(
+        GOLDEN_MODULE,
+        GOLDEN_REPORT,
+        "0d17e2",
+        ("com/example/golden/Newer.class: metadata unreadable",),
+        shape_fields=GOLDEN_SHAPE_FIELDS,
+        open_questions=OPEN_QUESTIONS,
+    )
+    assert not any(isinstance(section, MachineSection) for section in sections)
+
+
+def test_every_markdown_heading_becomes_its_own_html_heading():
+    """`<h2>` per `##`, `<h1>` for the module title — the golden fixture's own
+    seven `##` sections (Coverage, Structure, Inbound endpoints, Outbound
+    endpoints, Open questions, Known gaps, Catalogs skipped), pinned by count
+    against the same golden markdown this fixture is proven byte-identical to
+    (`test_render_assembly.test_a_module_with_no_overlay_renders_the_checked_in_golden_document`)."""
+    sections = assemble_module_document(
+        GOLDEN_MODULE,
+        GOLDEN_REPORT,
+        "0d17e2",
+        ("com/example/golden/Newer.class: metadata unreadable",),
+        shape_fields=GOLDEN_SHAPE_FIELDS,
+        open_questions=OPEN_QUESTIONS,
+    )
+    document = _html(sections, module_id=GOLDEN_MODULE.module_id)
+    # Scoped to the document's own body, before the vendored mermaid script:
+    # the pinned asset's own minified text happens to contain a literal
+    # `"## "` (an unrelated string constant), which is not this renderer's
+    # markdown leaking through.
+    body = document.split("<script>", 1)[0]
+    assert document.count("<h1>") == 1
+    assert document.count("<h2>") == 7
+    assert "## " not in body
+
+
+def test_the_endpoint_table_is_a_real_table_with_one_row_per_endpoint():
+    """A real `<table>`, not a `<pre>` a reader has to squint at — one
+    `<tbody>` row per endpoint the golden fixture's report carries: one
+    inbound, one outbound (spec §5b/§7's "HTML table/heading presence for the
+    fixture" pin)."""
+    sections = assemble_module_document(
+        GOLDEN_MODULE,
+        GOLDEN_REPORT,
+        "0d17e2",
+        shape_fields=GOLDEN_SHAPE_FIELDS,
+    )
+    document = _html(sections, module_id=GOLDEN_MODULE.module_id)
+    # Scoped before the vendored mermaid script, which happens to contain one
+    # unrelated `<table>` literal of its own (an HTML template string buried
+    # in the library, not this renderer's output).
+    body = document.split("<script>", 1)[0]
+    assert body.count("<table>") == 2
+    inbound_body = re.search(
+        r"<h2>Inbound endpoints</h2>.*?<tbody>(.*?)</tbody>", document, re.DOTALL
+    )
+    outbound_body = re.search(
+        r"<h2>Outbound endpoints</h2>.*?<tbody>(.*?)</tbody>", document, re.DOTALL
+    )
+    assert inbound_body is not None and outbound_body is not None
+    assert inbound_body.group(1).count("<tr>") == 1
+    assert outbound_body.group(1).count("<tr>") == 1
+    # The identity column is a code run, typeset as `<code>`, never plain text
+    # a reader could mistake for prose.
+    assert "<td><code>GET /v1/orders</code></td>" in document
+    assert "<td><code>POST /billing/invoices</code></td>" in document
+
+
+def test_an_endpoint_detail_renders_as_a_definition_block_with_a_nested_table():
+    """`MachineDetail`'s HTML shape: a bare `<dt>` for the block's own header
+    (the endpoint identity), then a `<dt>`/`<dd>` pair per nested line — here
+    a `Request` entry whose payload is a shape, so its `<dd>` holds a real
+    nested `<table>` rather than the four-space-indented markdown block the
+    old `<pre>` emitter would have shown verbatim."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "POST",
+                "path": "/v1/orders",
+                "handler": "s maven c 1 com/acme/C#create().",
+                "resolution": "resolved",
+                "request_shape": json.dumps(
+                    {
+                        "wire_type": "object",
+                        "wire_format": "",
+                        "nullable": False,
+                        "shape_id": "com/acme/orders/contracts/OrderRequest#",
+                    }
+                ),
+            }
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    shape_fields = [
+        {
+            "shape_id": "com/acme/orders/contracts/OrderRequest#",
+            "ordinal": 0,
+            "wire_name": "customer_id",
+            "wire_type": "string",
+            "wire_format": None,
+            "field_number": None,
+            "required": True,
+            "nullable": False,
+            "item": None,
+        }
+    ]
+    sections = assemble_module_document(MODULE, report, "a3f91c", shape_fields=shape_fields)
+    document = _html(sections)
+    assert '<dl class="detail"><dt><code>POST /v1/orders</code></dt>' in document
+    assert "<dt>Request</dt><dd><table>" in document
+    assert "<td>customer_id</td>" in document
+    assert "<td>string</td>" in document
+
+
+def test_enrichment_sections_render_unchanged_alongside_typed_machine_structure():
+    """The typed-section refactor touches only the machine half: an
+    enrichment block sitting beside a real `<table>`/`<h2>` still carries its
+    badge and its claim text exactly as the pre-existing enrichment pins
+    already prove in isolation — checked here TOGETHER, so a future change to
+    machine typing that somehow broke the enrichment path would fail beside
+    the structure it broke, not in a separate file that might not be run."""
+    sections = assemble_module_document(
+        GOLDEN_MODULE,
+        GOLDEN_REPORT,
+        "0d17e2",
+        shape_fields=GOLDEN_SHAPE_FIELDS,
+        overlay=_overlay(_component()),
+    )
+    document = _html(sections, module_id=GOLDEN_MODULE.module_id)
+    assert "<h2>Inbound endpoints</h2>" in document
+    assert "<table>" in document
+    assert '<span class="llm-badge">LLM</span>' in document
+    assert "Component: Ingestion edge" in document
 
 
 def test_machine_prose_appears_in_the_document():
+    """2M design §5b: a machine heading is real markup now, not markdown text
+    escaped into a `<pre>` — so the section reads as `<h2>Structure</h2>`,
+    never the literal `## Structure` a reader would have had to already know
+    markdown to recognize."""
     sections = assemble_module_document(MODULE, REPORT, "a3f91c", open_questions=OPEN_QUESTIONS)
     document = _html(sections)
-    assert "## Structure" in document
-    assert "## Open questions" in document
+    assert "<h2>Structure</h2>" in document
+    assert "<h2>Open questions</h2>" in document
+    assert "## Structure" not in document
 
 
 def test_a_visible_badge_marks_every_enrichment_block():

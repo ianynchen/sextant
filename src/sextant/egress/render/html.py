@@ -17,15 +17,15 @@ around them is a fixed string, and section order is whatever
 `assemble_module_document` already fixed (NFR-1) — nothing here reads a
 clock.
 
-**Machine prose is shown, not parsed.** A `MachineSection`'s lines are the
-same markdown bytes `markdown_document` emits, carrying `#` headings, `|`
-tables and `-` bullets as their own syntax. Interpreting that syntax into
-`<h1>`/`<table>`/`<ul>` would be exactly the markdown parse the brief
-forbids — this renderer built those bytes as text, once, and a second pass
-that re-derives their structure from it could disagree with the first pass
-about what it means. So they are shown as what they are: escaped text in a
-monospaced block, which keeps a `|`-aligned table readable without this
-module ever asking what a table is.
+**Structure is typed, never parsed back out of text.** `assemble_module_document`
+builds `MachineHeading`/`MachineParagraph`/`MachineList`/`MachineTable`/
+`MachineDetail` at the sites that already know the structure (2M design
+§5b), so this module writes real `<h1>`-`<h3>`, `<table>`, `<ul>` and
+definition-block markup straight from those types — never by scanning
+markdown for `#`, `|` or `-` to guess what they meant. `MachineSection`
+(opaque lines) remains the escape hatch for machine text with no typed shape
+of its own: shown as escaped text in a monospaced block, exactly as before,
+for whatever still reaches this emitter that way.
 
 **Every diagram, wrapped alike.** A `MachineDiagram` and a claim's own
 `DiagramClaim` both reach this module as mermaid *source* rather than a
@@ -66,8 +66,14 @@ from sextant.domain.enrichment import (
 from sextant.egress.render.document import (
     AssembledDocument,
     EnrichmentSection,
+    MachineDetail,
     MachineDiagram,
+    MachineHeading,
+    MachineList,
+    MachineParagraph,
     MachineSection,
+    MachineTable,
+    Run,
     Section,
     StaleNoticeSection,
 )
@@ -90,6 +96,12 @@ pre.machine { background: #f6f8fa; padding: 1rem; overflow-x: auto; border-radiu
 .diagram-canvas pre.mermaid { margin: 0; background: transparent; padding: 1rem; }
 .diagram-caption { padding: 0.5rem 1rem; font-style: italic; color: #57606a;
                     border-top: 1px solid #d0d7de; }
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+th, td { border: 1px solid #d0d7de; padding: 0.35rem 0.6rem; text-align: left; }
+th { background: #f6f8fa; }
+dl.detail { border-left: 2px solid #d0d7de; margin: 0.5rem 0 1rem; padding-left: 1rem; }
+dl.detail dt { font-weight: 600; margin-top: 0.5rem; }
+dl.detail dd { margin: 0.15rem 0 0.5rem; }
 .enrichment { border-left: 4px solid #8250df; background: #faf5ff; padding: 0.25rem 1rem 0.75rem;
               margin: 1rem 0; border-radius: 0 6px 6px 0; }
 .enrichment-header { padding-top: 0.5rem; font-weight: 600; }
@@ -170,6 +182,16 @@ def _refused_if_unsafe_to_inline(name: str, text: str) -> str:
 
 
 def _section_html(section: Section) -> str:
+    if isinstance(section, MachineHeading):
+        return _heading_html(section)
+    if isinstance(section, MachineParagraph):
+        return f"<p>{_runs_html(section.runs)}</p>"
+    if isinstance(section, MachineList):
+        return _list_html(section)
+    if isinstance(section, MachineTable):
+        return _table_html(section)
+    if isinstance(section, MachineDetail):
+        return _detail_html(section)
     if isinstance(section, MachineSection):
         return _machine_html(section)
     if isinstance(section, MachineDiagram):
@@ -178,13 +200,59 @@ def _section_html(section: Section) -> str:
         return _enrichment_html(section)
     if isinstance(section, StaleNoticeSection):
         return _stale_html(section)
-    # `Section` is the closed set `document.py` itself defines
-    # (`type Section = MachineSection | MachineDiagram | EnrichmentSection |
-    # StaleNoticeSection`). A fifth kind reaching here means this emitter has
-    # fallen behind that set, and the honest answer is a loud failure rather
-    # than a section silently missing from the page (brief: "a kind you
-    # don't recognize is a hard error, not a skip").
+    # `Section` is the closed set `document.py` itself defines. A kind
+    # reaching here means this emitter has fallen behind that set, and the
+    # honest answer is a loud failure rather than a section silently missing
+    # from the page (brief: "a kind you don't recognize is a hard error, not
+    # a skip").
     raise ValueError(f"html emitter has no rendering rule for section {section!r}")
+
+
+def _runs_html(runs: tuple[Run, ...]) -> str:
+    """Runs, escaped and typeset — a code run as `<code>`, a text run as
+    plain escaped text — which is the whole reason machine text carries runs
+    now (2M design §5b): this never has to parse a backtick to know where a
+    `<code>` tag belongs."""
+    return "".join(
+        f"<code>{html.escape(content)}</code>" if kind == "code" else html.escape(content)
+        for kind, content in runs
+    )
+
+
+def _heading_html(section: MachineHeading) -> str:
+    level = section.level
+    return f"<h{level}>{html.escape(section.text)}</h{level}>"
+
+
+def _list_html(section: MachineList) -> str:
+    items = "".join(f"<li>{_runs_html(item)}</li>" for item in section.items)
+    return f"<ul>{items}</ul>"
+
+
+def _table_html(table: MachineTable) -> str:
+    head = "".join(f"<th>{html.escape(header)}</th>" for header in table.headers)
+    body = "".join(
+        "<tr>" + "".join(f"<td>{_runs_html(cell)}</td>" for cell in row) + "</tr>"
+        for row in table.rows
+    )
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+
+
+def _detail_html(section: MachineDetail) -> str:
+    """A definition block: the header entry (`entries[0]`, never carrying a
+    body or a table) is a bare `<dt>`; every entry after it is a `<dt>`/`<dd>`
+    pair, the `<dd>` holding either the inline body or a real nested
+    `<table>` — never the indented markdown block this used to be scanned out
+    of a `<pre>`."""
+    parts = ['<dl class="detail">']
+    for entry in section.entries:
+        parts.append(f"<dt>{_runs_html(entry.title)}</dt>")
+        if entry.table is not None:
+            parts.append(f"<dd>{_table_html(entry.table)}</dd>")
+        elif entry.body is not None:
+            parts.append(f"<dd>{_runs_html(entry.body)}</dd>")
+    parts.append("</dl>")
+    return "".join(parts)
 
 
 def _machine_html(section: MachineSection) -> str:

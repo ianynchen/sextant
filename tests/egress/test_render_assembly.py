@@ -241,7 +241,9 @@ def test_a_module_with_no_overlay_assembles_to_machine_sections_alone():
     the HTML emitter's sake, and that is exactly what the golden proves costs
     no bytes."""
     sections = assemble_module_document(MODULE, REPORT, "a3f91c", open_questions=OPEN_QUESTIONS)
-    assert all(isinstance(section, MachineSection | MachineDiagram) for section in sections)
+    assert not any(
+        isinstance(section, EnrichmentSection | StaleNoticeSection) for section in sections
+    )
     assert markdown_document(sections) == _machine_only()
 
 
@@ -256,13 +258,12 @@ def test_the_machine_half_is_byte_identical_with_an_overlay_present():
         open_questions=OPEN_QUESTIONS,
         overlay=_overlay(_component(), _diagram(), _verdict(), _section()),
     )
-    machine: list[str] = []
-    for section in sections:
-        if isinstance(section, MachineSection):
-            machine += section.lines
-        elif isinstance(section, MachineDiagram):
-            machine += ["```mermaid", *section.mermaid.split("\n"), "```"]
-    assert "\n".join(machine) + "\n" == _machine_only()
+    machine = tuple(
+        section
+        for section in sections
+        if not isinstance(section, EnrichmentSection | StaleNoticeSection)
+    )
+    assert markdown_document(machine) == _machine_only()
 
 
 # --- the machine diagram, as data -----------------------------------------
