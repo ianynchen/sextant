@@ -170,14 +170,25 @@ def test_two_empty_code_spans_round_trip():
     assert _runs_to_markdown(_runs("x``y``z")) == "x``y``z"
 
 
-def test_an_odd_backtick_count_does_not_round_trip_and_the_docstring_says_so():
-    """The honest half of the fix: `_runs` round-trips an EVEN backtick count
-    (every span this renderer opened, it closed) and never claims more than
-    that. An unbalanced count is not refused or silently corrected — the
-    trailing text after the last backtick lands at an odd index and comes
-    back out wrapped in a backtick pair it never had, pinned here as the
-    actual (documented) behaviour rather than left as a surprise."""
-    assert _runs_to_markdown(_runs("a`b")) == "a`b`"
+def test_an_odd_backtick_count_now_round_trips_too():
+    """Fix round 2: `_runs` used to claim round-tripping only for an EVEN
+    backtick count, and an unbalanced (odd) count reconstructed with a
+    spurious extra closing backtick (`_runs_to_markdown(_runs("a`b"))` used
+    to produce `` a`b` ``). `_runs` is now TOTAL — every input round-trips,
+    balanced or not — by merging the trailing unmatched split back into one
+    text part with its backtick put back in literally, rather than reading
+    it as a code span this renderer never opened."""
+    assert _runs_to_markdown(_runs("a`b")) == "a`b"
+    assert _runs("a`b") == (("text", "a`b"),)
+
+
+def test_several_stray_backticks_still_round_trip():
+    """Beyond the single-stray case: a genuine balanced pair ahead of a
+    trailing unmatched backtick still splits into its own code run, and only
+    the LAST, unmatched cut is the one merged back."""
+    assert _runs_to_markdown(_runs("a`b`c`d")) == "a`b`c`d"
+    assert _runs("a`b`c`d") == (("text", "a"), ("code", "b"), ("text", "c`d"))
+    assert _runs_to_markdown(_runs("`")) == "`"
 
 
 # --- the regression pin ---------------------------------------------------

@@ -77,6 +77,7 @@ from sextant.egress.render.document import (
     Run,
     Section,
     StaleNoticeSection,
+    _shape_anchor_id,
 )
 
 _STYLE = """
@@ -102,9 +103,7 @@ th, td { border: 1px solid #d0d7de; padding: 0.35rem 0.6rem; text-align: left; }
 th { background: #f6f8fa; }
 /* One typography per meaning: a code run is a code run, whether it sits in a
    table cell, a definition-block identity or a claim's own prose — so this
-   is the ONE rule that gives every `<code>` its chip, and `.claim code`
-   below is redundant with it rather than a second definition to keep in
-   sync. */
+   is the ONE rule that gives every `<code>` its chip. */
 code { background: rgba(0, 0, 0, 0.06); border-radius: 4px; padding: 0 0.25rem; }
 .detail-identity { font-weight: 600; margin: 1rem 0 0.25rem; }
 dl.detail { border-left: 2px solid #d0d7de; margin: 0 0 1rem; padding-left: 1rem; }
@@ -118,7 +117,6 @@ dl.detail dd { margin: 0.15rem 0 0.5rem; }
              letter-spacing: 0.03em; text-transform: uppercase; }
 .stale-notice { border-left-color: #9a6700; background: #fff8c5; }
 .claim { margin: 0.75rem 0 0; }
-.claim code { background: rgba(0, 0, 0, 0.06); border-radius: 4px; padding: 0 0.25rem; }
 """
 
 
@@ -217,14 +215,25 @@ def _section_html(section: Section) -> str:
 
 
 def _runs_html(runs: tuple[Run, ...]) -> str:
-    """Runs, escaped and typeset — a code run as `<code>`, a text run as
-    plain escaped text — which is the whole reason machine text carries runs
-    now (2M design §5b): this never has to parse a backtick to know where a
-    `<code>` tag belongs."""
-    return "".join(
-        f"<code>{html.escape(content)}</code>" if kind == "code" else html.escape(content)
-        for kind, content in runs
-    )
+    """Runs, escaped and typeset — a code run as `<code>`, a `shaperef` run
+    as an in-page link to its `### Shapes` entry, a text run as plain
+    escaped text — which is the whole reason machine text carries runs now
+    (2M design §5b): this never has to parse a backtick, or guess at a shape
+    name sitting in plain prose, to know where a `<code>` tag or a link
+    belongs. The href is `_shape_anchor_id` over the run's own content —
+    the SAME function the `### Shapes` entry's own header id is built with
+    (`_detail_html`), so the two can never name two different anchors for
+    one shape."""
+    parts = []
+    for kind, content in runs:
+        if kind == "code":
+            parts.append(f"<code>{html.escape(content)}</code>")
+        elif kind == "shaperef":
+            href = _shape_anchor_id(content)
+            parts.append(f'<a href="#{html.escape(href)}">{html.escape(content)}</a>')
+        else:
+            parts.append(html.escape(content))
+    return "".join(parts)
 
 
 def _heading_html(section: MachineHeading) -> str:
@@ -262,10 +271,27 @@ def _detail_html(section: MachineDetail) -> str:
     nested `<table>` — never the indented markdown block this used to be
     scanned out of a `<pre>`.
 
-    A header with no entries after it (reachable once every endpoint gets
-    one — 2M §5c) renders as just the `<p>`, never an empty `<dl></dl>`."""
+    A header with no entries after it (every endpoint gets one now — 2M
+    §5c) renders as just the `<p>`, never an empty `<dl></dl>`.
+
+    `section.anchor` carries the header's `id` — set only for a `### Shapes`
+    entry, so a `shaperef` run's `<a href="#...">` elsewhere in the page has
+    somewhere to land."""
+    if not section.entries:
+        # `entries` is never built empty by `assemble_module_document` — every
+        # `MachineDetail` this renderer produces carries at least its own
+        # header — but a `MachineDetail` handed to this function directly
+        # (a test, a future caller) is not this module's to trust blind. The
+        # honest answer is a message naming what is missing, not the bare
+        # `not enough values to unpack` a plain `header, *rest = ()` would
+        # raise here.
+        raise ValueError(
+            "a MachineDetail with no entries has no identity to render — every "
+            "detail block must carry at least its own header entry"
+        )
     header, *rest = section.entries
-    identity = f'<p class="detail-identity">{_runs_html(header.title)}</p>'
+    anchor = f' id="{html.escape(section.anchor)}"' if section.anchor else ""
+    identity = f'<p class="detail-identity"{anchor}>{_runs_html(header.title)}</p>'
     if not rest:
         return identity
     parts = ['<dl class="detail">']

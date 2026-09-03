@@ -40,7 +40,7 @@ from sextant.domain.enrichment import (
     open_question_identity,
 )
 from sextant.domain.redaction import Redactor
-from sextant.domain.symbols import bare_descriptor
+from sextant.domain.symbols import bare_descriptor, method_name, owner_of
 from sextant.egress.render.diagrams import class_diagram
 from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
 
@@ -180,28 +180,36 @@ class ClaimRedactionError(ValueError):
 
 type Run = tuple[str, str]
 """One inline span of machine text: `("code", content)` for a backtick-quoted
-identifier, path or key, `("text", content)` for everything else. The
-builders below already know which is which — every code span they ever wrote
-was wrapped in backticks by hand — so a `Run` never has to be guessed at
-after the fact by an HTML emitter that would otherwise have to decide what a
-backtick means on its own (2M design §5b)."""
+identifier, path or key, `("text", content)` for everything else, or
+`("shaperef", name)` for a named shape's display name where it is CITED
+rather than declared — a `### Shapes` entry's own table lives once, under
+its own heading, and every other place that shape is mentioned carries this
+instead of a second copy (2M design §5c). The builders below already know
+which is which — every code span they ever wrote was wrapped in backticks by
+hand, and every citation is built through `_shape_ref` alone — so a `Run`
+never has to be guessed at after the fact by an HTML emitter that would
+otherwise have to decide what a backtick means on its own (2M design §5b).
+`html.py` turns a `shaperef` run into an in-page link to the `### Shapes`
+entry of the same name; every other serializer treats it as plain text,
+since naming the shape is all a reader needs where linking is not
+possible."""
 
 
 def _runs(markdown: str) -> tuple[Run, ...]:
     """`markdown` split into alternating text/code runs on backtick-delimited
     spans — the inverse of how every machine string below is already built.
 
-    **Round-trips exactly when `markdown` carries an EVEN number of
-    backticks** — every code span this renderer ever opened, it closed, so
-    its own output always qualifies, and so does any evidence text (a
-    reason, a candidate's `why`/`seen_in`) that happens to contain a
-    complete, or no, backtick pair. An ODD (unbalanced) count does NOT
-    round-trip: the trailing part after the last backtick lands at an ODD
-    index and is read back as a code run, so `_runs_to_markdown(_runs("a`b"))`
-    produces `` a`b` `` — a spurious closing backtick the input never had —
-    never a raised error or a dropped character. This function does not
-    validate; it only ever has to be reversible for the balanced case that is
-    every string it actually receives in practice.
+    **Total: round-trips for ANY input, balanced or not** (fix round 2). A
+    balanced (EVEN) backtick count is the common case — every code span this
+    renderer ever opened, it closed — and splits cleanly into alternating
+    text/code parts. An UNBALANCED (odd) count leaves one backtick with no
+    partner, which `str.split` turns into one EXTRA part (an even part
+    count); merging that trailing pair back into one text part, with the
+    backtick that used to separate them put back in literally, undoes
+    exactly that one bad cut. Everything before it still alternates
+    text/code normally, so this is a single, local repair rather than a
+    second parse — `_runs_to_markdown(_runs("a`b")) == "a`b"` now, not the
+    `` a`b` `` a spurious reconstructed closing backtick used to produce.
 
     Kept EVEN for an empty code span (`` `` ``, two adjacent backticks): `if
     part or i % 2` — never `if part` alone, which would silently drop an
@@ -210,17 +218,23 @@ def _runs(markdown: str) -> tuple[Run, ...]:
     outright, not merely misplaced. Dropping an EMPTY text run is always
     safe: an empty string contributes nothing to `_runs_to_markdown` whether
     kept or dropped."""
+    parts = markdown.split("`")
+    if len(parts) % 2 == 0:
+        parts = [*parts[:-2], f"{parts[-2]}`{parts[-1]}"]
     return tuple(
-        ("code" if i % 2 else "text", part)
-        for i, part in enumerate(markdown.split("`"))
-        if part or i % 2
+        ("code" if i % 2 else "text", part) for i, part in enumerate(parts) if part or i % 2
     )
 
 
 def _runs_to_markdown(runs: Sequence[Run]) -> str:
-    """The exact inverse of `_runs`: a code run is rewrapped in backticks, a
-    text run passes through unchanged, and the two concatenate back into the
-    original markdown."""
+    """The exact inverse of `_runs` over the two kinds `_runs` can ever
+    produce: a code run is rewrapped in backticks, a text run passes through
+    unchanged, and the two concatenate back into the original markdown. A
+    `shaperef` run — never one `_runs` itself produces, only `_shape_ref` —
+    renders as its bare name: markdown has no in-page link to give it, so
+    NAMING the shape is the whole of what this serializer owes a reader
+    (2M design §5c; `html.py`'s own emitter is what turns the same run into
+    a link)."""
     return "".join(f"`{content}`" if kind == "code" else content for kind, content in runs)
 
 
@@ -236,6 +250,16 @@ def _code(content: str) -> tuple[Run, ...]:
     """A single run of code — for a value that is ALWAYS a whole code span on
     its own (a wire identity, a bare descriptor), never text mixed with one."""
     return (("code", content),)
+
+
+def _shape_ref(name: str) -> tuple[Run, ...]:
+    """A single run naming a shape declared once, elsewhere, in the
+    `### Shapes` subsection (2M design §5c) — `name` is the shape's DISPLAY
+    name (`simple_name(shape_id)`), the same string the shape's own entry is
+    headed by, so both ends of the reference are built from the one value
+    rather than a name derived one way at the citation and another at the
+    declaration."""
+    return (("shaperef", name),)
 
 
 @dataclass(frozen=True)
@@ -331,9 +355,17 @@ class MachineDetail:
 
     A `MachineTable` entry serializes as a real nested `<table>` rather than
     the indented markdown block scanned back apart — the whole point of
-    typing this instead of leaving it as `MachineSection` lines."""
+    typing this instead of leaving it as `MachineSection` lines.
+
+    `anchor` names the HTML `id` this block's header is addressed by — set
+    only for a `### Shapes` entry, which a `shaperef` run elsewhere in the
+    document links to (`_shape_anchor_id`, 2M design §5c); `None` for every
+    ordinary endpoint block, which nothing points at. Markdown ignores it —
+    an in-page id is an HTML-only concept — so this is the one field the two
+    serializers do not both read from every block."""
 
     entries: tuple[DetailEntry, ...]
+    anchor: str | None = None
 
 
 @dataclass(frozen=True)
@@ -447,9 +479,39 @@ def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
     return f"{prefix}{rendered_method} {rendered_path}"
 
 
-def _handler(endpoint: dict[str, object]) -> str:
-    """The Handler column: the owner's bare descriptor, or one of the two
-    different things a NULL `handler` can mean.
+def _short_handler(descriptor: str) -> str:
+    """`descriptor` (a BARE descriptor, `bare_descriptor`'s own output) as the
+    human spelling a reader recognizes at a glance: the owning type's simple
+    name and the method name, joined by `#` — `UserResource#deleteUser` for
+    `io/github/jhipster/sample/web/rest/UserResource#deleteUser(sig_4a71b976).`
+    — never the package path, the `sig_` disambiguator, or the trailing `.`
+    (2M design §5c, the JHipster field run's own example). A descriptor with
+    no owner (a free function) has no `#` to join around, so it renders as
+    its own bare simple name alone.
+
+    Deliberately lossy: two overloads sharing a name now spell identically
+    here (the ruled consequence spec §5c states outright), which is exactly
+    why the FULL descriptor — `sig_` hash included — moves to the endpoint's
+    detail block instead of being deleted (`_handler_identity`, below)."""
+    owner = owner_of(descriptor)
+    method = method_name(descriptor)
+    if owner is None:
+        return simple_name(method)
+    return f"{simple_name(owner)}#{method}"
+
+
+def _handler_symbol(endpoint: dict[str, object]) -> str | None:
+    """The Handler column's underlying symbol — the owner's BARE descriptor,
+    package and `sig_` hash included — or `None` where there is no code to
+    report at all. `_handler_fallback` is the two different things a `None`
+    here can mean; this function only ever answers "is there a symbol."""
+    handler = endpoint.get("handler")
+    return None if handler is None else bare_descriptor(str(handler))
+
+
+def _handler_fallback(endpoint: dict[str, object]) -> str:
+    """One of the two different things a NULL `handler` can mean, for a row
+    `_handler_symbol` answered `None` for.
 
     Until 2H every inbound row with no handler was a row whose address could
     not be read either, so one word covered both. `schema_operations` (2H
@@ -467,20 +529,55 @@ def _handler(endpoint: dict[str, object]) -> str:
     row that names neither a handler nor a caller and still resolved its
     address is one whose evidence had no symbol to give.
     """
-    handler = endpoint.get("handler")
-    if handler is not None:
-        return f"`{bare_descriptor(str(handler))}`"
     if endpoint.get("caller") is None and endpoint.get("resolution") == "resolved":
         return "none recorded"
     return "unresolved"
 
 
+def _handler_cell(endpoint: dict[str, object]) -> tuple[Run, ...]:
+    """The Handler column itself: the HUMAN spelling of the symbol, as a code
+    run, or the fallback text where there is none — never the machine
+    identity `io/github/.../UserResource#deleteUser(sig_4a71b976).` used to
+    print verbatim (2M design §5c). The full identity is not lost, only
+    moved: `_handler_identity` renders it in the endpoint's own detail block,
+    which every endpoint now gets."""
+    symbol = _handler_symbol(endpoint)
+    if symbol is not None:
+        return _code(_short_handler(symbol))
+    return _text(_handler_fallback(endpoint))
+
+
+def _handler_identity(endpoint: dict[str, object]) -> tuple[Run, ...]:
+    """The full identity that used to be the Handler column's whole content —
+    package path, `sig_` hash and all — now the FIRST line of the endpoint's
+    own detail block (2M design §5c): moved, not deleted, and still the one
+    place two same-named overloads read as the two different methods they
+    are. Where there is no symbol, the same fallback text the column itself
+    would have shown stands in — there is nothing to move for a row that had
+    no symbol to begin with."""
+    symbol = _handler_symbol(endpoint)
+    if symbol is not None:
+        return _code(symbol)
+    return _text(_handler_fallback(endpoint))
+
+
+_MEDIA_NONE_RECORDED = "—"  # em dash — never a bare blank cell.
+
+# The legend printed once, directly under an inbound table that carries a
+# Media column: the glyph is self-explanatory only once, not on every row it
+# appears in (2M design §5c).
+_MEDIA_LEGEND = f"Media reads `consumes → produces`; `{_MEDIA_NONE_RECORDED}` means none recorded."
+
+
 def _media(value: object) -> str:
     """One side of the Media column: the JSON list's comma-joined members, or
-    `-` when the side is NULL — never a bare blank cell, so a row with both
-    sides NULL still says so rather than reading as an omission."""
+    the em dash `—` when the side is NULL — never a bare blank cell, so
+    a row with both sides NULL still says so rather than reading as an
+    omission. `—` rather than a bare hyphen (2M design §5c, the JHipster
+    field run): one glyph, one meaning, spelled out once in `_MEDIA_LEGEND`
+    rather than read as a stray dash a table cell just happens to contain."""
     if value is None:
-        return "-"
+        return _MEDIA_NONE_RECORDED
     return ", ".join(json.loads(str(value)))
 
 
@@ -700,6 +797,11 @@ def assemble_module_document(
 
     sections.append(MachineHeading(2, "Inbound endpoints"))
     inbound = [e for e in report.endpoints if str(e["direction"]) in ("inbound", "both")]
+    # Shapes cited by a NAMED descriptor below, keyed by shape id in
+    # FIRST-SEEN order (`_named_shape_reference` mutates this in place) — read
+    # back once every inbound endpoint has been visited, to build `### Shapes`
+    # exactly once per shape rather than once per citation (2M design §5c).
+    named_shapes: dict[str, MachineTable] = {}
     if inbound:
         headers = ("Endpoint", "Handler", "Media", "Format", "Resolution")
         rows = []
@@ -708,26 +810,42 @@ def assemble_module_document(
             rows.append(
                 (
                     _code(_wire_identity(endpoint, redactor)),
-                    _runs(_handler(endpoint)),
+                    _handler_cell(endpoint),
                     _text(media),
                     _text(_format(endpoint)),
                     _text(str(endpoint["resolution"])),
                 )
             )
         sections.append(MachineTable(headers, tuple(rows)))
+        sections.append(MachineParagraph(_runs(_MEDIA_LEGEND)))
+        # Every inbound endpoint now gets a detail block, not only the ones
+        # with a `Via`/`Request`/`Response` line to hang under it (2M design
+        # §5c, adversarial review C3): the full symbol the Handler column no
+        # longer spells out lives here instead, and with one block per row in
+        # table order, correlating a block back to its row needs no shared
+        # identity between them.
         for endpoint in inbound:
-            request = _descriptor_entry("Request", endpoint.get("request_shape"), fields_by_shape)
+            request = _descriptor_entry(
+                "Request", endpoint.get("request_shape"), fields_by_shape, named_shapes
+            )
             response = _descriptor_entry(
-                "Response", endpoint.get("response_shape"), fields_by_shape
+                "Response", endpoint.get("response_shape"), fields_by_shape, named_shapes
             )
             via = _via_entry(endpoint, origin_by_symbol)
             entries = [entry for entry in (via, request, response) if entry is not None]
-            if entries:
-                identity = _wire_identity(endpoint, redactor)
-                header = DetailEntry(_code(identity), None, None)
-                sections.append(MachineDetail((header, *entries)))
+            header = DetailEntry(_handler_identity(endpoint), None, None)
+            sections.append(MachineDetail((header, *entries)))
             if via is not None:
                 attributed.add(_wire_identity(endpoint, redactor))
+        if named_shapes:
+            sections.append(MachineHeading(3, "Shapes"))
+            for shape_id, table in named_shapes.items():
+                name = simple_name(shape_id)
+                shape_header = DetailEntry(_code(name), None, None)
+                fields_entry = DetailEntry(_text("Fields"), None, table)
+                sections.append(
+                    MachineDetail((shape_header, fields_entry), anchor=_shape_anchor_id(shape_id))
+                )
     else:
         sections.append(MachineParagraph(_runs("None found.")))
 
@@ -977,24 +1095,24 @@ def _inline_descriptor(descriptor: dict[str, object]) -> str:
 
 _SHAPE_FIELD_HEADERS = ("Field", "Type", "Required", "Nullable")
 
+# `Response: none recorded` (2M design §5c): a shape whose OWN fields query
+# came back empty renders one line, never a table with a header row and no
+# body — the `## Coverage`/`## Known gaps` NFR-7 discipline this document
+# keeps everywhere else, extended to a shape table specifically because a
+# header-only `| Field | Type | Required | Nullable |` with nothing under it
+# is indistinguishable, at a glance, from a table a reader just has not
+# scrolled far enough to see the rows of.
+_SHAPE_NONE_RECORDED = "none recorded"
 
-def _descriptor_entry(
-    label: str,
-    descriptor_json: object,
-    fields_by_shape: dict[str, list[dict[str, object]]],
-) -> DetailEntry | None:
-    """One endpoint's request or response, nested under its detail block's
-    header entry: a contract table of the referenced shape's fields when the
-    payload is itself a shape, or an inline label when it is a scalar or a
-    collection of one. `None` (no descriptor) contributes nothing."""
-    if descriptor_json is None:
-        return None
-    descriptor = json.loads(str(descriptor_json))
-    shape_id = descriptor.get("shape_id")
-    if not shape_id:
-        return DetailEntry(_text(label), _text(_inline_descriptor(descriptor)), None)
-    rows = []
-    for row in fields_by_shape.get(str(shape_id), []):
+
+def _shape_fields_table(rows: Sequence[dict[str, object]]) -> MachineTable:
+    """A shape's OWN field table — `_SHAPE_FIELD_HEADERS` beside one row per
+    `shape_fields` entry — factored out of `_descriptor_entry` so it can be
+    built exactly once per shape (`_named_shape_reference`) rather than once
+    per endpoint that happens to reference the same shape (2M design §5c,
+    "each shape's table emitted exactly once")."""
+    table_rows = []
+    for row in rows:
         # The schema's own field number (protobuf), shown the same
         # unobtrusive way `wire_format` already rides beside `wire_type` —
         # NULL for Avro and every annotation-derived field, which render
@@ -1009,8 +1127,66 @@ def _descriptor_entry(
         field_type = f"{row['wire_type']} ({wire_format})" if wire_format else str(row["wire_type"])
         required = "yes" if row["required"] else "no"
         nullable = "yes" if row["nullable"] else "no"
-        rows.append((_text(wire_name), _text(field_type), _text(required), _text(nullable)))
-    return DetailEntry(_text(label), None, MachineTable(_SHAPE_FIELD_HEADERS, tuple(rows)))
+        table_rows.append((_text(wire_name), _text(field_type), _text(required), _text(nullable)))
+    return MachineTable(_SHAPE_FIELD_HEADERS, tuple(table_rows))
+
+
+def _shape_anchor_id(shape_id_or_name: str) -> str:
+    """The in-page HTML anchor a named shape's `### Shapes` entry is
+    addressed by, derived from its DISPLAY name (`simple_name`) — idempotent
+    over an already-simple name, so `document.py` (which has the full shape
+    id on hand while assembling) and `html.py` (which only ever sees the
+    already-shortened name a `shaperef` run carries) compute the exact same
+    string without either re-deriving the other's input. A document with two
+    same-named shapes from different packages already draws them as one node
+    in `## Structure`'s class diagram (`diagrams.class_diagram`'s own
+    `simple_name` use); a second point of that same collision here is not a
+    new limitation this task introduces."""
+    return f"shape-{simple_name(shape_id_or_name)}"
+
+
+def _named_shape_reference(
+    shape_id: str,
+    fields_by_shape: dict[str, list[dict[str, object]]],
+    shapes: dict[str, MachineTable],
+) -> tuple[Run, ...]:
+    """One endpoint's citation of a NAMED shape (a descriptor carrying a
+    `shape_id`) — `_shape_ref`'s runs where the shape has recorded fields,
+    registering the shape's table into `shapes` (keyed by id, in FIRST-SEEN
+    order) the one time it is first cited so `### Shapes` can emit it exactly
+    once afterward; plain fallback text for an empty shape, which registers
+    nothing (2M design §5c: no header-only table anywhere, including under
+    `### Shapes`)."""
+    rows = fields_by_shape.get(shape_id, [])
+    if not rows:
+        return _text(_SHAPE_NONE_RECORDED)
+    if shape_id not in shapes:
+        shapes[shape_id] = _shape_fields_table(rows)
+    return _shape_ref(simple_name(shape_id))
+
+
+def _descriptor_entry(
+    label: str,
+    descriptor_json: object,
+    fields_by_shape: dict[str, list[dict[str, object]]],
+    shapes: dict[str, MachineTable],
+) -> DetailEntry | None:
+    """One endpoint's request or response, nested under its detail block's
+    header entry: a citation of the shape's own `### Shapes` entry when the
+    payload is itself a NAMED shape (`_named_shape_reference`), or an inline
+    label when it is a scalar or a collection of one (anonymous — nothing to
+    tabulate, so nothing to name or move). `None` (no descriptor) contributes
+    nothing. `shapes` is mutated in place — the caller reads it back once
+    every endpoint has been visited, to build `### Shapes` itself."""
+    if descriptor_json is None:
+        return None
+    descriptor = json.loads(str(descriptor_json))
+    shape_id = descriptor.get("shape_id")
+    if not shape_id:
+        return DetailEntry(_text(label), _text(_inline_descriptor(descriptor)), None)
+    return DetailEntry(
+        _text(label), _named_shape_reference(str(shape_id), fields_by_shape, shapes), None
+    )
 
 
 @dataclass(frozen=True)

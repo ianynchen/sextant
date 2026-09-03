@@ -285,14 +285,17 @@ def test_the_endpoint_table_is_a_real_table_with_one_row_per_endpoint():
 
 def test_an_endpoint_detail_renders_as_a_definition_block_with_a_nested_table():
     """`MachineDetail`'s HTML shape (fix round 1, IMPORTANT 2): the block's
-    own header — the endpoint identity — renders OUTSIDE the definition list
-    as its own `<p class="detail-identity">`, never a sibling `<dt>` beside
-    `Request`/`Response` where the content model would read the identity as
-    just another name for the same table. Every entry after it is a
-    `<dt>`/`<dd>` pair — here a `Request` entry whose payload is a shape, so
-    its `<dd>` holds a real nested `<table>` rather than the
-    four-space-indented markdown block the old `<pre>` emitter would have
-    shown verbatim."""
+    own header renders OUTSIDE the definition list as its own
+    `<p class="detail-identity">`, never a sibling `<dt>` beside `Request`/
+    `Response` where the content model would read the identity as just
+    another name for the same table.
+
+    2M §5c moved WHAT the header names: the full handler symbol, not the
+    wire identity — and a `Request` whose payload is a NAMED shape with
+    recorded fields no longer nests its own table here at all; it links to
+    the shape's own entry under `### Shapes`, where the real `<table>` now
+    lives exactly once (`test_a_named_shape_is_linked_from_its_endpoint_and_
+    declared_once_under_shapes` below pins that block directly)."""
     report = ResolveReport(
         facts_loaded=1,
         endpoints=[
@@ -331,25 +334,87 @@ def test_an_endpoint_detail_renders_as_a_definition_block_with_a_nested_table():
     sections = assemble_module_document(MODULE, report, "a3f91c", shape_fields=shape_fields)
     document = _html(sections)
     assert (
-        '<p class="detail-identity"><code>POST /v1/orders</code></p><dl class="detail">' in document
+        '<p class="detail-identity"><code>com/acme/C#create().</code></p><dl class="detail">'
+        in document
     )
-    assert "<dt>Request</dt><dd><table>" in document
+    assert '<dt>Request</dt><dd><a href="#shape-OrderRequest">OrderRequest</a></dd>' in document
     assert "<td>customer_id</td>" in document
     assert "<td>string</td>" in document
     # The identity never leaks into the list itself as a `<dt>` of its own.
-    assert "<dt><code>POST /v1/orders</code></dt>" not in document
+    assert "<dt><code>com/acme/C#create().</code></dt>" not in document
+
+
+def test_a_named_shape_is_linked_from_its_endpoint_and_declared_once_under_shapes():
+    """The `### Shapes` subsection itself: its own header carries the `id`
+    a `shaperef` link targets, and the field table renders exactly once,
+    under `<h3>Shapes</h3>` — never re-nested under the endpoint's own
+    `Request`/`Response` entry (2M design §5c)."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "POST",
+                "path": "/v1/orders",
+                "handler": "s maven c 1 com/acme/C#create().",
+                "resolution": "resolved",
+                "request_shape": json.dumps(
+                    {
+                        "wire_type": "object",
+                        "wire_format": "",
+                        "nullable": False,
+                        "shape_id": "com/acme/orders/contracts/OrderRequest#",
+                    }
+                ),
+            }
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    shape_fields = [
+        {
+            "shape_id": "com/acme/orders/contracts/OrderRequest#",
+            "ordinal": 0,
+            "wire_name": "customer_id",
+            "wire_type": "string",
+            "wire_format": None,
+            "field_number": None,
+            "required": True,
+            "nullable": False,
+            "item": None,
+        }
+    ]
+    sections = assemble_module_document(MODULE, report, "a3f91c", shape_fields=shape_fields)
+    document = _html(sections)
+    assert "<h3>Shapes</h3>" in document
+    assert '<p class="detail-identity" id="shape-OrderRequest"><code>OrderRequest</code></p>' in (
+        document
+    )
+    assert document.count("<td>customer_id</td>") == 1
 
 
 def test_a_header_only_detail_block_renders_as_just_the_identity_paragraph():
     """The orphan-`<dt>` case IMPORTANT 2 also fixes: a `MachineDetail` whose
-    entries are ONLY the bare header (reachable once 2M §5c makes every
-    endpoint emit one, even with nothing else to say) renders as the `<p>`
-    alone — never an empty `<dl class="detail"></dl>` sitting under it."""
+    entries are ONLY the bare header (now reachable directly — 2M §5c makes
+    every endpoint emit one, even with nothing else to say) renders as the
+    `<p>` alone — never an empty `<dl class="detail"></dl>` sitting under
+    it."""
     detail = MachineDetail((DetailEntry(_code("GET /v1/orders"), None, None),))
     document = _html((detail,))
     body = document.split("<script>", 1)[0]
     assert body.endswith('<p class="detail-identity"><code>GET /v1/orders</code></p>\n')
     assert "<dl" not in body
+
+
+def test_a_detail_block_with_no_entries_at_all_is_a_domain_worded_error():
+    """`assemble_module_document` never builds a `MachineDetail` with zero
+    entries — every block it produces carries at least its own header — but
+    the html emitter is not this module's alone to trust blind (2M §5c ride-
+    along): `header, *rest = ()` would otherwise raise Python's own generic
+    unpacking error, naming neither the section nor what is missing from
+    it."""
+    with pytest.raises(ValueError, match="no entries"):
+        _html((MachineDetail(()),))
 
 
 def test_enrichment_sections_render_unchanged_alongside_typed_machine_structure():

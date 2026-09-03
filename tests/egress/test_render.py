@@ -362,9 +362,7 @@ def test_kafka_inbound_row_renders_verbless_with_no_unresolved_marker():
     )
     text = render_module_document(MODULE, report, "a3f91c")
     assert (
-        "| `kafka order-events` | "
-        "`com/acme/orders/listeners/OrderEventsListener#onMessage(String).` | - → - | "
-        "unresolved | resolved |"
+        "| `kafka order-events` | `OrderEventsListener#onMessage` | — → — | unresolved | resolved |"
     ) in text
     assert "(unresolved)" not in text
 
@@ -531,7 +529,7 @@ def test_inbound_row_with_no_handler_renders_unresolved_in_the_handler_column():
         coverage={"documents": 1, "partial_documents": 0},
     )
     text = render_module_document(MODULE, report, "a3f91c")
-    assert "| `GET /v1/orders` | unresolved | - → - | unresolved | unresolved |" in text
+    assert "| `GET /v1/orders` | unresolved | — → — | unresolved | unresolved |" in text
 
 
 def test_a_schema_declared_row_with_no_handler_says_so_rather_than_unresolved():
@@ -565,7 +563,7 @@ def test_a_schema_declared_row_with_no_handler_says_so_rather_than_unresolved():
         coverage={"documents": 1, "partial_documents": 0},
     )
     text = render_module_document(MODULE, report, "a3f91c")
-    assert "| `graphql query auditTrail` | none recorded | - → - | unresolved | resolved |" in text
+    assert "| `graphql query auditTrail` | none recorded | — → — | unresolved | resolved |" in text
 
 
 def test_messaging_gap_retires_and_both_lists_rotate_together():
@@ -622,7 +620,7 @@ def test_inbound_media_column_joins_declared_lists():
     )
     text = render_module_document(MODULE, report, "a3f91c")
     assert (
-        "| `POST /v1/orders/detailed` | `com/acme/C#createDetailed().` | "
+        "| `POST /v1/orders/detailed` | `C#createDetailed` | "
         "application/json → application/json | unresolved | resolved |"
     ) in text
 
@@ -661,10 +659,9 @@ def test_inbound_media_column_shows_a_dash_on_either_or_both_null_sides():
     )
     text = render_module_document(MODULE, report, "a3f91c")
     assert (
-        "| `GET /v1/orders/{id}` | `com/acme/C#get().` | - → application/json | "
-        "unresolved | resolved |"
+        "| `GET /v1/orders/{id}` | `C#get` | — → application/json | unresolved | resolved |"
     ) in text
-    assert "| `GET /v1/orders` | `com/acme/C#list().` | - → - | unresolved | resolved |" in text
+    assert "| `GET /v1/orders` | `C#list` | — → — | unresolved | resolved |" in text
 
 
 def test_coverage_section_names_environments_and_the_unresolved_key_with_its_reason():
@@ -893,12 +890,18 @@ def test_an_attribution_is_stated_once_per_identity_not_once_per_section():
     """A `both` row is listed in BOTH endpoint tables — it is one wire this
     module exposes and calls — so an attribution written under the inbound
     table must not be written again under the outbound one. The same finding
-    twice reads as two."""
+    twice reads as two.
+
+    The detail block's own header no longer carries the wire identity (2M
+    design §5c moved that line's content to the handler's full symbol, or —
+    as here, with no handler — its fallback text), so the dedup is checked
+    against the attribution line itself rather than the header bullet that
+    used to carry the identity."""
     row = {**_LIBRARY_ROW, "direction": "both", "handler": None, "caller": _LIBRARY_CALLER}
     text = render_module_document(
         MODULE, _report_with(row), "a3f91c", library_symbols=_LIBRARY_SYMBOLS
     )
-    assert text.count("- `soap {http://billing.example.com/ws}stubCharge`") == 1
+    assert text.count("Via: `com.example:orders-soap-client`") == 1
 
 
 def test_a_library_that_could_not_be_scanned_is_named_beside_one_that_did_not_resolve():
