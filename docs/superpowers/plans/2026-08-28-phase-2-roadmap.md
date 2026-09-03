@@ -55,6 +55,23 @@ messaging) both exist.
 | **2J** | Second frameworks | planned | Micronaut, Quarkus/JAX-RS, MicroProfile REST Client — **zero engine changes is the acceptance test**; then the typed-Catalog refactor | none — that is the point |
 | **L** | Linking and system scope | planned | `participants`, `links`, DR-5 over bundles; the system document; shape provenance fixed structurally | M05/M06 over federated Parquet |
 
+**The gap program interleaves here, ahead of 2J — not a row in the table above, which is
+the coverage program's own sequence.** A 2026-09-02 gap analysis found build systems and
+project shape (gap area A) never priced into that table, plus four rendered-output defects
+a live analysis of `examples/jhipster-sample-app` surfaced in a real browser. **2M —
+delivered** ([spec](../specs/2026-09-02-phase-2m-build-and-output-design.md)):
+`GradleDetector` beside `MavenDetector`, learning a Gradle build by running the project's
+own wrapper against a read-only init script; Maven's `<modules>` walk (now recursive) and
+Gradle's own settings-evaluation module list, each non-library, non-BOM module analyzed
+into its own workspace and pinned in `modules.json`; and the four rendered-output fixes —
+backtick-quoted mermaid identifiers so a `$`-named inner class no longer breaks the first
+diagram, typed HTML sections (`<h1>`-`<h3>`, real `<table>`s) replacing the machine half's
+three giant `<pre>` blocks, endpoint/shape readability (human handler spelling, an
+always-emitted detail block, a `### Shapes` subsection), and inline-code/fenced-block
+formatting in LLM claim prose. 2N (enrichment polish), 2O (Spring surface) and 2P (Spring
+Cloud) follow the same gap program before 2J resumes; the version-bump gate below is
+unchanged by any of it.
+
 **The remaining sequence, and its three milestones** (2K deliberately moved ahead of 2J,
 ruled 2026-08-31: a complete end-to-end flow for module-level Java/Spring — coverage,
 enrichment, docs and export together — comes before any second Java framework; L moved

@@ -290,7 +290,11 @@ Configuration, exclusion and redaction are specified in
                                  first-party full facts, keyed by artifact checksum
 
 <repo-root>/.sextant/
-  modules.json                   module inventory: ids, paths, kinds, workspaces
+  modules.json                   module inventory: one row per module — its id, its
+                                 root-relative dir, its kind, and whether this run
+                                 analyzed it or skip-listed it (2M design §2). No separate
+                                 "workspaces" field: a module's workspace is always
+                                 `<dir>/.sextant`, derived from `dir` rather than stored.
 
 <module-root>/.sextant/
   metadata.json                  identity, provenance, coverage, counts

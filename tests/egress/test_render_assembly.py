@@ -243,6 +243,17 @@ def test_shape_display_name_reads_a_qnames_local_part_not_a_url_path_segment():
     assert _shape_display_name("com/example/golden/OrderView#") == "OrderView"
 
 
+def test_shape_display_name_strips_a_trailing_type_marker_on_a_qname_too():
+    """2M Task 7 ride-along: the QName branch read a local part straight off
+    `rsplit('}', 1)`, never stripping a trailing `#` the way the
+    `simple_name` branch always has — an asymmetry with no reason behind it,
+    since `without_type_marker` is a no-op wherever a QName's local part
+    never carries one anyway."""
+    assert _shape_display_name("{http://orders.example.com/ws}quoteOrderRequest#") == (
+        "quoteOrderRequest"
+    )
+
+
 # --- the regression pin ---------------------------------------------------
 
 GOLDEN = Path(__file__).parent / "golden" / "architecture-minimal.md"

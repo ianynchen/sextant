@@ -41,17 +41,21 @@ arrived in.
 `> **Enrichment — evidence: llm**` blockquote — so a reader cannot mistake
 model output for derived fact by skimming past a heading.
 
-**Model prose renders literally.** A claim's own free-form text —
-`SectionClaim.body`, a verdict's `because`/`searched`, a backtick an agent
-wrote inline around a symbol name — is escaped and shown as plain text,
-never reinterpreted as markdown. This is the same no-parse rule applied to a
-second carrier of markdown-ish text: this module does not know what a
-backtick means in a claim's prose any more than it knows what a `#` means in
-`MachineSection.lines`, and treating one as syntax while leaving the other
-alone would be an arbitrary distinction with no rule behind it.
+**Model prose renders literally, except the two spans it cannot say without**
+(2M design §5d). Everywhere a claim carries free-form text — a verdict's
+`because`/`searched`, a component's `purpose`, a diagram's `elides` — that
+text is escaped and shown as plain, unreinterpreted prose: this module does
+not know what a `#` or a `[` means in it any more than it knows what one
+means in `MachineSection.lines`. `SectionClaim.body` alone draws one
+exception, `_claim_body_html` below: a paired `` `code` `` span becomes
+`<code>`, and a triple-backtick fence becomes `<pre><code>`, because those
+are the only two marks a model has for pointing at a literal symbol or a
+block of text rather than writing prose about it. Nothing else — a markdown
+link, `**bold**`, a stray unpaired backtick — is read as syntax there either.
 """
 
 import html
+import re
 from importlib import resources
 
 from sextant.domain.enrichment import (
@@ -406,15 +410,60 @@ def _component_claim_html(claim: ComponentClaim) -> str:
 
 
 def _section_claim_html(claim: SectionClaim) -> str:
-    paragraphs = "".join(f"<p>{html.escape(line)}</p>" for line in claim.body.split("\n") if line)
     cites = ", ".join(f"<code>{html.escape(cite)}</code>" for cite in claim.cites)
     return (
         '<div class="claim claim-section">'
         f"<strong>{html.escape(claim.title)}</strong>"
-        f"{paragraphs}"
+        f"{_claim_body_html(claim.body)}"
         f"<p>Cites: {cites}</p>"
         "</div>"
     )
+
+
+_FENCE_LINE = "```"
+_INLINE_CODE = re.compile(r"`([^`]+)`")
+
+
+def _claim_body_html(body: str) -> str:
+    """`SectionClaim.body` (2M design §5d): a line is its own `<p>` exactly
+    as before this rule existed (`body.split("\\n")`, blank lines dropped),
+    except a fenced span — a line of its own reading ` ``` `, everything up
+    to the next such line or the body's own end — which renders as ONE
+    `<pre><code>` block covering however many lines it spans, never split
+    line by line the way ordinary prose is. Within an ordinary line,
+    `_inline_code_html` turns a paired backtick span into `<code>`; nothing
+    else here is markdown, so a link, `**bold**`, or a fence that never
+    closes before the body ends (still a complete, escaped code block — no
+    prose is left over to also render) is exactly the text the model wrote."""
+    parts: list[str] = []
+    lines = body.split("\n")
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.strip().startswith(_FENCE_LINE):
+            fence_lines: list[str] = []
+            index += 1
+            while index < len(lines) and lines[index].strip() != _FENCE_LINE:
+                fence_lines.append(lines[index])
+                index += 1
+            if index < len(lines):
+                index += 1  # consume the closing fence line
+            code = "\n".join(fence_lines)
+            parts.append(f"<pre><code>{html.escape(code)}</code></pre>")
+            continue
+        if line:
+            parts.append(f"<p>{_inline_code_html(line)}</p>")
+        index += 1
+    return "".join(parts)
+
+
+def _inline_code_html(line: str) -> str:
+    """One line of claim prose, escaped, with a paired `` `code` `` span
+    turned into `<code>` — a lone backtick with no partner on the same line
+    is never matched (the pattern needs two), so it stays exactly the
+    literal character `html.escape` already left it as, never a half-open
+    `<code>` tag (2M design §5d)."""
+    return _INLINE_CODE.sub(r"<code>\1</code>", html.escape(line))
 
 
 def _diagram_claim_html(claim: DiagramClaim) -> str:

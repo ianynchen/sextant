@@ -130,7 +130,10 @@ actually found.
 
 `cites` are the files this section is actually built from — every one of
 them must be a real file under the module, reachable by the same path
-`find`/`grep` printed for it.
+`find`/`grep` printed for it. In the rendered HTML, a backtick-quoted
+`` `symbol` `` in `body` becomes code and a triple-backtick fenced block
+becomes a code block — nothing else in `body` is specially interpreted
+there (the markdown output already renders ordinary markdown natively).
 
 ### `diagram` — a simplified mermaid class or sequence diagram
 

@@ -470,6 +470,95 @@ def test_two_shapes_sharing_a_simple_name_get_distinct_anchors_and_links():
     assert "<td>b_field</td>" not in a_section
 
 
+def test_qname_shapes_colliding_only_after_sanitizing_get_distinct_anchors_too():
+    """2M Task 7 ride-along: `{uri}order.request` and `{uri}order-request`
+    read as two DIFFERENT display names (`order.request` != `order-request`),
+    so MEDIUM 2's fix — which grouped on display-name EQUALITY — never
+    caught this collision at all: `_shape_anchor_id` replaces the dot with
+    `-` the same character the hyphen already is, so both sanitize to the
+    identical `shape-order-request`. Disambiguation now groups on the
+    SANITIZED anchor id instead, catching this pair — and since even their
+    own full ids collide the same way once sanitized (the `{uri}` prefix and
+    the dot-vs-hyphen both wash out identically), a second disambiguation
+    level breaks the tie so each still gets its own anchor and its own
+    citation link, never a duplicate, invalid HTML id."""
+    descriptor_dot = json.dumps(
+        {
+            "wire_type": "object",
+            "wire_format": "",
+            "nullable": False,
+            "shape_id": "{uri}order.request",
+        }
+    )
+    descriptor_dash = json.dumps(
+        {
+            "wire_type": "object",
+            "wire_format": "",
+            "nullable": False,
+            "shape_id": "{uri}order-request",
+        }
+    )
+    report = ResolveReport(
+        facts_loaded=2,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "GET",
+                "path": "/dot/orders",
+                "handler": "s maven c 1 com/acme/C#a().",
+                "resolution": "resolved",
+                "response_shape": descriptor_dot,
+            },
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "GET",
+                "path": "/dash/orders",
+                "handler": "s maven c 1 com/acme/C#b().",
+                "resolution": "resolved",
+                "response_shape": descriptor_dash,
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    shape_fields = [
+        {
+            "shape_id": "{uri}order.request",
+            "ordinal": 0,
+            "wire_name": "dot_field",
+            "wire_type": "string",
+            "wire_format": None,
+            "field_number": None,
+            "required": True,
+            "nullable": False,
+            "item": None,
+        },
+        {
+            "shape_id": "{uri}order-request",
+            "ordinal": 0,
+            "wire_name": "dash_field",
+            "wire_type": "string",
+            "wire_format": None,
+            "field_number": None,
+            "required": True,
+            "nullable": False,
+            "item": None,
+        },
+    ]
+    sections = assemble_module_document(MODULE, report, "a3f91c", shape_fields=shape_fields)
+    document = _html(sections)
+    ids = re.findall(r'id="(shape-[^"]+)"', document)
+    assert len(ids) == 2
+    assert len(set(ids)) == 2, f"anchors collided: {ids!r}"
+    dot_id, dash_id = ids
+    assert f'<a href="#{dot_id}">' in document
+    assert f'<a href="#{dash_id}">' in document
+    dot_section = document.split(f'id="{dot_id}"', 1)[1].split(f'id="{dash_id}"', 1)[0]
+    assert "<td>dot_field</td>" in dot_section
+    assert "<td>dash_field</td>" not in dot_section
+
+
 def test_a_header_only_detail_block_renders_as_just_the_identity_paragraph():
     """The orphan-`<dt>` case IMPORTANT 2 also fixes: a `MachineDetail` whose
     entries are ONLY the bare header (now reachable directly — 2M §5c makes
@@ -592,6 +681,60 @@ def test_the_stale_notice_renders_with_its_own_badge_and_sentence():
     document = _html(sections)
     assert "1 enrichment claim stale, not shown." in document
     assert document.count('<span class="llm-badge">LLM</span>') == 2
+
+
+# --- claim body formatting (2M design §5d) --------------------------------
+
+
+def _section_body(body: str):
+    return _claim(
+        "section",
+        "end-of-document",
+        title="Extending the edge",
+        body=body,
+        cites=["src/main/java/com/acme/orders/Ingest.java"],
+    )
+
+
+def test_a_claim_bodys_inline_code_span_becomes_a_code_tag():
+    claim = _section_body("See `Foo#bar()` for the entry point.")
+    sections = assemble_module_document(MODULE, REPORT, "a3f91c", overlay=_overlay(claim))
+    document = _html(sections)
+    assert "<p>See <code>Foo#bar()</code> for the entry point.</p>" in document
+
+
+def test_a_claim_bodys_fenced_block_becomes_pre_code_escaped():
+    body = "Configure it like:\n```\nfoo<bar>\nbaz\n```\nThen restart."
+    claim = _section_body(body)
+    sections = assemble_module_document(MODULE, REPORT, "a3f91c", overlay=_overlay(claim))
+    document = _html(sections)
+    assert "<p>Configure it like:</p>" in document
+    assert "<pre><code>foo&lt;bar&gt;\nbaz</code></pre>" in document
+    assert "<p>Then restart.</p>" in document
+
+
+def test_a_claims_unpaired_backtick_renders_literally_with_no_half_open_tag():
+    """2M design §5d: only a PAIRED backtick span is code — a stray one, with
+    no partner on the same line, is just a character the model happened to
+    type, not the start of something this emitter must close for it."""
+    claim = _section_body("It uses a ` mark with no partner.")
+    sections = assemble_module_document(MODULE, REPORT, "a3f91c", overlay=_overlay(claim))
+    document = _html(sections)
+    # A fully-formed `<p>...</p>` carrying the literal backtick is the proof
+    # of "no half-open tag": a mis-parsed unpaired backtick would either
+    # break this exact string or leave an unmatched `<code>` dangling in it.
+    assert "<p>It uses a ` mark with no partner.</p>" in document
+
+
+def test_a_claims_markdown_links_and_bold_stay_literal():
+    """2M design §5d draws the line at inline code and fenced blocks —
+    nothing else is markdown here, so a link or bold marker is exactly as
+    literal as any other punctuation in the model's prose."""
+    body = "See [the doc](https://example.com) and **do not** skip it."
+    claim = _section_body(body)
+    sections = assemble_module_document(MODULE, REPORT, "a3f91c", overlay=_overlay(claim))
+    document = _html(sections)
+    assert "<p>See [the doc](https://example.com) and **do not** skip it.</p>" in document
 
 
 # --- escaping ------------------------------------------------------------

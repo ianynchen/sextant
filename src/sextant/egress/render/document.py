@@ -1167,12 +1167,18 @@ def _shape_anchor_id(display_name: str) -> str:
     `shaperef` run's `<a href="#...">` targets — both built from the SAME
     already-FINAL display name (`_disambiguated_shape_names`), never
     re-derived independently at each end, so the two can never name two
-    different anchors for one shape (2M design §5c) or, the mirror mistake,
-    the same anchor for two different ones (fix round 1, MEDIUM 2). Every
-    character an HTML id cannot safely carry — a QName's `{`/`}`, a
-    disambiguated fallback's own `/` — is replaced with `-`, since a display
-    name is no longer always a bare SCIP simple name once `#5c`'s per-shape
-    disambiguation can fall back to something closer to the raw id."""
+    different anchors for one shape (2M design §5c). Every character an
+    HTML id cannot safely carry — a QName's `{`/`}`, a disambiguated
+    fallback's own `/` — is replaced with `-`, since a display name is no
+    longer always a bare SCIP simple name once `#5c`'s per-shape
+    disambiguation can fall back to something closer to the raw id.
+
+    This sanitizing is lossy — a `.` and a `-` both collapse to the same
+    `-` — so it is `_disambiguated_shape_names`' job, not this function's,
+    to guarantee the mirror mistake (fix round 1, MEDIUM 2) never happens:
+    that two DIFFERENT final names handed to this function never produce
+    the same anchor. This function alone cannot promise that; it only
+    sanitizes what it is given."""
     return f"shape-{_ANCHOR_UNSAFE.sub('-', display_name)}"
 
 
@@ -1186,37 +1192,84 @@ def _shape_display_name(shape_id: str) -> str:
     `ws}quoteOrderRequest`, not `quoteOrderRequest` (fix round 1, LOW
     finding). A QName's own grammar says a local part is whatever follows
     the LAST `}`; an ordinary package-path shape id has none, and keeps
-    `simple_name`'s existing convention exactly. `domain.symbols.simple_name`
-    itself is untouched — this is local to the two `### Shapes` call sites
-    that are the first to ever display a shape id that might not be SCIP at
-    all."""
+    `simple_name`'s existing convention exactly — trailing `#` stripped by
+    `without_type_marker` on THIS branch too (2M Task 7 ride-along): nothing
+    says a QName's local part can never carry the same SCIP type marker a
+    package-path shape id does, and `without_type_marker` is a harmless
+    no-op everywhere it does not. `domain.symbols.simple_name` itself is
+    untouched — this is local to the two `### Shapes` call sites that are
+    the first to ever display a shape id that might not be SCIP at all."""
     if "}" in shape_id:
-        return shape_id.rsplit("}", 1)[-1]
+        return without_type_marker(shape_id.rsplit("}", 1)[-1])
     return simple_name(shape_id)
 
 
 def _disambiguated_shape_names(cited_shapes: dict[str, list[dict[str, object]]]) -> dict[str, str]:
     """Every cited shape id's FINAL display name: `_shape_display_name`
     ordinarily, or — within a group of shape ids whose OWN display names
-    collide — the shape id itself (trailing `#` stripped, otherwise
-    verbatim) for every member of that group (fix round 1, MEDIUM 2). Two
-    shapes reading as the same name is not a cosmetic near-miss: their
-    `### Shapes` entries become indistinguishable and their citations'
-    anchors collide (an invalid, duplicate HTML `id`, and a link that can no
-    longer promise which table it lands on) — so a collision falls all the
-    way back to something already guaranteed unique, the very key this dict
-    (and `cited_shapes`) is built on, rather than a half-measure that only
-    postpones the next collision."""
-    by_display: dict[str, list[str]] = {}
-    for shape_id in cited_shapes:
-        by_display.setdefault(_shape_display_name(shape_id), []).append(shape_id)
+    would sanitize to the SAME `_shape_anchor_id` — the shape id itself
+    (trailing `#` stripped, otherwise verbatim) for every member of that
+    group (fix round 1, MEDIUM 2). Two shapes reading as the same name is
+    not a cosmetic near-miss: their `### Shapes` entries become
+    indistinguishable and their citations' anchors collide (an invalid,
+    duplicate HTML `id`, and a link that can no longer promise which table
+    it lands on) — so a collision falls all the way back to something
+    already guaranteed unique, the very key this dict (and `cited_shapes`)
+    is built on, rather than a half-measure that only postpones the next
+    collision.
+
+    Grouped on the SANITIZED anchor id (`_shape_anchor_id` of the display
+    name), not the display name's own bytes (2M Task 7 ride-along): two
+    display names that read as different TEXT — `order.request` and
+    `order-request` — still sanitize to the identical `order-request` once
+    `_shape_anchor_id` collapses a `.` to the same `-` a literal `-` already
+    is, so comparing the pre-sanitized strings let exactly this pair through
+    uncaught. Comparing the anchor each would actually produce is the only
+    check that matches what `_shape_anchor_id` itself promises never
+    collides.
+
+    The fallback (the shape id itself) is not immune to the same lossy
+    sanitizing — two full ids can collide there too, for the identical
+    reason — so `_disambiguate_by_full_id` runs the SAME anchor-equality
+    check a second time over just the colliding group, breaking any tie
+    that survives with a positional ordinal a digit's own presence in the
+    sanitized anchor guarantees is not lossy."""
+    by_anchor: dict[str, list[str]] = {}
+    display_names = {shape_id: _shape_display_name(shape_id) for shape_id in cited_shapes}
+    for shape_id, display in display_names.items():
+        by_anchor.setdefault(_shape_anchor_id(display), []).append(shape_id)
     names: dict[str, str] = {}
-    for display, colliding in by_display.items():
+    for colliding in by_anchor.values():
         if len(colliding) == 1:
-            names[colliding[0]] = display
+            shape_id = colliding[0]
+            names[shape_id] = display_names[shape_id]
         else:
-            for shape_id in colliding:
-                names[shape_id] = without_type_marker(shape_id)
+            names.update(_disambiguate_by_full_id(colliding))
+    return names
+
+
+def _disambiguate_by_full_id(colliding: list[str]) -> dict[str, str]:
+    """One group of shape ids whose display names collided, named by their
+    own full id instead (trailing `#` stripped) — unique as Python values
+    since `cited_shapes` is keyed on them, but sanitizing punctuation down
+    to `-` can still land two DIFFERENT full ids on the SAME anchor (a `.`
+    and a `-` both collapse to it, and a shared QName prefix like `{uri}`
+    makes this more likely, not less). So this runs the identical
+    anchor-equality check again over just these names, and ONLY where that
+    still finds a tie appends a positional ordinal — a digit is a safe
+    character `_shape_anchor_id` never touches, so appending one is the one
+    disambiguator guaranteed to survive sanitizing intact."""
+    fallback = {shape_id: without_type_marker(shape_id) for shape_id in colliding}
+    by_anchor: dict[str, list[str]] = {}
+    for shape_id, name in fallback.items():
+        by_anchor.setdefault(_shape_anchor_id(name), []).append(shape_id)
+    names: dict[str, str] = {}
+    for group in by_anchor.values():
+        if len(group) == 1:
+            names[group[0]] = fallback[group[0]]
+        else:
+            for ordinal, shape_id in enumerate(group, start=1):
+                names[shape_id] = f"{fallback[shape_id]} ({ordinal})"
     return names
 
 
