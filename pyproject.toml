@@ -18,25 +18,37 @@ dependencies = [
   "pathspec==1.1.1",
   # Import-confined to `src/sextant/agents/tradewind.py` (2N design §1): the
   # one sanctioned model-calling adapter, enforced by
-  # `tests/architecture/test_agents_confinement.py`. Pinned by commit sha —
-  # no version tags exist past 0.6.0 — via `[tool.uv.sources]` below.
-  # `anthropic` is no longer a direct dependency: it stays installed
-  # transitively through tradewind's own `langchain-anthropic`, which is
-  # what the api-key auth profile actually talks to.
-  "tradewind",
+  # `tests/architecture/test_agents_confinement.py`. `anthropic` is no longer
+  # a direct dependency: it stays installed transitively through tradewind's
+  # own `langchain-anthropic`, which is what the api-key auth profile talks to.
+  #
+  # A PEP 508 DIRECT REFERENCE, not a `[tool.uv.sources]` entry: that table is
+  # uv's own and every other installer ignores it, so `pip install sextant`
+  # went looking for `tradewind` on PyPI and failed — invisible locally, where
+  # everything runs through `uv run`, and fatal in CI, which installs with pip.
+  # The direct reference is the standard both honour, and it is what makes the
+  # `sextant.api` library facade (2N §5b) installable by whoever embeds it.
+  # Commit-sha pinned — no version tags exist past 0.6.0 — to the exact commit
+  # `examples/tradewind` is a read-only clone of, which is what the adapter's
+  # tests and docstrings answer their source questions against. Direct
+  # references cannot be published to PyPI; that constraint arrives with the
+  # first release, not before the version-bump gate.
+  "tradewind @ git+https://github.com/ianynchen/Tradewind.git@9a23e45356e22dcc0005a31edf0a344d04a1b6a6",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10", "import-linter>=2.0"]
 
-[tool.uv.sources]
-# Commit-sha pin (2N design §1): the exact commit `examples/tradewind` is a
-# read-only clone of, for the source questions this adapter's tests and
-# docstrings answer against.
-tradewind = { git = "https://github.com/ianynchen/Tradewind.git", rev = "9a23e45356e22dcc0005a31edf0a344d04a1b6a6" }
-
 [project.scripts]
 sextant = "sextant.cli.app:cli"
+
+[tool.hatch.metadata]
+# Hatchling refuses a PEP 508 direct reference without this opt-in, and the
+# `tradewind` dependency above is one (a commit-sha git pin). The refusal is
+# hatchling guarding against publishing an unpublishable wheel to PyPI; that
+# constraint is real and arrives with the first release, which the version-bump
+# gate has not opened yet.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sextant"]
