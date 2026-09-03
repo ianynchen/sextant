@@ -560,7 +560,7 @@ def test_a_non_verdict_claim_anchored_beside_the_questions_lands_after_them_all(
 def test_an_end_of_document_claim_is_the_last_thing_in_the_file():
     text = _rendered(_section())
     assert _position(text, "## Known gaps") < _position(text, "**Extending the edge**")
-    assert text.rstrip().endswith("`src/main/java/com/acme/orders/Ingest.java`")
+    assert text.rstrip().endswith("`src/main/java/com/acme/orders/Ingest.java`\n\n---")
 
 
 # --- the mark and the shapes ----------------------------------------------
@@ -571,7 +571,7 @@ def test_every_enrichment_block_sits_under_a_provenance_header():
     see what produced the words before reading them, and the marker names the
     evidence tier and the run."""
     text = _rendered(_component(), _section())
-    header = "> **Enrichment — evidence: llm** (model a-model, agent an-agent)"
+    header = "**Enrichment — evidence: llm** (model a-model, agent an-agent)"
     assert text.count(header) == 2
 
 
@@ -647,7 +647,7 @@ def test_two_claims_at_one_anchor_share_a_single_provenance_header():
     repeating its provenance between two adjacent claims is noise that teaches
     a reader to stop seeing the mark."""
     text = _rendered(_component(name="First"), _component(name="Second"))
-    assert text.count("> **Enrichment — evidence: llm**") == 1
+    assert text.count("**Enrichment — evidence: llm**") == 1
 
 
 def test_assembling_the_same_overlay_twice_is_byte_identical():
@@ -852,14 +852,14 @@ def test_the_serializer_survives_a_machine_section_carrying_no_lines():
         EnrichmentSection(provenance, tuple(overlay.claims)),
         MachineSection(()),
     )
-    assert markdown_document(sections).startswith("# a module\n\n> **Enrichment")
+    assert markdown_document(sections).startswith("# a module\n\n---\n\n**Enrichment")
 
 
 def test_an_enrichment_block_is_the_last_thing_in_the_document():
     """The other lookahead edge: nothing follows, so nothing is looked at. A
     document ending in a claim is the ordinary `end-of-document` anchor."""
     text = _rendered(_section())
-    assert text.endswith("Cites: `src/main/java/com/acme/orders/Ingest.java`\n")
+    assert text.endswith("Cites: `src/main/java/com/acme/orders/Ingest.java`\n\n---\n")
 
 
 # --- fix round 1, MINOR 3: a claim anchored out of range is a loud failure -

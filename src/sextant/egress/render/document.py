@@ -1633,20 +1633,35 @@ def _detail_lines(detail: MachineDetail) -> tuple[str, ...]:
 
 def _provenance_line(provenance: Provenance) -> str:
     """The header every enrichment block sits under: what the block is, the
-    evidence marker it carries, and the run that produced it. A blockquote, so
-    a reader scanning the document sees the mark before the words (2K design
-    §6, "clearly marked")."""
-    return f"> **Enrichment — evidence: llm** (model {provenance.model}, agent {provenance.agent})"
+    evidence marker it carries, and the run that produced it (2K design §6,
+    "clearly marked")."""
+    return f"**Enrichment — evidence: llm** (model {provenance.model}, agent {provenance.agent})"
 
 
 def _enrichment_lines(section: EnrichmentSection | StaleNoticeSection) -> list[str]:
-    """One enrichment block as markdown: the provenance header, then each
-    claim, blank-line separated."""
+    """One enrichment block as markdown: a horizontal rule, the provenance
+    header, each claim blank-line separated, and a closing rule.
+
+    The rules are the markdown answer to the HTML serializer's bordered,
+    badged box: they bound the block on BOTH sides, so a reader always sees
+    where the model's text ends and the machine document resumes. The old
+    form marked only the first line (as a blockquote), which left the claims
+    visually indistinguishable from machine prose — and a blockquote is also
+    why this is rules rather than `> `-prefixing the whole block: a mermaid
+    fence inside a blockquote does not render on GitHub, and a diagram claim
+    must render in BOTH outputs or the two disagree."""
     if isinstance(section, StaleNoticeSection):
-        return [f"{_provenance_line(section.provenance)} — {_stale_sentence(section.count)}"]
-    lines = [_provenance_line(section.provenance)]
+        return [
+            "---",
+            "",
+            f"{_provenance_line(section.provenance)} — {_stale_sentence(section.count)}",
+            "",
+            "---",
+        ]
+    lines = ["---", "", _provenance_line(section.provenance)]
     for claim in section.claims:
         lines += ["", *_claim_lines(claim)]
+    lines += ["", "---"]
     return lines
 
 

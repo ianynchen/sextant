@@ -1391,7 +1391,7 @@ def test_the_golden_overlay_assembles_into_the_rendered_document(tmp_path: Path)
     _run(tmp_path)
     document = (tmp_path / "render" / "architecture.md").read_text()
 
-    header = "> **Enrichment — evidence: llm** (model fixture-model, agent fixture-agent)"
+    header = "**Enrichment — evidence: llm** (model fixture-model, agent fixture-agent)"
     assert document.count(header) == 3  # two anchors plus the verdict's own question
     assert "**Component: Legacy billing edge**" in document
     assert "Members: `com/example/orders/soap/OrderSoapEndpoint#`" in document
