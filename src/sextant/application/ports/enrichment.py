@@ -9,7 +9,7 @@ answer validation and overlay assembly downstream — stays deterministic.
 `application` never imports an adapter. Layering runs `cli -> ingress |
 storage | egress | agents -> application -> domain`: an outer group
 (`agents` included) depends on `application`, never the reverse, so this
-module cannot import `sextant.agents.claude_api` to build a name ->
+module cannot import `sextant.agents.tradewind` to build a name ->
 implementation mapping — only the composition root (`cli/app.py`, wired in
 2K Task 7) may import an adapter and construct it. The name -> constructor
 registry therefore lives one layer out, at `sextant.agents.AGENT_REGISTRY`
@@ -48,11 +48,15 @@ class EnrichmentAnswers:
     caller to `enrich-transcript.jsonl`). `partial` states whether `text`
     is a clean final answer or whatever existed when a turn cap or the
     no-progress guard ended the run early — never silent about which, and
-    `partial_reason` says WHY: `"max_turns"`, `"no_progress"`, a truncated
-    or otherwise non-`end_turn` finish as `"stop:<reason>"` (the model's own
-    `stop_reason`, verbatim), or `None` for a clean answer — so a caller
-    (2K Task 7) can persist an honest account of how a run ended rather
-    than just the fact that it did."""
+    `partial_reason` says WHY, in a vocabulary each adapter defines for
+    itself against what its own runtime can actually distinguish (2N design
+    §1) — `None` always means a clean answer, but the non-`None` members are
+    not a fixed set this port promises across adapters. The Tradewind
+    adapter's own vocabulary is exactly `{"stop:max_tokens", "max_turns",
+    "no_progress"}` — narrower than an adapter talking to a provider API
+    directly could offer, because Tradewind's own backends distinguish fewer
+    abnormal-stop reasons than that; see `sextant.agents.tradewind`'s module
+    docstring for the mapping."""
 
     text: str
     transcript: list[dict[str, object]]

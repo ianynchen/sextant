@@ -94,7 +94,7 @@ class MissingInitScriptError(FileNotFoundError):
 
 def _init_script() -> Path:
     """The packaged init script, resolved through the installed package (2M
-    Task 3 fix round 1, I7) — the same reasoning `sextant.cli.resources`
+    Task 3 fix round 1, I7) — the same reasoning `sextant.resources`
     already states for the catalogs/extractor/instructions (a version
     mismatch cannot happen when a resource travels with the code that reads
     it), without importing that module: the import-linter layering contract

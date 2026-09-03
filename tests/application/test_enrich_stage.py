@@ -146,6 +146,63 @@ def test_partial_and_its_reason_carry_through_to_the_result_unchanged():
     assert result.transcript == ({"name": "read_file", "args": {}, "result": "ok"},)
 
 
+def test_a_textless_partial_is_a_loud_failure_naming_the_reason_not_a_malformed_answer():
+    """2N design §1: a capped run that produced no final text is reported
+    naming WHY it ended early, never laundered into `MalformedAnswersError`
+    — there is no JSON here that failed to parse, only an honest absence."""
+    with pytest.raises(stage.EmptyPartialAnswerError) as raised:
+        stage.validate_and_finish(
+            "",
+            _Workspace(),
+            Path("/module"),
+            Redactor.from_rules(),
+            "an-agent",
+            "a-model",
+            "sha256:instructions",
+            "sha256:workspace",
+            partial=True,
+            partial_reason="no_progress",
+        )
+    assert "no_progress" in str(raised.value)
+
+
+def test_a_whitespace_only_partial_is_also_treated_as_textless():
+    with pytest.raises(stage.EmptyPartialAnswerError):
+        stage.validate_and_finish(
+            "   \n",
+            _Workspace(),
+            Path("/module"),
+            Redactor.from_rules(),
+            "an-agent",
+            "a-model",
+            "sha256:instructions",
+            "sha256:workspace",
+            partial=True,
+            partial_reason="max_turns",
+        )
+
+
+def test_a_non_empty_partial_answer_is_still_validated_normally():
+    """The textless ruling only fires on EMPTY text — a partial run that did
+    produce a real (if incomplete-context) answer is validated exactly as a
+    clean run's answer would be, `partial`/`partial_reason` carried through
+    unchanged (the existing `test_partial_and_its_reason_carry_through_to_
+    the_result_unchanged` pin)."""
+    result = stage.validate_and_finish(
+        json.dumps([_component()]),
+        _Workspace(),
+        Path("/module"),
+        Redactor.from_rules(),
+        "an-agent",
+        "a-model",
+        "sha256:instructions",
+        "sha256:workspace",
+        partial=True,
+        partial_reason="stop:max_tokens",
+    )
+    assert (result.partial, result.partial_reason) == (True, "stop:max_tokens")
+
+
 def test_an_ingested_answer_defaults_to_a_clean_non_partial_record():
     result = stage.validate_and_finish(
         json.dumps([_component()]),
@@ -158,3 +215,68 @@ def test_an_ingested_answer_defaults_to_a_clean_non_partial_record():
         "sha256:workspace",
     )
     assert (result.partial, result.partial_reason) == (False, None)
+
+
+def _claim() -> dict:
+    return {
+        "kind": "component",
+        "evidence": "llm",
+        "anchor": "after-component-overview",
+        "name": "A part",
+        "purpose": "What it does.",
+        "members": ["com/acme/orders/OrderController#"],
+    }
+
+
+def test_a_narrated_fenced_answer_still_parses_the_first_live_flight_shape():
+    """The 2026-09-03 subscription flight returned a perfect claims array
+    wrapped in one narration line and a ```json fence — the Claude Code
+    persona narrating despite INSTRUCTIONS. `_extracted_array` unwraps
+    exactly that shape; the claims inside are judged unchanged."""
+    wrapped = (
+        "Now I have full grounding. Writing the final answer.\n\n"
+        "```json\n" + json.dumps([_claim()]) + "\n```\n"
+    )
+    assert json.loads(stage._extracted_array(wrapped)) == [_claim()]
+
+
+def test_prose_with_no_array_is_still_malformed():
+    """Leniency unwraps; it never invents. Pure narration with no array
+    anywhere fails exactly as before."""
+    assert stage._extracted_array("I could not produce an answer.") == (
+        "I could not produce an answer."
+    )
+
+
+def test_an_array_answer_passes_through_untouched():
+    text = json.dumps([_claim()])
+    assert stage._extracted_array(text) == text
+
+
+def test_a_claims_keyed_object_unwraps_to_its_array():
+    """`{"claims": [...]}` unwraps — the slice rule finds the inner array;
+    sibling keys are dropped by the slice, never read. Documented leniency,
+    pinned so it cannot silently widen further."""
+    text = '{"claims": ' + json.dumps([_claim()]) + "}"
+    assert json.loads(stage._extracted_array(text)) == [_claim()]
+
+
+def test_a_bare_array_with_trailing_narration_still_parses():
+    """The mirror image of the first-live-flight shape: a perfect claims
+    array followed by a trailing sentence of narration. The array LEADS, so
+    the old `startswith("[")` shortcut returned the whole unparsed text —
+    this pins that the parse-first algorithm falls through to the slice
+    instead of dying as malformed."""
+    trailing = json.dumps([_claim()]) + "\n\nAll claims are grounded.\n"
+    assert json.loads(stage._extracted_array(trailing)) == [_claim()]
+
+
+def test_a_mis_sliced_answer_fails_closed_as_malformed():
+    """Prose containing a bracket before the real array mis-slices — and the
+    wrong slice is not valid JSON, so the run fails closed with the same
+    MalformedAnswersError a strict parse raises. A false negative is the
+    accepted cost; a silent mis-ingest is not possible on this path."""
+    text = "I looked at [several] files before answering.\n\n```json\n[]\n```"
+    extracted = stage._extracted_array(text)
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(extracted)

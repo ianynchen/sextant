@@ -59,8 +59,16 @@ _NAMED_QUERIES = {
     # (`resolve/effective_annotations.py`), which needs a composing type's
     # own declared attributes and not just which annotation it carries.
     # Ordered so two fields under the same scope read its claim the same way.
+    # The ORDER BY must uniquely determine row order: the parallel parquet
+    # writer preserves only what the sort fixes, so tied rows land in
+    # nondeterministic order. (target, annotation) ties are real — 6 of 11
+    # field-checked workspaces carry them (review audit, 2026-09-04) — so
+    # this widening is genuine hardening. It is NOT the identified cause of
+    # the byte-identity e2e's two observed flakes: that fixture has zero
+    # tied groups, and the flake's cause remains unidentified and open.
     "annotations": """
-        SELECT target, annotation, args, type_path FROM annotations ORDER BY target, annotation
+        SELECT target, annotation, args, type_path FROM annotations
+        ORDER BY target, annotation, type_path, args
     """,
     # `ordinal` alone would tie across callers; `caller` first is what makes
     # the ordering total, the same reason `shape_fields` orders by
@@ -447,7 +455,7 @@ _EXPORT_QUERIES = {
                a.type_path, a.retention
         FROM annotations a
         LEFT JOIN {_REDACTED_JSON} j ON j.original = a.args::VARCHAR
-        ORDER BY a.target, a.annotation, a.type_path
+        ORDER BY a.target, a.annotation, a.type_path, a.args
     """,
 }
 

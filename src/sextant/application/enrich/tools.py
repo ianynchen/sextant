@@ -203,7 +203,13 @@ FACT_LINE_EXTENSION = "jsonl"
 # or any analysis walk — a build directory is fair game for `analyze`
 # (D00 §2's origin tiering already answers whether ITS classes count), only
 # the enrichment jail refuses to describe it as source.
-DERIVED_OUTPUT_DIRS = frozenset({"target", "build", "out", "node_modules", ".git"})
+#
+# `.tradewind` joins this set for the identical reason (2N design §1): the
+# Tradewind adapter's api-key session mirror is the model reading its own
+# prior conversation back — the same feedback loop that excluded the
+# overlay file (`ENRICHMENT_FILE`) above, not a build artifact, but invisible
+# the same jail-specific way rather than through `.sextantignore`.
+DERIVED_OUTPUT_DIRS = frozenset({"target", "build", "out", "node_modules", ".git", ".tradewind"})
 
 # A config-bearing file's `key: value` / `key = value` assignment lines
 # (YAML block style, and the `.properties` format), matched so ONLY an

@@ -2,10 +2,12 @@
 
 Everything an agent is handed for one run, built once and never touched
 again after: the machine-rendered `architecture.md`, `metadata.json`'s own
-gaps, every `open_questions` row (its `path` `redact_text`-ed — 2K Task 7
-ruling 1, "the brief IS the wire"), a digest of the endpoint and config rows
-the graph itself marked doubtful, the four content requests, and the closed
-anchor list a claim may place itself at. Same workspace, same rendered
+gaps, every `open_questions` row plus every unresolved `resolved_config` row
+as a copyable identity (each `path`/`key`/`source` `redact_text`-ed — 2K Task
+7 ruling 1, "the brief IS the wire", widened by 2N design §3), a digest of
+the endpoint and config rows the graph itself marked doubtful, the four
+content requests, and the closed anchor list a claim may place itself at.
+Same workspace, same rendered
 document, same overlay-free run → the same prompt bytes (NFR-1's one stated
 exception is the model's own response, never the brief that produced it).
 
@@ -164,9 +166,20 @@ def _open_question_lines(workspace: Workspace, redactor: Redactor) -> list[str]:
     model in the first place. Printed as the exact JSON `OpenQuestionRef`
     shape a `verdict` claim's `question` field carries, so an answer can
     copy it back unchanged.
+
+    Every unresolved `resolved_config` row (`value IS NULL`) joins the same
+    section, as the `ConfigQuestionRef` shape (2N design §3): the exact rows
+    `validate_overlay` matches a config verdict against (`application/enrich/
+    validate.py` filters the identical `value is None`), so a row printed
+    here always has somewhere to validate against. `key`/`source` get the
+    same `redact_text` canonicalization `path` gets, for the same reason. The
+    two shapes are clearly distinguishable by their field names alone
+    (`protocol`/`method`/`path` vs `key`/`source`/`environment`), so neither
+    is labelled. "None open." only when both queries come back empty.
     """
     rows = workspace.query("open_questions")
-    if not rows:
+    config_rows = [row for row in workspace.query("resolved_config") if row.get("value") is None]
+    if not rows and not config_rows:
         return ["None open."]
     lines: list[str] = []
     for row in rows:
@@ -191,6 +204,21 @@ def _open_question_lines(workspace: Workspace, redactor: Redactor) -> list[str]:
                 f"  - candidates considered and not chosen: "
                 f"{json.dumps(candidates, sort_keys=True)}"
             )
+    for row in config_rows:
+        key = row.get("key")
+        redacted_key = None if key is None else redactor.redact_text(str(key))
+        source = row.get("source")
+        redacted_source = None if source is None else redactor.redact_text(str(source))
+        identity = json.dumps(
+            {
+                "key": redacted_key,
+                "source": redacted_source,
+                "environment": row.get("environment"),
+                "kind": row.get("unresolved_reason"),
+            },
+            sort_keys=True,
+        )
+        lines.append(f"- {identity}")
     return lines
 
 
@@ -200,7 +228,10 @@ def _doubtful_rows_digest(workspace: Workspace, redactor: Redactor) -> list[str]
     evidence, no new dataset — the same rows `egress/render/document.py`
     already surfaces in `architecture.md`'s own Coverage and endpoint tables,
     pulled out here as a standalone list rather than left for the model to
-    re-derive by reading the whole document again)."""
+    re-derive by reading the whole document again). `path`/`key` get the
+    same `redact_text` treatment `_open_question_lines` gives the identical
+    rows, so the same row never prints two spellings across the two
+    sections."""
     lines: list[str] = []
     doubtful_endpoints = [
         row
@@ -224,7 +255,9 @@ def _doubtful_rows_digest(workspace: Workspace, redactor: Redactor) -> list[str]
     if doubtful_config:
         lines.append("Configuration:")
         for row in doubtful_config:
+            key = row.get("key")
+            redacted_key = None if key is None else redactor.redact_text(str(key))
             lines.append(
-                f"- {row.get('key')} — {row.get('unresolved_reason')} in {row.get('environment')}"
+                f"- {redacted_key} — {row.get('unresolved_reason')} in {row.get('environment')}"
             )
     return lines or ["None recorded."]

@@ -92,12 +92,15 @@ def compiled_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
     # scratch workspace, whose `workspace.duckdb` can predate the current
     # schema (`CREATE TABLE IF NOT EXISTS` never migrates an existing file);
     # `.sextant-enrichment.json` is the tracked GOLDEN overlay, and a test
-    # that inherited it would see one before `enrich` ever ran.
+    # that inherited it would see one before `enrich` ever ran; `.tradewind`
+    # is the api-key session store (2N design §1) — a stale one inherited
+    # from a prior local run would make a test asserting the store gets
+    # WRITTEN pass vacuously against a file that was already there.
     shutil.copytree(
         FIXTURE,
         root,
         dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns(".sextant", ENRICHMENT_FILE),
+        ignore=shutil.ignore_patterns(".sextant", ENRICHMENT_FILE, ".tradewind"),
     )
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=root, check=True)
     return root
@@ -142,35 +145,17 @@ def test_an_unknown_agent_is_refused_naming_the_known_list(module_root: Path):
     )
     assert result.exit_code != 0
     assert "not-a-real-agent" in result.output
-    assert "claude-api" in result.output
+    assert "tradewind" in result.output
 
 
-def test_claude_api_with_no_key_refuses_loudly_naming_the_variable(
+def test_tradewind_api_key_with_no_key_refuses_loudly_naming_the_variable(
     module_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """2K Task 7 ruling 5: the key is read from the environment alone, and
-    its absence is refused before any network attempt — `ClaudeApiAgent._send`
-    checks `ANTHROPIC_API_KEY` before constructing a client, so this makes no
-    network call even though it exercises the real adapter."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    _analyzed_and_rendered(module_root)
-    result = CliRunner().invoke(
-        cli,
-        ["module", "enrich", str(module_root), "--agent", "claude-api", "--model", "claude-x"],
-    )
-    assert result.exit_code != 0
-    assert "ANTHROPIC_API_KEY" in result.output
-
-
-def test_max_turns_zero_refuses_via_the_agents_own_validation_not_a_silent_default(
-    module_root: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """2K Task 7 fix round 1, minor: `--max-turns 0` is a real, falsy-but-
-    meaningful flag value — `is None`, never `or`, is what lets it reach
-    `ClaudeApiAgent`'s own `>= 1` validation instead of silently reading as
-    "no flag given" and becoming 50. The real `claude-api` constructor is
-    used and never reaches the network: the `ValueError` fires in
-    `__init__`, before any `_send`."""
+    """2K Task 7 ruling 5, kept for Tradewind (2N design §1): the key is
+    read from the environment alone by SEXTANT, and its absence is refused
+    before any client is built — `TradewindAgent.run`'s own pre-client check
+    — so this makes no network call even though it exercises the real
+    adapter."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     _analyzed_and_rendered(module_root)
     result = CliRunner().invoke(
@@ -180,15 +165,81 @@ def test_max_turns_zero_refuses_via_the_agents_own_validation_not_a_silent_defau
             "enrich",
             str(module_root),
             "--agent",
-            "claude-api",
+            "tradewind",
+            "--auth",
+            "api-key",
             "--model",
             "claude-x",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "ANTHROPIC_API_KEY" in result.output
+
+
+def test_max_turns_above_the_api_key_ceiling_refuses_via_the_agents_own_validation(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2N design §1: the langchain (api-key) backend's own hard ceiling is
+    24 `--max-turns` (25 model iterations) — `--max-turns 25` is refused
+    through `TradewindAgent.__init__`'s own `ValueError`, not a silent late
+    failure. The real `tradewind` constructor is used and never reaches the
+    network: the `ValueError` fires in `__init__`, before `run` even checks
+    for a key."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _analyzed_and_rendered(module_root)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "enrich",
+            str(module_root),
+            "--agent",
+            "tradewind",
+            "--auth",
+            "api-key",
+            "--model",
+            "claude-x",
+            "--max-turns",
+            "25",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--max-turns 25 exceeds the api-key backend's own ceiling of 24" in result.output
+
+
+def test_max_turns_zero_reaches_the_agent_honestly_not_silently_defaulted(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2K Task 7 fix round 1, minor, kept for Tradewind: `--max-turns 0` is
+    a real, falsy-but-meaningful flag value — `is None`, never `or`, is what
+    lets it reach the agent's own constructor as `0` rather than silently
+    reading as "no flag given" and becoming the CLI's own default of 20."""
+    _analyzed_and_rendered(module_root)
+    captured: dict[str, object] = {}
+
+    def _constructor(**kwargs: object) -> FakeEnrichmentAgent:
+        captured.update(kwargs)
+        return FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
+
+    monkeypatch.setitem(AGENT_REGISTRY, "fake-zero-turns", _constructor)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "enrich",
+            str(module_root),
+            "--agent",
+            "fake-zero-turns",
+            "--model",
+            "x",
             "--max-turns",
             "0",
         ],
     )
-    assert result.exit_code != 0
-    assert "max_turns" in result.output
+
+    assert result.exit_code == 0, result.output
+    assert captured["max_turns"] == 0
 
 
 def test_dry_run_writes_only_the_brief_and_instructions_copy(module_root: Path):
@@ -343,6 +394,58 @@ def test_a_refused_claim_is_reported_and_excluded_from_the_written_overlay(
     assert [claim["name"] for claim in overlay["claims"]] == ["Legacy billing edge"]
 
 
+def test_a_later_assembly_failure_still_prints_the_refusal_report_first(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2N Task 5 fix round 1, MAJOR-1: the per-claim report — BASE's own
+    "before either is buried in a file" guarantee — must survive even when
+    the FINAL assembly (built from the accepted overlay) fails afterward.
+    A `redact:` rule wide enough to eat a claim's own `evidence` marker
+    (`value_patterns: [llm]`, matching every accepted claim's `evidence:
+    "llm"` — the same pathological rule
+    `tests/egress/test_render_assembly.py::
+    test_a_redaction_rule_that_breaks_a_claims_schema_is_refused_by_name`
+    pins at the renderer level) breaks assembly on the ACCEPTED claim
+    (index 0), after a refused claim (the phantom, index 1) has already
+    been validated — proving the refusal report for index 1 still reaches
+    stdout even though the run then errors out, and reaches it BEFORE the
+    error, never after."""
+    _analyzed_and_rendered(module_root)
+    (module_root / ".sextant.yml").write_text(
+        "redact:\n  value_patterns:\n    - llm\n", encoding="utf-8"
+    )
+    claims = [_component(), _component(name="Phantom", members=[PHANTOM_MEMBER])]
+    fake = FakeEnrichmentAgent(answers_text=json.dumps(claims))
+    _register_fake(monkeypatch, "fake-assembly-failure", fake)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "enrich",
+            str(module_root),
+            "--agent",
+            "fake-assembly-failure",
+            "--model",
+            "x",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "refused claim 1" in result.output
+    assert PHANTOM_MEMBER in result.output
+    assert "Error:" in result.output
+    assert "claim 0" in result.output
+    # The report reaches stdout BEFORE the error line — never buried after it.
+    assert result.output.index("refused claim 1") < result.output.index("Error:")
+
+    # The overlay IS still written (2K Task 7 fix round 1's own ordering
+    # ruling, unaffected by this fix): the accepted claim's record survives
+    # a rendering failure that happens after it was written.
+    overlay = json.loads((module_root / ENRICHMENT_FILE).read_text(encoding="utf-8"))
+    assert [claim["name"] for claim in overlay["claims"]] == ["Legacy billing edge"]
+
+
 def test_the_checked_in_refused_at_ingest_fixture_pins_its_refusal_report(module_root: Path):
     """Spec §10's own fixture requirement: a checked-in answers file whose
     claims include at least one refusal (`fixtures/orders-service/
@@ -492,8 +595,102 @@ def test_config_defaults_are_used_and_a_flag_overrides_them(
         cli, ["module", "enrich", str(module_root), "--model", "flag-model"]
     )
     assert result.exit_code == 0, result.output
-    assert captured == {"model": "flag-model", "max_turns": 7}
+    assert captured == {
+        "auth": "subscription",
+        "model": "flag-model",
+        "max_turns": 7,
+        "session_store": None,
+    }
 
     overlay = json.loads((module_root / ENRICHMENT_FILE).read_text(encoding="utf-8"))
     assert overlay["produced_by"]["agent"] == "fake-config-default"
     assert overlay["produced_by"]["model"] == "flag-model"
+
+
+def test_a_zero_max_turns_from_the_config_reaches_the_agent(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """M6 fix: `.sextant.yml enrich: max_turns: 0` used to be refused at the
+    yml gate ("must be a positive integer") though the flag and the
+    constructor both legalize `0` — an honest single-response run with no
+    tool execution. `is None`, never falsy-`or`, is what lets the config's
+    own `0` reach the agent here too, mirroring the flag's own
+    `test_max_turns_zero_reaches_the_agent_honestly_not_silently_defaulted`."""
+    _analyzed_and_rendered(module_root)
+    config_path = module_root / ".sextant.yml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + "enrich:\n  agent: fake-config-zero-turns\n  model: default-model\n  max_turns: 0\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def _constructor(**kwargs: object) -> FakeEnrichmentAgent:
+        captured.update(kwargs)
+        return FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
+
+    monkeypatch.setitem(AGENT_REGISTRY, "fake-config-zero-turns", _constructor)
+
+    result = CliRunner().invoke(cli, ["module", "enrich", str(module_root)])
+    assert result.exit_code == 0, result.output
+    assert captured["max_turns"] == 0
+
+
+def test_config_auth_and_session_store_reach_the_agent_and_the_auth_flag_wins(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Fix round 1, I3: `.sextant.yml enrich: auth:`/`session_store:`
+    (2N design §1) reach the agent's own constructor kwargs the same way
+    `agent:`/`model:`/`max_turns:` already do — `--auth` (a real flag)
+    beats the config's `auth: api-key` the same way every other flag wins
+    over its default here, and `session_store` (config-only, no flag
+    counterpart) reaches the agent as a `Path` (cli/app.py's own
+    conversion), not the raw string `.sextant.yml` carries."""
+    _analyzed_and_rendered(module_root)
+    config_path = module_root / ".sextant.yml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8") + "enrich:\n"
+        "  agent: fake-config-auth\n"
+        "  model: default-model\n"
+        "  auth: api-key\n"
+        "  session_store: custom/sessions.sqlite\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def _constructor(**kwargs: object) -> FakeEnrichmentAgent:
+        captured.update(kwargs)
+        return FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
+
+    monkeypatch.setitem(AGENT_REGISTRY, "fake-config-auth", _constructor)
+
+    result = CliRunner().invoke(
+        cli,
+        ["module", "enrich", str(module_root), "--auth", "subscription"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "auth": "subscription",  # the flag, never the config's "api-key"
+        "model": "default-model",
+        "max_turns": 20,
+        "session_store": Path("custom/sessions.sqlite"),
+    }
+
+
+def test_no_agent_flag_defaults_to_tradewind_so_the_run_fails_at_model_not_agent(
+    module_root: Path,
+):
+    """Fix round 1, M7: `--agent` defaults to `tradewind` (2N design §1)
+    when neither the flag nor `.sextant.yml enrich: agent:` names one — a
+    bare `enrich` with no flags at all fails on the NEXT missing
+    requirement (`--model`), never on an unset `--agent`, which is the only
+    way to prove the default actually applies rather than merely being
+    documented."""
+    _analyzed_and_rendered(module_root)
+
+    result = CliRunner().invoke(cli, ["module", "enrich", str(module_root)])
+
+    assert result.exit_code != 0
+    assert "--model is required" in result.output
+    assert "--agent is required" not in result.output

@@ -11,12 +11,12 @@ import json
 from pathlib import Path
 
 from sextant.application.ports.scanner import ScanRequest
-from sextant.cli.resources import extractor_jar
 from sextant.domain.factfile import read_fact_file
 from sextant.domain.facts import EmbeddedDescriptorFact
 from sextant.ingress.extract.jvm.generated_naming import JvmGeneratedNaming
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
+from sextant.resources import extractor_jar
 
 REPO = Path(__file__).parents[2]
 JAR = extractor_jar()

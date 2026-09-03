@@ -8,12 +8,12 @@ from click.testing import CliRunner
 
 from sextant.application.enrich.validate import validate_overlay
 from sextant.cli.app import cli
-from sextant.cli.resources import instructions_path
 from sextant.domain.enrichment import load_overlay
 from sextant.domain.factfile import read_fact_file
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import REDACTED, Redactor
 from sextant.ingress.detect.sextant_config import read_redaction_rules
+from sextant.resources import instructions_path
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
@@ -1379,6 +1379,51 @@ def test_the_golden_overlays_instructions_hash_matches_the_shipped_instructions_
     assert overlay is not None
     digest = hashlib.sha256(instructions_path().read_bytes()).hexdigest()
     assert overlay.produced_by.instructions_hash == f"sha256:{digest}"
+
+
+def test_instructions_teach_cite_paths_are_module_root_relative():
+    """2N Task 3 (flight-1 ambiguity 1): a `section` claim's `cites` names a
+    path in the same spelling `find`/`grep` printed it in — module-root-
+    relative — never an absolute path or a different root. A substring pin,
+    not the full sentence: wording can breathe, but this teaching may not
+    quietly vanish from the shipped prompt the way it was absent before
+    flight-1."""
+    text = instructions_path().read_text(encoding="utf-8")
+    assert "That path is module-root-relative" in text
+
+
+def test_instructions_teach_members_use_the_short_pkg_class_form():
+    """2N Task 3 (flight-1 ambiguity 2): a `component` claim's `members`
+    are written in the short `pkg/Class#` form the example already shows,
+    never a fully qualified dotted name."""
+    text = instructions_path().read_text(encoding="utf-8")
+    assert "Write each one in the short `pkg/Class#` form" in text
+
+
+def test_instructions_teach_a_how_to_sections_anchor_rule():
+    """2N Task 3 (flight-1 ambiguity 3): a how-to `section` (an extension
+    guide) anchors `after-endpoint-table` when it concerns the module's
+    endpoints, and `end-of-document` otherwise — closing the ambiguity
+    between those two anchors for exactly the claim shape most likely to
+    straddle them."""
+    text = instructions_path().read_text(encoding="utf-8")
+    assert "A how-to `section` — a guide for extending or adding to something — anchors" in text
+
+
+def test_instructions_teach_the_config_verdict_shape_both_forms():
+    """2N Task 3: the config-shaped `verdict` (2N design §2) gets its own
+    worked example beside the endpoint one, answered and `unanswered`, plus
+    the sentence distinguishing the two identity shapes and stating that a
+    verdict's `question` is copied from the brief's printed rows while
+    `cites`/`members` come from the tools instead."""
+    text = instructions_path().read_text(encoding="utf-8")
+    assert "endpoint shape (`protocol`, `method`, `path`, `kind`) or the config shape" in text
+    assert '"key": "spring.config.import"' in text
+    assert '"environment": "docker"' in text
+    assert (
+        '"assessment": "unanswered"'
+        in text.split("A `question` can also identify an unresolved configuration row")[1]
+    )
 
 
 def test_the_golden_overlay_assembles_into_the_rendered_document(tmp_path: Path):

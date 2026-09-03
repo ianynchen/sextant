@@ -15,7 +15,9 @@ from pydantic import ValidationError
 from sextant.domain.closed_sets import Anchor
 from sextant.domain.enrichment import (
     ComponentClaim,
+    ConfigQuestionRef,
     EnrichmentOverlay,
+    OpenQuestionRef,
     Provenance,
     VerdictClaim,
 )
@@ -68,7 +70,41 @@ UNANSWERED_VERDICT = {
     "assessment": "unanswered",
     "searched": "read every listener in the module; none names a payload type",
 }
-ALL_KINDS = [COMPONENT, SECTION, DIAGRAM, VERDICT, UNANSWERED_VERDICT]
+CONFIG_VERDICT = {
+    "kind": "verdict",
+    "evidence": "llm",
+    "anchor": "beside-open-question",
+    "question": {
+        "key": "spring.config.import",
+        "source": "application.yml",
+        "environment": "default",
+        "kind": "remote_source",
+    },
+    "assessment": "likely a Config Server import",
+    "because": "the profile declares `spring.config.import=configserver:`",
+}
+CONFIG_VERDICT_NULL_SOURCE = {
+    "kind": "verdict",
+    "evidence": "llm",
+    "anchor": "beside-open-question",
+    "question": {
+        "key": "server.port",
+        "source": None,
+        "environment": "docker",
+        "kind": "missing_key",
+    },
+    "assessment": "unanswered",
+    "searched": "grepped every profile-scoped application-*.yml; the key is declared nowhere",
+}
+ALL_KINDS = [
+    COMPONENT,
+    SECTION,
+    DIAGRAM,
+    VERDICT,
+    UNANSWERED_VERDICT,
+    CONFIG_VERDICT,
+    CONFIG_VERDICT_NULL_SOURCE,
+]
 
 
 def _overlay(*claims: dict[str, object]) -> dict[str, object]:
@@ -206,3 +242,63 @@ def test_provenance_and_the_verdict_reference_reject_unknown_fields_too():
         VerdictClaim.model_validate(
             dict(VERDICT, question=dict(VERDICT["question"], topic="orders"))  # type: ignore[call-overload]
         )
+
+
+# --- 2N design §2: the identity union widens to config-shaped questions ---
+
+
+def test_a_config_shaped_verdict_question_is_accepted():
+    """A verdict about an unresolved `resolved_config` row is exactly as
+    valid as one about an `open_questions` row (2N design §2) — the same
+    claim kind, a different identity shape, so config-shaped uncertainty
+    stops being unanswerable."""
+    claim = VerdictClaim.model_validate(CONFIG_VERDICT)
+    assert isinstance(claim.question, ConfigQuestionRef)
+    assert claim.question.source == "application.yml"
+
+
+def test_a_config_verdict_with_a_null_source_is_accepted():
+    """A `missing_key` row was never declared in any file, so no file ever
+    won it (D01) — `source` is nullable, and a verdict about such a row
+    states that explicitly rather than being unable to name one."""
+    claim = VerdictClaim.model_validate(CONFIG_VERDICT_NULL_SOURCE)
+    assert claim.question.source is None
+
+
+def test_an_endpoint_shaped_verdict_question_still_parses_as_the_endpoint_shape():
+    """Widening `question` to a union must not change what the EXISTING
+    endpoint shape parses as: an overlay written before this change still
+    comes back as `OpenQuestionRef`, not the config shape wearing the same
+    union — the whole reason every existing overlay validates unchanged."""
+    claim = VerdictClaim.model_validate(VERDICT)
+    assert isinstance(claim.question, OpenQuestionRef)
+
+
+@pytest.mark.parametrize("field", ["key", "environment", "kind"])
+def test_a_config_question_missing_any_of_its_fields_is_refused(field: str):
+    """Nothing is optional that identity depends on: a config verdict with no
+    `environment`, for one, could not be matched to the row that disambiguates
+    by it alone — the live rows this shape was verified against
+    (`spring.config.import`) differ from each other ONLY by environment."""
+    incomplete = {k: v for k, v in CONFIG_VERDICT["question"].items() if k != field}
+    with pytest.raises(ValidationError):
+        VerdictClaim.model_validate(dict(CONFIG_VERDICT, question=incomplete))
+
+
+def test_a_config_question_with_an_extra_field_is_refused():
+    """`extra: forbid` on the config shape too: a spare column names a row
+    identity that does not exist, the same rule the endpoint shape keeps."""
+    with pytest.raises(ValidationError, match="profile"):
+        VerdictClaim.model_validate(
+            dict(CONFIG_VERDICT, question=dict(CONFIG_VERDICT["question"], profile="cloud"))
+        )
+
+
+def test_a_question_shaped_like_both_kinds_at_once_is_refused_not_guessed():
+    """The ambiguity probe: `question`/`kind` vs `key`/`source`/`environment`
+    are disjoint required-field sets, so a payload wearing both shapes' fields
+    matches NEITHER member under `extra="forbid"` — pydantic's smart union
+    refuses it rather than guessing which shape was meant."""
+    ambiguous = dict(VERDICT["question"], key="spring.config.import", environment="default")
+    with pytest.raises(ValidationError):
+        VerdictClaim.model_validate(dict(VERDICT, question=ambiguous))

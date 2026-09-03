@@ -554,8 +554,8 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
     import subprocess
 
     from sextant.application.ports.scanner import ScanRequest
-    from sextant.cli.resources import extractor_jar
     from sextant.ingress.extract.jvm.scanner import AsmScanner
+    from sextant.resources import extractor_jar
 
     repo = Path(__file__).parents[2]
     fixture = repo / "fixtures" / "orders-service"

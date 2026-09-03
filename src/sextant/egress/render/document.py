@@ -33,6 +33,7 @@ from sextant.domain.enrichment import (
     UNANSWERED,
     Claim,
     ComponentClaim,
+    ConfigQuestionRef,
     DiagramClaim,
     EnrichmentOverlay,
     Provenance,
@@ -60,10 +61,12 @@ _GAPS = [
     "The structure diagram covers contract types only: inheritance edges are not extracted.",
     "The call graph is not implemented: there are no traces or sequence diagrams.",
     (
-        "Maven parent POMs, profiles, and property interpolation are not resolved: "
-        "the detector reads pom.xml directly instead of asking Maven to resolve it, "
-        "so any POM that depends on a parent, an active profile, or a property "
-        "placeholder will be misread — which is most real-world POMs."
+        "Maven profiles and property interpolation are not resolved: the "
+        "detector reads pom.xml directly instead of asking Maven to resolve "
+        "it. Parent coordinate inheritance and reactor `<modules>` discovery "
+        "ARE read, so an ordinary parent-and-children build detects "
+        "correctly — but a coordinate behind a `${property}` or inside a "
+        "profile is misread."
     ),
     (
         "Catalogs are not matched to modules: every catalog's `detect.coordinates` "
@@ -795,6 +798,13 @@ def assemble_module_document(
         )
     )
     sections.append(MachineList(tuple(coverage_items)))
+    # `beside-open-question`'s config placement (2N design §2): a config
+    # verdict answers one of the "Configuration key unresolved" lines just
+    # written above, so it lands right after the Coverage listing that
+    # carries them — the whole listing, not a per-row index, since the brief
+    # prints those rows as one listing rather than one section apiece the way
+    # `## Open questions` does.
+    config_end = len(sections)
 
     sections.append(MachineHeading(2, "Structure"))
     if report.shapes:
@@ -993,7 +1003,12 @@ def assemble_module_document(
     return _interleave(
         tuple(sections),
         _Anchors(
-            structure_end, endpoints_end, tuple(beside_question), questions_end, len(sections)
+            structure_end,
+            endpoints_end,
+            tuple(beside_question),
+            questions_end,
+            config_end,
+            len(sections),
         ),
         overlay,
         stale,
@@ -1372,13 +1387,21 @@ class _Anchors:
     # row's identity and the index just past its own single-item section.
     beside_question: tuple[tuple[tuple[str | None, ...], int], ...]
     questions_end: int
+    # Where a config-shaped verdict lands (2N design §2): the index just past
+    # the Coverage section's single `MachineList`, which is where the
+    # "Configuration key unresolved" lines it answers are printed. One index
+    # for the whole listing, not one per row — unlike `beside_question`,
+    # config rows are not each given their own single-item section.
+    config_end: int
     document_end: int
 
     def index_of(self, claim: Claim) -> int:
-        """Where `claim` goes. A `beside-open-question` verdict goes under the
-        line of the very question it answers; anything else anchored there
-        goes after the last question, since nothing in a component, section or
-        diagram claim names a single row."""
+        """Where `claim` goes. An endpoint-shaped `beside-open-question`
+        verdict goes under the line of the very question it answers; a
+        config-shaped one goes beside the coverage table's unresolved-
+        configuration listing; anything else anchored there goes after the
+        last question, since nothing in a component, section or diagram claim
+        names a single row."""
         if claim.anchor is Anchor.AFTER_COMPONENT_OVERVIEW:
             return self.structure_end
         if claim.anchor is Anchor.AFTER_ENDPOINT_TABLE:
@@ -1386,6 +1409,8 @@ class _Anchors:
         if claim.anchor is Anchor.END_OF_DOCUMENT:
             return self.document_end
         if isinstance(claim, VerdictClaim):
+            if isinstance(claim.question, ConfigQuestionRef):
+                return self.config_end
             for identity, index in self.beside_question:
                 if identity == claim.question.identity:
                     return index
@@ -1705,14 +1730,22 @@ def _claim_lines(claim: Claim) -> list[str]:
 
 
 def _verdict_lines(claim: VerdictClaim) -> list[str]:
-    """The verification seat's label (2K design §7). The question's own
-    identity is repeated on the line because a verdict does not always land
-    directly under its question — one anchored `end-of-document`, or one whose
-    row the section did not render, would otherwise name nothing."""
+    """The verification seat's label (2K design §7, widened by 2N design §2).
+    The question's own identity is repeated on the line because a verdict
+    does not always land directly under its question — one anchored
+    `end-of-document`, or one whose row the section did not render, would
+    otherwise name nothing. A config-shaped question prints its own columns
+    (`key`, `source`, `environment`) the same way; `kind` is common to both
+    shapes and always printed in the parenthetical that follows."""
     question = claim.question
-    identity = " ".join(
-        part for part in (question.protocol, question.method, question.path) if part
-    )
+    if isinstance(question, ConfigQuestionRef):
+        identity = " ".join(
+            part for part in (question.key, question.source, question.environment) if part
+        )
+    else:
+        identity = " ".join(
+            part for part in (question.protocol, question.method, question.path) if part
+        )
     label = f"**LLM assessment** for `{identity}` ({question.kind}): {claim.assessment}"
     if claim.assessment == UNANSWERED:
         return [f"{label} — searched: {claim.searched}"]

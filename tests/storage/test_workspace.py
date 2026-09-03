@@ -4,7 +4,6 @@ from pathlib import Path
 import duckdb
 
 from sextant.application.resolve.endpoints import derive_endpoints
-from sextant.cli.resources import catalogs_dir
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -19,6 +18,7 @@ from sextant.domain.facts import (
 )
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 

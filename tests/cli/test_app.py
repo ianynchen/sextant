@@ -4,23 +4,20 @@ import subprocess
 import uuid
 from pathlib import Path
 
-import click
 import pytest
 from click.testing import CliRunner
 
-from sextant.application.ports.detector import ModuleModel
 from sextant.application.ports.progress import NullProgress
 from sextant.application.ports.scanner import ScanReport, ScanRequest
 from sextant.application.stages.analyze import analyze
-from sextant.cli.app import _skip_reason, _tool_executor_for, cli
-from sextant.cli.resources import catalogs_dir, extractor_jar
+from sextant.cli.app import cli
 from sextant.domain.factfile import read_fact_tree
-from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import bare_descriptor, owner_of
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.resources import catalogs_dir, extractor_jar
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
@@ -672,32 +669,11 @@ def test_a_redaction_rule_that_breaks_a_claim_is_a_message_at_the_render_exit(tm
     assert "Traceback" not in result.output
 
 
-def test_a_missing_home_directory_is_reported_as_a_message_not_a_stack_trace(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """`ToolExecutor.__init__` (2K Task 7 fix round 3) calls `Path.home()`,
-    which raises `RuntimeError` — not `ValueError` — when no home directory
-    can be resolved (a container image with no `HOME` set, above all). Before
-    2K Task 8's review, `_tool_executor_for` caught `ValueError` alone, so
-    this would have escaped as an uncaught crash rather than reaching the
-    operator as the same kind of message every other jail-construction
-    refusal already gets.
-
-    A direct unit test of `_tool_executor_for` rather than a full `module
-    enrich` invocation: the jailed roots just need to exist and sit under
-    the repository root `IgnoreRules.load` reads, which `tmp_path` alone
-    already satisfies — no fixture compile required."""
-    (tmp_path / "facts").mkdir()
-    (tmp_path / "render").mkdir()
-
-    def _no_home() -> Path:
-        raise RuntimeError("could not determine the user's home directory")
-
-    monkeypatch.setattr(Path, "home", staticmethod(_no_home))
-
-    with pytest.raises(click.ClickException) as excinfo:
-        _tool_executor_for(tmp_path, tmp_path, Redactor.from_rules())
-    assert "could not determine the user's home directory" in str(excinfo.value)
+# (2N Task 6, carry (c)): the missing-home-directory whitebox test that
+# lived here moved to `tests/api/test_composition.py`, targeting
+# `sextant.api._tool_executor_for` directly, now that `cli/app.py`'s own
+# `_tool_executor_for` shim — which existed only to give this test a
+# `click.ClickException` to catch — is deleted.
 
 
 # --- Maven reactor discovery (2M Task 2, fix round 1) ----------------------
@@ -970,52 +946,11 @@ def test_a_leaf_module_packaged_pom_is_skip_listed_with_that_reason(tmp_path: Pa
     assert by_dir["service"]["skip_reason"] is None
 
 
-def test_skip_reason_names_library_kind():
-    """Gradle-only today (Maven never returns `library`, spec §2) — pinned
-    directly against `_skip_reason` since no real `MavenDetector` fixture
-    can produce it."""
-    module = ModuleModel(
-        module_id="g:a",
-        coordinates="g/a",
-        version="1.0.0",
-        root=Path("."),
-        kind="library",
-        languages=frozenset(),
-        source_roots=(),
-        output_dirs=(),
-    )
-    assert _skip_reason(module) == "kind is library"
-
-
-def test_skip_reason_names_packaging_pom():
-    module = ModuleModel(
-        module_id="g:a",
-        coordinates="g/a",
-        version="1.0.0",
-        root=Path("."),
-        kind="undetermined",
-        languages=frozenset(),
-        source_roots=(),
-        output_dirs=(),
-        packaging="pom",
-    )
-    assert _skip_reason(module) == "packaging is pom"
-
-
-def test_skip_reason_is_none_for_an_ordinary_undetermined_jar_module():
-    """The ruled amendment's whole point: `undetermined` alone is no longer
-    a skip reason."""
-    module = ModuleModel(
-        module_id="g:a",
-        coordinates="g/a",
-        version="1.0.0",
-        root=Path("."),
-        kind="undetermined",
-        languages=frozenset(),
-        source_roots=(),
-        output_dirs=(),
-    )
-    assert _skip_reason(module) is None
+# (2N Task 6, carry (c)): the three `_skip_reason` unit tests that lived
+# here moved to `tests/api/test_composition.py`, targeting
+# `sextant.api._skip_reason` directly, now that `cli/app.py`'s own
+# `_skip_reason = api._skip_reason` re-export — which existed only so this
+# file could import a local name — is deleted.
 
 
 def test_a_one_module_reactor_still_analyzes_into_the_childs_own_workspace(tmp_path: Path):

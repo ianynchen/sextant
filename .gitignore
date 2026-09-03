@@ -2,6 +2,11 @@
 # Unanchored: module workspaces live at module roots, including nested ones.
 .sextant/
 
+# The Tradewind adapter's api-key session mirror (2N design §1) — an audit
+# log beside the module it explains, never a build input. Same unanchored
+# treatment as `.sextant/`.
+.tradewind/
+
 # ---- Python ----
 __pycache__/
 *.py[cod]

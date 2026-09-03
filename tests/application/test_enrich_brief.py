@@ -123,6 +123,134 @@ def test_a_module_with_no_open_questions_says_so_rather_than_omitting_the_sectio
     assert "None open." in brief.prompt
 
 
+def test_unresolved_config_rows_join_open_questions_as_copyable_identity_rows():
+    """2N design §3: the exact rows the resolver could not join — printed as
+    the `ConfigQuestionRef` shape a config `verdict` claim's `question` field
+    carries, environment-distinguished the way the real `spring.config.import`
+    rows are (2N design §2)."""
+    resolved_config = [
+        {
+            "key": "spring.config.import",
+            "value": None,
+            "source": "application.yml",
+            "environment": "default",
+            "unresolved_reason": "remote_source",
+        },
+        {
+            "key": "spring.config.import",
+            "value": None,
+            "source": "application.yml",
+            "environment": "docker",
+            "unresolved_reason": "remote_source",
+        },
+    ]
+    brief = _compose(_Workspace(resolved_config=resolved_config))
+    for environment in ("default", "docker"):
+        expected = json.dumps(
+            {
+                "key": "spring.config.import",
+                "source": "application.yml",
+                "environment": environment,
+                "kind": "remote_source",
+            },
+            sort_keys=True,
+        )
+        assert expected in brief.prompt
+    assert "None open." not in brief.prompt
+
+
+def test_an_unresolved_config_rows_missing_source_renders_null_honestly():
+    resolved_config = [
+        {
+            "key": "billing.url",
+            "value": None,
+            "source": None,
+            "environment": "prod",
+            "unresolved_reason": "missing_key",
+        }
+    ]
+    brief = _compose(_Workspace(resolved_config=resolved_config))
+    expected = json.dumps(
+        {"key": "billing.url", "source": None, "environment": "prod", "kind": "missing_key"},
+        sort_keys=True,
+    )
+    assert expected in brief.prompt
+
+
+def test_a_resolved_config_row_gets_no_identity_row_in_open_questions():
+    """Only the rows pass 2 could not join are addressable (2N design §3) —
+    a resolved row (`value` set) never gains an identity, in this section or
+    in `validate_overlay`'s own matching set."""
+    resolved_config = [
+        {
+            "key": "orders.url",
+            "value": "http://orders",
+            "source": "application.yml",
+            "environment": "prod",
+            "unresolved_reason": None,
+        }
+    ]
+    brief = _compose(_Workspace(resolved_config=resolved_config))
+    assert "None open." in brief.prompt
+    assert "orders.url" not in brief.prompt
+
+
+def test_a_config_rows_key_and_source_are_redacted_before_they_reach_the_prompt():
+    """The brief IS the wire (2K Task 7 ruling 1, widened by 2N design §2):
+    `key`/`source` get the same `redact_text` canonicalization `path` gets."""
+    redactor = Redactor.from_rules()
+    resolved_config = [
+        {
+            "key": "billing.url",
+            "value": None,
+            "source": "https://user:pass@billing.example.com/config.yml",
+            "environment": "prod",
+            "unresolved_reason": "missing_key",
+        }
+    ]
+    brief = _compose(_Workspace(resolved_config=resolved_config), redactor)
+    assert "user:pass" not in brief.prompt
+    assert "https://billing.example.com/config.yml" in brief.prompt
+
+
+def test_open_questions_and_config_rows_coexist_clearly_distinguishable():
+    open_questions = [
+        {
+            "protocol": "jms",
+            "method": None,
+            "path": "relay-queue",
+            "question": "payload_binding",
+            "candidates": "[]",
+            "evidence": None,
+        }
+    ]
+    resolved_config = [
+        {
+            "key": "spring.config.import",
+            "value": None,
+            "source": "application.yml",
+            "environment": "default",
+            "unresolved_reason": "remote_source",
+        }
+    ]
+    brief = _compose(_Workspace(open_questions=open_questions, resolved_config=resolved_config))
+    endpoint_identity = json.dumps(
+        {"protocol": "jms", "method": None, "path": "relay-queue", "kind": "payload_binding"},
+        sort_keys=True,
+    )
+    config_identity = json.dumps(
+        {
+            "key": "spring.config.import",
+            "source": "application.yml",
+            "environment": "default",
+            "kind": "remote_source",
+        },
+        sort_keys=True,
+    )
+    assert endpoint_identity in brief.prompt
+    assert config_identity in brief.prompt
+
+
 def test_the_digest_lists_unresolved_and_narrowed_endpoints_but_not_resolved_ones():
     endpoints = [
         {"protocol": "http", "method": "GET", "path": "/a", "resolution": "unresolved"},
@@ -153,6 +281,27 @@ def test_the_digest_lists_unresolved_config_keys_with_their_reason():
     brief = _compose(_Workspace(resolved_config=resolved_config))
     assert "billing.url — missing_key in prod" in brief.prompt
     assert "orders.url" not in brief.prompt
+
+
+def test_the_digest_and_open_questions_print_one_spelling_of_a_redacted_config_key():
+    """The same unresolved `resolved_config` row feeds both the open-questions
+    identity (`_open_question_lines`, which `redact_text`s `key`) and this
+    digest — printing the raw key in one and the masked key in the other
+    would leak the exact value redaction exists to hide. Both sections must
+    print the identical masked spelling, never the raw one."""
+    redactor = Redactor.from_rules()
+    resolved_config = [
+        {
+            "key": "https://user:pass@billing.example.com/config.yml",
+            "value": None,
+            "source": "application.yml",
+            "environment": "prod",
+            "unresolved_reason": "missing_key",
+        }
+    ]
+    brief = _compose(_Workspace(resolved_config=resolved_config), redactor)
+    assert "user:pass" not in brief.prompt
+    assert brief.prompt.count("https://billing.example.com/config.yml") == 2
 
 
 def test_the_digest_says_so_when_the_graph_is_unsure_about_nothing():
@@ -195,6 +344,15 @@ def test_composing_the_same_inputs_twice_is_byte_identical():
             }
         ],
         endpoints=[{"protocol": "http", "method": "GET", "path": "/a", "resolution": "unresolved"}],
+        resolved_config=[
+            {
+                "key": "spring.config.import",
+                "value": None,
+                "source": "application.yml",
+                "environment": "default",
+                "unresolved_reason": "remote_source",
+            }
+        ],
     )
     first = _compose(workspace)
     second = _compose(workspace)

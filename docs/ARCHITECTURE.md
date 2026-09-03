@@ -488,8 +488,11 @@ exist in no code, and validation-by-construction is the only check that cannot b
 > never called from anywhere else in the pipeline. This replaces the external-skill design
 > above, not merely extends it: there is no skill running outside Sextant under the user's
 > own subscription any more — the call happens inside Sextant's own process, through an
-> adapter (`claude-api` in v1, one file, import-confined to it by a structural test), gated
-> by `ANTHROPIC_API_KEY` read from the environment alone. What DR-2 protected survives
+> adapter (`tradewind` since 2N — one file, `src/sextant/agents/tradewind.py`, driving the
+> user's Tradewind library through its public client, import-confined by a structural
+> test; 2K's `claude-api` was its proof-of-shape and is deleted), authenticated either by
+> the machine's own Claude Code login or by `ANTHROPIC_API_KEY` read from the environment
+> alone. What DR-2 protected survives
 > unchanged: no invention (the overlay is validated by construction exactly as before,
 > `application/enrich/validate.py`), no provider dependency tree in the deterministic core
 > (the adapter lives in its own outer group, `src/sextant/agents/`, importing no other outer

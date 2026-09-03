@@ -1,11 +1,11 @@
 """Belt-and-braces network guard (2K design §9, fix round 1 Important 4):
-every test in this directory patches `ClaudeApiAgent._send`, the one seam
-that reaches `anthropic`, so the suite never touches the network — but a
-patch is only as good as the seam it targets staying named `_send`. If a
-future rename ever left a test's patch a silent no-op, `_send`'s real body
-would run and reach for `ANTHROPIC_API_KEY`; stripping it from every
-test's environment, autouse, turns that failure mode into a loud
-`EnrichmentAgentError` (missing key) instead of a real, billed API call."""
+every api-key-auth test in this directory injects a scripted fake transport
+(`tests/agents/test_tradewind_loop.py`'s `backend_factories` seam) rather
+than touching the network — but a fake is only as good as it actually being
+the one Tradewind resolves. Stripping `ANTHROPIC_API_KEY` from every test's
+environment, autouse, turns a fake that silently stopped taking effect into
+a loud `EnrichmentAgentError` (missing key, `TradewindAgent.run`'s own
+pre-client check) instead of a real, billed API call."""
 
 import pytest
 

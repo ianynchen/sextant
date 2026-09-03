@@ -169,9 +169,23 @@ def test_a_module_with_no_enrich_section_has_every_default_unset(tmp_path: Path)
 
 def test_the_declared_enrich_defaults_are_returned_as_written(tmp_path: Path):
     defaults = read_enrich_defaults(
-        _config(tmp_path, "enrich:\n  agent: claude-api\n  model: claude-x\n  max_turns: 20\n")
+        _config(
+            tmp_path,
+            "enrich:\n"
+            "  agent: tradewind\n"
+            "  model: claude-x\n"
+            "  max_turns: 20\n"
+            "  auth: api-key\n"
+            "  session_store: /tmp/sessions.sqlite\n",
+        )
     )
-    assert defaults == EnrichDefaults(agent="claude-api", model="claude-x", max_turns=20)
+    assert defaults == EnrichDefaults(
+        agent="tradewind",
+        model="claude-x",
+        max_turns=20,
+        auth="api-key",
+        session_store="/tmp/sessions.sqlite",
+    )
 
 
 def test_an_unknown_enrich_key_is_refused(tmp_path: Path):
@@ -182,11 +196,27 @@ def test_an_unknown_enrich_key_is_refused(tmp_path: Path):
         read_enrich_defaults(_config(tmp_path, "enrich:\n  max_turn: 20\n"))
 
 
-def test_a_non_positive_max_turns_is_refused(tmp_path: Path):
+def test_a_negative_max_turns_is_refused(tmp_path: Path):
     with pytest.raises(SextantConfigError):
-        read_enrich_defaults(_config(tmp_path, "enrich:\n  max_turns: 0\n"))
+        read_enrich_defaults(_config(tmp_path, "enrich:\n  max_turns: -1\n"))
+
+
+def test_a_zero_max_turns_is_legal(tmp_path: Path):
+    """`0` is an honest single-response run with no tool execution permitted
+    (`agents/tradewind.py`'s own constructor legalizes it) — the yml check
+    must not refuse a floor the constructor itself does not enforce."""
+    defaults = read_enrich_defaults(_config(tmp_path, "enrich:\n  max_turns: 0\n"))
+    assert defaults.max_turns == 0
 
 
 def test_an_enrich_section_that_is_not_a_mapping_is_refused(tmp_path: Path):
     with pytest.raises(SextantConfigError):
         read_enrich_defaults(_config(tmp_path, "enrich:\n  - claude-api\n"))
+
+
+def test_an_unrecognized_auth_value_is_refused(tmp_path: Path):
+    """`auth:` is a closed two-value set (2N design §1) — a typo'd
+    `apikey` would otherwise be indistinguishable from a real, unhandled
+    third auth mode rather than a mistake to report."""
+    with pytest.raises(SextantConfigError):
+        read_enrich_defaults(_config(tmp_path, "enrich:\n  auth: apikey\n"))

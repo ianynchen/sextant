@@ -36,7 +36,10 @@ matters (accepted at ingest, invisible at render, or the reverse).
   checked after resolution, so a cite escaping through `..` or a symlink is
   refused rather than followed.
 - **A verdict's question** must match an `open_questions` row on all four of
-  protocol, method, path and kind — including an `unanswered` one, whose
+  protocol, method, path and kind, OR an unresolved `resolved_config` row
+  (`value IS NULL`) on all four of key, source, environment and
+  unresolved_reason (2N design §2) — whichever shape the claim's `question`
+  itself carries. Either way an `unanswered` verdict is included, whose
   exemption is about the ANSWER and not the row it answers. Matching is against
   the row's own values as the workspace holds them.
 """
@@ -49,11 +52,13 @@ from sextant.application.ports.workspace import Workspace
 from sextant.domain.enrichment import (
     Claim,
     ComponentClaim,
+    ConfigQuestionRef,
     DiagramClaim,
     EnrichmentOverlay,
     SectionClaim,
     VerdictClaim,
     open_question_identity,
+    resolved_config_identity,
 )
 from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import bare_descriptor, simple_name
@@ -160,15 +165,16 @@ def validate_overlay(
     `section` claim's citations are resolved against, and the boundary they
     must stay inside.
 
-    `redactor` canonicalizes a verdict's `question.path` match the same way
-    on both sides (2K Task 7 ruling 1): the brief hands the model a
-    `redact_text`-ed `open_questions` row, so a model copying that row back
-    into a `verdict` can only ever echo the redacted spelling — the shared
-    `open_question_identity` redacts the WORKSPACE row's own `path` before
-    comparing (the same function assembly keys its placement on), so a redaction
-    that changed nothing (the ordinary case) still matches on the raw value
-    and a redaction that changed something still matches on the value the
-    model actually saw.
+    `redactor` canonicalizes a verdict's `question.path` (or, for a
+    config-shaped question, its `key`/`source`) match the same way on both
+    sides (2K Task 7 ruling 1, widened by 2N design §2): the brief hands the
+    model a `redact_text`-ed row, so a model copying that row back into a
+    `verdict` can only ever echo the redacted spelling — the shared
+    `open_question_identity`/`resolved_config_identity` redacts the WORKSPACE
+    row's own address columns before comparing (the same functions assembly
+    keys its placement on), so a redaction that changed nothing (the ordinary
+    case) still matches on the raw value and a redaction that changed
+    something still matches on the value the model actually saw.
     """
     descriptors = set()
     names = set()
@@ -177,11 +183,22 @@ def validate_overlay(
         descriptors.add(descriptor)
         names.add(simple_name(descriptor))
     questions = {open_question_identity(row, redactor) for row in workspace.query("open_questions")}
+    # Only the UNRESOLVED rows (`value IS NULL`) are addressable (2N design
+    # §2/§3): a config verdict answers a row pass 2 could not resolve, never
+    # a resolved one — the same "only rows the machine already computes gain
+    # an address" rule §3 states for the whole task.
+    config_questions = {
+        resolved_config_identity(row, redactor)
+        for row in workspace.query("resolved_config")
+        if row.get("value") is None
+    }
 
     accepted: list[Claim] = []
     refusals: list[Refusal] = []
     for index, claim in enumerate(overlay.claims):
-        reason = _reason_to_refuse(claim, descriptors, names, questions, module_root)
+        reason = _reason_to_refuse(
+            claim, descriptors, names, questions, config_questions, module_root
+        )
         if reason is None:
             accepted.append(claim)
         else:
@@ -220,6 +237,7 @@ def _reason_to_refuse(
     descriptors: set[str],
     names: set[str],
     questions: set[tuple[str | None, ...]],
+    config_questions: set[tuple[str | None, ...]],
     module_root: Path,
 ) -> str | None:
     """Why this claim cannot be accepted, or `None` when it can."""
@@ -229,7 +247,7 @@ def _reason_to_refuse(
         return _first_missing_node(claim, names)
     if isinstance(claim, SectionClaim):
         return _first_missing_cite(claim, module_root)
-    return _unmatched_question(claim, questions)
+    return _unmatched_question(claim, questions, config_questions)
 
 
 def _first_missing_member(claim: ComponentClaim, descriptors: set[str]) -> str | None:
@@ -289,20 +307,35 @@ def _first_missing_cite(claim: SectionClaim, module_root: Path) -> str | None:
     return None
 
 
-def _unmatched_question(claim: VerdictClaim, questions: set[tuple[str | None, ...]]) -> str | None:
-    """Every verdict answers a row in the ledger, and the row has to exist.
+def _unmatched_question(
+    claim: VerdictClaim,
+    questions: set[tuple[str | None, ...]],
+    config_questions: set[tuple[str | None, ...]],
+) -> str | None:
+    """Every verdict answers a row in the ledger, and the row has to exist —
+    an `open_questions` row for the endpoint shape, an unresolved
+    `resolved_config` row for the config one (2N design §2), by whichever
+    shape `claim.question` itself carries.
 
     **`unanswered` exempts the ASSESSMENT, never the REFERENT** (Task 3 review,
-    ruled). "`unanswered` beats a guess" (2K design §5/§7) is a rule about the
-    answer: a model that looked and could not ground one is never refused for
-    saying so, and no grounding is demanded of the text it gives. But an
-    `unanswered` verdict still names a question, still renders beside it, and
-    still counts as a claim in the file — so a verdict against a question
-    nobody asked is a phantom whichever way it is answered, and exempting the
-    referent as well would leave open the one channel by which an invented row
-    could reach the document.
+    ruled, unchanged by the identity widening). "`unanswered` beats a guess"
+    (2K design §5/§7) is a rule about the answer: a model that looked and
+    could not ground one is never refused for saying so, and no grounding is
+    demanded of the text it gives. But an `unanswered` verdict still names a
+    question, still renders beside it, and still counts as a claim in the
+    file — so a verdict against a question nobody asked is a phantom whichever
+    way it is answered, and exempting the referent as well would leave open
+    the one channel by which an invented row could reach the document.
     """
     question = claim.question
+    if isinstance(question, ConfigQuestionRef):
+        if question.identity in config_questions:
+            return None
+        return (
+            f"verdict answers `{question.kind}` for config key `{question.key}` in "
+            f"`{question.environment}`, which is not an unresolved configuration row "
+            "in this workspace"
+        )
     if question.identity in questions:
         return None
     return (

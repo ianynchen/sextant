@@ -55,6 +55,16 @@ class MalformedAnswersError(RuntimeError):
     """
 
 
+class EmptyPartialAnswerError(RuntimeError):
+    """A partial answer whose text is empty (2N design §1) — a capped run
+    that produced no final text at all, reachable on any adapter whose loop
+    can end mid-turn with nothing yet written. Distinct from
+    `MalformedAnswersError`: an empty string is not "text that exists and
+    does not parse" — it is the honest absence `partial_reason` already
+    explains, so the failure names THAT reason rather than describing a JSON
+    parse that was never attempted."""
+
+
 @dataclass(frozen=True)
 class EnrichResult:
     """One run's outcome, whichever door supplied the answers.
@@ -113,6 +123,37 @@ def compose(
     )
 
 
+def _extracted_array(answers_text: str) -> str:
+    """The JSON array inside `answers_text`, tolerating the one wrapper a
+    live engine actually produces.
+
+    INSTRUCTIONS says "a single JSON array and nothing else", and the
+    api-key path obeys. But the subscription path runs the Claude Code
+    ENGINE, whose persona narrates — the first live flight (2026-09-03)
+    returned a perfect claims array wrapped in one line of prose and a
+    ```json fence, and a strict parse threw the whole run away at char 0. A
+    later flight returned the mirror image: a bare array followed by a
+    trailing sentence of narration, which fails a strict parse for the same
+    reason at the opposite end. Leniency here is bounded and honest: text
+    that already parses AS AN ARRAY is returned untouched; otherwise the
+    slice from the first `[` to the last `]` is tried — the narrowest rule
+    that unwraps prose and fences, leading or trailing, without ever
+    INVENTING structure. Anything else still fails as malformed, and
+    validation-by-construction downstream judges every claim exactly as
+    before; nothing about leniency loosens what a claim must prove."""
+    stripped = answers_text.strip()
+    try:
+        if isinstance(json.loads(stripped), list):
+            return stripped
+    except json.JSONDecodeError:
+        pass
+    start = stripped.find("[")
+    end = stripped.rfind("]")
+    if start != -1 and end > start:
+        return stripped[start : end + 1]
+    return stripped
+
+
 def validate_and_finish(
     answers_text: str,
     workspace: Workspace,
@@ -136,8 +177,17 @@ def validate_and_finish(
     pinning a golden fixture's run_at need only pass one through rather than
     patch a clock).
     """
+    if partial and not answers_text.strip():
+        # 2N design §1: a capped run that produced no final text is a loud
+        # failure NAMING the partial reason, never `MalformedAnswersError`
+        # — there is no JSON to have failed to parse. Checked before the
+        # `json.loads` below, which an empty string would otherwise fail on
+        # the wrong way (a decode error, not this honest absence).
+        raise EmptyPartialAnswerError(
+            f"the run ended early ({partial_reason}) and returned no answers"
+        )
     try:
-        raw = json.loads(answers_text)
+        raw = json.loads(_extracted_array(answers_text))
         claims = _CLAIMS.validate_python(raw)
     except (json.JSONDecodeError, ValidationError) as broken:
         raise MalformedAnswersError(

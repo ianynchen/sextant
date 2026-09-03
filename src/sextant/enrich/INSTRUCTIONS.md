@@ -126,6 +126,11 @@ these four strings — where render is allowed to place it:
 - `"end-of-document"` — at the very end; for anything that does not belong
   beside a more specific position.
 
+A how-to `section` — a guide for extending or adding to something — anchors
+`after-endpoint-table` when what it walks through concerns the module's
+endpoints (adding an operation, a route, a listener), and `end-of-document`
+otherwise.
+
 There are exactly four kinds of claim, one example of each below. Do not
 invent a fifth kind or a field not shown here.
 
@@ -144,7 +149,9 @@ invent a fifth kind or a field not shown here.
 
 `members` are the exact symbols you saw declared — a class the graph does
 not know about will be refused, not silently dropped, so only name what you
-actually found.
+actually found. Write each one in the short `pkg/Class#` form the example
+above shows — package path, class name, trailing `#` — never a fully
+qualified dotted name.
 
 ### `section` — prose: a design note, an extension guide, an algorithm description
 
@@ -161,7 +168,9 @@ actually found.
 
 `cites` are the files this section is actually built from — every one of
 them must be a real file under the module, reachable by the same path
-`find`/`grep` printed for it. In the rendered HTML, a backtick-quoted
+`find`/`grep` printed for it. That path is module-root-relative — the exact
+spelling `find` and `grep` already print, never rewritten to an absolute
+path or a different root. In the rendered HTML, a backtick-quoted
 `` `symbol` `` in `body` becomes code and a triple-backtick fenced block
 becomes a code block — nothing else in `body` is specially interpreted
 there (the markdown output already renders ordinary markdown natively).
@@ -213,8 +222,39 @@ Unanswered, with the search recorded instead of a guess:
 }
 ```
 
-`question` must match one of the rows you were handed exactly (protocol,
-method, path, kind) — the graph never changes because of what you write
-here; a verdict only ever renders *beside* the question, never resolves it.
-Carry `because` on an answered verdict and `searched` on an `unanswered`
-one — never both, never neither.
+A `question` can also identify an unresolved configuration row instead of an
+endpoint — same claim shape, a different set of fields. Answered:
+
+```json
+{
+  "kind": "verdict",
+  "evidence": "llm",
+  "anchor": "beside-open-question",
+  "question": {"key": "spring.config.import", "source": "application.yml", "environment": "default", "kind": "remote_source"},
+  "assessment": "a Spring Cloud Config server — `application.yml`'s `spring.config.import` value is a `configserver:` reference, not a local file, so nothing in this module resolves it further",
+  "because": "`grep`ping the module for `spring.config.import` finds only this one declaration, in `application.yml`, and `read_file` shows its value starts with `configserver:`"
+}
+```
+
+Unanswered:
+
+```json
+{
+  "kind": "verdict",
+  "evidence": "llm",
+  "anchor": "beside-open-question",
+  "question": {"key": "spring.config.import", "source": "application.yml", "environment": "docker", "kind": "remote_source"},
+  "assessment": "unanswered",
+  "searched": "grepped every `application*.yml`/`application*.properties` file visible in the module for a docker-profile override of `spring.config.import`; none exists beyond the `default` environment's own row"
+}
+```
+
+`question` must match one of the rows you were handed exactly — the
+endpoint shape (`protocol`, `method`, `path`, `kind`) or the config shape
+(`key`, `source`, `environment`, `kind`), copied verbatim from the identity
+row the brief printed, never retyped or reshaped. Identities come from those
+printed rows; `cites` and `members` come from what the tools handed you —
+the two are not interchangeable. The graph never changes because of what
+you write here; a verdict only ever renders *beside* the question, never
+resolves it. Carry `because` on an answered verdict and `searched` on an
+`unanswered` one — never both, never neither.

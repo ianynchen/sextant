@@ -29,10 +29,10 @@ from sextant.application.resolve.shapes import (
 from sextant.application.resolve.shapes.contracts import _contracts_of, _owns
 from sextant.application.resolve.shapes.expansion import _rules_of
 from sextant.application.resolve.shapes.nullability import _scope_nullable
-from sextant.cli.resources import catalogs_dir
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.facts import DeclaredFieldFact, DeclaredShapeFact, Document
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 

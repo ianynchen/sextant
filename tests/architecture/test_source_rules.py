@@ -96,8 +96,23 @@ def test_jvm_names_stay_in_the_jvm_extractor():
     the wire key is Gradle's own name for the identical language-neutral idea,
     not a JVM implementation detail leaking out of the extractor, so it is
     recorded here for the same reason rather than smuggled past the check.
+
+    `api.py` was the composition-root exception (2N Task 5, §5b): the
+    reactor-walk/scan composition that used to live inline in `cli/app.py`'s
+    own command bodies — the one place allowed to name
+    `AsmScanner`/`JvmGeneratedNaming` directly — moved into `sextant.api`,
+    which is now the ONLY place that does; `cli` itself dropped out of this
+    exception (2N Task 6) once `cli/resources.py` — the last file under it
+    that named JVM things — was retired in favor of `sextant.resources`
+    (below). The exact filename, not a bare `"api"` prefix (fix round 1,
+    MINOR-8): a prefix would silently exempt any future `api_*` module too,
+    which is not this exception's claim. `resources.py` (top-level) is
+    `sextant.resources`, the one real implementation now (2N Task 6 retired
+    `cli/resources.py`'s delegating copy entirely); it carries the same
+    `extractor-jvm` path segment/prose that made the file need an exception
+    before, and after.
     """
-    allowed = {"ingress/extract/jvm", "cli"}
+    allowed = {"ingress/extract/jvm", "api.py", "resources.py"}
     files = [
         path
         for path in python_files() + sql_files()

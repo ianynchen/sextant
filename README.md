@@ -17,13 +17,58 @@ uv sync                                        # Python side
 
 uv run sextant module analyze <module-path>
 uv run sextant module render  <module-path>
-uv run sextant module enrich  <module-path> --agent claude-api --model <model-id>
+uv run sextant module enrich  <module-path> --model <model-id>   # tradewind/subscription by default
 uv run sextant module export  <module-path>
 ```
 
 `scripts/check.sh` runs every gate — formatting, lint, types, import contracts, the
 extractor's own build and tests, then the Python suite. `scripts/check.sh --lint` runs
 the lint gates alone, which is what the pre-commit hook in `.githooks/` runs.
+
+## Embedding Sextant as a library
+
+`sextant.api` exposes the same four verbs as the CLI's own `module` commands —
+`analyze`, `render`, `enrich`/`enrich_async`, `export` — as plain Python functions, for a
+service that wants Sextant's output without shelling out to it:
+
+```python
+from pathlib import Path
+from sextant import api
+
+module = Path("services/orders")  # its own .sextant.yml needs `enrich: model: <id>`
+try:
+    api.analyze(module)
+    api.render(module)
+    result = api.enrich(module)  # auth="api-key" by default — see below
+    print(result.overlay, result.accepted, result.refused)
+except api.SextantError as refused:
+    raise SystemExit(f"sextant: {refused}") from refused
+```
+
+`enrich` takes no `model` parameter — unlike the CLI's `--model`, there is no flag to pass
+one on. It reads `module`'s own `.sextant.yml enrich: model:` instead, the same fallback the
+CLI itself uses when `--model` is absent; a module with neither is refused exactly as a bare
+`--agent`/no `--model` CLI invocation is.
+
+**The v1 contract:** synchronous — each call blocks until its work is done and returns a
+small frozen result object (`AnalyzeResult`, `RenderResult`, `EnrichResult`,
+`ExportResult`); quiet — no progress output, unlike the CLI's own live console display;
+not thread-safe per module — one workspace (`<module>/.sextant`) is one file tree, and two
+calls against the same module at the same time are undefined, same as the CLI's own "one
+module, one workspace, one command" rule. Every refusal raises a typed `SextantError`
+subclass (`DetectionError`, `NotAnalyzedError`, `ConfigurationError`, `EnrichmentError`) —
+never `SystemExit` — carrying the exact message the CLI prints for the same refusal.
+
+`enrich`'s own default is `auth="api-key"`, the opposite of the CLI's own `subscription`
+default: a library host is a service with no login to hand the agent, where the CLI runs
+on a developer's own logged-in machine. Calling the synchronous `enrich` from inside an
+already-running event loop fails the way any nested `asyncio.run` does; `enrich_async`
+awaits the same composition on a worker thread instead, for an async service's own request
+handler — at two real costs, not free: one blocked executor thread for the full run (a live
+model call, potentially minutes) per concurrent call, sized by Python's own default
+thread-pool limit; and no real cancellation — a cancelled `await` leaves that thread running
+to completion regardless, including writing the overlay and both rendered documents, unseen
+by whatever gave up on it.
 
 ## Build systems and multi-module repositories
 
@@ -150,20 +195,33 @@ straight into both `architecture.md` and `architecture.html` — one command, do
 here rewrites or reorders machine-derived text.
 
 ```
-uv run sextant module enrich <module-path> --agent claude-api --model <provider's model id>
+uv run sextant module enrich <module-path> --model <provider's model id>
 ```
 
-- **`--agent`** — for a live run, a name in `AGENT_REGISTRY` (`claude-api` ships in v1); an
+- **`--agent`** — for a live run, a name in `AGENT_REGISTRY` (`tradewind` ships in v1, and
+  is the default); an
   unknown name is refused, naming the known list. Under `--dry-run`/`--ingest` no adapter
   runs, so this is a free-text label for the overlay's provenance instead, not validated
   against the registry. **`--model`** is passed to the adapter **verbatim** — Sextant does
   not maintain a provider's model catalog. **`--max-turns`** caps the tool-use loop (default
-  50); a no-progress guard ends the run early if the same call repeats three times running.
+  20, and on `api-key` a value above 24 is refused up front — the backend's own ceiling); a
+  no-progress nudge fires on the third identical call across the whole run, and a run that
+  keeps repeating burns rounds to the cap, reported honestly as `no_progress`.
 - **`.sextant.yml`'s `enrich:` section** supplies defaults for all three
   (`agent`/`model`/`max_turns`), read only where the matching flag is absent — flags always
-  win.
-- **`ANTHROPIC_API_KEY` comes from the environment alone** — never a flag, never a config
-  file. Its absence is refused before any network attempt.
+  win, and `auth`/`session_store` may be set the same way. Through the library facade,
+  `model`, `max_turns` and `session_store` are consulted from `.sextant.yml`; `agent` and
+  `auth` are not — `sextant.api.enrich`'s own parameters carry those two.
+- **`--auth`** selects how the model is reached: `subscription` (the default — Tradewind's
+  claude backend, the machine's logged-in Claude Code; its engine's own dev tools are
+  disabled, so only the four jailed tools exist) or `api-key` (Tradewind's langchain
+  backend). On the api-key path **`ANTHROPIC_API_KEY` comes from the environment alone** —
+  never a flag, never a config file — and its absence is refused, naming the variable,
+  before any client is built. The api-key path persists Tradewind's session mirror to
+  `<module>/.tradewind/sessions.sqlite` (gitignore `.tradewind/`; the jail cannot see it);
+  the subscription path keeps no store — the engine has its own native record. The two
+  auth modes run materially different system prompts: subscription APPENDS the enrichment
+  instructions to the Claude Code persona rather than replacing it.
 - **Two doors skip the model call entirely**, and Sextant validates whatever comes back
   through them exactly as it validates a live run's answer: **`--dry-run`** writes the
   composed brief and the instructions document to the workspace and calls nothing, for any

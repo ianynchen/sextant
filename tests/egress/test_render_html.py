@@ -23,6 +23,7 @@ from test_render_assembly import (
     REPORT,
     _claim,
     _component,
+    _config_verdict,
     _diagram,
     _overlay,
     _section,
@@ -695,6 +696,35 @@ def test_an_unanswered_verdict_renders_as_the_honest_answer_it_is():
     assert (
         "LLM assessment</strong> for <code>sqs order-intake</code> (payload_binding): "
         "unanswered — searched: read every listener; none names a payload type"
+    ) in document
+
+
+def test_a_config_shaped_verdict_renders_in_html_too():
+    """2N design §2. The second serializer reads the same claim
+    `document._verdict_lines`
+    does (module docstring, "the HTML emitter consumes the SAME list") — a
+    config-shaped `question` must render its own identity here exactly as it
+    does in markdown, not raise on the endpoint shape's `protocol`/`path`
+    attributes a `ConfigQuestionRef` does not carry."""
+    sections = assemble_module_document(
+        MODULE,
+        REPORT,
+        "a3f91c",
+        resolved_config=[
+            {
+                "key": "spring.config.import",
+                "value": None,
+                "source": "application.yml",
+                "environment": "default",
+                "unresolved_reason": "remote_source",
+            }
+        ],
+        overlay=_overlay(_config_verdict()),
+    )
+    document = _html(sections)
+    assert (
+        "LLM assessment</strong> for <code>spring.config.import application.yml "
+        "default</code> (remote_source): likely a Config Server import"
     ) in document
 
 

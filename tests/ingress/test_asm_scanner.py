@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from sextant.application.ports.scanner import ScanRequest
-from sextant.cli.resources import extractor_jar
 from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.resources import extractor_jar
 
 REPO = Path(__file__).parents[2]
 JAR = extractor_jar()

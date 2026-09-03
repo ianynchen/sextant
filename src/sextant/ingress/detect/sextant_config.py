@@ -50,8 +50,17 @@ _REDACT_KEYS = frozenset({"key_patterns", "value_patterns"})
 # `enrich:`'s own keys (2K design §3: "repo defaults in `.sextant.yml` under
 # `enrich:`; flags win"), closed for the same reason every other section here
 # is: a typo'd `max_turn` would read as "no default", indistinguishable from
-# a module that declared none.
-_ENRICH_KEYS = frozenset({"agent", "model", "max_turns"})
+# a module that declared none. `auth`/`session_store` join the set for the
+# Tradewind adapter (2N design §1): the CLI's own `--auth` flag wins over
+# `auth:` the same way every other flag wins over its default here;
+# `session_store` has no flag counterpart at all, only this default.
+_ENRICH_KEYS = frozenset({"agent", "model", "max_turns", "auth", "session_store"})
+
+# The only two `auth:` values the Tradewind adapter knows (2N design §1) —
+# closed the same way `--auth`'s own `click.Choice` is, so a typo here is
+# refused loudly rather than read as "no default" (this file's own
+# module-docstring rule).
+_AUTH_VALUES = frozenset({"subscription", "api-key"})
 
 # `groupId:artifactId`, optionally `:version`, over Maven's own identifier
 # charset. Each segment becomes a directory — under `facts/lib/`, or in the
@@ -179,12 +188,16 @@ def read_extract_libraries(module_root: Path) -> tuple[str, ...]:
 class EnrichDefaults:
     """`enrich:`'s own defaults (2K design §3) — each `None` where the module
     declares none, which is the ordinary case: `sextant module enrich`'s own
-    `--agent`/`--model`/`--max-turns` flags win over whatever is set here,
-    and win over nothing when neither exists."""
+    `--agent`/`--model`/`--max-turns`/`--auth` flags win over whatever is set
+    here, and win over nothing when neither exists. `session_store` has no
+    flag counterpart (2N design §1) — this is its only source besides the
+    Tradewind adapter's own per-auth default."""
 
     agent: str | None = None
     model: str | None = None
     max_turns: int | None = None
+    auth: str | None = None
+    session_store: str | None = None
 
 
 def read_enrich_defaults(module_root: Path) -> EnrichDefaults:
@@ -194,7 +207,8 @@ def read_enrich_defaults(module_root: Path) -> EnrichDefaults:
 
     Raises `SextantConfigError` for anything else: unparseable YAML, a root
     that is not a mapping, an unknown top-level or `enrich:` key, `agent`/
-    `model` not a string, or `max_turns` not a positive integer.
+    `model`/`session_store` not a string, `max_turns` a negative integer (or
+    not an integer at all), or `auth` not `"subscription"`/`"api-key"`.
     """
     path, document = _document(module_root)
     section = document.get("enrich", {})
@@ -212,10 +226,21 @@ def read_enrich_defaults(module_root: Path) -> EnrichDefaults:
     model = _optional_string(path, section, "model")
     max_turns = section.get("max_turns")
     if max_turns is not None and (
-        not isinstance(max_turns, int) or isinstance(max_turns, bool) or max_turns < 1
+        not isinstance(max_turns, int) or isinstance(max_turns, bool) or max_turns < 0
     ):
-        raise SextantConfigError(f"{path}: `enrich.max_turns` must be a positive integer")
-    return EnrichDefaults(agent=agent, model=model, max_turns=max_turns)
+        # `0` stays legal (mirrors `agents/tradewind.py`'s own constructor
+        # check): an honest single-response run with no tool execution
+        # permitted, not a value the run itself would ever reject.
+        raise SextantConfigError(f"{path}: `enrich.max_turns` must be a non-negative integer")
+    auth = _optional_string(path, section, "auth")
+    if auth is not None and auth not in _AUTH_VALUES:
+        raise SextantConfigError(
+            f"{path}: `enrich.auth` must be one of {', '.join(sorted(_AUTH_VALUES))}, not {auth!r}"
+        )
+    session_store = _optional_string(path, section, "session_store")
+    return EnrichDefaults(
+        agent=agent, model=model, max_turns=max_turns, auth=auth, session_store=session_store
+    )
 
 
 def _optional_string(path: Path, section: dict[str, object], name: str) -> str | None:

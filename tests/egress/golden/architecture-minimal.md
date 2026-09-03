@@ -51,7 +51,7 @@ Media reads `consumes → produces`; `—` means none recorded.
 - Sequence diagrams await the call graph.
 - The structure diagram covers contract types only: inheritance edges are not extracted.
 - The call graph is not implemented: there are no traces or sequence diagrams.
-- Maven parent POMs, profiles, and property interpolation are not resolved: the detector reads pom.xml directly instead of asking Maven to resolve it, so any POM that depends on a parent, an active profile, or a property placeholder will be misread — which is most real-world POMs.
+- Maven profiles and property interpolation are not resolved: the detector reads pom.xml directly instead of asking Maven to resolve it. Parent coordinate inheritance and reactor `<modules>` discovery ARE read, so an ordinary parent-and-children build detects correctly — but a coordinate behind a `${property}` or inside a profile is misread.
 - Catalogs are not matched to modules: every catalog's `detect.coordinates` is declared and read by nobody, so every catalog runs against every module whether or not the module depends on that framework.
 - Module classification reads only a container file and a declared main class: a module showing neither is reported `undetermined` rather than weighed against the rest of the evidence.
 - A path the module both exposes and calls keeps only the handler's declared contract: where the client's declaration differs, that difference is not recorded.

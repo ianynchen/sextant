@@ -62,6 +62,7 @@ from sextant.domain.enrichment import (
     UNANSWERED,
     Claim,
     ComponentClaim,
+    ConfigQuestionRef,
     DiagramClaim,
     Provenance,
     SectionClaim,
@@ -175,7 +176,7 @@ def html_document(sections: AssembledDocument, module_id: str) -> str:
 
 def _asset(name: str) -> str:
     """One vendored or hand-written front-end asset's text, read from package
-    data — the same reasoning `cli/resources.py` states for the catalogs and
+    data — the same reasoning `sextant/resources.py` states for the catalogs and
     the extractor jar: resolved through the installed package rather than a
     path relative to this file's position on disk, so a wheel install finds
     it too."""
@@ -495,10 +496,19 @@ def _diagram_claim_html(claim: DiagramClaim) -> str:
 
 
 def _verdict_claim_html(claim: VerdictClaim) -> str:
+    """Mirrors `egress/render/document._verdict_lines` (2N design §2): the
+    question's own identity, whichever of the two shapes it carries — the
+    two serializers read the same claim and must not disagree about what it
+    says."""
     question = claim.question
-    identity = " ".join(
-        part for part in (question.protocol, question.method, question.path) if part
-    )
+    if isinstance(question, ConfigQuestionRef):
+        identity = " ".join(
+            part for part in (question.key, question.source, question.environment) if part
+        )
+    else:
+        identity = " ".join(
+            part for part in (question.protocol, question.method, question.path) if part
+        )
     label = (
         f"<strong>LLM assessment</strong> for <code>{html.escape(identity)}</code> "
         f"({html.escape(question.kind)}): {html.escape(claim.assessment)}"
