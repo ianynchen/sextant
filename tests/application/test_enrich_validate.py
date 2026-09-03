@@ -192,6 +192,51 @@ def test_a_dotted_node_whose_last_segment_is_invented_is_still_refused(tmp_path:
     assert "Ghost" in refusals[0].reason
 
 
+def test_a_backtick_quoted_dollar_node_validates_against_the_real_symbol(tmp_path: Path):
+    """spec §5a: the diagram builder backtick-quotes an identifier the mermaid
+    grammar refuses bare — a JVM `$` name, most often. The scan strips the
+    quoting before comparing, so a machine-emitted `` class `Outer$Inner` ``
+    validates against the real symbol the same way an unquoted name does."""
+    overlay = _overlay(_diagram("classDiagram\n    class `Outer$Inner` {\n    }\n"))
+    workspace = _Workspace(symbols=["s maven com.acme/orders 1.0.0 com/acme/orders/Outer$Inner#"])
+    accepted, refusals = validate_overlay(overlay, workspace, tmp_path)
+    assert refusals == ()
+    assert len(accepted) == 1
+
+
+def test_a_backtick_quoted_dollar_node_that_is_not_a_type_is_still_refused(tmp_path: Path):
+    """The other half of the backtick-stripping widening: quoting must not
+    become a way to smuggle a phantom past the scan — a quoted name that
+    names no real symbol is refused exactly like an unquoted one."""
+    overlay = _overlay(_diagram("classDiagram\n    class `Ghost$Inner` {\n    }\n"))
+    _, refusals = validate_overlay(overlay, _Workspace(), tmp_path)
+    assert len(refusals) == 1
+    assert "Ghost$Inner" in refusals[0].reason
+
+
+def test_a_participant_alias_is_accepted_by_either_spelling(tmp_path: Path):
+    """`participant J as Real` names two spellings and the scan cannot tell
+    which one is the real type: an LLM copying a machine-quoted name into the
+    alias slot (`participant J as Real$Name`) must not be refused for it, so
+    the conservative reading accepts a citation of EITHER side — the
+    short id or the label."""
+    workspace = _Workspace(symbols=["s maven com.acme/orders 1.0.0 com/acme/orders/Real#"])
+    left = _overlay(_diagram("sequenceDiagram\n    participant J as Real\n"))
+    accepted, refusals = validate_overlay(left, workspace, tmp_path)
+    assert refusals == ()
+    assert len(accepted) == 1
+
+
+def test_a_participant_alias_with_neither_spelling_grounded_is_still_refused(tmp_path: Path):
+    """The either-side widening is not a blanket pass: when NEITHER the
+    identifier nor the alias names a real type, the phantom is still
+    refused."""
+    overlay = _overlay(_diagram("sequenceDiagram\n    participant J as Ghost\n"))
+    _, refusals = validate_overlay(overlay, _Workspace(), tmp_path)
+    assert len(refusals) == 1
+    assert "Ghost" in refusals[0].reason or "J" in refusals[0].reason
+
+
 def test_a_flowchart_style_assignment_is_not_read_as_a_type_declaration(tmp_path: Path):
     """`class A,B someStyle` applies a CSS class to nodes in a flowchart — it
     shares a keyword with `classDiagram` and names no type at all. Reading it

@@ -69,8 +69,19 @@ from sextant.domain.symbols import bare_descriptor, simple_name
 #
 # That is a class declaration in a `classDiagram` (`class OrderView {`, `class
 # OrderView`) and a participant declaration in a `sequenceDiagram`
-# (`participant OrderView`, `participant OrderView as the view` — the alias is
-# a label for humans, so the identifier before `as` is what gets checked).
+# (`participant OrderView`, `participant OrderView as the view`).
+#
+# **`participant X as Y` is checked on EITHER spelling (spec §5a).** The
+# alias can be a human label (`participant Ingest as the ingestion edge`) or
+# it can carry the real name — an LLM copying a machine-quoted identifier, or
+# writing `participant J as Real$Name` itself — and the scan cannot tell
+# which. The conservative reading accepts a citation of either side rather
+# than refusing a correct diagram for guessing wrong about which one is the
+# type.
+#
+# **A backtick-quoted identifier is unquoted before comparison** — the
+# diagram builder's own convention (`egress/render/diagrams.py`) for a name
+# mermaid's bare grammar refuses, most often a JVM `$` nested-class name.
 #
 # **The identifier admits dots, and only the last dotted segment is compared.**
 # A model writing `participant com.acme.orders.Ingest` is naming a real type in
@@ -100,7 +111,11 @@ from sextant.domain.symbols import bare_descriptor, simple_name
 # validator that rejects correct work teaches its user to stop running it. The
 # claim still carries `evidence: llm` and the diagram still says what it elides;
 # this check catches the invented class name, not every possible one.
-_NODE_DECLARATION = re.compile(r"^[ \t]*(?:class|participant|actor)[ \t]+([A-Za-z_][\w$.]*)")
+_IDENTIFIER = r"`[^`]*`|[A-Za-z_][\w$.]*"
+_NODE_DECLARATION = re.compile(
+    rf"^[ \t]*(?:class|participant|actor)[ \t]+({_IDENTIFIER})"
+    rf"(?:[ \t]+as[ \t]+({_IDENTIFIER}))?"
+)
 
 # 2K Task 7 ruling 1: the brief IS the wire, so a redaction-sensitive
 # `open_questions.path` (an address that can carry userinfo, or match a
@@ -228,24 +243,41 @@ def _first_missing_member(claim: ComponentClaim, descriptors: set[str]) -> str |
 
 
 def _first_missing_node(claim: DiagramClaim, names: set[str]) -> str | None:
-    for node in _declared_nodes(claim.mermaid):
-        if node not in names:
-            return f"diagram declares node `{node}`, which is not a type in this workspace"
+    for spellings in _declared_nodes(claim.mermaid):
+        if not any(spelling in names for spelling in spellings):
+            return f"diagram declares node `{spellings[0]}`, which is not a type in this workspace"
     return None
 
 
-def _declared_nodes(mermaid: str) -> list[str]:
-    """Every identifier `_NODE_DECLARATION` can see, in source order, each
-    reduced to its last dotted segment — see the comment above the pattern for
-    what the rule covers and what it deliberately does not.
+def _simple_spelling(identifier: str) -> str:
+    """Strip `identifier`'s backtick quoting, if any, then reduce it to its
+    last dotted segment — the same simple-name comparison every declared node
+    gets (see the comment above `_NODE_DECLARATION`)."""
+    if identifier.startswith("`") and identifier.endswith("`"):
+        identifier = identifier[1:-1]
+    return identifier.rsplit(".", 1)[-1]
+
+
+def _declared_nodes(mermaid: str) -> list[tuple[str, ...]]:
+    """Every declaration `_NODE_DECLARATION` can see, in source order, as the
+    tuple of spellings that satisfy it. A bare declaration (`class X`,
+    `participant X`, `actor X`) yields a one-element tuple; `participant X as
+    Y` yields both — see the comment above the pattern for why either side is
+    accepted, and for what the rule deliberately does not cover.
 
     A line carrying a comma is skipped whole: that is the flowchart `class A,B
     someStyle` form, which names a CSS class rather than a type."""
-    return [
-        match.group(1).rsplit(".", 1)[-1]
-        for line in mermaid.splitlines()
-        if "," not in line and (match := _NODE_DECLARATION.match(line)) is not None
-    ]
+    nodes: list[tuple[str, ...]] = []
+    for line in mermaid.splitlines():
+        if "," in line:
+            continue
+        match = _NODE_DECLARATION.match(line)
+        if match is None:
+            continue
+        nodes.append(
+            tuple(_simple_spelling(group) for group in match.groups() if group is not None)
+        )
+    return nodes
 
 
 def _first_missing_cite(claim: SectionClaim, module_root: Path) -> str | None:

@@ -146,7 +146,10 @@ them must be a real file under the module, reachable by the same path
 
 Every `class`/`participant`/`actor` line must name a real type you found —
 `elides` is required, and it is where you say what is left out and why, so
-the diagram never claims to be the whole picture when it is not.
+the diagram never claims to be the whole picture when it is not. Backtick-
+quote any identifier that is not a bare word or dotted path — a JVM `$`
+nested-class name (`` class `OrderProtos$OrderRequest` ``), most often —
+because mermaid's grammar refuses it unquoted.
 
 ### `verdict` — an assessment of one open question, or an honest `unanswered`
 
