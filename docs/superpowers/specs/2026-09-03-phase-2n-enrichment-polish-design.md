@@ -19,7 +19,8 @@ forks, so history scope is left to Tradewind's own truthful per-backend defaults
 New `src/sextant/agents/tradewind.py` implementing `EnrichmentAgent.run(brief,
 executor) -> EnrichmentAnswers` through Tradewind's PUBLIC client only — one
 `Tradewind(config)` per run, one session (caller-minted UUID), one `session.run(...)`
-turn. Tradewind is pinned as a git dependency at an exact commit (≥ 0.6.0; its 0.6.0
+turn. Tradewind is pinned as a git dependency at an exact commit sha (post-0.6.0 — no
+version tags exist; the 0.6.0
 breaking change — `TurnContext.load_history` as an async lazy closure — touches only
 custom `Backend` implementations, which Sextant does not write).
 
@@ -29,15 +30,42 @@ custom `Backend` implementations, which Sextant does not write).
   unchanged. The executor's transcript remains the record Sextant persists to
   `enrich-transcript.jsonl`; Tradewind's mirror is an additional audit trail, not a
   replacement.
-- **The loop contract, mapped:** `system_prompt` = the INSTRUCTIONS text; the user
-  prompt = the brief; `max_tool_rounds` = `--max-turns`; the answer = `final_text`
-  (in-band JSON, unparsed by the adapter). `end_reason` maps to the port's honesty
-  fields: `end_turn` → `partial=False`; `max_tokens` → `partial=True,
-  "stop:max_tokens"`; `max_tool_rounds` → `partial=True, "max_turns"`;
-  `interrupted` → `partial=True, "no_progress"` when Sextant's own guard ended the
-  run. The no-progress guard moves adapter-side: the tool handlers see every call, and
-  on the third identical `(name, canonical args)` the handler returns the nudge text
-  once, then the adapter calls `session.stop()`.
+- **The loop contract, mapped:** the INSTRUCTIONS text rides as the system prompt —
+  with one stated divergence: on `subscription`, Tradewind's claude backend APPENDS
+  it to the Claude Code preset persona rather than replacing it, so the two auth
+  modes run materially different system prompts (adapter docstring and D04 both say
+  so; the §5 flight validates the subscription path as what it is). The user prompt
+  = the brief; `max_tool_rounds` = `--max-turns`; the answer = `final_text` (in-band
+  JSON, unparsed by the adapter). `end_reason` maps to the port's honesty fields:
+  `end_turn` → `partial=False`; `max_tokens` → `partial=True, "stop:max_tokens"`;
+  `max_tool_rounds` → `partial=True, "max_turns"` — or `"no_progress"` when the
+  guard below had already nudged, the more specific truth. The reachable
+  `partial_reason` vocabulary through Tradewind is exactly {None, "stop:max_tokens",
+  "max_turns", "no_progress"} — narrower than claude-api's open `stop:<reason>`
+  family (Tradewind's langchain backend distinguishes only `max_tokens` among
+  abnormal stops); the port docstring is amended to say the vocabulary is
+  adapter-defined and to list Tradewind's.
+- **The no-progress guard, redesigned (adversarial review C1):** `session.stop()` is
+  NOT used — an interrupted Tradewind turn synthesizes a terminal event with
+  `final_text=None`, so stopping can never yield the honest partial the port
+  promises, and a stop issued from the nudging handler would cancel before the
+  model ever read the nudge. Instead: the handlers EXECUTE every call (so the
+  executor's transcript records all of them), and on the third identical `(name,
+  canonical args)` the handler appends the nudge sentence to that call's real
+  result, once. Termination stays Tradewind's own `max_tool_rounds`; a model that
+  keeps repeating after the nudge burns rounds to the cap, and the adapter reports
+  `partial_reason="no_progress"` for that ending.
+- **Textless partials are a ruled stage behavior, not a crash:** a partial answer
+  whose text is empty (a capped run that produced no final text — reachable on both
+  backends) is reported by the enrich stage as a loud failure NAMING the partial
+  reason ("the run ended early (no_progress) and returned no answers"), never as
+  `MalformedAnswersError` — that error is for text that exists and does not parse.
+  Nothing is written either way.
+- **The round cap is validated against the backend's own ceiling:** Tradewind's
+  langchain backend hard-fails at 25 model iterations, so on `--auth api-key` a
+  `--max-turns` above 24 is refused up front with a message naming that ceiling —
+  never a silent late failure. Sextant's default `--max-turns` drops from 50 to 20,
+  safely inside both backends' limits.
 - **Auth is explicit, never guessed:** `--auth subscription` (Tradewind's `claude`
   backend — the machine's logged-in Claude Code; that engine disables its own built-in
   dev tools, so only the registered jailed tools exist and the jail guarantee holds)
@@ -45,11 +73,25 @@ custom `Backend` implementations, which Sextant does not write).
   `ANTHROPIC_API_KEY` by SEXTANT and passed into `TradewindConfig` — Tradewind never
   reads env, and the missing-key refusal keeps naming the variable before any client
   is built). Default: `--agent tradewind --auth subscription`; `.sextant.yml
-  enrich:` may set both, flags win. `AGENT_REGISTRY` maps `tradewind` to the
-  constructor; `claude-api` is deleted from the registry, the codebase, and
-  `pyproject.toml` (the `anthropic` dependency and its confinement test go with it —
-  the confinement pattern itself moves to `tradewind`: importable only in
-  `agents/tradewind.py`, with the same positive-control architecture test).
+  enrich:` may set both, flags win. `AGENT_REGISTRY` maps `tradewind` to a
+  LAZY factory — the import happens inside the registry callable, because `import
+  tradewind` eagerly loads all four vendor SDK adapters and no non-enrich `sextant`
+  invocation should pay for three SDKs it never uses. `claude-api` is deleted from
+  the registry, the codebase, and `pyproject.toml`'s direct dependencies; its
+  confinement test inverts into the removal pin, and the confinement pattern moves
+  to `tradewind` (importable only in `agents/tradewind.py`, positive control kept).
+  Dependency honesty, stated where the dependency is declared: Tradewind is pinned
+  by commit sha via `[tool.uv.sources]` and requires the GitHub repo to stay
+  reachable at install time; `anthropic` remains INSTALLED transitively through
+  `langchain-anthropic` — what Sextant removes is the direct dependency and every
+  import site, which is what the architecture scan enforces — and Tradewind's own
+  direct deps are `==`-pinned while deeper transitives float, consistent with the
+  standing uncommitted-lockfile rule. Adapter mechanics the implementation must
+  honor: Tradewind tool handlers are async and invoked `handler(**arguments)` while
+  `EnrichmentAgent.run` is sync, so the adapter bridges with one `asyncio.run`
+  around the session; and the sqlite store does not create parent directories, so
+  the adapter mkdirs `<module>/.tradewind/` before building the config (the field
+  is `TradewindConfig.store`; `Path(":memory:")` is the opt-out spelling).
 - **The session store:** the `api-key`/langchain profile — where the mirror is the
   system of record — persists it to `<module>/.tradewind/sessions.sqlite`
   (module-local: the audit trail sits beside the workspace it explains, and
@@ -86,14 +128,26 @@ custom `Backend` implementations, which Sextant does not write).
 
 ## §2 Verdicts for config-shaped questions
 
-The overlay's verdict `question` becomes a discriminated union of two identities:
+The overlay's verdict `question` becomes a union of two identities — an UNTAGGED
+(smart) union, not a pydantic discriminated one (the shapes share no Literal tag):
+with `extra="forbid"` and disjoint required fields (`protocol` vs `key`) the parse
+is unambiguous, and every existing overlay validates unchanged:
 
 - the existing endpoint shape `{protocol, method, path, kind}` — unchanged, so every
   existing overlay validates as before;
-- a config shape `{key, source, kind}` matching the coverage table's
-  unresolved-configuration rows (`kind` is the row's unresolved reason class;
-  `source` the file that carried the key, module-root-relative; both pass the same
-  canonical-spelling rule — `redact_text` on both sides — the endpoint shape uses).
+- a config shape `{key, source, environment, kind}` matching the workspace's
+  unresolved-configuration rows FIELD FOR FIELD (adversarial review C2, verified
+  against the flagship module's own rows): `kind` is the row's unresolved reason
+  (the resolver's five-reason set); `environment` is the row's environment — the
+  real rows differ ONLY by it (`spring.config.import` is unresolved in both
+  `default` and `docker`), so an identity without it is ambiguous; `source` is
+  NULLABLE (`missing_key` rows have no source to name) and carries the WORKSPACE
+  ROW'S OWN spelling (classpath-relative, e.g. `application.yml`) — never a derived
+  module-root path, so the brief's printed row copies back verbatim. The
+  canonical-spelling rule (`redact_text` both sides) applies to `key` and `source`
+  as to the endpoint shape's fields. This is deliberately a different spelling
+  domain from §4's cite paths: identities come from workspace rows, cites from the
+  jail's tools, and the spec says so where each is defined.
 
 The brief prints config open-questions as copyable identity rows exactly as it prints
 endpoint ones. `validate_overlay` extends by construction: a config verdict must match
