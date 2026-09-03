@@ -283,6 +283,27 @@ def test_the_digest_lists_unresolved_config_keys_with_their_reason():
     assert "orders.url" not in brief.prompt
 
 
+def test_the_digest_and_open_questions_print_one_spelling_of_a_redacted_config_key():
+    """The same unresolved `resolved_config` row feeds both the open-questions
+    identity (`_open_question_lines`, which `redact_text`s `key`) and this
+    digest — printing the raw key in one and the masked key in the other
+    would leak the exact value redaction exists to hide. Both sections must
+    print the identical masked spelling, never the raw one."""
+    redactor = Redactor.from_rules()
+    resolved_config = [
+        {
+            "key": "https://user:pass@billing.example.com/config.yml",
+            "value": None,
+            "source": "application.yml",
+            "environment": "prod",
+            "unresolved_reason": "missing_key",
+        }
+    ]
+    brief = _compose(_Workspace(resolved_config=resolved_config), redactor)
+    assert "user:pass" not in brief.prompt
+    assert brief.prompt.count("https://billing.example.com/config.yml") == 2
+
+
 def test_the_digest_says_so_when_the_graph_is_unsure_about_nothing():
     brief = _compose(_Workspace())
     assert "None recorded." in brief.prompt

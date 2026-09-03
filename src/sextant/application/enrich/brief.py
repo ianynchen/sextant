@@ -228,7 +228,10 @@ def _doubtful_rows_digest(workspace: Workspace, redactor: Redactor) -> list[str]
     evidence, no new dataset — the same rows `egress/render/document.py`
     already surfaces in `architecture.md`'s own Coverage and endpoint tables,
     pulled out here as a standalone list rather than left for the model to
-    re-derive by reading the whole document again)."""
+    re-derive by reading the whole document again). `path`/`key` get the
+    same `redact_text` treatment `_open_question_lines` gives the identical
+    rows, so the same row never prints two spellings across the two
+    sections."""
     lines: list[str] = []
     doubtful_endpoints = [
         row
@@ -252,7 +255,9 @@ def _doubtful_rows_digest(workspace: Workspace, redactor: Redactor) -> list[str]
     if doubtful_config:
         lines.append("Configuration:")
         for row in doubtful_config:
+            key = row.get("key")
+            redacted_key = None if key is None else redactor.redact_text(str(key))
             lines.append(
-                f"- {row.get('key')} — {row.get('unresolved_reason')} in {row.get('environment')}"
+                f"- {redacted_key} — {row.get('unresolved_reason')} in {row.get('environment')}"
             )
     return lines or ["None recorded."]

@@ -196,9 +196,17 @@ def test_an_unknown_enrich_key_is_refused(tmp_path: Path):
         read_enrich_defaults(_config(tmp_path, "enrich:\n  max_turn: 20\n"))
 
 
-def test_a_non_positive_max_turns_is_refused(tmp_path: Path):
+def test_a_negative_max_turns_is_refused(tmp_path: Path):
     with pytest.raises(SextantConfigError):
-        read_enrich_defaults(_config(tmp_path, "enrich:\n  max_turns: 0\n"))
+        read_enrich_defaults(_config(tmp_path, "enrich:\n  max_turns: -1\n"))
+
+
+def test_a_zero_max_turns_is_legal(tmp_path: Path):
+    """`0` is an honest single-response run with no tool execution permitted
+    (`agents/tradewind.py`'s own constructor legalizes it) — the yml check
+    must not refuse a floor the constructor itself does not enforce."""
+    defaults = read_enrich_defaults(_config(tmp_path, "enrich:\n  max_turns: 0\n"))
+    assert defaults.max_turns == 0
 
 
 def test_an_enrich_section_that_is_not_a_mapping_is_refused(tmp_path: Path):

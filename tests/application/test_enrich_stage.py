@@ -261,6 +261,16 @@ def test_a_claims_keyed_object_unwraps_to_its_array():
     assert json.loads(stage._extracted_array(text)) == [_claim()]
 
 
+def test_a_bare_array_with_trailing_narration_still_parses():
+    """The mirror image of the first-live-flight shape: a perfect claims
+    array followed by a trailing sentence of narration. The array LEADS, so
+    the old `startswith("[")` shortcut returned the whole unparsed text —
+    this pins that the parse-first algorithm falls through to the slice
+    instead of dying as malformed."""
+    trailing = json.dumps([_claim()]) + "\n\nAll claims are grounded.\n"
+    assert json.loads(stage._extracted_array(trailing)) == [_claim()]
+
+
 def test_a_mis_sliced_answer_fails_closed_as_malformed():
     """Prose containing a bracket before the real array mis-slices — and the
     wrong slice is not valid JSON, so the run fails closed with the same

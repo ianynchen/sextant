@@ -607,6 +607,35 @@ def test_config_defaults_are_used_and_a_flag_overrides_them(
     assert overlay["produced_by"]["model"] == "flag-model"
 
 
+def test_a_zero_max_turns_from_the_config_reaches_the_agent(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """M6 fix: `.sextant.yml enrich: max_turns: 0` used to be refused at the
+    yml gate ("must be a positive integer") though the flag and the
+    constructor both legalize `0` — an honest single-response run with no
+    tool execution. `is None`, never falsy-`or`, is what lets the config's
+    own `0` reach the agent here too, mirroring the flag's own
+    `test_max_turns_zero_reaches_the_agent_honestly_not_silently_defaulted`."""
+    _analyzed_and_rendered(module_root)
+    config_path = module_root / ".sextant.yml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + "enrich:\n  agent: fake-config-zero-turns\n  model: default-model\n  max_turns: 0\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def _constructor(**kwargs: object) -> FakeEnrichmentAgent:
+        captured.update(kwargs)
+        return FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
+
+    monkeypatch.setitem(AGENT_REGISTRY, "fake-config-zero-turns", _constructor)
+
+    result = CliRunner().invoke(cli, ["module", "enrich", str(module_root)])
+    assert result.exit_code == 0, result.output
+    assert captured["max_turns"] == 0
+
+
 def test_config_auth_and_session_store_reach_the_agent_and_the_auth_flag_wins(
     module_root: Path, monkeypatch: pytest.MonkeyPatch
 ):

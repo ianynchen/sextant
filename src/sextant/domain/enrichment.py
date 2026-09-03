@@ -244,7 +244,7 @@ class VerdictClaim(_ClaimBase):
     required) and the config shape (`key`/`environment`/`kind` required)
     share no `Literal` tag, but their required fields are disjoint, so
     `extra="forbid"` on both members makes the parse unambiguous — a payload
-    carrying both shapes' fields is refused by neither member rather than
+    carrying both shapes' fields is refused by BOTH members rather than
     guessed into one.
 
     Two shapes, one model: an answered verdict carries `because` (the grounding

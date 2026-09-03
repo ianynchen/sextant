@@ -89,7 +89,8 @@ redact:
 enrich:
   agent:      tradewind                    # an AGENT_REGISTRY name; --agent overrides
   auth:       subscription                 # or api-key; --auth overrides
-  session_store: .tradewind/sessions.sqlite  # api-key only; ':memory:' opts out
+  session_store: ':memory:'                # either auth, when set explicitly (api-key is
+                                            # where the default store lives); opts out
   model:      <provider's own model id>    # passed to the agent verbatim; --model overrides
   max_turns:  20                           # --max-turns overrides
 ```

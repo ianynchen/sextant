@@ -131,16 +131,22 @@ def _extracted_array(answers_text: str) -> str:
     api-key path obeys. But the subscription path runs the Claude Code
     ENGINE, whose persona narrates — the first live flight (2026-09-03)
     returned a perfect claims array wrapped in one line of prose and a
-    ```json fence, and a strict parse threw the whole run away at char 0.
-    Leniency here is bounded and honest: text that already parses is
-    returned untouched; otherwise the slice from the first `[` to the last
-    `]` is tried — the narrowest rule that unwraps prose and fences without
-    ever INVENTING structure. Anything else still fails as malformed, and
+    ```json fence, and a strict parse threw the whole run away at char 0. A
+    later flight returned the mirror image: a bare array followed by a
+    trailing sentence of narration, which fails a strict parse for the same
+    reason at the opposite end. Leniency here is bounded and honest: text
+    that already parses AS AN ARRAY is returned untouched; otherwise the
+    slice from the first `[` to the last `]` is tried — the narrowest rule
+    that unwraps prose and fences, leading or trailing, without ever
+    INVENTING structure. Anything else still fails as malformed, and
     validation-by-construction downstream judges every claim exactly as
     before; nothing about leniency loosens what a claim must prove."""
     stripped = answers_text.strip()
-    if stripped.startswith("["):
-        return stripped
+    try:
+        if isinstance(json.loads(stripped), list):
+            return stripped
+    except json.JSONDecodeError:
+        pass
     start = stripped.find("[")
     end = stripped.rfind("]")
     if start != -1 and end > start:

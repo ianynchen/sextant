@@ -99,7 +99,7 @@ type = "layers"
 containers = ["sextant"]
 # `agents` joins the outer-group rank (2K design §8): it imports
 # `application`/`domain` inward like `ingress`/`storage`/`egress`, and nothing
-# else outward — the one module it houses, `claude_api.py`, is the ONE
+# else outward — the one module it houses, `tradewind.py`, is the ONE
 # sanctioned model-calling adapter (DR-2's amendment).
 #
 # `api` (2N Task 5, §5b — the library facade) sits directly below `cli`:

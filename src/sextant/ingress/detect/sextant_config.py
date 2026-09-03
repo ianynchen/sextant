@@ -207,8 +207,8 @@ def read_enrich_defaults(module_root: Path) -> EnrichDefaults:
 
     Raises `SextantConfigError` for anything else: unparseable YAML, a root
     that is not a mapping, an unknown top-level or `enrich:` key, `agent`/
-    `model`/`session_store` not a string, `max_turns` not a positive
-    integer, or `auth` not `"subscription"`/`"api-key"`.
+    `model`/`session_store` not a string, `max_turns` a negative integer (or
+    not an integer at all), or `auth` not `"subscription"`/`"api-key"`.
     """
     path, document = _document(module_root)
     section = document.get("enrich", {})
@@ -226,9 +226,12 @@ def read_enrich_defaults(module_root: Path) -> EnrichDefaults:
     model = _optional_string(path, section, "model")
     max_turns = section.get("max_turns")
     if max_turns is not None and (
-        not isinstance(max_turns, int) or isinstance(max_turns, bool) or max_turns < 1
+        not isinstance(max_turns, int) or isinstance(max_turns, bool) or max_turns < 0
     ):
-        raise SextantConfigError(f"{path}: `enrich.max_turns` must be a positive integer")
+        # `0` stays legal (mirrors `agents/tradewind.py`'s own constructor
+        # check): an honest single-response run with no tool execution
+        # permitted, not a value the run itself would ever reject.
+        raise SextantConfigError(f"{path}: `enrich.max_turns` must be a non-negative integer")
     auth = _optional_string(path, section, "auth")
     if auth is not None and auth not in _AUTH_VALUES:
         raise SextantConfigError(
