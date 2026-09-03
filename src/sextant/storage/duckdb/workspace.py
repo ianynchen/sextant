@@ -59,8 +59,13 @@ _NAMED_QUERIES = {
     # (`resolve/effective_annotations.py`), which needs a composing type's
     # own declared attributes and not just which annotation it carries.
     # Ordered so two fields under the same scope read its claim the same way.
+    # The ORDER BY must be TOTAL (every selected column): the parallel
+    # parquet writer preserves only the ordered prefix, so a partial sort
+    # left (target, annotation) ties in nondeterministic order — the
+    # byte-identity e2e caught it twice (2026-09-03/04) before this widened.
     "annotations": """
-        SELECT target, annotation, args, type_path FROM annotations ORDER BY target, annotation
+        SELECT target, annotation, args, type_path FROM annotations
+        ORDER BY target, annotation, type_path, args
     """,
     # `ordinal` alone would tie across callers; `caller` first is what makes
     # the ordering total, the same reason `shape_fields` orders by
@@ -447,7 +452,7 @@ _EXPORT_QUERIES = {
                a.type_path, a.retention
         FROM annotations a
         LEFT JOIN {_REDACTED_JSON} j ON j.original = a.args::VARCHAR
-        ORDER BY a.target, a.annotation, a.type_path
+        ORDER BY a.target, a.annotation, a.type_path, a.args
     """,
 }
 

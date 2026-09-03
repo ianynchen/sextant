@@ -87,7 +87,9 @@ redact:
   value_patterns: ["ACME_[A-Z0-9]{24}"]    # regular expressions, matched against values
 
 enrich:
-  agent:      claude-api                   # an AGENT_REGISTRY name; --agent overrides
+  agent:      tradewind                    # an AGENT_REGISTRY name; --agent overrides
+  auth:       subscription                 # or api-key; --auth overrides
+  session_store: .tradewind/sessions.sqlite  # api-key only; ':memory:' opts out
   model:      <provider's own model id>    # passed to the agent verbatim; --model overrides
   max_turns:  50                           # --max-turns overrides
 ```
@@ -331,15 +333,26 @@ it to a model through the `EnrichmentAgent` port (`application/ports/enrichment.
 `executor` parameter is the seam that makes "our code serves the bytes" true: the adapter
 drives whatever loop its runtime uses, but every tool call it makes runs through this same
 `ToolExecutor`, never a call the foreign runtime services itself. The one adapter that
-ships, `claude-api`
-(`src/sextant/agents/claude_api.py`), lives in `agents/` — a new outer group, sibling to
+ships, `tradewind` (`src/sextant/agents/tradewind.py`, 2N design §1 — it replaced 2K's
+`claude-api`), lives in `agents/` — a new outer group, sibling to
 `ingress`/`storage`/`egress`, importing `application`/`domain` inward and nothing else
-outward. It is the **only** file in the codebase permitted to import the `anthropic` SDK,
-enforced by a structural test, mirroring how the `protobuf`/`graphql-core` dependencies are
-each confined to the one component that understands their format (§Dependencies,
-[README.md](../../README.md)). **`ANTHROPIC_API_KEY` is read from the environment alone** —
-never a flag, never a config file — and its absence refuses loudly, naming the variable,
-before any network attempt.
+outward. It drives the user's Tradewind library through its public client, and it is the
+**only** file in the codebase permitted to import `tradewind`, enforced by a structural
+test, mirroring how the `protobuf`/`graphql-core` dependencies are each confined to the one
+component that understands their format (§Dependencies, [README.md](../../README.md));
+`anthropic` is importable nowhere (it remains installed only as Tradewind's own transitive
+dependency). Two auth modes, selected explicitly by `--auth`, never guessed:
+`subscription` (the default) runs Tradewind's claude backend — the machine's logged-in
+Claude Code, whose engine disables its own built-in dev tools so only the four jailed tools
+below exist, and which APPENDS the enrichment instructions to its preset persona rather
+than replacing it — and `api-key` runs the langchain backend, where
+**`ANTHROPIC_API_KEY` is read from the environment alone** — never a flag, never a config
+file — and its absence refuses loudly, naming the variable, before any client is built.
+The api-key path persists Tradewind's session mirror to
+`<module>/.tradewind/sessions.sqlite` (an audit log: re-analyze does not clear it, export
+never copies it, and `.tradewind/` is a jail-specific exclusion — the model must not read
+its own prior conversation); the subscription path configures no store at all, because the
+engine keeps its own native record.
 
 **The jail is what makes the call safe to run against a real repository.** The model gets
 exactly four read-only, in-process tools (`application/enrich/tools.py`'s `ToolExecutor`) —

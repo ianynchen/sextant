@@ -17,7 +17,7 @@ uv sync                                        # Python side
 
 uv run sextant module analyze <module-path>
 uv run sextant module render  <module-path>
-uv run sextant module enrich  <module-path> --agent claude-api --model <model-id>
+uv run sextant module enrich  <module-path> --model <model-id>   # tradewind/subscription by default
 uv run sextant module export  <module-path>
 ```
 
@@ -195,20 +195,33 @@ straight into both `architecture.md` and `architecture.html` — one command, do
 here rewrites or reorders machine-derived text.
 
 ```
-uv run sextant module enrich <module-path> --agent claude-api --model <provider's model id>
+uv run sextant module enrich <module-path> --model <provider's model id>
 ```
 
-- **`--agent`** — for a live run, a name in `AGENT_REGISTRY` (`claude-api` ships in v1); an
+- **`--agent`** — for a live run, a name in `AGENT_REGISTRY` (`tradewind` ships in v1, and
+  is the default); an
   unknown name is refused, naming the known list. Under `--dry-run`/`--ingest` no adapter
   runs, so this is a free-text label for the overlay's provenance instead, not validated
   against the registry. **`--model`** is passed to the adapter **verbatim** — Sextant does
   not maintain a provider's model catalog. **`--max-turns`** caps the tool-use loop (default
-  50); a no-progress guard ends the run early if the same call repeats three times running.
+  20, and on `api-key` a value above 24 is refused up front — the backend's own ceiling); a
+  no-progress nudge fires when the same call repeats three times running, and a run that
+  keeps repeating burns rounds to the cap, reported honestly as `no_progress`.
 - **`.sextant.yml`'s `enrich:` section** supplies defaults for all three
   (`agent`/`model`/`max_turns`), read only where the matching flag is absent — flags always
-  win.
-- **`ANTHROPIC_API_KEY` comes from the environment alone** — never a flag, never a config
-  file. Its absence is refused before any network attempt.
+  win, and `auth`/`session_store` may be set the same way (though through the library
+  facade only `model`/`max_turns` are consulted — `sextant.api.enrich`'s own parameters
+  carry the rest).
+- **`--auth`** selects how the model is reached: `subscription` (the default — Tradewind's
+  claude backend, the machine's logged-in Claude Code; its engine's own dev tools are
+  disabled, so only the four jailed tools exist) or `api-key` (Tradewind's langchain
+  backend). On the api-key path **`ANTHROPIC_API_KEY` comes from the environment alone** —
+  never a flag, never a config file — and its absence is refused, naming the variable,
+  before any client is built. The api-key path persists Tradewind's session mirror to
+  `<module>/.tradewind/sessions.sqlite` (gitignore `.tradewind/`; the jail cannot see it);
+  the subscription path keeps no store — the engine has its own native record. The two
+  auth modes run materially different system prompts: subscription APPENDS the enrichment
+  instructions to the Claude Code persona rather than replacing it.
 - **Two doors skip the model call entirely**, and Sextant validates whatever comes back
   through them exactly as it validates a live run's answer: **`--dry-run`** writes the
   composed brief and the instructions document to the workspace and calls nothing, for any
