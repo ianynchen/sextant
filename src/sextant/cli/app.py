@@ -41,6 +41,7 @@ from sextant.egress.render.document import (
 from sextant.egress.render.html import html_document
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.ingress.detect.gradle import GradleDetector
 from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.detect.sextant_config import (
     EnrichDefaults,
@@ -61,8 +62,12 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 # detector added to only one of two hand-kept lists would send the other
 # path to `select_detector`'s own uncaught `NoAdapterError`. Every command
 # below that needs a real detector reads this list rather than writing its
-# own.
-_DETECTORS: list[Detector] = [MavenDetector()]
+# own. Order is precedence (`select_detector` picks the first that
+# `accepts()`): Maven before Gradle, so a repository carrying both a
+# `pom.xml` and Gradle build files is Maven's, with the coexistence recorded
+# as `MavenDetector`'s own detect note (2M design §1) rather than Gradle
+# claiming it first.
+_DETECTORS: list[Detector] = [MavenDetector(), GradleDetector()]
 
 
 def _modules_json_path(path: Path) -> Path:
