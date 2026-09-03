@@ -7,6 +7,7 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
+from xml.etree.ElementTree import ParseError
 
 import click
 from pydantic import ValidationError
@@ -324,10 +325,15 @@ def module_analyze(path: Path, workspace_dir: Path | None, allow_resolve: bool) 
     # reactor walk's own refusals (a `<modules>` cycle, a `<module>` naming
     # a directory with no `pom.xml` — 2M Task 2 fix round 1, F2) are the
     # same class of "the analysed repository is written wrong" mistake, not
-    # a crash in the tool.
+    # a crash in the tool. `ParseError` too (2M final review wave, I2): it
+    # subclasses `SyntaxError`, not `ValueError`, so a malformed CHILD pom
+    # anywhere in a reactor walk reached here as an uncaught traceback —
+    # `MavenDetector` now names the offending pom before this ever fires
+    # (`_parse_pom`), but a bare parse failure still belongs in this tuple
+    # rather than crashing the tool.
     try:
         model = select_detector(_DETECTORS, path).detect(path, allow_resolve=allow_resolve)
-    except (SextantConfigError, ValueError) as refused:
+    except (SextantConfigError, ValueError, ParseError) as refused:
         raise click.ClickException(str(refused)) from refused
 
     # `model.multi_module`, never `len(model.modules) > 1` (2M Task 2 fix

@@ -41,7 +41,10 @@ as a note, never merged.
 *known* not to be a service (a Gradle-only `library` kind, or a leaf `packaging: pom`
 aggregator/BOM) into its **own** workspace, one per module, root-relative and listed in
 `<repo-root>/.sextant/modules.json` alongside whether each was analyzed or skip-listed and
-why. `--workspace` is refused at a multi-module root — the flag is per-module — and
+why. A Gradle module with no compiled output (no source-set-owning plugin applied) is
+recorded with the same `skip_reason: "packaging is pom"` a Maven leaf `packaging: pom`
+module gets — Maven vocabulary, reused deliberately rather than invented per build system,
+since both name the identical "nothing here to scan" shape. `--workspace` is refused at a multi-module root — the flag is per-module — and
 `render`/`enrich`/`export` never re-detect: pointed at a multi-module root instead of one
 of its modules, they refuse and print the module list `modules.json` already named.
 

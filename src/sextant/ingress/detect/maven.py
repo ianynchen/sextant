@@ -114,7 +114,7 @@ class MavenDetector:
         # naming exactly one child is still a reactor (that child analyzes
         # into ITS OWN workspace, not the aggregator's), and `fixtures/
         # pom.xml` today names exactly one (`orders-soap-client`).
-        top_pom = ElementTree.parse(path / "pom.xml").getroot()
+        top_pom = self._parse_pom(path)
         is_reactor = top_pom.find("m:modules", _POM_NS) is not None
         modules = self._walk(path, visited=(), seen=set())
         return RepositoryModel(
@@ -144,15 +144,23 @@ class MavenDetector:
         if resolved in visited:
             chain = " -> ".join(str(step) for step in (*visited, resolved))
             raise ValueError(f"pom.xml <modules> cycle: {chain}")
-        pom = ElementTree.parse(path / "pom.xml").getroot()
+        pom = self._parse_pom(path)
         modules_element = pom.find("m:modules", _POM_NS)
         if modules_element is None:
             if resolved in seen:
                 return ()
             seen.add(resolved)
             return (self._module_of(path, pom),)
+        module_elements = modules_element.findall("m:module", _POM_NS)
+        if not module_elements:
+            # An aggregator that names no child analyzes nothing and used to
+            # succeed silently — a `render`/`enrich`/`export` pointed at it
+            # afterwards then hit the bare "one of: " listing with nothing
+            # after it (2M final review wave, MINOR 4). Refused here instead,
+            # by the pom that declares the empty `<modules>`.
+            raise ValueError(f"{path / 'pom.xml'} declares <modules> but names none")
         children: list[ModuleModel] = []
-        for module_element in modules_element.findall("m:module", _POM_NS):
+        for module_element in module_elements:
             text = (module_element.text or "").strip()
             if not text:
                 raise ValueError(f"{path / 'pom.xml'} has an empty <module/> entry")
@@ -177,14 +185,27 @@ class MavenDetector:
         return tuple(children)
 
     @staticmethod
+    def _parse_pom(path: Path) -> ElementTree.Element:
+        """`path`'s own `pom.xml`, parsed — or a `ValueError` naming that
+        file when it is not well-formed XML (2M final review wave, I2/MINOR
+        3): a raw `ElementTree.ParseError` names a line and column, never a
+        file, which is unactionable the moment a reactor has more than one
+        pom to suspect."""
+        pom_path = path / "pom.xml"
+        try:
+            return ElementTree.parse(pom_path).getroot()
+        except ElementTree.ParseError as malformed:
+            raise ValueError(f"{pom_path} is not well-formed XML: {malformed}") from malformed
+
+    @staticmethod
     def _module_of(path: Path, pom: ElementTree.Element) -> ModuleModel:
         # A reactor child inherits groupId and version from <parent> and may
         # omit its own elements entirely (Maven's inheritance rule) —
         # artifactId alone is never inherited. Reading the parent's value is
         # Maven convention data, not a guess.
-        group = MavenDetector._text(pom, "groupId", inherited=True)
-        artifact = MavenDetector._text(pom, "artifactId")
-        version = MavenDetector._text(pom, "version", inherited=True)
+        group = MavenDetector._text(pom, "groupId", path, inherited=True)
+        artifact = MavenDetector._text(pom, "artifactId", path)
+        version = MavenDetector._text(pom, "version", path, inherited=True)
         source_roots = MavenDetector._source_roots(path, pom)
         resources = path / "src" / "main" / "resources"
         library_roots, libraries_not_resolved = MavenDetector._library_roots(path, pom)
@@ -410,10 +431,13 @@ class MavenDetector:
         return node.text.strip() if node is not None and node.text else "jar"
 
     @staticmethod
-    def _text(pom: ElementTree.Element, tag: str, inherited: bool = False) -> str:
+    def _text(pom: ElementTree.Element, tag: str, path: Path, inherited: bool = False) -> str:
+        # Named by its pom (2M final review wave, MINOR 3): "pom.xml has no
+        # <groupId>" points nowhere in a many-pom reactor — the reader needs
+        # to know WHICH pom.xml.
         node = pom.find(f"m:{tag}", _POM_NS)
         if node is None and inherited:
             node = pom.find(f"m:parent/m:{tag}", _POM_NS)
         if node is None or node.text is None:
-            raise ValueError(f"pom.xml has no <{tag}>")
+            raise ValueError(f"{path / 'pom.xml'} has no <{tag}>")
         return node.text.strip()

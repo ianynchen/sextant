@@ -86,11 +86,18 @@ def _ensure_repo_present(repo: Path, remote: str) -> None:
         )
 
 
-def _checkout(repo: Path, commit: str) -> None:
+def _checkout(repo: Path, commit: str) -> bool:
     """Pin the upstream working tree to exactly `commit` — the whole point of pinning
     (upstream drift never masquerades as a Sextant regression). A dirty tree or a commit
     this clone does not have is a loud failure, never a silent checkout of whatever is
     closest.
+
+    Returns whether this call actually MOVED HEAD (`False` when the tree was already at
+    `commit`). `_ensure_compiled` uses this to decide whether its own "`target/classes`
+    already exists" shortcut is still trustworthy (2M final review wave, I1):
+    `target/` is untracked and survives a real `git checkout` untouched, so a moved HEAD
+    leaves the OLD commit's bytecode sitting there under NEW sources until something
+    forces a rebuild.
 
     The dirty-tree check runs BEFORE the already-at-`commit` early return (2M Task 7 fix
     round 1, field-check gap a): a dirty tree sitting AT the pinned commit is not "already
@@ -117,24 +124,31 @@ def _checkout(repo: Path, commit: str) -> None:
             f"may not match the pinned commit {commit}"
         )
     if head.stdout.strip() == commit:
-        return
+        return False
     checkout = _run(["git", "checkout", "--quiet", commit], cwd=repo)
     if checkout.returncode != 0:
         raise FieldCheckFailure(
             f"could not check out {repo}'s pinned commit {commit}: {checkout.stderr.strip()}"
         )
+    return True
 
 
-def _ensure_compiled(repo: Path) -> None:
+def _ensure_compiled(repo: Path, force: bool) -> None:
     """`target/classes` populated at the checked-out commit — the compiled-first reading
     `MavenDetector` requires (it never runs Maven itself). Skipped when `target/classes`
-    already exists: `_checkout` already proved the tree is at the pinned commit, and a
-    field run against an already-built checkout (the ordinary case between two runs of
-    this script) should not pay a full rebuild every time. Delete `target/` to force one.
-    Offline first (`-o`), the same posture the detectors themselves default to; only
-    retried without it — reaching the network — when the offline attempt fails, since this
-    script is explicitly allowed to (network-using by nature, see the module docstring)."""
-    if (repo / "target" / "classes").is_dir():
+    already exists AND `force` is `False`: `_checkout` proves the tree's SOURCES are at
+    the pinned commit, never that `target/classes` was compiled from them — `target/` is
+    untracked and survives `git checkout` untouched (2M final review wave, I1), so
+    skipping unconditionally on "already exists" validates a PIN REFRESH's new sources
+    against the OLD commit's leftover bytecode. `force=True` — `_checkout` just moved
+    HEAD — rebuilds unconditionally regardless of what is already in `target/classes`;
+    the ordinary case between two runs of this script (HEAD unmoved) still skips, so a
+    field run against an already-built checkout does not pay a full rebuild every time.
+    Delete `target/` to force one by hand. Offline first (`-o`), the same posture the
+    detectors themselves default to; only retried without it — reaching the network —
+    when the offline attempt fails, since this script is explicitly allowed to
+    (network-using by nature, see the module docstring)."""
+    if not force and (repo / "target" / "classes").is_dir():
         return
     offline = _run(["./mvnw", "-q", "-o", "compile"], cwd=repo)
     if offline.returncode == 0:
@@ -227,8 +241,8 @@ def _check_one(name: str) -> list[str]:
     problems: list[str] = []
 
     _ensure_repo_present(repo, expectation["remote"])
-    _checkout(repo, expectation["commit"])
-    _ensure_compiled(repo)
+    moved_head = _checkout(repo, expectation["commit"])
+    _ensure_compiled(repo, force=moved_head)
     _analyze_and_render(repo)
 
     metadata = json.loads((repo / ".sextant" / "metadata.json").read_text(encoding="utf-8"))

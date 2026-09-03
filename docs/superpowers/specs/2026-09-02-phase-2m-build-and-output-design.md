@@ -293,10 +293,11 @@ scoped to §5a's citation rules — `application/enrich/validate.py`.
 
 ## §7 Testing (output half)
 
-Golden updates happen exactly twice, each a deliberate reviewed ruling: once for §5c's
-spellings-and-structure changes (handler cells, always-emitted details, Shapes
-subsection, empty-shape lines, media glyphs) and never for the §5b typed-section
-refactor, whose byte-identity the unchanged golden proves first. New pins: the
+The golden changes only in Task 6's reviewed update for §5c's spellings-and-structure
+changes (handler cells, always-emitted details, Shapes subsection, empty-shape lines,
+media glyphs) — across its ruling commit and its fix round, one deliberate ruling audited
+line by line — and never for the §5b typed-section refactor, whose byte-identity the
+unchanged golden proves first. New pins: the
 typed-section zero-`<pre>` check, `MachineDetail` round-trip (markdown nesting and HTML
 table), the `$`-identifier diagram text, quoted stereotype and relationship productions,
 either-side alias citation, the emitted-once shape rule, `Response: none recorded`, the

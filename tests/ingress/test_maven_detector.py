@@ -652,3 +652,44 @@ def test_packaging_defaults_to_jar_when_the_pom_declares_none(tmp_path: Path):
 def test_packaging_is_read_from_the_pom_when_declared(tmp_path: Path):
     pom = _BARE_POM.replace("</project>", "  <packaging>pom</packaging>\n</project>")
     assert MavenDetector().detect(_module(tmp_path, pom)).modules[0].packaging == "pom"
+
+
+def test_a_missing_coordinate_refusal_names_the_pom_it_came_from(tmp_path: Path):
+    """2M final review wave, MINOR 3: `_text`'s refusal used to read
+    "pom.xml has no <groupId>" — unactionable the moment more than one pom
+    exists, as every reactor child does. It now names the exact pom.xml this
+    reading failed against."""
+    pom = _BARE_POM.replace("  <groupId>com.acme</groupId>\n", "")
+
+    with pytest.raises(ValueError, match="groupId") as failure:
+        MavenDetector().detect(_module(tmp_path, pom))
+    assert str(tmp_path / "pom.xml") in str(failure.value)
+
+
+def test_a_malformed_pom_is_refused_by_name_not_a_bare_parse_error(tmp_path: Path):
+    """2M final review wave, I2: `ElementTree.ParseError` subclasses
+    `SyntaxError`, not `ValueError`, and names no file on its own — a
+    traceback rather than a message once it reaches the CLI. `_parse_pom`
+    catches it here and re-raises with the pom.xml that failed to parse."""
+    (tmp_path / "pom.xml").write_text("<project><groupId>oops</project>", encoding="utf-8")
+
+    with pytest.raises(ValueError) as failure:
+        MavenDetector().detect(tmp_path)
+    assert str(tmp_path / "pom.xml") in str(failure.value)
+
+
+def test_an_empty_modules_list_is_refused_by_name(tmp_path: Path):
+    """2M final review wave, MINOR 4: `<modules/>` naming zero children used
+    to walk to nothing and analyze successfully with no output — a
+    `render`/`enrich`/`export` later pointed at that empty reactor root then
+    hit `_refuse_if_unanalyzed`'s own bare "one of: " listing with nothing
+    after it. Refused here instead, by the pom that declares the empty
+    `<modules>`."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    empty = _AGGREGATOR_POM.replace("    <module>MODULE</module>\n", "")
+    (reactor / "pom.xml").write_text(empty, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="declares <modules> but names none") as failure:
+        MavenDetector().detect(reactor)
+    assert str(reactor / "pom.xml") in str(failure.value)

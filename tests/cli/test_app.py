@@ -1065,6 +1065,26 @@ def test_a_missing_child_pom_reaches_the_cli_as_a_message_not_a_traceback(tmp_pa
     assert "Traceback" not in result.output
 
 
+def test_a_malformed_child_pom_reaches_the_cli_as_a_message_naming_it(tmp_path: Path):
+    """2M final review wave, I2: `ElementTree.ParseError` subclasses
+    `SyntaxError`, not `ValueError` — reachable past `MavenDetector`'s own
+    `_parse_pom` naming only if some future parse site skips it, and past
+    that as an uncaught traceback if the CLI's own catch tuple did not carry
+    it too. Either way the reader gets a message naming the broken pom, exit
+    1, never a traceback."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    (reactor / "pom.xml").write_text(_ONE_MODULE_REACTOR_POM, encoding="utf-8")
+    (reactor / "child").mkdir()
+    (reactor / "child" / "pom.xml").write_text("<project><groupId>oops</project>", encoding="utf-8")
+
+    result = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
+
+    assert result.exit_code != 0
+    assert str(reactor / "child" / "pom.xml") in result.output
+    assert "Traceback" not in result.output
+
+
 def test_a_modules_cycle_reaches_the_cli_as_a_message_not_a_traceback(tmp_path: Path):
     """2M Task 2 fix round 1, F2."""
     a = tmp_path / "a"
@@ -1087,20 +1107,24 @@ def test_a_modules_cycle_reaches_the_cli_as_a_message_not_a_traceback(tmp_path: 
     assert "Traceback" not in result.output
 
 
-def test_an_empty_reactor_analyzes_nothing_and_prints_no_table(tmp_path: Path):
-    """2M Task 2 fix round 1, F8: a table with a header and no rows under it
-    reads as a tool that found nothing to say — the honest empty case
-    prints no table at all."""
+def test_an_empty_reactor_is_refused_by_name_at_detect(tmp_path: Path):
+    """2M final review wave, MINOR 4: `<modules/>` naming zero children used
+    to analyze successfully with nothing to show (2M Task 2 fix round 1,
+    F8's own honest-empty table) — but a `render`/`enrich`/`export` pointed
+    at that root afterwards then hit `_refuse_if_unanalyzed`'s reactor
+    listing with nothing after "one of: ". Refused at detect instead, by the
+    pom that declares the empty `<modules>`, before anything on disk is
+    touched."""
     reactor = tmp_path / "reactor"
     reactor.mkdir()
     (reactor / "pom.xml").write_text(_EMPTY_REACTOR_POM, encoding="utf-8")
 
     result = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
 
-    assert result.exit_code == 0, result.output
-    assert "kind" not in result.output
-    modules = json.loads((reactor / ".sextant" / "modules.json").read_text())["modules"]
-    assert modules == []
+    assert result.exit_code != 0
+    assert "declares <modules> but names none" in result.output
+    assert "Traceback" not in result.output
+    assert not (reactor / ".sextant").exists()
 
 
 def test_the_table_truncates_a_dir_column_longer_than_the_cap(tmp_path: Path):
