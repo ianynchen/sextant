@@ -39,6 +39,16 @@ class ModuleModel:
     languages: frozenset[str]
     source_roots: tuple[Path, ...]
     output_dirs: tuple[Path, ...]
+    # Maven's own packaging value (`<packaging>`, defaulting to `jar` when
+    # the element is absent — Maven's own default, not a guess this
+    # detector invents). Defaulted so every existing construction site
+    # keeps working. Read by the multi-module CLI (2M design §2, ruled
+    # amendment): a leaf module packaged `pom` is a BOM or aggregation-only
+    # sibling with nothing to scan, and the one kind-independent signal
+    # that a module is NOT a service — every other packaging is analyzed
+    # regardless of `kind`, since `kind` alone is honestly `undetermined`
+    # for most real modules and was never meant to gate analysis.
+    packaging: str = "jar"
     # Where the ArtifactReader port (M03's second port) looks for config
     # files — `src/main/resources` for Maven. Defaulted so every existing
     # construction site keeps working; a build system that names none
@@ -71,6 +81,21 @@ class ModuleModel:
 class RepositoryModel:
     root: Path
     modules: tuple[ModuleModel, ...] = field(default_factory=tuple)
+    # Detect-time observations that are neither a module fact nor a refusal
+    # (2M design §1c): build-system coexistence, a wrapper fallback, a
+    # boundary Sextant refuses but does not fail the whole detection over.
+    # Carried into `metadata.json` verbatim. A sorted tuple, never a set or a
+    # list — determinism (NFR-1) applies to notes exactly as it does to every
+    # other reader-facing sequence this model produces.
+    notes: tuple[str, ...] = ()
+    # Whether the TARGETED root itself declared `<modules>` (2M Task 2 fix
+    # round 1, F1) — the multi-module CLI gate, never `len(modules) > 1`: a
+    # reactor naming exactly one child is still a reactor (its own child
+    # analyzes into the CHILD's workspace, not the aggregator's), and
+    # `fixtures/pom.xml` is exactly this shape. Defaulted `False` so every
+    # existing construction site — every one of them a single leaf module —
+    # keeps working unchanged.
+    multi_module: bool = False
 
 
 class Detector(Protocol):

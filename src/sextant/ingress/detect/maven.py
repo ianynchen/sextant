@@ -1,26 +1,27 @@
+import os
 from pathlib import Path
 from xml.etree import ElementTree
 
 from sextant.application.ports.detector import LibraryRoot, ModuleModel, RepositoryModel
+from sextant.ingress.detect.conventions import (
+    CONTAINER_FILES,
+    RESOURCE_SCHEMA_SUFFIXES,
+    SOURCE_SCHEMA_NAMES,
+)
 from sextant.ingress.detect.sextant_config import read_extract_libraries
 
 _POM_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
 _MAIN_CLASS = f"{{{_POM_NS['m']}}}mainClass"
 
-# Files that declare how the module is packaged to run. Names, not contents:
-# M02 forbids the detector from reading code, and these are build files.
 # Maven's own non-code build directories. Named here because they are build
 # layout, not languages: everything else under src/main is a source root, and
 # the name of that directory is what the build says is compiled there.
 _NON_SOURCE_DIRECTORIES = frozenset({"resources", "webapp", "filters"})
 
-# Schema-source directory names (protobuf-maven-plugin / avro-maven-plugin
-# convention): schema dirs are not languages, so this detector must not
-# report one from them. Ordered, unlike a set, because `schema_roots` reports
-# them in this fixed order (protobuf before Avro) rather than whatever order
-# a directory listing would give.
-_SCHEMA_ROOT_NAMES = ("proto", "avro")
-_SCHEMA_DIRECTORIES = frozenset(_SCHEMA_ROOT_NAMES)
+# Schema dirs are not languages, so this detector must not report one from
+# them (protobuf-maven-plugin/avro-maven-plugin convention) — shared with
+# `GradleDetector` (2M Task 3 fix round 1, M2).
+_SCHEMA_DIRECTORIES = frozenset(SOURCE_SCHEMA_NAMES)
 
 # Every schema root, as its path segments under `src/main`, in the order
 # `schema_roots` reports them. Spring GraphQL's SDL directory is the one that
@@ -34,11 +35,8 @@ _SCHEMA_DIRECTORIES = frozenset(_SCHEMA_ROOT_NAMES)
 # declaration of a contract directory for this detector to read instead, so a
 # WSDL kept anywhere else is a stated boundary rather than a guess.
 _SCHEMA_ROOT_PATHS = (
-    *((name,) for name in _SCHEMA_ROOT_NAMES),
-    ("resources", "graphql"),
-    ("resources", "wsdl"),
-    ("resources", "xsd"),
-    ("resources", "META-INF", "wsdl"),
+    *((name,) for name in SOURCE_SCHEMA_NAMES),
+    *(("resources", *suffix) for suffix in RESOURCE_SCHEMA_SUFFIXES),
 )
 
 
@@ -78,14 +76,17 @@ def _local_repository_archive(coordinate: str, version: str) -> Path:
     return Path.home() / ".m2" / "repository" / _repository_layout(coordinate, version)
 
 
-_CONTAINER_FILES = (
-    "Dockerfile",
-    "Containerfile",
-    "compose.yaml",
-    "compose.yml",
-    "docker-compose.yaml",
-    "docker-compose.yml",
+# Gradle's own build/settings files (2M design §1): when a directory this
+# detector accepts ALSO holds one of these, Maven still wins outright — one
+# build system per run, stated, never merged — and the coexistence becomes a
+# detect note rather than a silent choice.
+_GRADLE_BUILD_FILES = (
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
 )
+_GRADLE_COEXISTENCE_NOTE = "gradle build files present; maven selected"
 
 
 class MavenDetector:
@@ -93,33 +94,128 @@ class MavenDetector:
     prerequisite is a successful build, so the local cache already has the
     classpath.
 
-    Phase 1 detects a single module by reading its POM directly. Multi-module
-    discovery (walking <modules>) and classpath resolution via `mvn -o` land
-    when a fixture needs them; any future `mvn` invocation this detector
-    makes must pass `-o` unless `allow_resolve` is set.
+    A single-module POM is read directly. An aggregation-only POM (one
+    declaring `<modules>`, never a module in its own right — 2M design §2)
+    is walked recursively instead, each child read by the same
+    `_module_of` every leaf goes through, so a reactor child is detected
+    identically whether it was reached through the walk or handed to
+    `detect` on its own. Classpath resolution via `mvn -o` lands when a
+    fixture needs it; any future `mvn` invocation this detector makes must
+    pass `-o` unless `allow_resolve` is set.
     """
 
     def accepts(self, path: Path) -> bool:
         return (path / "pom.xml").is_file()
 
     def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
-        pom = ElementTree.parse(path / "pom.xml").getroot()
+        # Read directly, not via `bool(self._walk(...))` or `len(modules) >
+        # 1`: whether `path` ITSELF declared `<modules>` is the multi-module
+        # gate the CLI branches on (2M Task 2 fix round 1, F1) — a reactor
+        # naming exactly one child is still a reactor (that child analyzes
+        # into ITS OWN workspace, not the aggregator's), and `fixtures/
+        # pom.xml` today names exactly one (`orders-soap-client`).
+        top_pom = self._parse_pom(path)
+        is_reactor = top_pom.find("m:modules", _POM_NS) is not None
+        modules = self._walk(path, visited=(), seen=set())
+        return RepositoryModel(
+            root=path, modules=modules, notes=self._notes(path), multi_module=is_reactor
+        )
+
+    def _walk(
+        self, path: Path, visited: tuple[Path, ...], seen: set[Path]
+    ) -> tuple[ModuleModel, ...]:
+        """Every buildable module reachable from `path` (2M design §2): a leaf
+        POM (no `<modules>`) becomes one `ModuleModel`, exactly as `detect`
+        always read a single module; a POM declaring `<modules>` is
+        AGGREGATION-ONLY — it names no module of its own, only the children
+        named there, walked recursively so a reactor of reactors is read the
+        same way a flat one is.
+
+        `visited` is every aggregator directory already on this walk's own
+        path to `path`, checked before `path` is read again: a `<modules>`
+        entry that leads back to one of them is a cycle, refused loudly
+        (DR-6's own discipline — a cycle is not a shape this detector can
+        silently skip past) rather than walked forever. `seen` is every LEAF
+        already turned into a `ModuleModel`, checked so a parent naming the
+        same child by two different spellings (`a` and `./a` — 2M Task 2 fix
+        round 1, F6) is analyzed once, not once per spelling.
+        """
+        resolved = path.resolve()
+        if resolved in visited:
+            chain = " -> ".join(str(step) for step in (*visited, resolved))
+            raise ValueError(f"pom.xml <modules> cycle: {chain}")
+        pom = self._parse_pom(path)
+        modules_element = pom.find("m:modules", _POM_NS)
+        if modules_element is None:
+            if resolved in seen:
+                return ()
+            seen.add(resolved)
+            return (self._module_of(path, pom),)
+        module_elements = modules_element.findall("m:module", _POM_NS)
+        if not module_elements:
+            # An aggregator that names no child analyzes nothing and used to
+            # succeed silently — a `render`/`enrich`/`export` pointed at it
+            # afterwards then hit the bare "one of: " listing with nothing
+            # after it (2M final review wave, MINOR 4). Refused here instead,
+            # by the pom that declares the empty `<modules>`.
+            raise ValueError(f"{path / 'pom.xml'} declares <modules> but names none")
+        children: list[ModuleModel] = []
+        for module_element in module_elements:
+            text = (module_element.text or "").strip()
+            if not text:
+                raise ValueError(f"{path / 'pom.xml'} has an empty <module/> entry")
+            # `normpath`, not `resolve`: a `<module>` path collapses its own
+            # `..` segments lexically, the same way Maven itself reads one,
+            # without following symlinks or forcing every `ModuleModel.root`
+            # to absolute — `path` stays in whatever form the caller passed
+            # `detect` (2M Task 2 review: `fixtures/orders-service`, adopted
+            # by `../orders-service`, must report the identical root a
+            # direct `detect(FIXTURE)` call would).
+            child = Path(os.path.normpath(path / text))
+            if not (child / "pom.xml").is_file():
+                # Named, not a bare `FileNotFoundError` from the recursive
+                # parse below (2M Task 2 fix round 1, F2): a `<module>`
+                # naming a directory with no POM is a mistake in the
+                # analysed repository, the same class of refusal every other
+                # detect-time `ValueError` here already is.
+                raise ValueError(
+                    f"{path / 'pom.xml'} names <module>{text}</module>, but {child} has no pom.xml"
+                )
+            children.extend(self._walk(child, (*visited, resolved), seen))
+        return tuple(children)
+
+    @staticmethod
+    def _parse_pom(path: Path) -> ElementTree.Element:
+        """`path`'s own `pom.xml`, parsed — or a `ValueError` naming that
+        file when it is not well-formed XML (2M final review wave, I2/MINOR
+        3): a raw `ElementTree.ParseError` names a line and column, never a
+        file, which is unactionable the moment a reactor has more than one
+        pom to suspect."""
+        pom_path = path / "pom.xml"
+        try:
+            return ElementTree.parse(pom_path).getroot()
+        except ElementTree.ParseError as malformed:
+            raise ValueError(f"{pom_path} is not well-formed XML: {malformed}") from malformed
+
+    @staticmethod
+    def _module_of(path: Path, pom: ElementTree.Element) -> ModuleModel:
         # A reactor child inherits groupId and version from <parent> and may
         # omit its own elements entirely (Maven's inheritance rule) —
         # artifactId alone is never inherited. Reading the parent's value is
         # Maven convention data, not a guess.
-        group = self._text(pom, "groupId", inherited=True)
-        artifact = self._text(pom, "artifactId")
-        version = self._text(pom, "version", inherited=True)
-        source_roots = self._source_roots(path, pom)
+        group = MavenDetector._text(pom, "groupId", path, inherited=True)
+        artifact = MavenDetector._text(pom, "artifactId", path)
+        version = MavenDetector._text(pom, "version", path, inherited=True)
+        source_roots = MavenDetector._source_roots(path, pom)
         resources = path / "src" / "main" / "resources"
-        library_roots, libraries_not_resolved = self._library_roots(path, pom)
-        module = ModuleModel(
+        library_roots, libraries_not_resolved = MavenDetector._library_roots(path, pom)
+        return ModuleModel(
             module_id=f"{group}:{artifact}",
             coordinates=f"{group}/{artifact}",
             version=version,
             root=path,
-            kind=self._classify(path, pom),
+            kind=MavenDetector._classify(path, pom),
+            packaging=MavenDetector._packaging(pom),
             # Observed, never asserted: a module records the languages
             # present (M02), and this detector is keyed by build system, so
             # it has no business naming one.
@@ -143,7 +239,18 @@ class MavenDetector:
             library_roots=library_roots,
             libraries_not_resolved=libraries_not_resolved,
         )
-        return RepositoryModel(root=path, modules=(module,))
+
+    @staticmethod
+    def _notes(path: Path) -> tuple[str, ...]:
+        """Detect-time observations, sorted (RepositoryModel's own
+        determinism rule) — today the one Gradle-coexistence note, since this
+        detector reads nothing else worth remarking on."""
+        notes = (
+            [_GRADLE_COEXISTENCE_NOTE]
+            if any((path / name).is_file() for name in _GRADLE_BUILD_FILES)
+            else []
+        )
+        return tuple(sorted(notes))
 
     @staticmethod
     def _library_roots(
@@ -307,17 +414,30 @@ class MavenDetector:
         anything is published or not — reading that as evidence would be the
         guess this method exists to refuse.
         """
-        if any((path / name).is_file() for name in _CONTAINER_FILES):
+        if any((path / name).is_file() for name in CONTAINER_FILES):
             return "service"
         if any(node.tag == _MAIN_CLASS for node in pom.iter()):
             return "service"
         return "undetermined"
 
     @staticmethod
-    def _text(pom: ElementTree.Element, tag: str, inherited: bool = False) -> str:
+    def _packaging(pom: ElementTree.Element) -> str:
+        """Maven's own `<packaging>`, defaulting to `jar` — Maven's own
+        default when the element is absent or empty, not a guess this
+        detector invents (2M design §2, ruled amendment). Read for a LEAF
+        module only: an aggregation-only POM's own `<packaging>pom</packaging>`
+        never reaches here, since it never becomes a `ModuleModel`."""
+        node = pom.find("m:packaging", _POM_NS)
+        return node.text.strip() if node is not None and node.text else "jar"
+
+    @staticmethod
+    def _text(pom: ElementTree.Element, tag: str, path: Path, inherited: bool = False) -> str:
+        # Named by its pom (2M final review wave, MINOR 3): "pom.xml has no
+        # <groupId>" points nowhere in a many-pom reactor — the reader needs
+        # to know WHICH pom.xml.
         node = pom.find(f"m:{tag}", _POM_NS)
         if node is None and inherited:
             node = pom.find(f"m:parent/m:{tag}", _POM_NS)
         if node is None or node.text is None:
-            raise ValueError(f"pom.xml has no <{tag}>")
+            raise ValueError(f"{path / 'pom.xml'} has no <{tag}>")
         return node.text.strip()

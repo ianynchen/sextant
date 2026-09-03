@@ -24,10 +24,23 @@ from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_o
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.render.document import (
     ClaimRedactionError,
+    DetailEntry,
     EnrichmentSection,
     MachineDiagram,
+    MachineList,
+    MachineParagraph,
     MachineSection,
+    MachineTable,
     StaleNoticeSection,
+    _Anchors,
+    _code,
+    _disambiguated_shape_names,
+    _interleave,
+    _runs,
+    _runs_to_markdown,
+    _shape_anchor_id,
+    _shape_display_name,
+    _text,
     assemble_module_document,
     markdown_document,
     render_module_document,
@@ -132,6 +145,132 @@ def _position(text: str, needle: str) -> int:
     index = text.find(needle)
     assert index >= 0, f"not in the document: {needle}"
     return index
+
+
+# --- runs: the text/code split, and exactly how far its round-trip goes ---
+# Fix round 1, IMPORTANT 1: `_runs` claimed to be lossless for ANY input. It
+# was not — `if part` dropped an EMPTY *code* run (an odd-index part) right
+# alongside a genuinely droppable empty *text* run, so a double backtick with
+# nothing between it (an empty code span, or the boundary two adjacent spans
+# share) silently vanished. Reachable through any repo-authored evidence text
+# this renderer passes through `_runs` unvalidated: an unresolved-config
+# reason, a `config_join` site, a candidate's `why`/`seen_in`.
+
+
+def test_an_empty_code_span_round_trips_instead_of_vanishing():
+    """The reviewer's own break: 'a``b' used to reconstruct as 'ab' — the
+    empty code run between the two backtick pairs was dropped along with
+    every genuinely-empty text run, losing two backticks outright rather than
+    merely misplacing them."""
+    assert _runs_to_markdown(_runs("a``b")) == "a``b"
+    assert _runs("a``b") == (("text", "a"), ("code", ""), ("text", "b"))
+
+
+def test_a_bare_empty_code_span_round_trips():
+    assert _runs_to_markdown(_runs("``")) == "``"
+    assert _runs("``") == (("code", ""),)
+
+
+def test_two_empty_code_spans_round_trip():
+    assert _runs_to_markdown(_runs("x``y``z")) == "x``y``z"
+
+
+def test_an_odd_backtick_count_now_round_trips_too():
+    """Fix round 2: `_runs` used to claim round-tripping only for an EVEN
+    backtick count, and an unbalanced (odd) count reconstructed with a
+    spurious extra closing backtick (`_runs_to_markdown(_runs("a`b"))` used
+    to produce `` a`b` ``). `_runs` is now TOTAL — every input round-trips,
+    balanced or not — by merging the trailing unmatched split back into one
+    text part with its backtick put back in literally, rather than reading
+    it as a code span this renderer never opened."""
+    assert _runs_to_markdown(_runs("a`b")) == "a`b"
+    assert _runs("a`b") == (("text", "a`b"),)
+
+
+def test_several_stray_backticks_still_round_trip():
+    """Beyond the single-stray case: a genuine balanced pair ahead of a
+    trailing unmatched backtick still splits into its own code run, and only
+    the LAST, unmatched cut is the one merged back."""
+    assert _runs_to_markdown(_runs("a`b`c`d")) == "a`b`c`d"
+    assert _runs("a`b`c`d") == (("text", "a"), ("code", "b"), ("text", "c`d"))
+    assert _runs_to_markdown(_runs("`")) == "`"
+
+
+# --- blank-line separation between adjacent sections (fix round 1, HIGH) --
+
+
+def test_a_table_directly_followed_by_a_paragraph_gets_a_blank_line():
+    """The exact mechanism behind the media-legend fix, isolated from the
+    whole assembly pipeline: a `MachineTable` with NOTHING of its own that
+    would separate it from what comes next, followed by a bare
+    `MachineParagraph`, must not let the paragraph land as a ghost row of
+    the table in GFM (verified against cmark-gfm) — ZERO blank lines
+    between them is exactly the broken shape this pins against."""
+    table = MachineTable(("A",), ((_text("1"),),))
+    paragraph = MachineParagraph(_text("a caption"))
+    text = markdown_document((table, paragraph))
+    assert "| 1 |\n\na caption\n" in text
+    assert "| 1 |\na caption" not in text
+
+
+def test_two_adjacent_machine_lists_stay_one_continuous_list():
+    """The one deliberate exception the general rule carves out: `## Open
+    questions` builds one single-item `MachineList` per question so a
+    `beside-open-question` claim can anchor on any one of them, and several
+    with no claim between them must still read as ONE bulleted list, not as
+    two paragraphs' worth of bullets with a blank line splitting them."""
+    first = MachineList((_text("first question"),))
+    second = MachineList((_text("second question"),))
+    text = markdown_document((first, second))
+    assert text == "- first question\n- second question\n"
+
+
+# --- shape display names (fix round 1, LOW and MEDIUM 2) -------------------
+
+
+def test_shape_display_name_reads_a_qnames_local_part_not_a_url_path_segment():
+    """LOW finding: `simple_name` assumes a SCIP symbol's slash-delimited
+    package path; a SOAP element's shape id is a QName wire identity instead
+    (`{uri}local`, D00 §4), and its own URI happens to contain real `/`
+    characters — `simple_name` reads the LAST one and lands mid-URI
+    (`{http://orders.example.com/ws}quoteOrderRequest` becomes
+    `ws}quoteOrderRequest`, not `quoteOrderRequest`). `_shape_display_name`
+    reads a QName by its own grammar — whatever follows the LAST `}` — and
+    keeps `simple_name`'s existing convention for every ordinary
+    package-path shape id, unchanged."""
+    assert (
+        _shape_display_name("{http://orders.example.com/ws}quoteOrderRequest")
+        == "quoteOrderRequest"
+    )
+    assert _shape_display_name("com/example/golden/OrderView#") == "OrderView"
+
+
+def test_shape_display_name_strips_a_trailing_type_marker_on_a_qname_too():
+    """2M Task 7 ride-along: the QName branch read a local part straight off
+    `rsplit('}', 1)`, never stripping a trailing `#` the way the
+    `simple_name` branch always has — an asymmetry with no reason behind it,
+    since `without_type_marker` is a no-op wherever a QName's local part
+    never carries one anyway."""
+    assert _shape_display_name("{http://orders.example.com/ws}quoteOrderRequest#") == (
+        "quoteOrderRequest"
+    )
+
+
+def test_shape_anchors_stay_unique_across_different_collision_groups():
+    """2M Task 7 fix round 1, High — the reviewer's own proven counterexample:
+    a per-GROUP disambiguation pass is not enough. `p/q/A#` and `p/r/A#`
+    collide with each other on the simple name `A` and fall back to their own
+    full ids — `p/q/A` and `p/r/A`, genuinely distinct from EACH OTHER — but a
+    third, unrelated shape `x/p-q-A#` never collided with either of them (it
+    is alone in its own display-name group, `p-q-A`, so a per-group check
+    never runs it against `p/q/A`'s fallback at all) — and `p/q/A`/`p-q-A`
+    sanitize to the IDENTICAL anchor `shape-p-q-A` once `/` and `-` both
+    become `-`. Without a final pass over the whole set, `p/q/A#` and
+    `x/p-q-A#` would render duplicate, invalid `id="shape-p-q-A"` attributes."""
+    cited_shapes = {"p/q/A#": [], "p/r/A#": [], "x/p-q-A#": []}
+    names = _disambiguated_shape_names(cited_shapes)
+    anchors = {shape_id: _shape_anchor_id(name) for shape_id, name in names.items()}
+    assert len(set(anchors.values())) == 3, anchors
 
 
 # --- the regression pin ---------------------------------------------------
@@ -241,7 +380,9 @@ def test_a_module_with_no_overlay_assembles_to_machine_sections_alone():
     the HTML emitter's sake, and that is exactly what the golden proves costs
     no bytes."""
     sections = assemble_module_document(MODULE, REPORT, "a3f91c", open_questions=OPEN_QUESTIONS)
-    assert all(isinstance(section, MachineSection | MachineDiagram) for section in sections)
+    assert not any(
+        isinstance(section, EnrichmentSection | StaleNoticeSection) for section in sections
+    )
     assert markdown_document(sections) == _machine_only()
 
 
@@ -256,13 +397,12 @@ def test_the_machine_half_is_byte_identical_with_an_overlay_present():
         open_questions=OPEN_QUESTIONS,
         overlay=_overlay(_component(), _diagram(), _verdict(), _section()),
     )
-    machine: list[str] = []
-    for section in sections:
-        if isinstance(section, MachineSection):
-            machine += section.lines
-        elif isinstance(section, MachineDiagram):
-            machine += ["```mermaid", *section.mermaid.split("\n"), "```"]
-    assert "\n".join(machine) + "\n" == _machine_only()
+    machine = tuple(
+        section
+        for section in sections
+        if not isinstance(section, EnrichmentSection | StaleNoticeSection)
+    )
+    assert markdown_document(machine) == _machine_only()
 
 
 # --- the machine diagram, as data -----------------------------------------
@@ -278,10 +418,12 @@ def test_the_machine_structure_diagram_reaches_a_serializer_as_source():
     assert len(diagrams) == 1
     assert diagrams[0].mermaid.startswith("classDiagram")
     assert "```" not in diagrams[0].mermaid
-    # And no MachineSection still carries the fence it was lifted out of.
-    for section in sections:
-        if isinstance(section, MachineSection):
-            assert "```mermaid" not in section.lines
+    # And the fence appears in the rendered document exactly once — as the
+    # `MachineDiagram` above, never a second time duplicated into some other
+    # section's own text. (Assembly builds no `MachineSection` at all any
+    # more — see `test_a_module_with_no_overlay_assembles_to_machine_sections_alone`
+    # — so a loop over `sections` checking that type would now be vacuous.)
+    assert markdown_document(sections).count("```mermaid") == 1
 
 
 def test_a_module_with_no_shapes_has_no_diagram_section_at_all():
@@ -418,7 +560,7 @@ def test_a_non_verdict_claim_anchored_beside_the_questions_lands_after_them_all(
 def test_an_end_of_document_claim_is_the_last_thing_in_the_file():
     text = _rendered(_section())
     assert _position(text, "## Known gaps") < _position(text, "**Extending the edge**")
-    assert text.rstrip().endswith("`src/main/java/com/acme/orders/Ingest.java`")
+    assert text.rstrip().endswith("`src/main/java/com/acme/orders/Ingest.java`\n\n---")
 
 
 # --- the mark and the shapes ----------------------------------------------
@@ -429,7 +571,7 @@ def test_every_enrichment_block_sits_under_a_provenance_header():
     see what produced the words before reading them, and the marker names the
     evidence tier and the run."""
     text = _rendered(_component(), _section())
-    header = "> **Enrichment — evidence: llm** (model a-model, agent an-agent)"
+    header = "**Enrichment — evidence: llm** (model a-model, agent an-agent)"
     assert text.count(header) == 2
 
 
@@ -505,7 +647,7 @@ def test_two_claims_at_one_anchor_share_a_single_provenance_header():
     repeating its provenance between two adjacent claims is noise that teaches
     a reader to stop seeing the mark."""
     text = _rendered(_component(name="First"), _component(name="Second"))
-    assert text.count("> **Enrichment — evidence: llm**") == 1
+    assert text.count("**Enrichment — evidence: llm**") == 1
 
 
 def test_assembling_the_same_overlay_twice_is_byte_identical():
@@ -710,11 +852,50 @@ def test_the_serializer_survives_a_machine_section_carrying_no_lines():
         EnrichmentSection(provenance, tuple(overlay.claims)),
         MachineSection(()),
     )
-    assert markdown_document(sections).startswith("# a module\n\n> **Enrichment")
+    assert markdown_document(sections).startswith("# a module\n\n---\n\n**Enrichment")
 
 
 def test_an_enrichment_block_is_the_last_thing_in_the_document():
     """The other lookahead edge: nothing follows, so nothing is looked at. A
     document ending in a claim is the ordinary `end-of-document` anchor."""
     text = _rendered(_section())
-    assert text.endswith("Cites: `src/main/java/com/acme/orders/Ingest.java`\n")
+    assert text.endswith("Cites: `src/main/java/com/acme/orders/Ingest.java`\n\n---\n")
+
+
+# --- fix round 1, MINOR 3: a claim anchored out of range is a loud failure -
+
+
+def test_a_claim_anchored_outside_the_document_range_is_refused_not_dropped():
+    """Unreachable through the public `assemble_module_document` path — every
+    `_Anchors` field it builds is `len(sections)` at some point during
+    assembly — so this drives `_interleave` directly with a broken one, the
+    same way a future anchor kind might compute a bad index. This file's own
+    discipline (NFR-7, the stale-claim notice) never drops a claim quietly;
+    an out-of-range index must fail exactly as loudly."""
+    machine = (MachineSection(("# a module",)),)
+    broken_anchors = _Anchors(
+        structure_end=99, endpoints_end=99, beside_question=(), questions_end=99, document_end=99
+    )
+    overlay = _overlay(_component())
+    with pytest.raises(ValueError, match="outside the document's own"):
+        _interleave(machine, broken_anchors, overlay, frozenset(), Redactor.from_rules())
+
+
+# --- fix round 1, MINOR 7: a DetailEntry never carries both a body and a --
+# --- table -------------------------------------------------------------
+
+
+def test_a_detail_entry_refuses_to_carry_both_a_body_and_a_table():
+    """The markdown renderer's `if entry.table is not None` branch would
+    otherwise let a table silently win over a body the entry also carried —
+    the same "no rendering rule silently wins" refusal
+    `ClaimRedactionError`/the html emitter's unrecognised-kind checks already
+    take elsewhere in this file."""
+    with pytest.raises(ValueError, match="EITHER a body OR a table"):
+        DetailEntry(_text("Request"), _text("string"), MachineTable(("Field",), ()))
+
+
+def test_a_detail_entry_with_neither_a_body_nor_a_table_is_still_allowed():
+    """The header entry every `MachineDetail` opens with — a bare title,
+    deliberately neither — must not trip the new refusal."""
+    DetailEntry(_code("GET /v1/orders"), None, None)

@@ -17,15 +17,15 @@ around them is a fixed string, and section order is whatever
 `assemble_module_document` already fixed (NFR-1) — nothing here reads a
 clock.
 
-**Machine prose is shown, not parsed.** A `MachineSection`'s lines are the
-same markdown bytes `markdown_document` emits, carrying `#` headings, `|`
-tables and `-` bullets as their own syntax. Interpreting that syntax into
-`<h1>`/`<table>`/`<ul>` would be exactly the markdown parse the brief
-forbids — this renderer built those bytes as text, once, and a second pass
-that re-derives their structure from it could disagree with the first pass
-about what it means. So they are shown as what they are: escaped text in a
-monospaced block, which keeps a `|`-aligned table readable without this
-module ever asking what a table is.
+**Structure is typed, never parsed back out of text.** `assemble_module_document`
+builds `MachineHeading`/`MachineParagraph`/`MachineList`/`MachineTable`/
+`MachineDetail` at the sites that already know the structure (2M design
+§5b), so this module writes real `<h1>`-`<h3>`, `<table>`, `<ul>` and
+definition-block markup straight from those types — never by scanning
+markdown for `#`, `|` or `-` to guess what they meant. `MachineSection`
+(opaque lines) remains the escape hatch for machine text with no typed shape
+of its own: shown as escaped text in a monospaced block, exactly as before,
+for whatever still reaches this emitter that way.
 
 **Every diagram, wrapped alike.** A `MachineDiagram` and a claim's own
 `DiagramClaim` both reach this module as mermaid *source* rather than a
@@ -41,17 +41,21 @@ arrived in.
 `> **Enrichment — evidence: llm**` blockquote — so a reader cannot mistake
 model output for derived fact by skimming past a heading.
 
-**Model prose renders literally.** A claim's own free-form text —
-`SectionClaim.body`, a verdict's `because`/`searched`, a backtick an agent
-wrote inline around a symbol name — is escaped and shown as plain text,
-never reinterpreted as markdown. This is the same no-parse rule applied to a
-second carrier of markdown-ish text: this module does not know what a
-backtick means in a claim's prose any more than it knows what a `#` means in
-`MachineSection.lines`, and treating one as syntax while leaving the other
-alone would be an arbitrary distinction with no rule behind it.
+**Model prose renders literally, except the two spans it cannot say without**
+(2M design §5d). Everywhere a claim carries free-form text — a verdict's
+`because`/`searched`, a component's `purpose`, a diagram's `elides` — that
+text is escaped and shown as plain, unreinterpreted prose: this module does
+not know what a `#` or a `[` means in it any more than it knows what one
+means in `MachineSection.lines`. `SectionClaim.body` alone draws one
+exception, `_claim_body_html` below: a paired `` `code` `` span becomes
+`<code>`, and a triple-backtick fence becomes `<pre><code>`, because those
+are the only two marks a model has for pointing at a literal symbol or a
+block of text rather than writing prose about it. Nothing else — a markdown
+link, `**bold**`, a stray unpaired backtick — is read as syntax there either.
 """
 
 import html
+import re
 from importlib import resources
 
 from sextant.domain.enrichment import (
@@ -64,12 +68,20 @@ from sextant.domain.enrichment import (
     VerdictClaim,
 )
 from sextant.egress.render.document import (
+    HEADING_LEVELS,
     AssembledDocument,
     EnrichmentSection,
+    MachineDetail,
     MachineDiagram,
+    MachineHeading,
+    MachineList,
+    MachineParagraph,
     MachineSection,
+    MachineTable,
+    Run,
     Section,
     StaleNoticeSection,
+    _shape_anchor_id,
 )
 
 _STYLE = """
@@ -87,9 +99,20 @@ pre.machine { background: #f6f8fa; padding: 1rem; overflow-x: auto; border-radiu
                      user-select: none; -webkit-user-select: none; }
 .diagram-viewport.dragging { cursor: grabbing; }
 .diagram-canvas { width: max-content; transform-origin: 0 0; }
-.diagram-canvas pre.mermaid { margin: 0; background: transparent; padding: 1rem; }
+.diagram-canvas pre.mermaid { margin: 0; background: transparent; padding: 0; }
 .diagram-caption { padding: 0.5rem 1rem; font-style: italic; color: #57606a;
                     border-top: 1px solid #d0d7de; }
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+th, td { border: 1px solid #d0d7de; padding: 0.35rem 0.6rem; text-align: left; }
+th { background: #f6f8fa; }
+/* One typography per meaning: a code run is a code run, whether it sits in a
+   table cell, a definition-block identity or a claim's own prose — so this
+   is the ONE rule that gives every `<code>` its chip. */
+code { background: rgba(0, 0, 0, 0.06); border-radius: 4px; padding: 0 0.25rem; }
+.detail-identity { font-weight: 600; margin: 1rem 0 0.25rem; }
+dl.detail { border-left: 2px solid #d0d7de; margin: 0 0 1rem; padding-left: 1rem; }
+dl.detail dt { font-weight: 600; margin-top: 0.5rem; }
+dl.detail dd { margin: 0.15rem 0 0.5rem; }
 .enrichment { border-left: 4px solid #8250df; background: #faf5ff; padding: 0.25rem 1rem 0.75rem;
               margin: 1rem 0; border-radius: 0 6px 6px 0; }
 .enrichment-header { padding-top: 0.5rem; font-weight: 600; }
@@ -98,7 +121,6 @@ pre.machine { background: #f6f8fa; padding: 1rem; overflow-x: auto; border-radiu
              letter-spacing: 0.03em; text-transform: uppercase; }
 .stale-notice { border-left-color: #9a6700; background: #fff8c5; }
 .claim { margin: 0.75rem 0 0; }
-.claim code { background: rgba(0, 0, 0, 0.06); border-radius: 4px; padding: 0 0.25rem; }
 """
 
 
@@ -131,7 +153,18 @@ def html_document(sections: AssembledDocument, module_id: str) -> str:
         "<script>\n"
         'mermaid.initialize({"startOnLoad": false, "securityLevel": "strict"});\n'
         'document.addEventListener("DOMContentLoaded", function () {\n'
-        '  mermaid.run({ querySelector: ".mermaid" });\n'
+        "  // run() resolves once every diagram is rendered SVG; the event\n"
+        "  // tells panzoom.js to fit each diagram to its viewport, which\n"
+        "  // needs the real rendered geometry rather than the placeholder\n"
+        "  // the browser sizes before mermaid replaces it.\n"
+        '  mermaid.run({ querySelector: ".mermaid" }).then(function () {\n'
+        "    // Flag AND event: panzoom.js may register its listener before or\n"
+        "    // after this resolves (promise microtasks can run between two\n"
+        "    // DOMContentLoaded handlers), so it checks the flag when it sets\n"
+        "    // up and listens for the event when it set up first.\n"
+        "    window.sextantDiagramsRendered = true;\n"
+        '    document.dispatchEvent(new Event("sextant:diagrams-rendered"));\n'
+        "  });\n"
         "});\n"
         "</script>\n"
         f"<script>{panzoom_js}</script>\n"
@@ -170,6 +203,16 @@ def _refused_if_unsafe_to_inline(name: str, text: str) -> str:
 
 
 def _section_html(section: Section) -> str:
+    if isinstance(section, MachineHeading):
+        return _heading_html(section)
+    if isinstance(section, MachineParagraph):
+        return f"<p>{_runs_html(section.runs)}</p>"
+    if isinstance(section, MachineList):
+        return _list_html(section)
+    if isinstance(section, MachineTable):
+        return _table_html(section)
+    if isinstance(section, MachineDetail):
+        return _detail_html(section)
     if isinstance(section, MachineSection):
         return _machine_html(section)
     if isinstance(section, MachineDiagram):
@@ -178,13 +221,103 @@ def _section_html(section: Section) -> str:
         return _enrichment_html(section)
     if isinstance(section, StaleNoticeSection):
         return _stale_html(section)
-    # `Section` is the closed set `document.py` itself defines
-    # (`type Section = MachineSection | MachineDiagram | EnrichmentSection |
-    # StaleNoticeSection`). A fifth kind reaching here means this emitter has
-    # fallen behind that set, and the honest answer is a loud failure rather
-    # than a section silently missing from the page (brief: "a kind you
-    # don't recognize is a hard error, not a skip").
+    # `Section` is the closed set `document.py` itself defines. A kind
+    # reaching here means this emitter has fallen behind that set, and the
+    # honest answer is a loud failure rather than a section silently missing
+    # from the page (brief: "a kind you don't recognize is a hard error, not
+    # a skip").
     raise ValueError(f"html emitter has no rendering rule for section {section!r}")
+
+
+def _runs_html(runs: tuple[Run, ...]) -> str:
+    """Runs, escaped and typeset — a code run as `<code>`, a `shaperef` run
+    as an in-page link to its `### Shapes` entry, a text run as plain
+    escaped text — which is the whole reason machine text carries runs now
+    (2M design §5b): this never has to parse a backtick, or guess at a shape
+    name sitting in plain prose, to know where a `<code>` tag or a link
+    belongs. The href is `_shape_anchor_id` over the run's own content —
+    the SAME function the `### Shapes` entry's own header id is built with
+    (`_detail_html`), so the two can never name two different anchors for
+    one shape."""
+    parts = []
+    for kind, content in runs:
+        if kind == "code":
+            parts.append(f"<code>{html.escape(content)}</code>")
+        elif kind == "shaperef":
+            href = _shape_anchor_id(content)
+            parts.append(f'<a href="#{html.escape(href)}">{html.escape(content)}</a>')
+        else:
+            parts.append(html.escape(content))
+    return "".join(parts)
+
+
+def _heading_html(section: MachineHeading) -> str:
+    level = section.level
+    if level not in HEADING_LEVELS:
+        # Bounded against the SAME table markdown's `_HEADING_MARKERS` reads
+        # (`document.HEADING_LEVELS`), so a level neither serializer knows
+        # fails identically in both — `<h{level}>` would otherwise happily
+        # emit a tag for a level markdown has no marker for at all.
+        raise ValueError(f"heading level {level!r} outside {HEADING_LEVELS}")
+    return f"<h{level}>{html.escape(section.text)}</h{level}>"
+
+
+def _list_html(section: MachineList) -> str:
+    items = "".join(f"<li>{_runs_html(item)}</li>" for item in section.items)
+    return f"<ul>{items}</ul>"
+
+
+def _table_html(table: MachineTable) -> str:
+    head = "".join(f"<th>{html.escape(header)}</th>" for header in table.headers)
+    body = "".join(
+        "<tr>" + "".join(f"<td>{_runs_html(cell)}</td>" for cell in row) + "</tr>"
+        for row in table.rows
+    )
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+
+
+def _detail_html(section: MachineDetail) -> str:
+    """The header entry (`entries[0]`, always bare — no body or table) is the
+    block's own NAME, not one of its nested facts, so it renders OUTSIDE the
+    definition list as its own `<p>` — never a sibling `<dt>` next to `Via`/
+    `Request`/`Response`, which read the identity as just another name for
+    the same table a reader is meant to look up. Every entry after it is a
+    `<dt>`/`<dd>` pair, the `<dd>` holding either the inline body or a real
+    nested `<table>` — never the indented markdown block this used to be
+    scanned out of a `<pre>`.
+
+    A header with no entries after it (every endpoint gets one now — 2M
+    §5c) renders as just the `<p>`, never an empty `<dl></dl>`.
+
+    `section.anchor` carries the header's `id` — set only for a `### Shapes`
+    entry, so a `shaperef` run's `<a href="#...">` elsewhere in the page has
+    somewhere to land."""
+    if not section.entries:
+        # `entries` is never built empty by `assemble_module_document` — every
+        # `MachineDetail` this renderer produces carries at least its own
+        # header — but a `MachineDetail` handed to this function directly
+        # (a test, a future caller) is not this module's to trust blind. The
+        # honest answer is a message naming what is missing, not the bare
+        # `not enough values to unpack` a plain `header, *rest = ()` would
+        # raise here.
+        raise ValueError(
+            "a MachineDetail with no entries has no identity to render — every "
+            "detail block must carry at least its own header entry"
+        )
+    header, *rest = section.entries
+    anchor = f' id="{html.escape(section.anchor)}"' if section.anchor else ""
+    identity = f'<p class="detail-identity"{anchor}>{_runs_html(header.title)}</p>'
+    if not rest:
+        return identity
+    parts = ['<dl class="detail">']
+    for entry in rest:
+        parts.append(f"<dt>{_runs_html(entry.title)}</dt>")
+        if entry.table is not None:
+            parts.append(f"<dd>{_table_html(entry.table)}</dd>")
+        elif entry.body is not None:
+            parts.append(f"<dd>{_runs_html(entry.body)}</dd>")
+    parts.append("</dl>")
+    return identity + "".join(parts)
 
 
 def _machine_html(section: MachineSection) -> str:
@@ -288,15 +421,73 @@ def _component_claim_html(claim: ComponentClaim) -> str:
 
 
 def _section_claim_html(claim: SectionClaim) -> str:
-    paragraphs = "".join(f"<p>{html.escape(line)}</p>" for line in claim.body.split("\n") if line)
     cites = ", ".join(f"<code>{html.escape(cite)}</code>" for cite in claim.cites)
     return (
         '<div class="claim claim-section">'
         f"<strong>{html.escape(claim.title)}</strong>"
-        f"{paragraphs}"
+        f"{_claim_body_html(claim.body)}"
         f"<p>Cites: {cites}</p>"
         "</div>"
     )
+
+
+_FENCE_LINE = "```"
+_INLINE_CODE = re.compile(r"`([^`]+)`")
+
+
+def _claim_body_html(body: str) -> str:
+    """`SectionClaim.body` (2M design §5d): a line is its own `<p>` exactly
+    as before this rule existed (`body.split("\\n")`, blank lines dropped),
+    except a fenced span — a line of its own reading ` ``` `, everything up
+    to the next such line or the body's own end — which renders as ONE
+    `<pre><code>` block covering however many lines it spans, never split
+    line by line the way ordinary prose is. Within an ordinary line,
+    `_inline_code_html` turns a paired backtick span into `<code>`; nothing
+    else here is markdown, so a link, `**bold**`, or a fence that never
+    closes before the body ends (still a complete, escaped code block — no
+    prose is left over to also render) is exactly the text the model wrote.
+
+    Two asymmetries, stated rather than silently relied on (2M Task 7 fix
+    round 1, LOW): the OPEN test (`.startswith(_FENCE_LINE)`) accepts a
+    trailing info string — `` ```json `` opens a fence exactly like ` ``` `
+    alone — while the CLOSE test (`== _FENCE_LINE`) accepts only the bare
+    three backticks; a line reading `` ```json `` never closes one, the
+    same convention Commonmark itself uses. And whatever info string an
+    open line carries is dropped, never surfacing as a `class="language-…"`
+    or any other marker on the `<code>` it opens — the whole span still
+    renders as an unlabelled code block. Neither is a defect to fix; §5d's
+    rule is "code or not", not language-aware highlighting, and this is the
+    one place that distinction is spelled out rather than left for a reader
+    of the code alone to notice."""
+    parts: list[str] = []
+    lines = body.split("\n")
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.strip().startswith(_FENCE_LINE):
+            fence_lines: list[str] = []
+            index += 1
+            while index < len(lines) and lines[index].strip() != _FENCE_LINE:
+                fence_lines.append(lines[index])
+                index += 1
+            if index < len(lines):
+                index += 1  # consume the closing fence line
+            code = "\n".join(fence_lines)
+            parts.append(f"<pre><code>{html.escape(code)}</code></pre>")
+            continue
+        if line:
+            parts.append(f"<p>{_inline_code_html(line)}</p>")
+        index += 1
+    return "".join(parts)
+
+
+def _inline_code_html(line: str) -> str:
+    """One line of claim prose, escaped, with a paired `` `code` `` span
+    turned into `<code>` — a lone backtick with no partner on the same line
+    is never matched (the pattern needs two), so it stays exactly the
+    literal character `html.escape` already left it as, never a half-open
+    `<code>` tag (2M design §5d)."""
+    return _INLINE_CODE.sub(r"<code>\1</code>", html.escape(line))
 
 
 def _diagram_claim_html(claim: DiagramClaim) -> str:

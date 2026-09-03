@@ -1,0 +1,112 @@
+{
+  "projects": [
+    {
+      "path": ":",
+      "group": "",
+      "name": "gradle-orders",
+      "version": "unspecified",
+      "dir": "{root}",
+      "sourceRoots": [],
+      "resourceRoots": [],
+      "classesDirs": [],
+      "publishing": false,
+      "classpath": []
+    },
+    {
+      "path": ":pricing-lib",
+      "group": "com.acme",
+      "name": "pricing-lib",
+      "version": "1.0.0",
+      "dir": "{root}/pricing-lib",
+      "sourceRoots": [
+        "{root}/pricing-lib/src/main/java"
+      ],
+      "resourceRoots": [
+        "{root}/pricing-lib/src/main/resources"
+      ],
+      "classesDirs": [
+        "{root}/pricing-lib/build/classes/java/main"
+      ],
+      "publishing": true,
+      "classpath": []
+    },
+    {
+      "path": ":service-app",
+      "group": "com.acme",
+      "name": "service-app",
+      "version": "1.0.0",
+      "dir": "{root}/service-app",
+      "sourceRoots": [
+        "{root}/service-app/src/main/java"
+      ],
+      "resourceRoots": [
+        "{root}/service-app/src/main/resources"
+      ],
+      "classesDirs": [
+        "{root}/service-app/build/classes/java/main"
+      ],
+      "publishing": false,
+      "classpath": [
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.micrometer/micrometer-commons/1.12.5/da45afd81a6a05267df5ddfe10438ea857e0f7d9/micrometer-commons-1.12.5.jar",
+          "group": "io.micrometer",
+          "name": "micrometer-commons",
+          "version": "1.12.5"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.micrometer/micrometer-observation/1.12.5/ee23704259a1aad5c8f503db4d37cdfe5352e766/micrometer-observation-1.12.5.jar",
+          "group": "io.micrometer",
+          "name": "micrometer-observation",
+          "version": "1.12.5"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.springframework/spring-aop/6.1.6/4958f52cb9fcb3adf7e836304550de5431a9347e/spring-aop-6.1.6.jar",
+          "group": "org.springframework",
+          "name": "spring-aop",
+          "version": "6.1.6"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.springframework/spring-beans/6.1.6/332d80ff134420db4ebf7614758e6a02a9bd3c41/spring-beans-6.1.6.jar",
+          "group": "org.springframework",
+          "name": "spring-beans",
+          "version": "6.1.6"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.springframework/spring-context/6.1.6/2be30298638975efaf7fff22f1570d79b2679814/spring-context-6.1.6.jar",
+          "group": "org.springframework",
+          "name": "spring-context",
+          "version": "6.1.6"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.springframework/spring-core/6.1.6/dea4b8e110b7b54a02a4907e32dbb0adee8a7168/spring-core-6.1.6.jar",
+          "group": "org.springframework",
+          "name": "spring-core",
+          "version": "6.1.6"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.springframework/spring-expression/6.1.6/9c3d7f0e17a919a4ea9f087e4e2140ad39776bc8/spring-expression-6.1.6.jar",
+          "group": "org.springframework",
+          "name": "spring-expression",
+          "version": "6.1.6"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.springframework/spring-jcl/6.1.6/84cb19b30b22feca73c2ac005ca849c5890935a3/spring-jcl-6.1.6.jar",
+          "group": "org.springframework",
+          "name": "spring-jcl",
+          "version": "6.1.6"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.springframework/spring-web/6.1.6/49a32e3497fe39550da3b280bda5d9933ae2d51d/spring-web-6.1.6.jar",
+          "group": "org.springframework",
+          "name": "spring-web",
+          "version": "6.1.6"
+        },
+        {
+          "path": "{root}/pricing-lib/build/classes/java/main",
+          "internal": true
+        }
+      ]
+    }
+  ],
+  "includedBuilds": []
+}

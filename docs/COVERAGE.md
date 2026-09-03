@@ -238,6 +238,23 @@ outbound form is a stub in a jar — an opt-in, per library, never a walk of the
 tree, and every row it contributes carries its origin coordinate into the facts, the
 rendered document and the exported bundle.
 
+**Phase 2M closed gap area A — build systems and project shape — and fixed four
+rendered-output defects a live analysis surfaced.** `GradleDetector` joins `MavenDetector`
+behind the same `Detector` port ([M02](components/M02-detector.md)): it learns a Gradle
+build by running the project's own wrapper against a read-only init script, never by
+parsing `build.gradle(.kts)` — a Kotlin program, version catalogs and `subprojects` blocks
+put real parsing out of reach. A multi-module root — Maven's `<modules>` walk, now
+recursive, and Gradle's own settings evaluation — is discovered, and every module not
+KNOWN to be a library or a leaf `pom` packaging is analyzed into its own workspace,
+root-relative and pinned in `modules.json`. **Tested surface, stated honestly:** every
+fixture behind this document's matrices still pins Spring Boot 3.x semantics — the
+goldens' value is stability, not currency. Boot 4.1 is field-validated, not
+fixture-pinned, for the HTTP inbound surface — verified live against
+`examples/jhipster-sample-app` and `examples/spring-petclinic-rest`, both Boot 4.1 —
+through `scripts/field_check.py`: opt-in, network-using by nature, and never part of the
+test suite or `scripts/check.sh`. Anything Boot-4-specific the field run finds missing
+becomes a catalog row in Phase 2O, never a special case bolted onto this phase.
+
 **Everything else in both matrices remains a gap** — including, inside the cells Phase 2D and
 2E-prep touched, Spring Integration's channel adapters and spring-cloud-aws's own
 channel-adapter bindings (`config_join`'s shape, not yet catalogued — Spring Cloud Stream's

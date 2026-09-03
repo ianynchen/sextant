@@ -116,3 +116,15 @@ def simple_name(symbol: str) -> str:
     """The display name for a SCIP symbol (D00 §5a): the last path segment,
     with the trailing `#` a type descriptor always carries stripped."""
     return symbol.rsplit("/", 1)[-1].rstrip("#")
+
+
+def without_type_marker(symbol: str) -> str:
+    """`symbol` with its trailing SCIP type marker (`#`) removed, if it
+    carries one — everything else about it, package coordinates included,
+    left exactly as written. `simple_name`'s one-character sibling: that
+    function ALSO drops everything before the last `/`, which is wrong for a
+    caller that needs the WHOLE id kept (still unique) with only the
+    trailing marker's redundant punctuation gone — a shape id disambiguated
+    by falling back to itself (`egress/render/document.py`,
+    `_disambiguated_shape_names`) is exactly this case."""
+    return symbol.rstrip("#")

@@ -1,0 +1,126 @@
+// Sextant's own read-only probe (2M design §1). A plain Groovy init script —
+// init scripts are always Groovy regardless of the target build's own DSL,
+// which is exactly why one script here reads both Groovy- and Kotlin-DSL
+// Gradle builds. It registers `sextantModel` on the root project; walking
+// `allprojects` happens inside the task's own execution (`doLast`), never at
+// configuration time, because `compileClasspath` cannot be resolved until
+// the task graph is running. The walk writes ONE JSON document to the file
+// named by `-Psextant.out` — never stdout, which Gradle itself, the target
+// build's own scripts, and JVM warnings all pollute. A `sextantModel` name
+// collision with the target build surfaces as Gradle's own configuration
+// error (a duplicate task registration) and needs no handling here — it
+// reaches GradleDetector as an ordinary build-configuration-failure refusal.
+//
+// Honesty (2M design §1a): running this script executes the target
+// repository's own build — its plugins, its `buildSrc`, whatever a
+// `doLast`/`afterEvaluate` block on ANY applied plugin chooses to do. Sextant
+// adds no sandbox around that, the same trust already extended when the
+// fixture suite compiles Maven fixtures with `mvn`. Gradle also writes
+// `.gradle/` state into the repository it runs against and may start a
+// daemon; neither is filesystem-read-only behaviour, and GradleDetector's
+// own docstring says so in those words. Nor is this a narrow, cheap probe
+// (2M Task 3 fix round 1, I4): `sextantModel` depends on EVERY Java-plugin
+// project's own `classes` task (below), so running it compiles the ENTIRE
+// target build in one invocation — every project, including ones the CLI
+// will go on to skip-list — and one project's compile failure fails this
+// whole task, refusing detection for every project, not only that one.
+import groovy.json.JsonOutput
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+
+gradle.rootProject { rp ->
+    def sextantModel = rp.tasks.register("sextantModel") {
+        // No declared inputs/outputs: this task's whole job is a one-shot
+        // read of the evaluated model, and Gradle's own up-to-date checking
+        // has nothing to gain from a task that is never meant to be skipped.
+        doLast {
+            def outPath = rp.property("sextant.out").toString()
+            def projectRecords = rp.allprojects.sort { it.path }.collect { p ->
+                def hasJava = p.plugins.hasPlugin("java")
+                def sourceRoots = []
+                def resourceRoots = []
+                def classesDirs = []
+                def classpath = []
+                if (hasJava) {
+                    def main = p.sourceSets.main
+                    def buildDirPath = p.layout.buildDirectory.get().asFile.absolutePath
+                    def resourceDirs = main.resources.srcDirs
+                    // Every language directory a JVM-language plugin (Java,
+                    // Kotlin, Groovy, ...) registered on the `main` source
+                    // set — `allSource` is the plugin-agnostic way to read
+                    // that — MINUS the resource dirs (reported separately)
+                    // and anything under the build directory (annotation
+                    // processors register their generated-sources dir here
+                    // too, and a generated dir is not a source root any more
+                    // than Maven's `target/generated-sources` is).
+                    sourceRoots = main.allSource.srcDirs
+                        .findAll { !resourceDirs.contains(it) && !it.absolutePath.startsWith(buildDirPath) }
+                        .collect { it.absolutePath }
+                        .sort()
+                    resourceRoots = resourceDirs.collect { it.absolutePath }.sort()
+                    classesDirs = main.output.classesDirs.files.collect { it.absolutePath }.sort()
+                    def compileClasspath = p.configurations.findByName("compileClasspath")
+                    if (compileClasspath != null) {
+                        compileClasspath.incoming.artifacts.artifacts.each { artifact ->
+                            def id = artifact.id.componentIdentifier
+                            def entry = [path: artifact.file.absolutePath]
+                            // Gradle reports a coordinate only where it HAS one
+                            // (2M design §1): a `ModuleComponentIdentifier` is
+                            // an external Maven-style dependency. A
+                            // `ProjectComponentIdentifier` (2M Task 3 fix round
+                            // 1, I3) is an INTER-PROJECT dependency
+                            // (`project(":other")`) — internal wiring Gradle
+                            // resolved just fine, marked `internal` rather than
+                            // given a group/name/version this identifier does
+                            // not carry, so GradleDetector can tell it apart
+                            // from a genuinely unresolved one. Anything else (a
+                            // flat file() dependency) carries neither and
+                            // stays path-only.
+                            if (id instanceof ModuleComponentIdentifier) {
+                                entry.group = id.group
+                                entry.name = id.module
+                                entry.version = id.version
+                            } else if (id instanceof ProjectComponentIdentifier) {
+                                entry.internal = true
+                            }
+                            classpath << entry
+                        }
+                        classpath = classpath.sort { it.path }
+                    }
+                }
+                [
+                    path: p.path,
+                    group: p.group.toString(),
+                    name: p.name,
+                    version: p.version.toString(),
+                    dir: p.projectDir.absolutePath,
+                    sourceRoots: sourceRoots,
+                    resourceRoots: resourceRoots,
+                    classesDirs: classesDirs,
+                    publishing: p.plugins.hasPlugin("maven-publish"),
+                    classpath: classpath,
+                ]
+            }
+            // Composite builds (2M design §1c / Task 3 fix round 1, I1):
+            // `includeBuild`d projects are invisible to `allprojects` above —
+            // named here instead, so GradleDetector can state the boundary
+            // as a note rather than dropping it silently.
+            def includedBuilds = gradle.includedBuilds.collect { it.name }.sort()
+            new File(outPath).text = JsonOutput.toJson(
+                [projects: projectRecords, includedBuilds: includedBuilds]
+            )
+        }
+    }
+    // "The compiled-classes output directories" (2M design §1) means what it
+    // says: the prerequisite is a SUCCESSFUL BUILD, the same precondition
+    // `MavenDetector`'s own docstring states for `mvn`, except Gradle's own
+    // task graph can state it directly rather than asking the caller for a
+    // separate compile step first. `plugins.withId` reacts whether the Java
+    // plugin is already applied or applied later, so this reaches every
+    // Java-plugin project regardless of configuration order.
+    rp.allprojects.each { p ->
+        p.plugins.withId("java") {
+            sextantModel.configure { dependsOn p.tasks.named("classes") }
+        }
+    }
+}

@@ -20,6 +20,7 @@ byte-identical to what this renderer produced before any of this existed.
 """
 
 import json
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -40,7 +41,7 @@ from sextant.domain.enrichment import (
     open_question_identity,
 )
 from sextant.domain.redaction import Redactor
-from sextant.domain.symbols import bare_descriptor
+from sextant.domain.symbols import bare_descriptor, method_name, owner_of, without_type_marker
 from sextant.egress.render.diagrams import class_diagram
 from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
 
@@ -178,18 +179,205 @@ class ClaimRedactionError(ValueError):
     """
 
 
+type Run = tuple[str, str]
+"""One inline span of machine text: `("code", content)` for a backtick-quoted
+identifier, path or key, `("text", content)` for everything else, or
+`("shaperef", name)` for a named shape's display name where it is CITED
+rather than declared — a `### Shapes` entry's own table lives once, under
+its own heading, and every other place that shape is mentioned carries this
+instead of a second copy (2M design §5c). The builders below already know
+which is which — every code span they ever wrote was wrapped in backticks by
+hand, and every citation is built through `_shape_ref` alone — so a `Run`
+never has to be guessed at after the fact by an HTML emitter that would
+otherwise have to decide what a backtick means on its own (2M design §5b).
+`html.py` turns a `shaperef` run into an in-page link to the `### Shapes`
+entry of the same name; every other serializer treats it as plain text,
+since naming the shape is all a reader needs where linking is not
+possible."""
+
+
+def _runs(markdown: str) -> tuple[Run, ...]:
+    """`markdown` split into alternating text/code runs on backtick-delimited
+    spans — the inverse of how every machine string below is already built.
+
+    **Total: round-trips for ANY input, balanced or not** (fix round 2). A
+    balanced (EVEN) backtick count is the common case — every code span this
+    renderer ever opened, it closed — and splits cleanly into alternating
+    text/code parts. An UNBALANCED (odd) count leaves one backtick with no
+    partner, which `str.split` turns into one EXTRA part (an even part
+    count); merging that trailing pair back into one text part, with the
+    backtick that used to separate them put back in literally, undoes
+    exactly that one bad cut. Everything before it still alternates
+    text/code normally, so this is a single, local repair rather than a
+    second parse — `_runs_to_markdown(_runs("a`b")) == "a`b"` now, not the
+    `` a`b` `` a spurious reconstructed closing backtick used to produce.
+
+    Kept EVEN for an empty code span (`` `` ``, two adjacent backticks): `if
+    part or i % 2` — never `if part` alone, which would silently drop an
+    empty *code* run (odd index) along with every genuinely empty text run
+    (even index) and, for `` a``b ``, reconstruct as `ab` — two backticks lost
+    outright, not merely misplaced. Dropping an EMPTY text run is always
+    safe: an empty string contributes nothing to `_runs_to_markdown` whether
+    kept or dropped."""
+    parts = markdown.split("`")
+    if len(parts) % 2 == 0:
+        parts = [*parts[:-2], f"{parts[-2]}`{parts[-1]}"]
+    return tuple(
+        ("code" if i % 2 else "text", part) for i, part in enumerate(parts) if part or i % 2
+    )
+
+
+def _runs_to_markdown(runs: Sequence[Run]) -> str:
+    """The exact inverse of `_runs` over the two kinds `_runs` can ever
+    produce: a code run is rewrapped in backticks, a text run passes through
+    unchanged, and the two concatenate back into the original markdown. A
+    `shaperef` run — never one `_runs` itself produces, only `_shape_ref` —
+    renders as its bare name: markdown has no in-page link to give it, so
+    NAMING the shape is the whole of what this serializer owes a reader
+    (2M design §5c; `html.py`'s own emitter is what turns the same run into
+    a link)."""
+    return "".join(f"`{content}`" if kind == "code" else content for kind, content in runs)
+
+
+def _text(content: str) -> tuple[Run, ...]:
+    """A single run of plain text — for a value this renderer never wraps in
+    backticks (a resolution enum, a media type, a peer address), so splitting
+    it for embedded backticks would be answering a question that was never
+    asked."""
+    return (("text", content),)
+
+
+def _code(content: str) -> tuple[Run, ...]:
+    """A single run of code — for a value that is ALWAYS a whole code span on
+    its own (a wire identity, a bare descriptor), never text mixed with one."""
+    return (("code", content),)
+
+
+def _shape_ref(name: str) -> tuple[Run, ...]:
+    """A single run naming a shape declared once, elsewhere, in the
+    `### Shapes` subsection (2M design §5c) — `name` is the shape's DISPLAY
+    name (`simple_name(shape_id)`), the same string the shape's own entry is
+    headed by, so both ends of the reference are built from the one value
+    rather than a name derived one way at the citation and another at the
+    declaration."""
+    return (("shaperef", name),)
+
+
+@dataclass(frozen=True)
+class MachineHeading:
+    """A `#`-to-`###` heading, as the level and its plain text — never runs,
+    since every heading this renderer writes is a literal title with no code
+    span in it."""
+
+    level: int
+    text: str
+
+
+# The markdown marker each heading level opens with, INCLUDING its trailing
+# space — a lookup table rather than repeating a single hash-mark literal by
+# `level`, which would put that one bare character on its own between quotes
+# in this file and trip `test_symbol_grammar_confinement.py`'s check for
+# SCIP-symbol-splitting parses outside its one seam (`domain/symbols.py`).
+# Markdown's heading marker is a different grammar entirely; the table
+# sidesteps the false match rather than asking that check to tell the two
+# apart.
+_HEADING_MARKERS = {1: "# ", 2: "## ", 3: "### "}
+
+# The only levels a `MachineHeading` may carry — this dict's own keys, so
+# there is exactly one place that decides the bound rather than two that
+# could drift. Exported (no leading underscore) so `html._heading_html`
+# checks the SAME bound instead of trusting `<h{level}>` to accept anything:
+# a level outside it fails identically in both serializers rather than one
+# `KeyError`-ing here and the other silently emitting a tag markdown has no
+# heading for.
+HEADING_LEVELS = tuple(_HEADING_MARKERS)
+
+
+@dataclass(frozen=True)
+class MachineParagraph:
+    """One line of machine prose, as runs."""
+
+    runs: tuple[Run, ...]
+
+
+@dataclass(frozen=True)
+class MachineList:
+    """A run of `-` bullets with no blank line between them — one list, one
+    section. An item that must sit beside its OWN placement anchor (an open
+    question a verdict answers) is instead its own single-item `MachineList`,
+    which is what lets `_Anchors` key on it directly."""
+
+    items: tuple[tuple[Run, ...], ...]
+
+
+@dataclass(frozen=True)
+class MachineTable:
+    """A markdown table: plain-text headers (never code — a column name is
+    never a value to look up) and rows of cells, each cell its own runs."""
+
+    headers: tuple[str, ...]
+    rows: tuple[tuple[tuple[Run, ...], ...], ...]
+
+
+@dataclass(frozen=True)
+class DetailEntry:
+    """One line of a `MachineDetail` — a title, and EITHER an inline body OR
+    a nested table, never both (the shape `_descriptor_entry`/`_via_entry`
+    already builds one of). `table is None and body is None` is the bare
+    title of the block's own header line (`- `{identity}``), which has
+    neither."""
+
+    title: tuple[Run, ...]
+    body: tuple[Run, ...] | None
+    table: MachineTable | None
+
+    def __post_init__(self) -> None:
+        # Enforced, not merely documented above: a builder that ever passed
+        # both would hand both serializers a shape neither actually renders
+        # (markdown's `if entry.table is not None` branch would silently
+        # swallow a body it also carried) — a hard error here, the same
+        # stance `ClaimRedactionError`/the html emitter's "no rendering
+        # rule" refusals already take, beats a table quietly winning.
+        if self.body is not None and self.table is not None:
+            raise ValueError(
+                f"a DetailEntry carries EITHER a body OR a table, never both: {self!r}"
+            )
+
+
+@dataclass(frozen=True)
+class MachineDetail:
+    """One endpoint's nested detail block — the two-level list markdown
+    already wrote (`- `{identity}`` then indented `Via:`/`Request:`/
+    `Response:` lines), typed rather than carried as opaque text (2M design
+    §5b, adversarial review C2). `entries[0]` is always the block's own
+    header (a bare title, no body or table); every entry after it is one
+    nested line, indented one level in markdown and rendered as its own
+    `<dt>`/`<dd>` pair in HTML.
+
+    A `MachineTable` entry serializes as a real nested `<table>` rather than
+    the indented markdown block scanned back apart — the whole point of
+    typing this instead of leaving it as `MachineSection` lines.
+
+    `anchor` names the HTML `id` this block's header is addressed by — set
+    only for a `### Shapes` entry, which a `shaperef` run elsewhere in the
+    document links to (`_shape_anchor_id`, 2M design §5c); `None` for every
+    ordinary endpoint block, which nothing points at. Markdown ignores it —
+    an in-page id is an HTML-only concept — so this is the one field the two
+    serializers do not both read from every block."""
+
+    entries: tuple[DetailEntry, ...]
+    anchor: str | None = None
+
+
 @dataclass(frozen=True)
 class MachineSection:
-    """A run of machine-derived PROSE, as the markdown lines this renderer
-    built — verbatim, in order.
-
-    Deliberately NOT decomposed into typed headings, tables and paragraphs.
-    Byte-identity with the document Sextant rendered before the overlay existed
-    is a regression pin the whole phase leans on, and the cheapest way to keep
-    a promise about bytes is to carry the bytes. A second serializer renders
-    these lines as the markdown they are; what it must never do is read them to
-    work out where an enrichment claim belongs, and it never has to — the
-    claims are their own sections.
+    """A run of machine-derived PROSE, as markdown lines — verbatim, in
+    order. The escape hatch left behind by the 2M §5b typed-section refactor:
+    `assemble_module_document` no longer builds one (every region it used to
+    emit as opaque lines is now one of the typed kinds above), but the type —
+    and `markdown_document`/`html_document`'s support for it — stays, for
+    machine text a future region has no typed shape for yet rather than one
+    this renderer would otherwise have to invent a shape for on the spot.
 
     The one exception is a diagram, which is `MachineDiagram` below: a fence
     buried in these lines would be a fence the HTML emitter could only find by
@@ -246,7 +434,17 @@ class StaleNoticeSection:
     count: int
 
 
-type Section = MachineSection | MachineDiagram | EnrichmentSection | StaleNoticeSection
+type Section = (
+    MachineHeading
+    | MachineParagraph
+    | MachineList
+    | MachineTable
+    | MachineDetail
+    | MachineSection
+    | MachineDiagram
+    | EnrichmentSection
+    | StaleNoticeSection
+)
 type AssembledDocument = tuple[Section, ...]
 
 
@@ -282,9 +480,39 @@ def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
     return f"{prefix}{rendered_method} {rendered_path}"
 
 
-def _handler(endpoint: dict[str, object]) -> str:
-    """The Handler column: the owner's bare descriptor, or one of the two
-    different things a NULL `handler` can mean.
+def _short_handler(descriptor: str) -> str:
+    """`descriptor` (a BARE descriptor, `bare_descriptor`'s own output) as the
+    human spelling a reader recognizes at a glance: the owning type's simple
+    name and the method name, joined by `#` — `UserResource#deleteUser` for
+    `io/github/jhipster/sample/web/rest/UserResource#deleteUser(sig_4a71b976).`
+    — never the package path, the `sig_` disambiguator, or the trailing `.`
+    (2M design §5c, the JHipster field run's own example). A descriptor with
+    no owner (a free function) has no `#` to join around, so it renders as
+    its own bare simple name alone.
+
+    Deliberately lossy: two overloads sharing a name now spell identically
+    here (the ruled consequence spec §5c states outright), which is exactly
+    why the FULL descriptor — `sig_` hash included — moves to the endpoint's
+    detail block instead of being deleted (`_handler_identity`, below)."""
+    owner = owner_of(descriptor)
+    method = method_name(descriptor)
+    if owner is None:
+        return simple_name(method)
+    return f"{simple_name(owner)}#{method}"
+
+
+def _handler_symbol(endpoint: dict[str, object]) -> str | None:
+    """The Handler column's underlying symbol — the owner's BARE descriptor,
+    package and `sig_` hash included — or `None` where there is no code to
+    report at all. `_handler_fallback` is the two different things a `None`
+    here can mean; this function only ever answers "is there a symbol."""
+    handler = endpoint.get("handler")
+    return None if handler is None else bare_descriptor(str(handler))
+
+
+def _handler_fallback(endpoint: dict[str, object]) -> str:
+    """One of the two different things a NULL `handler` can mean, for a row
+    `_handler_symbol` answered `None` for.
 
     Until 2H every inbound row with no handler was a row whose address could
     not be read either, so one word covered both. `schema_operations` (2H
@@ -302,20 +530,69 @@ def _handler(endpoint: dict[str, object]) -> str:
     row that names neither a handler nor a caller and still resolved its
     address is one whose evidence had no symbol to give.
     """
-    handler = endpoint.get("handler")
-    if handler is not None:
-        return f"`{bare_descriptor(str(handler))}`"
     if endpoint.get("caller") is None and endpoint.get("resolution") == "resolved":
         return "none recorded"
     return "unresolved"
 
 
+def _handler_cell(endpoint: dict[str, object]) -> tuple[Run, ...]:
+    """The Handler column itself: the HUMAN spelling of the symbol, as a code
+    run, or the fallback text where there is none — never the machine
+    identity `io/github/.../UserResource#deleteUser(sig_4a71b976).` used to
+    print verbatim (2M design §5c). The full identity is not lost, only
+    moved: `_handler_identity` renders it in the endpoint's own detail block,
+    which every endpoint now gets."""
+    symbol = _handler_symbol(endpoint)
+    if symbol is not None:
+        return _code(_short_handler(symbol))
+    return _text(_handler_fallback(endpoint))
+
+
+def _handler_identity(endpoint: dict[str, object]) -> tuple[Run, ...]:
+    """The full identity that used to be the Handler column's whole content —
+    package path, `sig_` hash and all — now the SYMBOL half of the endpoint's
+    own detail header (`_detail_header`, fix round 1 MEDIUM 1): moved, not
+    deleted, and still the one place two same-named overloads read as the
+    two different methods they are. Where there is no symbol, the same
+    fallback text the column itself would have shown stands in — there is
+    nothing to move for a row that had no symbol to begin with."""
+    symbol = _handler_symbol(endpoint)
+    if symbol is not None:
+        return _code(symbol)
+    return _text(_handler_fallback(endpoint))
+
+
+def _detail_header(identity: str, symbol_or_fallback: tuple[Run, ...]) -> DetailEntry:
+    """A detail block's own header line: the wire identity, then the full
+    symbol (or its fallback text) that used to be a table column's whole
+    content, joined by ` — ` — ONE convention regardless of direction (fix
+    round 1, MEDIUM 1: a two-conventions split, where an inbound header
+    carried the symbol alone and an outbound one carried the identity alone,
+    left three handler-less rows reading the indistinguishable `- unresolved`
+    three times over, naming no endpoint at all). The identity says WHICH
+    endpoint the block documents; the symbol is what moved out of the table.
+    `entries[0]` stays a bare title — no body or table — matching every
+    other detail header."""
+    return DetailEntry(_code(identity) + _text(" — ") + symbol_or_fallback, None, None)
+
+
+_MEDIA_NONE_RECORDED = "—"  # em dash — never a bare blank cell.
+
+# The legend printed once, directly under an inbound table that carries a
+# Media column: the glyph is self-explanatory only once, not on every row it
+# appears in (2M design §5c).
+_MEDIA_LEGEND = f"Media reads `consumes → produces`; `{_MEDIA_NONE_RECORDED}` means none recorded."
+
+
 def _media(value: object) -> str:
     """One side of the Media column: the JSON list's comma-joined members, or
-    `-` when the side is NULL — never a bare blank cell, so a row with both
-    sides NULL still says so rather than reading as an omission."""
+    the em dash `—` when the side is NULL — never a bare blank cell, so
+    a row with both sides NULL still says so rather than reading as an
+    omission. `—` rather than a bare hyphen (2M design §5c, the JHipster
+    field run): one glyph, one meaning, spelled out once in `_MEDIA_LEGEND`
+    rather than read as a stray dash a table cell just happens to contain."""
     if value is None:
-        return "-"
+        return _MEDIA_NONE_RECORDED
     return ", ".join(json.loads(str(value)))
 
 
@@ -345,9 +622,9 @@ def _format(endpoint: dict[str, object]) -> str:
     return str(value)
 
 
-def _origin_lines(endpoint: dict[str, object], origin_by_symbol: dict[str, str]) -> list[str]:
-    """The `Via:` detail line for a row an extracted LIBRARY contributed, or
-    nothing at all for the ordinary case.
+def _via_entry(endpoint: dict[str, object], origin_by_symbol: dict[str, str]) -> DetailEntry | None:
+    """The `Via:` detail entry for a row an extracted LIBRARY contributed, or
+    `None` at all for the ordinary case.
 
     A library-contributed row is otherwise indistinguishable from one the
     module's own code declares — same table, same columns, same resolution —
@@ -366,12 +643,13 @@ def _origin_lines(endpoint: dict[str, object], origin_by_symbol: dict[str, str])
     """
     deriving = endpoint.get("handler") or endpoint.get("caller")
     origin = None if deriving is None else origin_by_symbol.get(str(deriving))
-    return [] if origin is None else [f"  - Via: `{origin}`"]
+    return None if origin is None else DetailEntry(_text("Via"), _code(origin), None)
 
 
-def _library_gap_line(what: str, entry: str) -> str:
-    """One unreachable library, as `<what>, so nothing above accounts for it:
-    library `<coordinate>` — <reason>.`
+def _library_gap_item(what: str, entry: str) -> tuple[Run, ...]:
+    """One unreachable library, as the runs of `<what>, so nothing above
+    accounts for it: library `<coordinate>` — <reason>.` (minus the bullet's
+    own leading `- `, which `MachineList` supplies).
 
     The producer writes `<coordinate>: <reason>` — the shape `uncovered`
     already uses — and only the coordinate is set in code here: a reason is a
@@ -381,7 +659,7 @@ def _library_gap_line(what: str, entry: str) -> str:
     """
     coordinate, _, reason = entry.partition(": ")
     tail = f" — {reason}" if reason else ""
-    return f"- {what}, so nothing above accounts for it: library `{coordinate}`{tail}."
+    return _runs(f"{what}, so nothing above accounts for it: library `{coordinate}`{tail}.")
 
 
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
@@ -488,96 +766,131 @@ def assemble_module_document(
     # section does not repeat one the inbound section stated (a `both` row is
     # listed in both).
     attributed: set[str] = set()
-    lines = [
-        f"# {module.module_id}",
-        "",
-        f"Generated from commit `{commit}`.",
-        "",
-        "## Coverage",
-        "",
-        f"- Documents analysed: {report.coverage.get('documents', 0)}",
-        f"- Partial documents: {report.coverage.get('partial_documents', 0)}",
-        f"- Facts loaded: {report.facts_loaded}",
+
+    # Typed sections, built at the sites that already know the structure (2M
+    # design §5b) — the flat line list this used to be is gone, and with it
+    # the need to lift a diagram back out of one: `MachineDiagram` is
+    # appended directly where the fence used to be spliced in.
+    sections: list[Section] = [
+        MachineHeading(1, module.module_id),
+        MachineParagraph(_runs(f"Generated from commit `{commit}`.")),
+        MachineHeading(2, "Coverage"),
     ]
-    lines += _config_coverage_lines(resolved_config)
-    lines += _unresolved_derivation_lines(report.endpoints)
-    lines += [
-        # Per-environment peer AUTHORITIES — one substituted address per
-        # environment for a resolved outbound row — are the system-scope
-        # document's material (M06 stitcher, M07 system scope): this module
-        # document names the expression a row carries (`path`/`peer`), never
-        # the per-environment values `resolved_peers` joins them against.
-        (
-            "- Per-environment peer resolution is the system architecture "
+    coverage_items = [
+        _runs(f"Documents analysed: {report.coverage.get('documents', 0)}"),
+        _runs(f"Partial documents: {report.coverage.get('partial_documents', 0)}"),
+        _runs(f"Facts loaded: {report.facts_loaded}"),
+    ]
+    coverage_items += _config_coverage_items(resolved_config)
+    coverage_items += _unresolved_derivation_items(report.endpoints)
+    # Per-environment peer AUTHORITIES — one substituted address per
+    # environment for a resolved outbound row — are the system-scope
+    # document's material (M06 stitcher, M07 system scope): this module
+    # document names the expression a row carries (`path`/`peer`), never the
+    # per-environment values `resolved_peers` joins them against.
+    coverage_items.append(
+        _runs(
+            "Per-environment peer resolution is the system architecture "
             "document's material, not repeated per module here."
-        ),
-        "",
-        "## Structure",
-        "",
-    ]
-    # The fence stays in `lines` so every offset below — and the byte-identity
-    # of the markdown — is unaffected; the SPAN is what lets assembly lift it
-    # back out as a `MachineDiagram`. Recording a span rather than splitting
-    # the list here keeps one line list and one set of anchor offsets, instead
-    # of two representations that could disagree about where anything is.
-    diagram_spans: list[tuple[int, int, str]] = []
+        )
+    )
+    sections.append(MachineList(tuple(coverage_items)))
+
+    sections.append(MachineHeading(2, "Structure"))
     if report.shapes:
         nodes, edges = _contract_nodes(report.shapes, shape_fields)
         mermaid = class_diagram(nodes, edges).rstrip("\n")
-        start = len(lines)
-        lines += ["```mermaid"]
-        lines += mermaid.split("\n")
-        lines += ["```"]
-        diagram_spans.append((start, len(lines), mermaid))
+        sections.append(MachineDiagram(mermaid))
     else:
-        lines.append("None derived.")
+        sections.append(MachineParagraph(_runs("None derived.")))
     # `after-component-overview` (2K design §6). `## Structure` IS this
     # document's component overview: the contract class diagram is the only
     # place it draws the module's own types as a whole. An anchor is a
     # position, so it is recorded here — where the section ends — rather than
     # searched for afterwards in text that would then have to be parsed.
-    structure_end = len(lines)
+    structure_end = len(sections)
 
-    lines += ["", "## Inbound endpoints", ""]
+    sections.append(MachineHeading(2, "Inbound endpoints"))
     inbound = [e for e in report.endpoints if str(e["direction"]) in ("inbound", "both")]
     if inbound:
-        lines += ["| Endpoint | Handler | Media | Format | Resolution |", "|---|---|---|---|---|"]
+        # Two passes (fix round 1, MEDIUM 2): a citation needs the shape's
+        # FINAL display name, and two different shapes sharing one simple
+        # name can only be told apart once every shape this section will
+        # cite is already known — a citation built inline, endpoint by
+        # endpoint, could not yet know a same-named collision two endpoints
+        # later was coming. `_cited_named_shapes` is pass one, over ALL of
+        # `inbound`; `shape_names` is the disambiguated registry both the
+        # per-endpoint citations and `### Shapes` itself read from pass two.
+        cited_shapes = _cited_named_shapes(inbound, fields_by_shape)
+        shape_names = _disambiguated_shape_names(cited_shapes)
+
+        headers = ("Endpoint", "Handler", "Media", "Format", "Resolution")
+        rows = []
         for endpoint in inbound:
             media = f"{_media(endpoint.get('consumes'))} → {_media(endpoint.get('produces'))}"
-            lines.append(
-                f"| `{_wire_identity(endpoint, redactor)}` | {_handler(endpoint)} | {media} | "
-                f"{_format(endpoint)} | {endpoint['resolution']} |"
+            rows.append(
+                (
+                    _code(_wire_identity(endpoint, redactor)),
+                    _handler_cell(endpoint),
+                    _text(media),
+                    _text(_format(endpoint)),
+                    _text(str(endpoint["resolution"])),
+                )
             )
+        sections.append(MachineTable(headers, tuple(rows)))
+        sections.append(MachineParagraph(_runs(_MEDIA_LEGEND)))
+        # Every inbound endpoint now gets a detail block, not only the ones
+        # with a `Via`/`Request`/`Response` line to hang under it (2M design
+        # §5c, adversarial review C3): the full symbol the Handler column no
+        # longer spells out lives here instead, and with one block per row in
+        # table order, correlating a block back to its row needs no shared
+        # identity between them.
         for endpoint in inbound:
-            request = _descriptor_lines("Request", endpoint.get("request_shape"), fields_by_shape)
-            response = _descriptor_lines(
-                "Response", endpoint.get("response_shape"), fields_by_shape
+            request = _descriptor_entry(
+                "Request", endpoint.get("request_shape"), fields_by_shape, shape_names
             )
-            via = _origin_lines(endpoint, origin_by_symbol)
-            if request or response or via:
-                lines += ["", f"- `{_wire_identity(endpoint, redactor)}`"]
-                lines += via
-                lines += request
-                lines += response
-            if via:
-                attributed.add(_wire_identity(endpoint, redactor))
+            response = _descriptor_entry(
+                "Response", endpoint.get("response_shape"), fields_by_shape, shape_names
+            )
+            via = _via_entry(endpoint, origin_by_symbol)
+            entries = [entry for entry in (via, request, response) if entry is not None]
+            identity = _wire_identity(endpoint, redactor)
+            header = _detail_header(identity, _handler_identity(endpoint))
+            sections.append(MachineDetail((header, *entries)))
+            if via is not None:
+                attributed.add(identity)
+        if cited_shapes:
+            sections.append(MachineHeading(3, "Shapes"))
+            for shape_id, shape_rows in cited_shapes.items():
+                name = shape_names[shape_id]
+                shape_header = DetailEntry(_code(name), None, None)
+                fields_entry = DetailEntry(_text("Fields"), None, _shape_fields_table(shape_rows))
+                sections.append(
+                    MachineDetail((shape_header, fields_entry), anchor=_shape_anchor_id(name))
+                )
     else:
-        lines.append("None found.")
+        sections.append(MachineParagraph(_runs("None found.")))
 
     # An empty section is now a real statement rather than a stand-in for
     # "not implemented" — outbound derivation exists (NFR-7).
-    lines += ["", "## Outbound endpoints", ""]
+    sections.append(MachineHeading(2, "Outbound endpoints"))
     outbound = [e for e in report.endpoints if str(e["direction"]) in ("outbound", "both")]
     if outbound:
-        lines += ["| Endpoint | Peer | Caller | Format | Resolution |", "|---|---|---|---|---|"]
+        headers = ("Endpoint", "Peer", "Caller", "Format", "Resolution")
+        rows = []
         for endpoint in outbound:
             peer = endpoint.get("peer")
             caller = bare_descriptor(str(endpoint["caller"]))
-            lines.append(
-                f"| `{_wire_identity(endpoint, redactor)}` | "
-                f"{'unresolved' if peer is None else redactor.redact_text(str(peer))} | "
-                f"`{caller}` | {_format(endpoint)} | {endpoint['resolution']} |"
+            rows.append(
+                (
+                    _code(_wire_identity(endpoint, redactor)),
+                    _text("unresolved" if peer is None else redactor.redact_text(str(peer))),
+                    _code(caller),
+                    _text(_format(endpoint)),
+                    _text(str(endpoint["resolution"])),
+                )
             )
+        sections.append(MachineTable(headers, tuple(rows)))
         # The outbound half has no request/response detail to hang under, so
         # this is its whole detail block — written only where there is
         # something to say, which is the same rule the inbound one keeps.
@@ -588,18 +901,24 @@ def assemble_module_document(
         # same attribution twice reads as two findings.
         for endpoint in outbound:
             identity = _wire_identity(endpoint, redactor)
-            via = [] if identity in attributed else _origin_lines(endpoint, origin_by_symbol)
-            if via:
-                lines += ["", f"- `{identity}`"]
-                lines += via
+            via = None if identity in attributed else _via_entry(endpoint, origin_by_symbol)
+            if via is not None:
+                # One convention with inbound (fix round 1, MEDIUM 1): the
+                # identity, then the caller's own full symbol — the same
+                # unshortened form the Caller column already carries (2M
+                # §5c never touches that column, only the inbound Handler
+                # one), not a second spelling invented for this line alone.
+                caller_symbol = _code(bare_descriptor(str(endpoint["caller"])))
+                header = _detail_header(identity, caller_symbol)
+                sections.append(MachineDetail((header, via)))
                 attributed.add(identity)
     else:
-        lines.append("None found.")
+        sections.append(MachineParagraph(_runs("None found.")))
     # `after-endpoint-table`: after BOTH tables and their detail blocks. The
     # document's endpoint listing is one thing to a reader — a claim about "the
     # endpoints" that landed between the inbound and outbound halves would read
     # as a claim about the inbound ones alone.
-    endpoints_end = len(lines)
+    endpoints_end = len(sections)
 
     # Rendered only when the ledger holds rows (2G design §8): a run with
     # nothing to ask leaves the section absent, the `## Catalogs skipped`
@@ -607,12 +926,18 @@ def assemble_module_document(
     # this is a hand-off inbox for 2K, and an empty inbox is not a finding.
     beside_question: list[tuple[tuple[str | None, ...], int]] = []
     if open_questions:
-        lines += ["", "## Open questions", ""]
+        sections.append(MachineHeading(2, "Open questions"))
         for row in open_questions:
             question = str(row["question"])
             candidates = json.loads(str(row["candidates"]))
             rendered = "; ".join(_candidate_line(question, c) for c in candidates)
-            lines.append(f"- `{_wire_identity(row, redactor)}` — {question}: {rendered}")
+            item = _runs(f"`{_wire_identity(row, redactor)}` — {question}: {rendered}")
+            # One question, one single-item `MachineList`: a `beside-open-
+            # question` verdict has to land right after THIS question and no
+            # other, so the question needs its own section index to anchor
+            # on — a shared list covering every question would only ever let
+            # a claim land after the last one.
+            sections.append(MachineList((item,)))
             # `beside-open-question`, per question: a verdict renders under the
             # very line it answers. Keyed on the row's own values, NOT on the
             # rendered line — matching on presentation would make placement
@@ -623,25 +948,27 @@ def assemble_module_document(
             # a verdict on a question whose path changes under redaction
             # validated cleanly and then rendered at `questions_end` instead of
             # beside its question.
-            beside_question.append((open_question_identity(row, redactor), len(lines)))
+            beside_question.append((open_question_identity(row, redactor), len(sections)))
     # Where a `beside-open-question` claim goes when no single question owns
     # it: after the last question, or — with no section at all — where the
     # section would have been. Only a verdict names a question; every other
     # kind anchored here is a claim about the open questions as a group.
     questions_end = beside_question[-1][1] if beside_question else endpoints_end
 
-    lines += ["", "## Known gaps", ""]
-    lines += [f"- {gap}" for gap in _GAPS]
+    sections.append(MachineHeading(2, "Known gaps"))
+    gap_items = [_runs(gap) for gap in _GAPS]
     # Named one by one, because a compiled source nothing read is the one gap
     # a reader can act on: it says which part of the module this document is
     # silent about (FR-17, M03).
-    lines += [f"- Not read, so nothing above accounts for it: `{source}`." for source in uncovered]
+    gap_items += [
+        _runs(f"Not read, so nothing above accounts for it: `{source}`.") for source in uncovered
+    ]
     # Named one by one for the same reason: a payload type nothing could open
     # is the gap between "this shape is the contract" and "this shape is as
     # much of the contract as anyone could see", and only the name says which
     # catalog entry would close it (FR-17).
-    lines += [
-        f"- Not expanded, so the shapes referring to it are open: `{symbol}`."
+    gap_items += [
+        _runs(f"Not expanded, so the shapes referring to it are open: `{symbol}`.")
         for symbol in report.unexpanded_types
     ]
     # Named one by one for the same reason again: a library this module asked
@@ -649,49 +976,61 @@ def assemble_module_document(
     # called through it" and "nobody looked" (FR-17, M02). Both lists carry
     # `<coordinate>: <reason>`, and the reason is the point — it says what to
     # go and do, which a bare coordinate never could.
-    lines += [_library_gap_line("Not resolved", entry) for entry in module.libraries_not_resolved]
-    lines += [_library_gap_line("Not scanned", entry) for entry in libraries_not_scanned]
+    gap_items += [
+        _library_gap_item("Not resolved", entry) for entry in module.libraries_not_resolved
+    ]
+    gap_items += [_library_gap_item("Not scanned", entry) for entry in libraries_not_scanned]
+    sections.append(MachineList(tuple(gap_items)))
+
     if report.skipped_catalogs:
-        lines += ["", "## Catalogs skipped", ""]
-        for skipped in report.skipped_catalogs:
-            lines.append(
-                f"- `{skipped.catalog_id}` requires {', '.join(skipped.missing_capabilities)}"
-            )
+        sections.append(MachineHeading(2, "Catalogs skipped"))
+        skipped_items = [
+            _runs(f"`{skipped.catalog_id}` requires {', '.join(skipped.missing_capabilities)}")
+            for skipped in report.skipped_catalogs
+        ]
+        sections.append(MachineList(tuple(skipped_items)))
+
     return _interleave(
-        lines,
-        _Anchors(structure_end, endpoints_end, tuple(beside_question), questions_end, len(lines)),
-        tuple(diagram_spans),
+        tuple(sections),
+        _Anchors(
+            structure_end, endpoints_end, tuple(beside_question), questions_end, len(sections)
+        ),
         overlay,
         stale,
         redactor,
     )
 
 
-def _config_coverage_lines(resolved_config: Sequence[dict[str, object]]) -> list[str]:
+def _config_coverage_items(
+    resolved_config: Sequence[dict[str, object]],
+) -> list[tuple[Run, ...]]:
     """Coverage's own view of pass 2 (2F design §2): which profiles resolved,
     and which declared keys did not — named with their reason and
     environment, never just counted, so a reader can act on the same row
     `resolved_config` itself carries (spec §5). An empty answer is stated,
-    never a section that silently has nothing to say (NFR-7)."""
+    never a section that silently has nothing to say (NFR-7). Items, not
+    lines: the bullet's own leading `- ` is `MachineList`'s job now."""
     environments = list(dict.fromkeys(str(row["environment"]) for row in resolved_config))
     if environments:
         rendered = ", ".join(f"`{e}`" for e in environments)
-        lines = [f"- Environments resolved: {rendered}."]
+        items = [_runs(f"Environments resolved: {rendered}.")]
     else:
-        lines = ["- Environments resolved: none."]
+        items = [_runs("Environments resolved: none.")]
     unresolved = [row for row in resolved_config if row.get("value") is None]
     if not unresolved:
-        lines.append("- Configuration keys unresolved: none.")
-        return lines
+        items.append(_runs("Configuration keys unresolved: none."))
+        return items
     for row in unresolved:
-        lines.append(
-            f"- Configuration key unresolved: {row['key']} — "
-            f"{row['unresolved_reason']} in {row['environment']}."
+        items.append(
+            _runs(
+                f"Configuration key unresolved: {row['key']} — "
+                f"{row['unresolved_reason']} in {row['environment']}."
+            )
         )
-    return lines
+    return items
 
 
-def _unresolved_derivation_lines(endpoints: Sequence[dict[str, object]]) -> list[str]:
+def _unresolved_derivation_items(endpoints: Sequence[dict[str, object]]) -> list[tuple[Run, ...]]:
     """Every endpoint row a catalog derived but could not address (`path`
     NULL, `resolution: unresolved`) — named by the catalog that derived it
     and the site it read, since neither is visible from the wire-identity
@@ -708,15 +1047,15 @@ def _unresolved_derivation_lines(endpoints: Sequence[dict[str, object]]) -> list
     rather than a filter this data cannot make honestly — and the lead-in
     line below says so on the page itself, not only in this docstring."""
     rows = [e for e in endpoints if e.get("path") is None and e.get("resolution") == "unresolved"]
-    lines = [
-        (
-            "- Unresolved endpoint derivations — across every engine, whatever "
+    items = [
+        _runs(
+            "Unresolved endpoint derivations — across every engine, whatever "
             "their evidence, not configuration alone:"
         )
     ]
     if not rows:
-        lines.append("- None.")
-        return lines
+        items.append(_runs("None."))
+        return items
     for row in rows:
         catalog_id = row.get("catalog_id")
         catalog = "unresolved" if catalog_id is None else str(catalog_id)
@@ -728,8 +1067,8 @@ def _unresolved_derivation_lines(endpoints: Sequence[dict[str, object]]) -> list
             site = f"caller `{bare_descriptor(str(caller))}`"
         else:
             site = "a composed selection expression"
-        lines.append(f"- Unresolved endpoint derivation: `{catalog}` — {site}.")
-    return lines
+        items.append(_runs(f"Unresolved endpoint derivation: `{catalog}` — {site}."))
+    return items
 
 
 def _fields_by_shape(
@@ -782,28 +1121,26 @@ def _inline_descriptor(descriptor: dict[str, object]) -> str:
     return wire_type
 
 
-def _descriptor_lines(
-    label: str,
-    descriptor_json: object,
-    fields_by_shape: dict[str, list[dict[str, object]]],
-) -> list[str]:
-    """One endpoint's request or response, indented under its summary row: a
-    contract table of the referenced shape's fields when the payload is
-    itself a shape, or an inline label when it is a scalar or a collection of
-    one. `None` (no descriptor) contributes nothing."""
-    if descriptor_json is None:
-        return []
-    descriptor = json.loads(str(descriptor_json))
-    shape_id = descriptor.get("shape_id")
-    if not shape_id:
-        return [f"  - {label}: {_inline_descriptor(descriptor)}"]
-    lines = [
-        f"  - {label}:",
-        "",
-        "    | Field | Type | Required | Nullable |",
-        "    |---|---|---|---|",
-    ]
-    for row in fields_by_shape.get(str(shape_id), []):
+_SHAPE_FIELD_HEADERS = ("Field", "Type", "Required", "Nullable")
+
+# `Response: none recorded` (2M design §5c): a shape whose OWN fields query
+# came back empty renders one line, never a table with a header row and no
+# body — the `## Coverage`/`## Known gaps` NFR-7 discipline this document
+# keeps everywhere else, extended to a shape table specifically because a
+# header-only `| Field | Type | Required | Nullable |` with nothing under it
+# is indistinguishable, at a glance, from a table a reader just has not
+# scrolled far enough to see the rows of.
+_SHAPE_NONE_RECORDED = "none recorded"
+
+
+def _shape_fields_table(rows: Sequence[dict[str, object]]) -> MachineTable:
+    """A shape's OWN field table — `_SHAPE_FIELD_HEADERS` beside one row per
+    `shape_fields` entry — factored out of `_descriptor_entry` so it can be
+    built exactly once per shape (`_named_shape_reference`) rather than once
+    per endpoint that happens to reference the same shape (2M design §5c,
+    "each shape's table emitted exactly once")."""
+    table_rows = []
+    for row in rows:
         # The schema's own field number (protobuf), shown the same
         # unobtrusive way `wire_format` already rides beside `wire_type` —
         # NULL for Avro and every annotation-derived field, which render
@@ -818,31 +1155,226 @@ def _descriptor_lines(
         field_type = f"{row['wire_type']} ({wire_format})" if wire_format else str(row["wire_type"])
         required = "yes" if row["required"] else "no"
         nullable = "yes" if row["nullable"] else "no"
-        lines.append(f"    | {wire_name} | {field_type} | {required} | {nullable} |")
-    return lines
+        table_rows.append((_text(wire_name), _text(field_type), _text(required), _text(nullable)))
+    return MachineTable(_SHAPE_FIELD_HEADERS, tuple(table_rows))
+
+
+_ANCHOR_UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _shape_anchor_id(display_name: str) -> str:
+    """The in-page HTML `id` a `### Shapes` entry's header carries, and a
+    `shaperef` run's `<a href="#...">` targets — both built from the SAME
+    already-FINAL display name (`_disambiguated_shape_names`), never
+    re-derived independently at each end, so the two can never name two
+    different anchors for one shape (2M design §5c). Every character an
+    HTML id cannot safely carry — a QName's `{`/`}`, a disambiguated
+    fallback's own `/` — is replaced with `-`, since a display name is no
+    longer always a bare SCIP simple name once `#5c`'s per-shape
+    disambiguation can fall back to something closer to the raw id.
+
+    This sanitizing is lossy — a `.` and a `-` both collapse to the same
+    `-` — so it is `_disambiguated_shape_names`' job, not this function's,
+    to guarantee the mirror mistake (fix round 1, MEDIUM 2) never happens:
+    that two DIFFERENT final names handed to this function never produce
+    the same anchor, ACROSS EVERY shape in one document, not only within
+    whichever group first collided (2M Task 7 fix round 1, High: the
+    per-group fallback alone still let two names from DIFFERENT groups
+    collide — `_globally_unique_anchors` is where that promise is actually
+    kept). This function alone cannot promise it; it only sanitizes what it
+    is given."""
+    return f"shape-{_ANCHOR_UNSAFE.sub('-', display_name)}"
+
+
+def _shape_display_name(shape_id: str) -> str:
+    """One shape id's own display name, honestly — never blindly
+    `simple_name`, which reads the last `/`-segment and assumes every shape
+    id is a SCIP symbol. A SOAP element's shape id is a QName wire identity,
+    `{uri}local` (D00 §4's own verbless-protocol shape), and the URI's own
+    path segments make `simple_name` land mid-URI —
+    `{http://orders.example.com/ws}quoteOrderRequest` reads back as
+    `ws}quoteOrderRequest`, not `quoteOrderRequest` (fix round 1, LOW
+    finding). A QName's own grammar says a local part is whatever follows
+    the LAST `}`; an ordinary package-path shape id has none, and keeps
+    `simple_name`'s existing convention exactly — trailing `#` stripped by
+    `without_type_marker` on THIS branch too (2M Task 7 ride-along): nothing
+    says a QName's local part can never carry the same SCIP type marker a
+    package-path shape id does, and `without_type_marker` is a harmless
+    no-op everywhere it does not. `domain.symbols.simple_name` itself is
+    untouched — this is local to the two `### Shapes` call sites that are
+    the first to ever display a shape id that might not be SCIP at all."""
+    if "}" in shape_id:
+        return without_type_marker(shape_id.rsplit("}", 1)[-1])
+    return simple_name(shape_id)
+
+
+def _disambiguated_shape_names(cited_shapes: dict[str, list[dict[str, object]]]) -> dict[str, str]:
+    """Every cited shape id's FINAL display name: `_shape_display_name`
+    ordinarily, or — within a group of shape ids whose OWN display names
+    would sanitize to the SAME `_shape_anchor_id` — the shape id itself
+    (trailing `#` stripped, otherwise verbatim) for every member of that
+    group (fix round 1, MEDIUM 2). Two shapes reading as the same name is
+    not a cosmetic near-miss: their `### Shapes` entries become
+    indistinguishable and their citations' anchors collide (an invalid,
+    duplicate HTML `id`, and a link that can no longer promise which table
+    it lands on) — so a collision falls all the way back to something
+    already guaranteed unique, the very key this dict (and `cited_shapes`)
+    is built on, rather than a half-measure that only postpones the next
+    collision.
+
+    Grouped on the SANITIZED anchor id (`_shape_anchor_id` of the display
+    name), not the display name's own bytes (2M Task 7 ride-along): two
+    display names that read as different TEXT — `order.request` and
+    `order-request` — still sanitize to the identical `order-request` once
+    `_shape_anchor_id` collapses a `.` to the same `-` a literal `-` already
+    is, so comparing the pre-sanitized strings let exactly this pair through
+    uncaught. Comparing the anchor each would actually produce is the only
+    check that matches what `_shape_anchor_id` itself promises never
+    collides.
+
+    Built in `cited_shapes`' own order (its first-seen citation order, the
+    order `### Shapes` itself renders in) before the final pass below runs,
+    so which shape wins a shared anchor bare is the one the document cites
+    first — not an artifact of which dict this function happened to group
+    things into internally.
+
+    `_globally_unique_anchors` then runs ONCE, over every shape at once,
+    because the per-group fallback above is not by itself enough (fix round
+    1, High — the reviewer's proven counterexample): `p/q/A#` and `p/r/A#`
+    collide on the simple name `A` and fall back to their own full ids,
+    `p/q/A` and `p/r/A` — genuinely distinct from EACH OTHER — but a THIRD,
+    unrelated shape `x/p-q-A#`, alone in its own group, keeps its unchanged
+    display name `p-q-A`, whose anchor (`shape-p-q-A`) is the SAME one
+    `p/q/A`'s fallback produces once `/` and `-` both sanitize to `-`. No
+    per-group check ever compares those two names, because they were never
+    in the same group — only a pass over the WHOLE finished set can."""
+    display_names = {shape_id: _shape_display_name(shape_id) for shape_id in cited_shapes}
+    by_anchor: dict[str, list[str]] = {}
+    for shape_id, display in display_names.items():
+        by_anchor.setdefault(_shape_anchor_id(display), []).append(shape_id)
+    per_group: dict[str, str] = {}
+    for colliding in by_anchor.values():
+        if len(colliding) == 1:
+            shape_id = colliding[0]
+            per_group[shape_id] = display_names[shape_id]
+        else:
+            for shape_id in colliding:
+                per_group[shape_id] = without_type_marker(shape_id)
+    ordered = {shape_id: per_group[shape_id] for shape_id in cited_shapes}
+    return _globally_unique_anchors(ordered)
+
+
+def _globally_unique_anchors(names: dict[str, str]) -> dict[str, str]:
+    """`names`, walked in order, with a positional ordinal (` (2)`, ` (3)`,
+    ...) appended to any name whose `_shape_anchor_id` a PRIOR entry in this
+    same walk already claimed (fix round 1, High — see
+    `_disambiguated_shape_names`' own docstring for the counterexample this
+    closes). The first shape to reach a given anchor keeps its name bare;
+    every later one competing for the same anchor gets the next free
+    ordinal — deterministic (NFR-1) because `names` itself is already
+    ordered, and because a digit is a character `_shape_anchor_id` never
+    touches, so appending one is guaranteed to change the anchor it
+    produces.
+
+    A churn hazard worth naming: appending a NEW shape earlier in citation
+    order than an existing one that happens to share its anchor can shift
+    which one keeps the bare name and which gets `(2)` — this walk has no
+    memory of a PRIOR run's assignment, only of citation order within the
+    CURRENT one."""
+    claimed: set[str] = set()
+    final: dict[str, str] = {}
+    for shape_id, name in names.items():
+        candidate = name
+        anchor = _shape_anchor_id(candidate)
+        ordinal = 2
+        while anchor in claimed:
+            candidate = f"{name} ({ordinal})"
+            anchor = _shape_anchor_id(candidate)
+            ordinal += 1
+        claimed.add(anchor)
+        final[shape_id] = candidate
+    return final
+
+
+def _cited_named_shapes(
+    endpoints: Sequence[dict[str, object]],
+    fields_by_shape: dict[str, list[dict[str, object]]],
+) -> dict[str, list[dict[str, object]]]:
+    """Every NAMED shape (a `request_shape`/`response_shape` descriptor
+    carrying a `shape_id`) with recorded fields, cited by at least one of
+    `endpoints`, keyed by shape id in FIRST-SEEN order — pass ONE of the two
+    `### Shapes` needs (fix round 1, MEDIUM 2's own reasoning): the full set
+    of cited shapes must be known before ANY citation can pick a (possibly
+    disambiguated) display name, so nothing here builds an entry yet. An
+    empty-fields shape (`Response: none recorded`, NFR-7) is deliberately
+    excluded: nothing about it is ever named or linked."""
+    cited: dict[str, list[dict[str, object]]] = {}
+    for endpoint in endpoints:
+        for key in ("request_shape", "response_shape"):
+            descriptor_json = endpoint.get(key)
+            if descriptor_json is None:
+                continue
+            shape_id = json.loads(str(descriptor_json)).get("shape_id")
+            if not shape_id:
+                continue
+            shape_id = str(shape_id)
+            rows = fields_by_shape.get(shape_id, [])
+            if rows and shape_id not in cited:
+                cited[shape_id] = rows
+    return cited
+
+
+def _descriptor_entry(
+    label: str,
+    descriptor_json: object,
+    fields_by_shape: dict[str, list[dict[str, object]]],
+    shape_names: dict[str, str],
+) -> DetailEntry | None:
+    """One endpoint's request or response, nested under its detail block's
+    header entry: a citation of the shape's own `### Shapes` entry (by its
+    FINAL, already-disambiguated `shape_names` entry) when the payload is
+    itself a NAMED shape with recorded fields, the `Response: none recorded`
+    one-liner for a shape with none (NFR-7), or an inline label when it is a
+    scalar or a collection of one (anonymous — nothing to tabulate, so
+    nothing to name or move). `None` (no descriptor) contributes nothing.
+    `shape_names` is READ ONLY here — pass two of the two `### Shapes` needs,
+    over the registry `_cited_named_shapes`/`_disambiguated_shape_names`
+    already finished building from every inbound endpoint at once."""
+    if descriptor_json is None:
+        return None
+    descriptor = json.loads(str(descriptor_json))
+    shape_id = descriptor.get("shape_id")
+    if not shape_id:
+        return DetailEntry(_text(label), _text(_inline_descriptor(descriptor)), None)
+    shape_id = str(shape_id)
+    if not fields_by_shape.get(shape_id):
+        return DetailEntry(_text(label), _text(_SHAPE_NONE_RECORDED), None)
+    return DetailEntry(_text(label), _shape_ref(shape_names[shape_id]), None)
 
 
 @dataclass(frozen=True)
 class _Anchors:
-    """The offsets into the machine document's own line list that the four
-    anchors of `domain/enrichment.Anchor` name (2K design §6).
+    """The indices into the assembled `sections` list that the four anchors of
+    `domain/enrichment.Anchor` name (2K design §6; keyed on SECTION INDEX
+    rather than line offset since 2M design §5b's typed-section refactor —
+    the flat line list these used to be offsets into is gone).
 
-    Recorded WHERE THEY HAPPEN, as the lines are built, rather than found
-    afterwards by searching the finished text for a heading. A search would
-    make placement depend on how a heading is spelled — and on whether an
-    earlier claim's prose happened to contain the same words — which is
+    Recorded WHERE THEY HAPPEN, as the sections are built, rather than found
+    afterwards by searching the finished document for a heading. A search
+    would make placement depend on how a heading is spelled — and on whether
+    an earlier claim's prose happened to contain the same words — which is
     precisely the markdown-parsing round trip §6b forbids.
     """
 
     structure_end: int
     endpoints_end: int
     # One entry per open question, in the order the section renders them: the
-    # row's identity and the offset just past its line.
+    # row's identity and the index just past its own single-item section.
     beside_question: tuple[tuple[tuple[str | None, ...], int], ...]
     questions_end: int
     document_end: int
 
-    def offset_of(self, claim: Claim) -> int:
+    def index_of(self, claim: Claim) -> int:
         """Where `claim` goes. A `beside-open-question` verdict goes under the
         line of the very question it answers; anything else anchored there
         goes after the last question, since nothing in a component, section or
@@ -854,60 +1386,71 @@ class _Anchors:
         if claim.anchor is Anchor.END_OF_DOCUMENT:
             return self.document_end
         if isinstance(claim, VerdictClaim):
-            for identity, offset in self.beside_question:
+            for identity, index in self.beside_question:
                 if identity == claim.question.identity:
-                    return offset
+                    return index
         return self.questions_end
 
 
 def _interleave(
-    lines: list[str],
+    machine_sections: tuple[Section, ...],
     anchors: _Anchors,
-    diagram_spans: tuple[tuple[int, int, str], ...],
     overlay: EnrichmentOverlay | None,
     stale: frozenset[int],
     redactor: Redactor,
 ) -> AssembledDocument:
-    """The machine lines, the machine diagrams and the overlay's claims as one
-    ordered section list.
+    """The typed machine sections and the overlay's claims as one ordered
+    section list.
 
-    **Deterministic by construction** (NFR-1): claims are grouped by the offset
-    their anchor resolves to, the boundaries are visited in ascending document
-    order, and within one offset the claims keep the order the overlay file
-    lists them in. Nothing here sorts by content, so re-running assembly over
-    the same workspace and the same overlay produces the same list.
+    **Deterministic by construction** (NFR-1): claims are grouped by the
+    section index their anchor resolves to, the indices are visited in
+    ascending document order, and within one index the claims keep the order
+    the overlay file lists them in. Nothing here sorts by content, so
+    re-running assembly over the same workspace and the same overlay produces
+    the same list.
 
-    Two kinds of boundary meet here: an offset where claims are INSERTED, and a
-    span that is LIFTED OUT of the line list as a `MachineDiagram`. Both are
-    positions in one list, so both are walked in one pass — the alternative,
-    splitting the document twice over, is two representations of where things
-    are and eventually two answers.
+    With 2M design §5b's typed sections, there is no line list left to slice:
+    a claim at index N is simply inserted before `machine_sections[N]` (or
+    after everything, at `N == len(machine_sections)`), which is what makes
+    this a single pass over the machine list rather than the line-splitting
+    this used to be.
     """
     placed: dict[int, list[Claim]] = {}
     if overlay is not None:
         for index, claim in enumerate(overlay.claims):
             if index in stale:
                 continue
-            placed.setdefault(anchors.offset_of(claim), []).append(
+            placed.setdefault(anchors.index_of(claim), []).append(
                 _redacted_claim(index, claim, redactor)
             )
-    spans = {start: (end, mermaid) for start, end, mermaid in diagram_spans}
+
+    # A claim dropped silently is exactly what this file's own discipline
+    # refuses everywhere else (NFR-7's visible stale-claim notice, below): a
+    # section index outside the document's own range would otherwise sit in
+    # `placed` unvisited by either loop below and vanish with no trace. Every
+    # `_Anchors.index_of` result is built from `len(sections)` at some point
+    # during assembly, so this never fires in practice — it is here for the
+    # day a future anchor kind computes one wrong, so that bug is a loud
+    # failure here rather than a claim quietly missing from the page.
+    for section_index in placed:
+        if not 0 <= section_index <= len(machine_sections):
+            raise ValueError(
+                f"claim anchor resolved to section index {section_index}, outside "
+                f"the document's own 0..{len(machine_sections)} range — a claim must "
+                "never be silently dropped"
+            )
 
     sections: list[Section] = []
-    previous = 0
-    for offset in sorted(set(placed) | set(spans)):
-        if offset > previous:
-            sections.append(MachineSection(tuple(lines[previous:offset])))
-            previous = offset
-        if offset in placed:
+    for index, section in enumerate(machine_sections):
+        if index in placed:
             assert overlay is not None
-            sections.append(EnrichmentSection(overlay.produced_by, tuple(placed[offset])))
-        if offset in spans:
-            end, mermaid = spans[offset]
-            sections.append(MachineDiagram(mermaid))
-            previous = end
-    if previous < len(lines):
-        sections.append(MachineSection(tuple(lines[previous:])))
+            sections.append(EnrichmentSection(overlay.produced_by, tuple(placed[index])))
+        sections.append(section)
+    if len(machine_sections) in placed:
+        assert overlay is not None
+        sections.append(
+            EnrichmentSection(overlay.produced_by, tuple(placed[len(machine_sections)]))
+        )
     if stale and overlay is not None:
         sections.append(StaleNoticeSection(overlay.produced_by, len(stale)))
     return tuple(sections)
@@ -956,37 +1499,89 @@ def markdown_document(sections: AssembledDocument) -> str:
     no overlay the bytes are the ones this renderer produced before any of 2K
     existed, which is what the golden document pins.
 
-    An enrichment block is separated from whatever surrounds it by exactly one
-    blank line — required, not cosmetic: a markdown blockquote followed
-    immediately by a list item swallows that item as a lazy continuation, so
-    the claim would eat the next open question. Where the neighbouring machine
-    lines already begin or end with a blank of their own, none is added, so an
-    overlay adds no blank lines it does not need.
+    **Exactly one blank line between ANY two adjacent sections whose own
+    lines do not already touch one** (fix round 1, HIGH — generalized past
+    2K's own enrichment-only rule below, which is now this rule's special
+    case rather than a second one living beside it). Required, not cosmetic,
+    for two different reasons that both land on the same fix: an enrichment
+    blockquote followed immediately by a list item swallows that item as a
+    lazy continuation, so a claim would eat the next open question; and a
+    plain paragraph landing immediately under a pipe table with no blank
+    line between them is read by GFM as one more row of the table itself —
+    four empty cells a reader never wrote (the media legend under the
+    inbound endpoint table is exactly this, since a `MachineTable` and the
+    `MachineParagraph` after it were the first two adjacent sections in this
+    document that both actually need a separator neither already supplies).
+    Where the neighbouring lines already begin or end with a blank of their
+    own — a heading's own leading blank, `### Shapes` right before its first
+    entry — none is added, so this never doubles what a section already
+    provides for itself.
+
+    **One deliberate exception: two adjacent `MachineList` sections stay
+    tight, no blank forced between them.** `## Open questions` builds ONE
+    single-item `MachineList` per question (`_Anchors`'s own docstring: a
+    `beside-open-question` claim has to land right after THIS question and
+    no other, which is only possible if each question owns its own section
+    index) — several of those, with no claim landing between any two of
+    them, are meant to read as ONE continuous bulleted list, the same way
+    `## Coverage`'s bullets do from inside a single `MachineList`. The
+    general rule would otherwise read consecutive questions as two
+    paragraphs' worth of unrelated bullets rather than one list.
     """
     lines: list[str] = []
     for index, section in enumerate(sections):
-        if not isinstance(section, EnrichmentSection | StaleNoticeSection):
-            lines += _machine_lines(section) or ()
-            continue
-        if lines and lines[-1] != "":
-            lines.append("")
-        lines += _enrichment_lines(section)
+        if isinstance(section, EnrichmentSection | StaleNoticeSection):
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines += _enrichment_lines(section)
+        else:
+            lines += _machine_lines(section, is_first=index == 0) or ()
         following = sections[index + 1] if index + 1 < len(sections) else None
-        # `following_lines` can be empty only for a machine section carrying
-        # none, which assembly does not build — guarded anyway, because
-        # indexing a serializer's input on the assumption that a producer
-        # never yields an empty one is a crash waiting for the day it does.
-        following_lines = () if following is None else (_machine_lines(following) or ())
-        if following_lines and following_lines[0] != "":
+        following_lines = () if following is None else _opening_lines(following)
+        both_lists = isinstance(section, MachineList) and isinstance(following, MachineList)
+        if (
+            not both_lists
+            and lines
+            and lines[-1] != ""
+            and following_lines
+            and following_lines[0] != ""
+        ):
             lines.append("")
     return "\n".join(lines) + "\n"
 
 
-def _machine_lines(section: Section) -> tuple[str, ...] | None:
-    """The markdown lines of a MACHINE section — prose as it was built, a
-    diagram re-fenced — or `None` for a section that is not machine text at
-    all. One place decides what "machine" means, so the emitter's blank-line
-    rule and its verbatim rule cannot disagree about a diagram."""
+def _opening_lines(section: Section) -> Sequence[str]:
+    """The lines `section` would render as, machine or enrichment alike —
+    used ONLY to peek at whether the NEXT section already opens on a blank
+    line of its own, from `markdown_document`'s blank-line rule above. Each
+    section still renders through its own branch when its own turn comes;
+    this never decides what gets written, only whether a separator is still
+    needed before it."""
+    if isinstance(section, EnrichmentSection | StaleNoticeSection):
+        return _enrichment_lines(section)
+    return _machine_lines(section) or ()
+
+
+def _machine_lines(section: Section, is_first: bool = False) -> tuple[str, ...] | None:
+    """The markdown lines of a MACHINE section — or `None` for a section that
+    is not machine text at all. One place decides what "machine" means, so
+    the emitter's blank-line rule and its per-kind rendering rule cannot
+    disagree about a diagram — or, now, about a heading, a list, a table or a
+    detail block.
+
+    `is_first` matters only for `MachineHeading`: every heading is preceded
+    by a blank line EXCEPT the module title, which opens the document."""
+    if isinstance(section, MachineHeading):
+        lines = () if is_first else ("",)
+        return (*lines, f"{_HEADING_MARKERS[section.level]}{section.text}", "")
+    if isinstance(section, MachineParagraph):
+        return (_runs_to_markdown(section.runs),)
+    if isinstance(section, MachineList):
+        return tuple(f"- {_runs_to_markdown(item)}" for item in section.items)
+    if isinstance(section, MachineTable):
+        return _table_lines(section)
+    if isinstance(section, MachineDetail):
+        return _detail_lines(section)
     if isinstance(section, MachineSection):
         return section.lines
     if isinstance(section, MachineDiagram):
@@ -994,22 +1589,79 @@ def _machine_lines(section: Section) -> tuple[str, ...] | None:
     return None
 
 
+def _table_lines(table: MachineTable, indent: str = "") -> tuple[str, ...]:
+    """One `MachineTable` as markdown pipe-table lines, `indent` spaces before
+    every `|` — `""` for a top-level endpoint table, four spaces for a shape
+    table nested inside a `MachineDetail` entry, matching the indent the
+    line-based renderer this replaces always used for a nested one."""
+    header = f"{indent}| " + " | ".join(table.headers) + " |"
+    separator = f"{indent}|" + "|".join("---" for _ in table.headers) + "|"
+    rows = tuple(
+        f"{indent}| " + " | ".join(_runs_to_markdown(cell) for cell in row) + " |"
+        for row in table.rows
+    )
+    return (header, separator, *rows)
+
+
+def _detail_lines(detail: MachineDetail) -> tuple[str, ...]:
+    """One `MachineDetail` as the two-level markdown list it always was: the
+    header entry (`entries[0]`) as the unindented bullet, then every entry
+    after it nested one level, either as an inline `label: body` or as a
+    `label:` followed by its table indented four spaces.
+
+    No leading blank line of its own (fix round 1, HIGH): `markdown_document`
+    now guarantees exactly one between this block and whatever precedes it —
+    an endpoint table, the media legend, another detail block, a heading —
+    so a leading blank hardcoded here on top of that would double up
+    whenever the block right before this one ALSO ends on non-blank content
+    that the shared rule would already have separated (this is what fixed
+    the double blank line between `### Shapes` and its first entry)."""
+    lines: list[str] = []
+    for index, entry in enumerate(detail.entries):
+        prefix = "-" if index == 0 else "  -"
+        title = _runs_to_markdown(entry.title)
+        if entry.table is not None:
+            lines.append(f"{prefix} {title}:")
+            lines.append("")
+            lines += _table_lines(entry.table, indent="    ")
+        elif entry.body is not None:
+            lines.append(f"{prefix} {title}: {_runs_to_markdown(entry.body)}")
+        else:
+            lines.append(f"{prefix} {title}")
+    return tuple(lines)
+
+
 def _provenance_line(provenance: Provenance) -> str:
     """The header every enrichment block sits under: what the block is, the
-    evidence marker it carries, and the run that produced it. A blockquote, so
-    a reader scanning the document sees the mark before the words (2K design
-    §6, "clearly marked")."""
-    return f"> **Enrichment — evidence: llm** (model {provenance.model}, agent {provenance.agent})"
+    evidence marker it carries, and the run that produced it (2K design §6,
+    "clearly marked")."""
+    return f"**Enrichment — evidence: llm** (model {provenance.model}, agent {provenance.agent})"
 
 
 def _enrichment_lines(section: EnrichmentSection | StaleNoticeSection) -> list[str]:
-    """One enrichment block as markdown: the provenance header, then each
-    claim, blank-line separated."""
+    """One enrichment block as markdown: a horizontal rule, the provenance
+    header, each claim blank-line separated, and a closing rule.
+
+    The rules are the markdown answer to the HTML serializer's bordered,
+    badged box: they bound the block on BOTH sides, so a reader always sees
+    where the model's text ends and the machine document resumes. The old
+    form marked only the first line (as a blockquote), which left the claims
+    visually indistinguishable from machine prose — and a blockquote is also
+    why this is rules rather than `> `-prefixing the whole block: a mermaid
+    fence inside a blockquote does not render on GitHub, and a diagram claim
+    must render in BOTH outputs or the two disagree."""
     if isinstance(section, StaleNoticeSection):
-        return [f"{_provenance_line(section.provenance)} — {_stale_sentence(section.count)}"]
-    lines = [_provenance_line(section.provenance)]
+        return [
+            "---",
+            "",
+            f"{_provenance_line(section.provenance)} — {_stale_sentence(section.count)}",
+            "",
+            "---",
+        ]
+    lines = ["---", "", _provenance_line(section.provenance)]
     for claim in section.claims:
         lines += ["", *_claim_lines(claim)]
+    lines += ["", "---"]
     return lines
 
 

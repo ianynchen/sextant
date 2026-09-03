@@ -1,0 +1,54 @@
+{
+  "repo": "jhipster-sample-app",
+  "remote": "https://github.com/jhipster/jhipster-sample-app.git",
+  "commit": "e06e87abe0be8a3a194381ce651164a734811b3f",
+  "endpoints": {
+    "inbound": {
+      "http": 38
+    },
+    "outbound": {}
+  },
+  "routes": {
+    "inbound": [
+      "DELETE /api/admin/users/{login}",
+      "DELETE /api/authorities/{id}",
+      "DELETE /api/bank-accounts/{id}",
+      "DELETE /api/labels/{id}",
+      "DELETE /api/operations/{id}",
+      "GET /api/account",
+      "GET /api/activate",
+      "GET /api/admin/users",
+      "GET /api/admin/users/{login}",
+      "GET /api/authenticate",
+      "GET /api/authorities",
+      "GET /api/authorities/{id}",
+      "GET /api/bank-accounts",
+      "GET /api/bank-accounts/{id}",
+      "GET /api/labels",
+      "GET /api/labels/{id}",
+      "GET /api/operations",
+      "GET /api/operations/{id}",
+      "GET /api/users",
+      "PATCH /api/bank-accounts/{id}",
+      "PATCH /api/labels/{id}",
+      "PATCH /api/operations/{id}",
+      "POST /api/account",
+      "POST /api/account/change-password",
+      "POST /api/account/reset-password/finish",
+      "POST /api/account/reset-password/init",
+      "POST /api/admin/users",
+      "POST /api/authenticate",
+      "POST /api/authorities",
+      "POST /api/bank-accounts",
+      "POST /api/labels",
+      "POST /api/operations",
+      "POST /api/register",
+      "PUT /api/admin/users",
+      "PUT /api/admin/users/{login}",
+      "PUT /api/bank-accounts/{id}",
+      "PUT /api/labels/{id}",
+      "PUT /api/operations/{id}"
+    ],
+    "outbound": []
+  }
+}

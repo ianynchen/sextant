@@ -1,15 +1,18 @@
 import json
+import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 import click
 import pytest
 from click.testing import CliRunner
 
+from sextant.application.ports.detector import ModuleModel
 from sextant.application.ports.progress import NullProgress
 from sextant.application.ports.scanner import ScanReport, ScanRequest
 from sextant.application.stages.analyze import analyze
-from sextant.cli.app import _tool_executor_for, cli
+from sextant.cli.app import _skip_reason, _tool_executor_for, cli
 from sextant.cli.resources import catalogs_dir, extractor_jar
 from sextant.domain.factfile import read_fact_tree
 from sextant.domain.redaction import Redactor
@@ -526,6 +529,73 @@ def test_a_malformed_sextant_yml_is_reported_as_a_message_not_a_stack_trace(tmp_
     assert "extract_libaries" in result.output
     assert "extract_libraries" in result.output
     assert "Traceback" not in result.output
+    # 2M Task 1: detection now runs before the workspace is created at all, so
+    # a refused detection must leave no trace of one — today's order created
+    # `ws/` (and `ws/workspace.duckdb`) via `DuckDbWorkspace.__init__` before
+    # the detector's own refusal was ever reached.
+    assert not (tmp_path / "ws").exists()
+
+
+def test_allow_resolve_flag_reaches_the_detector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The CLI's own half of 2M Task 1's plumbing: `--allow-resolve` must
+    reach the detector `analyze` selects, not stop at the command's own
+    argument parsing. Spies on `MavenDetector.detect` itself rather than on
+    any Sextant-internal wiring, so the pin is about the value a real detector
+    receives."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    calls: list[bool] = []
+    original = MavenDetector.detect
+
+    def spy(self: MavenDetector, path: Path, allow_resolve: bool = False):
+        calls.append(allow_resolve)
+        return original(self, path, allow_resolve=allow_resolve)
+
+    monkeypatch.setattr(MavenDetector, "detect", spy)
+
+    result = CliRunner().invoke(
+        cli,
+        ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path), "--allow-resolve"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls
+    assert all(call is True for call in calls)
+
+
+def test_allow_resolve_defaults_to_false_when_the_flag_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    calls: list[bool] = []
+    original = MavenDetector.detect
+
+    def spy(self: MavenDetector, path: Path, allow_resolve: bool = False):
+        calls.append(allow_resolve)
+        return original(self, path, allow_resolve=allow_resolve)
+
+    monkeypatch.setattr(MavenDetector, "detect", spy)
+
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls
+    assert all(call is False for call in calls)
+
+
+def test_analyze_writes_an_empty_detect_notes_list_for_a_plain_maven_fixture(tmp_path: Path):
+    """`detect_notes` is a key that is always present (empty where the
+    detector had nothing to remark on), not one that appears only once a note
+    exists — a reader parsing `metadata.json` must never special-case a
+    missing key."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert metadata["detect_notes"] == []
 
 
 def test_a_malformed_overlay_is_reported_as_a_message_not_a_stack_trace(tmp_path: Path):
@@ -628,3 +698,505 @@ def test_a_missing_home_directory_is_reported_as_a_message_not_a_stack_trace(
     with pytest.raises(click.ClickException) as excinfo:
         _tool_executor_for(tmp_path, tmp_path, Redactor.from_rules())
     assert "could not determine the user's home directory" in str(excinfo.value)
+
+
+# --- Maven reactor discovery (2M Task 2, fix round 1) ----------------------
+
+REACTOR = REPO / "fixtures" / "orders-reactor"
+BILLING_LIB = REACTOR / "billing-lib"
+
+
+def _rmtree_if_exists(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+
+
+def _snapshot(path: Path) -> Path | None:
+    """Move `path` aside if it exists, returning where it went (`None` if it
+    never existed) — restored via `_restore` regardless of what a test does
+    to `path` while it is out of the way (2M Task 2 fix round 1, F3). A
+    SESSION fixture elsewhere in the suite
+    (`tests/application/test_enrich_tools.py`) builds `fixtures/
+    orders-service/.sextant` once per session and depends on it staying
+    exactly as it left it for every later consumer — session-scoped meaning
+    it never rebuilds on its own. Deleting it without restoring the
+    ORIGINAL bytes would break that fixture for the rest of the session,
+    regardless of test order or which subset `-k` selects; moving it aside
+    and back never does."""
+    if not path.exists():
+        return None
+    backup = path.with_name(f"{path.name}.snapshot-{uuid.uuid4().hex}")
+    shutil.move(str(path), str(backup))
+    return backup
+
+
+def _restore(path: Path, backup: Path | None) -> None:
+    _rmtree_if_exists(path)
+    if backup is not None:
+        shutil.move(str(backup), str(path))
+
+
+def test_detection_reaches_the_detector_exactly_once_per_analyze(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2M Task 2 review's HARD GATE: Task 1 left a double detect (a pre-flight
+    call in `module_analyze` plus `analyze()`'s own internal one) — the exact
+    shape a real `GradleDetector` cannot afford, since each call is its own
+    `./gradlew` subprocess. `_KnownModuleDetector` closes it: the ONE real
+    `MavenDetector.detect` call replays into every per-module `analyze()`
+    rather than triggering a second one."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    calls: list[Path] = []
+    original = MavenDetector.detect
+
+    def spy(self: MavenDetector, path: Path, allow_resolve: bool = False):
+        calls.append(path)
+        return original(self, path, allow_resolve=allow_resolve)
+
+    monkeypatch.setattr(MavenDetector, "detect", spy)
+
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+
+
+def test_workspace_flag_is_refused_at_a_multi_module_root():
+    """`--workspace` names one module's workspace (M00); a multi-module root
+    has no single workspace of its own — every module gets its own,
+    unconditionally (2M design §2). Read-only up to the refusal (the gate
+    fires before any per-module work starts), so the real fixture needs no
+    snapshot here."""
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(REACTOR), "--workspace", "/tmp/wherever"]
+    )
+    assert result.exit_code != 0
+    assert "--workspace" in result.output
+    assert "multi-module root" in result.output
+
+
+def test_analyze_at_a_reactor_root_analyzes_every_non_bom_module(tmp_path: Path):
+    """Ruled spec amendment (2M Task 2 fix round 1): the original "only
+    `service` is analyzed" rule returned ZERO analyzed output against
+    `spring-petclinic-microservices` — all eight of its modules classify
+    `undetermined` — so the kind gate inverts to skip only what is KNOWN
+    not to be a service: `library` (Gradle-only) and a leaf `<packaging>
+    pom</packaging>`. `orders-service` and `billing-lib`, both
+    `undetermined`, are therefore BOTH analyzed here, each into its own
+    workspace. `orders-service` is adopted by the reactor completely
+    UNCHANGED, so its endpoint count must match the single-module run
+    exactly; `billing-lib`'s `<parent>` resolves offline because its own
+    `<relativePath>` reaches the reactor parent's `pom.xml` directly, no
+    install required."""
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=BILLING_LIB, check=True)
+
+    baseline = CliRunner().invoke(
+        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path / "baseline")]
+    )
+    assert baseline.exit_code == 0, baseline.output
+    # `click.echo(json.dumps(...))` is the one line `module analyze` writes
+    # to stdout; `RichProgress` writes its own lines to stderr, and
+    # `CliRunner` mixes the two streams together — the JSON line is the
+    # first one out.
+    single_module_endpoints = json.loads(baseline.output.splitlines()[0])["endpoints"]
+
+    orders_service_backup = _snapshot(FIXTURE / ".sextant")
+    billing_lib_backup = _snapshot(BILLING_LIB / ".sextant")
+    reactor_backup = _snapshot(REACTOR / ".sextant")
+    try:
+        result = CliRunner().invoke(cli, ["module", "analyze", str(REACTOR)])
+        assert result.exit_code == 0, result.output
+        assert (
+            f"analyzed ../orders-service (com.acme:orders-service): "
+            f"{single_module_endpoints} endpoints" in result.output
+        )
+        assert "analyzed billing-lib (com.acme:billing-lib):" in result.output
+        # The table (2M Task 2 fix round 1, F8): lowercase `yes`, never
+        # Python's capitalized `str(True)`.
+        assert "yes" in result.output
+        assert "True" not in result.output
+
+        assert (FIXTURE / ".sextant" / "metadata.json").is_file()
+        assert (BILLING_LIB / ".sextant" / "metadata.json").is_file()
+
+        modules_json = REACTOR / ".sextant" / "modules.json"
+        modules = json.loads(modules_json.read_text())["modules"]
+        assert modules == sorted(modules, key=lambda row: row["dir"])
+        by_dir = {row["dir"]: row for row in modules}
+        # Root-relative (2M Task 2 fix round 1, F5), not absolute: stable
+        # across however `path` was itself spelled on the command line.
+        assert by_dir["../orders-service"] == {
+            "dir": "../orders-service",
+            "module_id": "com.acme:orders-service",
+            "kind": "undetermined",
+            "analyzed": True,
+            "skip_reason": None,
+        }
+        assert by_dir["billing-lib"] == {
+            "dir": "billing-lib",
+            "module_id": "com.acme:billing-lib",
+            "kind": "undetermined",
+            "analyzed": True,
+            "skip_reason": None,
+        }
+
+        # `render`/`enrich`/`export` never re-detect (M00); pointed at the
+        # reactor root itself — where `modules.json` sits and no workspace
+        # ever will, `--workspace` being refused there — they refuse by
+        # naming every module `modules.json` lists, root-relative, in the
+        # exact pinned form.
+        render_result = CliRunner().invoke(cli, ["module", "render", str(REACTOR)])
+        assert render_result.exit_code != 0
+        assert (
+            f"{REACTOR} is a multi-module root; analyze it, then run this command against "
+            "one of: ../orders-service, billing-lib" in render_result.output
+        )
+    finally:
+        _restore(FIXTURE / ".sextant", orders_service_backup)
+        _restore(BILLING_LIB / ".sextant", billing_lib_backup)
+        _restore(REACTOR / ".sextant", reactor_backup)
+
+
+_TRIVIAL_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>{name}</artifactId>
+  <version>1.0.0</version>
+</project>
+"""
+
+_BOM_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>{name}</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+</project>
+"""
+
+_ONE_MODULE_REACTOR_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>reactor</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <modules>
+    <module>child</module>
+  </modules>
+</project>
+"""
+
+_EMPTY_REACTOR_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>reactor</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <modules>
+  </modules>
+</project>
+"""
+
+_REACTOR_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>reactor</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <modules>
+    <module>ok-first</module>
+    <module>bad</module>
+    <module>ok-second</module>
+  </modules>
+</project>
+"""
+
+
+def _trivial_service_module(root: Path, name: str, compile_it: bool) -> None:
+    root.mkdir()
+    (root / "pom.xml").write_text(_TRIVIAL_POM.format(name=name), encoding="utf-8")
+    (root / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    java = root / "src" / "main" / "java" / "com" / "acme"
+    java.mkdir(parents=True)
+    class_name = name.replace("-", "_").title().replace("_", "")
+    (java / f"{class_name}.java").write_text(
+        f"package com.acme;\npublic class {class_name} {{}}\n", encoding="utf-8"
+    )
+    if compile_it:
+        subprocess.run(["mvn", "-q", "-o", "compile"], cwd=root, check=True)
+
+
+def _bom_module(root: Path, name: str) -> None:
+    root.mkdir()
+    (root / "pom.xml").write_text(_BOM_POM.format(name=name), encoding="utf-8")
+
+
+def test_a_leaf_module_packaged_pom_is_skip_listed_with_that_reason(tmp_path: Path):
+    """Ruled spec amendment: a leaf `<packaging>pom</packaging>` (a BOM or
+    aggregation-only sibling with no classes to scan) is the one
+    kind-independent skip signal — without it, a reactor containing a BOM
+    hard-fails the whole run, since the BOM's own scan has no
+    `target/classes` directory to read at all."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    (reactor / "pom.xml").write_text(
+        _REACTOR_POM.replace(
+            "<module>ok-first</module>\n    <module>bad</module>\n    <module>ok-second</module>",
+            "<module>bom</module>\n    <module>service</module>",
+        ),
+        encoding="utf-8",
+    )
+    _bom_module(reactor / "bom", "bom")
+    _trivial_service_module(reactor / "service", "service", compile_it=True)
+
+    result = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
+
+    assert result.exit_code == 0, result.output
+    assert "skipped bom (com.acme:bom): packaging is pom" in result.output
+    assert "analyzed service (com.acme:service):" in result.output
+    modules = json.loads((reactor / ".sextant" / "modules.json").read_text())["modules"]
+    by_dir = {row["dir"]: row for row in modules}
+    assert by_dir["bom"]["analyzed"] is False
+    # 2M Task 7 fix round 1, Critical: the reason lives in the COMMITTED
+    # artifact too, not only in this run's own stdout — a reader of
+    # `modules.json` alone (`--refresh-stale` orchestration, a later
+    # `render`/`enrich`/`export` refusal) must be able to answer "why"
+    # without the terminal output that produced it.
+    assert by_dir["bom"]["skip_reason"] == "packaging is pom"
+    assert by_dir["service"]["analyzed"] is True
+    assert by_dir["service"]["skip_reason"] is None
+
+
+def test_skip_reason_names_library_kind():
+    """Gradle-only today (Maven never returns `library`, spec §2) — pinned
+    directly against `_skip_reason` since no real `MavenDetector` fixture
+    can produce it."""
+    module = ModuleModel(
+        module_id="g:a",
+        coordinates="g/a",
+        version="1.0.0",
+        root=Path("."),
+        kind="library",
+        languages=frozenset(),
+        source_roots=(),
+        output_dirs=(),
+    )
+    assert _skip_reason(module) == "kind is library"
+
+
+def test_skip_reason_names_packaging_pom():
+    module = ModuleModel(
+        module_id="g:a",
+        coordinates="g/a",
+        version="1.0.0",
+        root=Path("."),
+        kind="undetermined",
+        languages=frozenset(),
+        source_roots=(),
+        output_dirs=(),
+        packaging="pom",
+    )
+    assert _skip_reason(module) == "packaging is pom"
+
+
+def test_skip_reason_is_none_for_an_ordinary_undetermined_jar_module():
+    """The ruled amendment's whole point: `undetermined` alone is no longer
+    a skip reason."""
+    module = ModuleModel(
+        module_id="g:a",
+        coordinates="g/a",
+        version="1.0.0",
+        root=Path("."),
+        kind="undetermined",
+        languages=frozenset(),
+        source_roots=(),
+        output_dirs=(),
+    )
+    assert _skip_reason(module) is None
+
+
+def test_a_one_module_reactor_still_analyzes_into_the_childs_own_workspace(tmp_path: Path):
+    """2M Task 2 fix round 1, F1 (HIGH): the multi-module gate is whether the
+    root declared `<modules>`, never `len(modules) > 1` — a reactor naming
+    exactly ONE child (`fixtures/pom.xml` is this shape today) used to fall
+    into the single-module branch, landing the child's analysis in the
+    AGGREGATOR's own `.sextant`/`.sextant.yml`/overlay/commit instead of the
+    child's."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    (reactor / "pom.xml").write_text(_ONE_MODULE_REACTOR_POM, encoding="utf-8")
+    _trivial_service_module(reactor / "child", "child", compile_it=True)
+
+    result = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
+    assert result.exit_code == 0, result.output
+
+    assert (reactor / "child" / ".sextant" / "metadata.json").is_file()
+    assert not (reactor / ".sextant" / "metadata.json").exists()
+    modules = json.loads((reactor / ".sextant" / "modules.json").read_text())["modules"]
+    assert [row["dir"] for row in modules] == ["child"]
+
+    # `--workspace` is still refused at this root, exactly as a multi-child
+    # reactor refuses it.
+    refused = CliRunner().invoke(
+        cli, ["module", "analyze", str(reactor), "--workspace", str(tmp_path / "ws")]
+    )
+    assert refused.exit_code != 0
+    assert "multi-module root" in refused.output
+
+
+def test_a_missing_child_pom_reaches_the_cli_as_a_message_not_a_traceback(tmp_path: Path):
+    """2M Task 2 fix round 1, F2."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    (reactor / "pom.xml").write_text(
+        _ONE_MODULE_REACTOR_POM.replace("<module>child</module>", "<module>ghost</module>"),
+        encoding="utf-8",
+    )
+    (reactor / "ghost").mkdir()
+
+    result = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
+
+    assert result.exit_code != 0
+    assert "ghost" in result.output
+    assert "no pom.xml" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_a_malformed_child_pom_reaches_the_cli_as_a_message_naming_it(tmp_path: Path):
+    """2M final review wave, I2: `ElementTree.ParseError` subclasses
+    `SyntaxError`, not `ValueError` — reachable past `MavenDetector`'s own
+    `_parse_pom` naming only if some future parse site skips it, and past
+    that as an uncaught traceback if the CLI's own catch tuple did not carry
+    it too. Either way the reader gets a message naming the broken pom, exit
+    1, never a traceback."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    (reactor / "pom.xml").write_text(_ONE_MODULE_REACTOR_POM, encoding="utf-8")
+    (reactor / "child").mkdir()
+    (reactor / "child" / "pom.xml").write_text("<project><groupId>oops</project>", encoding="utf-8")
+
+    result = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
+
+    assert result.exit_code != 0
+    assert str(reactor / "child" / "pom.xml") in result.output
+    assert "Traceback" not in result.output
+
+
+def test_a_modules_cycle_reaches_the_cli_as_a_message_not_a_traceback(tmp_path: Path):
+    """2M Task 2 fix round 1, F2."""
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (a / "pom.xml").write_text(
+        _ONE_MODULE_REACTOR_POM.replace("<module>child</module>", "<module>../b</module>"),
+        encoding="utf-8",
+    )
+    (b / "pom.xml").write_text(
+        _ONE_MODULE_REACTOR_POM.replace("<module>child</module>", "<module>../a</module>"),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["module", "analyze", str(a)])
+
+    assert result.exit_code != 0
+    assert "cycle" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_an_empty_reactor_is_refused_by_name_at_detect(tmp_path: Path):
+    """2M final review wave, MINOR 4: `<modules/>` naming zero children used
+    to analyze successfully with nothing to show (2M Task 2 fix round 1,
+    F8's own honest-empty table) — but a `render`/`enrich`/`export` pointed
+    at that root afterwards then hit `_refuse_if_unanalyzed`'s reactor
+    listing with nothing after "one of: ". Refused at detect instead, by the
+    pom that declares the empty `<modules>`, before anything on disk is
+    touched."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    (reactor / "pom.xml").write_text(_EMPTY_REACTOR_POM, encoding="utf-8")
+
+    result = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
+
+    assert result.exit_code != 0
+    assert "declares <modules> but names none" in result.output
+    assert "Traceback" not in result.output
+    assert not (reactor / ".sextant").exists()
+
+
+def test_the_table_truncates_a_dir_column_longer_than_the_cap(tmp_path: Path):
+    """2M Task 2 fix round 1, F8: the cap keeps the columns after it aligned
+    regardless of how long any one module's relative path is — truncation
+    is a TABLE concern only, so the per-module progress line above the
+    table still carries the name in full."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    long_name = "a-very-long-module-directory-name-" + "x" * 30
+    (reactor / "pom.xml").write_text(
+        _ONE_MODULE_REACTOR_POM.replace("<module>child</module>", f"<module>{long_name}</module>"),
+        encoding="utf-8",
+    )
+    _trivial_service_module(reactor / long_name, "thing", compile_it=True)
+
+    result = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
+
+    assert result.exit_code == 0, result.output
+    assert "…" in result.output
+    assert f"analyzed {long_name} (" in result.output
+
+
+def test_one_module_failing_in_a_reactor_stops_the_run_and_names_it(tmp_path: Path):
+    """One failing module fails loudly and stops the run (`--keep-going` is
+    not offered in 2M): `bad` has no compiled `target/classes` at all (never
+    built), so its own scan fails — and the failure names `bad`, not a bare
+    traceback, and never reaches `ok-second`, which sits after it in
+    `<modules>` declaration order."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    (reactor / "pom.xml").write_text(_REACTOR_POM, encoding="utf-8")
+    _trivial_service_module(reactor / "ok-first", "ok-first", compile_it=True)
+    _trivial_service_module(reactor / "bad", "bad", compile_it=False)
+    _trivial_service_module(reactor / "ok-second", "ok-second", compile_it=True)
+
+    result = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
+
+    assert result.exit_code != 0
+    assert "bad" in result.output
+    assert "Traceback" not in result.output
+    assert (reactor / "ok-first" / ".sextant" / "metadata.json").is_file()
+    assert not (reactor / "ok-second" / ".sextant").exists()
+    # A stopped run leaves no `modules.json` claiming any module beyond the
+    # one that failed was ever reached.
+    assert not (reactor / ".sextant" / "modules.json").exists()
+
+
+def test_a_refused_detection_leaves_a_pre_existing_workspace_byte_untouched(tmp_path: Path):
+    """Task 1's reorder made detection run before `DuckDbWorkspace` ever
+    touches disk (2M design §2); this pins the OTHER direction, which Task 1
+    left unpinned — a workspace a PRIOR successful run already wrote is
+    never touched by a LATER `analyze` invocation that detection refuses,
+    since that refusal is discovered before `workspace_dir` is referenced at
+    all."""
+    module = tmp_path / "module"
+    _trivial_service_module(module, "thing", compile_it=True)
+    workspace = tmp_path / "ws"
+
+    first = CliRunner().invoke(
+        cli, ["module", "analyze", str(module), "--workspace", str(workspace)]
+    )
+    assert first.exit_code == 0, first.output
+    metadata_before = (workspace / "metadata.json").read_bytes()
+    db_before = (workspace / "workspace.duckdb").read_bytes()
+
+    (module / ".sextant.yml").write_text("extract_libaries: [x:y]\n", encoding="utf-8")
+
+    second = CliRunner().invoke(
+        cli, ["module", "analyze", str(module), "--workspace", str(workspace)]
+    )
+    assert second.exit_code != 0
+
+    assert (workspace / "metadata.json").read_bytes() == metadata_before
+    assert (workspace / "workspace.duckdb").read_bytes() == db_before

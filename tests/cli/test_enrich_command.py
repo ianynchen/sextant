@@ -256,7 +256,7 @@ def test_a_second_runs_brief_carries_the_machine_document_not_the_enriched_one(
     brief = json.loads((module_root / ".sextant" / "enrich-brief.json").read_text(encoding="utf-8"))
 
     assert "Legacy billing edge" not in brief["prompt"]
-    assert "> **Enrichment — evidence: llm**" not in brief["prompt"]
+    assert "**Enrichment — evidence: llm**" not in brief["prompt"]
     assert machine_only.rstrip("\n") in brief["prompt"]
 
 
@@ -316,7 +316,7 @@ def test_the_happy_path_writes_the_overlay_and_both_assembled_outputs(
 
     markdown = (module_root / ".sextant" / "render" / "architecture.md").read_text(encoding="utf-8")
     html = (module_root / ".sextant" / "render" / "architecture.html").read_text(encoding="utf-8")
-    assert "> **Enrichment — evidence: llm**" in markdown
+    assert "**Enrichment — evidence: llm**" in markdown
     assert "Legacy billing edge" in markdown
     assert 'class="llm-badge"' in html
     assert "Legacy billing edge" in html

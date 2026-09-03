@@ -1,11 +1,13 @@
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
+from xml.etree.ElementTree import ParseError
 
 import click
 from pydantic import ValidationError
@@ -13,7 +15,12 @@ from pydantic import ValidationError
 from sextant.agents import AGENT_REGISTRY
 from sextant.application.enrich.tools import ToolDefinition, ToolExecutor
 from sextant.application.enrich.validate import stale_claims
-from sextant.application.ports.detector import ModuleModel
+from sextant.application.ports.detector import (
+    Detector,
+    ModuleModel,
+    RepositoryModel,
+    select_detector,
+)
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport
@@ -35,6 +42,7 @@ from sextant.egress.render.document import (
 from sextant.egress.render.html import html_document
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.ingress.detect.gradle import GradleDetector
 from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.detect.sextant_config import (
     EnrichDefaults,
@@ -50,6 +58,111 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 # The registries the composition root builds (ARCHITECTURE §6). Order is the
 # statement of precedence where two adapters could both accept.
+
+# The one real `Detector` registry in this file (2M Task 2 review): a future
+# detector added to only one of two hand-kept lists would send the other
+# path to `select_detector`'s own uncaught `NoAdapterError`. Every command
+# below that needs a real detector reads this list rather than writing its
+# own. Order is precedence (`select_detector` picks the first that
+# `accepts()`): Maven before Gradle, so a repository carrying both a
+# `pom.xml` and Gradle build files is Maven's, with the coexistence recorded
+# as `MavenDetector`'s own detect note (2M design §1) rather than Gradle
+# claiming it first.
+_DETECTORS: list[Detector] = [MavenDetector(), GradleDetector()]
+
+
+def _modules_json_path(path: Path) -> Path:
+    """`modules.json`'s own location (ARCHITECTURE §8's file layout:
+    `<repo-root>/.sextant/modules.json`) — named once so the write site in
+    `module_analyze` and the read sites in `render`/`enrich`/`export`'s
+    refusal cannot drift apart. Not inside any MODULE's own workspace
+    (`--workspace` is refused at a multi-module root — there is no single
+    one to name); this is the root's own `.sextant/`, holding only the
+    inventory, never a full workspace's `facts/`/`render/`/`workspace.duckdb`."""
+    return path / ".sextant" / "modules.json"
+
+
+def _root_relative(root: Path, target: Path) -> str:
+    """`target`, spelled relative to `root` (2M Task 2 fix round 1, F5) —
+    `os.path.relpath`, never `Path.relative_to`: a `<module>` may climb OUT
+    of the aggregator's own directory (`fixtures/orders-reactor`'s own
+    adoption of `fixtures/orders-service`, by `../orders-service`, is
+    exactly this shape), and `relative_to` refuses anything that is not a
+    strict descendant. Both resolved first, so the spelling in
+    `modules.json` and in a refusal message is the SAME regardless of
+    whether `root`/`target` reached here as relative or absolute strings —
+    stable across invocation spellings, the same portability D00 §2 already
+    states for every other reader-facing path this codebase writes out."""
+    return os.path.relpath(target.resolve(), start=root.resolve())
+
+
+def _skip_reason(module: ModuleModel) -> str | None:
+    """Why a module is skip-listed rather than analyzed, or `None` when it
+    should be analyzed (2M design §2, ruled amendment — fix round 1). The
+    kind gate inverts to skip only what is KNOWN not to be a service:
+    `library` (Gradle-only today — Maven never returns it) and a leaf
+    `<packaging>pom</packaging>` (a BOM or aggregation-only sibling with no
+    classes to scan — without this exception, any reactor containing one
+    hard-fails the whole run, since its own scan has no `target/classes`
+    directory to read). EVERYTHING ELSE is analyzed, `kind == "undetermined"`
+    included: `kind` stays honestly `undetermined` in `modules.json` and
+    `metadata.json` either way — only `analyzed` flips. The original design
+    skipped every non-`service` module; the flagship multi-module fixture
+    it was meant to serve (`spring-petclinic-microservices`) classifies all
+    eight of its modules `undetermined`, so that rule returned zero
+    analyzed output on the repository the feature exists for."""
+    if module.kind == "library":
+        return "kind is library"
+    if module.packaging == "pom":
+        return "packaging is pom"
+    return None
+
+
+def _module_row(
+    root: Path, module: ModuleModel, analyzed: bool, skip_reason: str | None
+) -> dict[str, object]:
+    """One `modules.json` row (2M Task 2 fix round 1, F9: single-sited here
+    rather than written out at both the skip and the analyzed call site).
+
+    `skip_reason` (2M Task 7 fix round 1, Critical) carries `_skip_reason`'s
+    own string — `None` for an analyzed row, never omitted for a skipped
+    one: the artifact is committed and read back later (`--refresh-stale`
+    orchestration, `render`/`enrich`/`export`'s own refusal), while the
+    `skipped ... : <reason>` line above only ever reaches THIS run's stdout.
+    Without this field, `analyzed: false` on its own forces a reader back to
+    a scrolled-away terminal to learn why — the exact thing a committed
+    inventory exists to avoid."""
+    return {
+        "dir": _root_relative(root, module.root),
+        "module_id": module.module_id,
+        "kind": module.kind,
+        "analyzed": analyzed,
+        "skip_reason": skip_reason,
+    }
+
+
+class _KnownModuleDetector:
+    """Adapts one already-detected `ModuleModel` back into the `Detector`
+    Protocol, so `analyze`'s own internal `select_detector(...).detect(path)`
+    call (M00's "one module, one workspace, one command" contract, unchanged
+    by this task) is satisfied from data this command already has, rather
+    than invoking the real detector a second time (2M Task 2 review's hard
+    gate — a build tool invoked to detect must never run twice per
+    `analyze`, and once Task 3's `GradleDetector` lands, a second
+    invocation is a second subprocess). `_DETECTORS` above is called exactly
+    once per `module analyze` — the reactor walk if the root is one, a plain
+    detect otherwise — and every per-module `analyze()` call is driven from
+    that single result through an instance of this class."""
+
+    def __init__(self, module: ModuleModel, notes: tuple[str, ...]) -> None:
+        self._module = module
+        self._notes = notes
+
+    def accepts(self, path: Path) -> bool:
+        return True
+
+    def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
+        return RepositoryModel(root=self._module.root, modules=(self._module,), notes=self._notes)
 
 
 class _JvmDescriptorInterpreter:
@@ -111,6 +224,34 @@ def _workspace_dir_of(path: Path, workspace_dir: Path | None) -> Path:
     return workspace_dir or (path / ".sextant")
 
 
+def _refuse_if_unanalyzed(path: Path, workspace_dir: Path) -> None:
+    """The `no analysis found` refusal every EXIT command shares (`render`,
+    `enrich`, `export` — M00's "no analysis" rule: none of them re-detects,
+    re-scans, or re-resolves). Widened for a multi-module root (2M design
+    §2): `modules.json` sits at the root's OWN `.sextant/` (ARCHITECTURE
+    §8), never inside a per-module workspace — `--workspace` is refused at
+    a multi-module root, so there is no single one to find it absent from —
+    and its presence with no per-module workspace at `workspace_dir` means
+    the caller pointed an EXIT command at the reactor root rather than at
+    one of the modules it names, so the refusal reads out that list instead
+    of the generic message."""
+    metadata_path = workspace_dir / "metadata.json"
+    db_path = workspace_dir / "workspace.duckdb"
+    if metadata_path.is_file() and db_path.is_file():
+        return
+    modules_path = _modules_json_path(path)
+    if modules_path.is_file():
+        modules = json.loads(modules_path.read_text(encoding="utf-8"))["modules"]
+        dirs = ", ".join(sorted(str(module["dir"]) for module in modules))
+        raise click.ClickException(
+            f"{path} is a multi-module root; analyze it, then run this command against "
+            f"one of: {dirs}"
+        )
+    raise click.ClickException(
+        f"no analysis found at {workspace_dir} — run `sextant module analyze {path}` first."
+    )
+
+
 def _redactor_for(path: Path) -> Redactor:
     """The redactor both EXITS use (2K design §1): the built-in rule set,
     widened by this module's own `.sextant.yml`. Built at the composition root
@@ -163,8 +304,74 @@ def module() -> None:
 @module.command("analyze")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("--workspace", "workspace_dir", type=click.Path(path_type=Path), default=None)
-def module_analyze(path: Path, workspace_dir: Path | None) -> None:
+@click.option(
+    "--allow-resolve",
+    "allow_resolve",
+    is_flag=True,
+    default=False,
+    help="Permit one online dependency-resolution retry when the detector needs it.",
+)
+def module_analyze(path: Path, workspace_dir: Path | None, allow_resolve: bool) -> None:
+    # Detection runs FIRST, before anything below creates so much as a
+    # directory (2M design §2): `DuckDbWorkspace`'s own constructor is what
+    # makes a workspace and its `.duckdb` file exist, so a refused detection
+    # must be discovered here, ahead of any of that, or a repository Sextant
+    # cannot analyze would still leave one behind. Exactly ONE real
+    # detection happens per invocation (2M Task 2 review's hard gate) — the
+    # reactor walk below if `path` is a multi-module root, a single module
+    # otherwise — and every per-module `analyze()` call beneath it is driven
+    # from THIS result via `_KnownModuleDetector`, never a second real
+    # `detect()` call. `ValueError` alongside `SextantConfigError`: the
+    # reactor walk's own refusals (a `<modules>` cycle, a `<module>` naming
+    # a directory with no `pom.xml` — 2M Task 2 fix round 1, F2) are the
+    # same class of "the analysed repository is written wrong" mistake, not
+    # a crash in the tool. `ParseError` too (2M final review wave, I2): it
+    # subclasses `SyntaxError`, not `ValueError`, so a malformed CHILD pom
+    # anywhere in a reactor walk reached here as an uncaught traceback —
+    # `MavenDetector` now names the offending pom before this ever fires
+    # (`_parse_pom`), but a bare parse failure still belongs in this tuple
+    # rather than crashing the tool.
+    try:
+        model = select_detector(_DETECTORS, path).detect(path, allow_resolve=allow_resolve)
+    except (SextantConfigError, ValueError, ParseError) as refused:
+        raise click.ClickException(str(refused)) from refused
+
+    # `model.multi_module`, never `len(model.modules) > 1` (2M Task 2 fix
+    # round 1, F1): whether `path` ITSELF declared `<modules>` is the gate —
+    # a reactor naming exactly one child is still a reactor, and that
+    # child's own analysis belongs in ITS OWN workspace, not `path`'s.
+    if model.multi_module:
+        # `--workspace` names ONE module's workspace (M00); a multi-module
+        # root has no single workspace of its own to name — every module
+        # gets its own, always at its own `<module-dir>/.sextant` (2M design
+        # §2).
+        if workspace_dir is not None:
+            raise click.ClickException(
+                f"{path} is a multi-module root — --workspace is refused there; it names "
+                "one module's workspace, and every module here gets its own"
+            )
+        _module_analyze_reactor(path, model, allow_resolve)
+        return
+
     workspace_dir = _workspace_dir_of(path, workspace_dir)
+    result = _analyze_into(path, model.modules[0], model.notes, workspace_dir, allow_resolve)
+    click.echo(json.dumps({"endpoints": len(result.report.endpoints)}))
+
+
+def _analyze_into(
+    path: Path,
+    module: ModuleModel,
+    notes: tuple[str, ...],
+    workspace_dir: Path,
+    allow_resolve: bool,
+) -> AnalyzeResult:
+    """One module, analyzed into one workspace, and its `metadata.json`
+    written — the body every `module analyze` invocation shares, whether
+    `path` is a single-module root or one module inside a just-walked
+    reactor (2M design §2). `module`/`notes` are ALREADY the result of the
+    one real detection `module_analyze` performed above; `_KnownModuleDetector`
+    replays them so `analyze()`'s own internal `select_detector(...).detect(path)`
+    call never triggers a second one."""
     # A stale rendered document must never survive a re-analyze (2K Task 8
     # review): `analyze` never otherwise touches `render/` — that is
     # `render`'s own output — so without this, re-analyzing a module after
@@ -180,7 +387,14 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
     progress = RichProgress()
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
-        result = _analyzed(path, workspace, workspace_dir, progress)
+        result = _analyzed(
+            path,
+            workspace,
+            workspace_dir,
+            progress,
+            [_KnownModuleDetector(module, notes)],
+            allow_resolve=allow_resolve,
+        )
         write_metadata(
             workspace_dir / "metadata.json",
             result.module,
@@ -193,33 +407,111 @@ def module_analyze(path: Path, workspace_dir: Path | None) -> None:
             schema_sources_not_compiled=result.schema_sources_not_compiled,
             descriptors_not_interpreted=result.descriptors_not_interpreted,
             libraries_not_scanned=result.libraries_not_scanned,
+            detect_notes=result.notes,
         )
     finally:
         workspace.close()
         progress.close()
-    click.echo(json.dumps({"endpoints": len(result.report.endpoints)}))
+    return result
+
+
+# The table's dir column (2M Task 2 fix round 1, F8): a cap, not a
+# guess at a terminal width — one fixed number keeps the column, and
+# therefore the two columns after it, aligned regardless of how long any
+# one module's relative path happens to be.
+_TABLE_DIR_WIDTH = 50
+
+
+def _truncated(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def _module_analyze_reactor(path: Path, model: RepositoryModel, allow_resolve: bool) -> None:
+    """Every module a just-walked reactor named that is not KNOWN not to be
+    a service, each analyzed into its own `<module-dir>/.sextant` workspace
+    exactly as a single-module run would (2M design §2, ruled amendment —
+    `_skip_reason` is the whole gate). `modules.json` then names every
+    module found, analyzed or not, at `path` — the artifact `render`/
+    `enrich`/`export`'s own refusal below reads. One failing module fails
+    loudly and stops the run (`--keep-going` is not offered in 2M):
+    `modules.json` is written only once every module that was going to be
+    analyzed has been, so a stopped run leaves no artifact claiming a
+    module finished when it did not — and any STALE inventory from a PRIOR
+    run is removed at the START, for the same reason (2M Task 2 fix round
+    1, F7): a run that fails partway must not leave the previous run's
+    `analyzed: true` rows looking current."""
+    modules_path = _modules_json_path(path)
+    modules_path.unlink(missing_ok=True)
+
+    rows: list[dict[str, object]] = []
+    for module in model.modules:
+        relative_dir = _root_relative(path, module.root)
+        reason = _skip_reason(module)
+        if reason is not None:
+            click.echo(f"skipped {relative_dir} ({module.module_id}): {reason}")
+            rows.append(_module_row(path, module, analyzed=False, skip_reason=reason))
+            continue
+        workspace_dir = _workspace_dir_of(module.root, None)
+        try:
+            result = _analyze_into(module.root, module, model.notes, workspace_dir, allow_resolve)
+        except Exception as failure:  # deliberately broad, see below
+            # A batch run's own failure must name WHICH module failed — left
+            # uncaught, the module's own exception would read as this
+            # command crashing rather than as that module's analysis
+            # failing, with no way to tell which of several modules it was.
+            raise click.ClickException(
+                f"{relative_dir} ({module.module_id}) failed to analyze: {failure}"
+            ) from failure
+        click.echo(
+            f"analyzed {relative_dir} ({module.module_id}): "
+            f"{len(result.report.endpoints)} endpoints"
+        )
+        rows.append(_module_row(path, module, analyzed=True, skip_reason=None))
+
+    rows.sort(key=lambda row: cast(str, row["dir"]))
+    modules_path.parent.mkdir(parents=True, exist_ok=True)
+    modules_path.write_text(json.dumps({"modules": rows}, indent=2) + "\n", encoding="utf-8")
+
+    # No header, no rows, for an empty reactor (2M Task 2 fix round 1, F8):
+    # a table with a header and nothing under it reads as a tool that found
+    # nothing to say, not as the honest empty case it is.
+    if not rows:
+        return
+    click.echo()
+    click.echo(f"{'dir':<{_TABLE_DIR_WIDTH}} {'kind':<15} analyzed")
+    for row in rows:
+        dir_cell = _truncated(cast(str, row["dir"]), _TABLE_DIR_WIDTH)
+        analyzed_cell = "yes" if row["analyzed"] else "no"
+        click.echo(f"{dir_cell:<{_TABLE_DIR_WIDTH}} {cast(str, row['kind']):<15} {analyzed_cell}")
 
 
 def _analyzed(
-    path: Path, workspace: DuckDbWorkspace, workspace_dir: Path, progress: RichProgress
+    path: Path,
+    workspace: DuckDbWorkspace,
+    workspace_dir: Path,
+    progress: RichProgress,
+    detectors: Sequence[Detector],
+    allow_resolve: bool = False,
 ) -> AnalyzeResult:
     """`analyze`, with the one failure a USER caused turned into the message a
     user reads. A malformed `.sextant.yml` is Sextant's own input written
     wrong (D04 §2a's refusal) — a stack trace here would report a mistake in
     the analysed repository as a crash in the tool, the same way the two
     `no analysis found` messages below exist so a missing workspace does
-    not."""
+    not. `detectors` is always the caller's own `_KnownModuleDetector`
+    (2M Task 2 review) — this function itself never picks a real one."""
     try:
         return analyze(
             path=path,
             workspace=workspace,
-            detectors=[MavenDetector()],
+            detectors=detectors,
             scanners=[AsmScanner(extractor_jar())],
             catalogs=YamlCatalogSource(catalogs_dir()),
             fact_root=workspace_dir / "facts",
             progress=progress,
             readers=READERS,
             interpret=_JvmDescriptorInterpreter(),
+            allow_resolve=allow_resolve,
         )
     except SextantConfigError as refused:
         raise click.ClickException(str(refused)) from refused
@@ -339,12 +631,9 @@ def module_render(path: Path, workspace_dir: Path | None) -> None:
     re-scans, or re-resolves (M00 "no analysis"; the workspace persists
     precisely so render is a cheap read)."""
     workspace_dir = _workspace_dir_of(path, workspace_dir)
+    _refuse_if_unanalyzed(path, workspace_dir)
     metadata_path = workspace_dir / "metadata.json"
     db_path = workspace_dir / "workspace.duckdb"
-    if not metadata_path.is_file() or not db_path.is_file():
-        raise click.ClickException(
-            f"no analysis found at {workspace_dir} — run `sextant module analyze {path}` first."
-        )
 
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     redactor = _redactor_for(path)
@@ -458,12 +747,9 @@ def module_enrich(
     # agree on one spelling for the rest of this command.
     path = path.resolve()
     workspace_dir = _workspace_dir_of(path, workspace_dir)
+    _refuse_if_unanalyzed(path, workspace_dir)
     metadata_path = workspace_dir / "metadata.json"
     db_path = workspace_dir / "workspace.duckdb"
-    if not metadata_path.is_file() or not db_path.is_file():
-        raise click.ClickException(
-            f"no analysis found at {workspace_dir} — run `sextant module analyze {path}` first."
-        )
 
     redactor = _redactor_for(path)
     defaults = _enrich_defaults_for(path)
@@ -700,12 +986,9 @@ def module_export(path: Path, workspace_dir: Path | None, out_dir: Path | None) 
     anywhere is the caller's business; Sextant does not talk to artifact
     stores."""
     workspace_dir = _workspace_dir_of(path, workspace_dir)
+    _refuse_if_unanalyzed(path, workspace_dir)
     metadata_path = workspace_dir / "metadata.json"
     db_path = workspace_dir / "workspace.duckdb"
-    if not metadata_path.is_file() or not db_path.is_file():
-        raise click.ClickException(
-            f"no analysis found at {workspace_dir} — run `sextant module analyze {path}` first."
-        )
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     commit = str(metadata["provenance"]["commit"])
     bundle_name = re.sub(r"[^A-Za-z0-9._-]", "-", str(metadata["module"]["id"])) + "@" + commit

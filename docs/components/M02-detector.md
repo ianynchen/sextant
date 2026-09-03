@@ -62,15 +62,25 @@ classpath, the source sets and the output directories. Those are the four things
 downstream depends on, and only the build tool knows them.
 
 **The Gradle mechanism is an init script, run through the project's own wrapper**:
-`./gradlew --offline -I sextant-model.gradle sextantModel`. The script registers a task
-that walks the fully-evaluated model and prints one JSON document. It rides whatever Gradle
-version the project pins, so there is no client-library compatibility matrix — the audit
-found that the official Tooling API route would *also* need an injected model builder for
-source-set precision, making it this mechanism plus a dependency. The script is tested
-against conformance fixtures pinned per Gradle major, and convention paths
-(`build/classes/java/main`) serve as a sanity check: disagreement with the script's output
-is a warning, never a source of truth. Maven needs no such artifact —
-`mvn dependency:build-classpath -o` and `help:effective-pom` answer directly.
+`<gradle> [--offline] --init-script <ours> --no-configuration-cache -q sextantModel
+-Psextant.out=<tmpfile>` (2M design §1; `--offline` governs only the first of at most two
+attempts — the second is the flagged online retry). The script registers a task that walks
+the fully-evaluated model and writes one JSON document to the named file — never stdout,
+which Gradle, the target build's own scripts, and JVM warnings all pollute. It rides
+whatever Gradle version the project pins, so there is no client-library compatibility
+matrix — the audit found that the official Tooling API route would *also* need an injected
+model builder for source-set precision, making it this mechanism plus a dependency. Maven
+needs no such artifact — `mvn dependency:build-classpath -o` and `help:effective-pom`
+answer directly.
+
+> **2M delivery status (§1b of the [2M design](../superpowers/specs/2026-09-02-phase-2m-build-and-output-design.md)):**
+> `GradleDetector` itself shipped in 2M — `src/sextant/ingress/detect/gradle.py`, this same
+> init-script mechanism, live against a real fixture (`fixtures/gradle-orders/`). What did
+> **not** ship, and stays open M02 future work: conformance fixtures pinned **per Gradle
+> major** (2M pins exactly one fixture on one Gradle version), and the convention-path
+> sanity check the paragraph above describes — 2M's init script is the only source of truth
+> for a Gradle module's classpath and source sets; nothing cross-checks it against
+> `build/classes/java/main` or warns on disagreement.
 
 **Offline by default.** The build tool is invoked in its offline mode (`--offline`, `-o`):
 it may read the local dependency cache, and it may not reach the network. The prerequisite
@@ -121,6 +131,15 @@ publishes an artifact and does none of those.
 | **First-party dependency** | **Fully, bodies included** | `first_party.groups` patterns |
 | Third-party dependency | Signatures only | Everything else on the classpath |
 | Platform | Not read; recorded by name | `java.*`, `javax.*`, `jdk.*` |
+
+> **2M delivery status:** this three-tier split and the `module` facts below are Maven's
+> route, and — per the 2M design's own §1 — not even Maven's: `MavenDetector` never runs
+> Maven and produces no classpath facts of its own; the `module`-fact/`ClasspathEntry` route
+> is documented dead already (2I spec). `GradleDetector` does not tier at all — it builds
+> `LibraryRoot`s directly from the init script's own classpath report (jar path from
+> Gradle, coordinates from the component id it names), through its own route, stated in 2M
+> design §1. A three-tier classpath and `module` facts for Gradle stay open M02 future
+> work.
 
 **First-party jars are read in full because the code that matters is often inside them.** A
 shared client library wraps the HTTP call; if only its signatures are read, the calling

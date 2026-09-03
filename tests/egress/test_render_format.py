@@ -44,7 +44,7 @@ def test_a_resolved_format_renders_plain():
         coverage={"documents": 1, "partial_documents": 0},
     )
     text = render_module_document(MODULE, report, "a3f91c")
-    assert "| `GET /v1/orders` | `com/acme/C#list().` | - → - | protobuf | resolved |" in text
+    assert "| `GET /v1/orders` | `C#list` | — → — | protobuf | resolved |" in text
 
 
 def test_a_narrowed_format_renders_assumed():
@@ -58,9 +58,7 @@ def test_a_narrowed_format_renders_assumed():
         coverage={"documents": 1, "partial_documents": 0},
     )
     text = render_module_document(MODULE, report, "a3f91c")
-    assert (
-        "| `GET /v1/orders` | `com/acme/C#list().` | - → - | protobuf (assumed) | resolved |"
-    ) in text
+    assert ("| `GET /v1/orders` | `C#list` | — → — | protobuf (assumed) | resolved |") in text
 
 
 def test_a_null_format_renders_unresolved():
@@ -73,7 +71,7 @@ def test_a_null_format_renders_unresolved():
         coverage={"documents": 1, "partial_documents": 0},
     )
     text = render_module_document(MODULE, report, "a3f91c")
-    assert "| `GET /v1/orders` | `com/acme/C#list().` | - → - | unresolved | resolved |" in text
+    assert "| `GET /v1/orders` | `C#list` | — → — | unresolved | resolved |" in text
 
 
 @pytest.mark.parametrize(
@@ -103,9 +101,275 @@ def test_a_present_format_beside_any_non_resolved_marker_still_hedges(format_res
         coverage={"documents": 1, "partial_documents": 0},
     )
     text = render_module_document(MODULE, report, "a3f91c")
+    assert ("| `GET /v1/orders` | `C#list` | — → — | protobuf (assumed) | resolved |") in text
+
+
+# --- readability rulings from the JHipster field run (2M design §5c) ------
+
+
+def test_the_handler_column_shows_the_short_human_spelling_not_the_machine_identity():
+    """The JHipster field run's own example: a package path, an opaque
+    `sig_` hash and a stray trailing `.` in every row is machine identity,
+    not something a reader parses at a glance. The column now shows the
+    owning type's simple name and the method name alone."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            _endpoint(
+                handler=(
+                    "s maven c 1 io/github/jhipster/sample/web/rest/"
+                    "UserResource#deleteUser(sig_4a71b976)."
+                )
+            )
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| `GET /v1/orders` | `UserResource#deleteUser` |" in text
+    assert "sig_4a71b976" not in text.split("## Inbound endpoints", 1)[1].split("\n\n", 1)[0]
+
+
+def test_every_inbound_endpoint_carries_the_full_symbol_in_its_own_detail_block():
+    """Moved, not deleted: the full symbol the Handler column no longer
+    spells out lives in the endpoint's own detail block instead, and EVERY
+    inbound endpoint gets one now — not only the ones with a `Via`/
+    `Request`/`Response` line to hang under it (adversarial review C3).
+
+    The header carries BOTH the wire identity and the full symbol (fix
+    round 1, MEDIUM 1): the identity alone could not otherwise distinguish
+    which endpoint a handler-less block belongs to."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[_endpoint()],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "- `GET /v1/orders` — `com/acme/C#list().`" in text
+
+
+def test_two_overloads_sharing_a_short_spelling_stay_distinguishable_in_their_details():
+    """Synthetic overload: two handlers in the same class with the same
+    method name (differing only by the compiler's `sig_` disambiguator)
+    collide in the table's short spelling — the ruled consequence spec §5c
+    states outright — but each keeps its own full symbol in its own detail
+    block, so a reader can still tell the two apart there."""
+    report = ResolveReport(
+        facts_loaded=2,
+        endpoints=[
+            _endpoint(
+                path="/v1/orders",
+                handler="s maven c 1 com/acme/C#save(sig_1111aaaa).",
+            ),
+            _endpoint(
+                path="/v1/orders/{id}",
+                method="PUT",
+                handler="s maven c 1 com/acme/C#save(sig_2222bbbb).",
+            ),
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert text.count("| `C#save` |") == 2
+    assert "- `GET /v1/orders` — `com/acme/C#save(sig_1111aaaa).`" in text
+    assert "- `PUT /v1/orders/{id}` — `com/acme/C#save(sig_2222bbbb).`" in text
+
+
+def test_a_handler_less_row_carries_the_same_fallback_in_its_detail_block():
+    """A row with nothing to move still gets a block — its header names the
+    endpoint by its wire identity and then reads the same fallback text the
+    Handler column shows, never a bare `- unresolved` naming no endpoint at
+    all (fix round 1, MEDIUM 1)."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[_endpoint(handler=None, resolution="unresolved")],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| `GET /v1/orders` | unresolved |" in text
+    assert "- `GET /v1/orders` — unresolved" in text
+
+
+def test_an_empty_shape_renders_one_line_with_no_header_only_table():
+    """NFR-7's empty-section discipline extended to a shape table: a shape
+    query that came back with no fields renders one line, never a
+    `| Field | Type | Required | Nullable |` header with nothing under it."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            _endpoint(
+                method="POST",
+                response_shape=json.dumps(
+                    {
+                        "wire_type": "object",
+                        "wire_format": "",
+                        "nullable": False,
+                        "shape_id": "com/acme/orders/contracts/Empty#",
+                    }
+                ),
+            )
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+        shapes=[
+            {"shape_id": "com/acme/orders/contracts/Empty#", "content_hash": "md5:1", "open": False}
+        ],
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "- Response: none recorded" in text
+    assert "| Field | Type | Required | Nullable |" not in text
+
+
+def test_a_shape_named_by_two_endpoints_is_emitted_once_under_shapes():
+    """Repeated shape tables (2M design §5c): a shape two endpoints both
+    return is not tabulated twice — it lives once, under `### Shapes`, and
+    each endpoint's own entry names it instead of repeating its table."""
+    descriptor = json.dumps(
+        {
+            "wire_type": "object",
+            "wire_format": "",
+            "nullable": False,
+            "shape_id": "com/acme/orders/contracts/OrderView#",
+        }
+    )
+    report = ResolveReport(
+        facts_loaded=2,
+        endpoints=[
+            _endpoint(path="/v1/orders", response_shape=descriptor),
+            _endpoint(path="/v1/orders/{id}", response_shape=descriptor),
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+        shapes=[
+            {
+                "shape_id": "com/acme/orders/contracts/OrderView#",
+                "content_hash": "md5:1",
+                "open": False,
+            }
+        ],
+    )
+    shape_fields = [
+        {
+            "shape_id": "com/acme/orders/contracts/OrderView#",
+            "ordinal": 0,
+            "wire_name": "id",
+            "wire_type": "string",
+            "wire_format": None,
+            "field_number": None,
+            "required": True,
+            "nullable": False,
+            "item": None,
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", shape_fields=shape_fields)
+    assert "### Shapes" in text
+    assert text.count("- Response: OrderView") == 2
+    assert text.count("| id | string | yes | no |") == 1
+    assert text.count("- `OrderView`") == 1
+    # Fix round 1, NIT: exactly ONE blank line between the heading and its
+    # first entry — the heading's own trailing blank plus the entry's own
+    # (formerly hardcoded) leading blank used to stack into two.
+    assert "### Shapes\n\n- `OrderView`" in text
+    assert "### Shapes\n\n\n" not in text
+
+
+def test_two_shapes_sharing_a_simple_name_get_disambiguated_entries():
+    """Fix round 1, MEDIUM 2: `com/a/Order#` and `com/b/Order#` share the
+    simple name `Order` — left alone, `### Shapes` would carry two
+    indistinguishable `Order` entries and every citation would read as
+    ambiguous as to which one it names. Both fall back to their own full id
+    (trailing `#` stripped) instead, which is already guaranteed unique, so
+    a reader — and, in HTML, a link's own href
+    (`test_two_shapes_sharing_a_simple_name_get_distinct_anchors_and_links`
+    in test_render_html.py) — can always tell the two apart."""
+    descriptor_a = json.dumps(
+        {"wire_type": "object", "wire_format": "", "nullable": False, "shape_id": "com/a/Order#"}
+    )
+    descriptor_b = json.dumps(
+        {"wire_type": "object", "wire_format": "", "nullable": False, "shape_id": "com/b/Order#"}
+    )
+    report = ResolveReport(
+        facts_loaded=2,
+        endpoints=[
+            _endpoint(path="/a/orders", response_shape=descriptor_a),
+            _endpoint(path="/b/orders", response_shape=descriptor_b),
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+        shapes=[
+            {"shape_id": "com/a/Order#", "content_hash": "md5:1", "open": False},
+            {"shape_id": "com/b/Order#", "content_hash": "md5:2", "open": False},
+        ],
+    )
+    shape_fields = [
+        {
+            "shape_id": "com/a/Order#",
+            "ordinal": 0,
+            "wire_name": "a_field",
+            "wire_type": "string",
+            "wire_format": None,
+            "field_number": None,
+            "required": True,
+            "nullable": False,
+            "item": None,
+        },
+        {
+            "shape_id": "com/b/Order#",
+            "ordinal": 0,
+            "wire_name": "b_field",
+            "wire_type": "string",
+            "wire_format": None,
+            "field_number": None,
+            "required": True,
+            "nullable": False,
+            "item": None,
+        },
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", shape_fields=shape_fields)
+    assert "- `com/a/Order`" in text
+    assert "- `com/b/Order`" in text
+    assert "- `Order`" not in text
+    assert "- Response: com/a/Order" in text
+    assert "- Response: com/b/Order" in text
+
+
+def test_media_glyph_forms_the_legend_states():
+    """The exact two forms the legend under the table describes: one empty
+    side, and both — one glyph, one meaning, never a bare hyphen."""
+    report = ResolveReport(
+        facts_loaded=2,
+        endpoints=[
+            _endpoint(path="/v1/orders", consumes='["application/json"]', produces=None),
+            _endpoint(path="/v1/orders/{id}", produces=None, consumes=None),
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| application/json → — |" in text
+    assert "| — → — |" in text
+
+
+def test_the_media_legend_appears_once_directly_under_the_inbound_table():
+    """Fix round 1, HIGH: a paragraph landing IMMEDIATELY under a pipe table
+    with no blank line between them is read by GFM as one more row of the
+    table itself (verified against cmark-gfm) — four empty cells a reader
+    never wrote. The legend must be separated from the table by a real blank
+    line, not merely follow it somewhere in the text: the substring-ordering
+    checks below would have passed even on the broken, blank-less output, so
+    this pins the literal adjacency a GFM parser actually keys on."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[_endpoint()],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert text.count("Media reads `consumes → produces`; `—` means none recorded.") == 1
+    # The exact, literal table-row-then-blank-then-legend adjacency: no line
+    # of the table's own body sits directly against the legend text.
     assert (
-        "| `GET /v1/orders` | `com/acme/C#list().` | - → - | protobuf (assumed) | resolved |"
+        "| `GET /v1/orders` | `C#list` | — → — | unresolved | resolved |\n"
+        "\n"
+        "Media reads `consumes → produces`; `—` means none recorded.\n"
     ) in text
+    table_end = text.index("| `GET /v1/orders` |")
+    legend_index = text.index("Media reads `consumes → produces`")
+    assert table_end < legend_index < text.index("- `GET /v1/orders` — `com/acme/C#list().`")
 
 
 def test_the_open_questions_section_lists_wire_identity_question_and_candidates():

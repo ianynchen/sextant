@@ -85,12 +85,17 @@ def test_storage_names_no_framework_language_or_protocol():
 def test_jvm_names_stay_in_the_jvm_extractor():
     """§10 language confinement.
 
-    Two exceptions, both deliberate. The composition root names concrete
+    Three exceptions, all deliberate. The composition root names concrete
     adapters — that is what a composition root is for, and hiding it would only
-    move the coupling. And `domain/facts.py` calls a field `classpath`, which is
+    move the coupling. `domain/facts.py` calls a field `classpath`, which is
     a JVM name for a language-neutral idea: the ordered set of places symbols
     were read from, with a tier each. Renaming it is a D00 schema change, so it
-    is recorded here rather than waved through.
+    is recorded here rather than waved through. And `ingress/detect/gradle.py`
+    reads the SAME word off Gradle's own init-script JSON (2M design §1's
+    pinned schema: `"classpath": [{"path","group?","name?","version?"}]`) —
+    the wire key is Gradle's own name for the identical language-neutral idea,
+    not a JVM implementation detail leaking out of the extractor, so it is
+    recorded here for the same reason rather than smuggled past the check.
     """
     allowed = {"ingress/extract/jvm", "cli"}
     files = [
@@ -100,10 +105,10 @@ def test_jvm_names_stay_in_the_jvm_extractor():
     ]
 
     found = offenders(files, JVM_NAMES)
-    known_leak = {"domain/facts.py"}
+    known_leak = {"domain/facts.py", "ingress/detect/gradle.py"}
 
     assert {str(path) for path in found} == known_leak, found
-    assert found[next(iter(found))] == {"classpath"}
+    assert all(hits == {"classpath"} for hits in found.values())
 
 
 def test_a_language_extension_namespace_is_read_only_by_its_own_adapter():

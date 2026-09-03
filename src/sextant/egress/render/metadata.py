@@ -46,6 +46,7 @@ def write_metadata(
     schema_sources_not_compiled: tuple[str, ...] = (),
     descriptors_not_interpreted: tuple[str, ...] = (),
     libraries_not_scanned: tuple[str, ...] = (),
+    detect_notes: tuple[str, ...] = (),
 ) -> None:
     """Written as the final act of analyze (D05 §3), so it exists whenever the
     workspace does and always describes the graph beside it."""
@@ -83,6 +84,12 @@ def write_metadata(
         # deterministic without depending on the query's own ORDER BY.
         "environments": sorted({str(row["environment"]) for row in resolved_config}),
         "gaps": KNOWN_GAPS,
+        # Detect-time observations (2M design §1c) — build-system coexistence,
+        # a wrapper fallback, a boundary refusal — sorted so the key is
+        # deterministic regardless of what order the detector found them in.
+        # Always present, empty where the detector had nothing to remark on:
+        # the key never depends on whether this run produced a note.
+        "detect_notes": sorted(detect_notes),
         # Which compiled sources the facts do not account for (FR-17). Listed
         # in full rather than counted: a count cannot be acted on.
         "uncovered": list(uncovered),

@@ -1,0 +1,16 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <!-- groupId and version are inherited from the reactor parent, the ordinary
+       Maven reactor-child shape (2M Task 2 — the same inheritance rule
+       `fixtures/orders-soap-client` already pins). One class, no endpoints,
+       no evidence `_classify` reads as a service: the fixture that pins
+       `undetermined` for a reactor sibling, since Maven's own evidence can
+       never make `_classify` return `library` (spec §2). -->
+  <parent>
+    <groupId>com.acme</groupId>
+    <artifactId>orders-reactor</artifactId>
+    <version>1.0.0</version>
+    <relativePath>../pom.xml</relativePath>
+  </parent>
+  <artifactId>billing-lib</artifactId>
+</project>

@@ -94,13 +94,17 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # `google-pubsub-subscriber.yml`'s `interface_implementation` style
     # resolves `raw-notify`'s instance receiver to its class's own declared
     # `MessageReceiver#receiveMessage` implementer — the handler renders
-    # verbatim in the SAME row as the identity. The `(sig_...)` suffix is
-    # there because the handler is the METHOD SYMBOL the facts carry, joined
-    # out of `symbols` (final review, FIX 1), not a string built from the
-    # receiver's type descriptor and the catalog's method name — the older,
-    # suffix-free form named no symbol at all and joined to nothing.
+    # verbatim in the SAME row as the identity, human-spelled in the table
+    # (2M design §5c). The `(sig_...)` suffix — the handler is the METHOD
+    # SYMBOL the facts carry, joined out of `symbols` (final review, FIX 1),
+    # not a string built from the receiver's type descriptor and the
+    # catalog's method name — now lives in the endpoint's own detail block,
+    # every endpoint's own row in the document below the table.
+    assert "`pubsub raw-notify` | `RawPubSubReceiver#receiveMessage`" in document
+    # The detail header carries both the wire identity and the full symbol
+    # (fix round 1, MEDIUM 1) — one convention regardless of direction.
     assert (
-        "`pubsub raw-notify` | "
+        "- `pubsub raw-notify` — "
         "`com/acme/orders/messaging/raw/RawPubSubReceiver#receiveMessage(sig_bb1c3cf6).`"
     ) in document
     # 2F Task 9: the coverage section names environments resolved, every
@@ -138,15 +142,14 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # default, the ladder's own live answer today (Task 6 re-pins this if
     # its own work moves it, per the checkpoint).
     assert (
-        "`websocket /live` | `com/example/orders/ws/LiveEndpoint#onFrame(sig_a7421bf5).` | - → - | unresolved | resolved |"
+        "`websocket /live` | `LiveEndpoint#onFrame` | — → — | unresolved | resolved |" in document
+    )
+    assert (
+        "`websocket /orders/place` | `OrderStompController#place` | — → — | json (assumed) | resolved |"
         in document
     )
     assert (
-        "`websocket /orders/place` | `com/example/orders/ws/OrderStompController#place(sig_961974f8).` | - → - | json (assumed) | resolved |"
-        in document
-    )
-    assert (
-        "`websocket /orders/board` | `com/example/orders/ws/OrderStompController#board(sig_26be7569).` | - → - | json (assumed) | resolved |"
+        "`websocket /orders/board` | `OrderStompController#board` | — → — | json (assumed) | resolved |"
         in document
     )
     # `place`'s own resolved `@SendTo` reply, and `board`'s own dynamic
@@ -173,16 +176,16 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # both rows are pinned because they arrive by different evidence (media
     # for `/stream`, return type for `/emitter`).
     #
-    # `- → text/event-stream` is the Media column: the MIME string is still
+    # `— → text/event-stream` is the Media column: the MIME string is still
     # there and still declared, and the Format column beside it reads `json
     # (assumed)` rather than anything derived from it — the envelope names the
     # protocol, never the format.
     assert (
-        "`sse GET /events/emitter` | `com/example/orders/sse/OrderEventsController#emitterEvents(sig_6e650372).` | - → - | json (assumed) | resolved |"
+        "`sse GET /events/emitter` | `OrderEventsController#emitterEvents` | — → — | json (assumed) | resolved |"
         in document
     )
     assert (
-        "`sse GET /events/stream` | `com/example/orders/sse/OrderEventsController#streamEvents(sig_ed469b30).` | - → text/event-stream | json (assumed) | resolved |"
+        "`sse GET /events/stream` | `OrderEventsController#streamEvents` | — → text/event-stream | json (assumed) | resolved |"
         in document
     )
     # The per-event payload unwraps through BOTH envelopes (2H design §6's
@@ -762,13 +765,21 @@ def test_a_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
     """The same row at the document a reader actually sees. `none recorded`
     rather than `unresolved`: the schema addressed this operation outright and
     names no code, which is an absence rather than a failed read — and the
-    response the reader gets is the schema's own type, by its schema name."""
+    response the reader gets is the schema's own type, by its schema name.
+
+    2M design §5c: the row's own detail block names the endpoint by its wire
+    identity and then reads the same `none recorded` fallback the Handler
+    column shows — there is no full symbol to move for a row with no
+    handler (fix round 1, MEDIUM 1: the identity stays in the header even
+    where there is no symbol to append after it)."""
     subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     _run(tmp_path)  # analyze + render + export
     document = (tmp_path / "render" / "architecture.md").read_text()
 
-    assert "| `graphql query auditTrail` | none recorded | - → - | json | resolved |" in document
-    assert "- `graphql query auditTrail`\n  - Response: array of object AuditEntry" in document
+    assert "| `graphql query auditTrail` | none recorded | — → — | json | resolved |" in document
+    assert (
+        "- `graphql query auditTrail` — none recorded\n  - Response: array of object AuditEntry"
+    ) in document
 
 
 def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_full_analyze(
@@ -994,11 +1005,28 @@ def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(tmp_path: P
 
     assert (
         "| `soap {http://orders.example.com/ws}quoteOrderRequest` | "
-        "none recorded | - → - | xml | resolved |"
+        "none recorded | — → — | xml | resolved |"
     ) in document
+    # 2M design §5c: a NAMED shape's table is emitted once, under
+    # `### Shapes`, and the endpoint's own entry names it instead of
+    # repeating it — the boundary this docstring describes (no Response
+    # section) is visible in the per-endpoint reference below, not in a
+    # nested table any more. The header carries the wire identity too (fix
+    # round 1, MEDIUM 1) — one convention regardless of direction.
+    #
+    # `_shape_display_name` (fix round 1, LOW) reads a QName shape id — this
+    # WSDL element's own `{uri}local` wire identity — by its own grammar
+    # (whatever follows the LAST `}`), not `simple_name`'s slash-splitting
+    # convention (still used, unchanged, by the class diagram's own node
+    # names, which is why `## Structure` still draws this same shape as
+    # `ws}quoteOrderRequest` — out of this task's scope, a background task
+    # owns that fix). The `### Shapes` subsection and this citation both
+    # read the honest `quoteOrderRequest` instead.
+    identity = "- `soap {http://orders.example.com/ws}quoteOrderRequest` — none recorded"
+    assert f"{identity}\n  - Request: quoteOrderRequest" in document
     assert (
-        "- `soap {http://orders.example.com/ws}quoteOrderRequest`\n"
-        "  - Request:\n"
+        "- `quoteOrderRequest`\n"
+        "  - Fields:\n"
         "\n"
         "    | Field | Type | Required | Nullable |\n"
         "    |---|---|---|---|\n"
@@ -1007,20 +1035,23 @@ def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(tmp_path: P
         "    | status | enum | yes | no |\n"
         "    | cancelledAt | string (date-time) | yes | yes |\n"
     ) in document
-    # No Response section: 2I Task 3 marks INPUT elements only, so nothing
-    # coalesces a response here — the boundary is visible in the rendered
-    # document, not just the endpoint table.
-    assert "quoteOrderRequest`\n  - Response:" not in document
+    # No Response reference at all: 2I Task 3 marks INPUT elements only, so
+    # nothing coalesces a response here.
+    assert (
+        "- Response:" not in document.split(f"{identity}\n  - Request:", 1)[1].split("\n\n", 1)[0]
+    )
     # 2I Task 5: the merged row appears in BOTH sections, and the outbound
     # one carries the configuration expression as its peer — the address a
-    # reader needs, verbless like every other soap row.
+    # reader needs, verbless like every other soap row. The Caller column is
+    # untouched by 2M §5c (only the inbound Handler column shortens) so it
+    # still carries the full symbol.
     assert (
         "| `soap {http://orders.example.com/ws}placeOrderRequest` | ${soap.billing.uri} | "
         "`com/example/orders/soap/BillingSoapClient#place(sig_b5d0d855).` | xml | resolved |"
     ) in document
     assert (
         "| `soap {http://orders.example.com/ws}placeOrderRequest` | "
-        "`com/example/orders/soap/OrderSoapEndpoint#placeOrder(sig_fd19bfc7).` | "
+        "`OrderSoapEndpoint#placeOrder` | "
     ) in document
 
 
@@ -1036,33 +1067,32 @@ def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_
     _run(tmp_path)  # analyze + render + export
     document = (tmp_path / "render" / "architecture.md").read_text()
 
-    # Rung 2 (declared media, `resolved`) — plain, no hedge.
+    # Rung 2 (declared media, `resolved`) — plain, no hedge. Human-spelled in
+    # the table now (2M design §5c); the full symbol lives in the endpoint's
+    # own detail block below (pinned via the `sig_...` open-question line
+    # further down, which quotes the same handler whole).
     assert (
-        "| `POST /v1/orders/proto-orders` | "
-        "`com/acme/orders/OrderController#createProtoOrder(sig_0bf859c2).` | "
-        "- → application/json | json | resolved |"
+        "| `POST /v1/orders/proto-orders` | `OrderController#createProtoOrder` | "
+        "— → application/json | json | resolved |"
     ) in document
     # Rung 3 (serializer config, `resolved`) — plain, no hedge.
     assert (
-        "| `kafka composed-orders` | "
-        "`com/acme/orders/composed/ComposedListener#onComposedEvent(sig_b2a754d9).` | "
-        "- → - | protobuf | resolved |"
+        "| `kafka composed-orders` | `ComposedListener#onComposedEvent` | "
+        "— → — | protobuf | resolved |"
     ) in document
     # Rung 4 (payload hierarchy, `narrowed`) — one of the three rows the
     # parse-binding pass bound: an assumed format must never look observed
     # (2G design §5's first rule), so it carries `(assumed)`.
     assert (
-        "| `jms parsed-audit-queue` | "
-        "`com/acme/orders/messaging/parse/ParsedPayloadListeners#onDelegated(sig_cb303bd1).` | "
-        "- → - | protobuf (assumed) | resolved |"
+        "| `jms parsed-audit-queue` | `ParsedPayloadListeners#onDelegated` | "
+        "— → — | protobuf (assumed) | resolved |"
     ) in document
     # Rung 6 (nothing) — one of the two rows the same pass refused: the
     # endpoint itself derived cleanly (`resolved`), but nothing describes
     # what is on its wire.
     assert (
-        "| `jms parsed-relay-queue` | "
-        "`com/acme/orders/messaging/parse/ParsedPayloadListeners#onRelayed(sig_cb303bd1).` | "
-        "- → - | unresolved | resolved |"
+        "| `jms parsed-relay-queue` | `ParsedPayloadListeners#onRelayed` | "
+        "— → — | unresolved | resolved |"
     ) in document
 
     # The two refused rows reach "Open questions" with their candidates —
@@ -1361,7 +1391,7 @@ def test_the_golden_overlay_assembles_into_the_rendered_document(tmp_path: Path)
     _run(tmp_path)
     document = (tmp_path / "render" / "architecture.md").read_text()
 
-    header = "> **Enrichment — evidence: llm** (model fixture-model, agent fixture-agent)"
+    header = "**Enrichment — evidence: llm** (model fixture-model, agent fixture-agent)"
     assert document.count(header) == 3  # two anchors plus the verdict's own question
     assert "**Component: Legacy billing edge**" in document
     assert "Members: `com/example/orders/soap/OrderSoapEndpoint#`" in document
@@ -1388,7 +1418,6 @@ def test_the_golden_overlay_assembles_into_the_rendered_document(tmp_path: Path)
     # none of them, which is what makes those pins the regression guard.
     assert "## Known gaps" in document
     assert (
-        "| `jms parsed-relay-queue` | "
-        "`com/acme/orders/messaging/parse/ParsedPayloadListeners#onRelayed(sig_cb303bd1).` | "
-        "- → - | unresolved | resolved |"
+        "| `jms parsed-relay-queue` | `ParsedPayloadListeners#onRelayed` | "
+        "— → — | unresolved | resolved |"
     ) in document

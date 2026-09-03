@@ -25,6 +25,37 @@ uv run sextant module export  <module-path>
 extractor's own build and tests, then the Python suite. `scripts/check.sh --lint` runs
 the lint gates alone, which is what the pre-commit hook in `.githooks/` runs.
 
+## Build systems and multi-module repositories
+
+Maven and Gradle are both detected behind the same `Detector` port
+([M02](docs/components/M02-detector.md)): Maven reads `pom.xml` directly, and Gradle —
+which has no build file a parser can read on its own, since `build.gradle.kts` is a
+Kotlin program — is learned by running the project's own `./gradlew` (falling back to a
+`gradle` on `PATH`) against a read-only init script Sextant packages, offline first with
+one flagged online retry (`--allow-resolve`) if the build's own dependency cache is
+incomplete. `pom.xml` wins when both exist in one repository; the coexistence is recorded
+as a note, never merged.
+
+`sextant module analyze <path>` detects the root first. A **multi-module** root — Maven's
+`<modules>`, Gradle's own `include`d projects — analyzes every module that is not
+*known* not to be a service (a Gradle-only `library` kind, or a leaf `packaging: pom`
+aggregator/BOM) into its **own** workspace, one per module, root-relative and listed in
+`<repo-root>/.sextant/modules.json` alongside whether each was analyzed or skip-listed and
+why. A Gradle module with no compiled output (no source-set-owning plugin applied) is
+recorded with the same `skip_reason: "packaging is pom"` a Maven leaf `packaging: pom`
+module gets — Maven vocabulary, reused deliberately rather than invented per build system,
+since both name the identical "nothing here to scan" shape. `--workspace` is refused at a multi-module root — the flag is per-module — and
+`render`/`enrich`/`export` never re-detect: pointed at a multi-module root instead of one
+of its modules, they refuse and print the module list `modules.json` already named.
+
+**Tested surface, stated honestly.** The end-to-end suite's fixtures pin Spring Boot 3.x
+semantics — their value is stability, not currency. Boot 4.1 is field-validated instead,
+for the HTTP inbound surface, against `examples/jhipster-sample-app` and
+`examples/spring-petclinic-rest` (both live Boot 4.1 repositories) by `scripts/field_check.py`
+— opt-in, network-using, and never part of `scripts/check.sh` or the test suite; its own
+module docstring states exactly what it checks (endpoint counts, route sets, the HTML
+output-quality assertions) and how "the first diagram parses" is defined without a browser.
+
 ## `.sextant.yml` — reading a dependency's own code
 
 Some declarations a module depends on are not in the module. A generated SOAP client stub,

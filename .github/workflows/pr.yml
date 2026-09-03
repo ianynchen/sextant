@@ -56,6 +56,21 @@ jobs:
           python tests/fixture_stub.py
           mvn -q -B -f fixtures/orders-service/pom.xml compile
 
+      - name: Prime the Gradle fixture's dependencies
+        # The Gradle counterpart of the step above — the ONE fetch-allowed
+        # Gradle step (2M design §4). `tests/e2e/test_gradle_fixture_builds.py`
+        # is the one opt-in Gradle integration test, and it runs `./gradlew
+        # --offline`, so a fresh runner's empty Gradle caches (the wrapper
+        # distribution, fixtures/gradle-orders's own dependencies) must be
+        # warm before it does. Running `sextantModel` itself here — the exact
+        # task that test re-runs offline — both fetches those and compiles
+        # both subprojects once, online, the same "successful build first"
+        # precondition `MavenDetector`'s own priming step states for `mvn`.
+        run: |
+          cd fixtures/gradle-orders
+          ./gradlew --init-script ../../src/sextant/ingress/detect/sextant-model.init.gradle \
+            --no-configuration-cache -q sextantModel -Psextant.out=/tmp/sextant-model-prime.json
+
       - name: Gates
         # ruff, mypy, the import contracts, the extractor build and both test
         # suites — in that order, cheapest first, and the extractor before the

@@ -6,6 +6,37 @@ works, and a diagram a human can actually read. Everything you write lands
 as an **overlay** — added beside the machine-derived document, never inside
 it, and never replacing a word of it.
 
+## Who you are writing for
+
+A developer on their **first day** with this codebase. They have not read
+any of it; they may not know the frameworks it uses; they opened this
+document to understand what the module does and where they would start.
+The machine half already gives them the inventory — every endpoint, every
+shape, every class name. Your half is the part a colleague would say out
+loud while pointing at the screen. So:
+
+- **Explain, don't inventory.** "AccountResource is the HTTP edge;
+  UserService owns the lifecycle state machine" is a list wearing a
+  sentence's clothes. Say what the thing *does* and *why it is there*:
+  "When someone registers or resets a password, the request lands here.
+  The controller only translates HTTP; the real rules — what makes an
+  activation key valid, when a reset expires — live in `UserService`, so
+  there is exactly one place to change them."
+- **Walk through one concrete moment** where it helps: a request's journey,
+  a message's path, what happens when the user clicks the thing. One real
+  example teaches more than three abstract sentences.
+- **Define jargon on first use**, or avoid it. "The HTTP edge", "the
+  lifecycle state machine", "alert-header plumbing" mean nothing on day
+  one. Plain words first; the precise term in parentheses if it earns its
+  place.
+- **Say why a reader would care.** A purpose that could caption any module
+  ("handles user management") has said nothing. What breaks if this
+  component is wrong? What would you touch it for?
+
+Grounding and readability are not rivals: every sentence still traces to
+something you read — you are choosing the *words*, not loosening the
+*evidence*.
+
 You will be given, in the message that follows: the machine-rendered
 `architecture.md`, the module's known gaps, its open questions, and a digest
 of the rows the graph itself is unsure about. Read those first. Then use the
@@ -106,7 +137,7 @@ invent a fifth kind or a field not shown here.
   "evidence": "llm",
   "anchor": "after-component-overview",
   "name": "Legacy billing edge",
-  "purpose": "Everything this module exchanges with the billing system over the older XML transport lives here.",
+  "purpose": "The billing system this module talks to still speaks an older XML protocol (SOAP), and everything about that conversation is kept in these two classes so the rest of the module never has to know. When an order needs billing, `BillingSoapClient` wraps it in the XML envelope billing expects and sends it; when billing calls back, `OrderSoapEndpoint` unwraps the request and hands a plain object onward. If billing ever moves off SOAP, this component is the only thing that changes.",
   "members": ["com/example/orders/soap/OrderSoapEndpoint#", "com/example/orders/soap/BillingSoapClient#"]
 }
 ```
@@ -123,14 +154,17 @@ actually found.
   "evidence": "llm",
   "anchor": "after-endpoint-table",
   "title": "Extending the legacy billing edge",
-  "body": "To expose another operation on the existing endpoint, add a method to the endpoint class using the same payload-root annotation style its neighbours use.",
+  "body": "Suppose billing needs a new operation — say, cancelling an order. Open `OrderSoapEndpoint` and look at any existing method: each one is a plain method with an annotation naming the XML element it answers to (the payload root). Add yours the same way — a method taking the new request type, annotated with the new element's name — and the framework wires it up; there is no registry to update and no configuration to touch. The request and response classes follow the naming pattern of the ones already in the same package.",
   "cites": ["src/main/java/com/example/orders/soap/OrderSoapEndpoint.java"]
 }
 ```
 
 `cites` are the files this section is actually built from — every one of
 them must be a real file under the module, reachable by the same path
-`find`/`grep` printed for it.
+`find`/`grep` printed for it. In the rendered HTML, a backtick-quoted
+`` `symbol` `` in `body` becomes code and a triple-backtick fenced block
+becomes a code block — nothing else in `body` is specially interpreted
+there (the markdown output already renders ordinary markdown natively).
 
 ### `diagram` — a simplified mermaid class or sequence diagram
 
@@ -146,7 +180,10 @@ them must be a real file under the module, reachable by the same path
 
 Every `class`/`participant`/`actor` line must name a real type you found —
 `elides` is required, and it is where you say what is left out and why, so
-the diagram never claims to be the whole picture when it is not.
+the diagram never claims to be the whole picture when it is not. Backtick-
+quote any identifier that is not a bare word or dotted path — a JVM `$`
+nested-class name (`` class `OrderProtos$OrderRequest` ``), most often —
+because mermaid's grammar refuses it unquoted.
 
 ### `verdict` — an assessment of one open question, or an honest `unanswered`
 

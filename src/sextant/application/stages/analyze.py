@@ -101,6 +101,10 @@ class AnalyzeResult:
     # list would leave a reader to work out which of the two they are looking
     # at from the reason text alone.
     libraries_not_scanned: tuple[str, ...] = ()
+    # The detector's own `RepositoryModel.notes` (2M design §1c), carried out
+    # unchanged — this stage neither adds to nor filters them, the same
+    # pass-through `uncovered` and the two lists above already are.
+    notes: tuple[str, ...] = ()
 
 
 def analyze(
@@ -122,6 +126,12 @@ def analyze(
     # `DescriptorInterpreter`'s own docstring says why this is a Protocol
     # rather than the interpreter's own `GeneratedNaming` parameter).
     interpret: DescriptorInterpreter | None = None,
+    # Threaded to the detector and nowhere else (2M design §1 network-posture
+    # bullet): today's port parameter exists on every detector and nothing
+    # passed it, so an offline-only build could never opt into the one online
+    # retry `allow_resolve` is for. Defaulted so every existing caller stays
+    # offline exactly as before.
+    allow_resolve: bool = False,
 ) -> AnalyzeResult:
     progress.define("detect", "detect")
     progress.define("scan", "scan")
@@ -130,7 +140,7 @@ def analyze(
     progress.define("resolve", "resolve")
 
     progress.start("detect")
-    model = select_detector(detectors, path).detect(path)
+    model = select_detector(detectors, path).detect(path, allow_resolve=allow_resolve)
     module = model.modules[0]
     progress.finish("detect", f"modules: {len(model.modules)}")
 
@@ -335,6 +345,7 @@ def analyze(
         tuple(schema_sources_not_compiled),
         descriptors_not_interpreted,
         tuple(libraries_not_scanned),
+        model.notes,
     )
 
 
