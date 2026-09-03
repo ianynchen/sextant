@@ -122,6 +122,34 @@ def _verdict(path: str = "order-intake", anchor: str = "beside-open-question"):
     )
 
 
+def _config_verdict(key: str = "spring.config.import", anchor: str = "beside-open-question"):
+    return _claim(
+        "verdict",
+        anchor,
+        question={
+            "key": key,
+            "source": "application.yml",
+            "environment": "default",
+            "kind": "remote_source",
+        },
+        assessment="likely a Config Server import",
+        because="the profile declares `spring.config.import=configserver:`",
+    )
+
+
+# One unresolved `resolved_config` row (D01's closed five-reason set) — the
+# exact row `_config_verdict` above answers.
+CONFIG_ROWS = [
+    {
+        "key": "spring.config.import",
+        "value": None,
+        "source": "application.yml",
+        "environment": "default",
+        "unresolved_reason": "remote_source",
+    },
+]
+
+
 def _overlay(*claims: dict[str, object]) -> EnrichmentOverlay:
     return EnrichmentOverlay.model_validate({"produced_by": PROVENANCE, "claims": list(claims)})
 
@@ -533,6 +561,8 @@ def test_a_verdict_on_a_question_whose_path_redaction_changes_still_lands_beside
                 return []
             if name == "open_questions":
                 return questions
+            if name == "resolved_config":
+                return []
             raise AssertionError(f"unexpected query: {name}")
 
     accepted, refusals = validate_overlay(overlay, _QuestionWorkspace(), Path("/nonexistent"))
@@ -555,6 +585,43 @@ def test_a_non_verdict_claim_anchored_beside_the_questions_lands_after_them_all(
     text = _rendered(_section(anchor="beside-open-question", title="Reading the inbox"))
     assert _position(text, "`sqs order-audit`") < _position(text, "**Reading the inbox**")
     assert _position(text, "**Reading the inbox**") < _position(text, "## Known gaps")
+
+
+# --- 2N design §2: a config verdict's own placement -------------------------
+
+
+def test_a_config_verdict_renders_beside_the_coverage_unresolved_listing():
+    """The config-shaped half of `beside-open-question` (2N design §2): a
+    config verdict answers a "Configuration key unresolved" line the Coverage
+    section already prints, so it lands right after that listing — before
+    `## Structure`, the section that follows Coverage."""
+    text = render_module_document(
+        MODULE,
+        REPORT,
+        "a3f91c",
+        resolved_config=CONFIG_ROWS,
+        overlay=_overlay(_config_verdict()),
+    )
+    assert _position(text, "Configuration key unresolved: spring.config.import") < _position(
+        text, "**LLM assessment**"
+    )
+    assert _position(text, "**LLM assessment**") < _position(text, "## Structure")
+
+
+def test_an_endpoint_verdict_still_lands_beside_its_own_question_unaffected_by_config_rows():
+    """The config placement is additive, not a replacement: an endpoint-shaped
+    verdict keeps landing directly under the exact `open_questions` row it
+    answers even when the module also carries unresolved configuration."""
+    text = render_module_document(
+        MODULE,
+        REPORT,
+        "a3f91c",
+        open_questions=OPEN_QUESTIONS,
+        resolved_config=CONFIG_ROWS,
+        overlay=_overlay(_verdict(path="order-audit")),
+    )
+    assert _position(text, "`sqs order-audit`") < _position(text, "**LLM assessment**")
+    assert _position(text, "**LLM assessment**") < _position(text, "## Known gaps")
 
 
 def test_an_end_of_document_claim_is_the_last_thing_in_the_file():
@@ -748,7 +815,7 @@ def test_the_redaction_reaches_the_section_model_not_only_the_markdown():
 
 
 class _Workspace:
-    """The two queries validation reads. The stale test needs a workspace it
+    """The three queries validation reads. The stale test needs a workspace it
     can REDUCE, which no analysed fixture offers: the golden overlay shipped
     in `fixtures/` is grounded against the live workspace by design, and
     making one of its referents vanish would mean deleting fixture code that
@@ -764,6 +831,8 @@ class _Workspace:
         if name == "declared_symbols":
             return [{"symbol": symbol} for symbol in self._symbols]
         if name == "open_questions":
+            return []
+        if name == "resolved_config":
             return []
         raise AssertionError(f"unexpected query: {name}")
 
@@ -874,7 +943,12 @@ def test_a_claim_anchored_outside_the_document_range_is_refused_not_dropped():
     an out-of-range index must fail exactly as loudly."""
     machine = (MachineSection(("# a module",)),)
     broken_anchors = _Anchors(
-        structure_end=99, endpoints_end=99, beside_question=(), questions_end=99, document_end=99
+        structure_end=99,
+        endpoints_end=99,
+        beside_question=(),
+        questions_end=99,
+        config_end=99,
+        document_end=99,
     )
     overlay = _overlay(_component())
     with pytest.raises(ValueError, match="outside the document's own"):

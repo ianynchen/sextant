@@ -171,6 +171,66 @@ class OpenQuestionRef(BaseModel):
         return question_identity(self.protocol, self.method, self.path, self.kind)
 
 
+def config_identity(
+    key: object, source: object, environment: object, kind: object
+) -> tuple[str | None, ...]:
+    """The four columns that identify one unresolved `resolved_config` row
+    (2N design §2): the config address, then the reason pass 2 could not
+    resolve it. One spelling, here, for the same reason `question_identity`
+    is: validation matches a config verdict to a row and assembly places that
+    verdict under the same row's rendered line, and two spellings of one
+    identity is a verdict that validates against a row and then renders
+    nowhere near it. `object` rather than `str | None` for the same reason
+    `question_identity` takes it — one caller holds a claim's typed fields and
+    the other holds a query row's untyped columns.
+    """
+    return tuple(
+        None if value is None else str(value) for value in (key, source, environment, kind)
+    )
+
+
+def resolved_config_identity(
+    row: Mapping[str, object], redactor: Redactor
+) -> tuple[str | None, ...]:
+    """One unresolved `resolved_config` WORKSPACE row's identity, canonicalized
+    (2N design §2, mirroring 2K Task 7 ruling 1 for `open_question_identity`):
+    `key` and `source` — the two columns that can carry a classpath-relative
+    address — are `redact_text`-ed before the tuple is built, so the row
+    matches on the spelling the model actually saw. `unresolved_reason` fills
+    the `kind` slot, the same way `open_question_identity` fills it from the
+    row's `question` column while the ref field is named `kind`.
+    """
+    key = row.get("key")
+    redacted_key = None if key is None else redactor.redact_text(str(key))
+    source = row.get("source")
+    redacted_source = None if source is None else redactor.redact_text(str(source))
+    return config_identity(
+        redacted_key, redacted_source, row.get("environment"), row.get("unresolved_reason")
+    )
+
+
+class ConfigQuestionRef(BaseModel):
+    """The identity of one unresolved `resolved_config` row (2N design §2):
+    the config address plus the reason pass 2 could not resolve it.
+    `environment` disambiguates rows that share every other column — the live
+    rows this shape was verified against differ from each other ONLY by it
+    (`spring.config.import` unresolved in both `default` and `docker`).
+    `source` is nullable and required rather than defaulted: a `missing_key`
+    row was never declared in any file, so no file ever won it (D01) and there
+    is nothing to name, but every config verdict states that explicitly
+    rather than relying on an omitted field to mean it."""
+
+    model_config = {"frozen": True, "extra": "forbid"}
+    key: str
+    source: str | None
+    environment: str
+    kind: str
+
+    @property
+    def identity(self) -> tuple[str | None, ...]:
+        return config_identity(self.key, self.source, self.environment, self.kind)
+
+
 class VerdictClaim(_ClaimBase):
     """The verification seat (2K design §7): an assessment of one open
     question, or an honest `unanswered`.
@@ -178,6 +238,14 @@ class VerdictClaim(_ClaimBase):
     **The graph is immutable.** A verdict never feeds resolve and never
     rewrites the row — the question stays open, and this claim renders beside
     it labelled as a model's assessment.
+
+    `question` is itself a union of two identities (2N design §2), UNTAGGED
+    rather than discriminated: the endpoint shape (`protocol`/`kind`
+    required) and the config shape (`key`/`environment`/`kind` required)
+    share no `Literal` tag, but their required fields are disjoint, so
+    `extra="forbid"` on both members makes the parse unambiguous — a payload
+    carrying both shapes' fields is refused by neither member rather than
+    guessed into one.
 
     Two shapes, one model: an answered verdict carries `because` (the grounding
     that makes it readable as evidence rather than opinion) and no `searched`;
@@ -188,7 +256,7 @@ class VerdictClaim(_ClaimBase):
     """
 
     kind: Literal["verdict"]
-    question: OpenQuestionRef
+    question: OpenQuestionRef | ConfigQuestionRef
     assessment: str
     because: str | None = None
     searched: str | None = None

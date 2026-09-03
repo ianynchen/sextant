@@ -39,26 +39,41 @@ QUESTION = {
     "evidence": "compiler",
 }
 
+# One unresolved `resolved_config` row (D01's closed five-reason set):
+# `spring.config.import`, unresolved for `remote_source` in `default` — the
+# exact shape 2N design §2 verified the identity against.
+CONFIG_ROW = {
+    "key": "spring.config.import",
+    "value": None,
+    "source": "application.yml",
+    "environment": "default",
+    "unresolved_reason": "remote_source",
+}
+
 
 class _Workspace:
-    """The two named queries validation reads, and nothing else. A hand-built
-    workspace rather than an analysed fixture: these tests are about which
-    claims are refused, and a fixture would tie every assertion to whatever
-    the fixture's own code happens to declare this month."""
+    """The three named queries validation reads, and nothing else. A
+    hand-built workspace rather than an analysed fixture: these tests are
+    about which claims are refused, and a fixture would tie every assertion
+    to whatever the fixture's own code happens to declare this month."""
 
     def __init__(
         self,
         symbols: list[str] | None = None,
         open_questions: list[dict[str, object]] | None = None,
+        resolved_config: list[dict[str, object]] | None = None,
     ) -> None:
         self._symbols = SYMBOLS if symbols is None else symbols
         self._open_questions = [QUESTION] if open_questions is None else open_questions
+        self._resolved_config = [CONFIG_ROW] if resolved_config is None else resolved_config
 
     def query(self, name: str, **params: object) -> list[dict[str, object]]:
         if name == "declared_symbols":
             return [{"symbol": symbol} for symbol in self._symbols]
         if name == "open_questions":
             return list(self._open_questions)
+        if name == "resolved_config":
+            return list(self._resolved_config)
         raise AssertionError(f"validation asked for an unexpected query: {name}")
 
 
@@ -372,6 +387,131 @@ def test_a_userinfo_bearing_question_path_matches_after_the_same_redaction_the_b
 
     assert refusals == ()
     assert len(accepted) == 1
+
+
+# --- 2N design §2: config-shaped verdicts, the same "validation by ---------
+# --- construction" law widened to `resolved_config`'s unresolved rows ------
+
+
+def _config_verdict(**overrides: object) -> dict[str, object]:
+    return {
+        "kind": "verdict",
+        "evidence": "llm",
+        "anchor": "beside-open-question",
+        "question": {
+            "key": "spring.config.import",
+            "source": "application.yml",
+            "environment": "default",
+            "kind": "remote_source",
+        },
+        "assessment": "likely a Config Server import",
+        "because": "the profile declares `spring.config.import=configserver:`",
+        **overrides,
+    }
+
+
+def test_a_config_verdict_matching_the_unresolved_row_is_accepted(tmp_path: Path):
+    """A config verdict must match a real unresolved `resolved_config` row
+    field for field (2N design §2) — the same "validation by construction"
+    rule the endpoint shape already keeps, widened to config-shaped
+    uncertainty."""
+    accepted, refusals = validate_overlay(_overlay(_config_verdict()), _Workspace(), tmp_path)
+    assert refusals == ()
+    assert len(accepted) == 1
+
+
+def test_environment_disambiguates_two_rows_that_share_every_other_column(tmp_path: Path):
+    """The exact case that motivated `environment` in the identity (2N design
+    §2, verified against spring-petclinic-customers-service's live rows):
+    `spring.config.import` is unresolved in BOTH `default` and `docker` — an
+    identity without `environment` could not tell the two rows apart, and a
+    verdict about one must match exactly that one, not either."""
+    docker_row = dict(CONFIG_ROW, environment="docker")
+    workspace = _Workspace(resolved_config=[CONFIG_ROW, docker_row])
+    accepted, refusals = validate_overlay(_overlay(_config_verdict()), workspace, tmp_path)
+    assert refusals == ()
+    assert len(accepted) == 1
+    assert accepted[0].question.environment == "default"  # type: ignore[union-attr]
+
+
+def test_a_config_verdict_answering_a_phantom_row_is_refused(tmp_path: Path):
+    """A config verdict naming a row the workspace never carries unresolved is
+    a phantom exactly as an invented `open_questions` row is — refused by
+    name, never silently accepted."""
+    question = {
+        "key": "spring.config.import",
+        "source": "application.yml",
+        "environment": "docker",  # only "default" is unresolved in this workspace
+        "kind": "remote_source",
+    }
+    _, refusals = validate_overlay(
+        _overlay(_config_verdict(question=question)), _Workspace(), tmp_path
+    )
+    assert len(refusals) == 1
+    assert "docker" in refusals[0].reason
+
+
+def test_a_config_verdict_against_a_resolved_row_is_refused(tmp_path: Path):
+    """Only UNRESOLVED rows (`value IS NULL`) are addressable (2N design
+    §2/§3, "only rows the machine already computes gain an address") — a row
+    pass 2 resolved has no unresolved reason left to ask about, so a verdict
+    naming one is refused the same way a phantom row is."""
+    resolved_row = dict(CONFIG_ROW, value="http://config-server:8888", unresolved_reason=None)
+    workspace = _Workspace(resolved_config=[resolved_row])
+    _, refusals = validate_overlay(_overlay(_config_verdict()), workspace, tmp_path)
+    assert len(refusals) == 1
+
+
+def test_a_userinfo_bearing_config_source_matches_after_the_same_redaction_the_brief_applied(
+    tmp_path: Path,
+):
+    """2N design §2 extends 2K Task 7 ruling 1's "the brief IS the wire" to
+    the config shape's `key` and `source`: the brief redacts both before the
+    model ever reads them, so a verdict echoing the redacted spelling back
+    must still match once the workspace's raw row is canonicalized the same
+    way — the mirror of the endpoint shape's `path` redaction test above."""
+    redactor = Redactor.from_rules()
+    raw_source = "https://user:pass@config.example.com/application.yml"
+    redacted_source = redactor.redact_text(raw_source)
+    assert redacted_source != raw_source  # sanity: this redactor is not a no-op here
+
+    row = dict(CONFIG_ROW, source=raw_source)
+    claim = _config_verdict(
+        question={
+            "key": "spring.config.import",
+            "source": redacted_source,
+            "environment": "default",
+            "kind": "remote_source",
+        }
+    )
+
+    accepted, refusals = validate_overlay(
+        _overlay(claim), _Workspace(resolved_config=[row]), tmp_path, redactor
+    )
+    assert refusals == ()
+    assert len(accepted) == 1
+
+
+def test_an_unanswered_config_verdict_still_has_to_answer_a_real_row(tmp_path: Path):
+    """**`unanswered` exempts the ANSWER, never the REFERENT** — the same law
+    the endpoint shape keeps (Task 3 review, ruled), extended unchanged to
+    config-shaped questions (2N design §2): a verdict against a config row
+    nobody resolved as unresolved is a phantom whichever way it is answered."""
+    claim = _config_verdict(
+        assessment="unanswered",
+        searched="checked every profile file; the import target could not be traced",
+        question={
+            "key": "spring.config.import",
+            "source": "application.yml",
+            "environment": "gone",
+            "kind": "remote_source",
+        },
+    )
+    del claim["because"]
+    accepted, refusals = validate_overlay(_overlay(claim), _Workspace(), tmp_path)
+    assert accepted == ()
+    assert len(refusals) == 1
+    assert "gone" in refusals[0].reason
 
 
 def _unanswered(**overrides: object) -> dict[str, object]:
