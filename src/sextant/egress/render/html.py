@@ -99,7 +99,7 @@ pre.machine { background: #f6f8fa; padding: 1rem; overflow-x: auto; border-radiu
                      user-select: none; -webkit-user-select: none; }
 .diagram-viewport.dragging { cursor: grabbing; }
 .diagram-canvas { width: max-content; transform-origin: 0 0; }
-.diagram-canvas pre.mermaid { margin: 0; background: transparent; padding: 1rem; }
+.diagram-canvas pre.mermaid { margin: 0; background: transparent; padding: 0; }
 .diagram-caption { padding: 0.5rem 1rem; font-style: italic; color: #57606a;
                     border-top: 1px solid #d0d7de; }
 table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
@@ -153,7 +153,18 @@ def html_document(sections: AssembledDocument, module_id: str) -> str:
         "<script>\n"
         'mermaid.initialize({"startOnLoad": false, "securityLevel": "strict"});\n'
         'document.addEventListener("DOMContentLoaded", function () {\n'
-        '  mermaid.run({ querySelector: ".mermaid" });\n'
+        "  // run() resolves once every diagram is rendered SVG; the event\n"
+        "  // tells panzoom.js to fit each diagram to its viewport, which\n"
+        "  // needs the real rendered geometry rather than the placeholder\n"
+        "  // the browser sizes before mermaid replaces it.\n"
+        '  mermaid.run({ querySelector: ".mermaid" }).then(function () {\n'
+        "    // Flag AND event: panzoom.js may register its listener before or\n"
+        "    // after this resolves (promise microtasks can run between two\n"
+        "    // DOMContentLoaded handlers), so it checks the flag when it sets\n"
+        "    // up and listens for the event when it set up first.\n"
+        "    window.sextantDiagramsRendered = true;\n"
+        '    document.dispatchEvent(new Event("sextant:diagrams-rendered"));\n'
+        "  });\n"
         "});\n"
         "</script>\n"
         f"<script>{panzoom_js}</script>\n"

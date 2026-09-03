@@ -36,6 +36,11 @@
     var dragging = false;
     var lastX = 0;
     var lastY = 0;
+    // The "home" view reset() returns to. Identity until fit() computes a
+    // real one from the rendered SVG's geometry.
+    var homeScale = 1;
+    var homeX = 0;
+    var homeY = 0;
 
     function apply() {
       canvas.style.transform =
@@ -43,10 +48,55 @@
     }
 
     function reset() {
-      scale = 1;
-      x = 0;
-      y = 0;
+      scale = homeScale;
+      x = homeX;
+      y = homeY;
       apply();
+    }
+
+    // Fit-and-center: the initial view a reader gets, and what reset()
+    // returns to. Mermaid emits its SVG with width="100%", but the canvas is
+    // width:max-content — circular sizing the browser resolves to the SVG
+    // default 300px, which painted a 2500px-wide diagram into a corner (the
+    // field defect this function exists for). So: read the diagram's natural
+    // size off its own viewBox, pin the SVG to those pixels, then scale the
+    // whole canvas DOWN to fit the viewport (never up — a two-node diagram
+    // blown to 8x is not a better initial view) and center it.
+    function fit() {
+      var svg = canvas.querySelector("svg");
+      if (!svg || !svg.viewBox || !svg.viewBox.baseVal) {
+        return; // mermaid failed or never ran; keep the identity view
+      }
+      var naturalWidth = svg.viewBox.baseVal.width;
+      var naturalHeight = svg.viewBox.baseVal.height;
+      if (!naturalWidth || !naturalHeight) {
+        return;
+      }
+      svg.style.width = naturalWidth + "px";
+      svg.style.height = naturalHeight + "px";
+      svg.style.maxWidth = "none";
+      homeScale = clamp(
+        Math.min(
+          viewport.clientWidth / naturalWidth,
+          viewport.clientHeight / naturalHeight,
+          1,
+        ),
+      );
+      homeX = (viewport.clientWidth - naturalWidth * homeScale) / 2;
+      homeY = (viewport.clientHeight - naturalHeight * homeScale) / 2;
+      reset();
+    }
+
+    // mermaid.run() finishes after DOMContentLoaded and announces itself
+    // with a flag AND an event, because the ordering is a genuine race:
+    // promise microtasks can run between two DOMContentLoaded handlers, so
+    // the announcement may land before this setup runs (read the flag) or
+    // after it (hear the event). Either way the fit sees real rendered
+    // geometry, never the placeholder.
+    if (window.sextantDiagramsRendered) {
+      fit();
+    } else {
+      document.addEventListener("sextant:diagrams-rendered", fit);
     }
 
     // Zoom by `factor`, keeping the point at VIEWPORT coordinates (px, py)

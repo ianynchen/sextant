@@ -162,6 +162,34 @@ def test_diagram_source_is_escaped_without_being_corrupted():
     assert "uses <T> & more" not in document
 
 
+def test_the_render_announcement_reaches_panzoom_across_the_ordering_race():
+    """The fit-to-viewport handshake (field defect: a 2500px-wide diagram
+    painted at the SVG's 300px default in a corner). mermaid's completion is
+    announced with a FLAG and an EVENT because promise microtasks can run
+    between two DOMContentLoaded handlers — panzoom may set up before or
+    after the announcement, and must catch it either way."""
+    sections = assemble_module_document(MODULE, REPORT, "a3f91c")
+    document = _html(sections)
+    assert "window.sextantDiagramsRendered = true;" in document
+    assert 'new Event("sextant:diagrams-rendered")' in document
+    assert "if (window.sextantDiagramsRendered)" in PANZOOM_JS
+    assert 'addEventListener("sextant:diagrams-rendered", fit)' in PANZOOM_JS
+
+
+def test_the_initial_view_fits_and_centers_and_reset_returns_there():
+    """fit() reads the diagram's natural size off its own viewBox (mermaid's
+    width="100%" against a max-content canvas resolves to the 300px SVG
+    default — the crowded-corner defect), pins the SVG to real pixels, scales
+    DOWN to fit (never up), centers, and makes that the home reset() restores."""
+    assert "function fit(" in PANZOOM_JS
+    assert "svg.viewBox.baseVal" in PANZOOM_JS
+    assert 'svg.style.maxWidth = "none"' in PANZOOM_JS
+    # scale caps at 1: a small diagram is centered at natural size, not blown up
+    assert "1,\n" in PANZOOM_JS or "          1," in PANZOOM_JS
+    # reset restores the computed home, not the identity transform
+    assert "scale = homeScale;" in PANZOOM_JS
+
+
 # --- panzoom.js: the wheel convention and drag safety (I-2, M-2, M-3) -----
 
 
