@@ -7,10 +7,14 @@ beyond-fixture claims are verified only when someone runs this; the fixture pins
 always-on net.
 
 Each expectation file under `scripts/field-expectations/*.json` PINS the upstream commit
-it was recorded against. This script checks out that exact commit before validating, so
-upstream drift can never masquerade as a Sextant regression — refreshing a pin (a new
-`commit`, and the counts/routes re-recorded against it) is a deliberate, reviewed act, not
-something this script does on its own.
+it was recorded against, and the upstream's own `remote` URL — `examples/` is gitignored,
+so nothing survives outside these expectation files to say which repository a `repo` name
+even refers to. Reproducing a check on a machine that does not already have the clone is
+therefore `git clone <remote> examples/<repo>` (at any commit — this script checks out the
+pinned one itself) before running this script. It then checks the working tree out to
+exactly that commit before validating, so upstream drift can never masquerade as a Sextant
+regression — refreshing a pin (a new `commit`, and the counts/routes re-recorded against
+it) is a deliberate, reviewed act, not something this script does on its own.
 
 Checks, per expectation:
 
@@ -71,22 +75,49 @@ def _run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False)
 
 
+def _ensure_repo_present(repo: Path, remote: str) -> None:
+    """The pinned repository has to already be cloned locally — this script deliberately
+    never clones it for you (§3's opt-in, deliberate-network posture governs a `mvn
+    compile` this script DOES run, not fetching a whole upstream history unasked). `remote`
+    is `git clone`-able straight from the expectation file (see the module docstring)."""
+    if not repo.is_dir():
+        raise FieldCheckFailure(
+            f"{repo} does not exist — clone the pinned upstream first: git clone {remote} {repo}"
+        )
+
+
 def _checkout(repo: Path, commit: str) -> None:
     """Pin the upstream working tree to exactly `commit` — the whole point of pinning
     (upstream drift never masquerades as a Sextant regression). A dirty tree or a commit
     this clone does not have is a loud failure, never a silent checkout of whatever is
-    closest."""
+    closest.
+
+    The dirty-tree check runs BEFORE the already-at-`commit` early return (2M Task 7 fix
+    round 1, field-check gap a): a dirty tree sitting AT the pinned commit is not "already
+    correct" — validating against it means validating against whatever local edits are
+    sitting on top, which is exactly the drift this whole script exists to rule out. Left
+    after the early return, it also compounds with `_ensure_compiled`'s own "skip if
+    `target/classes` already exists" shortcut into a fully unpinned `ok`: a stale, edited
+    tree that still happens to report `HEAD == commit` would never be checked at all.
+
+    `--untracked-files=no`: TRACKED content only, deliberately. `sextant module
+    analyze`/`render` write `.sextant/` (and `.sextant-enrichment.json`) straight into
+    the module root by design (ARCHITECTURE §8) — this script's own prior run, or an
+    earlier `enrich`, leaves exactly that behind as untracked cruft the upstream's own
+    `.gitignore` never names. That is expected output, not drift: what this check exists
+    to catch is a TRACKED file — a `pom.xml`, a Java source — edited out from under the
+    pin, which `--untracked-files=no` still reports (`M path`) every time."""
     head = _run(["git", "rev-parse", "HEAD"], cwd=repo)
     if head.returncode != 0:
         raise FieldCheckFailure(f"{repo} is not a git repository: {head.stderr.strip()}")
-    if head.stdout.strip() == commit:
-        return
-    status = _run(["git", "status", "--porcelain"], cwd=repo)
+    status = _run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=repo)
     if status.stdout.strip():
         raise FieldCheckFailure(
-            f"{repo} has uncommitted changes; refusing to check out the pinned "
-            f"commit {commit} over them"
+            f"{repo} has uncommitted changes; refusing to validate against a tree that "
+            f"may not match the pinned commit {commit}"
         )
+    if head.stdout.strip() == commit:
+        return
     checkout = _run(["git", "checkout", "--quiet", commit], cwd=repo)
     if checkout.returncode != 0:
         raise FieldCheckFailure(
@@ -169,7 +200,17 @@ def _first_diagram_parses(html_text: str) -> bool:
     """See the module docstring's own definition of "parses". `None` (no diagram found at
     all) is itself a failure — every rendered document carries a `## Structure` diagram
     unconditionally, so its absence from the HTML means something upstream broke, not that
-    there was nothing to check."""
+    there was nothing to check.
+
+    `_BACKTICK_SPAN` (`` `[^`]*` ``) matches across newlines — mermaid identifiers are
+    single-line, so this is deliberately loose, not tight, and the conservatism this check
+    was documented with (module docstring) runs in the OPPOSITE direction here: a stray,
+    unpaired backtick earlier in the source can make this regex treat everything up to the
+    NEXT backtick — real `$`s included — as one big quoted span and strip it along with
+    them, hiding a genuinely unquoted `$` rather than flagging it. This check still proves
+    what it claims for well-formed, single-line quoted spans (2M design §5a's own emitted
+    shape); it is not a mermaid tokenizer and does not defend against adversarially
+    malformed diagram source."""
     match = re.search(r'<pre class="mermaid">(.*?)</pre>', html_text, re.DOTALL)
     if match is None:
         return False
@@ -185,6 +226,7 @@ def _check_one(name: str) -> list[str]:
     repo = EXAMPLES_DIR / expectation["repo"]
     problems: list[str] = []
 
+    _ensure_repo_present(repo, expectation["remote"])
     _checkout(repo, expectation["commit"])
     _ensure_compiled(repo)
     _analyze_and_render(repo)

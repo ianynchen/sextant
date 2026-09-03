@@ -34,9 +34,11 @@ from sextant.egress.render.document import (
     StaleNoticeSection,
     _Anchors,
     _code,
+    _disambiguated_shape_names,
     _interleave,
     _runs,
     _runs_to_markdown,
+    _shape_anchor_id,
     _shape_display_name,
     _text,
     assemble_module_document,
@@ -252,6 +254,23 @@ def test_shape_display_name_strips_a_trailing_type_marker_on_a_qname_too():
     assert _shape_display_name("{http://orders.example.com/ws}quoteOrderRequest#") == (
         "quoteOrderRequest"
     )
+
+
+def test_shape_anchors_stay_unique_across_different_collision_groups():
+    """2M Task 7 fix round 1, High — the reviewer's own proven counterexample:
+    a per-GROUP disambiguation pass is not enough. `p/q/A#` and `p/r/A#`
+    collide with each other on the simple name `A` and fall back to their own
+    full ids — `p/q/A` and `p/r/A`, genuinely distinct from EACH OTHER — but a
+    third, unrelated shape `x/p-q-A#` never collided with either of them (it
+    is alone in its own display-name group, `p-q-A`, so a per-group check
+    never runs it against `p/q/A`'s fallback at all) — and `p/q/A`/`p-q-A`
+    sanitize to the IDENTICAL anchor `shape-p-q-A` once `/` and `-` both
+    become `-`. Without a final pass over the whole set, `p/q/A#` and
+    `x/p-q-A#` would render duplicate, invalid `id="shape-p-q-A"` attributes."""
+    cited_shapes = {"p/q/A#": [], "p/r/A#": [], "x/p-q-A#": []}
+    names = _disambiguated_shape_names(cited_shapes)
+    anchors = {shape_id: _shape_anchor_id(name) for shape_id, name in names.items()}
+    assert len(set(anchors.values())) == 3, anchors
 
 
 # --- the regression pin ---------------------------------------------------

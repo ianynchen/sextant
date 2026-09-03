@@ -434,7 +434,20 @@ def _claim_body_html(body: str) -> str:
     `_inline_code_html` turns a paired backtick span into `<code>`; nothing
     else here is markdown, so a link, `**bold**`, or a fence that never
     closes before the body ends (still a complete, escaped code block — no
-    prose is left over to also render) is exactly the text the model wrote."""
+    prose is left over to also render) is exactly the text the model wrote.
+
+    Two asymmetries, stated rather than silently relied on (2M Task 7 fix
+    round 1, LOW): the OPEN test (`.startswith(_FENCE_LINE)`) accepts a
+    trailing info string — `` ```json `` opens a fence exactly like ` ``` `
+    alone — while the CLOSE test (`== _FENCE_LINE`) accepts only the bare
+    three backticks; a line reading `` ```json `` never closes one, the
+    same convention Commonmark itself uses. And whatever info string an
+    open line carries is dropped, never surfacing as a `class="language-…"`
+    or any other marker on the `<code>` it opens — the whole span still
+    renders as an unlabelled code block. Neither is a defect to fix; §5d's
+    rule is "code or not", not language-aware highlighting, and this is the
+    one place that distinction is spelled out rather than left for a reader
+    of the code alone to notice."""
     parts: list[str] = []
     lines = body.split("\n")
     index = 0

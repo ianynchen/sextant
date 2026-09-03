@@ -127,15 +127,19 @@ script (the error is Gradle's own).
   `<packaging>pom</packaging>` (a BOM or aggregation-only sibling with no classes to
   scan; without this exception a reactor containing a BOM hard-fails the whole run, a
   missing `target/classes` stopping the module's own scan) — reported skip-listed with
-  that reason (`"kind is library"` / `"packaging is pom"`). Every other module is
-  analyzed regardless of kind; `kind` stays honestly `undetermined` in `modules.json`
-  and `metadata.json` either way — only `analyzed` flips. One failing module fails
-  loudly and stops the run (`--keep-going` is NOT offered in 2M), and a run that fails
-  partway leaves no stale `modules.json` from a prior run claiming a module analyzed
-  that this run never reached. The root gets M02's designed `modules.json` (module
-  dirs — ROOT-RELATIVE, stable across however the root was itself spelled on the
-  command line — kinds, analyzed-or-skipped) — the artifact §2's refusals below read.
-  `--workspace` at a multi-module root is refused (the flag is per-module).
+  that reason (`"kind is library"` / `"packaging is pom"`), THE REASON ITSELF carried
+  as `skip_reason` on the module's own `modules.json` row (`null` when analyzed) — the
+  artifact is read back later, by a different invocation than the one whose stdout
+  named it, so the reason lives where the row does, not only in the run's own output.
+  Every other module is analyzed regardless of kind; `kind` stays honestly
+  `undetermined` in `modules.json` and `metadata.json` either way — only `analyzed`
+  flips. One failing module fails loudly and stops the run (`--keep-going` is NOT
+  offered in 2M), and a run that fails partway leaves no stale `modules.json` from a
+  prior run claiming a module analyzed that this run never reached. The root gets M02's
+  designed `modules.json` (module dirs — ROOT-RELATIVE, stable across however the root
+  was itself spelled on the command line — kinds, analyzed-or-skipped, and why) — the
+  artifact §2's refusals below read. `--workspace` at a multi-module root is refused
+  (the flag is per-module).
 - `render` / `enrich` / `export` stay strictly per-module and never re-detect: at a
   directory with a `modules.json` and no workspace they refuse WITH the module list
   read from that file; anywhere else workspace-less they keep today's "no analysis

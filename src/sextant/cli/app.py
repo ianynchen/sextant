@@ -117,14 +117,26 @@ def _skip_reason(module: ModuleModel) -> str | None:
     return None
 
 
-def _module_row(root: Path, module: ModuleModel, analyzed: bool) -> dict[str, object]:
+def _module_row(
+    root: Path, module: ModuleModel, analyzed: bool, skip_reason: str | None
+) -> dict[str, object]:
     """One `modules.json` row (2M Task 2 fix round 1, F9: single-sited here
-    rather than written out at both the skip and the analyzed call site)."""
+    rather than written out at both the skip and the analyzed call site).
+
+    `skip_reason` (2M Task 7 fix round 1, Critical) carries `_skip_reason`'s
+    own string — `None` for an analyzed row, never omitted for a skipped
+    one: the artifact is committed and read back later (`--refresh-stale`
+    orchestration, `render`/`enrich`/`export`'s own refusal), while the
+    `skipped ... : <reason>` line above only ever reaches THIS run's stdout.
+    Without this field, `analyzed: false` on its own forces a reader back to
+    a scrolled-away terminal to learn why — the exact thing a committed
+    inventory exists to avoid."""
     return {
         "dir": _root_relative(root, module.root),
         "module_id": module.module_id,
         "kind": module.kind,
         "analyzed": analyzed,
+        "skip_reason": skip_reason,
     }
 
 
@@ -431,7 +443,7 @@ def _module_analyze_reactor(path: Path, model: RepositoryModel, allow_resolve: b
         reason = _skip_reason(module)
         if reason is not None:
             click.echo(f"skipped {relative_dir} ({module.module_id}): {reason}")
-            rows.append(_module_row(path, module, analyzed=False))
+            rows.append(_module_row(path, module, analyzed=False, skip_reason=reason))
             continue
         workspace_dir = _workspace_dir_of(module.root, None)
         try:
@@ -448,7 +460,7 @@ def _module_analyze_reactor(path: Path, model: RepositoryModel, allow_resolve: b
             f"analyzed {relative_dir} ({module.module_id}): "
             f"{len(result.report.endpoints)} endpoints"
         )
-        rows.append(_module_row(path, module, analyzed=True))
+        rows.append(_module_row(path, module, analyzed=True, skip_reason=None))
 
     rows.sort(key=lambda row: cast(str, row["dir"]))
     modules_path.parent.mkdir(parents=True, exist_ok=True)

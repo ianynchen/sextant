@@ -1,5 +1,6 @@
 {
   "repo": "spring-petclinic-rest",
+  "remote": "https://github.com/spring-petclinic/spring-petclinic-rest.git",
   "commit": "4cd8e1b0cd42578e882247d8801f6be5d402f118",
   "endpoints": {
     "inbound": {

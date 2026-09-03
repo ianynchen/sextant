@@ -833,12 +833,14 @@ def test_analyze_at_a_reactor_root_analyzes_every_non_bom_module(tmp_path: Path)
             "module_id": "com.acme:orders-service",
             "kind": "undetermined",
             "analyzed": True,
+            "skip_reason": None,
         }
         assert by_dir["billing-lib"] == {
             "dir": "billing-lib",
             "module_id": "com.acme:billing-lib",
             "kind": "undetermined",
             "analyzed": True,
+            "skip_reason": None,
         }
 
         # `render`/`enrich`/`export` never re-detect (M00); pointed at the
@@ -958,7 +960,14 @@ def test_a_leaf_module_packaged_pom_is_skip_listed_with_that_reason(tmp_path: Pa
     modules = json.loads((reactor / ".sextant" / "modules.json").read_text())["modules"]
     by_dir = {row["dir"]: row for row in modules}
     assert by_dir["bom"]["analyzed"] is False
+    # 2M Task 7 fix round 1, Critical: the reason lives in the COMMITTED
+    # artifact too, not only in this run's own stdout — a reader of
+    # `modules.json` alone (`--refresh-stale` orchestration, a later
+    # `render`/`enrich`/`export` refusal) must be able to answer "why"
+    # without the terminal output that produced it.
+    assert by_dir["bom"]["skip_reason"] == "packaging is pom"
     assert by_dir["service"]["analyzed"] is True
+    assert by_dir["service"]["skip_reason"] is None
 
 
 def test_skip_reason_names_library_kind():

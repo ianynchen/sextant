@@ -49,8 +49,9 @@ of its modules, they refuse and print the module list `modules.json` already nam
 semantics — their value is stability, not currency. Boot 4.1 is field-validated instead,
 for the HTTP inbound surface, against `examples/jhipster-sample-app` and
 `examples/spring-petclinic-rest` (both live Boot 4.1 repositories) by `scripts/field_check.py`
-— opt-in, network-using, and never part of `scripts/check.sh` or the test suite; see
-[COVERAGE.md](docs/COVERAGE.md) for what that field run actually checks.
+— opt-in, network-using, and never part of `scripts/check.sh` or the test suite; its own
+module docstring states exactly what it checks (endpoint counts, route sets, the HTML
+output-quality assertions) and how "the first diagram parses" is defined without a browser.
 
 ## `.sextant.yml` — reading a dependency's own code
 

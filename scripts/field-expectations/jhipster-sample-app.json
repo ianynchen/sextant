@@ -1,5 +1,6 @@
 {
   "repo": "jhipster-sample-app",
+  "remote": "https://github.com/jhipster/jhipster-sample-app.git",
   "commit": "e06e87abe0be8a3a194381ce651164a734811b3f",
   "endpoints": {
     "inbound": {

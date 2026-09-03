@@ -1177,8 +1177,12 @@ def _shape_anchor_id(display_name: str) -> str:
     `-` — so it is `_disambiguated_shape_names`' job, not this function's,
     to guarantee the mirror mistake (fix round 1, MEDIUM 2) never happens:
     that two DIFFERENT final names handed to this function never produce
-    the same anchor. This function alone cannot promise that; it only
-    sanitizes what it is given."""
+    the same anchor, ACROSS EVERY shape in one document, not only within
+    whichever group first collided (2M Task 7 fix round 1, High: the
+    per-group fallback alone still let two names from DIFFERENT groups
+    collide — `_globally_unique_anchors` is where that promise is actually
+    kept). This function alone cannot promise it; it only sanitizes what it
+    is given."""
     return f"shape-{_ANCHOR_UNSAFE.sub('-', display_name)}"
 
 
@@ -1228,49 +1232,68 @@ def _disambiguated_shape_names(cited_shapes: dict[str, list[dict[str, object]]])
     check that matches what `_shape_anchor_id` itself promises never
     collides.
 
-    The fallback (the shape id itself) is not immune to the same lossy
-    sanitizing — two full ids can collide there too, for the identical
-    reason — so `_disambiguate_by_full_id` runs the SAME anchor-equality
-    check a second time over just the colliding group, breaking any tie
-    that survives with a positional ordinal a digit's own presence in the
-    sanitized anchor guarantees is not lossy."""
-    by_anchor: dict[str, list[str]] = {}
+    Built in `cited_shapes`' own order (its first-seen citation order, the
+    order `### Shapes` itself renders in) before the final pass below runs,
+    so which shape wins a shared anchor bare is the one the document cites
+    first — not an artifact of which dict this function happened to group
+    things into internally.
+
+    `_globally_unique_anchors` then runs ONCE, over every shape at once,
+    because the per-group fallback above is not by itself enough (fix round
+    1, High — the reviewer's proven counterexample): `p/q/A#` and `p/r/A#`
+    collide on the simple name `A` and fall back to their own full ids,
+    `p/q/A` and `p/r/A` — genuinely distinct from EACH OTHER — but a THIRD,
+    unrelated shape `x/p-q-A#`, alone in its own group, keeps its unchanged
+    display name `p-q-A`, whose anchor (`shape-p-q-A`) is the SAME one
+    `p/q/A`'s fallback produces once `/` and `-` both sanitize to `-`. No
+    per-group check ever compares those two names, because they were never
+    in the same group — only a pass over the WHOLE finished set can."""
     display_names = {shape_id: _shape_display_name(shape_id) for shape_id in cited_shapes}
+    by_anchor: dict[str, list[str]] = {}
     for shape_id, display in display_names.items():
         by_anchor.setdefault(_shape_anchor_id(display), []).append(shape_id)
-    names: dict[str, str] = {}
+    per_group: dict[str, str] = {}
     for colliding in by_anchor.values():
         if len(colliding) == 1:
             shape_id = colliding[0]
-            names[shape_id] = display_names[shape_id]
+            per_group[shape_id] = display_names[shape_id]
         else:
-            names.update(_disambiguate_by_full_id(colliding))
-    return names
+            for shape_id in colliding:
+                per_group[shape_id] = without_type_marker(shape_id)
+    ordered = {shape_id: per_group[shape_id] for shape_id in cited_shapes}
+    return _globally_unique_anchors(ordered)
 
 
-def _disambiguate_by_full_id(colliding: list[str]) -> dict[str, str]:
-    """One group of shape ids whose display names collided, named by their
-    own full id instead (trailing `#` stripped) — unique as Python values
-    since `cited_shapes` is keyed on them, but sanitizing punctuation down
-    to `-` can still land two DIFFERENT full ids on the SAME anchor (a `.`
-    and a `-` both collapse to it, and a shared QName prefix like `{uri}`
-    makes this more likely, not less). So this runs the identical
-    anchor-equality check again over just these names, and ONLY where that
-    still finds a tie appends a positional ordinal — a digit is a safe
-    character `_shape_anchor_id` never touches, so appending one is the one
-    disambiguator guaranteed to survive sanitizing intact."""
-    fallback = {shape_id: without_type_marker(shape_id) for shape_id in colliding}
-    by_anchor: dict[str, list[str]] = {}
-    for shape_id, name in fallback.items():
-        by_anchor.setdefault(_shape_anchor_id(name), []).append(shape_id)
-    names: dict[str, str] = {}
-    for group in by_anchor.values():
-        if len(group) == 1:
-            names[group[0]] = fallback[group[0]]
-        else:
-            for ordinal, shape_id in enumerate(group, start=1):
-                names[shape_id] = f"{fallback[shape_id]} ({ordinal})"
-    return names
+def _globally_unique_anchors(names: dict[str, str]) -> dict[str, str]:
+    """`names`, walked in order, with a positional ordinal (` (2)`, ` (3)`,
+    ...) appended to any name whose `_shape_anchor_id` a PRIOR entry in this
+    same walk already claimed (fix round 1, High — see
+    `_disambiguated_shape_names`' own docstring for the counterexample this
+    closes). The first shape to reach a given anchor keeps its name bare;
+    every later one competing for the same anchor gets the next free
+    ordinal — deterministic (NFR-1) because `names` itself is already
+    ordered, and because a digit is a character `_shape_anchor_id` never
+    touches, so appending one is guaranteed to change the anchor it
+    produces.
+
+    A churn hazard worth naming: appending a NEW shape earlier in citation
+    order than an existing one that happens to share its anchor can shift
+    which one keeps the bare name and which gets `(2)` — this walk has no
+    memory of a PRIOR run's assignment, only of citation order within the
+    CURRENT one."""
+    claimed: set[str] = set()
+    final: dict[str, str] = {}
+    for shape_id, name in names.items():
+        candidate = name
+        anchor = _shape_anchor_id(candidate)
+        ordinal = 2
+        while anchor in claimed:
+            candidate = f"{name} ({ordinal})"
+            anchor = _shape_anchor_id(candidate)
+            ordinal += 1
+        claimed.add(anchor)
+        final[shape_id] = candidate
+    return final
 
 
 def _cited_named_shapes(
