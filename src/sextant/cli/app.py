@@ -186,6 +186,12 @@ def module_enrich(
             auth_flag=auth_flag,
             dry_run=dry_run,
             ingest_path=ingest_path,
+            # The same shape `on_module=click.echo` already gives `analyze`
+            # (2N Task 5 fix round 1, MAJOR-1): `_enrich`'s own docstring
+            # states exactly where this fires, and why it can no longer be
+            # printed here, after the call returns — a later assembly
+            # failure raises before returning at all.
+            on_report=click.echo,
         )
     except api.SextantError as refused:
         raise click.ClickException(str(refused)) from refused
@@ -194,14 +200,6 @@ def module_enrich(
         click.echo(str(outcome.brief_path))
         click.echo(str(outcome.instructions_copy_path))
         return
-
-    # The user-visible report (2K design §6/Task 7 ruling 4): a refused
-    # claim named by position and reason, and an honest word about a run
-    # that did not end cleanly — before either is buried in a file.
-    for index, reason in outcome.refusals:
-        click.echo(f"refused claim {index}: {reason}")
-    if outcome.partial:
-        click.echo(f"partial answer ({outcome.partial_reason}) — overlay reflects what exists")
 
     click.echo(str(outcome.overlay_path))
     click.echo(str(outcome.markdown))

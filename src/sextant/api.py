@@ -7,12 +7,18 @@ anything and never raising `SystemExit`.
 **Built by extraction, not duplication.** Every composition that used to live
 inline inside a `click` command body in `cli/app.py` — the reactor loop
 `module analyze` walks, the tool-jail and door logic `module enrich`
-composes, the read-back-and-reassemble `render`/`export` share — moved here
-unchanged, so `cli/app.py`'s own commands could shrink to: parse flags, call
-one function below, translate a `SextantError` into a `click.ClickException`
-carrying the SAME message, then print the result. The existing CLI test
-suite, untouched, is the proof (2M's own discipline, restated for this task):
-a refactor is safe when the pins around it never moved.
+composes, the read-back-and-reassemble `render`/`export` share — moved here,
+its OWN observable behavior held fixed (nothing a `click` command printed
+moved earlier or later, no message text changed), so `cli/app.py`'s own
+commands could shrink to: parse flags, call one function below, translate a
+`SextantError` into a `click.ClickException` carrying the SAME message, then
+print the result. The existing CLI test suite, untouched, is the proof
+(2M's own discipline, restated for this task): a refactor is safe when the
+pins around it never moved. Fix round 1's own MAJOR-1 restored one such pin
+this extraction had actually MOVED (a report `cli/app.py` used to print
+before a later step could still fail, left printing only after that step —
+see `_enrich`'s own docstring) — the claim above is the target this module
+is now held to, not a claim that the first pass got there untested.
 
 **The v1 contract, stated plainly:**
 
@@ -46,6 +52,24 @@ keep in sync with the sync one by hand. Calling the plain, synchronous
 `RuntimeError` into an `EnrichmentAgentError`, which this module turns into
 an `EnrichmentError` the same way every other agent failure becomes one — no
 special-casing needed, and no `nest_asyncio` dependency added.
+
+**`enrich_async`'s own two real costs (fix round 1, MODERATE-4) — neither
+free, both worth stating plainly rather than leaving this read as pure
+upside over the sync `enrich`.** First, `asyncio.to_thread` runs the call on
+the default executor's own thread pool: one thread sits blocked for the
+FULL duration of a real run — a live model call, potentially minutes — for
+every concurrent `enrich_async` call, so a service issuing many at once can
+exhaust that pool (sized by `ThreadPoolExecutor`'s own default,
+`min(32, os.cpu_count() + 4)`) well before it exhausts anything else, and
+every call queued behind a full pool simply waits. Second, it is not
+cancellable in the way a native coroutine is: cancelling the `await` (a
+timeout, a client disconnect) does not stop the underlying thread — Python
+gives no API to interrupt one — so the worker keeps running to completion
+regardless, including writing the overlay and both rendered documents to
+disk, unseen by the caller that already gave up on it. Accepted for v1 as
+stated (review round 1): the real fix is a native async entry point on the
+`EnrichmentAgent` port itself (a `run_async` alongside `run`), ledgered as
+future work, not this task's.
 
 **The `SextantError` family.** The spec asks for "a typed `SextantError`
 family", not naming the members — this module picks four, grouped by what a
@@ -239,9 +263,13 @@ class ExportResult:
 class _EnrichOutcome:
     """The internal composition's own result — a superset of the public
     `EnrichResult`, carrying what only `cli/app.py`'s thin wrapper needs to
-    print: both dry-run paths (the public result folds down to one), the
-    other two written documents, and the per-claim refusal list `module
-    enrich` echoes one line per entry of."""
+    print: both dry-run paths (the public result folds down to one), and the
+    other two written documents. The per-claim refusal report itself is NOT
+    a field here (fix round 1, MAJOR-1) — it is handed to `on_report` at the
+    one moment BASE printed it, inside `_enrich` itself, before this object
+    is even built; carrying it here too would let a caller print it a
+    second time, or read it after a run whose later assembly step failed
+    and never returned one."""
 
     overlay_path: Path | None
     brief_path: Path | None
@@ -250,15 +278,15 @@ class _EnrichOutcome:
     html: Path | None
     accepted: int
     refused: int
-    refusals: tuple[tuple[int, str], ...]
-    partial: bool
     partial_reason: str | None
 
 
 # --------------------------------------------------------------------------
-# The composition root's own registries and helpers — moved verbatim from
-# `cli/app.py` (2N Task 5): every detail below already carried its own
-# rationale as a docstring/comment there, kept unchanged here.
+# The composition root's own registries and helpers — moved from `cli/app.py`
+# (2N Task 5): each one's own rationale, carried here as the docstring or
+# comment it already had there — restated, not reinvented, and updated only
+# where the refusal it raises changed shape (a typed `SextantError` now,
+# never `click.ClickException` directly).
 # --------------------------------------------------------------------------
 
 # The one real `Detector` registry (2M Task 2 review): a future detector
@@ -414,7 +442,13 @@ def _refuse_if_unanalyzed(path: Path, workspace_dir: Path) -> None:
 
 def _redactor_for(path: Path) -> Redactor:
     """The redactor both EXITS use (2K design §1): the built-in rule set,
-    widened by this module's own `.sextant.yml`."""
+    widened by this module's own `.sextant.yml`. Built at the composition root
+    so render and export mask by one set and the manifest can name it.
+
+    Both refusals become the message a caller reads, the same way
+    `_analyzed` turns a malformed `.sextant.yml` into one: a `redact:`
+    section written wrong is a mistake in the analysed repository, and a
+    stack trace would report it as a crash in the tool."""
     try:
         return Redactor.from_rules(read_redaction_rules(path))
     except (SextantConfigError, RedactionError) as refused:
@@ -423,7 +457,10 @@ def _redactor_for(path: Path) -> Redactor:
 
 def _overlay_for(path: Path) -> EnrichmentOverlay | None:
     """The module's enrichment overlay, or `None` where it has none (2K
-    design §6)."""
+    design §6). An overlay that is present and malformed becomes the message
+    a caller reads, for the reason `_redactor_for` turns a bad `redact:`
+    section into one: it is Sextant's own program artifact written wrong,
+    and a stack trace would report it as a crash in the tool."""
     try:
         return load_overlay(path)
     except ValidationError as refused:
@@ -433,7 +470,10 @@ def _overlay_for(path: Path) -> EnrichmentOverlay | None:
 
 
 def _enrich_defaults_for(path: Path) -> EnrichDefaults:
-    """This module's `enrich:` defaults (2K design §3)."""
+    """This module's `enrich:` defaults (2K design §3), or a message a
+    caller reads instead of a stack trace — the same turn `_redactor_for`
+    gives a bad `redact:` section, for the same reason (D04 §2a's
+    refusal)."""
     try:
         return read_enrich_defaults(path)
     except SextantConfigError as refused:
@@ -769,8 +809,14 @@ def render(path: Path) -> RenderResult:
 
 
 def _jailed_roots_of(path: Path, workspace_dir: Path) -> tuple[Path, Path, Path]:
-    """The three roots 2K design §4 names: the module's own source, its
-    fact root, and its rendered outputs."""
+    """The three roots 2K design §4 names: the module's own source, its fact
+    root, and its rendered outputs — the exact layout `ToolExecutor.__init__`
+    is built to accept (its own docstring: "the module root together with
+    its own `.sextant/facts` and `.sextant/render`"). `.sextantignore` is
+    loaded for `path` alone, so every root here has to sit under it — true of
+    the default `--workspace` layout, and refused loudly by `ToolExecutor`
+    itself (caught in `_tool_executor_for`) for a `--workspace` pointed
+    anywhere else."""
     return (path, workspace_dir / "facts", workspace_dir / "render")
 
 
@@ -779,7 +825,10 @@ def _tool_executor_for(path: Path, workspace_dir: Path, redactor: Redactor) -> T
         return ToolExecutor(_jailed_roots_of(path, workspace_dir), redactor, IgnoreRules.load(path))
     # `ToolExecutor.__init__` also calls `Path.home()` (2K Task 7 fix round
     # 3), which raises `RuntimeError` rather than `ValueError` when no home
-    # directory can be resolved.
+    # directory can be resolved — a container image with no `HOME` set,
+    # above all (2K Task 8 review). Caught into the same message, for the
+    # same reason every other refusal in this module is: an environment the
+    # caller wiring this jail up needs to fix, not a crash in the tool.
     except (ValueError, RuntimeError) as refused:
         raise EnrichmentError(str(refused)) from refused
 
@@ -802,13 +851,28 @@ def _enrich(
     auth_flag: str | None,
     dry_run: bool,
     ingest_path: Path | None,
+    on_report: Callable[[str], None] | None = None,
 ) -> _EnrichOutcome:
     """`enrich`'s own composition, shared by the public `enrich()`/
     `enrich_async()` and `cli/app.py`'s `module_enrich`. Composes the brief,
     runs the agent (or a `dry_run`/`ingest_path` door), validates the answer
     by construction, writes `.sextant-enrichment.json`, and auto-assembles
     both rendered outputs — one call, done (2K design §8: "no second render
-    command")."""
+    command").
+
+    `on_report` (fix round 1, MAJOR-1) is called, one line per call, with
+    each per-claim refusal and — where the run was partial — the partial
+    line, at the exact point BASE's own `module_enrich` printed them: after
+    the overlay and transcript are written, but BEFORE the final assembly
+    that can still raise `EnrichmentError` (a `redact:` rule wide enough to
+    break the surviving overlay's own claim schema). The extraction's first
+    pass moved that report to `cli/app.py`, printed only after `_enrich`
+    returned — which lost it precisely when assembly failed afterward, the
+    one case a user most needs to see WHICH claims made it in before reading
+    why the run then errored. `None` (the public `enrich()`/`enrich_async()`
+    never pass one) prints nothing, matching the facade's own "quiet"
+    contract; `cli/app.py`'s thin wrapper passes `click.echo`, the same
+    shape `on_module` already uses for `analyze`."""
     if dry_run and ingest_path is not None:
         raise EnrichmentError("--dry-run and --ingest are mutually exclusive")
 
@@ -837,13 +901,18 @@ def _enrich(
         else (defaults.max_turns if defaults.max_turns is not None else DEFAULT_MAX_TURNS)
     )
     auth_name = auth_flag if auth_flag is not None else defaults.auth
+    # `session_store` has no CLI flag counterpart (2N design §1) — its only
+    # source besides the agent's own per-auth default is `.sextant.yml
+    # enrich: session_store:`.
     session_store = Path(defaults.session_store) if defaults.session_store is not None else None
 
     instructions = instructions_path().read_text(encoding="utf-8")
     instructions_hash = "sha256:" + hashlib.sha256(instructions.encode("utf-8")).hexdigest()
 
-    # Checked here, in the composition — a missing rendered document is a
-    # GATE, never the brief's source (see below).
+    # Checked here, in the composition root — `application` reads no files
+    # (`tests/architecture/test_source_rules.py`), so the stage decides
+    # whether a missing rendered document is refused; this is only the check.
+    # The file is a GATE, never the brief's source (see below).
     architecture_md_path = resolved_workspace_dir / "render" / "architecture.md"
     if not architecture_md_path.is_file():
         raise EnrichmentError(
@@ -852,6 +921,14 @@ def _enrich(
         )
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
+    # Built only now that a rendered document is confirmed on disk (2K Task 7
+    # fix round 1, CRITICAL C1b): `ToolExecutor` refuses a jailed root that
+    # does not exist, and `workspace_dir/"render"` genuinely does not exist
+    # for an analysed-but-unrendered workspace — the exact case just refused
+    # above, with this composition's own message. Building the jail any
+    # earlier would trade that honest message for `ToolExecutor`'s generic
+    # missing-root one, which was the live failure the fix round 1 review
+    # actually reproduced.
     executor = _tool_executor_for(path, resolved_workspace_dir, redactor)
     roots = _jailed_roots_of(path, resolved_workspace_dir)
 
@@ -906,13 +983,24 @@ def _enrich(
                 html=None,
                 accepted=0,
                 refused=0,
-                refusals=(),
-                partial=False,
                 partial_reason=None,
             )
 
         # `metadata.json`'s own bytes stand in for "the graph" the run went
-        # against (D06 §3), deterministic and already on disk.
+        # against (D06 §3's "one run of one model against one graph"),
+        # deterministic and already on disk — cheaper than a bespoke
+        # whole-workspace hash. Honestly imprecise both ways, stated rather
+        # than implied: OVER-sensitive, because the dump embeds
+        # `provenance.commit`, so the fingerprint moves on every commit even
+        # when nothing the overlay actually references changed — it is
+        # informational, read by a person, never compared bit-for-bit by any
+        # code in this repository; UNDER-sensitive, because it is a set of
+        # COUNTS (endpoint totals per protocol, gap lists), not identities —
+        # two graphs with the same shape but different symbols underneath
+        # (an endpoint swapped for another of the same protocol) hash
+        # identically. Detecting that would need a fingerprint over the
+        # actual rows, which is D06's own manifest-hash story (Task 8), not
+        # this field's job.
         workspace_fingerprint = "sha256:" + hashlib.sha256(metadata_path.read_bytes()).hexdigest()
 
         if ingest_path is not None:
@@ -1006,6 +1094,20 @@ def _enrich(
                 + "\n"
             )
 
+        # The user-visible report (2K design §6/Task 7 ruling 4): a refused
+        # claim named by position and reason, and an honest word about a run
+        # that did not end cleanly — before either is buried in a file, and
+        # (fix round 1, MAJOR-1) before the assembly below, which can still
+        # raise: a report already printed is a report a `ClaimRedactionError`
+        # two lines later cannot take back.
+        if on_report is not None:
+            for refusal in result.refusals:
+                on_report(f"refused claim {refusal.index}: {refusal.reason}")
+            if result.partial:
+                on_report(
+                    f"partial answer ({result.partial_reason}) — overlay reflects what exists"
+                )
+
         try:
             stale = _stale_of(result.overlay, workspace, path, redactor)
             sections, module_id = _assembled_sections(
@@ -1027,8 +1129,6 @@ def _enrich(
         html=html_target,
         accepted=len(result.overlay.claims),
         refused=len(result.refusals),
-        refusals=tuple((r.index, r.reason) for r in result.refusals),
-        partial=result.partial,
         partial_reason=result.partial_reason,
     )
 
@@ -1049,7 +1149,13 @@ def enrich(
     `model` has no facade parameter — it comes from `path`'s own
     `.sextant.yml enrich: model:`, the same source the CLI falls back to
     when `--model` is absent; a module with neither is refused exactly as
-    the CLI refuses a bare `--agent`/no `--model` invocation.
+    the CLI refuses a bare `--agent`/no `--model` invocation. `agent`/`auth`
+    are the ASYMMETRIC case (fix round 1, MINOR-11): both are real Python
+    defaults here, never `None`, so — unlike `model`/`max_turns`, which fall
+    back to `.sextant.yml enrich:` whenever this call's own value is left at
+    its default — a module's own `enrich: agent:`/`auth:` config keys are
+    never consulted through this facade at all; pass them explicitly to
+    override this call's own default instead of relying on the file.
 
     Blocks until the run is done — including any network call the agent
     makes. Calling this from inside an already-running event loop reaches
@@ -1085,7 +1191,10 @@ async def enrich_async(
     """`enrich`, awaited — the same composition, run on a worker thread
     (module docstring's own "`enrich_async`" section states why): safe to
     call from inside an async service's own running event loop, unlike the
-    plain synchronous `enrich`."""
+    plain synchronous `enrich`. Two costs that section also states: one
+    blocked executor thread for the full run per concurrent call, and no
+    real cancellation — a cancelled `await` leaves the worker finishing
+    (and still writing the overlay/documents) regardless."""
     return await asyncio.to_thread(
         enrich,
         path,

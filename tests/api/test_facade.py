@@ -15,9 +15,11 @@ failure) both refuse before any client is built.
 """
 
 import asyncio
+import gc
 import json
 import shutil
 import subprocess
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -365,6 +367,22 @@ def test_sync_enrich_called_from_a_running_loop_raises_the_adapters_own_message(
     assert str(excinfo.value) == (
         "tradewind run failed: asyncio.run() cannot be called from a running event loop"
     )
+
+    # `TradewindAgent.run`'s own `self._run_async(brief, executor)` builds a
+    # coroutine object before `asyncio.run` ever gets to run it — the nested
+    # RuntimeError above fires immediately, so that coroutine is dropped
+    # unawaited (fix round 1, MINOR-6). Left to Python's own GC, the "was
+    # never awaited" warning surfaces whenever collection eventually runs —
+    # observed attributed to a LATER, unrelated test in this same file,
+    # since `excinfo`'s own traceback keeps the coroutine's frame alive
+    # until something drops it. Dropped and force-collected here instead,
+    # inside a `catch_warnings` this test owns, so the warning — inherent to
+    # the scenario, not a bug — lands on the test that actually caused it.
+    del excinfo
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        gc.collect()
+    assert any("was never awaited" in str(warning.message) for warning in caught)
 
 
 # --------------------------------------------------------------------------

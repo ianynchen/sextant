@@ -35,7 +35,7 @@ service that wants Sextant's output without shelling out to it:
 from pathlib import Path
 from sextant import api
 
-module = Path("services/orders")
+module = Path("services/orders")  # its own .sextant.yml needs `enrich: model: <id>`
 try:
     api.analyze(module)
     api.render(module)
@@ -44,6 +44,11 @@ try:
 except api.SextantError as refused:
     raise SystemExit(f"sextant: {refused}") from refused
 ```
+
+`enrich` takes no `model` parameter — unlike the CLI's `--model`, there is no flag to pass
+one on. It reads `module`'s own `.sextant.yml enrich: model:` instead, the same fallback the
+CLI itself uses when `--model` is absent; a module with neither is refused exactly as a bare
+`--agent`/no `--model` CLI invocation is.
 
 **The v1 contract:** synchronous — each call blocks until its work is done and returns a
 small frozen result object (`AnalyzeResult`, `RenderResult`, `EnrichResult`,
@@ -59,7 +64,11 @@ default: a library host is a service with no login to hand the agent, where the 
 on a developer's own logged-in machine. Calling the synchronous `enrich` from inside an
 already-running event loop fails the way any nested `asyncio.run` does; `enrich_async`
 awaits the same composition on a worker thread instead, for an async service's own request
-handler.
+handler — at two real costs, not free: one blocked executor thread for the full run (a live
+model call, potentially minutes) per concurrent call, sized by Python's own default
+thread-pool limit; and no real cancellation — a cancelled `await` leaves that thread running
+to completion regardless, including writing the overlay and both rendered documents, unseen
+by whatever gave up on it.
 
 ## Build systems and multi-module repositories
 

@@ -394,6 +394,58 @@ def test_a_refused_claim_is_reported_and_excluded_from_the_written_overlay(
     assert [claim["name"] for claim in overlay["claims"]] == ["Legacy billing edge"]
 
 
+def test_a_later_assembly_failure_still_prints_the_refusal_report_first(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """2N Task 5 fix round 1, MAJOR-1: the per-claim report — BASE's own
+    "before either is buried in a file" guarantee — must survive even when
+    the FINAL assembly (built from the accepted overlay) fails afterward.
+    A `redact:` rule wide enough to eat a claim's own `evidence` marker
+    (`value_patterns: [llm]`, matching every accepted claim's `evidence:
+    "llm"` — the same pathological rule
+    `tests/egress/test_render_assembly.py::
+    test_a_redaction_rule_that_breaks_a_claims_schema_is_refused_by_name`
+    pins at the renderer level) breaks assembly on the ACCEPTED claim
+    (index 0), after a refused claim (the phantom, index 1) has already
+    been validated — proving the refusal report for index 1 still reaches
+    stdout even though the run then errors out, and reaches it BEFORE the
+    error, never after."""
+    _analyzed_and_rendered(module_root)
+    (module_root / ".sextant.yml").write_text(
+        "redact:\n  value_patterns:\n    - llm\n", encoding="utf-8"
+    )
+    claims = [_component(), _component(name="Phantom", members=[PHANTOM_MEMBER])]
+    fake = FakeEnrichmentAgent(answers_text=json.dumps(claims))
+    _register_fake(monkeypatch, "fake-assembly-failure", fake)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "enrich",
+            str(module_root),
+            "--agent",
+            "fake-assembly-failure",
+            "--model",
+            "x",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "refused claim 1" in result.output
+    assert PHANTOM_MEMBER in result.output
+    assert "Error:" in result.output
+    assert "claim 0" in result.output
+    # The report reaches stdout BEFORE the error line — never buried after it.
+    assert result.output.index("refused claim 1") < result.output.index("Error:")
+
+    # The overlay IS still written (2K Task 7 fix round 1's own ordering
+    # ruling, unaffected by this fix): the accepted claim's record survives
+    # a rendering failure that happens after it was written.
+    overlay = json.loads((module_root / ENRICHMENT_FILE).read_text(encoding="utf-8"))
+    assert [claim["name"] for claim in overlay["claims"]] == ["Legacy billing edge"]
+
+
 def test_the_checked_in_refused_at_ingest_fixture_pins_its_refusal_report(module_root: Path):
     """Spec §10's own fixture requirement: a checked-in answers file whose
     claims include at least one refusal (`fixtures/orders-service/

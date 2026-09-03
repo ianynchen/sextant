@@ -94,7 +94,7 @@ testpaths = ["tests"]
 root_package = "sextant"
 
 [[tool.importlinter.contracts]]
-name = "Layering: cli -> api -> outer groups -> application -> domain -> resources"
+name = "Layering: cli -> api -> outer groups -> application -> domain | resources"
 type = "layers"
 containers = ["sextant"]
 # `agents` joins the outer-group rank (2K design §8): it imports
@@ -105,12 +105,15 @@ containers = ["sextant"]
 # `api` (2N Task 5, §5b — the library facade) sits directly below `cli`:
 # `cli/app.py`'s own commands became thin wrappers over `sextant.api`'s
 # extracted composition, so `cli` is the one layer allowed to import it,
-# never the reverse. `resources` (a second, small copy of `cli.resources`'s
-# own four names — `sextant.resources`'s own module docstring says why a
-# re-export did not work) sits at the very bottom, alongside `domain` — a
-# leaf with no `sextant`-internal imports of its own, needed by `api`
-# directly; `cli.resources` keeps its own separate copy and is unaffected.
-layers = ["cli", "api", "ingress | storage | egress | agents", "application", "domain", "resources"]
+# never the reverse. `resources` (`sextant.resources` — the real
+# implementation `cli.resources` now delegates to, module docstring has the
+# full story) sits at the bottom, `domain`'s own SIBLING rather than
+# beneath it (fix round 1, MINOR-9: a bare linear tail left `domain`
+# legally able to import a filesystem lookup, uncaught by this contract —
+# `domain` must not, so the two are independent instead) — a leaf with no
+# `sextant`-internal imports of its own, needed by `api` directly;
+# `cli.resources` keeps its own separate copy and is unaffected.
+layers = ["cli", "api", "ingress | storage | egress | agents", "application", "domain | resources"]
 # Exhaustive so a new top-level package cannot land outside every contract:
 # an unlisted package is unlayered, and an unlayered package is unchecked.
 # The container form is what makes this option available.
