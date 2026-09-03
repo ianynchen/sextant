@@ -112,14 +112,30 @@ script (the error is Gradle's own).
   stated deviation, pinned by the Gradle fixture, not a change to Maven.
 - `sextant module analyze <repo-root>`: detection runs FIRST (today the workspace is
   created and `render/` cleared before detection — that reorders); a single-module
-  result then behaves byte-identically to today (golden-pinned). With several modules,
-  every `service` module is analyzed into its own `<module-dir>/.sextant` workspace
-  exactly as a single-module run would, with a per-module summary line and a final
-  table; skipped modules are listed with their kind as the reason. One failing module
-  fails loudly and stops the run (`--keep-going` is NOT offered in 2M). The root gets
-  M02's designed `modules.json` (module dirs, kinds, analyzed-or-skipped) — the
-  artifact §2's refusals below read. `--workspace` at a multi-module root is refused
-  (the flag is per-module).
+  result then behaves byte-identically to today (golden-pinned). The multi-module gate
+  is whether the TARGETED root itself declared `<modules>` (`RepositoryModel.
+  multi_module`), never a module count — a reactor naming exactly one child is still a
+  reactor, and that child analyzes into its OWN workspace, never the aggregator's
+  (`fixtures/pom.xml` is exactly this shape today, naming one: `orders-soap-client`).
+  With a multi-module root, every module that is not KNOWN not to be a service is
+  analyzed into its own `<module-dir>/.sextant` workspace exactly as a single-module
+  run would, with a per-module summary line and a final table — REVISED after fix
+  round 1: the original "only `service` is analyzed" rule returned ZERO analyzed
+  output against `spring-petclinic-microservices` itself, since all eight of its
+  modules classify `undetermined`. The kind gate is therefore an EXCLUSION list, not
+  an allow-list: skip `library` (Gradle-only — Maven never returns it) and a leaf
+  `<packaging>pom</packaging>` (a BOM or aggregation-only sibling with no classes to
+  scan; without this exception a reactor containing a BOM hard-fails the whole run, a
+  missing `target/classes` stopping the module's own scan) — reported skip-listed with
+  that reason (`"kind is library"` / `"packaging is pom"`). Every other module is
+  analyzed regardless of kind; `kind` stays honestly `undetermined` in `modules.json`
+  and `metadata.json` either way — only `analyzed` flips. One failing module fails
+  loudly and stops the run (`--keep-going` is NOT offered in 2M), and a run that fails
+  partway leaves no stale `modules.json` from a prior run claiming a module analyzed
+  that this run never reached. The root gets M02's designed `modules.json` (module
+  dirs — ROOT-RELATIVE, stable across however the root was itself spelled on the
+  command line — kinds, analyzed-or-skipped) — the artifact §2's refusals below read.
+  `--workspace` at a multi-module root is refused (the flag is per-module).
 - `render` / `enrich` / `export` stay strictly per-module and never re-detect: at a
   directory with a `modules.json` and no workspace they refuse WITH the module list
   read from that file; anywhere else workspace-less they keep today's "no analysis
@@ -158,8 +174,10 @@ live. 2M ships:
   declaring a `<parent>`) adopting `fixtures/orders-service` unchanged — its standing
   comment says gaining a parent would change its coordinates, and aggregation-only
   keeps that true (the comment is updated to say so) — plus one new sibling module that
-  DOES declare the parent, pinning inheritance, the walk, and skip-listing
-  (`undetermined`, per §2's Maven kind rule).
+  DOES declare the parent, pinning inheritance and the walk. Both classify
+  `undetermined` (no service evidence) and, per §2's post-fix-round-1 kind gate, are
+  BOTH analyzed — `undetermined` is no longer a skip reason on its own; only `library`
+  and a leaf `<packaging>pom</packaging>` are.
 - Unit tests drive the detector over captured init-script outputs (no Gradle invocation
   in unit tests); exactly one integration test per build system runs the real tool, and
   a stale-workspace guard mirrors the session-fixture precedent.
