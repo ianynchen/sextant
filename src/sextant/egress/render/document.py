@@ -60,10 +60,12 @@ _GAPS = [
     "The structure diagram covers contract types only: inheritance edges are not extracted.",
     "The call graph is not implemented: there are no traces or sequence diagrams.",
     (
-        "Maven parent POMs, profiles, and property interpolation are not resolved: "
-        "the detector reads pom.xml directly instead of asking Maven to resolve it, "
-        "so any POM that depends on a parent, an active profile, or a property "
-        "placeholder will be misread — which is most real-world POMs."
+        "Maven profiles and property interpolation are not resolved: the "
+        "detector reads pom.xml directly instead of asking Maven to resolve "
+        "it. Parent coordinate inheritance and reactor `<modules>` discovery "
+        "ARE read, so an ordinary parent-and-children build detects "
+        "correctly — but a coordinate behind a `${property}` or inside a "
+        "profile is misread."
     ),
     (
         "Catalogs are not matched to modules: every catalog's `detect.coordinates` "
