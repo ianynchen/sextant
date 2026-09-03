@@ -120,10 +120,22 @@ class MavenDetector:
         return (path / "pom.xml").is_file()
 
     def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
-        modules = self._walk(path, visited=())
-        return RepositoryModel(root=path, modules=modules, notes=self._notes(path))
+        # Read directly, not via `bool(self._walk(...))` or `len(modules) >
+        # 1`: whether `path` ITSELF declared `<modules>` is the multi-module
+        # gate the CLI branches on (2M Task 2 fix round 1, F1) — a reactor
+        # naming exactly one child is still a reactor (that child analyzes
+        # into ITS OWN workspace, not the aggregator's), and `fixtures/
+        # pom.xml` today names exactly one (`orders-soap-client`).
+        top_pom = ElementTree.parse(path / "pom.xml").getroot()
+        is_reactor = top_pom.find("m:modules", _POM_NS) is not None
+        modules = self._walk(path, visited=(), seen=set())
+        return RepositoryModel(
+            root=path, modules=modules, notes=self._notes(path), multi_module=is_reactor
+        )
 
-    def _walk(self, path: Path, visited: tuple[Path, ...]) -> tuple[ModuleModel, ...]:
+    def _walk(
+        self, path: Path, visited: tuple[Path, ...], seen: set[Path]
+    ) -> tuple[ModuleModel, ...]:
         """Every buildable module reachable from `path` (2M design §2): a leaf
         POM (no `<modules>`) becomes one `ModuleModel`, exactly as `detect`
         always read a single module; a POM declaring `<modules>` is
@@ -135,7 +147,10 @@ class MavenDetector:
         path to `path`, checked before `path` is read again: a `<modules>`
         entry that leads back to one of them is a cycle, refused loudly
         (DR-6's own discipline — a cycle is not a shape this detector can
-        silently skip past) rather than walked forever.
+        silently skip past) rather than walked forever. `seen` is every LEAF
+        already turned into a `ModuleModel`, checked so a parent naming the
+        same child by two different spellings (`a` and `./a` — 2M Task 2 fix
+        round 1, F6) is analyzed once, not once per spelling.
         """
         resolved = path.resolve()
         if resolved in visited:
@@ -144,11 +159,15 @@ class MavenDetector:
         pom = ElementTree.parse(path / "pom.xml").getroot()
         modules_element = pom.find("m:modules", _POM_NS)
         if modules_element is None:
+            if resolved in seen:
+                return ()
+            seen.add(resolved)
             return (self._module_of(path, pom),)
         children: list[ModuleModel] = []
         for module_element in modules_element.findall("m:module", _POM_NS):
-            if module_element.text is None:
-                continue
+            text = (module_element.text or "").strip()
+            if not text:
+                raise ValueError(f"{path / 'pom.xml'} has an empty <module/> entry")
             # `normpath`, not `resolve`: a `<module>` path collapses its own
             # `..` segments lexically, the same way Maven itself reads one,
             # without following symlinks or forcing every `ModuleModel.root`
@@ -156,8 +175,17 @@ class MavenDetector:
             # `detect` (2M Task 2 review: `fixtures/orders-service`, adopted
             # by `../orders-service`, must report the identical root a
             # direct `detect(FIXTURE)` call would).
-            child = Path(os.path.normpath(path / module_element.text.strip()))
-            children.extend(self._walk(child, (*visited, resolved)))
+            child = Path(os.path.normpath(path / text))
+            if not (child / "pom.xml").is_file():
+                # Named, not a bare `FileNotFoundError` from the recursive
+                # parse below (2M Task 2 fix round 1, F2): a `<module>`
+                # naming a directory with no POM is a mistake in the
+                # analysed repository, the same class of refusal every other
+                # detect-time `ValueError` here already is.
+                raise ValueError(
+                    f"{path / 'pom.xml'} names <module>{text}</module>, but {child} has no pom.xml"
+                )
+            children.extend(self._walk(child, (*visited, resolved), seen))
         return tuple(children)
 
     @staticmethod
@@ -178,6 +206,7 @@ class MavenDetector:
             version=version,
             root=path,
             kind=MavenDetector._classify(path, pom),
+            packaging=MavenDetector._packaging(pom),
             # Observed, never asserted: a module records the languages
             # present (M02), and this detector is keyed by build system, so
             # it has no business naming one.
@@ -381,6 +410,16 @@ class MavenDetector:
         if any(node.tag == _MAIN_CLASS for node in pom.iter()):
             return "service"
         return "undetermined"
+
+    @staticmethod
+    def _packaging(pom: ElementTree.Element) -> str:
+        """Maven's own `<packaging>`, defaulting to `jar` — Maven's own
+        default when the element is absent or empty, not a guess this
+        detector invents (2M design §2, ruled amendment). Read for a LEAF
+        module only: an aggregation-only POM's own `<packaging>pom</packaging>`
+        never reaches here, since it never becomes a `ModuleModel`."""
+        node = pom.find("m:packaging", _POM_NS)
+        return node.text.strip() if node is not None and node.text else "jar"
 
     @staticmethod
     def _text(pom: ElementTree.Element, tag: str, inherited: bool = False) -> str:

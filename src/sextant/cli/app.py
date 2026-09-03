@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -73,6 +74,53 @@ def _modules_json_path(path: Path) -> Path:
     one to name); this is the root's own `.sextant/`, holding only the
     inventory, never a full workspace's `facts/`/`render/`/`workspace.duckdb`."""
     return path / ".sextant" / "modules.json"
+
+
+def _root_relative(root: Path, target: Path) -> str:
+    """`target`, spelled relative to `root` (2M Task 2 fix round 1, F5) —
+    `os.path.relpath`, never `Path.relative_to`: a `<module>` may climb OUT
+    of the aggregator's own directory (`fixtures/orders-reactor`'s own
+    adoption of `fixtures/orders-service`, by `../orders-service`, is
+    exactly this shape), and `relative_to` refuses anything that is not a
+    strict descendant. Both resolved first, so the spelling in
+    `modules.json` and in a refusal message is the SAME regardless of
+    whether `root`/`target` reached here as relative or absolute strings —
+    stable across invocation spellings, the same portability D00 §2 already
+    states for every other reader-facing path this codebase writes out."""
+    return os.path.relpath(target.resolve(), start=root.resolve())
+
+
+def _skip_reason(module: ModuleModel) -> str | None:
+    """Why a module is skip-listed rather than analyzed, or `None` when it
+    should be analyzed (2M design §2, ruled amendment — fix round 1). The
+    kind gate inverts to skip only what is KNOWN not to be a service:
+    `library` (Gradle-only today — Maven never returns it) and a leaf
+    `<packaging>pom</packaging>` (a BOM or aggregation-only sibling with no
+    classes to scan — without this exception, any reactor containing one
+    hard-fails the whole run, since its own scan has no `target/classes`
+    directory to read). EVERYTHING ELSE is analyzed, `kind == "undetermined"`
+    included: `kind` stays honestly `undetermined` in `modules.json` and
+    `metadata.json` either way — only `analyzed` flips. The original design
+    skipped every non-`service` module; the flagship multi-module fixture
+    it was meant to serve (`spring-petclinic-microservices`) classifies all
+    eight of its modules `undetermined`, so that rule returned zero
+    analyzed output on the repository the feature exists for."""
+    if module.kind == "library":
+        return "kind is library"
+    if module.packaging == "pom":
+        return "packaging is pom"
+    return None
+
+
+def _module_row(root: Path, module: ModuleModel, analyzed: bool) -> dict[str, object]:
+    """One `modules.json` row (2M Task 2 fix round 1, F9: single-sited here
+    rather than written out at both the skip and the analyzed call site)."""
+    return {
+        "dir": _root_relative(root, module.root),
+        "module_id": module.module_id,
+        "kind": module.kind,
+        "analyzed": analyzed,
+    }
 
 
 class _KnownModuleDetector:
@@ -255,13 +303,21 @@ def module_analyze(path: Path, workspace_dir: Path | None, allow_resolve: bool) 
     # reactor walk below if `path` is a multi-module root, a single module
     # otherwise — and every per-module `analyze()` call beneath it is driven
     # from THIS result via `_KnownModuleDetector`, never a second real
-    # `detect()` call.
+    # `detect()` call. `ValueError` alongside `SextantConfigError`: the
+    # reactor walk's own refusals (a `<modules>` cycle, a `<module>` naming
+    # a directory with no `pom.xml` — 2M Task 2 fix round 1, F2) are the
+    # same class of "the analysed repository is written wrong" mistake, not
+    # a crash in the tool.
     try:
         model = select_detector(_DETECTORS, path).detect(path, allow_resolve=allow_resolve)
-    except SextantConfigError as refused:
+    except (SextantConfigError, ValueError) as refused:
         raise click.ClickException(str(refused)) from refused
 
-    if len(model.modules) > 1:
+    # `model.multi_module`, never `len(model.modules) > 1` (2M Task 2 fix
+    # round 1, F1): whether `path` ITSELF declared `<modules>` is the gate —
+    # a reactor naming exactly one child is still a reactor, and that
+    # child's own analysis belongs in ITS OWN workspace, not `path`'s.
+    if model.multi_module:
         # `--workspace` names ONE module's workspace (M00); a multi-module
         # root has no single workspace of its own to name — every module
         # gets its own, always at its own `<module-dir>/.sextant` (2M design
@@ -336,29 +392,41 @@ def _analyze_into(
     return result
 
 
+# The table's dir column (2M Task 2 fix round 1, F8): a cap, not a
+# guess at a terminal width — one fixed number keeps the column, and
+# therefore the two columns after it, aligned regardless of how long any
+# one module's relative path happens to be.
+_TABLE_DIR_WIDTH = 50
+
+
+def _truncated(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
 def _module_analyze_reactor(path: Path, model: RepositoryModel, allow_resolve: bool) -> None:
-    """Every SERVICE module a just-walked reactor named, each analyzed into
-    its own `<module-dir>/.sextant` workspace exactly as a single-module run
-    would (2M design §2) — a non-service module is skip-listed with its kind
-    as the reason, never guessed into an analysis it has no evidence for.
-    `modules.json` then names every module found, analyzed or not, at
-    `path` — the artifact `render`/`enrich`/`export`'s own refusal below
-    reads. One failing module fails loudly and stops the run
-    (`--keep-going` is not offered in 2M): `modules.json` is written only
-    once every module that was going to be analyzed has been, so a stopped
-    run leaves no artifact claiming a module finished when it did not."""
+    """Every module a just-walked reactor named that is not KNOWN not to be
+    a service, each analyzed into its own `<module-dir>/.sextant` workspace
+    exactly as a single-module run would (2M design §2, ruled amendment —
+    `_skip_reason` is the whole gate). `modules.json` then names every
+    module found, analyzed or not, at `path` — the artifact `render`/
+    `enrich`/`export`'s own refusal below reads. One failing module fails
+    loudly and stops the run (`--keep-going` is not offered in 2M):
+    `modules.json` is written only once every module that was going to be
+    analyzed has been, so a stopped run leaves no artifact claiming a
+    module finished when it did not — and any STALE inventory from a PRIOR
+    run is removed at the START, for the same reason (2M Task 2 fix round
+    1, F7): a run that fails partway must not leave the previous run's
+    `analyzed: true` rows looking current."""
+    modules_path = _modules_json_path(path)
+    modules_path.unlink(missing_ok=True)
+
     rows: list[dict[str, object]] = []
     for module in model.modules:
-        if module.kind != "service":
-            click.echo(f"skipped {module.module_id} ({module.root}): kind is {module.kind}")
-            rows.append(
-                {
-                    "dir": str(module.root),
-                    "module_id": module.module_id,
-                    "kind": module.kind,
-                    "analyzed": False,
-                }
-            )
+        relative_dir = _root_relative(path, module.root)
+        reason = _skip_reason(module)
+        if reason is not None:
+            click.echo(f"skipped {relative_dir} ({module.module_id}): {reason}")
+            rows.append(_module_row(path, module, analyzed=False))
             continue
         workspace_dir = _workspace_dir_of(module.root, None)
         try:
@@ -369,29 +437,29 @@ def _module_analyze_reactor(path: Path, model: RepositoryModel, allow_resolve: b
             # command crashing rather than as that module's analysis
             # failing, with no way to tell which of several modules it was.
             raise click.ClickException(
-                f"{module.module_id} ({module.root}) failed to analyze: {failure}"
+                f"{relative_dir} ({module.module_id}) failed to analyze: {failure}"
             ) from failure
         click.echo(
-            f"analyzed {module.module_id} ({module.root}): {len(result.report.endpoints)} endpoints"
+            f"analyzed {relative_dir} ({module.module_id}): "
+            f"{len(result.report.endpoints)} endpoints"
         )
-        rows.append(
-            {
-                "dir": str(module.root),
-                "module_id": module.module_id,
-                "kind": module.kind,
-                "analyzed": True,
-            }
-        )
+        rows.append(_module_row(path, module, analyzed=True))
 
     rows.sort(key=lambda row: cast(str, row["dir"]))
-    modules_path = _modules_json_path(path)
     modules_path.parent.mkdir(parents=True, exist_ok=True)
     modules_path.write_text(json.dumps({"modules": rows}, indent=2) + "\n", encoding="utf-8")
 
+    # No header, no rows, for an empty reactor (2M Task 2 fix round 1, F8):
+    # a table with a header and nothing under it reads as a tool that found
+    # nothing to say, not as the honest empty case it is.
+    if not rows:
+        return
     click.echo()
-    click.echo(f"{'dir':<50} {'kind':<15} {'analyzed'}")
+    click.echo(f"{'dir':<{_TABLE_DIR_WIDTH}} {'kind':<15} analyzed")
     for row in rows:
-        click.echo(f"{cast(str, row['dir']):<50} {cast(str, row['kind']):<15} {row['analyzed']}")
+        dir_cell = _truncated(cast(str, row["dir"]), _TABLE_DIR_WIDTH)
+        analyzed_cell = "yes" if row["analyzed"] else "no"
+        click.echo(f"{dir_cell:<{_TABLE_DIR_WIDTH}} {cast(str, row['kind']):<15} {analyzed_cell}")
 
 
 def _analyzed(

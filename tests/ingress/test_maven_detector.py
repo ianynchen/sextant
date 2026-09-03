@@ -571,3 +571,84 @@ def test_a_modules_cycle_is_refused_with_the_cycle_named(tmp_path: Path):
         MavenDetector().detect(a)
     assert str(a.resolve()) in str(failure.value)
     assert str(b.resolve()) in str(failure.value)
+
+
+def test_multi_module_is_true_for_the_real_reactor_and_false_for_a_plain_module():
+    """2M Task 2 fix round 1, F1: the CLI's multi-module gate reads whether
+    the TARGETED root itself declared `<modules>`, never `len(modules) >
+    1` — a reactor naming exactly one child is still a reactor."""
+    assert MavenDetector().detect(REACTOR).multi_module is True
+    assert MavenDetector().detect(FIXTURE).multi_module is False
+
+
+def test_multi_module_is_true_even_when_the_reactor_names_exactly_one_child(tmp_path: Path):
+    """The real-world shape this pins: `fixtures/pom.xml` itself names only
+    `orders-soap-client`, and a reactor with one child still analyzes that
+    child into ITS OWN workspace, not the aggregator's — `len(modules) > 1`
+    would have routed it into the single-module branch instead."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    (reactor / "pom.xml").write_text(_AGGREGATOR_POM.replace("MODULE", "child"), encoding="utf-8")
+    (reactor / "child").mkdir()
+    _module(reactor / "child")
+
+    model = MavenDetector().detect(reactor)
+
+    assert model.multi_module is True
+    assert len(model.modules) == 1
+
+
+def test_a_module_naming_a_directory_with_no_pom_is_refused_by_name(tmp_path: Path):
+    """2M Task 2 fix round 1, F2: a `<module>` naming a directory that holds
+    no `pom.xml` is a mistake in the analysed repository, refused by name —
+    never a bare `FileNotFoundError` from the recursive parse underneath."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    (reactor / "pom.xml").write_text(_AGGREGATOR_POM.replace("MODULE", "ghost"), encoding="utf-8")
+    (reactor / "ghost").mkdir()
+
+    with pytest.raises(ValueError, match="ghost") as failure:
+        MavenDetector().detect(reactor)
+    assert "no pom.xml" in str(failure.value)
+
+
+def test_an_empty_module_entry_is_refused_by_name(tmp_path: Path):
+    """2M Task 2 fix round 1, F6: a `<module/>` with no path at all names
+    nothing — refused loudly rather than silently skipped, the DR-6
+    exemption every other malformed `<modules>` shape here already gets."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    (reactor / "pom.xml").write_text(_AGGREGATOR_POM.replace("MODULE", ""), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="empty <module/>"):
+        MavenDetector().detect(reactor)
+
+
+def test_a_child_named_twice_in_one_modules_list_is_analyzed_once(tmp_path: Path):
+    """2M Task 2 fix round 1, F6: a parent listing the same child by two
+    spellings (`child` and `./child`) analyzes it once, not once per
+    spelling — the duplicate is a naming accident, not two modules."""
+    reactor = tmp_path / "reactor"
+    reactor.mkdir()
+    pom = _AGGREGATOR_POM.replace(
+        "<module>MODULE</module>", "<module>child</module>\n    <module>./child</module>"
+    )
+    (reactor / "pom.xml").write_text(pom, encoding="utf-8")
+    (reactor / "child").mkdir()
+    _module(reactor / "child")
+
+    model = MavenDetector().detect(reactor)
+
+    assert len(model.modules) == 1
+
+
+def test_packaging_defaults_to_jar_when_the_pom_declares_none(tmp_path: Path):
+    """Maven's own default (2M design §2, ruled amendment) — not a guess
+    this detector invents: `<packaging>` absent means `jar`, the same value
+    a real Maven build would use."""
+    assert MavenDetector().detect(_module(tmp_path)).modules[0].packaging == "jar"
+
+
+def test_packaging_is_read_from_the_pom_when_declared(tmp_path: Path):
+    pom = _BARE_POM.replace("</project>", "  <packaging>pom</packaging>\n</project>")
+    assert MavenDetector().detect(_module(tmp_path, pom)).modules[0].packaging == "pom"
