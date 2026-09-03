@@ -137,6 +137,15 @@ linking services into a system-level architecture begins):
    **version-bump gate opens** (unchanged anchor — the gate is about Java coverage,
    which linking is not part of).
 
+   **The gate is also the named C-tier descope checkpoint** (ruled 2026-09-04): the
+   still-unscheduled rows — `@RepositoryRestResource`, `@ControllerAdvice` error
+   contracts, servlets and filters, environment-conditional controllers — plus the
+   `json (assumed)` media weakness, Maven profiles/property interpolation, and
+   diagram inheritance edges are either scheduled or explicitly descoped BY THE USER
+   at the gate, never silently. The permanent honesty boundaries (config constructed
+   in code, reflection, DI-proxy indirection, the two-parse refusal) are not on that
+   list: they are design, not debt, and the enrichment verdict seat is their answer.
+
 L now comes last, after the gate: linking services into a system-level architecture
 starts only once everything module-level for Java is built. Its precondition never
 weakens by waiting — 2F's real peers are already in the bundles, and every phase
