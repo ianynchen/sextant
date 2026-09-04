@@ -98,12 +98,24 @@ This is not a hypothetical risk. [docs/documented-not-implemented.md](docs/docum
 
 **Why this rule is a grep and not another review round:** four rounds of adversarial spec review did not catch those two, because the reviewer read the same documents the author did and cited the same lines back. A premise the author and reviewer share is invisible to review. It is visible to a grep, in minutes.  
 
+**Cite the consumer, not the declaration.** The `file:line` that satisfies this rule is where the mechanism is READ, called, or acted upon — never where its name appears. `detect:` is declared by every one of the 41 shipped catalogs, so a grep finds it and a citation of any of those lines would satisfy a weaker rule; **nothing reads it, and that is the entire defect**. A name existing is not a mechanism existing.  
+
+The same trap has a second form, which costs more because the grep succeeds honestly: a mechanism that IS read, but is **gated, scoped, or answers differently than assumed**. Four of this phase's spec errors were that shape — an inheritance walk that runs only for catalogs declaring a type-level gate; a catalog model that holds one style/protocol/direction triple, not three; a build probe that emits one boolean where plugin ids were assumed; a framework conditional whose second branch its own dependencies make unreachable. So verify what the mechanism DOES at the point of use, and for a conditional, name the circumstances under which it does not hold.  
+
 Two corollaries:  
 
 - **When a document and the code disagree about what exists, the code wins and the document is wrong** — fix it under §6 rather than building on it. (This is narrower than §6's conflict rule, which governs *behaviour*; this one governs *existence*.)  
 - **Where a document deliberately describes something ahead of its implementation, it must say so in the document**, in words a reader cannot mistake for a shipped feature — `default_produces`'s own "specified here, not yet used" is the model. Silence is the failure mode, not intent.  
 
 Prefer making this mechanical over remembering it: an architecture test that asserts every catalog key `D02` declares is read by the loader, and every fact field `D00` declares exists on its model, enforces §5.3 the way §8 requires rules to be enforced rather than aspirational.  
+
+### 5.4 Empirical evidence is bounded by what it measured  
+
+A checkpoint, probe, or experiment establishes its verdict **only for the configuration it ran against**. Extending it further needs either new evidence or an explicit statement that the wider scope is assumed and unverified — written where the verdict is written, so a later reader inherits the boundary along with the result. A recorded verdict otherwise reads as universal.  
+
+Two failures this prevents, both from Phase 2O. A path-normalisation rule was measured against one framework's **server** side and then applied to every catalog sharing that protocol, including a client library whose relative-path semantics differ — so it rewrote addresses instead of normalising spellings. And a checkpoint was written with two branches for a framework conditional whose second branch is unreachable, because the framework's own non-optional dependency pins the antecedent true; implementing the unreachable branch would have produced a wrong address on every module of one build system.  
+
+Hence, before writing a checkpoint with branches, ask **which branches are reachable**. That is a dependency-tree question, not a code-reading one, and it is cheap to answer before a spec is written and expensive to discover during implementation.  
 
 ---  
 
