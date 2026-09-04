@@ -1203,6 +1203,54 @@ def test_a_row_level_inbound_direction_overrides_the_catalogs_own_direction(
     assert endpoint["caller"] is None
 
 
+def test_the_path_seam_reads_the_ROWS_direction_not_the_catalogs(tmp_path: Path):
+    """Ruling R8 meets D02 §2's per-row direction override.
+
+    A `methods` row may override its catalog's direction, and that override is
+    live vocabulary rather than a hypothetical: `jakarta-jms.yml` declares both
+    directions in one outbound file and `spring-pubsub.yml` makes `subscribe`
+    inbound inside an outbound catalog. The row's `direction` column and its
+    dedup key are both built from `row_direction`, so the canonical-address
+    gate must read the same value — a gate reading `catalog.direction` would be
+    answering about a different row than the one being minted, and would be
+    wrong in BOTH directions at once.
+
+    One catalog, declared outbound, two rows, the same slashless address. The
+    row that overrides to INBOUND is a route this module serves and becomes
+    `/orders`; the row that keeps the catalog's outbound direction is a client
+    call and keeps `orders` exactly as written.
+    """
+    matches = {
+        "owner": "com.acme.http.Client",
+        "methods": [
+            {"name": "call", "http_method": "GET", "url_arg": 0},
+            {"name": "serve", "direction": "inbound", "http_method": "GET", "url_arg": 0},
+        ],
+    }
+    caller = "com/acme/http/Client#both()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(owner="com/acme/http/Client#", name=name, descriptor="()V"),
+            invoke_kind="virtual",
+            ordinal=ordinal,
+            receiver=3,
+            result=None,
+            arguments=[CallArgument(kind="string", value="orders")],
+        )
+        for ordinal, name in enumerate(("call", "serve"))
+    ]
+    catalog = _single_call_catalog(
+        matches, "invented-http-both-directions", direction="outbound", protocol="http"
+    )
+    workspace = _resolve(tmp_path, facts, catalog)
+    paths = {e["direction"]: e["path"] for e in workspace.query("endpoints")}
+    workspace.close()
+
+    assert paths == {"inbound": "/orders", "outbound": "orders"}
+
+
 def test_a_verbless_row_with_a_resolved_channel_derives_a_null_method_without_penalising_resolution(
     tmp_path: Path,
 ):

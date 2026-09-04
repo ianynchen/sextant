@@ -348,7 +348,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # the rule, what it refuses to touch (a whole address, a
             # placeholder-bearing composition), and why the gate is INBOUND
             # `http` alone (ruling R8).
-            if path is not None and serves_urls(catalog.protocol, catalog.direction):
+            #
+            # `row_direction`, never `catalog.direction`: a `methods` row may
+            # override its catalog's direction (above, and live vocabulary —
+            # `jakarta-jms.yml` declares both in one file, `spring-pubsub.yml`
+            # makes `subscribe` inbound inside an outbound catalog), and the
+            # direction this row is WRITTEN with is the one R8 rules on. The
+            # column below and the dedup key both read `row_direction`; a gate
+            # reading anything else would answer about a different row than
+            # the one being minted.
+            if path is not None and serves_urls(catalog.protocol, row_direction):
                 path = canonical_http_path(path)
             # Checkpoint ruling I1: any DECLARED capture that failed to
             # resolve drops the *row's* resolution, even when the url itself

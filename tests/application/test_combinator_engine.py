@@ -402,6 +402,100 @@ def test_a_nest_prefix_folds_onto_every_route_of_its_subtree_exactly_once(tmp_pa
     ]
 
 
+def test_a_slashless_route_and_a_doubled_seam_both_derive_the_url_spring_serves(
+    tmp_path: Path,
+):
+    """2O design §8 / ruling R8, on the ONE live catalog that reaches this seam
+    outside `annotation_driven`: `spring-webflux-router.yml` is a combinator,
+    `http`, and INBOUND, so its composed routes are URLs this module serves and
+    their identity is the URL the framework answers at.
+
+    Both halves of the canonicalization are exercised here because the router
+    DSL composes `path_parts` by bare concatenation — there is no separator
+    seam in this style to hide either one:
+
+    * `RouterFunctions.route(GET("orders"), …)` is served at `/orders`. Spring
+      combines the predicate path the same way it combines a mapping (CP-1,
+      confirmed live), so recording `orders` would be a second identity for one
+      URL — the split this seam exists to close.
+    * a `nest("/")` prefix over a `GET("/chat")` route composes `//chat` by
+      concatenation, and is served at `/chat`. That is the second live failure
+      D02's prefix-seam note records, reached here by the other style.
+
+    Deleting the `canonical_http_path` call in `_path_of` passes every other
+    test in this file — every other fixture path already spells its leading
+    separator — so this case is the whole of what pins it.
+    """
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="orders")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            ROUTERS,
+            "route",
+            result=25,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATES,
+            "path",
+            result=30,
+            arguments=[CallArgument(kind="string", value="/")],
+        ),
+        _site(
+            ROUTES,
+            3,
+            PREDICATES,
+            "GET",
+            result=34,
+            arguments=[CallArgument(kind="string", value="/chat")],
+        ),
+        _site(
+            ROUTES,
+            4,
+            ROUTERS,
+            "route",
+            result=40,
+            arguments=[
+                CallArgument(kind="unresolved", source=34),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER),
+            ],
+        ),
+        _site(
+            ROUTES,
+            5,
+            ROUTERS,
+            "nest",
+            result=59,
+            arguments=[
+                CallArgument(kind="unresolved", source=30),
+                CallArgument(kind="unresolved", source=40),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/chat", _MODULE + CREATE_ORDER, "resolved"),
+        ("GET", "/orders", _MODULE + LIST_ORDERS, "resolved"),
+    ]
+
+
 # --- (3) `or` duplicates the route per branch, over any predicate kind -----
 
 

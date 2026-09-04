@@ -18,7 +18,7 @@ from sextant.application.resolve.effective_annotations import (
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
-from sextant.domain.paths import canonical_http_path, serves_urls
+from sextant.domain.paths import serves_urls
 from sextant.domain.symbols import bare_descriptor
 
 
@@ -130,10 +130,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # here, from the catalog's own protocol and direction, because
         # `storage/` may name no protocol (ARCHITECTURE §10) — the same reason
         # the rule itself is mirrored there rather than imported from
-        # `domain/paths.py`, which every OTHER minting site in this engine and
-        # in `combinator`/`single_call`/`fluent` calls directly
-        # (`_served_path`, below). The gate is `serves_urls`, spelled once so
-        # this bind and those calls cannot answer differently.
+        # `domain/paths.py`, which `combinator`/`single_call`/`fluent` call
+        # directly. The gate is `serves_urls`, spelled once so this bind and
+        # those calls cannot answer differently. This engine's OTHER minting
+        # site, `_reply_row`, asks it nowhere: that row's direction is a
+        # literal `outbound`, so the seam can never reach it (R8).
         canonical_path=serves_urls(catalog.protocol, catalog.direction),
         # 2E design §2, §3: the effective-annotations pre-pass widens
         # this catalog's own mapping fqns to every module-local annotation
@@ -686,18 +687,6 @@ def _destinations_of(args: dict[str, Any], name: str) -> list[str]:
     return []
 
 
-def _served_path(path: str | None, catalog: Catalog) -> str | None:
-    """`path` as the URL the framework serves it at, for an INBOUND HTTP
-    catalog only (2O design §8, ruling R8). The gate is the CATALOG's protocol
-    and direction rather than the row's: both are still the catalog's while
-    identity is being minted — `protocol_hint` reclassifies afterwards (which
-    is how an SSE row inherits this seam without `sse` ever being named here),
-    and D02 §3's merge mints `both` later still."""
-    if path is None or not serves_urls(catalog.protocol, catalog.direction):
-        return path
-    return canonical_http_path(path)
-
-
 def _reply_row(
     catalog: Catalog,
     handler: str,
@@ -711,17 +700,21 @@ def _reply_row(
     own for this pass to see — and `response_shape` is always absent (a
     reply carries no response of its own).
 
-    The path seam (2O design §8, `domain/paths.py`) is applied here for the
-    reason every other minting site applies it — identity is the URL the
-    framework serves — and is INERT for every catalog shipped today: a
-    `reply` block belongs to the messaging catalogs, whose protocol is never
-    `http`. Stated anyway, because "no HTTP catalog declares a reply yet" is
-    a fact about the catalogs and not a rule about this row."""
+    **No path seam here, and that is the rule rather than an omission**
+    (2O design §8 as narrowed by ruling R8). The seam canonicalizes the
+    address of a route the module SERVES; this row's `direction` is the
+    literal `outbound` two lines below, whatever the catalog declares, so the
+    seam could never apply to it. The catalog's own direction is the wrong
+    question to ask at this site precisely because this row does not take it:
+    an inbound HTTP catalog that declared a `reply` block would otherwise
+    canonicalize a client-side address, which is the rewrite R8 forbids.
+    `destination` is therefore recorded exactly as the reply annotation
+    wrote it."""
     return {
         "protocol": catalog.protocol,
         "direction": "outbound",
         "method": None,
-        "path": _served_path(destination, catalog),
+        "path": destination,
         "handler": None,
         "caller": handler,
         "peer": None,

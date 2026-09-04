@@ -3073,6 +3073,132 @@ def test_an_sendtouser_handler_derives_the_same_honest_unresolved_reply_row_as_n
     assert reply["request_shape"] is not None
 
 
+# --- 2O Task 2, ruling R8: the reply row is OUTBOUND whatever its catalog is
+# --------------------------------------------------------------------------
+def _http_reply_facts(root: Path) -> None:
+    """One inbound-HTTP-shaped handler carrying a slashless mapping AND a
+    reply annotation naming a slashless destination — the contrast pair the
+    test below turns on."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rest/ReplyController.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    controller = "com/acme/rest/ReplyController#"
+    handle = "com/acme/rest/ReplyController#handle(sig_33334444)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=controller, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handle,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=controller,
+            signature=Signature(
+                parameters=[],
+                returns=TypeRef(symbol="java/lang/String#", wire_type="string"),
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=controller,
+            retention="runtime",
+            use=AnnotationUse(annotation="com/acme/rest/annotation/Api#"),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handle,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/rest/annotation/Route#", args={"value": "orders"}
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handle,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/rest/annotation/Answer#", args={"value": "reply-dest"}
+            ),
+        ),
+    ]
+    write_fact_file(root / "ReplyController.jsonl", document, facts)
+
+
+def _http_reply_catalog() -> Catalog:
+    """An INBOUND HTTP catalog that also declares a `reply` block. No shipped
+    catalog is shaped this way today — the four with `reply` blocks are kafka
+    and websocket — which is exactly why this is invented: R8's rule about the
+    reply row must hold because of what the ROW is, not because of which
+    catalogs happen to exist."""
+    return Catalog(
+        id="invented-http-reply",
+        style="annotation_driven",
+        protocol="http",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-http-reply.yml"),
+        matches={
+            "type_annotation": "com.acme.rest.annotation.Api",
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": ["value"],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": None,
+                "annotations": [{"fqn": "com.acme.rest.annotation.Route"}],
+            },
+            "reply": {
+                "annotation": "com.acme.rest.annotation.Answer",
+                "destination_from": "value",
+                "payload": "return",
+            },
+        },
+    )
+
+
+def test_a_reply_row_is_never_canonicalized_however_its_catalog_is_declared(tmp_path: Path):
+    """Ruling R8, at the one minting site whose direction is a LITERAL.
+
+    `_reply_row` writes `"direction": "outbound"` outright — a reply is always
+    a client-side send, whatever direction its catalog declares — so the seam
+    must not reach it. Asking the CATALOG's direction here would canonicalize
+    an outbound address the moment an inbound HTTP catalog declared a `reply`
+    block, which is precisely the rewrite R8 forbids.
+
+    The contrast is the whole test: one handler, two rows, both addresses
+    written without a leading separator. The INBOUND row is a route this
+    module serves and becomes `/orders`; the OUTBOUND reply row keeps
+    `reply-dest` exactly as the annotation wrote it.
+    """
+    _http_reply_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(
+        workspace,
+        [_http_reply_catalog()],
+        capabilities={"annotation_args", "typed_signatures"},
+    )
+    assert skipped == []
+    rows = list(workspace.query("endpoints"))
+    workspace.close()
+
+    [inbound] = [e for e in rows if e["direction"] == "inbound"]
+    assert inbound["path"] == "/orders"
+
+    [reply] = [e for e in rows if e["direction"] == "outbound"]
+    assert reply["path"] == "reply-dest"
+    assert reply["resolution"] == "resolved"
+
+
 _UNKNOWN_STYLE_CATALOG = """id: invented
 style: protocol_hint
 protocol: http
