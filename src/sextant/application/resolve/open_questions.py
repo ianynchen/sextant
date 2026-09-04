@@ -20,10 +20,22 @@ from typing import Any
 
 from sextant.application.ports.workspace import Workspace
 
-# 2G design §6's closed question set. Adding a kind is a schema change (the
-# renderer and the export both switch on it), never an implementation
-# choice — the same discipline D00's own closed sets keep (NFR-5).
-QUESTIONS = ("payload_binding", "format_conflict")
+# 2G design §6's closed question set, extended by 2O design §0. Adding a kind
+# is a schema change (both the renderer and the export switch on it), which is
+# why all three of this phase's arrive together.
+QUESTIONS = (
+    "payload_binding",
+    "format_conflict",
+    # 2O §5: a Spring Integration channel whose destination no configuration
+    # key carries. Candidates: the channel name and the handler symbol.
+    "channel_destination",
+    # 2O §1b: a class a gRPC catalog flagged whose service identity could not
+    # be read. Candidates: the class symbol and the reason.
+    "service_identity",
+    # 2O §2b: a config key whose value differs between environments where one
+    # identity needs one value. Candidates: the key and the per-environment values.
+    "environment_divergence",
+)
 
 
 def reset_open_questions(workspace: Workspace) -> None:

@@ -586,6 +586,8 @@ far that reaches today:
 | **Pub/Sub** | Nothing. The message is `bytes`. Only the **parse call** reveals it — `Order.parseFrom(data)` versus `objectMapper.readValue(data, Order.class)` | `syntax` | Unknown | the parse-call binding is built and protocol-neutral, but **not reached here**: the shipped bytes-payload vocabulary is `String` and `byte[]` only, and a `MessageReceiver`'s payload parameter is a `PubsubMessage` envelope |
 | **SQS** | Nothing. The body is a string; same as Pub/Sub | `syntax` | Unknown | ✅ **the parse call**, binding the payload type — which, where that type is schema-described, then answers **rung 4** at `narrowed`, and otherwise makes the row an ordinary rung-5 one |
 | JMS | `TextMessage` / `BytesMessage` / `ObjectMessage`, then the parse call | `syntax` | Unknown | ✅ as SQS, for a `String`/`byte[]` payload parameter. The **message-type distinction** (`TextMessage` versus `BytesMessage`) is not read |
+| **AMQP** | Not yet known — no catalog reads it | — | — | Protocol only. 2O design §3a adds `amqp` to the closed protocol set ahead of the catalog that will own it, the same one-line-now precedent `graphql`/`websocket`/`sse` set in 2H — **no shipped catalog owns it yet; one arrives in Task 7** |
+| **Pulsar** | Not yet known — no catalog reads it | — | — | Protocol only, same as AMQP — **no shipped catalog owns it yet; one arrives in Task 7** |
 
 Kafka is the interesting one, because the answer sits in configuration rather than code —
 `config_join` again (§7), the same shape as Spring Cloud Stream destinations. **Since Phase

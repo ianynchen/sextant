@@ -76,6 +76,14 @@ class Protocol(StrEnum):
     GRAPHQL = "graphql"
     WEBSOCKET = "websocket"
     SSE = "sse"
+    # 2O design §3a. Two broker families in one edit, for the reason the 2H
+    # block above states: the set is closed, so a member a later task needs
+    # costs one line here and a schema change if it arrives alone. Each is its
+    # own protocol because linking gates on protocol equality (DR-5) — an AMQP
+    # exchange can never be answered by a Pulsar topic, and neither is a JMS
+    # queue, which is why Stream's `rabbit: jms` stopgap migrates in Task 2.
+    AMQP = "amqp"
+    PULSAR = "pulsar"
 
 
 class Direction(StrEnum):
