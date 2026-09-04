@@ -588,14 +588,41 @@ does not; never a guess.** This is the honest division of labour the
 `open_questions` ledger was built for, and it is what makes "we cannot see it"
 a route to an answer rather than a dead end.
 
-### Two incidental findings the probe recorded
+### Extractor capability 9.16 — nested annotation arguments (folded into 2O)
 
-Nested annotation arguments are silently dropped — `@Poller` inside
-`@InboundChannelAdapter` produces **no key at all**, because the collecting
-visitor has no `visitAnnotation` override. (Same root cause as §3b's `bindings=`
-boundary and §4a's `@Schedules` boundary — one gap, three symptoms.) And an
-XML-configured Integration flow contributes **zero** facts; XML config is a
-stated boundary.
+The probe found a second gap, and it is the single cause behind **three**
+separate boundaries this spec had been about to state independently. The
+extractor's annotation-argument collector overrides `visit`, `visitEnum` and
+`visitArray` but **not `visitAnnotation`**, so an annotation nested inside
+another is dropped entirely — not recorded as unreadable, simply absent:
+
+| Where | What is lost today |
+|---|---|
+| §5 | `@Poller` inside `@InboundChannelAdapter` — **no key at all** |
+| §3b | `@RabbitListener(bindings = @QueueBinding(value = @Queue("orders")))` — the queue name |
+| §4a | `@Schedules({@Scheduled(…), @Scheduled(…)})` — javac folds two or more repeatable `@Scheduled` into this, so the MULTI-TRIGGER case yields no readable trigger at all |
+
+Three stated boundaries, one missing override. **9.16 adds it**, and the three
+boundaries go with it rather than being written into the spec as permanent.
+
+**The shape is a fact-schema decision, not just a visitor override.** D00's
+literal model today is "string, number, boolean, enum reference, class reference,
+and arrays of these" — it has no annotation-valued argument. A nested annotation
+must therefore gain a representation that carries its own fqn and its own
+arguments, recursively (a `@QueueBinding` holding a `@Queue` holding a string is
+two levels), and it must reuse D00's existing vocabulary rather than introduce a
+parallel one. Depth is bounded in practice but not by the language; the
+implementation states what it does at whatever depth it stops.
+
+**Note what 9.16 does NOT fix:** `@Schedules` becoming readable does not mean a
+`@Scheduled` trigger is resolvable — it means the trigger EXPRESSIONS become
+visible where today the whole annotation is invisible. A `${…}` cron expression
+is still preserved verbatim, per §4a.
+
+### One boundary the probe confirmed is real
+
+An XML-configured Integration flow contributes **zero** facts. XML config is a
+stated boundary, unaffected by 9.15 or 9.16 — there is no bytecode to read.
 
 ## 5a. Spring Integration — the catalog and engine, on the measured evidence
 

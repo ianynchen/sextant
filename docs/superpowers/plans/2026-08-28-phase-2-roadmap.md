@@ -72,6 +72,19 @@ handler, which is already the enrichment pass's inbox (2K §8, 2N's verdict
 engine), so the model is pointed at exactly the uncertainties rather than at the
 whole document.
 
+**2O also gains capability 9.16 — nested annotation arguments** (folded in
+2026-09-04, same probe). The annotation-argument collector overrides `visit`,
+`visitEnum` and `visitArray` but not `visitAnnotation`, so an annotation nested
+in another is dropped entirely rather than recorded as unreadable. That one
+missing override is the cause behind three boundaries the spec was about to
+state separately: `@Poller` inside `@InboundChannelAdapter`, `@RabbitListener`'s
+`bindings = @QueueBinding(@Queue(…))`, and `@Schedules` — which matters most,
+because javac folds two or more repeatable `@Scheduled` into it, so the
+multi-trigger case currently yields no readable trigger at all. Fixing the
+override retires all three. It carries a fact-schema decision with it: D00's
+literal model has no annotation-valued argument, so one must be added
+recursively, reusing D00's existing vocabulary.
+
 **Nothing from 2O is deferred to a new phase. Two items were mis-sized inside
 it, not misplaced (ruled 2026-09-04):** servlets (`@WebServlet`) and Spring
 Integration destinations are Spring surface, so they stay in **2O** and their
