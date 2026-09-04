@@ -66,7 +66,21 @@ alongside `response_shape`'s own `shape_id`, under a `streaming` key no other
 format's descriptor ever writes — `unary`, `server-streaming`,
 `client-streaming` or `bidi` — read by the module document's detail block
 (2M design §5b) and nowhere else: it joins on nothing, so it is not a new
-`endpoints` column, the explicit ruling 2O design §1a states. `path` is the
+`endpoints` column, the explicit ruling 2O design §1a states.
+
+**Both payload columns are ALSO stamped on this branch** (fix round 2, C-2),
+and that is what makes the descriptor half survive a merge. 2O design §1b's
+`supertype_derived` derives the SAME wire identity from the generated class's
+own bytecode, with the handler symbol and both payload columns NULL, and it
+runs first (it is not in `_RUNS_LAST`) — so this engine's own insert at that
+identity is a no-op under `derive_call_endpoints.sql`'s insert-if-absent
+guard, and only a stamp can carry the request contract, the response contract
+and the streaming word onto the row that survived. Without them a gRPC
+endpoint the bytecode ALSO proved would publish strictly less than the
+descriptor alone would have, which is the whole redundancy 2O design §1 is
+built on inverted. `stamp_declared_request.sql`/`stamp_declared_response.sql`
+each guard their own column on `IS NULL`, so a row this pass minted itself —
+already carrying both — is untouched by them. `path` is the
 shape's own `schema_name` (`<protoPackage>.<Service>/<Method>`, D01's gRPC
 identity table) exactly as the WSDL case's `path` is; `method` stays NULL for
 the same reason — gRPC is as verbless as SOAP (D02 §2, amended).
@@ -114,6 +128,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 
     rows: list[dict[str, Any]] = []
     stamps: list[dict[str, Any]] = []
+    # The request half of the same stamp (2O design §1, fix round 2's C-2).
+    # A separate list because it is a separate statement, guarding a separate
+    # column against its own first writer — `stamp_declared_request.sql`'s own
+    # header states why one two-column UPDATE could not express both rules.
+    request_stamps: list[dict[str, Any]] = []
     # Deduplicated on the wire identity by the pass, because
     # `derive_call_endpoints.sql` cannot do it within a single batch (its own
     # header says so: the guard is evaluated against the table as it stood
@@ -190,22 +209,58 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             operation = None if raw_operation is None else json.loads(str(raw_operation))
             if operation is None:
                 rows.append(_operation_row(catalog, path, str(shape["evidence"])))
-            else:
-                # gRPC's own shape of this branch (2O design §1a): the
-                # sub-record names BOTH sides, so there is a real response to
-                # derive here, not merely a request self-reference.
-                rows.append(_grpc_operation_row(catalog, path, str(shape["evidence"]), operation))
-            # No stamp: `stamps` fills a row's `response_shape` from the
-            # OUTPUT side of an operation, coalescing what a pre-existing
-            # annotation twin left NULL — and gRPC's row above already CARRIES
-            # its own `response_shape`, so stamping it would only ever find a
-            # row that has nothing to coalesce. 2I Task 3 marks WSDL's INPUT
-            # elements only — no `declared_shape` fact links a WSDL operation
-            # to what its output message names, so there is nothing here to
-            # coalesce a response from either. Inventing one by, say, guessing
-            # at an output element's name would be exactly the guess D00 §3
-            # rules out; the WSDL row's `response_shape` stays NULL, honestly,
-            # until a later task reads the output side.
+                # No stamp for the WSDL case, and the reason is an absence of
+                # facts rather than an ordering: 2I Task 3 marks WSDL's INPUT
+                # elements only — no `declared_shape` fact links a WSDL
+                # operation to what its output message names — so there is
+                # nothing here to coalesce a response from. Inventing one by,
+                # say, guessing at an output element's name would be exactly
+                # the guess D00 §3 rules out; the row's `response_shape` stays
+                # NULL, honestly, until a later task reads the output side.
+                # The request side needs no stamp either: `_operation_row`
+                # self-references the very shape it derived from, so the row
+                # this pass minted is the only row that identity can have.
+                continue
+            # gRPC's own shape of this branch (2O design §1a): the sub-record
+            # names BOTH sides, so there is a real response to derive here,
+            # not merely a request self-reference.
+            rows.append(_grpc_operation_row(catalog, path, str(shape["evidence"]), operation))
+            # BOTH stamps, and this is the correction fix round 2's C-2 names
+            # (2O design §1: "the descriptor contributes … the request/response
+            # shapes; the bytecode contributes the handler symbols"). The
+            # earlier rationale here — "the row above already CARRIES its own
+            # response_shape, so stamping it would only ever find a row that
+            # has nothing to coalesce" — was true while this engine was the
+            # sole minter of a gRPC operation identity, and false the moment
+            # `supertype_derived` (2O design §1b) began minting the SAME
+            # identity first: that row carries the handler and NULL payload
+            # columns, this engine's own insert is then a no-op under
+            # `derive_call_endpoints.sql`'s insert-if-absent guard, and
+            # without these two stamps the merged row would publish LESS than
+            # the descriptor alone would have — losing both contracts and the
+            # streaming word that rides `response_shape`'s `shape_id`. The
+            # stamps are exactly why this style is in `_RUNS_LAST`; the rows
+            # this pass minted itself already carry both columns, so their own
+            # `IS NULL` guards make the stamp a no-op there, which is the
+            # first-writer discipline working rather than being bypassed.
+            stamps.append(
+                {
+                    "protocol": catalog.protocol,
+                    "direction": catalog.direction,
+                    "method": None,
+                    "path": path,
+                    "response_shape": rows[-1]["response_shape"],
+                }
+            )
+            request_stamps.append(
+                {
+                    "protocol": catalog.protocol,
+                    "direction": catalog.direction,
+                    "method": None,
+                    "path": path,
+                    "request_shape": rows[-1]["request_shape"],
+                }
+            )
             continue
         for field in json.loads(str(shape["fields"])):
             # GraphQL renames nothing and the interpreter says so by writing
@@ -228,6 +283,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 
     workspace.derive("call_endpoints", rows=rows)
     workspace.derive("stamp_declared_response", rows=stamps)
+    workspace.derive("stamp_declared_request", rows=request_stamps)
 
 
 def _row(catalog: Catalog, method: str | None, path: str, evidence: str) -> dict[str, Any]:

@@ -505,6 +505,41 @@ MicroProfile has no scope at all, and all three differences are one line of YAML
 That is §4's acceptance test run early, on one protocol, which is why the vocabulary grew
 here instead of three framework special cases growing in the engine.
 
+**Phase 2O generalises it one last way, and the generalisation is that a catalog may derive
+NO ROWS AT ALL.** `corroborates` sits at `matches` level beside `mapping`, and a catalog
+carrying it *without* a `mapping` derives nothing whatever — its entire contribution is
+`service_identity` open questions:
+
+```yaml
+matches:
+  corroborates:
+    class_annotations:
+      - org.springframework.grpc.server.service.GrpcService
+      - net.devh.boot.grpc.server.service.GrpcService
+```
+
+- **Why an annotation can be real evidence and still mint nothing.** `@GrpcService` marks a
+  class as serving something and names NOTHING else — no address, no verb, no member rule.
+  The wire identity comes only from the generated class's own constants, which
+  `supertype_derived` (below) reads. A row derived here would carry an invented address, so
+  none is.
+- **What it buys is the one case that style cannot reach**: a service implemented against a
+  PUBLISHED stubs jar. The extends edge is the module's own fact, but the generated
+  supertype's facts never arrive, so `supertype_derived` derives nothing at all — and
+  without this block the outcome is SILENCE, which 2O design §1b rules out in as many words.
+  A flagged class that no endpoint of this catalog's protocol names as a handler surfaces as
+  a `service_identity` question instead, filed by the engine's `gaps` entry point through
+  `resolve/service_identity.py` (the same hand-off `supertype_derived` and `injected_client`
+  use, and the reason it is a separate pass: the ledger is reset AFTER endpoint derivation).
+- **A flagged class the match DID derive files nothing.** The corroboration asks one
+  question of the finished table — "does any endpoint of this protocol name a method of this
+  class as its handler?" — and is silent when the answer is yes. A version that filed
+  regardless would put every correctly derived service in the ledger.
+- **Inert for every catalog that declares none**, which is every catalog written before it:
+  `gaps` returns an empty list and `run` is untouched. Malformed is REFUSED, not ignored —
+  an unread key is indistinguishable from a typo, and a typo here silently restores the
+  silence the block exists to remove.
+
 ### `single_call`
 
 One call carries the whole declaration. Arguments are addressed by position or name.
@@ -1286,6 +1321,17 @@ markers are `{owner, method}`, never a combined `Owner.Fqn#method` string — ev
 value is refused if it carries a `#`, reserved for the SCIP symbol grammar the fact stream
 itself uses.
 
+**The match has TWO conjuncts, and the marker call's PRESENCE is the first of them.** A
+class matches only where its extends target is itself in the module's facts **and** that
+target's own outer class MAKES one of the marker calls. Presence, not readability: whether
+the call's arguments can be read is a separate question, answered after the match, and it
+decides only resolved-versus-unresolved. Without the first conjunct the match reduces to
+"extends a module-local class and publicly overrides one of its methods", which every
+abstract-base/template-method pair in an ordinary repository satisfies — and each would then
+mint an inbound boundary plus a ledger question on no protocol evidence at all. That is not
+unresolved-is-an-answer; it is its converse failing: **no evidence means NO ROW, never an
+unresolved one** (fix round 2, C-1).
+
 **`members: overridden_public_methods`** is this style's one vocabulary word: a method the
 implementing class declares under the SAME NAME as one the supertype itself declares,
 PUBLIC on the implementer's own copy (an override may only widen visibility, never narrow
@@ -1299,8 +1345,17 @@ call-site string verbatim — **never derived by casing the compiled override's 
 name**, which is not invertible (a `mixedLower`-shaped transform can collapse more than one
 proto spelling onto one compiled identifier). The one casing operation this style performs
 runs the OTHER way: decapitalizing the wire name it already read, to find the matching
-override name among what bytecode itself declared — a candidate that matches nothing
-derives nothing.
+override name among what bytecode itself declared.
+
+**That lookup is not injective either, and both of its failures REFUSE rather than guess**
+(fix round 2, I-1). Where two wire names decapitalize onto ONE override — `GetOrder` and
+`getOrder` are two distinct RPCs and both compile to one `getOrder` — **both** are refused:
+deriving a row for each would carry the same handler symbol twice, and at least one of those
+attributions is false. The class derives its unresolved fallback row and a `service_identity`
+question naming the collision. Where an override no wire name reaches at all is found beside
+siblings that DID correlate (`mixedLower` can move a proto name further than decapitalization
+inverts), the correlating siblings still derive and the uncorrelated override is filed as a
+`service_identity` question — a visible gap, never a silent drop.
 
 **Where the constants cannot be read at all — CP-8(b)/(d) falsifying, not the supertype
 being absent — the row still derives** ([D02](D02-catalog-schema.md) §2's unresolved-is-an-
@@ -1312,11 +1367,19 @@ unresolved fallback, which is reserved for a LOCALLY SEEN supertype.
 
 `direction`/`protocol` are the catalog's own; `method` is always NULL (gRPC is verbless,
 like every non-HTTP protocol); `caller`/`peer` are always NULL (the deriving method is a
-`handler`); `request_shape`/`response_shape` stay NULL — this style contributes the handler
-symbol only, and where a `.proto` descriptor also covers the same identity
-(`schema_operations`, above), the two rows merge on the identical `(protocol, direction,
-method, path)` D02 §5 already dedups on, the descriptor contributing the method inventory
-and payload shapes it alone can read.
+`handler`); `request_shape`/`response_shape` are written NULL — this style contributes the
+handler symbol only.
+
+**They do not STAY NULL where a descriptor also covers the identity, and that took a fix**
+(round 2, C-2). This style is not in §3's runs-last group, so its row is inserted first, and
+`schema_operations`'s own insert at the identical `(protocol, direction, method, path)` is
+then a no-op under the insert-if-absent guard. Its STAMPS are not: running last is exactly
+what lets it fill `request_shape` and `response_shape` — and, riding the latter's `shape_id`,
+the `unary | server-streaming | client-streaming | bidi` streaming word — onto the row that
+survived, each stamp guarding its own column on `IS NULL` so a first writer is never
+overwritten. The merged row therefore carries BOTH halves: this style's handler symbol and
+the descriptor's own contracts. Before the fix it carried strictly less than the descriptor
+row alone would have, which inverted the whole redundancy the two halves exist for.
 
 ### `injected_client`
 

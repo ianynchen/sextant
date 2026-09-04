@@ -19,12 +19,22 @@ and the reason") — only the matching walk itself still has that."""
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.engines import injected_client, supertype_derived
+from sextant.application.resolve.engines import (
+    annotation_driven,
+    injected_client,
+    supertype_derived,
+)
 from sextant.application.resolve.open_questions import record_open_questions
 
+# `annotation_driven` is the third, and unlike the other two it is a style
+# EVERY annotation catalog declares — its `gaps` is inert for all of them and
+# answers only for a catalog carrying a `corroborates` block (2O design §1b,
+# fix round 2's I-2), which is why membership here is by style, as for the
+# others, rather than by an id this module would have to know.
 _GAP_ENGINES = {
     "supertype_derived": supertype_derived.gaps,
     "injected_client": injected_client.gaps,
+    "annotation_driven": annotation_driven.gaps,
 }
 
 

@@ -25,8 +25,22 @@ here would restate those documents rather than add anything.
   matches a net.devh `@GrpcClient`-injected stub field (`grpc-net-devh.yml`) and derives
   one outbound, service-level row (`method` NULL), fenced by symbol name against a service
   this module implements locally. Both merge with Task 4's descriptor-derived rows on the
-  identical wire identity where both exist. An unreadable identity derives an honest
-  `unresolved` row plus a `service_identity` open question, never a fabricated package.
+  identical wire identity where both exist — and the merged row keeps BOTH halves: the
+  bytecode's handler symbol plus the descriptor's request contract, response contract and
+  streaming word, carried across by `stamp_declared_response.sql` and its new sibling
+  `stamp_declared_request.sql` rather than by an insert the identity guard rejects. An
+  unreadable identity derives an honest `unresolved` row plus a `service_identity` open
+  question, never a fabricated package — and `supertype_derived` matches ONLY where the
+  supertype's own generated class makes one of the marker calls, so ordinary class
+  inheritance derives no row and files no question at all. Where two wire method names
+  collapse onto one candidate override neither is attributed, and an override no wire
+  name reaches is filed as a question rather than dropped silently.
+- **`@GrpcService` corroboration** (`grpc-spring.yml`, Spring gRPC and net.devh
+  spellings): a new `corroborates` block on `annotation_driven`, plus a `gaps` entry
+  point beside `supertype_derived`'s and `injected_client`'s. It derives NO endpoint rows
+  — the annotation names no service — and files a `service_identity` question for any
+  class it flags that no gRPC endpoint names as a handler, which is the published-stubs
+  case that previously produced nothing at all.
 
 ### Changed
 

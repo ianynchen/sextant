@@ -416,7 +416,7 @@ SNS and Redis are **out of scope by decision**, not oversight — each would be 
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ 2A | ◐ 1A 2B | ◐ 2A | ◐ 2A 1B | ◐ 1A 1B | 2A 2B 1C |
+| **Java / Kotlin** | ◐ 1A | ◐ 1A 2B | ◐ 2A | ◐ 2A 1B | ◐ 1A 1B | 2A 2B 1C |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -1268,25 +1268,45 @@ matches net.devh's own `@GrpcClient`-annotated field. Neither reads or names a f
 inside the engine; catalog data does (`src/sextant/catalogs/grpc-java.yml`,
 `src/sextant/catalogs/grpc-net-devh.yml`).
 
-**What Task 5 explicitly did NOT ship, and why:** the `@GrpcService`/net.devh annotation
-CORROBORATION spec §1b describes — surfacing a class an annotation flags but the supertype
-match misses as a `service_identity` open question, rather than silently seeing nothing — has
-no home in the shipped `annotation_driven` engine (it never files `open_questions`, and has no
-mechanism to derive nothing-but-a-gap the way this corroboration needs). Implementing that is
-new scope this task did not attempt; `grpc-spring.yml` (Spring gRPC's own `@GrpcService`
-corroboration catalog) is consequently also unshipped. The core `supertype_derived` match is
-framework-neutral, so a Spring gRPC (or Quarkus, or plain `io.grpc.Server`) service still
-derives its inbound row exactly as a net.devh one does, ANNOTATED OR NOT — it is only the
-*corroboration* (turning an annotated-but-unmatched class into a visible question instead of
-silence) that is missing.
+**Where both halves cover one identity the merged row keeps BOTH, and that is a fix rather
+than an accident** (fix round 2). The bytecode row is inserted first, so `schema_operations`'s
+insert at the same `(grpc, inbound, NULL, path)` is a no-op — its two STAMPS are what carry
+the descriptor's half across: `src/sextant/storage/duckdb/stamp_declared_response.sql` and its
+new sibling `src/sextant/storage/duckdb/stamp_declared_request.sql`, each touching only a row
+whose own column is still NULL. So the merged row publishes the handler symbol (bytecode) AND
+the request contract, the response contract and the streaming word (descriptor). Before the
+fix the bytecode half made the row strictly THINNER than the descriptor alone would have
+made it — both contracts and the `unary | server-streaming | client-streaming | bidi` Detail
+disappeared exactly where the tool knew MORE about the endpoint.
+
+**The `@GrpcService` corroboration ships too** (`src/sextant/catalogs/grpc-spring.yml`,
+carrying both the Spring gRPC and the net.devh spellings). It rides `annotation_driven` on a
+new `corroborates` block and a new `gaps` entry point
+(`src/sextant/application/resolve/engines/annotation_driven.py`, wired through
+`src/sextant/application/resolve/service_identity.py` beside the other two): it derives **no
+endpoint rows at all** — the annotation carries no service name and cannot mint an identity —
+and instead files a `service_identity` open question for any class it flags that no gRPC
+endpoint names as a handler. That is the published-stubs case in §1b: the extends edge is the
+module's own fact, the generated supertype's facts never arrive, `supertype_derived` derives
+nothing, and without this catalog the outcome was silence. A flagged class the supertype
+match DID derive files nothing.
+
+**Two derivation corrections landed with it** (fix round 2). `supertype_derived`'s match now
+requires the supertype's own outer class to MAKE one of the marker calls, not merely to be a
+module-local class with an overridden public method — without that conjunct every
+abstract-base/template-method pair in an ordinary repository minted a fabricated inbound gRPC
+boundary plus a ledger question on no gRPC evidence at all. And the wire-name-to-override
+lookup now refuses its two non-injective cases instead of guessing: two wire names collapsing
+onto one override refuse BOTH (unresolved row plus a question), and an override no wire name
+reaches is filed as a question rather than dropped.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
 | Java | generated `FooGrpc.FooImplBase` implementing `io.grpc.BindableService`; stubs extend `Abstract{Async,Blocking,Future}Stub` | inheritance, not a call | `supertype_derived` | ✅ shipped (2O Task 5) — **B, as scoped**: the extends edge (capability 9.13) plus a call-site-argument read, framework-neutral, no annotation needed |
 | Java | `net.devh.boot.grpc.client.inject.GrpcClient` (client stub injection) | field injection | `injected_client` | ✅ shipped (2O Task 5) — service-level only (`method` NULL); per-method outbound waits on 2Q's call graph |
-| Java | `net.devh.boot.grpc.server.service.GrpcService` (server annotation) | — | `annotation` corroboration | A — `supertype_derived` above already derives the row without it; unshipped is the "flag an annotated-but-unmatched class as a gap" corroboration alone (no home in `annotation_driven`, task-5-report.md) |
-| Java | Quarkus `io.quarkus.grpc.{GrpcService, GrpcClient}` | — | `annotation` | A — server side rides `supertype_derived` already (framework-neutral); `@GrpcClient` injection itself is unshipped (net.devh's own annotation only) |
-| Java | Spring gRPC `org.springframework.grpc.server.service.GrpcService` | **the annotation is optional** — Spring gRPC exposes *any* `BindableService` bean, so `supertype_derived` is the reliable match and the annotation only adds interceptors | `supertype_derived` (annotation corroboration unshipped) | ✅ shipped (2O Task 5) inbound, via the framework-neutral supertype match — the annotation's own corroboration row is not (same gap as the net.devh row above) |
+| Java | `net.devh.boot.grpc.server.service.GrpcService` (server annotation) | class annotation, **no service name** | `annotation_driven` `corroborates` | ✅ shipped (2O Task 5, fix round 2) — derives NO row by design (`supertype_derived` above already derives it, and the annotation names no identity); it files a `service_identity` open question for a flagged class no gRPC endpoint names as a handler |
+| Java | Quarkus `io.quarkus.grpc.{GrpcService, GrpcClient}` | — | `annotation` | A — server side rides `supertype_derived` already (framework-neutral); the `@GrpcService` corroboration catalog carries the Spring gRPC and net.devh spellings only, and `@GrpcClient` injection is net.devh's annotation only |
+| Java | Spring gRPC `org.springframework.grpc.server.service.GrpcService` | **the annotation is optional** — Spring gRPC exposes *any* `BindableService` bean, so `supertype_derived` is the reliable match and the annotation only adds interceptors | `supertype_derived` + `corroborates` | ✅ shipped (2O Task 5) inbound via the framework-neutral supertype match, with the annotation's own corroboration shipped beside it (fix round 2) — a question where the supertype match saw nothing, never a row |
 | Go | `pb.RegisterFooServer(s, impl)`, `pb.NewFooClient(conn)` | **the generated function names the service** | `registration_call` | A |
 | Python | `_pb2_grpc.py`: `FooServicer`, `add_FooServicer_to_server`, `FooStub(channel)` | — | `registration_call` | A |
 | Rust | `tonic` `FooServer::new(impl)`, `FooClient::connect(url)` | — | `registration_call` | A |
@@ -1306,12 +1326,13 @@ Task 5):**
   LOCALLY SEEN supertype); `injected_client` derives the unresolved fallback row (`path` the
   stub type's own descriptor) plus a `service_identity` gap. The shipped `.sextant.yml` library
   opt-in (D02 §4a) is the escape, unexercised by this task.
-- **Unannotated Spring gRPC on published stubs.** Spring gRPC's own `@GrpcService` is
-  optional — interacts with the boundary above: since the annotation carries no service name
-  and corroboration is unshipped (above), an unannotated Spring gRPC service implemented
-  against published stubs goes entirely unseen. An annotated one is no better off today for
-  the same reason (corroboration unshipped) — but see the row above: this is now the ONLY
-  case that goes unseen, not the general Spring gRPC surface.
+- **UNANNOTATED Spring gRPC on published stubs.** Spring gRPC's own `@GrpcService` is
+  optional — it exposes any `BindableService` bean — and this interacts with the boundary
+  above. An ANNOTATED service on published stubs is now visible as a `service_identity`
+  question (the corroboration catalog above); an UNANNOTATED one on published stubs still
+  goes entirely unseen, because neither the identity nor any marker reaches this workspace.
+  That is the one remaining silent cell, and the escape is the same `.sextant.yml` library
+  opt-in.
 - **Bare `newBlockingStub(channel)` without `@GrpcClient`.** No engine derives from a type
   reference alone; the call's own argument is a `Channel` object, not an address. Client
   wiring built by hand, with no field injection anywhere, is invisible to `injected_client`.

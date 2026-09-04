@@ -1,0 +1,63 @@
+id: grpc-spring
+displayName: gRPC service annotation (@GrpcService corroboration)
+style: annotation_driven
+protocol: grpc
+direction: inbound
+
+# CORROBORATION ONLY — this catalog derives NO endpoint rows at all, by
+# design (2O design §1b). `@GrpcService` marks a class as a gRPC service and
+# names NOTHING ELSE: no service name, no method, no address. The wire
+# identity `<protoPackage>.<Service>/<Method>` comes only from the generated
+# class's own `SERVICE_NAME`/wire-method constants, which `grpc-java.yml`'s
+# framework-neutral `supertype_derived` match reads (CP-8(b)/(d), R11) — so
+# an annotation row that minted an endpoint would be inventing an address
+# this evidence cannot support.
+#
+# What it DOES buy is the one case the supertype match cannot reach: a
+# service implemented against a PUBLISHED stubs jar. The extends edge is
+# still the module's own fact, but the generated supertype's facts never
+# reach this workspace, so `supertype_derived` derives nothing at all for it
+# — and without this catalog the outcome would be silence, which 2O design
+# §1b rules out in as many words ("silence is not an outcome"). A class this
+# annotation flags that no gRPC endpoint names as a handler therefore
+# surfaces as a `service_identity` OPEN QUESTION, filed by
+# `annotation_driven.gaps` through `resolve/service_identity.py` — visible
+# degradation instead of nothing.
+#
+# Both spellings live in this one file because they are one shape of evidence
+# at one identity ("a style is a shape of evidence, not a framework", D02):
+# Spring gRPC's own `@GrpcService` and net.devh's, differing only in package.
+# A second catalog would differ from this one by a single string and would
+# have to be kept in step with it by hand.
+#
+# Spring gRPC's `@GrpcService` is OPTIONAL — it exposes any `BindableService`
+# bean, and the annotation only adds interceptors — so the supertype match is
+# the reliable one for a module that compiles its own stubs, and this
+# corroboration is the fallback rather than the primary read.
+
+detect:
+  coordinates:
+    - "org.springframework.grpc:spring-grpc-spring-boot-starter"
+    - "net.devh:grpc-server-spring-boot-starter"
+
+# Only the annotation itself is read — presence on a class, no attributes —
+# so `annotation_args` is the whole requirement. No `superclass` here: this
+# catalog deliberately does NOT repeat `grpc-java.yml`'s supertype match, and
+# gating on a capability it never reads would skip the corroboration in
+# exactly the scans that most need it.
+requires: [annotation_args]
+
+matches:
+  # D02 §2's `corroborates` block — the one vocabulary an annotation catalog
+  # that derives nothing carries. No `mapping`: there is no address, no verb
+  # and no member rule to declare, and `annotation_driven.run` returns
+  # immediately for a catalog shaped this way.
+  corroborates:
+    class_annotations:
+      - org.springframework.grpc.server.service.GrpcService
+      - net.devh.boot.grpc.server.service.GrpcService
+
+# No `format_fixed`: `grpc-schema.yml` already declares `{grpc: protobuf}`
+# and `resolve/format.py` unions the block across every LOADED catalog, so a
+# second copy here could only drift out of step with the first
+# (`grpc-java.yml`'s own identical omission and reasoning).

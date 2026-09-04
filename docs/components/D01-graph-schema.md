@@ -361,7 +361,21 @@ two independent ways that merge on the identical string (D02 §5's own join, no 
 `.proto` descriptor states it outright, and the compiled `<Service>Grpc` class's own
 identity-building call sites state the SAME string from bytecode alone (R11:
 `ServiceDescriptor.newBuilder`'s and `MethodDescriptor.generateFullMethodName`'s own literal
-arguments, never a field value). The `<protoPackage>.<Service>` form — SERVICE-level, no
+arguments, never a field value).
+
+**What each side CONTRIBUTES to the merged row is different, and the row keeps both** — a
+correction, because for one revision it did not. The bytecode side contributes the `handler`
+symbol and the proof that the method is actually implemented; the descriptor side
+contributes `request_shape`, `response_shape` and the
+`unary | server-streaming | client-streaming | bidi` Detail that rides the response
+descriptor's own `shape_id`. The bytecode row is inserted first and the descriptor's insert
+at the same identity is then a no-op under insert-if-absent — so the descriptor's half
+reaches the row by STAMP, not by insert
+(`stamp_declared_request.sql`/`stamp_declared_response.sql`, each guarding its own column on
+`IS NULL`, run by the `schema_operations` engine from the runs-last group for exactly this
+purpose). Without those stamps a gRPC endpoint that BOTH halves proved would publish
+strictly less than the descriptor alone would have, which is the redundancy this design is
+built on running backwards. The `<protoPackage>.<Service>` form — SERVICE-level, no
 method — is deliberately coarser: an injected client stub (`@GrpcClient`) proves the module
 TALKS TO a service, not which of its methods it calls, and minting one row per service method
 from that evidence alone would fabricate a boundary nobody observed. **This row links to

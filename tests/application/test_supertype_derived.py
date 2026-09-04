@@ -27,6 +27,8 @@ from sextant.application.resolve.pipeline import resolve
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
+    AnnotationFact,
+    AnnotationUse,
     CallArgument,
     CallSiteFact,
     CallTarget,
@@ -37,7 +39,12 @@ from sextant.domain.facts import (
 )
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
-CAPABILITIES = {"call_site", "string_constants", "superclass"}
+CAPABILITIES = {"call_site", "string_constants", "superclass", "annotation_args"}
+# The one annotation `grpc-spring.yml`'s own corroboration block names, in the
+# SCIP form the fact stream carries (the catalog spells it dotted, and
+# `_catalog_symbol` converts) — invented here alongside every other identity
+# in this file rather than pinned to a shipped catalog's live value.
+SERVICE_ANNOTATION = "com/acme/starter/GrpcService#"
 # The module-coordinates prefix a real symbol fact's own `symbol` carries
 # (D00 §5a) — `test_interface_engine.py`'s own `_MODULE` precedent.
 _MODULE = "sextant-jvm maven com.acme/grpc-probe 1.0.0 "
@@ -287,11 +294,16 @@ def test_a_stub_from_a_published_jar_derives_nothing_not_even_unresolved(tmp_pat
 
 
 def test_an_unresolvable_identity_derives_the_unresolved_fallback_row(tmp_path: Path):
-    """CP-8(b)/(d) falsifying (no `ServiceDescriptor.newBuilder` call site
-    reaches the outer class at all): the row still derives — D02 §2's
-    unresolved-is-an-answer — with `path` the supertype's own bare
-    descriptor verbatim, never a fabricated package."""
-    facts = [*_supertype_facts("getOrder"), *_implementor_facts("getOrder")]
+    """CP-8(b)/(d) falsifying — the generated class MAKES the marker call
+    (which is what makes this a gRPC service base at all, fix round 2's C-1
+    gate) and its identity-carrying argument is unreadable: the row still
+    derives — D02 §2's unresolved-is-an-answer — with `path` the supertype's
+    own bare descriptor verbatim, never a fabricated package."""
+    facts = [
+        *_supertype_facts("getOrder"),
+        *_implementor_facts("getOrder"),
+        _service_name_site(value=None),
+    ]
     workspace = _resolve(tmp_path, facts)
     [row] = workspace.query("endpoints")
     workspace.close()
@@ -306,7 +318,11 @@ def test_an_unreadable_identity_files_a_question_rather_than_guessing(tmp_path: 
     design §1b) — filed by `resolve/service_identity.py`'s own pass, AFTER
     the 2K ledger reset, which is why this test runs the full pipeline
     (`resolve()`) rather than `derive_endpoints` alone."""
-    facts = [*_supertype_facts("getOrder"), *_implementor_facts("getOrder")]
+    facts = [
+        *_supertype_facts("getOrder"),
+        *_implementor_facts("getOrder"),
+        _service_name_site(value=None),
+    ]
     write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     resolve(workspace, tmp_path / "facts", _Catalogs([_catalog()]), CAPABILITIES)
@@ -320,6 +336,124 @@ def test_an_unreadable_identity_files_a_question_rather_than_guessing(tmp_path: 
     assert candidates[0]["class"] == _MODULE + IMPLEMENTOR
 
 
+# --- (b2) C-1: ordinary inheritance is not evidence of anything ------------
+
+
+def test_plain_java_inheritance_with_no_marker_call_derives_no_row_and_no_question(
+    tmp_path: Path,
+):
+    """Fix round 2, C-1 — the regression this gate exists for.
+
+    `NightlyJob extends AbstractJob` overriding `execute()`, both classes the
+    module's own, and NOT ONE gRPC fact anywhere: no `ServiceDescriptor.
+    newBuilder` call site, no `generateFullMethodName` call site, nothing.
+    Before the gate this matched on (a) the extends target being in
+    `declared_symbols` and (b) one public override — which every
+    abstract-base/template-method pair in a real repository satisfies — and
+    minted an inbound gRPC boundary at `com/acme/app/AbstractJob#` plus a
+    `service_identity` ledger question. That is not "unresolved is an
+    answer": the row ASSERTS a gRPC service exists on no gRPC evidence at
+    all, which is the fabrication this project exists to prevent. NO ROW and
+    NO QUESTION is the only honest outcome.
+    """
+    base = "com/acme/app/AbstractJob#"
+    job = "com/acme/app/NightlyJob#"
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + base, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=f"{_MODULE}{base}execute(sig_base).",
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + base,
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + job,
+            construct_kind=ConstructKind.CLASS,
+            superclass=_MODULE + base,
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=f"{_MODULE}{job}execute(sig_impl).",
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + job,
+        ),
+    ]
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    resolve(workspace, tmp_path / "facts", _Catalogs([_catalog()]), CAPABILITIES)
+    rows = workspace.query("endpoints")
+    questions = workspace.query("open_questions")
+    workspace.close()
+
+    assert rows == []
+    assert questions == []
+
+
+# --- (b3) I-1: the casing lookup refuses ambiguity rather than guessing -----
+
+
+def test_two_wire_names_collapsing_to_one_override_refuse_both(tmp_path: Path):
+    """Fix round 2, I-1. Proto method names are case-sensitive, so `GetOrder`
+    and `getOrder` are two DISTINCT RPCs on one service — and both compile to
+    the single Java override `getOrder`, which is exactly the collapse
+    decapitalization cannot see through. Deriving a resolved row for each
+    would carry the SAME handler symbol twice, and at least one of those
+    attributions is false — so NEITHER derives: the unresolved fallback
+    stands in their place, and the ledger carries the ambiguity.
+
+    (The reviewer's own `GetOrder` + `get_order` example is the SAME defect
+    one transform further out — `get_order` decapitalizes to itself, matches
+    no override, and is therefore the `uncorrelated` gap the next test pins,
+    not this one.)"""
+    facts = [
+        *_supertype_facts("getOrder"),
+        *_implementor_facts("getOrder"),
+        _service_name_site(),
+        _method_name_site("GetOrder"),
+        _method_name_site("getOrder", accessor="getgetOrderMethod", ordinal=2),
+    ]
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    resolve(workspace, tmp_path / "facts", _Catalogs([_catalog()]), CAPABILITIES)
+    rows = workspace.query("endpoints")
+    questions = workspace.query("open_questions")
+    workspace.close()
+
+    assert [(row["path"], row["resolution"], row["handler"]) for row in rows] == [
+        (IMPL_BASE, "unresolved", None)
+    ]
+    assert len(questions) == 1
+    assert questions[0]["question"] == "service_identity"
+    assert "decapitalize to the single override" in str(questions[0]["evidence"])
+
+
+def test_an_override_no_wire_name_reaches_files_a_gap_rather_than_vanishing(tmp_path: Path):
+    """Fix round 2, I-1's second half. `ListOrders` decapitalizes to
+    `listOrders` and correlates; a sibling override `streamOrders` is one the
+    generated class names no wire method for at all (grpc-java's `mixedLower`
+    transform can move a proto name further than decapitalization inverts).
+    The correlating sibling still derives; the one that did not is a GAP, not
+    an absence."""
+    facts = [
+        *_supertype_facts("listOrders", "streamOrders"),
+        *_implementor_facts("listOrders", "streamOrders"),
+        _service_name_site(),
+        _method_name_site("ListOrders", accessor="getListOrdersMethod"),
+    ]
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    resolve(workspace, tmp_path / "facts", _Catalogs([_catalog()]), CAPABILITIES)
+    rows = workspace.query("endpoints")
+    questions = workspace.query("open_questions")
+    workspace.close()
+
+    assert [row["path"] for row in rows] == [f"{SERVICE_NAME}/ListOrders"]
+    assert len(questions) == 1
+    assert questions[0]["question"] == "service_identity"
+    assert "streamOrders" in str(questions[0]["evidence"])
+
+
 # --- (c) the descriptor and bytecode rows merge on the real wire identity --
 
 
@@ -331,11 +465,17 @@ def test_the_bytecode_row_merges_with_the_descriptor_row(tmp_path: Path):
     insert-if-absent). `supertype_derived` is NOT in `_RUNS_LAST`
     (`resolve/endpoints.py`), so it inserts FIRST; `schema_operations` is,
     so its own attempt at the identical identity is a no-op — the bytecode
-    row's `handler` is what survives, the descriptor's own
-    `request_shape`/`response_shape` are not (a known, accepted consequence
-    of R11's own design, `schema_operations.py`'s own docstring: "gRPC's row
-    above already CARRIES its own `response_shape`, so stamping it would
-    only ever find a row that has nothing to coalesce")."""
+    row's `handler` is what survives.
+
+    **And BOTH contracts survive with it** (fix round 2, C-2): the insert is
+    a no-op, but the two STAMPS are not — `schema_operations` fills the
+    descriptor's own `request_shape` and `response_shape` (and, riding the
+    latter's `shape_id`, §1a's streaming word) onto the row that won,
+    precisely because it is in `_RUNS_LAST` and the stamps guard on `IS
+    NULL`. Before this fix the merged row was strictly THINNER than the
+    descriptor row alone would have been — handler present, both contracts
+    and the streaming detail gone — which inverted the redundancy 2O design
+    §1 is built on."""
     path = f"{SERVICE_NAME}/GetOrder"
     shape = DeclaredShapeFact(
         document_id="doc_1",
@@ -384,3 +524,97 @@ def test_the_bytecode_row_merges_with_the_descriptor_row(tmp_path: Path):
     assert len(rows) == 1
     assert rows[0]["path"] == path
     assert rows[0]["handler"] == f"{_MODULE}{IMPLEMENTOR}getOrder(sig_impl)."
+    assert json.loads(str(rows[0]["request_shape"]))["shape_id"] == "orders.v1.GetOrderRequest"
+    response = json.loads(str(rows[0]["response_shape"]))
+    assert response["shape_id"] == "orders.v1.GetOrderReply"
+    assert response["streaming"] == "unary"
+
+
+# --- (d) I-2: the annotation corroboration — a question, never a row --------
+
+
+def _corroboration_catalog() -> Catalog:
+    """`grpc-spring.yml`'s own shape (2O design §1b, fix round 2's I-2): an
+    `annotation_driven` catalog with a `corroborates` block and NO `mapping`
+    at all, so `annotation_driven.run` derives nothing and its `gaps` is the
+    catalog's whole contribution."""
+    return Catalog(
+        id="test-grpc-spring",
+        style="annotation_driven",
+        protocol="grpc",
+        direction="inbound",
+        requires=("annotation_args",),
+        matches={"corroborates": {"class_annotations": ["com.acme.starter.GrpcService"]}},
+        source=Path("test-grpc-spring.yml"),
+    )
+
+
+def _annotated(target: str) -> AnnotationFact:
+    return AnnotationFact(
+        document_id="doc_1",
+        target=target,
+        use=AnnotationUse(annotation=SERVICE_ANNOTATION),
+        retention="RUNTIME",
+    )
+
+
+def test_an_annotated_class_the_supertype_match_missed_becomes_a_question(tmp_path: Path):
+    """2O design §1b's "silence is not an outcome", shipped (I-2).
+
+    The published-stubs-jar case: the implementer's `extends` edge is its own
+    fact, but the generated supertype's facts never reached this workspace,
+    so `supertype_derived` derives NOTHING for it — not even the unresolved
+    fallback. Before this catalog that was the end of it: no row, no
+    question, a served gRPC surface invisible. The annotation cannot supply
+    the missing identity — it carries no service name — so what it supplies
+    instead is the class, as an open question.
+    """
+    facts = [*_implementor_facts("getOrder"), _annotated(_MODULE + IMPLEMENTOR)]
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    resolve(
+        workspace,
+        tmp_path / "facts",
+        _Catalogs([_catalog(), _corroboration_catalog()]),
+        CAPABILITIES,
+    )
+    rows = workspace.query("endpoints")
+    questions = workspace.query("open_questions")
+    workspace.close()
+
+    # It corroborates; it never mints. No endpoint row anywhere.
+    assert rows == []
+    assert len(questions) == 1
+    assert questions[0]["question"] == "service_identity"
+    assert questions[0]["path"] == IMPLEMENTOR
+    candidates = json.loads(str(questions[0]["candidates"]))
+    assert candidates[0]["class"] == _MODULE + IMPLEMENTOR
+
+
+def test_an_annotated_class_the_supertype_match_derived_files_no_question(tmp_path: Path):
+    """The other half of the same rule: where the identity WAS readable, the
+    corroboration adds nothing and asks nothing — the endpoint row already
+    names this class's method as its handler, so there is no open question to
+    file. A corroboration that filed one anyway would put every properly
+    derived service in the ledger."""
+    facts = [
+        *_supertype_facts("getOrder"),
+        *_implementor_facts("getOrder"),
+        _service_name_site(),
+        _method_name_site("GetOrder"),
+        _annotated(_MODULE + IMPLEMENTOR),
+    ]
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    resolve(
+        workspace,
+        tmp_path / "facts",
+        _Catalogs([_catalog(), _corroboration_catalog()]),
+        CAPABILITIES,
+    )
+    rows = workspace.query("endpoints")
+    questions = workspace.query("open_questions")
+    workspace.close()
+
+    assert [row["path"] for row in rows] == [f"{SERVICE_NAME}/GetOrder"]
+    assert questions == []

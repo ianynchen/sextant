@@ -520,6 +520,7 @@ _NAMED_DERIVATIONS = {
     "resolved_config_insert": "insert_resolved_config.sql",
     "stamp_media": "stamp_media.sql",
     "stamp_declared_response": "stamp_declared_response.sql",
+    "stamp_declared_request": "stamp_declared_request.sql",
     "stamp_format": "stamp_format.sql",
     "bind_request_shape": "bind_request_shape.sql",
     "reclassify_protocol": "reclassify_protocol.sql",

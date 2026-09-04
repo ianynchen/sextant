@@ -72,12 +72,14 @@ embedded and a `.proto` file on disk) and the JVM bytecode half (Task 5) — a
 framework-neutral `supertype_derived` engine for generated `<Service>ImplBase`
 implementations (capability 9.13's `superclass` plus a call-site-argument read, R11) and an
 `injected_client` engine for net.devh's `@GrpcClient`-injected stubs, fenced against a
-locally-implemented service by symbol name. Three boundaries remain stated rather than
-closed — published-stubs jars, an unannotated Spring gRPC service implemented against
-published stubs, and bare `newBlockingStub(channel)` wiring with no field injection
-([COVERAGE.md](COVERAGE.md) §5.7) — and the `@GrpcService`/net.devh annotation
-CORROBORATION (surfacing an annotated-but-unmatched class as a question rather than
-silence) is unshipped, since it has no home in the `annotation_driven` engine as built.
+locally-implemented service by symbol name. The `@GrpcService`/net.devh annotation
+CORROBORATION ships alongside them (`grpc-spring.yml`, on `annotation_driven`'s new
+`corroborates` block): it derives no endpoint row — the annotation carries no service
+name and cannot mint an identity — and instead surfaces an annotated-but-unmatched class
+as a `service_identity` question rather than silence. Three boundaries remain stated
+rather than closed — published-stubs jars, an UNANNOTATED Spring gRPC service implemented
+against published stubs, and bare `newBlockingStub(channel)` wiring with no field
+injection ([COVERAGE.md](COVERAGE.md) §5.7).
 None of the three narrows what derives; each narrows what a silent miss is visible as.
 
 ### FR-4 — Shape catalog

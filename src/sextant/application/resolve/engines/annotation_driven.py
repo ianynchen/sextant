@@ -26,7 +26,17 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     """Passes the catalog's own protocol, direction, annotation identifiers and
     mapping declaration through to the derivation as bound parameters. The
     engine here is generic: it never names a framework or a protocol, only
-    forwards what the catalog declares."""
+    forwards what the catalog declares.
+
+    A CORROBORATION-ONLY catalog derives nothing here and returns at once
+    (2O design §1b, fix round 2's I-2): it declares `corroborates` and no
+    `mapping` because its annotation states that a class SERVES something
+    without stating what — no address, no member rule, nothing this
+    derivation could bind — so its whole contribution is the open question
+    `gaps` files instead. Deriving a row from it would mint an endpoint with
+    no address, which is precisely what the annotation cannot support."""
+    if _corroboration(catalog) is not None and "mapping" not in catalog.matches:
+        return
     mapping = catalog.matches["mapping"]
     _validate_naming(catalog, mapping)
     declared_on = _declared_on(catalog)
@@ -154,6 +164,114 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # second-row rule at all — the HTTP catalogs, which never see @SendTo.
     if "reply" in catalog.matches:
         _derive_replies(workspace, catalog)
+
+
+# D02 §2's `corroborates` block: an optional, catalog-declared list of
+# CLASS-LEVEL annotations that mark a class as serving something without
+# naming what it serves (2O design §1b, fix round 2's I-2). Absent on every
+# catalog written before it, and inert while absent — `gaps` returns an empty
+# list and `run` is untouched.
+_CORROBORATES = "corroborates"
+_CLASS_ANNOTATIONS = "class_annotations"
+
+# Why a corroborated class earns an open question rather than a row. Stated
+# in terms of what is MISSING — an identity — rather than of any framework:
+# the annotation is real evidence that this class serves something, and it is
+# the only evidence, because whatever else would have named the address was
+# not readable in this workspace (2O design §1b's published-dependency case).
+_UNCORROBORATED = (
+    "the annotation marks this class as serving a declared contract but names "
+    "no address of its own, and no endpoint of this protocol names any of its "
+    "methods as a handler — the identity the other style reads off the "
+    "generated supertype's own facts never reached this workspace, so the "
+    "class is visible and its wire identity is not"
+)
+
+
+def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
+    """The `service_identity` open questions a CORROBORATION catalog earns
+    (2O design §1b, fix round 2's I-2) — one per annotated class that no
+    endpoint of this catalog's protocol names as a handler.
+
+    **Corroboration cannot mint identity, and that is the whole design.** The
+    annotation carries no address, so a class it flags is either already
+    derived by the style that CAN read one — in which case this adds nothing
+    and files nothing — or it is not, in which case the honest answer is a
+    question naming the class, not an endpoint row with an invented address
+    and not silence. Silence is what the unshipped version of this cost: a
+    class whose generated supertype lives in a dependency the workspace never
+    scanned produced no row and no question at all (2O design §1b: "silence is
+    not an outcome").
+
+    Read back off `endpoints` rather than by re-walking another engine's
+    match, unlike `supertype_derived.gaps`/`injected_client.gaps`: the
+    question this asks is literally "did ANY style derive this class's
+    methods", which is a property of the finished table and of no single
+    engine's own walk. `resolve/service_identity.py` runs this after
+    `derive_endpoints`, so the table is complete when it is read.
+    """
+    declared = _corroboration(catalog)
+    if declared is None:
+        return []
+    flagged = {_catalog_symbol(fqn) for fqn in declared}
+    served = [
+        str(row["handler"])
+        for row in workspace.query("endpoints")
+        if row["handler"] is not None and str(row["protocol"]) == catalog.protocol
+    ]
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for annotation in workspace.query("annotations"):
+        if str(annotation["annotation"]) not in flagged:
+            continue
+        target = str(annotation["target"])
+        if target in seen:
+            continue
+        seen.add(target)
+        # A handler symbol is `<class symbol><method>(<signature>).` (D00
+        # §5a), so a class this protocol already serves through is a prefix of
+        # at least one of them. Prefix rather than an owner split: the symbol
+        # grammar's own parsing lives in `domain/symbols.py` and a prefix test
+        # needs none of it.
+        if any(handler.startswith(target) for handler in served):
+            continue
+        rows.append(
+            {
+                "protocol": catalog.protocol,
+                "method": None,
+                "path": bare_descriptor(target),
+                "question": "service_identity",
+                "candidates": json.dumps(
+                    [{"class": target, "reason": _UNCORROBORATED}],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "evidence": _UNCORROBORATED,
+            }
+        )
+    return rows
+
+
+def _corroboration(catalog: Catalog) -> list[str] | None:
+    """This catalog's declared corroboration annotations, or `None` where it
+    declares none — which is every catalog but the one this block was added
+    for. Refused rather than ignored when malformed, the
+    `_validate_naming` precedent: an unread key is indistinguishable from a
+    typo, and a typo here would silently restore the silence I-2 removes."""
+    declared = catalog.matches.get(_CORROBORATES)
+    if declared is None:
+        return None
+    annotations = declared.get(_CLASS_ANNOTATIONS) if isinstance(declared, dict) else None
+    if (
+        not isinstance(annotations, list)
+        or not annotations
+        or not all(isinstance(fqn, str) and fqn for fqn in annotations)
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{_CORROBORATES}.{_CLASS_ANNOTATIONS}` must be "
+            f"a non-empty list of class-level annotation fqns (2O design §1b), got {annotations!r}"
+        )
+    return [str(fqn) for fqn in annotations]
 
 
 # The sources a declared name may fall back to when the annotation carries

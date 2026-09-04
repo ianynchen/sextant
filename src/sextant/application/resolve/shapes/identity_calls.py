@@ -82,6 +82,28 @@ def parsed_call_sites(workspace: Workspace) -> list[dict[str, Any]]:
     ]
 
 
+def calling_classes(call_sites: list[dict[str, Any]], owner: str, name: str) -> set[str]:
+    """Every caller outer class that MAKES the marked call at all — argument
+    readability deliberately not consulted, which is the whole difference
+    from the two reads below.
+
+    A style that MATCHES on a marker must ask this question separately from
+    the question of what the marker says, because the two answers mean
+    opposite things: a class that never makes the call is not the kind of
+    class this marker describes (no row, no gap — there is no evidence of
+    anything), while a class that makes it with an argument nothing could
+    read IS one, whose identity is merely unreadable (the unresolved answer,
+    plus a gap). Folding them together — inferring "not a match" from "no
+    readable argument" — is what turns an ordinary supertype into a
+    fabricated boundary, or an unreadable one into silence."""
+    return {
+        outer
+        for site in call_sites
+        if site["owner"] == owner and site["name"] == name
+        if (outer := caller_outer_class(str(site["caller"]))) is not None
+    }
+
+
 def first_string_arguments(
     call_sites: list[dict[str, Any]], owner: str, name: str, index: int
 ) -> dict[str, str]:
