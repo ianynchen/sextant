@@ -22,6 +22,8 @@ The design spec (`docs/components/*`, and REQUIREMENTS) and the phase plans (`do
 
 Allowed without asking: reading anything; running tests/linters/builds; writing tests; **implementing exactly what the plan/spec specifies**. When the spec is silent or wrong, do not pick — follow §6 (propose amendment with rationale, then proceed *once confirmed*; never code around a doc without updating it first, per §5).  
 
+**Declare deviations explicitly; silence is not a declaration.** Every task report and hand-off states either `Deviations: none` or an enumerated list — a report that simply does not mention a descope has violated this section, not satisfied it. The same applies to a numbered step in a brief: each is completed or explicitly reported as not completed. Skipping one without saying so is the same failure as descoping without asking.  
+
 **Pre-commit gate:** before committing or merging, confirm the change contains **zero un-approved deviations** from the spec/plan. If a deviation was necessary, it must already be an approved doc amendment. List any deviation in the message only after it was approved — never as a fait accompli.  
 
 ---  
@@ -145,6 +147,7 @@ Non-negotiable defaults. Deviations require justification in ARCHITECTURE.md.
 - **Dependencies flow inward** toward the domain.  
 - **Extension points are explicit interfaces**, with documented contracts.  
 - **No new global or static mutable state.** Immutability by default; mutation is a deliberate choice with a stated reason. Side effects at the edges.  
+- **Never assert what the evidence does not support.** A derived record must be justified by evidence specific to what it claims: absent evidence, produce nothing; ambiguous evidence, produce nothing. Where a value cannot be read, record it as unresolved with its expression verbatim — *unresolved is an answer, invention is not*. (ARCHITECTURE states this as "the failure mode is fabrication, not imprecision"; it is repeated here because it is a design rule, not only a design note.)  
 - **Architecture rules are enforceable, not aspirational.** Layering, dependency direction, and naming conventions are encoded as automated architecture tests (tooling chosen in ARCHITECTURE.md). An untested rule is already being violated.  
 
 **Diagrams:** Use Mermaid for L1/L2 in docs; L3 only if non-obvious. Use ASCII art for L2, class, and sequence diagrams during chat conversations. A lying diagram is worse than none.  
@@ -160,6 +163,8 @@ Every public symbol documents: **purpose**, **parameters and return** (meaning, 
 **Extension points** additionally document: required invariants, ordering and idempotency expectations, what the framework will and will not do, and examples when the contract is subtle.  
 
 **Non-obvious decisions** document: alternatives considered, tradeoff accepted, and conditions to revisit. Prefer one comment explaining *why* over five restating *what*.  
+
+**A comment justifying an omission states the condition that would make it wrong**, in the same sentence. "We do not X because Y" is a claim about the present that a later change can silently falsify — write "we do not X because Y, which holds as long as Z". A rationale that has quietly become false is worse than no comment, because the next reader trusts it.  
 
 ### Naming and style  
 
@@ -189,6 +194,8 @@ GUIDELINES.md states *what tests must cover and how they behave*. ARCHITECTURE.m
 ### Coverage  
 
 Every public method on a domain or application service has tests for the **happy path**, each **documented failure mode**, and **boundary conditions** (empty, absent, max, zero, negative, duplicate, concurrent if relevant).  
+
+**Anything that detects, matches, or classifies is tested on near-miss input that must NOT match** — and the assertion is that *nothing* was produced, not that something different was. A suite where every fixture demonstrates the rule firing cannot tell you the rule declines correctly; it only tells you it is capable of firing. Derive the near-miss from the rule's own conditions: for each conjunct, an input satisfying every other one. This is distinct from the boundary conditions above, which vary a *value*; this varies whether the thing is *the kind of thing at all*.  
 
 Branch and condition coverage are diagnostics, not targets. Coverage drops require justification; coverage increases driven by trivial tests are equally suspect. Bug fixes ship with a regression test that fails before the fix.  
 

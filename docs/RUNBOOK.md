@@ -324,3 +324,45 @@ requires this.
 collision is a routing-ambiguity finding", "the shipped jar-presence mechanism")
 rather than as specification. Descriptive prose about a design's *consequences*
 is easy to promote into a component that was never built.
+
+### The rule that matters most was the one not written down
+
+Phase 2O shipped an engine that minted a gRPC endpoint from `NightlyJob extends
+AbstractJob` — plain Java inheritance, zero gRPC evidence anywhere. The match
+required only "extends something in this module" plus "overrides a public
+method"; the gRPC-specific marker was read *afterwards*, and only chose
+resolved-vs-unresolved.
+
+The uncomfortable part is that **no guideline was broken.** §8's design
+principles were structural — single responsibility, dependency direction,
+immutability — and the change satisfied every one. The project's actual central
+invariant, "the failure mode is fabrication, not imprecision", lived in
+ARCHITECTURE prose rather than in the rules document CLAUDE.md calls
+non-negotiable. It is now a §8 bullet.
+
+**The two fabrication shapes seen in practice**, worth recognising by sight:
+
+- **Generic match, specific label.** A rule keys on structure any codebase has
+  (an `extends` pair, a public override) and then labels the result with a
+  meaning only some codebases have. The give-away: the framework-specific
+  evidence is read *after* the match, to decorate it, rather than *as* the match.
+- **Ambiguity emitted as certainty.** A lookup that cannot separate two
+  candidates emits BOTH rather than neither — two rows, both `resolved`, sharing
+  one handler symbol, at least one of them false.
+
+Two supporting gaps found the same phase:
+
+- **Every fixture demonstrated detection working; none demonstrated it
+  declining.** The reviewer's own words were that the golden fixture missed the
+  fabrication "by luck" — its single subclass happens to override nothing. §10
+  now requires near-miss input that must NOT match, asserting *nothing* is
+  produced.
+- **A rationale comment went stale and nobody noticed.** `# No stamp — the row
+  already carries its own response_shape` was true while one engine minted that
+  identity and false the moment a second did; the merged row silently lost both
+  contracts and the streaming detail that rides one of them. §9 now requires
+  such a comment to state the condition that would make it wrong.
+
+**The generalisable lesson:** when a review finds something the guidelines do
+not forbid, the guidelines are the defect. Check whether the violated principle
+is written down before concluding the implementer was careless.
