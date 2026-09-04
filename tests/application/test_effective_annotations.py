@@ -262,6 +262,11 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         # 2I Task 5's SEI fence, inert for the same reason — this regression's
         # catalog is inbound and gates on no construct kind.
         locally_implemented=[],
+        # 2O Task 2's canonical-address gate, at the value this catalog's own
+        # declared protocol implies. Inert against the assertion below either
+        # way: `/plain` is already the URL it is served at, and a leaked
+        # prefix would still fail the same equality.
+        canonical_path=True,
     )
     rows = workspace.query("endpoints")
     workspace.close()

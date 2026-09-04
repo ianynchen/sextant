@@ -40,7 +40,8 @@ from sextant.application.resolve.shapes.arguments import (
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
-from sextant.domain.closed_sets import Direction
+from sextant.domain.closed_sets import Direction, Protocol
+from sextant.domain.paths import canonical_http_path
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
 _DIRECTIONS = sorted(member.value for member in Direction)
@@ -341,6 +342,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # declared reply destinations) — every row shares the same verb/body
         # /response captures; only the destination itself varies.
         for peer, path, url_resolution in destinations:
+            # 2O design §8: identity is the URL the framework serves, so the
+            # path is canonicalized HERE — before the dedup key below is built
+            # from it, and before the row is written. `domain/paths.py` states
+            # the rule, what it refuses to touch (a whole address, a
+            # placeholder-bearing composition), and why the gate is `http`
+            # alone.
+            if path is not None and catalog.protocol == Protocol.HTTP:
+                path = canonical_http_path(path)
             # Checkpoint ruling I1: any DECLARED capture that failed to
             # resolve drops the *row's* resolution, even when the url itself
             # read fine — `path` still carries the known template regardless

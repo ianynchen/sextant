@@ -2063,11 +2063,18 @@ _OKHTTP_MATCHES = {
 }
 
 
-def _fluent_catalog(matches: dict, catalog_id: str = "invented-fluent") -> Catalog:
+def _fluent_catalog(
+    matches: dict, catalog_id: str = "invented-fluent", protocol: str = "http"
+) -> Catalog:
+    """`protocol` is a parameter because 2O design §8 made it one: an HTTP
+    catalog's composed address is canonicalized into the URL the framework
+    serves, so a catalog whose destination is a broker NAME — a topic, a
+    queue, a Pub/Sub resource path — has to say so, or a leading `/` this
+    seam is right to add to a URL is added to something that is not one."""
     return Catalog(
         id=catalog_id,
         style="fluent",
-        protocol="http",
+        protocol=protocol,
         direction="outbound",
         requires=("call_site", "string_constants", "chain_reconstruction"),
         matches=matches,
@@ -3077,7 +3084,9 @@ def test_a_guarded_step_whose_key_matches_captures_under_the_guard(tmp_path: Pat
     [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
     workspace.close()
 
-    assert endpoint["path"] == "t"
+    # `/t`, not `t`: this catalog's addresses are URLs, and an HTTP identity
+    # is the URL the framework serves (2O design §8, `domain/paths.py`).
+    assert endpoint["path"] == "/t"
     assert endpoint["resolution"] == "resolved"
 
 
@@ -3211,7 +3220,9 @@ def test_a_later_guarded_write_supersedes_an_earlier_poison(tmp_path: Path):
     [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
     workspace.close()
 
-    assert endpoint["path"] == "t"
+    # `/t`, not `t`: this catalog's addresses are URLs, and an HTTP identity
+    # is the URL the framework serves (2O design §8, `domain/paths.py`).
+    assert endpoint["path"] == "/t"
     assert endpoint["resolution"] == "resolved"
 
 
@@ -3305,7 +3316,7 @@ def test_an_unreadable_guard_poisons_the_argument_reads_and_leaves_the_literals_
     workspace.close()
 
     assert endpoint["method"] == "GET"
-    assert endpoint["path"] == "raw-x"
+    assert endpoint["path"] == "/raw-x"
     assert endpoint["peer"] is None
     assert endpoint["resolution"] == "resolved"
 
@@ -3466,7 +3477,7 @@ def test_a_verbless_chain_derives_a_null_method_resolved_row(tmp_path: Path):
     single_call's own verbless row (D02 §2, amended)."""
     caller = "com/acme/messaging/Client#publishOnce()."
     facts = _verbless_chain(caller, 0, CallArgument(kind="string", value="orders.created"))
-    catalog = _fluent_catalog(_VERBLESS_MATCHES, "invented-verbless-fluent")
+    catalog = _fluent_catalog(_VERBLESS_MATCHES, "invented-verbless-fluent", protocol="kafka")
     workspace = _resolve_fluent(tmp_path, facts, catalog)
     [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
     workspace.close()
@@ -3487,7 +3498,7 @@ def test_two_identical_resolved_verbless_chains_dedup_to_one_row(tmp_path: Path)
         *_verbless_chain(first_caller, 0, CallArgument(kind="string", value="orders.deleted")),
         *_verbless_chain(second_caller, 1, CallArgument(kind="string", value="orders.deleted")),
     ]
-    catalog = _fluent_catalog(_VERBLESS_MATCHES, "invented-verbless-fluent-dedup")
+    catalog = _fluent_catalog(_VERBLESS_MATCHES, "invented-verbless-fluent-dedup", protocol="kafka")
     workspace = _resolve_fluent(tmp_path, facts, catalog)
     rows = [e for e in workspace.query("endpoints") if e["path"] == "orders.deleted"]
     workspace.close()
@@ -3509,7 +3520,9 @@ def test_a_verbless_unresolved_row_never_dedups_with_its_twin(tmp_path: Path):
         *_verbless_chain(first_caller, 0, CallArgument(kind="unresolved")),
         *_verbless_chain(second_caller, 1, CallArgument(kind="unresolved")),
     ]
-    catalog = _fluent_catalog(_VERBLESS_MATCHES, "invented-verbless-fluent-unresolved")
+    catalog = _fluent_catalog(
+        _VERBLESS_MATCHES, "invented-verbless-fluent-unresolved", protocol="kafka"
+    )
     workspace = _resolve_fluent(tmp_path, facts, catalog)
     rows = [e for e in workspace.query("endpoints") if e["caller"] in (first_caller, second_caller)]
     workspace.close()
@@ -3600,7 +3613,7 @@ def test_a_fluent_root_channel_resolves_the_literal_argument_first(tmp_path: Pat
         ),
         *_build_and_publish_calls(caller, 1, 1),
     ]
-    catalog = _fluent_catalog(_PUBSUB_MATCHES, "invented-pubsub-literal")
+    catalog = _fluent_catalog(_PUBSUB_MATCHES, "invented-pubsub-literal", protocol="pubsub")
     workspace = _resolve_fluent(tmp_path, facts, catalog)
     [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
     workspace.close()
@@ -3635,7 +3648,7 @@ def test_a_fluent_root_channel_falls_back_to_the_linked_topicname_call(tmp_path:
         _newbuilder_call(caller, 1, 1, CallArgument(kind="unresolved", source=5)),
         *_build_and_publish_calls(caller, 2, 1),
     ]
-    catalog = _fluent_catalog(_PUBSUB_MATCHES, "invented-pubsub-channel-via")
+    catalog = _fluent_catalog(_PUBSUB_MATCHES, "invented-pubsub-channel-via", protocol="pubsub")
     workspace = _resolve_fluent(tmp_path, facts, catalog)
     [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
     workspace.close()
@@ -3655,7 +3668,7 @@ def test_a_fluent_root_channel_neither_literal_nor_linked_derives_unresolved(tmp
         _newbuilder_call(caller, 0, 1, CallArgument(kind="unresolved")),
         *_build_and_publish_calls(caller, 1, 1),
     ]
-    catalog = _fluent_catalog(_PUBSUB_MATCHES, "invented-pubsub-unresolved")
+    catalog = _fluent_catalog(_PUBSUB_MATCHES, "invented-pubsub-unresolved", protocol="pubsub")
     workspace = _resolve_fluent(tmp_path, facts, catalog)
     [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
     workspace.close()

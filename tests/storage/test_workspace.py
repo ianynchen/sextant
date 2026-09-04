@@ -296,6 +296,11 @@ _TOPIC_ENDPOINT_KWARGS = {
     # outbound interface-gated one, so the fence's own `$direction`/
     # `$declared_on` test never reaches this list.
     "locally_implemented": [],
+    # 2O Task 2's canonical-address gate, inert too: every catalog in this
+    # file addresses a broker TOPIC, which is a name and not a URL, so the
+    # composed address is recorded exactly as the annotations spell it — the
+    # `path_separator` reasoning one word along.
+    "canonical_path": False,
 }
 
 

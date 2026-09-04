@@ -223,6 +223,23 @@ Rows that differ only in declared media are one endpoint: the union of their lis
 engine-side, within a single derivation batch, order-normalised (NFR-1); across batches the
 existing first-writer dedup stands unchanged.
 
+**Amendment (2O design §8, Phase 2O Task 2): for `protocol: http`, `path` holds THE URL THE
+FRAMEWORK SERVES, not the characters the declaration spelled.** Identity is minted through
+one canonicalization (`sextant.domain.paths`) — leading separator guaranteed, exactly one
+separator per combine boundary, trailing separator preserved as **distinct**, because
+Framework 6 removed trailing-slash matching (checkpoint CP-1, confirmed live against Boot
+4.0.1). `@RequestMapping("users")` and `@RequestMapping("/users")` were two identities for
+one URL, which split dedup and every path-keyed anchor built on this column — the export,
+the overlay anchors, and L's cross-service joins. **Scoped to `http` and to path-shaped
+values**: a `path` holding a whole address or a placeholder-bearing composition
+(`https://${billing.host}/orders`, kept whole here until the peer join splits it) is
+untouched, GraphQL's `path` is a field name rather than a URL, and STOMP/websocket and every
+broker destination keep the character-for-character rule above. SSE rows inherit the
+canonicalization without being named by it, because `protocol_hint` reclassifies them after
+identity is minted. **This migration moves already-recorded rows**; its four consequences —
+goldens, overlays rejected whole, enrichment claims gone stale, `open_questions` snapshots
+re-deriving — are in `CHANGELOG.md`.
+
 **`endpoints.format` and `endpoints.format_resolution` hold what is on this channel's
 wire, and how much that answer is worth.** `format` is one of [D00](D00-fact-schema.md)
 §4's format values or NULL; `format_resolution` is the same `resolution` set every other

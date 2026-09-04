@@ -81,7 +81,8 @@ class Protocol(StrEnum):
     # costs one line here and a schema change if it arrives alone. Each is its
     # own protocol because linking gates on protocol equality (DR-5) — an AMQP
     # exchange can never be answered by a Pulsar topic, and neither is a JMS
-    # queue, which is why Stream's `rabbit: jms` stopgap migrates in Task 2.
+    # queue, which is why Stream's `rabbit: jms` stopgap MIGRATED in Task 2
+    # (`spring-cloud-stream.yml` now maps `rabbit: amqp`).
     AMQP = "amqp"
     PULSAR = "pulsar"
 

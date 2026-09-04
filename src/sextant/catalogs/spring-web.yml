@@ -162,6 +162,11 @@ media_formats:
 json_default_markers:
   - com.fasterxml.jackson
   - tools.jackson
+  # 2O design §7 (CP-6): Boot auto-configures Jackson's converter from the
+  # jar's mere presence, so a module carrying it answers `json` even with no
+  # annotation anywhere. A coordinate marker, not a package family, because
+  # that is the evidence Boot itself acts on.
+  - coordinate: com.fasterxml.jackson.core:jackson-databind
 
 # 2G design §7's fourth vocabulary, read by
 # `resolve/shapes/parse_binding.py`: which payload parameter types mean "this

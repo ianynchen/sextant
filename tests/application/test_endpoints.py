@@ -16,6 +16,7 @@ from sextant.domain.facts import (
     SymbolFact,
     TypeRef,
 )
+from sextant.domain.paths import canonical_http_path
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -1559,14 +1560,20 @@ def test_a_malformed_withdrawal_filter_is_refused_by_file(tmp_path: Path, declar
 # the fixture, through `spring-web.yml` (`tests/e2e/test_vertical_slice.py`).
 
 
-def _seam_catalog(**mapping: object) -> Catalog:
+def _seam_catalog(protocol: str = "http", **mapping: object) -> Catalog:
     """A gated catalog whose type-level annotation carries a prefix and whose
     method-level annotation carries a suffix — the two halves of one seam,
-    with whatever composition vocabulary a test layers on."""
+    with whatever composition vocabulary a test layers on.
+
+    `protocol` is a parameter because 2O design §8 made it one: an HTTP
+    catalog's composed address goes on to be canonicalized as the URL the
+    framework serves, so a test about the SEAM alone — what the join does and
+    does not insert — has to ask a catalog whose addresses are names rather
+    than URLs."""
     return Catalog(
         id="invented-seam",
         style="annotation_driven",
-        protocol="http",
+        protocol=protocol,
         direction="inbound",
         requires=("annotation_args",),
         source=Path("tests/invented-seam.yml"),
@@ -1685,14 +1692,23 @@ def test_a_declared_separator_joins_the_two_halves_of_a_seam_with_exactly_one(
 
 def test_an_empty_half_takes_no_separator_with_it(tmp_path: Path):
     """An absent prefix leaves the suffix exactly as written — a slashless
-    name does NOT gain a leading `/` this engine would be inventing — and an
+    name does NOT gain a leading `/` the JOIN would be inventing — and an
     empty suffix (a `@KafkaHandler`, an `@OnMessage`) leaves the prefix
     alone. Both halves are real: the catalogs riding the seam include ones
-    whose method annotation carries no path attribute at all."""
-    catalog = _seam_catalog(path_separator="/")
+    whose method annotation carries no path attribute at all.
 
-    assert _seam_path(tmp_path, catalog, "", "owners") == "owners"
+    The first assertion asks a NAMED-address catalog, and that is 2O design
+    §8's doing rather than a weakening: on an HTTP catalog the composed
+    address is canonicalized afterwards into the URL the framework serves,
+    so `owners` does end up as `/owners` there (third assertion) — from the
+    canonical gate, which knows it is looking at a URL, and never from the
+    seam, which does not."""
+    catalog = _seam_catalog(path_separator="/")
+    named = _seam_catalog(protocol="kafka", path_separator="/")
+
+    assert _seam_path(tmp_path, named, "", "owners") == "owners"
     assert _seam_path(tmp_path / "b", catalog, "/v1/orders", "") == "/v1/orders"
+    assert _seam_path(tmp_path / "c", catalog, "", "owners") == "/owners"
 
 
 def test_a_catalog_declaring_no_separator_concatenates_exactly_as_it_always_did(
@@ -1703,8 +1719,44 @@ def test_a_catalog_declaring_no_separator_concatenates_exactly_as_it_always_did(
     `@KafkaListener`'s TOPIC, and a topic name has no segments to join. A `/`
     inserted between two halves of one would invent a destination no broker
     carries, so a catalog that declares no separator keeps the bare
-    concatenation every catalog had before this vocabulary existed."""
-    assert _seam_path(tmp_path, _seam_catalog(), "orders", "-retry") == "orders-retry"
+    concatenation every catalog had before this vocabulary existed.
+
+    Asked of the protocol the claim is actually about, for 2O design §8's
+    reason: a topic is not a URL, so no canonical-address gate stands between
+    the concatenation and the recorded row."""
+    assert (
+        _seam_path(tmp_path, _seam_catalog(protocol="kafka"), "orders", "-retry") == "orders-retry"
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "users",  # CP-1: Spring serves this at /users
+        "/users",
+        "/api//users",  # one separator per boundary
+        "/users/",  # Framework 6: a trailing slash is DISTINCT
+        "",
+        "https://billing.example/orders",  # a whole address, not a path half
+        "https://${billing.host}/orders",  # placeholder-bearing composition
+        "${service.base}/orders",
+    ],
+)
+def test_the_sql_path_seam_answers_exactly_what_the_domain_seam_answers(tmp_path: Path, raw: str):
+    """The anti-drift pin `domain/paths.py` and `derive_endpoints.sql` both
+    name (2O design §8).
+
+    `annotation_driven` composes its address in SQL, from columns the domain
+    layer never sees, and `storage/` may not import a seam whose name is a
+    protocol (ARCHITECTURE §10) — so the canonicalization is stated on both
+    sides of that boundary, exactly as `_destinations_of` mirrors the SQL's
+    own alias-reading rule one level down. This asserts the two answers
+    against EACH OTHER rather than against a literal, so neither side can be
+    edited into disagreement without a failure here.
+    """
+    derived = _seam_path(tmp_path, _seam_catalog(path_separator="/"), "", raw)
+
+    assert derived == canonical_http_path(raw)
 
 
 def test_a_multi_character_separator_is_refused_by_file(tmp_path: Path):
@@ -2663,7 +2715,11 @@ def test_a_catalog_with_no_type_gate_matches_on_method_annotations_alone(tmp_pat
     is the whole evidence."""
     workspace = _ungated_workspace(tmp_path)
     rows = [e for e in workspace.query("endpoints") if e["direction"] == "outbound"]
-    assert [e["path"] for e in rows] == ["legacy/invoices"]
+    # `/legacy/invoices`, not the `legacy/invoices` the annotation spells: an
+    # HTTP catalog's identity is the URL the framework serves (2O design §8,
+    # CP-1), canonicalized once in `domain/paths.py` and mirrored by
+    # `derive_endpoints.sql`'s own `$canonical_path` gate.
+    assert [e["path"] for e in rows] == ["/legacy/invoices"]
     workspace.close()
 
 
@@ -2748,7 +2804,7 @@ def test_a_gateless_catalog_never_synthesizes_onto_an_implementing_class(tmp_pat
 
     assert len(rows) == 1
     [row] = rows
-    assert row["path"] == "legacy/invoices"
+    assert row["path"] == "/legacy/invoices"
     assert row["caller"] == "com/acme/legacy/ClientIface#fetch(sig_2a77e410)."
 
 

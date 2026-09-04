@@ -110,6 +110,15 @@
 --                           dedupe below is `rtrim`/`ltrim`, which trim a SET
 --                           of characters, so a multi-character separator
 --                           would trim each of its characters individually.
+--   $canonical_path      -- 2O design §8: whether the composed address is a
+--                           served URL, whose identity is the address the
+--                           framework actually answers at, rather than an
+--                           opaque destination name to be recorded verbatim.
+--                           The caller decides from the catalog's own declared
+--                           protocol, so this file names none; false leaves
+--                           every composed address exactly as it was before
+--                           the parameter existed, which is what keeps every
+--                           non-URL catalog's derivation byte-identical.
 --   $members             -- 2I design §2, word 3: what a GATED CLASS exposes
 --                           on its own, with no member-level annotation
 --                           anywhere, or NULL where a catalog declares no such
@@ -584,7 +593,43 @@ derived AS (
                   OR $path_separator IS NULL
              THEN coalesce(p.prefix, '') || scoped_name
              ELSE rtrim(p.prefix, $path_separator) || $path_separator
-                  || ltrim(scoped_name, $path_separator) END AS path,
+                  || ltrim(scoped_name, $path_separator) END AS composed,
+        -- THE CANONICAL-ADDRESS GATE, wrapped around the whole seam above.
+        -- `$canonical_path` says the composed address IS a served URL rather
+        -- than an opaque destination name, and the two rules it applies are
+        -- the framework's own: one separator per boundary, and an address
+        -- that omits its leading separator names the same thing as one that
+        -- spells it (2O design §8, checkpoint CP-1 — confirmed live). Without
+        -- it a mapping written `owners/{id}` and one written `/owners/{id}`
+        -- were two identities for one URL, which splits dedup and splits
+        -- every path-keyed anchor downstream.
+        --
+        -- The rules are stated HERE as well as in `domain/paths.py` because
+        -- this address is composed from columns that layer never sees, and
+        -- ARCHITECTURE §10 forbids this directory from importing a seam whose
+        -- name is a protocol. It is a MIRROR, not a second rule — the
+        -- `_destinations_of` precedent, one level down — and
+        -- `tests/application/test_endpoints.py::
+        -- test_the_sql_path_seam_answers_exactly_what_the_domain_seam_answers`
+        -- runs both over one case table so the two cannot drift.
+        --
+        -- What the gate deliberately leaves alone, in EITHER direction: an
+        -- address carrying a scheme or a placeholder is a whole address
+        -- rather than a path half (D02 keeps those whole until the peer join
+        -- splits them), and prefixing one would publish a URL nobody serves.
+        CASE WHEN NOT $canonical_path
+                  OR contains(composed, '://') OR contains(composed, '${')
+             THEN composed
+             WHEN composed = '' THEN '/'
+             -- `regexp_replace(..., 'g')` is the collapse `domain/paths.py`
+             -- spells as a repeated `replace`; both reduce any run of
+             -- separators to one. A TRAILING separator survives both, and
+             -- must: Framework 6 removed trailing-slash matching, so `/x/`
+             -- and `/x` are different URLs (CP-1, row 6).
+             ELSE CASE WHEN starts_with(regexp_replace(composed, '/+', '/', 'g'), '/')
+                       THEN regexp_replace(composed, '/+', '/', 'g')
+                       ELSE '/' || regexp_replace(composed, '/+', '/', 'g') END
+             END AS path,
         -- The symbol lands by direction (D01 §3, amended): the server side
         -- handles, the client side calls, and a later merge may hold both.
         CASE WHEN $direction = 'outbound' THEN NULL ELSE s.symbol END AS handler,

@@ -60,7 +60,12 @@ matches:
     default_binder_key: spring.cloud.stream.default-binder
     binder_protocols:
       kafka: kafka
-      rabbit: jms
+      # 2O design §3a: `amqp` is a real protocol now, so the binder names it.
+      # The stopgap `jms` was chosen when no AMQP member existed, and leaving
+      # it would put a Stream producer and a `@RabbitListener` consumer (Task
+      # 7) on different protocols permanently — DR-5 gates linking on protocol
+      # equality.
+      rabbit: amqp
       sqs: sqs
       pubsub: pubsub
 

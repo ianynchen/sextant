@@ -212,6 +212,27 @@ matches:
   otherwise: the dedupe is `rtrim`/`ltrim`, which trim a *set* of characters, so a longer
   separator would strip each of its characters individually.
 
+  > **OVERTURNED for `protocol: http` (2O design §8, Phase 2O Task 2).** The rule above is
+  > about the JOIN, and the join still inserts nothing into an empty half. What changed is
+  > what happens *after* it for a catalog whose addresses are served URLs: the composed
+  > address is canonicalized into **the URL the framework serves** — leading separator
+  > guaranteed, one separator per boundary, trailing separator preserved as distinct —
+  > because `@RequestMapping("users")` and `@RequestMapping("/users")` are the same URL to
+  > Spring (checkpoint CP-1, confirmed live against Boot 4.0.1) and recording them as two
+  > identities splits dedup and every path-keyed anchor downstream. So a slashless HTTP
+  > mapping DOES end up with a leading `/` — from the canonical gate, which knows it is
+  > looking at a URL, and never from the seam, which does not.
+  >
+  > **Scoped to `http`, and to path-shaped values.** STOMP, websocket and every messaging
+  > composition keep the rule above unchanged: a topic is not a URL, and a `/` invented into
+  > one names a destination no broker carries. GraphQL is out for the same reason from the
+  > other end — its address is a FIELD NAME. Inside `http`, a `path` holding a whole address
+  > or a placeholder-bearing composition (`https://${billing.host}/orders`) is untouched;
+  > D02 keeps those whole until the peer join splits them, and prefixing one would publish a
+  > URL nobody serves. The rule itself lives in `sextant.domain.paths`, with a mirror in
+  > `derive_endpoints.sql` (whose address is composed from columns that layer never sees)
+  > pinned against it by a test.
+
   **It is not the qualifier seam, and does not touch it.** `qualifier_separator` joins a scope
   to the member it qualifies and dedupes nothing, because both halves are written by one author
   on one annotation and neither ever spells the separator. The two remain separate rules; a
@@ -1023,7 +1044,7 @@ matches:
             direction: [inbound, outbound], payload_arg: [0, 1] }
     binder_key: "spring.cloud.stream.bindings.{binding}.binder"
     default_binder_key: spring.cloud.stream.default-binder
-    binder_protocols: { kafka: kafka, rabbit: jms }
+    binder_protocols: { kafka: kafka, rabbit: amqp }
 ```
 
 **`key` is a template carrying exactly one placeholder, `{binding}`**, and a key naming
@@ -1492,7 +1513,7 @@ that rung's resolution tier:
 | 2 | Declared media | the row's own `consumes`/`produces`, through `media_formats` | `resolved` |
 | 3 | Serializer config | the class the module's configuration names, through `format_from` | `resolved` |
 | 4 | Payload hierarchy | the bound payload was described by a **schema**, and the schema names its own format | `narrowed` |
-| 5 | Framework default | an ordinary declared payload, plus a default converter's package family present in the module (`json_default_markers`) | `narrowed` |
+| 5 | Framework default | an ordinary declared payload, plus a default converter present in the module — a marker package family named by any fqn the module names, or a marker dependency coordinate the analysis recorded (`json_default_markers`) | `narrowed` |
 | 6 | Nothing | — | `unresolved`, `format` NULL |
 
 **Two rules bind the whole ladder.**
@@ -1565,13 +1586,28 @@ media_formats:
   application/xml: xml
   text/xml: xml
 
-# Rung 5 — package families whose PRESENCE anywhere in the module is evidence
-# that a JSON default converter is on the classpath. Both Jackson generations:
-# the relocation between them is a package rename and nothing else.
+# Rung 5 — markers whose PRESENCE anywhere in the module is evidence that a
+# JSON default converter is available. Both Jackson generations: the
+# relocation between them is a package rename and nothing else.
 json_default_markers:
   - com.fasterxml.jackson
   - tools.jackson
+  # The second FORM (2O design §7): a dependency coordinate rather than a
+  # package family, because Boot auto-configures the converter from the jar's
+  # mere presence — a module can carry it and name none of its packages
+  # (checkpoint CP-6, confirmed live).
+  - coordinate: com.fasterxml.jackson.core:jackson-databind
 ```
+
+**A marker has two forms and no third** (2O design §7). A bare string is a **package
+family**, matched against every fqn the module names — the annotations it carries and the
+call-site owners it invokes; a `{coordinate: "group:artifact"}` mapping is a **dependency
+coordinate**, matched against the coordinates this analysis recorded ([D00](D00-fact-schema.md)
+§2's `origin`). Anything else is refused at load, the discipline every value in this
+vocabulary keeps: a marker nothing recognizes answers nothing, and a rung that answers
+nothing reads exactly like a converter that is genuinely absent. The coordinate form
+answers only for a dependency this run actually read — a jar nobody opted into is not
+recorded, and silence about it is the honest answer rather than a guess.
 
 **The two map tables are unioned across every catalog that declares them**, rather than
 scoped to one: a MIME string means the same format whoever wrote it down, and a row that

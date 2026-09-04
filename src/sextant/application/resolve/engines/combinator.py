@@ -78,6 +78,8 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.arguments import _arg_at
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.domain.closed_sets import Protocol
+from sextant.domain.paths import canonical_http_path
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
 # The two endpoint columns a failed read can poison. Both are wire identity,
@@ -825,7 +827,7 @@ def _row_of(route: _Route, caller: str, catalog: Catalog) -> dict[str, Any]:
         "protocol": catalog.protocol,
         "direction": catalog.direction,
         "method": None if _METHOD in route.poisons else route.verb,
-        "path": _path_of(route),
+        "path": _path_of(route, catalog),
         "handler": route.handler,
         "caller": caller,
         "peer": None,
@@ -840,10 +842,21 @@ def _row_of(route: _Route, caller: str, catalog: Catalog) -> dict[str, Any]:
     }
 
 
-def _path_of(route: _Route) -> str | None:
+def _path_of(route: _Route, catalog: Catalog) -> str | None:
+    """The folded route's own address, as the URL the framework serves it at.
+
+    The canonicalization is `domain/paths.py`'s, called HERE — before
+    `_emitted` dedups on `path` — because it is identity: two spellings of one
+    URL must be one row, and a seam applied after the dedup key was built
+    would leave both. It is HTTP-only for that module's stated reasons, and
+    the gate is the CATALOG's protocol rather than the row's: a row's protocol
+    is still the catalog's at this point (`protocol_hint` reclassifies later,
+    which is how an SSE row inherits this without naming `sse` here).
+    """
     if _PATH in route.poisons or not route.path_parts:
         return None
-    return "".join(route.path_parts)
+    path = "".join(route.path_parts)
+    return canonical_http_path(path) if catalog.protocol == Protocol.HTTP else path
 
 
 def _emitted(rows: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any]]:

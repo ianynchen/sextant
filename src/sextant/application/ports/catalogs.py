@@ -47,12 +47,22 @@ class Catalog:
     # `format_fixed`  -- protocol -> format, for a protocol whose wire is
     #                    constant by definition (rung 1).
     # `media_formats` -- MIME string -> format (rung 2).
-    # `json_default_markers` -- package prefixes whose presence anywhere in a
-    #                    module is evidence that a JSON default converter is
-    #                    on the classpath (rung 5).
+    # `json_default_markers` -- markers whose presence anywhere in a module is
+    #                    evidence that a JSON default converter is on the
+    #                    classpath (rung 5). One flat list, two forms: a bare
+    #                    string is a PACKAGE FAMILY, matched against the fqns
+    #                    the module names; a `{coordinate: "group:artifact"}`
+    #                    mapping is a CLASSPATH COORDINATE (2O design §7,
+    #                    CP-6), matched against the coordinates this analysis
+    #                    recorded. The second form exists because the framework
+    #                    itself acts on the jar's mere presence — a module can
+    #                    carry the converter and name none of its packages —
+    #                    and both forms are checked where the ladder reads
+    #                    them (`resolve/format.py`), which is where every other
+    #                    format value is checked too.
     format_fixed: dict[str, str] = field(default_factory=dict)
     media_formats: dict[str, str] = field(default_factory=dict)
-    json_default_markers: list[str] = field(default_factory=list)
+    json_default_markers: list[str | dict[str, str]] = field(default_factory=list)
     # 2G design §7's fourth format vocabulary, read only by
     # `resolve/shapes/parse_binding.py`: `{bytes_payloads: [...], calls:
     # [...]}` — which payload parameter types mean "this channel carries the
