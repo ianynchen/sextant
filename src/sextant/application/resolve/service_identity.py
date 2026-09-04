@@ -40,7 +40,7 @@ _GAP_ENGINES = {
 
 def record_service_identity_gaps(workspace: Workspace, catalogs: list[Catalog]) -> None:
     """Files one `service_identity` row per unresolved match, across every
-    loaded catalog naming one of the two styles above — including a catalog
+    loaded catalog naming one of the three styles above — including a catalog
     `derive_endpoints` skipped for a missing capability, since nothing here
     re-checks `catalog.requires` the way `derive_endpoints` does (the same
     unconditional read `resolve_format`/`bind_parse_calls` already rely on).
