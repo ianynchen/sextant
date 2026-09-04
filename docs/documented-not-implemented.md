@@ -1,0 +1,95 @@
+# Documented but not implemented
+
+**Status: a factual register, opened 2026-09-04 during Phase 2O.** Every entry
+below was verified in the code at the time of writing — not inferred from a
+document. Each names where it is documented, what the code actually does, the
+impact, and its disposition.
+
+**Why this file exists.** Phase 2O's spec was written against two mechanisms
+this repository documents and has never implemented, and four rounds of
+adversarial review did not catch it — because the reviewer read the same
+documents the author did and cited the same lines back. A shared false premise
+survives review; only execution exposed it. Every entry here was found the same
+way: something tried to *use* the mechanism.
+
+The lesson generalises: **for this codebase, a document is not evidence that a
+mechanism exists.** A spec that depends on one must verify it in `src/` first.
+
+---
+
+## The register
+
+| # | Mechanism | Documented in | What the code does | Disposition |
+|---|---|---|---|---|
+| 1 | `detect:` / `detect.coordinates` | D02; declared by **all 41 shipped catalogs** | Absent from the `Catalog` model (`application/ports/catalogs.py`); never read by `ingress/catalogs/yaml_source.py`. Every catalog carries a key the loader ignores. | **2O Task 6** (ruling R9) |
+| 2 | `ClasspathEntry` | `domain/facts.py:49` | Defined; **constructed nowhere**. No classpath table exists in `storage/`. | Open — see R9's outcome |
+| 3 | `ModuleFact` | `domain/facts.py:83` | Defined; **constructed nowhere**. | Open — see R9's outcome |
+| 4 | `constant` fact kind (`Symbol, value`) | D00 §5 | No `ConstantFact` class. `ClassScanner.visitField` receives ASM's `Object value` — the field's `ConstantValue` attribute — and never reads it. | **Deliberately routed around** in 2O (ruling R11); still unimplemented |
+| 5 | `resolves:` / `resolves.direction` with `when: {owner_implemented_in_module: true}` | D02 only | Zero occurrences in `src/`. Contrast `declared_on`, which IS implemented (`derive_endpoints.sql:675`, `engines/annotation_driven.py`). | **2O Task 10** |
+| 6 | `default_produces` | D02 ("specified here, not yet used"); 2E's spec and plan | Zero occurrences in `src/`. Pending since **2E** — the longest-standing entry. | **2O Task 6** |
+| 7 | `root_kind` | D00:181, with a full member list | The token appears **nowhere in `src/`** — not merely the `scheduled` member, the whole concept. | **Open — must be resolved before 2P's Meridian vocabulary is specified** |
+| 8 | Rung 5 marker semantics | D02: markers are "package families whose presence **anywhere in the module** is evidence" | Code read annotation FQNs only — narrower than documented. | **CLOSED, 2O Task 2** |
+
+---
+
+## Impact, calibrated
+
+These are not uniform, and treating them as one severity would be wrong.
+
+**One produces wrong output today.** #5: a module that locally *implements* an
+`@HttpExchange` interface (legal since Spring 6.1) has an **outbound row
+fabricated** — Sextant reports it calling itself — and its **inbound routes
+missed entirely**. Two errors in the same rows. Narrow in reach, because
+server-side `@HttpExchange` is less common than client-side, but it is the only
+entry where shipped output is actively false rather than merely thin.
+
+**Three under-report.** #8 left Jackson-bearing modules `unresolved` where the
+framework guarantees JSON (now fixed). #6 leaves format unresolved where a
+framework contract is certain. #1 means no catalog can report *"skipped: the
+framework is not present"*, so the manifest's coverage story (FR-17) cannot
+distinguish "nothing matched because the library is absent" from "nothing
+matched because there is nothing to find" — and all 41 catalogs evaluate
+against every module, always.
+
+**Three blocked or reshaped work.** #2/#3 mean no dependency-aware reasoning
+exists anywhere; 2O Task 2 fell back to `documents.origin`, which covers only
+opt-in extracted libraries. #4 makes a compile-time constant's *value*
+unreachable from field facts — mitigated in practice because JLS 13.1/13.4.9
+requires javac to inline such constants at their use sites, so the literal
+appears in `call_site` facts, but a constant declared and never used in its own
+module stays invisible.
+
+**One is a live risk to the NEXT phase.** #7: the Meridian integration scoped
+into 2P specifies a boundary vocabulary derived from D00/D01/D06. `root_kind`
+is documented in D00 with a full member list and does not exist in the code. A
+vocabulary specified from those documents the way 2O's spec was would be built
+against fiction, and the failure would surface at a *consumer* rather than in
+our own tests.
+
+---
+
+## Preventing recurrence
+
+Fixing eight instances does not fix the mechanism that produced them. Two
+proposals, cheapest first:
+
+1. **An architecture test that cross-checks documentation against code.** The
+   two highest-value checks: every catalog key D02 declares must be read by
+   `yaml_source.py` (or be explicitly listed as reserved-not-yet-read), and
+   every fact field D00 declares must exist on the corresponding
+   `domain/facts.py` model. Both are mechanical, and either would have caught
+   #1, #4 and #7 the day they diverged.
+2. **A convention for reserved vocabulary.** Where a document deliberately
+   describes something ahead of its implementation, it says so in the document,
+   in a form the test above can read. "Specified here, not yet used" (#6) is
+   already exactly this — it was honest, and it is the model. The failure mode
+   is silence, not intent.
+
+---
+
+## Rule for future specs
+
+**Before a spec cites a mechanism as shipped, grep for it in `src/`.** Phase
+2O's own experience is the argument: two phantom mechanisms, four adversarial
+review rounds, and neither the author nor the reviewers caught it, because all
+of them were reading the same documentation.
