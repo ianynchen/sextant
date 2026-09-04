@@ -359,7 +359,7 @@ def _correlated(
     declared is decapitalized to build a LOOKUP candidate, never the reverse —
     but the lookup is not injective, and both of its failure modes were
     silent before this fix. **Two wire names onto one candidate** (`GetOrder`
-    and `get_order` are distinct RPCs and both compile to `getOrder`) refuses
+    and `getOrder` are distinct RPCs and both compile to `getOrder`) refuses
     BOTH rather than attributing one override to each, because at least one of
     those attributions would be false and nothing here can say which. **An
     override no wire name reaches** — the stub generator's `mixedLower` can

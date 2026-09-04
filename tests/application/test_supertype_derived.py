@@ -402,10 +402,17 @@ def test_two_wire_names_collapsing_to_one_override_refuse_both(tmp_path: Path):
     attributions is false — so NEITHER derives: the unresolved fallback
     stands in their place, and the ledger carries the ambiguity.
 
-    (The reviewer's own `GetOrder` + `get_order` example is the SAME defect
-    one transform further out — `get_order` decapitalizes to itself, matches
-    no override, and is therefore the `uncorrelated` gap the next test pins,
-    not this one.)"""
+    (The reviewer's own `GetOrder` + `get_order` example does not collide at
+    all: `get_order` decapitalizes to itself, not to `getOrder`, so its
+    candidate matches no override and `_correlated` drops the wire name by a
+    bare `continue` — no gap filed anywhere, not even `uncorrelated`, which
+    fires the other way round, for an OVERRIDE no wire name reaches. That
+    silent drop is correct as long as this module still cannot tell a
+    non-matching wire name apart from an RPC the class legitimately does not
+    implement — which holds because R11 forbids deriving a wire name by
+    casing the override, the only thing that could tell them apart; this is
+    the same no-row outcome the test above,
+    `test_a_method_the_implementer_does_not_override_derives_no_row`, pins.)"""
     facts = [
         *_supertype_facts("getOrder"),
         *_implementor_facts("getOrder"),

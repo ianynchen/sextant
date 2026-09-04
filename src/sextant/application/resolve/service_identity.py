@@ -40,11 +40,25 @@ _GAP_ENGINES = {
 
 def record_service_identity_gaps(workspace: Workspace, catalogs: list[Catalog]) -> None:
     """Files one `service_identity` row per unresolved match, across every
-    loaded catalog naming one of the two styles above. A catalog
-    `derive_endpoints` skipped for a missing capability re-reads the same
-    empty facts here and finds nothing to file — no capability re-check
-    needed, the same reasoning `resolve_format`/`bind_parse_calls` already
-    rely on for their own unconditional reads."""
+    loaded catalog naming one of the two styles above — including a catalog
+    `derive_endpoints` skipped for a missing capability, since nothing here
+    re-checks `catalog.requires` the way `derive_endpoints` does (the same
+    unconditional read `resolve_format`/`bind_parse_calls` already rely on).
+    For `supertype_derived`/`injected_client` that costs nothing: their
+    `gaps` re-walks the SAME facts `run` needed, so the capability that left
+    `run` nothing to derive leaves `gaps` nothing to find either.
+    `annotation_driven`'s corroboration `gaps` does not re-walk its own
+    catalog's facts at all, though (its own docstring states why): it reads
+    the FINISHED `annotations`/`endpoints` tables back, so it can and does
+    file a real question when a class it flags was never claimed as a
+    handler — including when that is because a DIFFERENT catalog naming the
+    same protocol got skipped. `grpc-spring.yml`'s own `requires` is written
+    exactly for this: it omits `superclass`, the capability that gates
+    `grpc-java.yml`'s `supertype_derived` match, so a scan missing it skips
+    that catalog without also skipping this corroboration — which holds only
+    as long as `annotation_driven.gaps` keeps reading the finished tables
+    instead of its own catalog's requirements; keying it to `catalog.requires`
+    the way `run` is would silence the exact scans this exists to cover."""
     rows = [
         row
         for catalog in catalogs
