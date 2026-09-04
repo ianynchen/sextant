@@ -14,9 +14,11 @@ from sextant.application.resolve.engines import (
     combinator,
     config_join,
     fluent,
+    injected_client,
     interface_implementation,
     schema_operations,
     single_call,
+    supertype_derived,
 )
 
 # The styles that run after every call-site and annotation style, whatever
@@ -145,4 +147,10 @@ _ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
     "combinator": combinator.run,
     "config_join": config_join.run,
     "schema_operations": schema_operations.run,
+    # 2O design §1b/§1c (Task 5): both derive rows from their OWN evidence —
+    # a supertype's own facts, an injected field's own annotation — rather
+    # than enriching rows another engine minted, so neither belongs in
+    # `_RUNS_LAST` above.
+    "supertype_derived": supertype_derived.run,
+    "injected_client": injected_client.run,
 }

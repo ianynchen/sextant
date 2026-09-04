@@ -12,6 +12,22 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Added
+
+- **gRPC's JVM bytecode surface derives** (2O design §1b/§1c, Task 5), closing FR-3's
+  last open protocol on the JVM alongside Task 4's schema half. Two new, framework-neutral
+  engine styles: `supertype_derived` matches any class extending a generated
+  `<Service>ImplBase` (`grpc-java.yml`) and derives one inbound row per overridden RPC
+  method, reading the service identity and each wire method name off the generated
+  class's own identity-building call-site arguments (`ServiceDescriptor.newBuilder`,
+  `MethodDescriptor.generateFullMethodName`) rather than a field value — D00 §5's
+  `constant` fact kind has no producer in this codebase (ruling R11). `injected_client`
+  matches a net.devh `@GrpcClient`-injected stub field (`grpc-net-devh.yml`) and derives
+  one outbound, service-level row (`method` NULL), fenced by symbol name against a service
+  this module implements locally. Both merge with Task 4's descriptor-derived rows on the
+  identical wire identity where both exist. An unreadable identity derives an honest
+  `unresolved` row plus a `service_identity` open question, never a fabricated package.
+
 ### Changed
 
 - **Endpoint identity for INBOUND `http` is now the URL the framework serves**

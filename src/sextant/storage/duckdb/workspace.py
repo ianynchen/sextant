@@ -112,6 +112,49 @@ _NAMED_QUERIES = {
         WHERE kind = 'symbol' AND json_array_length(payload -> 'interfaces') > 0
         ORDER BY symbol
     """,
+    # Capability 9.13's own erased-superclass carrier (2O design §1b, Task 5):
+    # every class symbol that declares one, keyed by the class's own
+    # (module-prefixed) symbol, its `superclass` alongside it — unlike
+    # `interfaces` above, both sides arrive ALREADY module-prefixed in the
+    # real emitted fact (`ClassScanner`'s `erasedSuperclassJson` writes the
+    # full symbol form directly, not the bare descriptor `interfaces`
+    # entries carry), so no strip-then-reprefix step is needed at either
+    # side of a join against `symbols`/`superclasses` itself. A plain TEXT
+    # field, not a JSON one — `payload ->> 'superclass'` alone already
+    # excludes an absent key (SQL NULL) the way `supertype`'s own
+    # `json_type(...) NOT IN ('NULL')` guard has to spell out, because
+    # `superclass` was never given a `null`-writing Python default the way
+    # `supertype`'s PTR carrier was (D00 §5a). `supertype_derived`'s own
+    # "the extends target is itself in the module's facts" test reads this
+    # alongside `declared_symbols`. The parens around `(payload ->>
+    # 'superclass')` are load-bearing, not stylistic: this DuckDB build binds
+    # `AND` tighter than a bare `->>` immediately after it, so
+    # `kind = 'symbol' AND payload ->> 'superclass' IS NOT NULL` parses as
+    # `(kind = 'symbol' AND payload) ->> 'superclass' IS NOT NULL` and fails
+    # casting the JSON `payload` column to a boolean — reproduced directly
+    # against `raw_facts` before this fix landed, not a guess.
+    "superclasses": """
+        SELECT payload ->> 'symbol' AS symbol, payload ->> 'superclass' AS superclass
+        FROM raw_facts
+        WHERE kind = 'symbol' AND (payload ->> 'superclass') IS NOT NULL
+        ORDER BY symbol
+    """,
+    # Every declared method's own enclosing type and visibility (2O design
+    # §1b, Task 5): `method_declarations` above carries `signature` instead,
+    # which this join has no use for, and `method_symbols` carries neither
+    # `enclosing` nor `visibility` at all — `supertype_derived`'s own
+    # `overridden_public_methods` evidence needs both, to tell an
+    # implementer's own override from an unrelated same-named method
+    # elsewhere in the module AND to gate it on visibility (D00 §5a: `public`
+    # or `other`, the same column `mapping.members: public_methods` already
+    # reads SQL-side in `derive_endpoints.sql`). Both `symbol` and `enclosing`
+    # share the module-prefixed coordinate space `effective_annotations.py`'s
+    # own `method_declarations` join already relies on. Ordered by symbol for
+    # the same reason every other declaration-level query here is.
+    "method_visibility": """
+        SELECT symbol, enclosing, visibility FROM symbols
+        WHERE construct_kind = 'method' ORDER BY symbol
+    """,
     # Every `declared_shape` fact (2G design §3), keyed by its own `symbol` —
     # the generated class a compiled schema type travels as, or the schema's
     # own full name for a source-origin one — with its `fields` JSON array

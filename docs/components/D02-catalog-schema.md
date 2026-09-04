@@ -65,10 +65,11 @@ scanner capability above.
 
 ---
 
-## 2. The nine styles
+## 2. The eleven styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
-genuinely new shape needs a new engine.
+genuinely new shape needs a new engine. (Nine as of Phase 2H; `supertype_derived` and
+`injected_client`, Phase 2O Task 5, are the tenth and eleventh.)
 
 ### `annotation_driven`
 
@@ -1247,6 +1248,119 @@ is what a row with nothing else to say keeps. That is the no-class↔type-join r
 by ordering rather than by a second guard. The declared response is a SCHEMA-NAME reference
 within the declared universe; no join to a bytecode-derived class is attempted anywhere on
 this path.
+
+### `supertype_derived`
+
+The tenth style, and the first that derives from a SUPERCLASS rather than a call site, an
+annotation, a configuration key or a declared interface (Phase 2O Task 5). gRPC's own
+generated server base (`<Service>Grpc.<Service>ImplBase`) is reached by `extends`, and a
+Spring/net.devh gRPC service registers by bean scanning — there is no registration call
+site for `interface_implementation` (above) to gate on, and no `implements` edge either.
+The evidence is structural and pattern-free instead: protoc compiles the generated classes
+INTO the module's own output, so both the extends edge
+([D00](D00-fact-schema.md) §4's `relationship_kind: extends`, capability 9.13's
+`superclass`) and the identity-building call sites the generated class makes are already in
+the workspace's own facts.
+
+```yaml
+style: supertype_derived
+protocol: grpc
+direction: inbound
+requires: [call_site, string_constants, superclass]
+matches:
+  supertype_marker:
+    service_name_call: { owner: io.grpc.ServiceDescriptor, method: newBuilder }
+    method_name_call: { owner: io.grpc.MethodDescriptor, method: generateFullMethodName }
+  members: overridden_public_methods
+```
+
+**Where the identity comes from is a call-site argument, never a field value** (ruling R11,
+superseding an earlier draft's `identity_marker: {constant: SERVICE_NAME}`):
+[D00](D00-fact-schema.md) §5's `constant` fact kind has no producer in this codebase, so a
+compile-time constant's VALUE cannot be read off the field that declares it. It is still
+recoverable from bytecode alone, because the compiler inlines such a constant at every use
+site (JLS 13.1/13.4.9): the service identity is `service_name_call`'s own FIRST argument,
+read on the class whose facts make that call; the wire method name is `method_name_call`'s
+own SECOND argument, one per RPC method the generated class builds a descriptor for. Both
+markers are `{owner, method}`, never a combined `Owner.Fqn#method` string — every catalog
+value is refused if it carries a `#`, reserved for the SCIP symbol grammar the fact stream
+itself uses.
+
+**`members: overridden_public_methods`** is this style's one vocabulary word: a method the
+implementing class declares under the SAME NAME as one the supertype itself declares,
+PUBLIC on the implementer's own copy (an override may only widen visibility, never narrow
+it, so the supertype's own copy need not be checked). "The registration is the evidence"
+restated one level over: a class merely extending the generated base, overriding none of
+its methods, derives nothing at all.
+
+**One row per `(wire method, overridden method)` pair the marker calls and the overrides
+agree on.** The wire method name in the row's own `path` always carries the literal
+call-site string verbatim — **never derived by casing the compiled override's own method
+name**, which is not invertible (a `mixedLower`-shaped transform can collapse more than one
+proto spelling onto one compiled identifier). The one casing operation this style performs
+runs the OTHER way: decapitalizing the wire name it already read, to find the matching
+override name among what bytecode itself declared — a candidate that matches nothing
+derives nothing.
+
+**Where the constants cannot be read at all — CP-8(b)/(d) falsifying, not the supertype
+being absent — the row still derives** ([D02](D02-catalog-schema.md) §2's unresolved-is-an-
+answer): `path` the supertype's own bare descriptor verbatim, `resolution: unresolved`,
+`handler` NULL, plus one `service_identity` open question naming the implementer class and
+the reason. A supertype whose own facts never reached this workspace at all (a published
+`*-grpc-stubs` jar, consumed without the library opt-in) derives NOTHING — not even the
+unresolved fallback, which is reserved for a LOCALLY SEEN supertype.
+
+`direction`/`protocol` are the catalog's own; `method` is always NULL (gRPC is verbless,
+like every non-HTTP protocol); `caller`/`peer` are always NULL (the deriving method is a
+`handler`); `request_shape`/`response_shape` stay NULL — this style contributes the handler
+symbol only, and where a `.proto` descriptor also covers the same identity
+(`schema_operations`, above), the two rows merge on the identical `(protocol, direction,
+method, path)` D02 §5 already dedups on, the descriptor contributing the method inventory
+and payload shapes it alone can read.
+
+### `injected_client`
+
+A second, separate style from `supertype_derived` — injection is a different SHAPE of
+evidence (a field the module declares and a framework populates, never a class the module
+itself extends), and the rule that a style is a shape of evidence, not a framework, forbids
+fusing the two into one engine, even though both read the same kind of identity-building
+call site.
+
+```yaml
+style: injected_client
+protocol: grpc
+direction: outbound
+requires: [call_site, string_constants, annotation_args, typed_signatures]
+matches:
+  field_annotation: net.devh.boot.grpc.client.inject.GrpcClient
+  identity_marker:
+    service_name_call: { owner: io.grpc.ServiceDescriptor, method: newBuilder }
+```
+
+**One row per injected stub, at the SERVICE level.** `method` stays NULL and `path` is
+`<protoPackage>.<Service>` — the stub type's own outer class marker call, read exactly as
+`supertype_derived` reads it (R11: a call-site argument, never a field value), or the stub
+type's own bare descriptor verbatim where that call cannot be read. The injection declares
+that the module TALKS TO the service; it does not declare which methods, and deriving one
+row per service method would fabricate a boundary nothing here observes — per-method
+outbound rows wait on a later phase's call graph, which can read the stub's own calls. An
+unreadable identity derives the same unresolved-fallback-plus-gap pair
+`supertype_derived` derives.
+
+**The fence: an outbound row derives only for a service this module does NOT itself
+implement.** Stated by SYMBOL NAME rather than by identity, because the fence must still
+fire when the injected stub's own identity is unreadable (a module implementing a service
+against PUBLISHED stubs has no local `SERVICE_NAME` to read either): does any of this
+module's own classes carry an `extends` edge whose OUTER class matches the injected stub
+type's own outer class? The extends RELATIONSHIP is a fact of the module's own class even
+when its target lives in an unscanned jar — what the jar withholds is the identity, not the
+edge — so this test survives the published-stubs-jar case an identity-based fence could not.
+
+`direction` is always the catalog's own `outbound`; `handler`/`caller`/`peer` are all
+NULL — the injection names no calling method of its own (a field declaration, not a call
+site) and no handler. This is gRPC's SECOND identity form on [D01](D01-graph-schema.md)
+§3's own table (`<protoPackage>.<Service>`, no method) — it links to nothing until a later
+phase makes it per-method, the same honest-coarseness precedent SOAP's own two forms set.
 
 ### `protocol_hint`
 

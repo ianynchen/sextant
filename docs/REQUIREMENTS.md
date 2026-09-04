@@ -64,15 +64,21 @@ request and response shapes, and its trust fields.
 data, never as code, so that supporting a new framework requires no change to Sextant
 itself.*
 
-**Status, as of Phase 2I: three of the four protocol families named above derive.** HTTP
-(both directions, plus GraphQL, WebSocket and SSE on top of it), SOAP, and the message
-brokers Kafka, JMS, SQS and Pub/Sub. **gRPC does not — no Java row for it has shipped**
-([COVERAGE.md](COVERAGE.md) §5.7): the JVM is the one ecosystem where a gRPC service is
-declared by inheriting a generated base class rather than by a registration call, which
-is a scanner capability question rather than a catalog one, and the two Spring-side
-annotation rows beside it are each a catalog away. This note records the position rather
-than changing it — gRPC remains in version-1 scope above, and whether it stays there is a
-scoping decision, not a documentation one.
+**Status, as of Phase 2O Task 5: all four protocol families named above derive.** HTTP
+(both directions, plus GraphQL, WebSocket and SSE on top of it), SOAP, the message brokers
+Kafka, JMS, SQS and Pub/Sub, and now gRPC. gRPC's Java surface shipped in two halves
+([COVERAGE.md](COVERAGE.md) §5.7): the `.proto` descriptor (Phase 2O Task 4, both origins —
+embedded and a `.proto` file on disk) and the JVM bytecode half (Task 5) — a
+framework-neutral `supertype_derived` engine for generated `<Service>ImplBase`
+implementations (capability 9.13's `superclass` plus a call-site-argument read, R11) and an
+`injected_client` engine for net.devh's `@GrpcClient`-injected stubs, fenced against a
+locally-implemented service by symbol name. Three boundaries remain stated rather than
+closed — published-stubs jars, an unannotated Spring gRPC service implemented against
+published stubs, and bare `newBlockingStub(channel)` wiring with no field injection
+([COVERAGE.md](COVERAGE.md) §5.7) — and the `@GrpcService`/net.devh annotation
+CORROBORATION (surfacing an annotated-but-unmatched class as a question rather than
+silence) is unshipped, since it has no home in the `annotation_driven` engine as built.
+None of the three narrows what derives; each narrows what a silent miss is visible as.
 
 ### FR-4 — Shape catalog
 

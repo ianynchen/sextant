@@ -337,6 +337,8 @@ column with its own evidence, never this one.
 | SSE | `sse` | the HTTP verb (`GET`) | the route path (`/events/stream`) | an HTTP row, reclassified ([D02](D02-catalog-schema.md) §2's `protocol_hint`) |
 | SOAP operation | `soap` | NULL | the input element's QName in W3C notation (`{http://orders.example.com/ws}placeOrderRequest`) | the SOAP annotation catalogs, `single_call` off the payload type, and `schema_operations` from the WSDL |
 | SOAP action | `soap` | NULL | the action URI verbatim (`http://orders.example.com/action/cancelOrder`) | the Spring-WS catalog |
+| gRPC operation | `grpc` | NULL | `<protoPackage>.<Service>/<Method>` | the `.proto` descriptor (`schema_operations`, Phase 2O Task 4) and the generated class's own bytecode (`supertype_derived`, Task 5) — the SAME identity, independently derived, merging on it by construction |
+| gRPC service (outbound) | `grpc` | NULL | `<protoPackage>.<Service>` — the SERVICE alone, no method | an injected client stub (`injected_client`, Task 5) |
 
 **SOAP is verbless, and it carries TWO identity forms on one protocol** (Phase 2I). The
 verb goes because every operation on a port shares the transport binding's own POST, so a
@@ -350,6 +352,22 @@ framework-neutral: rows derived from a Spring-WS annotation, from a JAX-WS one a
 `.wsdl` file have to be one string to merge at all. An action row links only where a client
 states the same action, which code rarely does — a stated boundary
 ([COVERAGE](../COVERAGE.md) §5.3), not a defect in the form.
+
+**gRPC carries TWO identity forms on one protocol too** (Phase 2O). Both are verbless, for
+the same reason SOAP's are: gRPC has no HTTP-shaped verb to distinguish rows by, and every
+RPC dispatches by name, not by method. The `<protoPackage>.<Service>/<Method>` form is a real
+operation — one row per RPC method, `method` NULL, `path` the full method identity — derived
+two independent ways that merge on the identical string (D02 §5's own join, no new rule): the
+`.proto` descriptor states it outright, and the compiled `<Service>Grpc` class's own
+identity-building call sites state the SAME string from bytecode alone (R11:
+`ServiceDescriptor.newBuilder`'s and `MethodDescriptor.generateFullMethodName`'s own literal
+arguments, never a field value). The `<protoPackage>.<Service>` form — SERVICE-level, no
+method — is deliberately coarser: an injected client stub (`@GrpcClient`) proves the module
+TALKS TO a service, not which of its methods it calls, and minting one row per service method
+from that evidence alone would fabricate a boundary nobody observed. **This row links to
+nothing today** — DR-5 matches identities exactly, and `package.Service` never equals
+`package.Service/Method` — until a later phase's call graph can name the actual method calls
+and derive the finer form instead ([COVERAGE](../COVERAGE.md) §5.7).
 
 Three things follow, and each is a real distinction rather than a shading of one rule.
 **A GraphQL row's `method` is an OPERATION TYPE, not a verb** — a caller sending a

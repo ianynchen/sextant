@@ -8,6 +8,7 @@ from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoin
 from sextant.application.resolve.format import resolve_format
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
+from sextant.application.resolve.service_identity import record_service_identity_gaps
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.parse_binding import bind_parse_calls
 
@@ -70,6 +71,14 @@ def resolve(
     # schema-described parse is what lifts a NULL format to that schema's own
     # format at `narrowed`.
     bound = bind_parse_calls(workspace, declared)
+    # 2O design §1b/§1c: `supertype_derived`/`injected_client`'s own
+    # `service_identity` gaps, filed here for the same reason
+    # `bind_parse_calls` sits here rather than inside `derive_endpoints` —
+    # `service_identity.py`'s own module docstring states it in full. Order
+    # against `bind_parse_calls` itself does not matter (disjoint tables,
+    # disjoint question kinds); it sits below it only because it was added
+    # after it.
+    record_service_identity_gaps(workspace, declared)
     # Between the binding and the ladder, and both sides of that are the
     # pass's own contract (2H design §6). AFTER every engine and its merge:
     # this pass reclassifies rows others minted, so they must all exist, and

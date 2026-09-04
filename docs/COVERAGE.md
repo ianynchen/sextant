@@ -212,8 +212,9 @@ ladder's rung 1 got its first live surface.
 
 **Phase 2I closed SOAP — the last protocol on the coverage program's own committed list.**
 That list is the roadmap's, not [REQUIREMENTS.md](REQUIREMENTS.md)'s: version-1 scope names
-**gRPC** as well, and gRPC has no shipped Java row (§5.7) — it is enumerated in the
-milestone's own modulo rather than quietly folded into "done". A SOAP
+**gRPC** as well; at the time this section was written gRPC had no shipped Java row, and it
+was enumerated in the milestone's own modulo rather than quietly folded into "done" — Phase
+2O (Tasks 4-5) has since shipped both the descriptor and the JVM bytecode halves (§5.7). A SOAP
 operation is `(soap, NULL, {namespace}localPart)` — verbless, the identity being the input
 element's QName rather than the one POST path every operation shares — with a second form
 on the same protocol for `@SoapAction`, whose address is the transport header's URI
@@ -415,7 +416,7 @@ SNS and Redis are **out of scope by decision**, not oversight — each would be 
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | 3A 1B | ◐ 1A 2B | ◐ 2A | ◐ 2A 1B | ◐ 1A 1B | 2A 2B 1C |
+| **Java / Kotlin** | ◐ 2A | ◐ 1A 2B | ◐ 2A | ◐ 2A 1B | ◐ 1A 1B | 2A 2B 1C |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -575,7 +576,7 @@ far that reaches today:
 
 | Protocol | How the format is declared | Evidence | If nothing is declared | Shipped today |
 |---|---|---|---|---|
-| **gRPC** | **Fixed by the protocol** | `compiler` | Protobuf, always. The only certain cell in this table. | ✅ **rung 1, the third live surface** (2O). `format_fixed: {grpc: protobuf}` ships on `grpc-schema.yml`, so every gRPC row answers `protobuf`/`resolved` before any other rung is consulted — the schema-derived operation rows this task ships; the bytecode-tier detection that names a `<Service>Grpc`/`@GrpcClient` row (§5.7) is still unshipped, Task 5's to add |
+| **gRPC** | **Fixed by the protocol** | `compiler` | Protobuf, always. The only certain cell in this table. | ✅ **rung 1, the third live surface** (2O). `format_fixed: {grpc: protobuf}` ships on `grpc-schema.yml`, so every gRPC row answers `protobuf`/`resolved` before any other rung is consulted — both the Task 4 schema-derived operation rows and the Task 5 bytecode-detected `<Service>Grpc`/`@GrpcClient` rows (§5.7) reach it |
 | SOAP | Fixed | `compiler` | XML | ✅ **rung 1, the second live surface** (2I). `format_fixed: {soap: xml}` ships on all five catalogs owning the protocol, so every SOAP row answers `xml`/`resolved` before any other rung — including the schema-first rows, which carry no bytecode type for a later rung to read |
 | GraphQL | Fixed | `compiler` | JSON | ✅ **rung 1, and its first live surface** (2H). `format_fixed: {graphql: json}` ships on all four catalogs owning the protocol, so every GraphQL row answers `json`/`resolved` before any other rung is consulted |
 | **REST in** | `produces` / `consumes`, JAX-RS `@Produces` / `@Consumes`, or a return type that is itself a generated message | `declared` | **Assumed** from the framework's default converter (Jackson → JSON) | ◐ **rung 2** off Spring's own `produces`/`consumes` (2E), `resolved`; an undeclared route falls to **rung 5** — `json` at `narrowed` — where it carries a declared payload type at all, and to rung 6 where it carries none. Rung 5 reads its markers three ways since **2O**: a package family named by ANY fqn the module names (annotations, and now the call-site owners it invokes), plus a **dependency coordinate** the analysis recorded — Boot auto-configures the converter from the jar's mere presence (CP-6), so a module with no Jackson annotation and no Jackson call still answers `json`/`narrowed` where the coordinate was read. JAX-RS `@Produces` is **A**, with that catalog |
@@ -901,7 +902,7 @@ has nothing to match against them.
 
 **Shipped in Phase 2I** — the last protocol on the coverage roadmap's committed list, which
 is a narrower list than [REQUIREMENTS.md](REQUIREMENTS.md)'s version-1 scope: that also
-names gRPC, still unshipped for Java (§5.7). The boundary is not the HTTP route — one POST path fronts every
+names gRPC, shipped for Java in Phase 2O Tasks 4-5 (§5.7). The boundary is not the HTTP route — one POST path fronts every
 operation — so the identity is the **input element's QName** in W3C notation
 (`{http://orders.example.com/ws}placeOrderRequest`), verbless, on
 [D01](components/D01-graph-schema.md) §3's operation-is-the-endpoint rule. The row that
@@ -1240,27 +1241,52 @@ Boundaries, each verified against the shipped code:
 
 ### 5.7 gRPC
 
-**The schema half shipped in Phase 2O (Task 4) — the bytecode half below is still
-unshipped.** A `.proto` `service` block names its own methods with no help from any
-generated class, exactly as a WSDL names its operations (§5.3) — so the descriptor
-interpreter reads it directly: one `declared_shape` per RPC method, `role: operation`,
-carrying the request and response type refs and the two streaming flags
+**The schema half shipped in Phase 2O Task 4; the JVM bytecode half shipped in Task 5.**
+A `.proto` `service` block names its own methods with no help from any generated class,
+exactly as a WSDL names its operations (§5.3) — so the descriptor interpreter reads it
+directly: one `declared_shape` per RPC method, `role: operation`, carrying the request and
+response type refs and the two streaming flags
 (`src/sextant/ingress/interpret/protobuf.py:193-236`, `_service_shapes`). `schema_operations`
 derives gRPC's verbless identity, `(grpc, NULL, "<protoPackage>.<Service>/<Method>")`, from
 that record (`src/sextant/application/resolve/engines/schema_operations.py:164-197`,
-`_grpc_operation_row`), and the new `grpc-schema.yml` catalog's `format_fixed: {grpc:
-protobuf}` makes gRPC the format ladder's third live rung-1 protocol (§4.1). This reads the
-descriptor alone — embedded in generated code, or a `.proto` file on disk — whether or not
-any of the language-specific implementations below ever reaches the workspace; the rows
-underneath this one, naming a `<Service>Grpc`/`@GrpcClient` handler from bytecode, remain
-Task 5's to ship.
+`_grpc_operation_row`), and the `grpc-schema.yml` catalog's `format_fixed: {grpc: protobuf}`
+makes gRPC the format ladder's third live rung-1 protocol (§4.1). This reads the descriptor
+alone — embedded in generated code, or a `.proto` file on disk — whether or not any
+generated-class bytecode ever reaches the workspace.
+
+**Task 5 adds the JVM bytecode half — two new engine styles, both `supertype_derived`
+`src/sextant/application/resolve/engines/supertype_derived.py` and `injected_client`
+`src/sextant/application/resolve/engines/injected_client.py`**, both reading a call-site
+argument the generated class's own identity-building calls carry (R11 — the checkpoint that
+falsified the brief's original `constant: SERVICE_NAME` field-value read;
+`scripts/probes/cp3_cp8_grpc_facts.md`), never a field value: `ServiceDescriptor.newBuilder`'s
+own first argument for the service identity, `MethodDescriptor.generateFullMethodName`'s own
+second argument for the wire method name (`shapes/identity_calls.py`). The engines are
+framework-NEUTRAL — `supertype_derived` matches any class extending a generated
+`<Service>ImplBase` regardless of which annotation, if any, marks it, and `injected_client`
+matches net.devh's own `@GrpcClient`-annotated field. Neither reads or names a framework
+inside the engine; catalog data does (`src/sextant/catalogs/grpc-java.yml`,
+`src/sextant/catalogs/grpc-net-devh.yml`).
+
+**What Task 5 explicitly did NOT ship, and why:** the `@GrpcService`/net.devh annotation
+CORROBORATION spec §1b describes — surfacing a class an annotation flags but the supertype
+match misses as a `service_identity` open question, rather than silently seeing nothing — has
+no home in the shipped `annotation_driven` engine (it never files `open_questions`, and has no
+mechanism to derive nothing-but-a-gap the way this corroboration needs). Implementing that is
+new scope this task did not attempt; `grpc-spring.yml` (Spring gRPC's own `@GrpcService`
+corroboration catalog) is consequently also unshipped. The core `supertype_derived` match is
+framework-neutral, so a Spring gRPC (or Quarkus, or plain `io.grpc.Server`) service still
+derives its inbound row exactly as a net.devh one does, ANNOTATED OR NOT — it is only the
+*corroboration* (turning an annotated-but-unmatched class into a visible question instead of
+silence) that is missing.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
-| Java | generated `FooGrpc.FooImplBase` implementing `io.grpc.BindableService`; stubs extend `Abstract{Async,Blocking,Future}Stub` | inheritance, not a call | `interface_implementation` | **B — the JVM is the outlier here** |
-| Java | `net.devh.boot.grpc.{server.service.GrpcService, client.inject.GrpcClient}` | — | `annotation` | A |
-| Java | Quarkus `io.quarkus.grpc.{GrpcService, GrpcClient}` | — | `annotation` | A |
-| Java | Spring gRPC `org.springframework.grpc.server.service.GrpcService` | **the annotation is optional** — Spring gRPC exposes *any* `BindableService` bean, so `interface_implementation` is the reliable match and the annotation only adds interceptors | `annotation` + `interface_implementation` | A |
+| Java | generated `FooGrpc.FooImplBase` implementing `io.grpc.BindableService`; stubs extend `Abstract{Async,Blocking,Future}Stub` | inheritance, not a call | `supertype_derived` | ✅ shipped (2O Task 5) — **B, as scoped**: the extends edge (capability 9.13) plus a call-site-argument read, framework-neutral, no annotation needed |
+| Java | `net.devh.boot.grpc.client.inject.GrpcClient` (client stub injection) | field injection | `injected_client` | ✅ shipped (2O Task 5) — service-level only (`method` NULL); per-method outbound waits on 2Q's call graph |
+| Java | `net.devh.boot.grpc.server.service.GrpcService` (server annotation) | — | `annotation` corroboration | A — `supertype_derived` above already derives the row without it; unshipped is the "flag an annotated-but-unmatched class as a gap" corroboration alone (no home in `annotation_driven`, task-5-report.md) |
+| Java | Quarkus `io.quarkus.grpc.{GrpcService, GrpcClient}` | — | `annotation` | A — server side rides `supertype_derived` already (framework-neutral); `@GrpcClient` injection itself is unshipped (net.devh's own annotation only) |
+| Java | Spring gRPC `org.springframework.grpc.server.service.GrpcService` | **the annotation is optional** — Spring gRPC exposes *any* `BindableService` bean, so `supertype_derived` is the reliable match and the annotation only adds interceptors | `supertype_derived` (annotation corroboration unshipped) | ✅ shipped (2O Task 5) inbound, via the framework-neutral supertype match — the annotation's own corroboration row is not (same gap as the net.devh row above) |
 | Go | `pb.RegisterFooServer(s, impl)`, `pb.NewFooClient(conn)` | **the generated function names the service** | `registration_call` | A |
 | Python | `_pb2_grpc.py`: `FooServicer`, `add_FooServicer_to_server`, `FooStub(channel)` | — | `registration_call` | A |
 | Rust | `tonic` `FooServer::new(impl)`, `FooClient::connect(url)` | — | `registration_call` | A |
@@ -1268,6 +1294,27 @@ Task 5's to ship.
 | TS | `ts-proto`, `protobufjs` static mode | generated typed services | `generated_descriptor` | B |
 | Swift | gRPC-Swift generated clients and providers; Connect-Swift | — | `registration_call` | A |
 | — | `.proto` service descriptions, or the `FileDescriptorSet` embedded in generated code | **the actual contract, read directly** | artifact | ✅ shipped — both origins (2O), the same dual-origin read the message shapes already had (§4.1's Protobuf row); an RPC method's `symbol`/`schema_name` are the schema identity itself, since no generated class names it |
+
+**Three stated boundaries, all Java, all explicit rather than silent (2O design §1b/§1c,
+Task 5):**
+
+- **Published-stubs jars.** A module implementing or injecting against `*-grpc-stubs`
+  consumed as a dependency has no generated classes in its OWN output — the extends/field-type
+  EDGE is still this module's own fact, but the target's `SERVICE_NAME`-building call sites
+  never reach this workspace, so the identity cannot be read. `supertype_derived` derives
+  nothing at all for such a class (not even the unresolved fallback, which is reserved for a
+  LOCALLY SEEN supertype); `injected_client` derives the unresolved fallback row (`path` the
+  stub type's own descriptor) plus a `service_identity` gap. The shipped `.sextant.yml` library
+  opt-in (D02 §4a) is the escape, unexercised by this task.
+- **Unannotated Spring gRPC on published stubs.** Spring gRPC's own `@GrpcService` is
+  optional — interacts with the boundary above: since the annotation carries no service name
+  and corroboration is unshipped (above), an unannotated Spring gRPC service implemented
+  against published stubs goes entirely unseen. An annotated one is no better off today for
+  the same reason (corroboration unshipped) — but see the row above: this is now the ONLY
+  case that goes unseen, not the general Spring gRPC surface.
+- **Bare `newBlockingStub(channel)` without `@GrpcClient`.** No engine derives from a type
+  reference alone; the call's own argument is a `Channel` object, not an address. Client
+  wiring built by hand, with no field injection anywhere, is invisible to `injected_client`.
 
 ### 5.8 Kafka
 

@@ -43,6 +43,22 @@ def owner_of(descriptor: str) -> str | None:
     return None if index == -1 else descriptor[: index + 1]
 
 
+def outer_type_of(descriptor: str) -> str:
+    """A nested type's own top-level enclosing type, bare, dollar-nesting
+    stripped entirely — `A$B#` -> `A#` (D00 §5a: the JVM's own nested-class
+    notation, embedded in the path segment ahead of the trailing type
+    marker). `owner_of`'s sibling: that function splits a MEMBER descriptor
+    on its `#` to find the type that declares it; this one splits a TYPE
+    descriptor on its `$` to find the type that ENCLOSES it — 2O design
+    §1b/§1c's own read, where a generated class's identity-building call
+    sites live on the OUTER type, never on a nested `ImplBase`/`*Stub` a
+    catalog's own marker names. A descriptor naming no `$` at all (already
+    top-level) is returned unchanged."""
+    body = descriptor.removesuffix("#")
+    index = body.find("$")
+    return descriptor if index == -1 else body[:index] + "#"
+
+
 def member_name(descriptor: str) -> str:
     """The segment after the last `#`, trailing `.` stripped — a descriptor
     with no `#` returns itself minus any trailing `.` (D00 §5a)."""

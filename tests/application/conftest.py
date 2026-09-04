@@ -75,9 +75,10 @@ def resolved_fixture(
         # SAME three capabilities (`call_site`, `string_constants`,
         # `chain_reconstruction`), no new one added; `implemented_interfaces`
         # (2E-prep Task 12) gates `google-pubsub-subscriber.yml`'s own
-        # `interface_implementation` style — a real subset of what
-        # `AsmScanner.capabilities()` actually declares, the same way the
-        # other capabilities here already are.
+        # `interface_implementation` style; `superclass` (capability 9.13, 2O
+        # design §1b, Task 5) gates `grpc-java.yml`'s own `supertype_derived`
+        # style — a real subset of what `AsmScanner.capabilities()` actually
+        # declares, the same way the other capabilities here already are.
         {
             "annotation_args",
             "typed_signatures",
@@ -86,6 +87,7 @@ def resolved_fixture(
             "string_constants",
             "chain_reconstruction",
             "implemented_interfaces",
+            "superclass",
         },
     )
     yield workspace, report
