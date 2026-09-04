@@ -575,7 +575,7 @@ far that reaches today:
 
 | Protocol | How the format is declared | Evidence | If nothing is declared | Shipped today |
 |---|---|---|---|---|
-| **gRPC** | **Fixed by the protocol** | `compiler` | Protobuf, always. The only certain cell in this table. | Rung 1 is built; **no shipped catalog owns gRPC**, so nothing declares `format_fixed` — **A**, one catalog entry once a gRPC catalog exists |
+| **gRPC** | **Fixed by the protocol** | `compiler` | Protobuf, always. The only certain cell in this table. | ✅ **rung 1, the third live surface** (2O). `format_fixed: {grpc: protobuf}` ships on `grpc-schema.yml`, so every gRPC row answers `protobuf`/`resolved` before any other rung is consulted — the schema-derived operation rows this task ships; the bytecode-tier detection that names a `<Service>Grpc`/`@GrpcClient` row (§5.7) is still unshipped, Task 5's to add |
 | SOAP | Fixed | `compiler` | XML | ✅ **rung 1, the second live surface** (2I). `format_fixed: {soap: xml}` ships on all five catalogs owning the protocol, so every SOAP row answers `xml`/`resolved` before any other rung — including the schema-first rows, which carry no bytecode type for a later rung to read |
 | GraphQL | Fixed | `compiler` | JSON | ✅ **rung 1, and its first live surface** (2H). `format_fixed: {graphql: json}` ships on all four catalogs owning the protocol, so every GraphQL row answers `json`/`resolved` before any other rung is consulted |
 | **REST in** | `produces` / `consumes`, JAX-RS `@Produces` / `@Consumes`, or a return type that is itself a generated message | `declared` | **Assumed** from the framework's default converter (Jackson → JSON) | ◐ **rung 2** off Spring's own `produces`/`consumes` (2E), `resolved`; an undeclared route falls to **rung 5** — `json` at `narrowed` — where it carries a declared payload type at all, and to rung 6 where it carries none. Rung 5 reads its markers three ways since **2O**: a package family named by ANY fqn the module names (annotations, and now the call-site owners it invokes), plus a **dependency coordinate** the analysis recorded — Boot auto-configures the converter from the jar's mere presence (CP-6), so a module with no Jackson annotation and no Jackson call still answers `json`/`narrowed` where the coordinate was read. JAX-RS `@Produces` is **A**, with that catalog |
@@ -1240,6 +1240,21 @@ Boundaries, each verified against the shipped code:
 
 ### 5.7 gRPC
 
+**The schema half shipped in Phase 2O (Task 4) — the bytecode half below is still
+unshipped.** A `.proto` `service` block names its own methods with no help from any
+generated class, exactly as a WSDL names its operations (§5.3) — so the descriptor
+interpreter reads it directly: one `declared_shape` per RPC method, `role: operation`,
+carrying the request and response type refs and the two streaming flags
+(`src/sextant/ingress/interpret/protobuf.py:193-236`, `_service_shapes`). `schema_operations`
+derives gRPC's verbless identity, `(grpc, NULL, "<protoPackage>.<Service>/<Method>")`, from
+that record (`src/sextant/application/resolve/engines/schema_operations.py:164-197`,
+`_grpc_operation_row`), and the new `grpc-schema.yml` catalog's `format_fixed: {grpc:
+protobuf}` makes gRPC the format ladder's third live rung-1 protocol (§4.1). This reads the
+descriptor alone — embedded in generated code, or a `.proto` file on disk — whether or not
+any of the language-specific implementations below ever reaches the workspace; the rows
+underneath this one, naming a `<Service>Grpc`/`@GrpcClient` handler from bytecode, remain
+Task 5's to ship.
+
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
 | Java | generated `FooGrpc.FooImplBase` implementing `io.grpc.BindableService`; stubs extend `Abstract{Async,Blocking,Future}Stub` | inheritance, not a call | `interface_implementation` | **B — the JVM is the outlier here** |
@@ -1252,6 +1267,7 @@ Boundaries, each verified against the shipped code:
 | TS | `@grpc/grpc-js` + `@grpc/proto-loader` `loadSync("foo.proto")` | **service built at runtime from a `.proto` path** | `runtime_dynamic` | **B — the path is a literal, so read the `.proto` as an artifact** |
 | TS | `ts-proto`, `protobufjs` static mode | generated typed services | `generated_descriptor` | B |
 | Swift | gRPC-Swift generated clients and providers; Connect-Swift | — | `registration_call` | A |
+| — | `.proto` service descriptions, or the `FileDescriptorSet` embedded in generated code | **the actual contract, read directly** | artifact | ✅ shipped — both origins (2O), the same dual-origin read the message shapes already had (§4.1's Protobuf row); an RPC method's `symbol`/`schema_name` are the schema identity itself, since no generated class names it |
 
 ### 5.8 Kafka
 
