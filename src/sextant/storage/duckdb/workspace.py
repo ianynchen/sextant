@@ -151,8 +151,19 @@ _NAMED_QUERIES = {
     # share the module-prefixed coordinate space `effective_annotations.py`'s
     # own `method_declarations` join already relies on. Ordered by symbol for
     # the same reason every other declaration-level query here is.
+    #
+    # `static` comes through for the same reason it does on `fields` above —
+    # the declaring language is the only thing that can say it, and a reader
+    # enumerating an interface's exposed members has to tell a member bound to
+    # the TYPE from one bound to an instance. `derived_resource` is that reader
+    # (fix round 3, I-3): a `static` helper on a Spring Data repository is not
+    # a query method, and deriving a `/search/` route for one publishes a URL
+    # the framework does not serve. False where a scanner reports no modifiers
+    # at all — an absent answer is not a claim that the method is static.
     "method_visibility": """
-        SELECT symbol, enclosing, visibility FROM symbols
+        SELECT symbol, enclosing, visibility,
+               coalesce((modifiers ->> 'static')::BOOLEAN, false) AS "static"
+        FROM symbols
         WHERE construct_kind = 'method' ORDER BY symbol
     """,
     # Every `declared_shape` fact (2G design §3), keyed by its own `symbol` —

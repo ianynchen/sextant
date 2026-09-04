@@ -4,8 +4,11 @@ performs it (2O design §2b, CP-2).
 **Attribution.** This module is a port of the rule set of **Evo Inflector**
 (`org.atteo:evo-inflector`, Copyright 2011 Atteo), which is licensed under the
 Apache License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0. A
-port of a rule set is a derivative of it, so the origin is named here and in
-the repository's dependency/licence documentation. Evo Inflector is itself an
+port of a rule set is a derivative of it, so Apache-2.0 §4's attribution
+travels with it: `LICENSE-evo-inflector`, beside this file, carries the origin
+and the licence text in full, and `README.md`'s Dependencies section names it
+where a reader looks for what this repository took from elsewhere. Evo
+Inflector is itself an
 implementation of Damian Conway's *An Algorithmic Approach to English
 Pluralization*; this port mirrors Evo's own `English`/`TwoFormInflector`
 classes rule for rule and in their registration order, because the answer that

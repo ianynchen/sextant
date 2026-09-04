@@ -83,7 +83,7 @@ def resolve(
     # 2O design §2b, and it sits here for the same reason the two passes above
     # do: it WRITES `open_questions`, so it must run after the reset. Its order
     # against them does not matter — disjoint question kinds, disjoint tables.
-    record_environment_divergence(workspace, declared)
+    record_environment_divergence(workspace, declared, capabilities)
     # Between the binding and the ladder, and both sides of that are the
     # pass's own contract (2H design §6). AFTER every engine and its merge:
     # this pass reclassifies rows others minted, so they must all exist, and

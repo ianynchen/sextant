@@ -18,6 +18,7 @@ design asks.
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.capabilities import missing_capabilities
 from sextant.application.resolve.dependencies import unmet_dependency
 from sextant.application.resolve.engines import derived_resource
 from sextant.application.resolve.open_questions import record_open_questions
@@ -28,11 +29,13 @@ from sextant.application.resolve.open_questions import record_open_questions
 _GAP_ENGINES = {"derived_resource": derived_resource.gaps}
 
 
-def record_environment_divergence(workspace: Workspace, catalogs: list[Catalog]) -> None:
+def record_environment_divergence(
+    workspace: Workspace, catalogs: list[Catalog], capabilities: set[str]
+) -> None:
     """Files one question per derived resource whose base path configuration
     did not settle on a single value.
 
-    **The dependency gate is re-applied here**, unlike
+    **BOTH of `derive_endpoints`' gates are re-applied here**, unlike
     `resolve/service_identity.py`'s unconditional read, and the difference is
     not an inconsistency: that pass's engines match on evidence that NAMES
     their framework, so a skipped catalog finds nothing anyway, while this
@@ -40,11 +43,24 @@ def record_environment_divergence(workspace: Workspace, catalogs: list[Catalog])
     Ungated, a module with no Spring Data REST on its build would file
     questions about the base path of an API it does not serve — the same
     fabrication the gate exists to prevent, one table over.
+
+    The CAPABILITY gate is the same argument, and only half of it was applied
+    until fix round 3's I-4. A scan that did not report `generic_interfaces` or
+    `annotation_args` leaves `derive_endpoints` skipping this catalog and
+    deriving no route at all, while `gaps` re-walks the facts it does have and
+    would file a question about `${spring.data.rest.base-path}/orders` — a
+    route with nothing behind it, from a catalog the manifest already reports
+    as skipped. Not reachable while every JVM scan declares all three
+    capabilities from one constant, which is exactly why it has to be closed
+    here: facts travel between machines and versions, and `generic_interfaces`
+    (9.14) is new this phase, so an older extractor makes it live.
     """
     rows = [
         row
         for catalog in catalogs
-        if catalog.style in _GAP_ENGINES and unmet_dependency(workspace, catalog) is None
+        if catalog.style in _GAP_ENGINES
+        and not missing_capabilities(catalog, capabilities)
+        and unmet_dependency(workspace, catalog) is None
         for row in _GAP_ENGINES[catalog.style](workspace, catalog)
     ]
     record_open_questions(workspace, rows)

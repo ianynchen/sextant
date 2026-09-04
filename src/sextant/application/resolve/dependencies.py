@@ -45,9 +45,19 @@ from sextant.application.ports.workspace import Workspace
 # gated.
 DEPENDENCY_GATED = frozenset({"derived_resource"})
 
+# The caveat rides BOTH messages, and on this one it is the load-bearing half
+# (fix round 3, I-2): on Maven the recorded coordinates are the POM's direct
+# declarations, so a starter inherited through a company parent is genuinely
+# absent from them and this message would otherwise read as a confident "the
+# framework is not here". A reader who cannot tell that from real absence
+# cannot act on the skip, which is the whole of what "SKIPPED with a reason"
+# is for. Stated in the STRING rather than only in the three documents that
+# already say it, because the string is the only one a manifest reader sees.
 _NOT_DECLARED = (
     "a build declaration of one of {coordinates} — this module's build declares "
-    "none of them (D02 `detect.coordinates`)"
+    "none of them (D02 `detect.coordinates`; Maven records DIRECT declarations "
+    "only, so a starter inherited through a parent or a BOM is absent from them "
+    "and cannot be told apart from real absence here)"
 )
 
 _NOT_RECORDED = (
@@ -100,16 +110,29 @@ def _declared_coordinates(workspace: Workspace) -> set[str] | None:
     declares no dependencies. Only the first is unanswerable; the second is an
     answer, and it is "no".
 
+    A module fact whose payload carries no `dependency_coordinates` KEY at all
+    reads as SQL NULL here and counts as the first case, not the second: it
+    recorded nothing, so it answers nothing. Sextant's own emitter always
+    writes the key (the field's `default_factory` on `ModuleFact`), so this
+    degrades a hand-authored or third-party fact file at the same
+    `fact_schema_version` rather than anything this codebase produces — and it
+    degrades to the SKIPPED path this function exists to provide instead of
+    aborting the whole resolve on a `JSONDecodeError` (fix round 3, M-1). That
+    holds as long as the field stays required-with-a-default on the model; a
+    schema in which the key is genuinely optional and MEANS "no dependencies"
+    would need the two cases separated here rather than merged.
+
     More than one module fact in one workspace is not a case this collapses
     carefully — a workspace is one module (M00) — so the union is taken, which
     is the same answer for the one-module case and the only non-arbitrary one
     otherwise.
     """
-    rows = workspace.query("module_dependencies")
-    if not rows:
-        return None
     declared: set[str] = set()
-    for row in rows:
+    recorded_any = False
+    for row in workspace.query("module_dependencies"):
         recorded = row["dependency_coordinates"]
+        if recorded is None:
+            continue
+        recorded_any = True
         declared.update(str(entry) for entry in json.loads(str(recorded)))
-    return declared
+    return declared if recorded_any else None

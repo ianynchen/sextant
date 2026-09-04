@@ -129,11 +129,17 @@ def _repository(
     entity: str = ORDER,
     visibility: str = "public",
     queries: tuple[str, ...] = (),
+    statics: tuple[str, ...] = (),
 ) -> list[SymbolFact]:
     """One repository interface, in the shape the extractor really emits: the
     superinterface ERASED and module-prefixed in `interfaces`, its type
     arguments surviving only in capability 9.14's `generic_interfaces`, whose
-    own symbols are bare."""
+    own symbols are bare.
+
+    `statics` declares methods carrying the `static` modifier the extractor
+    really emits for them (`ClassScanner.methodModifiersJson`) — a helper bound
+    to the interface rather than a member of the repository's instance
+    contract."""
     facts: list[SymbolFact] = [
         SymbolFact(
             document_id="doc_1",
@@ -158,6 +164,17 @@ def _repository(
             signature=Signature(),
         )
         for name in queries
+    )
+    facts.extend(
+        SymbolFact(
+            document_id="doc_1",
+            symbol=f"{_MODULE}{descriptor}{name}(sig).",
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + descriptor,
+            signature=Signature(),
+            modifiers={"static": True, "synthetic": False},
+        )
+        for name in statics
     )
     return facts
 
@@ -504,7 +521,14 @@ def test_a_module_whose_build_does_not_declare_the_framework_derives_nothing(tmp
 
     assert routes == set()
     assert [entry.catalog_id for entry in skipped] == ["test-spring-data-rest"]  # type: ignore[attr-defined]
-    assert "declares none of them" in skipped[0].missing_capabilities[0]  # type: ignore[attr-defined]
+    reason = skipped[0].missing_capabilities[0]  # type: ignore[attr-defined]
+    assert "declares none of them" in reason
+    # Fix round 3, I-2: on Maven the recorded coordinates are the POM's DIRECT
+    # declarations, so this same message covers a starter inherited through a
+    # company parent. The caveat has to be in the string a manifest reader
+    # sees, not only in the documents behind it — a flat "declares none of
+    # them" is a confident negative the evidence does not support.
+    assert "DIRECT declarations" in reason
 
 
 def test_an_analysis_that_recorded_no_coordinates_skips_rather_than_deriving(tmp_path: Path):
@@ -519,6 +543,63 @@ def test_an_analysis_that_recorded_no_coordinates_skips_rather_than_deriving(tmp
 
     assert routes == set()
     assert "recorded no dependency coordinates" in skipped[0].missing_capabilities[0]  # type: ignore[attr-defined]
+
+
+def test_a_module_fact_carrying_no_coordinates_key_skips_rather_than_crashing(tmp_path: Path):
+    """Fix round 3, M-1: a module fact whose payload has no
+    `dependency_coordinates` KEY reads as SQL NULL, and the gate used to run
+    `json.loads("None")` on it and abort the whole resolve. Sextant's own
+    emitter always writes the key, so this is a hand-authored or third-party
+    fact file at the same `fact_schema_version` — the exact case the gate's
+    SKIPPED path exists for. It must degrade to that, not take the resolve
+    down with it."""
+    write_fact_file(tmp_path / "facts" / "Repo.jsonl", _document(), _repository())  # type: ignore[arg-type]
+    module = tmp_path / "facts" / "module.jsonl"
+    write_fact_file(
+        module,
+        _document("doc_module", "module"),
+        [
+            ModuleFact(
+                document_id="doc_module",
+                module_id="com.acme:orders-service",
+                module_kind="service",
+                languages=["java"],
+                source_roots=["src/main/java"],
+                output_dirs=["target/classes"],
+            )
+        ],
+    )
+    lines = [json.loads(line) for line in module.read_text().splitlines()]
+    del lines[1]["dependency_coordinates"]
+    module.write_text("".join(json.dumps(line, sort_keys=True) + "\n" for line in lines))
+
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [_catalog()], capabilities=CAPABILITIES)
+    routes = _routes(workspace)
+    workspace.close()
+
+    assert routes == set()
+    assert "recorded no dependency coordinates" in skipped[0].missing_capabilities[0]  # type: ignore[attr-defined]
+
+
+def test_a_static_helper_on_a_repository_is_not_a_query_method(tmp_path: Path):
+    """The near-miss inside a repository that IS exposed (fix round 3, I-3).
+    Every other conjunct holds — the framework is on the build, the interface
+    reaches `CrudRepository`, the method name is not a CRUD name — and the one
+    that fails is the only one that matters: a `static` helper is bound to the
+    interface, never to the repository's instance contract, so Spring Data
+    never puts it in `RepositoryInformation.getQueryMethods()` and no
+    `/search/` route exists for it. The assertion is that NOTHING was produced
+    for it: the six-route table is untouched and there is no search row.
+    """
+    workspace, skipped = _resolve(tmp_path, _repository(statics=("newest",)))
+    routes = _routes(workspace)
+    workspace.close()
+
+    assert skipped == []
+    assert routes == FULL_ROUTES
+    assert not any("/search/" in path for _, path in routes)
 
 
 def test_an_ordinary_interface_hierarchy_derives_nothing(tmp_path: Path):
@@ -708,7 +789,7 @@ def test_the_divergent_base_path_files_an_environment_divergence_question(tmp_pa
     ]
     workspace = _workspace(tmp_path, _repository(), config=config)  # type: ignore[arg-type]
     reset_open_questions(workspace)
-    record_environment_divergence(workspace, [_catalog()])
+    record_environment_divergence(workspace, [_catalog()], CAPABILITIES)
     questions = workspace.query("open_questions")
     workspace.close()
 
@@ -729,10 +810,35 @@ def test_an_agreed_base_path_files_no_question(tmp_path: Path):
         ],
     )
     reset_open_questions(workspace)
-    record_environment_divergence(workspace, [_catalog()])
+    record_environment_divergence(workspace, [_catalog()], CAPABILITIES)
     questions = workspace.query("open_questions")
     workspace.close()
 
+    assert questions == []
+
+
+def test_a_capability_skipped_catalog_files_no_question_either(tmp_path: Path):
+    """Fix round 3, I-4: the CAPABILITY gate is re-applied here too. A scan
+    that did not report `generic_interfaces` leaves `derive_endpoints` skipping
+    this catalog and deriving no route at all — so a question about
+    `${spring.data.rest.base-path}/orders` would be a question about a route
+    with nothing behind it, filed from a catalog the manifest already reports
+    as skipped."""
+    config = [
+        ("spring.data.rest.base-path", "prod", "/v1"),
+        ("spring.data.rest.base-path", "staging", "/v2"),
+    ]
+    workspace = _workspace(tmp_path, _repository(), config=config)  # type: ignore[arg-type]
+    without = CAPABILITIES - {"generic_interfaces"}
+    skipped = derive_endpoints(workspace, [_catalog()], capabilities=without)
+    reset_open_questions(workspace)
+    record_environment_divergence(workspace, [_catalog()], without)
+    questions = workspace.query("open_questions")
+    routes = _routes(workspace)
+    workspace.close()
+
+    assert routes == set()
+    assert [entry.catalog_id for entry in skipped] == ["test-spring-data-rest"]  # type: ignore[attr-defined]
     assert questions == []
 
 
@@ -751,7 +857,7 @@ def test_a_gated_out_module_files_no_question_either(tmp_path: Path):
         config=config,
     )
     reset_open_questions(workspace)
-    record_environment_divergence(workspace, [_catalog()])
+    record_environment_divergence(workspace, [_catalog()], CAPABILITIES)
     questions = workspace.query("open_questions")
     workspace.close()
 

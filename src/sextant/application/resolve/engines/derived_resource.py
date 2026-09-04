@@ -489,6 +489,23 @@ def _queries(
     search route (CP-2, observed 404) — and `@RestResource` renames it or
     removes it exactly as the class-level annotation does for the repository.
     Overloads of one name collapse to the one route the framework serves.
+    `_methods` has already dropped the `static` ones, which are not query
+    methods at all.
+
+    **A `default` method IS still derived, and that is a stated boundary
+    (COVERAGE), not a case this gets right.** Spring Data treats a `default`
+    method as a CUSTOM IMPLEMENTATION and excludes it from
+    `RepositoryInformation.getQueryMethods()`, so the framework serves no
+    `/search/` route for one — but nothing in the facts can tell a `default`
+    method from an abstract one: `methodModifiersJson` (`extractor-jvm`'s own
+    `ClassScanner`, line 541) records `static` and `synthetic` and not
+    `ACC_ABSTRACT`, and an interface
+    method carries no body in the facts either. So this over-reports by one row
+    per `default` method on an already-exposed repository, bounded to modules
+    that legitimately have a Data REST API past the gate. Recording the
+    abstract bit is what would close it, and the day it is recorded this filter
+    gains one clause; until then the boundary is written down rather than left
+    for a reader to discover in a manifest.
     """
     exposed: dict[str, str] = {}
     for name, method_symbol in methods.get(symbol, []):
@@ -640,11 +657,23 @@ def _methods(workspace: Workspace) -> dict[str, list[tuple[str, str]]]:
     """`{enclosing type symbol: [(method name, method symbol)]}`, in symbol
     order (NFR-1) — the same `method_visibility` projection Task 5's style
     reads, for the one question this one asks of it: which methods does this
-    interface itself declare."""
+    interface itself declare.
+
+    A `static` method is dropped here rather than in `_queries`, because it is
+    not a candidate at all: Spring Data builds a query method from the
+    repository's own instance contract, and a `static` helper on the interface
+    is never in `RepositoryInformation.getQueryMethods()` — deriving
+    `/orders/search/newest` for one publishes a URL the framework does not
+    serve (fix round 3, I-3). That holds as long as `static` means what the JVM
+    means by it in the facts this reads; a language whose `static` members were
+    dispatched on an instance would need the flag interpreted, not just read.
+    """
     methods: dict[str, list[tuple[str, str]]] = {}
     for row in workspace.query("method_visibility"):
         enclosing = row["enclosing"]
         if enclosing is None:
+            continue
+        if row["static"]:
             continue
         symbol = str(row["symbol"])
         methods.setdefault(str(enclosing), []).append(

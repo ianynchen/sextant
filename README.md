@@ -315,3 +315,23 @@ Upgrading is deliberate: replace the file and bump both constants together.
 
 The pan-zoom script beside it, `assets/panzoom.js`, is not vendored — it is Sextant's own,
 a few dozen lines of vanilla JS with no dependency of its own to pin.
+
+### A ported rule set — attributed, not vendored and not depended on
+
+`src/sextant/domain/pluralize.py` is a port of the pluralization rule set of
+[Evo Inflector](https://github.com/atteo/evo-inflector) (`org.atteo:evo-inflector`,
+Copyright 2011 Atteo, Apache License 2.0) — the same categories and regular expressions in
+the same registration order. It is here because Spring Data REST pluralizes a repository's
+entity name to build its collection path using exactly that library, so what Sextant must
+predict is **what Evo returns**, not what English arguably ought to do (`person` →
+`persons`, not `people`). Porting adds no Python dependency and no JVM one, and it keeps a
+single answer for every machine (NFR-1); depending on a "better" Python pluralizer would be
+wrong here by definition.
+
+A port of a rule set is a derivative work, so Apache-2.0 §4's attribution obligation
+applies as it would to the jar: `src/sextant/domain/LICENSE-evo-inflector` records the
+origin and reproduces the license in full, and the module's own docstring points at it.
+There is nothing to pin the way `mermaid.min.js` is pinned — no Evo bytes are shipped —
+so the equivalent check is a differential run against the real 1.3 jar over all 235,976
+words of `/usr/share/dict/words`, with zero mismatches
+(`scripts/probes/cp2_data_rest.md`).

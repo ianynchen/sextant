@@ -32,13 +32,30 @@ here would restate those documents rather than add anything.
   constructed for the first time, from both detectors (Gradle's resolved compile classpath,
   Maven's direct POM declarations). A gated catalog whose question cannot be answered is
   reported SKIPPED with its reason, never derived and never silently omitted.
-- **`domain/pluralize.py`** — a port of Evo Inflector's rule set (Apache-2.0, attributed in
-  the module), pinned by a differential run against the real library over every word in
-  `/usr/share/dict/words`. `spring-data-rest-core` depends on that library non-optionally,
-  so a working Data REST application always pluralizes its collection paths.
+- **`domain/pluralize.py`** — a port of Evo Inflector's rule set, pinned by a differential
+  run against the real library over every word in `/usr/share/dict/words`.
+  `spring-data-rest-core` depends on that library non-optionally, so a working Data REST
+  application always pluralizes its collection paths. A ported rule set is a derivative
+  work, so Apache-2.0 §4's attribution travels with it:
+  `src/sextant/domain/LICENSE-evo-inflector` carries the origin and the licence in full,
+  named by the module docstring and by README's Dependencies section.
 - **D02's `default_produces` is implemented** after being specified-not-used since 2E: read
   as a top-level catalog key, filling `produces` for rows no mapping declares a media type
   for. `application/hal+json → json` joins the shared `media_formats` table.
+- A `static` helper declared on a Spring Data repository derives **no** `/search/` route:
+  it is bound to the type, never to the repository's instance contract, so the framework
+  serves nothing for it. The `method_visibility` query now projects the `static` modifier
+  the extractor already emitted. A `default` method is still over-reported — `ACC_ABSTRACT`
+  is not recorded, so nothing in the facts tells one from an abstract method — and that is
+  now a stated boundary in COVERAGE rather than an undeclared one.
+- The `environment_divergence` pass re-applies the CAPABILITY gate as well as the
+  dependency gate, so a catalog `derive_endpoints` skipped for a missing capability can no
+  longer file a question about a route it derived nothing for.
+- A gated catalog's SKIPPED reason now carries Maven's direct-declarations-only caveat in
+  the message itself, so "this module's build declares none of them" cannot be read as a
+  confident negative for a starter inherited through a parent or a BOM. A module fact
+  carrying no `dependency_coordinates` key at all degrades to that same SKIPPED path
+  instead of aborting the resolve.
 - **A new open-question kind is written**: `environment_divergence`, filed when
   `spring.data.rest.base-path` differs between environments — the derived rows then carry
   the configuration expression as their prefix at `unresolved`, rather than one
