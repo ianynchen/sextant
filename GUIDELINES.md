@@ -162,6 +162,20 @@ Non-negotiable defaults. Deviations require justification in ARCHITECTURE.md.
 - **Never assert what the evidence does not support.** A derived record must be justified by evidence specific to what it claims: absent evidence, produce nothing; ambiguous evidence, produce nothing. Where a value cannot be read, record it as unresolved with its expression verbatim — *unresolved is an answer, invention is not*. (ARCHITECTURE states this as "the failure mode is fabrication, not imprecision"; it is repeated here because it is a design rule, not only a design note.)  
 - **Architecture rules are enforceable, not aspirational.** Layering, dependency direction, and naming conventions are encoded as automated architecture tests (tooling chosen in ARCHITECTURE.md). An untested rule is already being violated.  
 
+### 8.1 Modelling a framework, library, or language  
+
+Every catalog, engine, detector and rule that claims to know what a framework does is bound by these four. They exist because a derived record about someone else's framework is only ever as true as our model of it, and a wrong model is indistinguishable from a right one to every consumer downstream.  
+
+1. **Mirror the framework's own rule; never substitute an approximation.** Read what the framework actually does under the exact circumstances, and encode *its* predicate — not a simplification that happens to fit the examples in front of you. Spring's server-side handler test accepts `@Controller` **or** a type-level `@RequestMapping`, and honours meta-annotations; a check for two literal annotation names would reject a valid custom stereotype. Where the framework's rule is conditional, encode the condition, not the common case.  
+
+2. **A valid usage must never be misinterpreted, and never error out.** Deriving nothing for a shape we cannot see is acceptable — provided rule 3 is honoured. Deriving the *wrong* answer is not, and raising on valid input is worse than both: this phase shipped a renderer that raised on a question kind the same phase had added, so a real module would have crashed at render.  
+
+3. **Raise what the framework supports and we cannot see; never drop it silently.** A shape the framework serves and we miss gets a COVERAGE row naming the shape, why it is invisible, and the user-actionable escape where one exists (`extract_libraries` for a contract in a dependency jar). Under-reporting a stated boundary is honest; under-reporting an unstated one is a defect.  
+
+4. **Never add behaviour the framework does not have under the exact circumstances.** The test is not "would this be reasonable" but "does the framework do this, here, under these conditions". A class implementing an `@HttpExchange` interface is served only when it is a controller bean; deriving an inbound route for a plain `@Service` implementation invents an endpoint nothing serves.  
+
+**Operationally:** the framework's rule must be **measured before it is built on** (§5.4) — a rule taken from memory, from a reviewer's citation, or from documentation is a *prediction*, and two of Phase 2O's checkpoints falsified exactly such predictions. State the versions measured, because a framework's rule is version-scoped, and a rule verified on one version is evidence about that version only.  
+
 **Diagrams:** Use Mermaid for L1/L2 in docs; L3 only if non-obvious. Use ASCII art for L2, class, and sequence diagrams during chat conversations. A lying diagram is worse than none.  
 
 ---  
