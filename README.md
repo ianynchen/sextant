@@ -29,7 +29,21 @@ the lint gates alone, which is what the pre-commit hook in `.githooks/` runs.
 
 `sextant.api` exposes the same four verbs as the CLI's own `module` commands —
 `analyze`, `render`, `enrich`/`enrich_async`, `export` — as plain Python functions, for a
-service that wants Sextant's output without shelling out to it:
+service that wants Sextant's output without shelling out to it.
+
+**Installing it into that service.** Sextant is not on PyPI, so install it from the
+repository — either installer works, because the one git-pinned dependency
+(`tradewind`) is declared as a PEP 508 direct reference rather than in a uv-only table:
+
+```
+pip install "sextant @ git+https://github.com/ianynchen/sextant.git"   # or: uv add …
+```
+
+Installing reaches GitHub for Sextant and for Tradewind's own commit-sha pin, so an
+air-gapped installer needs both mirrored. The JVM extractor jar is built by Gradle into
+the package (`extractor-jvm`) and is deliberately not force-included in the wheel, so a
+package built before the jar exists installs fine and then refuses at the first analyze,
+naming the build command — build the jar before packaging, exactly as the quickstart does.
 
 ```python
 from pathlib import Path
