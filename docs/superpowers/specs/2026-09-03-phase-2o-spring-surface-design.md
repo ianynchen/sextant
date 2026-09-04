@@ -193,9 +193,27 @@ rules and neither is needed:
 style: supertype_derived
 matches:
   supertype_marker:
-    constant: SERVICE_NAME     # the generated class declares it (CP-8)
+    service_name_call: io.grpc.ServiceDescriptor#newBuilder   # CP-8(b), amended
   members: overridden_public_methods
 ```
+
+**Amended 2026-09-04 after CP-8(b) was FALSIFIED as stated.** This block
+originally read `constant: SERVICE_NAME`, on the belief that the generated
+class's constant was readable as a field value. It is not — and the reason is
+systemic rather than gRPC-specific: **D00 §5's `constant` fact kind has no
+producer anywhere in this codebase** (no `ConstantFact` class exists, and
+`ClassScanner.visitField`'s `Object value` parameter, which ASM hands the
+field's `ConstantValue` attribute, is accepted and never read). The value is
+nonetheless recoverable from bytecode ALONE, because `SERVICE_NAME` is a
+compile-time constant and JLS 13.1/13.4.9 requires javac to INLINE it at every
+use site: the literal is `LDC`-ed into the generated class's own calls and
+appears today in shipped `call_site` facts as
+`ServiceDescriptor.newBuilder("<protoPackage>.<Service>")`. The marker is
+therefore a CALL-SITE-ARGUMENT read on the matched class, not a field read —
+a different join, no new extractor capability, and the ambition of §1 (full
+identities from bytecode alone) intact. If a future protoc emits a non-inlined
+constant the read finds nothing and §1b falls to its unresolved branch, which
+is the designed failure mode rather than a wrong identity.
 
 - The match is EVIDENCE-shaped: a class whose extends target is itself in the
   module's facts and declares the marker constant. The service identity is the
@@ -247,9 +265,11 @@ style: injected_client
 matches:
   field_annotation: net.devh.boot.grpc.client.inject.GrpcClient   # per catalog
   identity_marker:
-    constant: SERVICE_NAME   # the stub type's OUTER class constant — declared
-                             # here too so the read stays catalog data (the
-                             # neutral key name: no supertype in this style)
+    service_name_call: io.grpc.ServiceDescriptor#newBuilder
+    # The stub type's OUTER class carries the identity. Declared here too so
+    # the read stays catalog data (the neutral key name: no supertype in this
+    # style). Same CP-8(b) amendment as §1b — a call-site-argument read, not a
+    # field-value read; see that section for why.
 ```
 
 - **One row per injected stub, at the SERVICE level** (method NULL, path =
