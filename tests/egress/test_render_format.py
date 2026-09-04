@@ -422,6 +422,94 @@ def test_the_open_questions_section_lists_wire_identity_question_and_candidates(
     ) in text
 
 
+def test_a_service_identity_question_renders_the_flagged_class_and_reason():
+    """Regression for the live bug: `_candidate_line` had no arm for
+    `service_identity` even though three resolve engines
+    (`supertype_derived`, `injected_client`, `annotation_driven.gaps`) file
+    it, so any module with such a question raised `ValueError` at render.
+    Candidate shape (`class`, `reason`) matches what those three engines
+    actually put in `candidates`, not only what `open_questions.py`'s
+    comment says."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "grpc",
+            "method": None,
+            "path": "com/acme/OrderServiceGrpc$OrderServiceImplBase.",
+            "question": "service_identity",
+            "candidates": json.dumps(
+                [
+                    {
+                        "class": "com/acme/OrderServiceImpl",
+                        "reason": "SERVICE_NAME constant unreadable",
+                    }
+                ]
+            ),
+            "evidence": "SERVICE_NAME constant unreadable",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert "## Open questions" in text
+    assert (
+        "- `(unresolved) com/acme/OrderServiceGrpc$OrderServiceImplBase.` — service_identity: "
+        "com/acme/OrderServiceImpl: SERVICE_NAME constant unreadable"
+    ) in text
+
+
+def test_a_channel_destination_question_renders_the_channel_and_handler():
+    """2O §5 (Task 9, not yet shipped): pinned ahead of the writer so the
+    renderer does not crash the day `spring-integration.yml` starts filing
+    this kind."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "amqp",
+            "method": None,
+            "path": "orders.inbound",
+            "question": "channel_destination",
+            "candidates": json.dumps(
+                [{"channel": "orders.inbound", "handler": "com/acme/Activator#handle(byte[])."}]
+            ),
+            "evidence": "no configuration key carries a Spring Integration channel's destination",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert "## Open questions" in text
+    assert (
+        "- `amqp orders.inbound` — channel_destination: "
+        "orders.inbound → com/acme/Activator#handle(byte[])."
+    ) in text
+
+
+def test_an_environment_divergence_question_renders_the_key_and_per_environment_values():
+    """2O §2b (Task 6, not yet shipped): pinned ahead of the writer for the
+    same reason as `channel_destination` above."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": "GET",
+            "path": "/v1/orders",
+            "question": "environment_divergence",
+            "candidates": json.dumps(
+                [
+                    {
+                        "key": "spring.data.rest.base-path",
+                        "values": {"prod": "/v1", "staging": "/v2"},
+                    }
+                ]
+            ),
+            "evidence": "spring.data.rest.base-path differs between environments",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert "## Open questions" in text
+    assert (
+        "- `GET /v1/orders` — environment_divergence: "
+        "spring.data.rest.base-path: prod=/v1, staging=/v2"
+    ) in text
+
+
 def test_the_open_questions_section_is_absent_when_the_ledger_is_empty():
     """Rendered only when rows exist (2G design §8) — the `## Catalogs
     skipped` precedent, not the NFR-7 "looked and found nothing" one this

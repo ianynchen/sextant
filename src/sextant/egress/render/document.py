@@ -23,6 +23,7 @@ import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import cast
 
 from pydantic import ValidationError
 
@@ -668,11 +669,12 @@ def _library_gap_item(what: str, entry: str) -> tuple[Run, ...]:
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     """One open question's candidate, in the same prose the writing pass
     already puts in its own `evidence` trail (`resolve/format.py`,
-    `resolve/shapes/parse_binding.py`) — so the fact reads the same way in
-    the trail and in this list. `payload_binding` and `format_conflict`
-    candidates carry different keys (2G design §6), so this switches on
-    `question` rather than guessing a common shape out of the JSON — the same
-    discipline `open_questions.py`'s own docstring asks of "the renderer"."""
+    `resolve/shapes/parse_binding.py`, `resolve/service_identity.py`'s three
+    engines) — so the fact reads the same way in the trail and in this list.
+    Each kind's candidates carry different keys (2G design §6, 2O design §0),
+    so this switches on `question` rather than guessing a common shape out of
+    the JSON — the same discipline `open_questions.py`'s own docstring asks
+    of "the renderer"."""
     if question == "format_conflict":
         return f"{candidate['format']} from {candidate['seen_in']} ({candidate['why']})"
     if question == "payload_binding":
@@ -680,9 +682,36 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
             f"{candidate['payload_type']} in {candidate['seen_in']} "
             f"via {candidate['why']} at {candidate['hops']} hop(s)"
         )
-    # Unreached while `open_questions.py`'s QUESTIONS stays the two-kind
-    # closed set it enforces at write time — a new kind is a schema change,
-    # never a rendering guess (NFR-5).
+    if question == "service_identity":
+        # All three writers (`resolve/engines/supertype_derived.py`,
+        # `injected_client.py`, `annotation_driven.py`'s `gaps`) file the same
+        # two keys — the flagged class and why its identity did not resolve —
+        # verified against each engine's own `candidates` line rather than
+        # trusting `open_questions.py`'s comment (2O design §1b).
+        return f"{candidate['class']}: {candidate['reason']}"
+    if question == "channel_destination":
+        # 2O §5 (Task 9, not yet shipped): the channel name and the handler
+        # symbol `spring-integration.yml` will flag. No writer exists yet to
+        # verify the exact keys against, so this arm exists to keep the
+        # renderer honest the day that writer lands rather than to describe
+        # a shipped mechanism (GUIDELINES §5.3).
+        return f"{candidate['channel']} → {candidate['handler']}"
+    if question == "environment_divergence":
+        # 2O §2b (Task 6, not yet shipped): the config key and its
+        # per-environment values. Sorted so two runs compose the identical
+        # sentence (NFR-1), the same discipline `supertype_derived._reason`
+        # already keeps for its own composed text.
+        per_environment = ", ".join(
+            f"{env}={value}"
+            for env, value in sorted(cast(dict[str, object], candidate["values"]).items())
+        )
+        return f"{candidate['key']}: {per_environment}"
+    # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
+    # (`record_open_questions` raises on anything outside it) — this arm list
+    # is the matching enforcement at RENDER time. The two are independent
+    # code paths, so this holds only as long as every kind added to QUESTIONS
+    # ships its arm here in the same change; reaching this line means that
+    # discipline slipped and the two sets have diverged (NFR-5).
     raise ValueError(f"open question `{question!r}` has no rendering rule")
 
 
