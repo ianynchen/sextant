@@ -105,7 +105,38 @@ public final class ClassScanner {
             // — which is the shape a real one takes — the class declares
             // nothing else that names the payload at all.
             emit(typeSymbol, constructKindOf(access), null, null, access, null, null,
-                 TypeRefs.genericSuperclassFromSignature(sig), interfaceSymbolsJson(ifaces));
+                 TypeRefs.genericSuperclassFromSignature(sig), interfaceSymbolsJson(ifaces),
+                 genericInterfacesJson(sig), erasedSuperclassJson(superName));
+        }
+
+        /** Capability 9.14: the parameterized superinterface references
+         *  {@link TypeRefs#genericInterfacesFromSignature} recovers, applied to this
+         *  class's own signature. Null — never an empty array — when nothing declared
+         *  here is generic, the same "absent key means none" rule {@link
+         *  #interfaceSymbolsJson} states for the erased list. */
+        private String genericInterfacesJson(String sig) {
+            List<String> generic = TypeRefs.genericInterfacesFromSignature(sig);
+            return generic.isEmpty() ? null : JsonOut.array(generic);
+        }
+
+        /** Capability 9.13: D00 §4's `relationship_kind: extends`, made real. CP-3 found
+         *  no fact recording it at all — `interfaces` erases every implemented type, and
+         *  `supertype` (above) captures a superclass ONLY when its signature is generic,
+         *  so a plain {@code class Foo extends Bar} produced nothing naming {@code Bar}.
+         *  The class file's own {@code super_class} constant-pool entry — {@code
+         *  superName}, always present in ASM's {@code visit} whether or not the class
+         *  carries a {@code Signature} attribute — is what closes the gap.
+         *
+         *  <p>Null for {@code java.lang.Object}. JVMS 4.1 gives every INTERFACE this same
+         *  entry though no interface "extends" it, and every class with no declared
+         *  superclass gets it implicitly, so writing it would put a superclass reference
+         *  on every interface and every root class in a module and say nothing with any
+         *  of them — the same "nothing generic, nothing captured" rule {@link
+         *  TypeRefs#genericSuperclassFromSignature} states, applied to the one case that
+         *  carries no information either way. */
+        private String erasedSuperclassJson(String superName) {
+            if (superName == null || "java/lang/Object".equals(superName)) return null;
+            return JsonOut.string(symbolOf(superName + "#"));
         }
 
         /** `implemented_interfaces`: the interface array ASM hands {@code visit},
@@ -531,6 +562,13 @@ public final class ClassScanner {
 
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
                            String ext, String modifiers, String supertype, String interfaces) {
+            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, supertype, interfaces,
+                 null, null);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext, String modifiers, String supertype, String interfaces,
+                           String genericInterfaces, String superclass) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -545,6 +583,8 @@ public final class ClassScanner {
             if (modifiers != null) fact.put("modifiers", modifiers);
             if (supertype != null) fact.put("supertype", supertype);
             if (interfaces != null) fact.put("interfaces", interfaces);
+            if (genericInterfaces != null) fact.put("generic_interfaces", genericInterfaces);
+            if (superclass != null) fact.put("superclass", superclass);
             lines.add(JsonOut.object(fact));
         }
     }

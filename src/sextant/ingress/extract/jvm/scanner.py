@@ -18,15 +18,26 @@ _CAPABILITIES = {
     # A class symbol fact's own `interfaces` — the erased interface symbols ASM's
     # `visit` hands over, in declaration order.
     "implemented_interfaces",
+    # Capability 9.14: a class symbol fact's `generic_interfaces` — the
+    # parameterized superinterface references `interfaces` above erases, kept
+    # as full type references. Spring Data REST reads it for a repository's
+    # entity type (2O design §2a).
+    "generic_interfaces",
+    # Capability 9.13: a class symbol fact's `superclass` — the erased symbol
+    # of its direct superclass, read off the class file regardless of whether
+    # its signature is generic. D00 §4's `relationship_kind: extends`, made
+    # real (2O CP-3 found it absent from the fact stream).
+    "superclass",
 }
 
 
 class AsmScanner:
-    """One backend covering every JVM language, declaring eight capabilities:
+    """One backend covering every JVM language, declaring ten capabilities:
     the four Phase 1 read from declarations, the three Phase 2C's per-method
     dataflow pass added — the call sites themselves, the literals they carry,
     and the within-method value ids a chain is rebuilt from — plus a class
-    symbol's own declared interfaces."""
+    symbol's own declared interfaces, its generic superinterface references,
+    and its erased superclass (2O capabilities 9.14 and 9.13)."""
 
     def __init__(self, jar: Path) -> None:
         self._jar = jar

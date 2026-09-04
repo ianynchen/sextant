@@ -209,6 +209,8 @@ def test_an_older_hand_built_symbol_fact_still_validates_without_the_2b_fields()
     assert fact.supertype is None
     assert fact.signature is None
     assert fact.interfaces == []
+    assert fact.generic_interfaces == []
+    assert fact.superclass is None
 
 
 def test_a_class_symbol_lists_its_implemented_interfaces_in_declaration_order():
@@ -246,6 +248,48 @@ def test_a_class_symbol_carries_its_generic_supertype_as_a_type_reference():
     reloaded = SymbolFact.model_validate(dumped)
 
     assert reloaded.supertype == supertype
+
+
+def test_a_class_symbol_carries_its_generic_superinterface_references():
+    # Capability 9.14: D00 §5a's PTR-carrier rule, extended one level over to
+    # `implements`. `interfaces` erases `Repository<OrderResult, Long>` to a
+    # bare symbol; `generic_interfaces` keeps the type arguments — round-trips
+    # like `supertype` above.
+    generic_interface = TypeRef(
+        symbol="com/acme/orders/data/Repository#",
+        arguments=[
+            TypeRef(symbol="com/acme/orders/OrderResult#"),
+            TypeRef(symbol="java/lang/Long#"),
+        ],
+    )
+    fact = SymbolFact(
+        document_id="doc_1",
+        symbol="sextant-jvm maven com.acme/orders 1.0 com/acme/orders/data/OrderRepository#",
+        construct_kind=ConstructKind.INTERFACE,
+        interfaces=["com/acme/orders/data/Repository#"],
+        generic_interfaces=[generic_interface],
+    )
+
+    dumped = fact.model_dump(mode="json")
+    reloaded = SymbolFact.model_validate(dumped)
+
+    assert reloaded.generic_interfaces == [generic_interface]
+
+
+def test_a_class_symbol_carries_its_erased_superclass_symbol():
+    # Capability 9.13: D00 §4's `relationship_kind: extends`, made real —
+    # round-trips like `interfaces` above, one level up the hierarchy.
+    fact = SymbolFact(
+        document_id="doc_1",
+        symbol="sextant-jvm maven com.acme/orders 1.0 com/acme/orders/openapi/DetailedOrderResult#",
+        construct_kind=ConstructKind.CLASS,
+        superclass="com/acme/orders/OrderResult#",
+    )
+
+    dumped = fact.model_dump(mode="json")
+    reloaded = SymbolFact.model_validate(dumped)
+
+    assert reloaded.superclass == "com/acme/orders/OrderResult#"
 
 
 def test_call_site_fact_round_trips_through_model_dump_and_validate():

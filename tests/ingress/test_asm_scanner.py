@@ -99,6 +99,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderProtos$OrderRequestOrBuilder.jsonl",
         "OrderProtos.jsonl",
         "OrderRelay.jsonl",
+        "OrderRepository.jsonl",
         "OrderRequest.jsonl",
         "OrderResult$Detail.jsonl",
         "OrderResult.jsonl",
@@ -124,6 +125,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "RawPubSubSubscribers.jsonl",
         "RawSqsClientSender.jsonl",
         "ReceiptView.jsonl",
+        "Repository.jsonl",
         "RootSeamController.jsonl",
         "RouteHandlers.jsonl",
         "ScopedRequest.jsonl",
@@ -143,7 +145,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # + 5: 2I Task 1's SOAP surfaces — `OrderSoapEndpoint`, `BillingWebService`,
     # `LegacyBillingWebService`, `BillingSoapClient` and the `PlaceOrderRequest`
     # payload, each its own class file.
-    assert report.documents == 94
+    # + 2: 2O Task 3's generic-superinterface fixture — `OrderRepository` and
+    # the `Repository<T, ID>` contract it extends, each its own class file.
+    assert report.documents == 96
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -227,6 +231,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderProtos$OrderRequestOrBuilder.jsonl",
         "OrderProtos.jsonl",
         "OrderRelay.jsonl",
+        "OrderRepository.jsonl",
         "OrderRequest.jsonl",
         "OrderResult$Detail.jsonl",
         "OrderResult.jsonl",
@@ -252,6 +257,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "RawPubSubSubscribers.jsonl",
         "RawSqsClientSender.jsonl",
         "ReceiptView.jsonl",
+        "Repository.jsonl",
         "RootSeamController.jsonl",
         "RouteHandlers.jsonl",
         "ScopedRequest.jsonl",
@@ -358,6 +364,121 @@ def test_scanner_declares_the_implemented_interfaces_capability():
     catalog to key off of once the scanner that wrote it says it produces
     them."""
     assert "implemented_interfaces" in AsmScanner(JAR).capabilities()
+
+
+def test_scanner_declares_the_generic_interfaces_capability():
+    """A class symbol fact's `generic_interfaces` field (capability 9.14) is
+    only trustworthy for Spring Data REST's entity-type read once the scanner
+    that wrote it says it produces them."""
+    assert "generic_interfaces" in AsmScanner(JAR).capabilities()
+
+
+def test_scanner_declares_the_superclass_capability():
+    """A class symbol fact's `superclass` field (capability 9.13, D00 §4's
+    `relationship_kind: extends` made real) is only trustworthy for a
+    hierarchy-walking catalog once the scanner that wrote it says it produces
+    it."""
+    assert "superclass" in AsmScanner(JAR).capabilities()
+
+
+def _scan(tmp_path: Path) -> Path:
+    AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=CLASSES,
+            out_dir=tmp_path,
+        )
+    )
+    return tmp_path
+
+
+def _class_symbol(path: Path) -> dict:
+    """The class-level `symbol` fact in a scanned `.jsonl` file — the one
+    `visit` emits before any member's, so it carries no `enclosing`. Filtered
+    rather than indexed: a class with members has more `symbol` lines after
+    it, and indexing past the document line would break the moment one grew
+    a field or a method."""
+    for line in path.read_text().splitlines():
+        fact = json.loads(line)
+        if fact.get("kind") == "symbol" and fact.get("enclosing") is None:
+            return fact
+    raise AssertionError(f"no class symbol found in {path}")
+
+
+def test_a_generic_superinterface_records_its_type_arguments(tmp_path: Path):
+    """Capability 9.14 — D00 §5a's PTR-carrier rule, extended one level over
+    to `implements`: `interfaces` alone erases `Repository<OrderResult, Long>`
+    to a bare symbol, and Spring Data REST cannot derive a repository's entity
+    type from that alone (2O design §2a). `generic_interfaces` is the only
+    place the entity and id types survive, kept as full type references
+    exactly like `supertype`."""
+    out = _scan(tmp_path)
+    fact = _class_symbol(out / "com" / "acme" / "orders" / "data" / "OrderRepository.jsonl")
+    assert fact["generic_interfaces"] == [
+        {
+            "symbol": "com/acme/orders/data/Repository#",
+            "arguments": [
+                {
+                    "symbol": "com/acme/orders/OrderResult#",
+                    "arguments": [],
+                    "wire_type": "object",
+                    "wire_format": "",
+                    "nullable": True,
+                    "nullable_resolution": "resolved",
+                },
+                {
+                    "symbol": "java/lang/Long#",
+                    "arguments": [],
+                    "wire_type": "integer",
+                    "wire_format": "int64",
+                    "nullable": True,
+                    "nullable_resolution": "resolved",
+                },
+            ],
+            "wire_type": "object",
+            "wire_format": "",
+            "nullable": True,
+            "nullable_resolution": "resolved",
+        }
+    ]
+
+
+def test_a_non_generic_interface_carries_no_generic_reference(tmp_path: Path):
+    """Symmetry with D00's generic-superclass rule: nothing generic, nothing
+    captured — the erased `interfaces` list already states the relationship
+    for a plain interface like `MessageReceiver`."""
+    out = _scan(tmp_path)
+    fact = _class_symbol(
+        out / "com" / "acme" / "orders" / "messaging" / "raw" / "RawPubSubReceiver.jsonl"
+    )
+    assert "generic_interfaces" not in fact
+
+
+def test_a_plain_class_records_its_erased_superclass_symbol(tmp_path: Path):
+    """Capability 9.13 — D00 §4's `relationship_kind: extends`, made real. CP-3
+    found no fact anywhere naming a plain superclass: `interfaces` erases
+    every implemented type, and `supertype` only fires when the signature is
+    generic. `DetailedOrderResult extends OrderResult` carries no `Signature`
+    attribute at all — neither class is generic — so `superclass`, read
+    straight off the class file's own `super_class` entry, is the only place
+    the relationship survives."""
+    out = _scan(tmp_path)
+    fact = _class_symbol(out / "com" / "acme" / "orders" / "openapi" / "DetailedOrderResult.jsonl")
+    assert (
+        fact["superclass"] == "sextant-jvm maven com.acme/orders 1.0.0 com/acme/orders/OrderResult#"
+    )
+
+
+def test_a_root_class_carries_no_superclass_reference(tmp_path: Path):
+    """Null for `java.lang.Object`: every class with no declared superclass
+    gets this same constant-pool entry implicitly, so writing it would put a
+    superclass reference on nearly every class in a module and say nothing
+    with any of them."""
+    out = _scan(tmp_path)
+    fact = _class_symbol(out / "com" / "acme" / "orders" / "OrderResult.jsonl")
+    assert "superclass" not in fact
 
 
 def _jar_of(target: Path, entries: dict[str, bytes]) -> Path:

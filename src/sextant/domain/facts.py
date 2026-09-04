@@ -113,6 +113,21 @@ class SymbolFact(BaseModel):
     # `implemented_interfaces`: erased interface symbols a class declares,
     # in declaration order. Empty for a class implementing none.
     interfaces: list[str] = Field(default_factory=list)
+    # Capability 9.14: mirrors `supertype`'s PTR-carrier rule one level over,
+    # applied to `implements` instead of `extends`. `interfaces` above erases
+    # `CrudRepository<Order, Long>` to a bare symbol; this is the only place
+    # a generic superinterface's type arguments survive. Empty when nothing
+    # declared here is generic — D00's "nothing generic, nothing captured"
+    # rule, applied per interface.
+    generic_interfaces: list[TypeRef] = Field(default_factory=list)
+    # Capability 9.13: D00 §4's `relationship_kind: extends`, made real. The
+    # erased symbol of a class's direct superclass, read straight off the
+    # class file regardless of whether its `Signature` attribute is generic
+    # (`supertype` above only fires when it is). None for the JVM's universal
+    # root type — every interface carries this same class-file entry though
+    # no interface "extends" it, and every root class gets it implicitly, so
+    # writing it there would say nothing with it.
+    superclass: str | None = None
 
 
 class AnnotationFact(BaseModel):

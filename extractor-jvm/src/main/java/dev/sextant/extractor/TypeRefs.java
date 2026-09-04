@@ -80,6 +80,38 @@ public final class TypeRefs {
         return superclass.argumentsJson().isEmpty() ? null : toJson(superclass);
     }
 
+    /** The generic superinterface references from a class {@code Signature} — D00 §5a's
+     *  PTR-carrier rule, applied one level over to `implements`: {@code interface
+     *  OrderRepository extends CrudRepository<Order, Long>} erases to
+     *  {@code interfaces: [".../CrudRepository#"]} with the entity and id types lost, and
+     *  Spring Data REST cannot derive a repository's entity type from that alone (2O
+     *  design §2a) — this is the only place they survive.
+     *
+     *  <p>Empty for a class signature with no generic superinterface, not merely for an
+     *  absent signature — the same "nothing generic, nothing captured" rule
+     *  {@link #genericSuperclassFromSignature} states for a superclass, applied per
+     *  interface: an ordinary, non-generic interface is already named once by the erased
+     *  `interfaces` list. Where one interface in the list is generic and another is not,
+     *  only the generic one is captured — never a positional placeholder for the one with
+     *  nothing to say.
+     *
+     *  <p>In declaration order, walked by the same {@link NodeCollector} every other type
+     *  reference is. */
+    public static List<String> genericInterfacesFromSignature(String signature) {
+        if (signature == null) return List.of();
+        List<Node> collected = new ArrayList<>();
+        new SignatureReader(signature).accept(new SignatureVisitor(org.objectweb.asm.Opcodes.ASM9) {
+            @Override public SignatureVisitor visitInterface() {
+                return new NodeCollector(collected::add);
+            }
+        });
+        List<String> generic = new ArrayList<>();
+        for (Node node : collected) {
+            if (!node.argumentsJson().isEmpty()) generic.add(toJson(node));
+        }
+        return generic;
+    }
+
     /** A field's fully augmented type reference: the {symbol, arguments} envelope every
      *  type reference carries (D00 §5a), plus D1's wire-type projection and D3's
      *  nullability at **every** level of the chain — a parameterized type keeps each of

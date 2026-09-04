@@ -1188,7 +1188,10 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
         f"'{bundle / 'graph' / 'documents.parquet'}') GROUP BY origin ORDER BY origin"
     ).fetchall()
     assert (COORDINATE, 1) in origins
-    assert (None, 105) in origins
+    # 105 + 2: 2O Task 3's generic-superinterface fixture (`Repository<T, ID>`,
+    # `OrderRepository`) — module-output documents, same reason `test_app.py`'s
+    # count moved.
+    assert (None, 107) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"

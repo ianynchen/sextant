@@ -120,7 +120,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # file inside `com.example:orders-soap-client`, and a class file is a
     # document wherever it was read from (D00 §2) — this is the count moving
     # because a jar was scanned, which is the point of the feature.
-    assert metadata["coverage"]["documents"] == 106
+    # + 2: 2O Task 3's generic-superinterface fixture — `Repository<T, ID>` and
+    # `OrderRepository`, each its own class file, one document each.
+    assert metadata["coverage"]["documents"] == 108
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):
