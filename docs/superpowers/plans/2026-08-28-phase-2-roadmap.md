@@ -72,6 +72,17 @@ handler, which is already the enrichment pass's inbox (2K §8, 2N's verdict
 engine), so the model is pointed at exactly the uncertainties rather than at the
 whole document.
 
+**2O also wires the two consumers 9.15 unblocked.** Capability 9.15 emits the
+varargs elements, but `spring-webflux-router.yml`'s `media_values` and
+`kafka-consumer.yml`'s `all_strings` read POSITIONAL arguments, not `elements`,
+so their derived output is unchanged — WebFlux media columns are still NULL
+even though `MediaType.APPLICATION_JSON` is now in the facts, and Kafka's
+multi-topic arity is readable but unread. Their comments and a COVERAGE row had
+asserted the extractor could not read varargs, which 9.15 made false and which
+that commit corrected in place. Reading `elements` is engine work, small and now
+unblocked, and it stays in 2O rather than becoming a note nobody actions —
+without it 9.15 is a capability with no visible output.
+
 **2O also gains capability 9.16 — nested annotation arguments** (folded in
 2026-09-04, same probe). The annotation-argument collector overrides `visit`,
 `visitEnum` and `visitArray` but not `visitAnnotation`, so an annotation nested
