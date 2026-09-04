@@ -1,6 +1,7 @@
 # Documented but not implemented
 
-**Status: a factual register, opened 2026-09-04 during Phase 2O.** Every entry
+**Status: a factual register, opened 2026-09-04 during Phase 2O; entries #1, #2, #3 and #6
+updated the same day when Task 6 built what it needed rather than citing it.** Every entry
 below was verified in the code at the time of writing — not inferred from a
 document. Each names where it is documented, what the code actually does, the
 impact, and its disposition.
@@ -21,12 +22,12 @@ mechanism exists.** A spec that depends on one must verify it in `src/` first.
 
 | # | Mechanism | Documented in | What the code does | Disposition |
 |---|---|---|---|---|
-| 1 | `detect:` / `detect.coordinates` | D02; declared by **all 41 shipped catalogs** | Absent from the `Catalog` model (`application/ports/catalogs.py`); never read by `ingress/catalogs/yaml_source.py`. Every catalog carries a key the loader ignores. | **2O Task 6** (ruling R9) |
-| 2 | `ClasspathEntry` | `domain/facts.py:49` | Defined; **constructed nowhere**. No classpath table exists in `storage/`. | Open — see R9's outcome |
-| 3 | `ModuleFact` | `domain/facts.py:83` | Defined; **constructed nowhere**. | Open — see R9's outcome |
+| 1 | `detect:` / `detect.coordinates` | D02; declared by every shipped catalog | **PARTLY CLOSED, 2O Task 6.** Now on the `Catalog` model and read by the loader, and it GATES the one style whose framework rule is conditional on the library (`derived_resource`, via `application/resolve/dependencies.py`). The MODULE-WIDE catalog activation D02 §12 describes is still not implemented — applied today it would deactivate `spring-mvc.yml` on any Maven module declaring only `spring-boot-starter-web`, because a parsed POM records direct declarations only. | Open, narrowed — needs a resolved classpath under both build systems |
+| 2 | `ClasspathEntry` | `domain/facts.py:49` | Still **constructed nowhere**, deliberately (2O Task 6): an entry names a resolved ARCHIVE and its tier, which the Gradle report carries and a parsed POM does not, so filling it from Maven would mean inventing a path. The coordinate half a gate needs is `ModuleFact.dependency_coordinates` instead. | Open — classpath TIERING waits on a resolved classpath |
+| 3 | `ModuleFact` | `domain/facts.py:83` | **CLOSED, 2O Task 6.** Written by `application/stages/analyze.py` on every run, carrying the module's identity, kind, languages, roots and `dependency_coordinates`; read back by the `module_dependencies` named query. `classpath` stays empty — entry #2. | Closed (partly: tiering is #2) |
 | 4 | `constant` fact kind (`Symbol, value`) | D00 §5 | No `ConstantFact` class. `ClassScanner.visitField` receives ASM's `Object value` — the field's `ConstantValue` attribute — and never reads it. | **Deliberately routed around** in 2O (ruling R11); still unimplemented |
 | 5 | `resolves:` / `resolves.direction` with `when: {owner_implemented_in_module: true}` | D02 only | Zero occurrences in `src/`. Contrast `declared_on`, which IS implemented (`derive_endpoints.sql:675`, `engines/annotation_driven.py`). | **2O Task 10** |
-| 6 | `default_produces` | D02 ("specified here, not yet used"); 2E's spec and plan | Zero occurrences in `src/`. Pending since **2E** — the longest-standing entry. | **2O Task 6** |
+| 6 | `default_produces` | D02; 2E's spec and plan | **CLOSED, 2O Task 6.** Read as a TOP-LEVEL catalog key (not under `mapping:`, where D02 first sketched it — the catalog that needed it declares no `mapping` at all) and written into `produces` by `derived_resource`, which refuses a catalog of its own style that declares none. `default_consumes` stays specified-not-used: Data REST negotiates the request side, so no catalog could declare one honestly. | Closed; `default_consumes` open |
 | 7 | `root_kind` | D00:181, with a full member list | The token appears **nowhere in `src/`** — not merely the `scheduled` member, the whole concept. | **Open — must be resolved before 2P's Meridian vocabulary is specified** |
 | 9 | Routing-ambiguity "finding" | D01:296 — "that collision is a routing-ambiguity finding" | No findings mechanism exists anywhere in `src/`. D01 describes a *property* of content-derived identity (two handlers sharing one wire contract merge into a single row), not a detector that reports anything. Found 2026-09-04 by the mechanism-existence pass, **before** Task 10 was dispatched against it. | Open — 2O Task 10 restated around merge precedence |
 | 8 | Rung 5 marker semantics | D02: markers are "package families whose presence **anywhere in the module** is evidence" | Code read annotation FQNs only — narrower than documented. | **CLOSED, 2O Task 2** |
@@ -45,16 +46,21 @@ server-side `@HttpExchange` is less common than client-side, but it is the only
 entry where shipped output is actively false rather than merely thin.
 
 **Three under-report.** #8 left Jackson-bearing modules `unresolved` where the
-framework guarantees JSON (now fixed). #6 leaves format unresolved where a
-framework contract is certain. #1 means no catalog can report *"skipped: the
-framework is not present"*, so the manifest's coverage story (FR-17) cannot
-distinguish "nothing matched because the library is absent" from "nothing
-matched because there is nothing to find" — and all 41 catalogs evaluate
-against every module, always.
+framework guarantees JSON (now fixed). #6 left format unresolved where a
+framework contract is certain (now fixed). #1 meant no catalog could report
+*"skipped: the framework is not present"* — **one now can**, and does: the
+manifest names `spring-data-rest` with the reason whenever the module's build
+does not declare Spring Data REST, or when the question cannot be answered at
+all. Every other catalog still evaluates against every module, always.
 
-**Three blocked or reshaped work.** #2/#3 mean no dependency-aware reasoning
-exists anywhere; 2O Task 2 fell back to `documents.origin`, which covers only
-opt-in extracted libraries. #4 makes a compile-time constant's *value*
+**Three blocked or reshaped work.** #2/#3 meant no dependency-aware reasoning
+existed anywhere; 2O Task 2 fell back to `documents.origin`, which covers only
+opt-in extracted libraries. **#3 is now closed** — the module fact is written and
+carries the build's declared coordinates — so a later pass could widen that
+fallback (`resolve/format.py`'s rung-5 coordinate marker is the obvious
+candidate); Task 6 did not, because widening a format rung was not its change.
+
+#4 makes a compile-time constant's *value*
 unreachable from field facts — mitigated in practice because JLS 13.1/13.4.9
 requires javac to inline such constants at their use sites, so the literal
 appears in `call_site` facts, but a constant declared and never used in its own

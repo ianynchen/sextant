@@ -556,6 +556,29 @@ another machine. A stage resumed with `--from-stage` never runs the detector at 
 
 So the detector's conclusions are facts like any other, and travel like any other.
 
+**What is CONSTRUCTED today, since Phase 2O Task 6** (before it, this record was defined
+and written nowhere): the module's identity, kind, languages, source roots, output
+directories, and **`dependency_coordinates`** — the `groupId:artifactId` coordinates the
+module's build declares, which is what a catalog whose framework rule is conditional on a
+library reads ([D02](D02-catalog-schema.md) §1's `detect.coordinates`). **Classpath
+TIERING is still not written**: `classpath`'s own `ClasspathEntry` names a resolved
+archive per entry, which the Gradle report carries and a parsed POM does not, and filling
+it from Maven would mean inventing a path. The coordinate half is its own field for that
+reason, rather than a half-filled entry list.
+
+The two build systems also differ in REACH, and the difference is carried rather than
+smoothed over: Gradle reports the resolved compile classpath, transitives included; Maven
+reports the POM's direct declarations only. A coordinate absent from this list means "not
+declared here", never "not on the classpath" — and an ABSENT module fact (an older
+workspace) is a third answer again, which is why a gate reading it distinguishes empty
+from missing.
+
+The module fact's own `document` record is SYNTHESIZED rather than read from a file: the
+stage that writes it may not touch the filesystem, so its `content_hash` is the hash of
+the module identity it records and its `origin_entry` is the module's own coordinates
+(never a machine path — §2's portability rule, which a filesystem root would break for two
+checkouts of one module).
+
 ### `call_site` is the load-bearing one
 
 The full shape, verbatim:

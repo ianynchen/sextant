@@ -5,6 +5,7 @@ from sextant.application.ports.catalogs import CatalogSource
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.config import resolve_config
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
+from sextant.application.resolve.environment_divergence import record_environment_divergence
 from sextant.application.resolve.format import resolve_format
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
@@ -79,6 +80,10 @@ def resolve(
     # disjoint question kinds); it sits below it only because it was added
     # after it.
     record_service_identity_gaps(workspace, declared)
+    # 2O design §2b, and it sits here for the same reason the two passes above
+    # do: it WRITES `open_questions`, so it must run after the reset. Its order
+    # against them does not matter — disjoint question kinds, disjoint tables.
+    record_environment_divergence(workspace, declared)
     # Between the binding and the ladder, and both sides of that are the
     # pass's own contract (2H design §6). AFTER every engine and its merge:
     # this pass reclassifies rows others minted, so they must all exist, and

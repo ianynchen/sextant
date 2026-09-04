@@ -414,7 +414,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     assert metadata["endpoints"]["inbound"] == {
         "graphql": 12,
         "grpc": 2,
-        "http": 34,
+        # + 8: 2O Task 6's Spring Data REST rows (`test_app.py`'s own note
+        # carries the breakdown).
+        "http": 42,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -581,7 +583,12 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # with no reply mechanism, and a grpc row cannot merge with anything else
     # in the fixture — wire identity is protocol-scoped (D01 §3), and no
     # annotation catalog implements either method here.
-    assert rows == [("both", 6), ("inbound", 80), ("outbound", 41)]
+    # 2O Task 6 (`spring-data-rest.yml`): +8 inbound http — the CRUD and search
+    # routes `CatalogRepository` earns, derived from a framework rule rather
+    # than from any declaration in this module — inbound 80 + 8 = 88 — the
+    # 135-endpoint total (6 + 88 + 41 = 135). Nothing merges: no controller in
+    # this fixture serves `/orderViews`.
+    assert rows == [("both", 6), ("inbound", 88), ("outbound", 41)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -777,6 +784,77 @@ def test_the_schemas_own_root_operations_reach_the_endpoint_table_in_a_full_anal
         json.loads(str(roots["orders"]["response_shape"]))["item"]["shape_id"]
         == "com/acme/orders/contracts/OrderView#"
     )
+
+
+def test_the_repository_interfaces_derive_their_rest_api_in_a_full_analyze(tmp_path: Path):
+    """2O Task 6, live and whole, through the REAL command — the only path that
+    builds the module fact the gate reads, so this is the only place the whole
+    chain runs: the POM declares `spring-data-rest-core`, the detector records
+    that coordinate, the analyze stage writes it as a `module` fact, the gate
+    reads it back, and the engine derives a REST API from three interfaces that
+    declare no path, no verb and no HTTP anything.
+
+    Three claims, and the two that DECLINE matter at least as much as the one
+    that fires — this style mints an entire API from ordinary-looking code, so
+    a suite that only proved it can fire would not tell us it declines
+    correctly (GUIDELINES §10):
+
+    * `CatalogRepository` derives eight routes: the six-route CRUD table plus
+      `/search/findByStatus` and `/search/by-customer` (renamed by
+      `@RestResource`). It carries NO `@RepositoryRestResource` at all, which
+      is the case §2 exists for;
+    * `SecretRepository` is `exported = false` and derives NOTHING — not even a
+      collection route;
+    * `OrderRepository` extends the fixture's OWN `Repository<T, ID>`
+      stand-in, which is not one of the Spring Data contracts the catalog
+      enumerates, and derives NOTHING either. Real bytecode, shipped catalog,
+      ordinary generic interface: the near-miss that a synthetic test can only
+      approximate.
+    """
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    try:
+        rows = [
+            row for row in workspace.query("endpoints") if row["catalog_id"] == "spring-data-rest"
+        ]
+        every_path = {str(row["path"]) for row in workspace.query("endpoints")}
+    finally:
+        workspace.close()
+
+    assert {(str(row["method"]), str(row["path"])) for row in rows} == {
+        ("GET", "/orderViews"),
+        ("POST", "/orderViews"),
+        ("GET", "/orderViews/{id}"),
+        ("PUT", "/orderViews/{id}"),
+        ("PATCH", "/orderViews/{id}"),
+        ("DELETE", "/orderViews/{id}"),
+        ("GET", "/orderViews/search/findByStatus"),
+        ("GET", "/orderViews/search/by-customer"),
+    }
+    # The entity's own name, uncapitalized in its first character and then
+    # pluralized by the ported Evo Inflector rules — never the repository's.
+    assert not any("catalog" in path.lower() for path in every_path)
+    # `exported = false` and the non-Spring-Data supertype: nothing, from
+    # either.
+    assert not any("orderRequest" in path for path in every_path)
+    assert not any("orderResult" in path for path in every_path)
+
+    by_identity = {(str(row["method"]), str(row["path"])): row for row in rows}
+    crud = by_identity[("GET", "/orderViews")]
+    search = by_identity[("GET", "/orderViews/search/findByStatus")]
+    # D02's `default_produces`, live: the framework serves HAL and does not
+    # negotiate its own representation.
+    assert crud["produces"] == '["application/hal+json"]'
+    assert (crud["resolution"], crud["evidence"]) == ("resolved", "declared")
+    # No code in this module serves the CRUD route; the query method DOES serve
+    # its own search route, and that is the difference the handler column
+    # carries.
+    assert crud["handler"] is None
+    assert str(search["handler"]).endswith("CatalogRepository#findByStatus(sig_b9c62fe1).")
 
 
 def test_a_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
@@ -1209,7 +1287,11 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # 105 + 2: 2O Task 3's generic-superinterface fixture (`Repository<T, ID>`,
     # `OrderRepository`) — module-output documents, same reason `test_app.py`'s
     # count moved.
-    assert (None, 107) in origins
+    # + 1: 2O Task 6's `module` fact document (D00 §5), the detector's own
+    # conclusions travelling as facts; it carries no `origin`, like every other
+    # document this module produced itself. + 2: the same task's Data REST
+    # repositories (`CatalogRepository`, `SecretRepository`).
+    assert (None, 110) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"

@@ -261,6 +261,45 @@ _NAMED_QUERIES = {
     # One column, because existence is the whole question. Ordered by symbol
     # for NFR-1, like every other projection here.
     "declared_symbols": "SELECT symbol FROM symbols ORDER BY symbol",
+    # Every declared INTERFACE with the three things a supertype-shaped match
+    # asks of it (2O design §2a, Task 6): its own visibility, its erased
+    # superinterfaces, and capability 9.14's parameterized references to them.
+    # Read from `raw_facts` rather than the `symbols` view because that view
+    # projects neither list — and both are needed together: `interfaces` is
+    # what the closure walk follows, `generic_interfaces` the only place a
+    # superinterface's TYPE ARGUMENTS survive (`interfaces` erases
+    # `CrudRepository<Order, Long>` to a bare symbol), and joining two queries
+    # on symbol would only rebuild this row.
+    #
+    # `generic_interfaces` is SQL NULL for a class the extractor found nothing
+    # generic on — the emitter writes the key only when it has one — which is
+    # a different absence from an empty array and is read as the same "nothing
+    # parameterized here" by the caller.
+    "interface_declarations": """
+        SELECT payload ->> 'symbol'            AS symbol,
+               payload ->> 'visibility'        AS visibility,
+               payload -> 'interfaces'         AS interfaces,
+               payload -> 'generic_interfaces' AS generic_interfaces
+        FROM raw_facts
+        WHERE kind = 'symbol' AND (payload ->> 'construct_kind') = 'interface'
+        ORDER BY symbol
+    """,
+    # D00 §5's `module` fact, as the one question a catalog asks of it today
+    # (2O design §2a, ruling R9): which `groupId:artifactId` coordinates this
+    # module's build declares. The JSON array is projected whole and parsed by
+    # the reader, the same way `implementations` hands `interfaces` over —
+    # unnesting it here would need a second column to keep the ordering
+    # deterministic, and the list is small enough that the reader's own set is
+    # cheaper. NO ROW AT ALL is the honest answer for a workspace whose facts
+    # predate the module fact, or one a test built by hand, and it is a
+    # DIFFERENT answer from an empty array (a build that declares nothing) —
+    # which is why the gate distinguishes them.
+    "module_dependencies": """
+        SELECT payload ->> 'module_id'            AS module_id,
+               payload -> 'dependency_coordinates' AS dependency_coordinates
+        FROM raw_facts WHERE kind = 'module'
+        ORDER BY module_id
+    """,
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents

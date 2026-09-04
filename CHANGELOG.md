@@ -14,6 +14,35 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **The API nobody wrote a controller for: Spring Data REST routes derive** (2O design §2,
+  Task 6). A new `derived_resource` engine style (`spring-data-rest.yml`) derives the CRUD
+  route table from a repository INTERFACE — six routes per exposed repository plus one
+  `/search/{query}` per query method — in a module that contains no controller, no mapping
+  annotation and no string that is a URL. Every rule was verified against a live Boot 4.0.1
+  / spring-data-rest 5.0.1 application (`scripts/probes/cp2_data_rest.md`): which item
+  routes exist follows which CRUD contract is extended (a `PagingAndSortingRepository`-only
+  repository serves a collection GET and nothing else), `path=` overrides the derived path,
+  `exported = false` removes the repository, `@RestResource` renames or removes a search
+  route, and which repositories are exposed at all follows
+  `spring.data.rest.detection-strategy` — whose default exposes PUBLIC repositories only.
+- **The dependency gate is real** (ruling R9). `detect.coordinates` was declared by every
+  shipped catalog and read by nothing; it is now on the `Catalog` model and gates the one
+  style whose framework rule is conditional on the library being present. The coordinates a
+  module's build declares reach the workspace as D00 §5's `module` fact —
+  constructed for the first time, from both detectors (Gradle's resolved compile classpath,
+  Maven's direct POM declarations). A gated catalog whose question cannot be answered is
+  reported SKIPPED with its reason, never derived and never silently omitted.
+- **`domain/pluralize.py`** — a port of Evo Inflector's rule set (Apache-2.0, attributed in
+  the module), pinned by a differential run against the real library over every word in
+  `/usr/share/dict/words`. `spring-data-rest-core` depends on that library non-optionally,
+  so a working Data REST application always pluralizes its collection paths.
+- **D02's `default_produces` is implemented** after being specified-not-used since 2E: read
+  as a top-level catalog key, filling `produces` for rows no mapping declares a media type
+  for. `application/hal+json → json` joins the shared `media_formats` table.
+- **A new open-question kind is written**: `environment_divergence`, filed when
+  `spring.data.rest.base-path` differs between environments — the derived rows then carry
+  the configuration expression as their prefix at `unresolved`, rather than one
+  environment's URL.
 - **gRPC's JVM bytecode surface derives** (2O design §1b/§1c, Task 5), closing FR-3's
   last open protocol on the JVM alongside Task 4's schema half. Two new, framework-neutral
   engine styles: `supertype_derived` matches any class extending a generated

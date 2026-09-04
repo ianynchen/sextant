@@ -43,6 +43,7 @@ class YamlCatalogSource:
                     requires=tuple(raw.get("requires", [])),
                     matches=_required(raw, "matches", path),
                     source=path,
+                    detect_coordinates=_coordinates(raw, path),
                     # D02 §2a, §2e, §2f, §2g — optional blocks. A catalog that
                     # declares none of them still loads.
                     wrappers=raw.get("wrappers", []),
@@ -56,6 +57,11 @@ class YamlCatalogSource:
                     # the values are checked against D00's format set where
                     # the ladder reads them (`resolve/format.py`), which is
                     # also where the reserved value is refused.
+                    # D02's framework-contract media default, read here for
+                    # the first time (2O design §2b). Checked where it is
+                    # used — `derived_resource` refuses a catalog of its own
+                    # style that declares none — like every other block above.
+                    default_produces=tuple(raw.get("default_produces", [])),
                     format_fixed=raw.get("format_fixed", {}),
                     media_formats=raw.get("media_formats", {}),
                     json_default_markers=raw.get("json_default_markers", []),
@@ -75,6 +81,37 @@ def _required(raw: dict[str, Any], key: str, path: Path) -> Any:
             f"loading catalog {path}: no `{key}` — every catalog declares one (D02 §1)"
         )
     return raw[key]
+
+
+def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
+    """D02 §1's `detect.coordinates`, checked here for the reason every other
+    value in this file is: it reaches a comparison against the coordinates a
+    module's build declared, and a coordinate written in the wrong shape
+    matches nothing while looking exactly like a framework that is absent.
+
+    Optional, and an absent block is an empty tuple — every catalog that
+    declares `detect: {coordinates: []}` says the same thing explicitly: the
+    evidence for this framework is not a dependency. Only the style that gates
+    on it reads the value (`Catalog.detect_coordinates`), so a catalog
+    declaring coordinates it never uses is not an error; it was the state of
+    all 41 shipped catalogs until this key was read at all.
+    """
+    detect = raw.get("detect", {})
+    if not isinstance(detect, dict):
+        raise CatalogError(
+            f"loading catalog {path}: `detect` must be a mapping with `coordinates` "
+            f"— got {detect!r} (D02 §1)"
+        )
+    declared = detect.get("coordinates", [])
+    valid = isinstance(declared, list) and all(
+        isinstance(entry, str) and entry.count(":") == 1 for entry in declared
+    )
+    if not valid:
+        raise CatalogError(
+            f"loading catalog {path}: `detect.coordinates` must be a list of "
+            f"`groupId:artifactId` coordinates — got {declared!r} (D02 §1)"
+        )
+    return tuple(declared)
 
 
 def _closed(raw: dict[str, Any], key: str, values: type[StrEnum], path: Path) -> str:

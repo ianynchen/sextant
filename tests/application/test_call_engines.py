@@ -2726,7 +2726,15 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
     being proved is loading and validation — including `_validate_steps` and
     the capture check — rather than any derivation. Every capability any
     catalog declares is granted, because a catalog gated out never reaches
-    its engine and so would never be validated at all."""
+    its engine and so would never be validated at all.
+
+    **One catalog IS skipped here, and that is the behaviour rather than a hole
+    in it** (2O design §2a, ruling R9): `spring-data-rest` derives an entire
+    HTTP API from an interface that names no HTTP, so it is gated on the
+    module's build declaring the framework. This workspace has no module fact
+    at all, which is the unanswerable case — and the skip, carried into the
+    manifest with its reason, is exactly the visible degradation that gate
+    exists to produce."""
     catalogs = YamlCatalogSource(CATALOGS_DIR).load()
     granted = {capability for catalog in catalogs for capability in catalog.requires}
     write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
@@ -2738,7 +2746,8 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
     workspace.close()
 
     assert [catalog.id for catalog in catalogs] != []
-    assert skipped == []
+    assert [entry.catalog_id for entry in skipped] == ["spring-data-rest"]
+    assert "recorded no dependency coordinates" in skipped[0].missing_capabilities[0]
     assert endpoints == []
 
 

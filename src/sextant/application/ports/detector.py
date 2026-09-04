@@ -68,6 +68,24 @@ class ModuleModel:
     # `.sextant.yml` — the opt-in is the file, so an empty tuple here is the
     # default state and not a failure.
     library_roots: tuple[LibraryRoot, ...] = ()
+    # The `groupId:artifactId` coordinates this module's BUILD declares, as
+    # the build system reports them — D00 §5's `module` fact carries them into
+    # the workspace, where a catalog whose framework rule is conditional on a
+    # dependency being present can read them (2O design §2a, ruling R9).
+    #
+    # **The two build systems answer differently, and the difference is
+    # visible rather than smoothed over.** Gradle reports the RESOLVED compile
+    # classpath, transitives included; Maven reports the POM's own DIRECT
+    # declarations, because this detector parses `pom.xml` rather than asking
+    # Maven to resolve it (the standing
+    # `maven_parent_and_profile_resolution_not_implemented` gap). So a
+    # dependency arriving transitively through a company parent is invisible
+    # on Maven, and a reader of these coordinates must treat "absent" as
+    # "not declared here", never as "not on the classpath". Empty for a module
+    # whose build declares none, and for every hand-built model in a test —
+    # which is why the gate that reads it treats empty as UNANSWERABLE rather
+    # than as absence.
+    dependency_coordinates: tuple[str, ...] = ()
     # The coordinates it named that could NOT be resolved to an archive — a
     # dependency the build never declares a version for, or one no local
     # repository holds. Carried rather than raised: a library nobody could find

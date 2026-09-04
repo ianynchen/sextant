@@ -236,6 +236,13 @@ class MavenDetector:
                 for parts in _SCHEMA_ROOT_PATHS
                 if (root := path.joinpath("src", "main", *parts)).is_dir()
             ),
+            # The POM's own DIRECT declarations, sorted (NFR-1). Maven's
+            # resolved classpath — parents, BOMs, transitives — is the gap
+            # `_dependency_versions` already names; a coordinate this list
+            # omits was not declared HERE, which is a weaker statement than
+            # "absent from the classpath", and `ModuleModel`'s own field
+            # comment is where that distinction is stated for readers.
+            dependency_coordinates=tuple(sorted(MavenDetector._dependency_versions(pom))),
             library_roots=library_roots,
             libraries_not_resolved=libraries_not_resolved,
         )

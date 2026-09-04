@@ -407,6 +407,10 @@ def test_an_sdl_file_inside_the_resource_root_is_read_once_not_twice(tmp_path: P
     documents = [document for _, document, _ in read_fact_tree(tmp_path / "facts")]
     assert sorted(document.relative_path for document in documents) == [
         "audit.graphqls",
+        # 2O Task 6: the detector's own conclusions are a fact like any other
+        # now (D00 §5's `module` kind), and its synthesized document sits
+        # beside the read ones.
+        "module",
         "schema.graphqls",
     ]
 

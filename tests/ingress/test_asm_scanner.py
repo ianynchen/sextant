@@ -47,6 +47,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "BillingRestTemplate.jsonl",
         "BillingSoapClient.jsonl",
         "BillingWebService.jsonl",
+        "CatalogRepository.jsonl",
         "ClassLevelListener.jsonl",
         "CommonProtos$Money$1.jsonl",
         "CommonProtos$Money$Builder.jsonl",
@@ -130,6 +131,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "RouteHandlers.jsonl",
         "ScopedRequest.jsonl",
         "SeamController.jsonl",
+        "SecretRepository.jsonl",
         "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]
@@ -147,7 +149,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # payload, each its own class file.
     # + 2: 2O Task 3's generic-superinterface fixture — `OrderRepository` and
     # the `Repository<T, ID>` contract it extends, each its own class file.
-    assert report.documents == 96
+    # 96 + 2: 2O Task 6's Data REST fixture (`CatalogRepository`,
+    # `SecretRepository`), one class file each.
+    assert report.documents == 98
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -179,6 +183,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "BillingRestTemplate.jsonl",
         "BillingSoapClient.jsonl",
         "BillingWebService.jsonl",
+        "CatalogRepository.jsonl",
         "ClassLevelListener.jsonl",
         "CommonProtos$Money$1.jsonl",
         "CommonProtos$Money$Builder.jsonl",
@@ -262,6 +267,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "RouteHandlers.jsonl",
         "ScopedRequest.jsonl",
         "SeamController.jsonl",
+        "SecretRepository.jsonl",
         "ShipmentsSqsListener.jsonl",
         "package-info.jsonl",
     ]

@@ -1,0 +1,162 @@
+id: spring-data-rest
+displayName: Spring Data REST (repository-derived CRUD API)
+style: derived_resource
+protocol: http
+direction: inbound
+
+# THE API NOBODY WROTE A CONTROLLER FOR (2O design §2). Spring Data REST
+# exposes a CRUD HTTP API from a repository INTERFACE — no controller, no
+# mapping annotation, nothing in the module that mentions HTTP at all. The
+# rows this catalog derives are therefore predictions from a FRAMEWORK RULE
+# rather than readings of a declaration, which is why the style exists and
+# why every value below is evidence rather than convention.
+#
+# Every route, verb, path and override in this file was verified against a
+# LIVE Boot 4.0.1 / spring-data-rest 5.0.1 application:
+# `scripts/probes/cp2_data_rest.md`.
+
+# THE GATE (2O design §2a, ruling R9). The rule this catalog applies is
+# CONDITIONAL — *if* Spring Data REST is present, repositories are exposed at
+# these paths — so without the antecedent there is no consequent to derive.
+# `resolve/dependencies.py` states why that is not a deployment check and what
+# happens when the question cannot be answered (the catalog is SKIPPED, and
+# the manifest says so).
+#
+# All three coordinates, because a module may declare any of them directly and
+# Maven records DIRECT declarations only: the Boot starter is what an
+# application writes, and the two Data REST artifacts are what a non-Boot
+# application (or a Gradle module, whose resolved classpath carries all three)
+# declares or resolves.
+detect:
+  coordinates:
+    - "org.springframework.boot:spring-boot-starter-data-rest"
+    - "org.springframework.data:spring-data-rest-webmvc"
+    - "org.springframework.data:spring-data-rest-core"
+
+# `implemented_interfaces` finds the repositories, `generic_interfaces` (9.14)
+# carries the entity type — `interfaces` alone erases `CrudRepository<Order,
+# Long>` to a bare symbol, and without the type argument there is no path to
+# derive. `annotation_args` reads `path`/`exported`.
+#
+# `resolved_config` is deliberately NOT required (2O design §2b): the base path
+# defaults to empty and the detection strategy to `default`, so a module with
+# no configuration at all derives its full route set. Requiring the capability
+# would skip this catalog on exactly those modules.
+requires: [annotation_args, implemented_interfaces, generic_interfaces]
+
+# D02's specified-but-unused `default_produces`, implemented here (register
+# entry #6) — a media type the FRAMEWORK enforces whenever a route declares
+# none itself, which is the shape D02 describes and which no catalog could
+# honestly declare until one arrived whose routes are entirely the framework's.
+# Spring MVC deliberately declares neither key because Spring negotiates an
+# undeclared mapping at runtime; Data REST does not negotiate its own
+# representation format, it serves HAL.
+default_produces: ["application/hal+json"]
+
+# Rung 2 of the format ladder (2G design §7). Unioned across every catalog
+# that declares a MIME table, and a conflicting duplicate is refused rather
+# than resolved — so this is the one place `application/hal+json` is spelled.
+media_formats:
+  application/hal+json: json
+
+matches:
+  # The enumerated Spring Data repository contracts, each mapped to the CRUD
+  # OPERATIONS extending it licenses — which is what decides the item routes
+  # (CP-2(b), live): since Spring Data 3, `PagingAndSortingRepository` no
+  # longer extends `CrudRepository`, and a repository extending only it serves
+  # a collection GET and NOTHING else — not even an item GET (`/boxes/1` →
+  # 405, observed).
+  #
+  # Reactive contracts (`ReactiveCrudRepository` and friends) are NOT
+  # enumerated, and the omission is deliberate rather than an oversight: Spring
+  # Data REST is built on Spring MVC and its repository inventory is the
+  # imperative one, and no probe in this checkpoint exercised a reactive store.
+  # Absent evidence, produce nothing (GUIDELINES §8) — COVERAGE carries the
+  # row, so the gap is visible rather than silent.
+  repositories:
+    org.springframework.data.repository.Repository: []
+    org.springframework.data.repository.CrudRepository: [item_read, save, delete]
+    org.springframework.data.repository.ListCrudRepository: [item_read, save, delete]
+    org.springframework.data.repository.PagingAndSortingRepository: []
+    org.springframework.data.repository.ListPagingAndSortingRepository: []
+    org.springframework.data.jpa.repository.JpaRepository: [item_read, save, delete]
+
+  # §2b's route table, verb by verb, each with the operation it needs. The
+  # collection read is the one route every exposed repository serves, whatever
+  # it extends.
+  routes:
+    - { method: GET, item: false }
+    - { method: POST, item: false, needs: save }
+    - { method: GET, item: true, needs: item_read }
+    - { method: PUT, item: true, needs: save }
+    - { method: PATCH, item: true, needs: save }
+    - { method: DELETE, item: true, needs: delete }
+
+  # The framework's own path words. `{id}` is the item template, spelled the
+  # way an observed `@GetMapping("/orders/{id}")` row spells it so a derived
+  # route and an observed one share an identity when they name one URL.
+  item_segment: "{id}"
+  search_segment: search
+
+  # `@RepositoryRestResource` on the interface, `@RestResource` on a query
+  # method: both optional, both carrying the same two attributes.
+  resource_annotation: org.springframework.data.rest.core.annotation.RepositoryRestResource
+  member_annotation: org.springframework.data.rest.core.annotation.RestResource
+  path_attribute: path
+  exported_attribute: exported
+  # A base repository marked with this is a template for other repositories,
+  # never a bean of its own, so it exposes nothing.
+  no_repository_bean: org.springframework.data.repository.NoRepositoryBean
+
+  # The CRUD interfaces' own method names. A method a repository declares is a
+  # QUERY method — and therefore a `/search/` route — only when it is not one
+  # of these: `BoxRepository` declares `Page<Box> findAll(Pageable)`, an
+  # override of a CRUD method, and `GET /boxes/search` is 404 (observed).
+  crud_methods:
+    - save
+    - saveAll
+    - saveAndFlush
+    - saveAllAndFlush
+    - findById
+    - findAll
+    - findAllById
+    - existsById
+    - count
+    - delete
+    - deleteById
+    - deleteAll
+    - deleteAllById
+    - deleteInBatch
+    - deleteAllInBatch
+    - deleteAllByIdInBatch
+    - flush
+    - getOne
+    - getById
+    - getReferenceById
+
+  # Read-if-present from `resolved_config`, never required. Empty by default —
+  # a config-less run derives everything at `/`.
+  base_path:
+    key: spring.data.rest.base-path
+
+  # CP-2(0), the most load-bearing half of the checkpoint: WHICH repositories
+  # are exposed is configurable, and the setting is a key this analysis already
+  # reads. Every row below was observed live, one application run per setting.
+  # An unset key is `default`.
+  detection_strategy:
+    key: spring.data.rest.detection-strategy
+    strategies:
+      # Every PUBLIC repository, honouring `exported = false`.
+      default: [public_only, honors_exported]
+      # Every repository, whatever its visibility, ignoring `exported`.
+      all: []
+      # Only annotated repositories, honouring `exported = false`.
+      annotated: [annotated_only, honors_exported]
+      # Every public repository, ignoring `exported`.
+      visibility: [public_only]
+
+# BOUNDARIES, stated (2O design §2c, COVERAGE): projections and excerpts,
+# HAL affordances, `@CrossOrigin`, event handlers and QueryDSL web support are
+# out. So are the `HEAD`/`OPTIONS` verbs Data REST also serves on every route
+# and the `/{basePath}/search` index route itself — §2b's table names neither,
+# and this catalog derives exactly that table.

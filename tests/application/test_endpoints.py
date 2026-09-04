@@ -57,6 +57,44 @@ def test_catalog_declares_its_style_and_required_capabilities_when_loaded():
     assert "annotation_args" in spring.requires
 
 
+def test_the_loader_reads_detect_coordinates_and_the_framework_media_default():
+    """Two keys D02 declared and the loader ignored until 2O Task 6
+    (`docs/documented-not-implemented.md`, entries #1 and #6). `detect:` was
+    declared by every shipped catalog and read by nothing; `default_produces`
+    had been specified-not-used since 2E. Both are now values on the model,
+    and `spring-data-rest` is the catalog that needs each."""
+    catalogs = {catalog.id: catalog for catalog in YamlCatalogSource(CATALOGS).load()}
+
+    data_rest = catalogs["spring-data-rest"]
+    assert "org.springframework.boot:spring-boot-starter-data-rest" in data_rest.detect_coordinates
+    assert data_rest.default_produces == ("application/hal+json",)
+    # The three schema catalogs declare `coordinates: []` on purpose — their
+    # evidence is a file in the repository, not a dependency — and an empty
+    # tuple is what that says on the model.
+    assert catalogs["graphql-schema"].detect_coordinates == ()
+    # A catalog that declares no media default at all reads as none, never as
+    # an invented one: an undeclared Spring mapping is negotiated at runtime.
+    assert catalogs["spring-mvc"].default_produces == ()
+
+
+def test_a_catalog_whose_detect_block_is_malformed_is_refused_by_file(tmp_path: Path):
+    """The value reaches a comparison against the coordinates a module's build
+    declared, and a coordinate in the wrong shape matches nothing while looking
+    exactly like a framework that is absent."""
+    catalog = tmp_path / "invented-detect.yml"
+    catalog.write_text(
+        "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: inbound\n"
+        "detect:\n  coordinates: [org.springframework]\nmatches: {}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert "detect.coordinates" in str(raised.value)
+    assert "invented-detect.yml" in str(raised.value)
+
+
 def test_catalog_declares_wrappers_nullability_serialization_and_known_types():
     """D02 §2a, §2e, §2f, §2g: `spring-web` and `spring-mvc` both need these
     four blocks before payload shapes can be derived (Tasks 9-11 read them).

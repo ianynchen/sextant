@@ -77,8 +77,15 @@ def resolved_fixture(
         # (2E-prep Task 12) gates `google-pubsub-subscriber.yml`'s own
         # `interface_implementation` style; `superclass` (capability 9.13, 2O
         # design §1b, Task 5) gates `grpc-java.yml`'s own `supertype_derived`
-        # style — a real subset of what `AsmScanner.capabilities()` actually
-        # declares, the same way the other capabilities here already are.
+        # style; `generic_interfaces` (capability 9.14, 2O design §2a, Task 6)
+        # gates `spring-data-rest.yml`'s own `derived_resource` style — a real
+        # subset of what `AsmScanner.capabilities()` actually declares, the
+        # same way the other capabilities here already are.
+        #
+        # Granting 9.14 rather than withholding it is deliberate: with the
+        # capability met, this fixture exercises the DEPENDENCY gate instead
+        # (it declares no Spring Data REST, and carries no module fact at
+        # all), which is the check worth having a live fixture behind.
         {
             "annotation_args",
             "typed_signatures",
@@ -88,6 +95,7 @@ def resolved_fixture(
             "chain_reconstruction",
             "implemented_interfaces",
             "superclass",
+            "generic_interfaces",
         },
     )
     yield workspace, report

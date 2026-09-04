@@ -90,6 +90,22 @@ class ModuleFact(BaseModel):
     source_roots: list[str]
     output_dirs: list[str]
     classpath: list[ClasspathEntry] = Field(default_factory=list)
+    # The `groupId:artifactId` coordinates the module's BUILD declares (2O
+    # design §2a, ruling R9), sorted. Its own field rather than `classpath`
+    # above, because the two answer different questions and only this one can
+    # be answered by both build systems today: a `ClasspathEntry` names a
+    # resolved ARCHIVE and its tier, which the Gradle report carries and a
+    # parsed POM does not, so filling `classpath` from Maven would mean
+    # inventing a path. This field is the coordinate half alone — what the
+    # build says it depends on — and it is what a catalog whose framework
+    # rule is conditional on a dependency reads (`detect.coordinates`).
+    #
+    # **Reach differs by build system and the difference is not smoothed
+    # over** (`application/ports/detector.py`'s own field states it in full):
+    # Gradle reports the resolved compile classpath, transitives included;
+    # Maven reports the POM's direct declarations only. Empty means "this
+    # analysis recorded none", never "the classpath is empty".
+    dependency_coordinates: list[str] = Field(default_factory=list)
 
 
 class SymbolFact(BaseModel):

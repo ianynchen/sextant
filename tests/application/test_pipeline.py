@@ -808,7 +808,13 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # pinned instead in `tests/e2e/test_vertical_slice.py`, where the
     # interpreter runs. 122 stands unmoved through this task.
     assert len(report.endpoints) == 122
-    assert report.skipped_catalogs == []
+    # 2O Task 6: `spring-data-rest.yml` is the one gated catalog, and this
+    # fixture is exactly the module the gate exists for — a Spring module with
+    # a repository-shaped interface (`OrderRepository extends
+    # Repository<OrderResult, Long>`) and no Spring Data REST anywhere in its
+    # build. Ungated it would mint a whole CRUD API here; gated, it is skipped
+    # with its reason and the endpoint count above does not move.
+    assert [entry.catalog_id for entry in report.skipped_catalogs] == ["spring-data-rest"]
     assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
     # Task 7: `handler_signature` comes from the IMPLEMENTING method (spec

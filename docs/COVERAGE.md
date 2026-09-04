@@ -794,7 +794,15 @@ is, what it costs.
 | Java | **Akka HTTP** `path("users" / IntNumber) { get { complete(…) } }` | nested closures, route is a *value* | `combinator` | **C-ish — the hardest inbound form surveyed** |
 | Java | Ktor `routing { get("/path") { … } }` | Kotlin DSL | `combinator` | B |
 | Java | Javalin `app.get("/path", ctx -> …)` | — | `registration_call` | B |
-| Java | **Spring Data REST** `@RepositoryRestResource` | a repository interface becomes a CRUD API | — | **C — no controller, no mapping annotation** |
+| Java | **Spring Data REST** — a repository interface becomes a CRUD API | six routes per exposed repository plus one per query method, derived from a framework rule; `@RepositoryRestResource` is OPTIONAL and the un-annotated case is the common one | `derived_resource` | ✅ **shipped** (2O Task 6) — gated on the module's build declaring Spring Data REST |
+| Java | Data REST — WHICH repositories are exposed (`spring.data.rest.detection-strategy`) | `default` = public only, honouring `exported = false`; `all`, `annotated`, `visibility` each change the set | `derived_resource` | ✅ shipped — all four verified live (CP-2(0)); a value the catalog does not enumerate, or one that differs per environment, derives **nothing** |
+| Java | Data REST — `path=`, `exported=false`, `/search/{query}`, `@RestResource` renames/removals | — | `derived_resource` | ✅ shipped |
+| Java | Data REST — a repository reached through a module-local `@NoRepositoryBean` base | within-module closure walk over `generic_interfaces` | `derived_resource` | ✅ shipped. **Boundary:** a chain through ANOTHER JAR is invisible (no facts here to walk), and a base that PERMUTES its type parameters would be read wrongly — no hop's type-parameter list is in the facts to check against |
+| Java | Data REST — a module whose build declares the framework only TRANSITIVELY, on Maven | the POM parse records direct declarations only | `derived_resource` | **Boundary — reported SKIPPED with its reason**, never derived and never silent. Gradle's resolved classpath has no such gap |
+| Java | Data REST — a NESTED entity type (`Order.Item`) | what the framework serves for one was not probed | `derived_resource` | **Boundary — derives nothing** rather than composing a path segment no probe covered |
+| Java | Data REST — REACTIVE repository contracts (`ReactiveCrudRepository`…) | Data REST is built on Spring MVC; no reactive store was probed | — | **Boundary — not enumerated**, so nothing derives. Absent evidence, produce nothing |
+| Java | Data REST — projections, excerpts, HAL affordances, `@CrossOrigin`, event handlers, QueryDSL web support | each changes the representation or adds routes | — | **C — stated boundaries** (2O design §2c) |
+| Java | Data REST — the `HEAD`/`OPTIONS` verbs and the `/{basePath}/search` index route it also serves | observed live, deliberately not derived | — | **Boundary — §2b's table is what ships** |
 | Java | `@ControllerAdvice` + `@ExceptionHandler` | defines the error contract of every endpoint | — | C |
 | Java | Servlets, filters, interceptors, built-in Actuator endpoints | `@WebServlet`, `FilterRegistrationBean`, dependency + property | — | C |
 | Java | `@ConditionalOnProperty` / `@Profile` controllers | exists in one environment only | — | C |

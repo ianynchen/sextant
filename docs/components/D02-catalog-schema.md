@@ -38,7 +38,7 @@ matches:
 | `id` | Stable. Appears in `evidence` and in skip reports. |
 | `style` | Which engine interprets `matches` |
 | `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c |
-| `detect` | Coordinates that make this catalog active for a module |
+| `detect` | Coordinates that make this catalog's framework rule applicable to a module. **Read since Phase 2O Task 6, by one style** — see below |
 | `requires` | Capabilities — scanner-declared or pipeline-declared (below). **If unmet, the catalog does not run and the skip is reported.** |
 | `matches` | Style-specific |
 
@@ -48,6 +48,27 @@ matches:
 specifically: the conversion (`domain/symbols.type_descriptor`) becomes scheme-aware when
 the first non-JVM catalog arrives, so this notation is documented as JVM sugar now rather
 than ossifying as a universal one.
+
+**`detect.coordinates` is read, and it gates ONE style rather than the whole catalog set**
+(Phase 2O Task 6, ruling R9; before it, every shipped catalog declared the key and the
+loader ignored it). The value is now on the `Catalog` model, and
+`application/resolve/dependencies.py` applies it to the styles whose framework rule is
+CONDITIONAL on the library being present — today `derived_resource` alone. Most catalogs
+need no such gate: their evidence NAMES the framework (an annotation only it defines, a
+call to a type only it ships), so the dependency is implied by the match itself.
+`derived_resource` is the opposite case — a repository interface mentions no HTTP anywhere
+— so without the antecedent there is no consequent to derive.
+
+The coordinates a module's build declares reach the workspace as [D00](D00-fact-schema.md)
+§5's `module` fact (`dependency_coordinates`). **Their REACH differs by build system and
+is not smoothed over**: Gradle reports the resolved compile classpath, transitives
+included; Maven reports the POM's own direct declarations, because the detector parses
+`pom.xml` rather than asking Maven to resolve it. A gated catalog whose question cannot be
+answered — no module fact recorded, or a starter arriving transitively on Maven — is
+SKIPPED and reported, exactly as an unmet capability is. Making this a MODULE-WIDE
+activation gate (the "active set" §12 describes) still waits on a resolved classpath under
+both build systems: applied today it would deactivate a catalog like `spring-mvc.yml` on
+any Maven module that declares only `spring-boot-starter-web`.
 
 **`requires` is the mechanism that keeps degradation visible.** A catalog needing chain
 reconstruction simply does not run against a scanner that lacks it, and
@@ -65,11 +86,12 @@ scanner capability above.
 
 ---
 
-## 2. The eleven styles
+## 2. The twelve styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
 genuinely new shape needs a new engine. (Nine as of Phase 2H; `supertype_derived` and
-`injected_client`, Phase 2O Task 5, are the tenth and eleventh.)
+`injected_client`, Phase 2O Task 5, are the tenth and eleventh; `derived_resource`, Task 6,
+is the twelfth.)
 
 ### `annotation_driven`
 
@@ -303,6 +325,15 @@ mapping:
   default to an empty alias list, and an empty list matches no attribute, so the column is
   `NULL` — absence is not a licence to invent a default. This is why every catalog that
   predates this key keeps deriving `NULL` with zero YAML change.
+- **`default_produces` is read since Phase 2O Task 6; `default_consumes` is still
+  specified-not-used.** `default_produces` is read as a **top-level catalog key**, not
+  under `mapping` where this bullet first sketched it: the catalog that finally needed it
+  (`spring-data-rest.yml`) declares no `mapping` at all — its rows come from a framework
+  rule rather than from annotation attributes — and the contract belongs to the framework,
+  not to any one annotation. `derived_resource` refuses a catalog of its own style that
+  declares none, since nothing else could fill `produces` for a row no mapping wrote.
+  What follows is the original statement of the pair, which still holds for
+  `default_consumes`:
 - **`default_consumes`/`default_produces` are specified here, not yet used**: a
   catalog-declared framework-contract default ([D01](D01-graph-schema.md) §4's evidence kind
   (b)) — a media type the framework enforces whenever a mapping declares none itself, rather
@@ -1425,6 +1456,83 @@ site) and no handler. This is gRPC's SECOND identity form on [D01](D01-graph-sch
 §3's own table (`<protoPackage>.<Service>`, no method) — it links to nothing until a later
 phase makes it per-method, the same honest-coarseness precedent SOAP's own two forms set.
 
+### `derived_resource`
+
+The twelfth style, and the first whose rows nobody DECLARED (Phase 2O Task 6). Spring Data
+REST exposes a CRUD HTTP API from a repository INTERFACE — no controller, no mapping
+annotation, no string in the module that is a URL. Not `annotation_driven` with `members:`:
+that style reads a path and a verb OFF each member, while here the route table is fixed BY
+FRAMEWORK RULE per repository — six verb/route combinations whose existence depends on
+which CRUD contract is extended — plus one search route per query method.
+
+```yaml
+style: derived_resource
+protocol: http
+direction: inbound
+detect:
+  coordinates: ["org.springframework.boot:spring-boot-starter-data-rest", …]
+requires: [annotation_args, implemented_interfaces, generic_interfaces]
+default_produces: ["application/hal+json"]
+matches:
+  repositories:                     # contract fqn -> the CRUD operations extending it licenses
+    org.springframework.data.repository.CrudRepository: [item_read, save, delete]
+    org.springframework.data.repository.PagingAndSortingRepository: []
+  routes:                           # the rule table; `needs` names the operation a route requires
+    - { method: GET,  item: false }
+    - { method: POST, item: false, needs: save }
+    - { method: GET,  item: true,  needs: item_read }
+  item_segment: "{id}"
+  search_segment: search
+  resource_annotation: org.springframework.data.rest.core.annotation.RepositoryRestResource
+  member_annotation: org.springframework.data.rest.core.annotation.RestResource
+  path_attribute: path
+  exported_attribute: exported
+  no_repository_bean: org.springframework.data.repository.NoRepositoryBean
+  crud_methods: [save, findAll, findById, …]   # a declared method is a QUERY method only if not one of these
+  base_path: { key: spring.data.rest.base-path }
+  detection_strategy:
+    key: spring.data.rest.detection-strategy
+    strategies:                     # flags: public_only | annotated_only | honors_exported
+      default: [public_only, honors_exported]
+      all: []
+      annotated: [annotated_only, honors_exported]
+      visibility: [public_only]
+```
+
+**`detect.coordinates` is mandatory for this style and refused when empty** (§1): the rule
+is conditional, and applying its consequent to a module that does not declare the library
+would mint an entire REST API for every plain Spring Data JPA module in every analysed
+repository.
+
+**WHICH repositories are exposed is configuration, not a constant** (CP-2(0),
+`scripts/probes/cp2_data_rest.md`, verified live). The default exposes every PUBLIC
+repository honouring `exported = false`; `annotated` exposes only annotated ones — which
+empties the un-annotated case this style exists for — `all` ignores both visibility and
+`exported`, and `visibility` ignores `exported` alone. The engine reads the key
+READ-IF-PRESENT and derives NOTHING when configuration names a strategy the catalog does
+not enumerate, or names different ones per environment: which repositories are exposed is
+the precondition of every row, and an unanswered precondition produces no rows.
+
+**The collection path** is `path=` when the annotation gives one, else the entity's own
+simple name — first character uncapitalized, then pluralized by `domain/pluralize.py`
+(a port of Evo Inflector's rule set, which `spring-data-rest-core` depends on
+non-optionally, so a working Data REST application always pluralizes). The ENTITY type
+comes from capability 9.14's `generic_interfaces`: `interfaces` erases
+`CrudRepository<Order, Long>` to a bare symbol, and the walk crosses interfaces DECLARED
+IN THIS MODULE only (the `@NoRepositoryBean` base pattern; a base repository shipped in
+another jar is a stated boundary).
+
+**Rows publish at `resolved` / `declared`** — the mirrored rule IS the framework's rule
+(DR-6, the 2I `reversed_package` precedent) — except where `spring.data.rest.base-path`
+differs between environments, in which case one row carries the configuration EXPRESSION
+as its prefix at `unresolved` and an `environment_divergence` question is filed. `handler`
+is NULL on a CRUD row (framework code serves it, and no fact in the module names a symbol
+for it) and the query METHOD's own symbol on a search row.
+
+**Ordering (§3): this style is in the runs-last group.** A predicted route must never
+displace an observed controller's row, and `derive_call_endpoints.sql`'s insert-if-absent
+guard only means that if every observing style has already written.
+
 ### `protocol_hint`
 
 **Reclassifies endpoints other engines already produced** — a streaming response, a
@@ -2288,6 +2396,14 @@ in step. **Within the runs-last group the same reason applies one level down**: 
 whose catalogs may either DERIVE rows or only stamp them runs every deriving catalog
 first, or a stamp arrives before the rows it was meant to enrich. Direction and filename
 remain the tiebreaks after both ranks.
+
+`derived_resource` joins that group for a reason of its own (Phase 2O Task 6): its rows
+are PREDICTIONS from a framework rule rather than readings of a declaration, so where a
+real controller serves the same URL the observed row is the one that must survive — and
+insert-if-absent only means that once every observing style has written. (2O design §2b
+also said "and before `config_join`". That half is not implementable and is not
+load-bearing: within this group the ranks above decide, there is no per-style rank, and
+the two mint disjoint identities — HTTP routes versus messaging destinations.)
 
 **`protocol_hint` is no longer in this list** (Phase 2H). It ships as a resolve pass
 rather than an engine, and its position is stated where it runs: after the engines' merge

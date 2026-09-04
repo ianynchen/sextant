@@ -19,6 +19,21 @@
       <artifactId>spring-context</artifactId>
       <version>6.1.6</version>
     </dependency>
+    <!-- 2O Task 6: the Spring Data REST surface. `spring-data-commons` carries
+         the repository contracts the catalog enumerates; `spring-data-rest-core`
+         carries `@RepositoryRestResource` AND is one of the coordinates the
+         catalog's `detect.coordinates` gate reads off this POM. Both are on the
+         Boot 3.2 line, matching `spring-web` above. -->
+    <dependency>
+      <groupId>org.springframework.data</groupId>
+      <artifactId>spring-data-commons</artifactId>
+      <version>3.2.5</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.data</groupId>
+      <artifactId>spring-data-rest-core</artifactId>
+      <version>4.2.5</version>
+    </dependency>
     <dependency>
       <groupId>org.jspecify</groupId>
       <artifactId>jspecify</artifactId>

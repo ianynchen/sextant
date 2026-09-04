@@ -30,6 +30,34 @@ def test_detect_reports_module_coordinates_and_output_dir_when_run_on_the_fixtur
     )
 
 
+def test_dependency_coordinates_are_the_poms_own_direct_declarations():
+    """2O design §2a, ruling R9: the gate a `derived_resource` catalog reads
+    needs the module's declared dependencies in the workspace, and a parsed
+    POM can answer for its DIRECT declarations only — no parent, no BOM, no
+    transitive. Sorted, because everything a detector reports is (NFR-1)."""
+    module = MavenDetector().detect(FIXTURE).modules[0]
+
+    assert "org.springframework:spring-web" in module.dependency_coordinates
+    # The one the Data REST gate reads, declared by this fixture on purpose
+    # (2O Task 6's conformance fixture).
+    assert "org.springframework.data:spring-data-rest-core" in module.dependency_coordinates
+    assert list(module.dependency_coordinates) == sorted(module.dependency_coordinates)
+    # A coordinate the POM does not declare is absent — which the gate must
+    # read as "not declared HERE", never as "not on the classpath". Data REST
+    # pulls `evo-inflector` in transitively and this POM never names it, which
+    # is exactly the shape a Maven parse cannot see.
+    assert "org.atteo:evo-inflector" not in module.dependency_coordinates
+
+
+def test_a_module_declaring_no_dependencies_reports_none(tmp_path: Path):
+    """Empty and unrecorded are different answers (`resolve/dependencies.py`):
+    this is the empty one — a build that declares nothing — and it is an
+    answer, not an absence."""
+    module = MavenDetector().detect(_module(tmp_path)).modules[0]
+
+    assert module.dependency_coordinates == ()
+
+
 _BARE_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
   <groupId>com.acme</groupId>
   <artifactId>thing</artifactId>

@@ -64,7 +64,7 @@ request and response shapes, and its trust fields.
 data, never as code, so that supporting a new framework requires no change to Sextant
 itself.*
 
-**Status, as of Phase 2O Task 5: all four protocol families named above derive.** HTTP
+**Status, as of Phase 2O Task 6: all four protocol families named above derive.** HTTP
 (both directions, plus GraphQL, WebSocket and SSE on top of it), SOAP, the message brokers
 Kafka, JMS, SQS and Pub/Sub, and now gRPC. gRPC's Java surface shipped in two halves
 ([COVERAGE.md](COVERAGE.md) §5.7): the `.proto` descriptor (Phase 2O Task 4, both origins —
@@ -81,6 +81,18 @@ rather than closed — published-stubs jars, an UNANNOTATED Spring gRPC service 
 against published stubs, and bare `newBlockingStub(channel)` wiring with no field
 injection ([COVERAGE.md](COVERAGE.md) §5.7).
 None of the three narrows what derives; each narrows what a silent miss is visible as.
+
+**Phase 2O Task 6 adds the first endpoints nobody DECLARED.** Spring Data REST exposes a
+CRUD HTTP API from a repository interface — no controller, no mapping annotation — and the
+new `derived_resource` style derives that route table from the framework's own rule
+([COVERAGE.md](COVERAGE.md) §5.1, verified live in `scripts/probes/cp2_data_rest.md`).
+Because such a rule is CONDITIONAL, this is the first style with a DEPENDENCY gate:
+[D02](components/D02-catalog-schema.md) §1's `detect.coordinates` is now read, matched
+against the coordinates the module's build declares (which travel as
+[D00](components/D00-fact-schema.md) §5's `module` fact, constructed for the first time),
+and a module that does not declare the framework — or one whose build system cannot answer
+the question, as Maven cannot for a transitively-inherited starter — is reported SKIPPED
+with its reason rather than derived or silently omitted.
 
 ### FR-4 — Shape catalog
 

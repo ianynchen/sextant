@@ -172,6 +172,32 @@ def test_classes_dirs_come_from_the_capture_as_output_dirs():
     )
 
 
+def test_dependency_coordinates_come_from_the_resolved_compile_classpath():
+    """2O design §2a, ruling R9. Unlike Maven's direct-declaration answer, the
+    init script already walks the RESOLVED compile classpath — transitives
+    included — so this is the reach a dependency gate gets on Gradle. Entries
+    Gradle gave no component id (an inter-project dependency, a `files()`
+    entry) carry no coordinate and contribute none: inventing one would name
+    an artifact nobody published."""
+    model = _repository_model(CAPTURE)
+    module = next(m for m in model.modules if m.module_id.endswith("service-app"))
+
+    assert "org.springframework:spring-core" in module.dependency_coordinates
+    assert list(module.dependency_coordinates) == sorted(set(module.dependency_coordinates))
+    assert all(":" in coordinate for coordinate in module.dependency_coordinates)
+
+
+def test_a_project_whose_classpath_resolves_nothing_reports_no_coordinates():
+    model = _repository_model(
+        {
+            "projects": [_minimal_project(classes_dirs=["/repo/thing/build/classes"])],
+            "includedBuilds": [],
+        }
+    )
+
+    assert model.modules[0].dependency_coordinates == ()
+
+
 def test_publishing_evidence_makes_the_kind_library_the_gradle_only_deviation():
     """2M design §2: `library` is unreadable from a POM alone, so Maven never
     returns it — Gradle CAN read publishing evidence from the evaluated

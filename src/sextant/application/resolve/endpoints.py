@@ -9,10 +9,12 @@ from dataclasses import dataclass
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.capabilities import missing_capabilities
+from sextant.application.resolve.dependencies import unmet_dependency
 from sextant.application.resolve.engines import (
     annotation_driven,
     combinator,
     config_join,
+    derived_resource,
     fluent,
     injected_client,
     interface_implementation,
@@ -35,7 +37,21 @@ from sextant.application.resolve.engines import (
 # operation AND the code serving it, and running afterwards is the whole of
 # what makes the annotation row the one that survives. First-writer agreement
 # by ordering, with no second rule to keep in step.
-_RUNS_LAST = frozenset({"config_join", "schema_operations"})
+#
+# `derived_resource` (2O design §2b) is the third, for a reason that is its
+# own: it derives rows nobody OBSERVED. A Spring Data REST route exists because
+# the framework serves it, not because any code in the module declares it — so
+# where a real controller serves the same URL, the OBSERVED row is the one that
+# must survive, and `derive_call_endpoints.sql`'s insert-if-absent guard makes
+# that true only if every observing style has already written. Running last is
+# what turns "insert if absent" into "a prediction never displaces an
+# observation". (2O design §2b also says "and BEFORE `config_join`". That half
+# is NOT implementable and is not load-bearing — ruling R3: within this group
+# the ranks below decide, and there is no per-style rank, so the two are
+# ordered by `_derives_rows` and then by filename. They mint disjoint
+# identities — HTTP routes versus messaging destinations — so their relative
+# order changes no output.)
+_RUNS_LAST = frozenset({"config_join", "schema_operations", "derived_resource"})
 
 # Within the runs-last group, the same reason applies once more, one level
 # down (fix round 1, M-3): a style whose catalogs may EITHER derive rows or
@@ -105,6 +121,16 @@ def derive_endpoints(
         if missing:
             skipped.append(SkippedCatalog(catalog.id, missing))
             continue
+        # The second gate (2O design §2a, ruling R9), reported through the
+        # same channel as the first: a style whose framework rule is
+        # CONDITIONAL on a dependency must not derive for a module whose build
+        # does not declare it, and must not degrade silently when the question
+        # cannot be answered. `resolve/dependencies.py` states why this is a
+        # property of the style rather than of every catalog.
+        unmet = unmet_dependency(workspace, catalog)
+        if unmet is not None:
+            skipped.append(SkippedCatalog(catalog.id, (unmet,)))
+            continue
         engine(workspace, catalog)
     # Once per resolve, after every catalog: a wire identity present in both
     # directions collapses to one row, direction `both` (D02 §3).
@@ -153,4 +179,10 @@ _ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
     # `_RUNS_LAST` above.
     "supertype_derived": supertype_derived.run,
     "injected_client": injected_client.run,
+    # 2O design §2 (Task 6): the first style that derives rows from a
+    # FRAMEWORK RULE rather than from a declaration — see `_RUNS_LAST` above
+    # for why it runs after every observing style, and
+    # `resolve/dependencies.py` for the gate that decides whether the rule
+    # applies to this module at all.
+    "derived_resource": derived_resource.run,
 }

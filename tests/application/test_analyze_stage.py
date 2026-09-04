@@ -4,6 +4,8 @@ own `RepositoryModel.notes` carried out unchanged as `AnalyzeResult.notes`.
 Both are pass-through: this stage neither computes an `allow_resolve` value
 nor edits a note, so the pins here are about the wiring, not the content."""
 
+import json
+from dataclasses import replace
 from pathlib import Path
 
 from sextant.application.ports.catalogs import Catalog
@@ -103,3 +105,47 @@ def test_no_notes_from_the_detector_is_an_empty_tuple_not_a_missing_field(tmp_pa
     detector = _RecordingDetector(_module(tmp_path))
     result = _analyzed(tmp_path, detector, allow_resolve=False)
     assert result.notes == ()
+
+
+def test_the_detectors_module_conclusions_are_written_as_a_fact(tmp_path: Path):
+    """D00 §5's `module` kind, constructed for the first time (2O design §2a,
+    ruling R9). Three later components need the detector's conclusions and
+    never see the detector, and a stage resumed from disk never runs one — so
+    they travel as facts, and this is the fact a dependency-gated catalog
+    reads.
+    """
+    detector = _RecordingDetector(
+        replace(
+            _module(tmp_path),
+            dependency_coordinates=("org.springframework.data:spring-data-rest-core",),
+        )
+    )
+    _analyzed(tmp_path, detector, False)
+
+    document, fact = (
+        json.loads(line)
+        for line in (tmp_path / "facts" / "module.jsonl").read_text(encoding="utf-8").splitlines()
+    )
+    assert fact["kind"] == "module"
+    assert fact["module_id"] == "com.acme:orders-service"
+    assert fact["dependency_coordinates"] == ["org.springframework.data:spring-data-rest-core"]
+    assert document["document_id"] == fact["document_id"]
+    # Portable, not a path: this document was read from no classpath entry,
+    # and a machine path would make two runs of one module at two checkout
+    # paths write different bytes (D00 §2, NFR-1).
+    assert document["origin_entry"] == "com.acme/orders-service"
+
+
+def test_the_module_fact_is_rewritten_whole_on_every_run(tmp_path: Path):
+    """A fact file is written whole, never appended to — so a second analyze
+    into the same workspace leaves one module fact, not two, and a dependency
+    dropped from the build disappears from the answer."""
+    first = _RecordingDetector(
+        replace(_module(tmp_path), dependency_coordinates=("com.example:gone",))
+    )
+    _analyzed(tmp_path, first, False)
+    _analyzed(tmp_path, _RecordingDetector(_module(tmp_path)), False)
+
+    lines = (tmp_path / "facts" / "module.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[1])["dependency_coordinates"] == []

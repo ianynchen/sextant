@@ -384,6 +384,21 @@ class GradleDetector:
             output_dirs=tuple(Path(entry) for entry in project["classesDirs"]),
             resource_roots=resource_roots,
             schema_roots=GradleDetector._schema_roots(project),
+            # The RESOLVED compile classpath's own coordinates, transitives
+            # included — sorted and deduplicated (NFR-1). Only entries Gradle
+            # gave a component id: an inter-project dependency and a
+            # `files()` entry carry no coordinate at all (the init script's
+            # own rule), and inventing one for them would name an artifact
+            # nobody published.
+            dependency_coordinates=tuple(
+                sorted(
+                    {
+                        f"{entry['group']}:{entry['name']}"
+                        for entry in project["classpath"]
+                        if entry.get("group") and entry.get("name")
+                    }
+                )
+            ),
             library_roots=library_roots,
             libraries_not_resolved=libraries_not_resolved,
         )

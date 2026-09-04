@@ -9,6 +9,7 @@ produces no declared shape, the same honest absence an untyped scanner
 already leaves for a construct it never emits — no catalog's `requires`
 needs a name for that."""
 
+import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,7 @@ from sextant.application.ports.scanner import (
 )
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.pipeline import ResolveReport, resolve
+from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import (
     config_fact_target,
     discard_library_facts,
@@ -39,9 +41,33 @@ from sextant.domain.factfile import (
     schema_fact_target,
     write_fact_file,
 )
-from sextant.domain.facts import DeclaredShapeFact, Document, EmbeddedDescriptorFact, Fact
+from sextant.domain.facts import (
+    DeclaredShapeFact,
+    Document,
+    EmbeddedDescriptorFact,
+    Fact,
+    ModuleFact,
+)
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import list_files
+
+# The module fact's own document (`_write_module_fact`). Its `relative_path`,
+# its `language` and its fact file's name are one literal: the document IS the
+# module, not a file under a root, and naming it three different ways would
+# invite a reader to look for three things.
+_MODULE_DOCUMENT = "module"
+# The facility that produced it — the detector, through this stage. Named the
+# way `ingress/read`'s own `SCANNER_ID` names the config-reading facility (D00
+# §2: `scanner_id` names the facility, never the format).
+_MODULE_SCANNER_ID = "sextant-detector"
+# Restated rather than imported: these three values are `ingress/read`'s, and
+# `application` may not import `ingress` (the layering contract). They must
+# stay equal to that module's own copies — a document written with a different
+# `fact_schema_version` than its siblings would claim a schema nobody shipped.
+SEXTANT_VERSION = "0.1.0"
+FACT_SCHEMA_VERSION = "1.0.0"
+SCANNER_VERSION = "0.1.0"
+NO_REDACTION_HASH = "sha256:none"
 
 
 def _config_files(
@@ -143,6 +169,13 @@ def analyze(
     model = select_detector(detectors, path).detect(path, allow_resolve=allow_resolve)
     module = model.modules[0]
     progress.finish("detect", f"modules: {len(model.modules)}")
+
+    # The detector's conclusions become facts here, before anything else is
+    # written — D00 §5's `module` kind, which nothing constructed until this
+    # phase needed the declared dependency coordinates in the workspace
+    # (2O design §2a, ruling R9). Rewritten whole on every run, like every
+    # other fact file.
+    _write_module_fact(fact_root, module)
 
     # Selected here, not by the caller: a scanner is chosen per language
     # (ARCHITECTURE §7) and the languages are not known until detection has
@@ -347,6 +380,63 @@ def analyze(
         tuple(libraries_not_scanned),
         model.notes,
     )
+
+
+def _write_module_fact(fact_root: Path, module: ModuleModel) -> None:
+    """The detector's own conclusions, written as a fact like any other
+    (D00 §5's `module` kind, and its own "why `module` is a fact and not a
+    passing argument": three later components need it and never see the
+    detector, and a stage resumed from disk never runs one).
+
+    **What it carries today is the coordinate half** — `dependency_coordinates`
+    — because that is the half both build systems can answer and the half a
+    dependency-gated catalog reads (2O design §2a, ruling R9). Classpath
+    TIERING, which D00 also names here, needs a resolved archive per entry and
+    stays unwritten rather than half-invented.
+
+    The document is synthesized rather than read from a file: this stage may
+    not touch the filesystem (ARCHITECTURE §10), so `content_hash` is the hash
+    of the module's own detected identity — the content this document actually
+    records — which changes exactly when that identity does. `relative_path`
+    is the literal `module`, and the fact file sits at `facts/module.jsonl`,
+    which shares its one collision risk with `facts/config`, `facts/schema`
+    and `facts/lib`: a top-level class named `module` in the default package
+    would write to the same target.
+    """
+    identity = "\n".join(
+        [module.module_id, module.version, module.kind, *module.dependency_coordinates]
+    )
+    document = Document(
+        document_id=hashlib.sha256(f"module:{module.module_id}".encode()).hexdigest(),
+        relative_path=_MODULE_DOCUMENT,
+        module_id=module.module_id,
+        language=_MODULE_DOCUMENT,
+        sextant_version=SEXTANT_VERSION,
+        fact_schema_version=FACT_SCHEMA_VERSION,
+        scanner_id=_MODULE_SCANNER_ID,
+        scanner_version=SCANNER_VERSION,
+        content_hash="sha256:" + hashlib.sha256(identity.encode()).hexdigest(),
+        # The module's own COORDINATES, not a path: this document was not read
+        # from a classpath entry at all, and D00 §2's rule that a path under
+        # someone's home identifies nothing off the machine that wrote it
+        # applies here with nothing to trade against it — a filesystem root
+        # would also make two runs of the same module at two checkout paths
+        # write different bytes (NFR-1, and `test_analyze_library_wiring`'s
+        # own byte-identity pins).
+        origin_entry=module.coordinates,
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash=NO_REDACTION_HASH,
+    )
+    fact = ModuleFact(
+        document_id=document.document_id,
+        module_id=module.module_id,
+        module_kind=module.kind,
+        languages=sorted(module.languages),
+        source_roots=[root.as_posix() for root in module.source_roots],
+        output_dirs=[directory.as_posix() for directory in module.output_dirs],
+        dependency_coordinates=list(module.dependency_coordinates),
+    )
+    write_fact_file(fact_root / f"{_MODULE_DOCUMENT}.jsonl", document, [fact])
 
 
 def _prefer_compiled(shapes: list[DeclaredShapeFact]) -> list[DeclaredShapeFact]:

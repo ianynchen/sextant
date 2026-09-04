@@ -72,7 +72,15 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # + 2: the prefix-seam controllers — `GET /v1/seam/owners/{ownerId}` and
     # `POST /chat`, one route each. Both were already derivable; what the
     # `path_separator` fix changed is the ADDRESS each derives, not the count.
-    assert metadata["endpoints"]["inbound"]["http"] == 34
+    # + 8: 2O Task 6's Spring Data REST surface. `CatalogRepository`
+    # declares no path, no verb and no HTTP anything, and the framework
+    # serves six CRUD routes for it plus two `/search/` routes (one renamed
+    # by `@RestResource(path = "by-customer")`). `SecretRepository`
+    # (`exported = false`) and `OrderRepository` (which extends the
+    # fixture's OWN `Repository<T, ID>` stand-in, not a Spring Data
+    # contract) each derive nothing — the live near-miss beside the live
+    # match.
+    assert metadata["endpoints"]["inbound"]["http"] == 42
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -122,7 +130,15 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # because a jar was scanned, which is the point of the feature.
     # + 2: 2O Task 3's generic-superinterface fixture — `Repository<T, ID>` and
     # `OrderRepository`, each its own class file, one document each.
-    assert metadata["coverage"]["documents"] == 108
+    # + 1: 2O Task 6's `module` fact (D00 §5), which the detector's own
+    # conclusions now travel as. Its document is SYNTHESIZED rather than read
+    # from a file — the stage may not touch the filesystem — so it is the one
+    # document here that is not a class file or a resource; the count moves
+    # because the fact tree genuinely gained a record, which is what this test
+    # is for.
+    # + 2: the same task's Data REST fixture — `CatalogRepository` and
+    # `SecretRepository`, one class file each.
+    assert metadata["coverage"]["documents"] == 111
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):
