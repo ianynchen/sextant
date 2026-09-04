@@ -54,7 +54,7 @@ def record_service_identity_gaps(workspace: Workspace, catalogs: list[Catalog]) 
     handler — including when that is because a DIFFERENT catalog naming the
     same protocol got skipped. `grpc-spring.yml`'s own `requires` is written
     exactly for this: it omits `superclass`, the capability that gates
-    `grpc-java.yml`'s `supertype_derived` match, so a scan missing it skips
+    the core gRPC catalog's `supertype_derived` match, so a scan missing it skips
     that catalog without also skipping this corroboration — which holds only
     as long as `annotation_driven.gaps` keeps reading the finished tables
     instead of its own catalog's requirements; keying it to `catalog.requires`
