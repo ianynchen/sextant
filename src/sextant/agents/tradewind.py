@@ -8,10 +8,13 @@ test_agents_confinement.py`): the ONE module in Sextant permitted to import
 results into Tradewind's `Tool`/`SessionOptions` shapes and back; it decides
 nothing about what is visible, jailed, or redacted.
 
-Pinned by commit sha via `[tool.uv.sources]` (`pyproject.toml`) — post-0.6.0,
-no version tags exist. `examples/tradewind` is a read-only clone of the same
-commit, kept for reading the library's own source when a behavior question
-arises; it is not imported by anything here.
+Pinned by commit sha as a PEP 508 direct reference (`pyproject.toml`) —
+post-0.6.0, no version tags exist. The pin is a direct reference rather than a
+`[tool.uv.sources]` entry because that table is uv's alone: pip ignores it and
+went looking for `tradewind` on PyPI, which broke CI and would have broken
+`pip install` for anyone embedding us through `sextant.api`. `examples/tradewind`
+is a read-only clone of the same commit, kept for reading the library's own
+source when a behavior question arises; it is not imported by anything here.
 
 **One `Tradewind(config)`/session/run per call.** `run` builds a fresh
 config and client, mints a caller-side session id (`uuid.uuid4()`), and

@@ -81,8 +81,15 @@ custom `Backend` implementations, which Sextant does not write).
   confinement test inverts into the removal pin, and the confinement pattern moves
   to `tradewind` (importable only in `agents/tradewind.py`, positive control kept).
   Dependency honesty, stated where the dependency is declared: Tradewind is pinned
-  by commit sha via `[tool.uv.sources]` and requires the GitHub repo to stay
-  reachable at install time; `anthropic` remains INSTALLED transitively through
+  by commit sha and requires the GitHub repo to stay reachable at install time.
+  (**Corrected 2026-09-03, post-CI:** this section originally specified the pin as
+  a `[tool.uv.sources]` entry. That table is uv's own — pip ignores it, so CI's
+  `pip install -e .[dev]` searched PyPI for `tradewind` and the run died at the
+  install step, and `pip install` would have failed for anyone embedding Sextant
+  through §5b's facade. The shipped pin is a PEP 508 direct reference carrying the
+  same sha, which every installer resolves; hatchling's
+  `allow-direct-references` opt-in permits it. The lesson is ledgered: a
+  uv-only mechanism cannot be verified by gates that all run through `uv run`.) `anthropic` remains INSTALLED transitively through
   `langchain-anthropic` — what Sextant removes is the direct dependency and every
   import site, which is what the architecture scan enforces — and Tradewind's own
   direct deps are `==`-pinned while deeper transitives float, consistent with the

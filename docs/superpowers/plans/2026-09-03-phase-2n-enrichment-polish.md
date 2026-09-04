@@ -6,7 +6,7 @@
 
 **Architecture:** a new agents adapter behind the unchanged `EnrichmentAgent` port; an untagged union widening the overlay's verdict identity; composition extracted from `cli/app.py` into functions both the CLI and a new `sextant.api` call.
 
-**Tech Stack:** existing + `tradewind` (git dependency, commit-sha pinned via `[tool.uv.sources]`); `anthropic` direct dependency removed.
+**Tech Stack:** existing + `tradewind` (git dependency, commit-sha pinned — as a PEP 508 direct reference; the plan and Task 1 originally said `[tool.uv.sources]`, which pip ignores, and CI proved it); `anthropic` direct dependency removed.
 
 **Spec:** docs/superpowers/specs/2026-09-03-phase-2n-enrichment-polish-design.md (binding; revised after adversarial review — §1's guard redesign, §2's field-for-field identity, and the honesty statements are requirements, not suggestions).
 
