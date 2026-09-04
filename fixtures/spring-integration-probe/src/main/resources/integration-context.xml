@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The XML-configured arm of the probe. Nothing here is compiled: it is a
+     resource, and the extractor reads `target/classes/**/*.class`. It is
+     committed so the finding "an XML flow contributes nothing to the fact
+     stream" is checkable rather than asserted. -->
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:int="http://www.springframework.org/schema/integration"
+       xmlns:int-amqp="http://www.springframework.org/schema/integration/amqp"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+           https://www.springframework.org/schema/beans/spring-beans.xsd
+           http://www.springframework.org/schema/integration
+           https://www.springframework.org/schema/integration/spring-integration.xsd
+           http://www.springframework.org/schema/integration/amqp
+           https://www.springframework.org/schema/integration/amqp/spring-integration-amqp.xsd">
+
+  <int:channel id="xmlOrdersChannel"/>
+
+  <int-amqp:inbound-channel-adapter id="xmlOrdersInbound"
+                                    queue-names="xml.orders.queue"
+                                    channel="xmlOrdersChannel"
+                                    connection-factory="connectionFactory"/>
+
+  <int:service-activator input-channel="xmlOrdersChannel"
+                         ref="xmlOrdersHandler"
+                         method="handle"/>
+</beans>
