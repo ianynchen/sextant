@@ -72,6 +72,52 @@ handler, which is already the enrichment pass's inbox (2K §8, 2N's verdict
 engine), so the model is pointed at exactly the uncertainties rather than at the
 whole document.
 
+### The principles sweep — a checkpoint between 2O and 2P, not a new phase
+
+**Ruled 2026-09-04.** Phases 2A–2N were built before the principles now written
+into GUIDELINES §5.3, §5.4, §8, §8.1, §9 and §10 — because **those principles
+were derived from 2O's failures**. Every rule there exists because something
+shipped without it. So the same defect classes are presumed present in earlier
+work, undetected, and 2O already produced the evidence: eleven documented
+mechanisms that were never built, a `publishing → library` inference asserting
+more than its evidence, a rung-5 doc/code divergence, a path rule applied to a
+client library it was never measured against, and a renderer that raised on a
+question kind the same phase had added.
+
+**Why before 2P specifically, and not at the version-bump gate:** 2P derives the
+Meridian boundary vocabulary from 2O's tables and hands it to an outside
+consumer. A fabrication that survives to that point stops being our bug and
+becomes someone else's data. Auditing after 2J would be cheaper per phase and
+far more expensive per defect.
+
+Five sweeps, each mechanical enough to run independently, ordered by what
+actually found defects in 2O:
+
+1. **Near-miss coverage (§10) — highest yield.** For every engine style and
+   every catalog: does a test prove it DECLINES on near-miss input? 2O's C-1
+   fabricated a gRPC endpoint from an ordinary `extends` pair and the golden
+   fixture missed it *by luck*. Every fixture in this repo demonstrates
+   detection firing; almost none demonstrates it correctly declining.
+2. **Fabrication audit (§8).** For every derivation: what evidence justifies
+   each row, and does the rule assert more than that evidence supports?
+   **Negative claims deserve the hardest look** — `library` meant "publishes AND
+   has no endpoints" and was asserted from publishing alone.
+3. **Mechanism existence and behaviour (§5.3).** Extend
+   `documented-not-implemented.md` beyond the eleven found: cite the CONSUMER,
+   and hunt the costlier second form — mechanisms that ARE read but are gated,
+   scoped, or answer differently than the citing document assumes.
+4. **Framework fidelity (§8.1).** For every catalog: is its rule MEASURED or
+   assumed, and is its version scope stated? A rule taken from documentation is
+   a prediction; two of 2O's checkpoints falsified exactly such predictions.
+5. **Stale rationale (§9).** Comments justifying an omission whose condition a
+   later change silently falsified. Two shipped instances in 2O alone — the
+   renderer's "unreached while QUESTIONS stays the two-kind set", and
+   `# No stamp — the row already carries its own value`, true under one minter
+   and false under two.
+
+The output is corrections, not a report: each finding either fixes shipped
+behaviour, retires a boundary, or lands in the register with its evidence.
+
 **2O also wires the two consumers 9.15 unblocked.** Capability 9.15 emits the
 varargs elements, but `spring-webflux-router.yml`'s `media_values` and
 `kafka-consumer.yml`'s `all_strings` read POSITIONAL arguments, not `elements`,
