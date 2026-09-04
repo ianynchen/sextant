@@ -78,7 +78,15 @@ ruling. Each CP commits its probe + expectation table.
   over-reports — the probe records both behaviors, COVERAGE states the version
   scope, and a per-version rule waits until a Boot 2 corpus is a real
   requirement rather than a hypothetical.
-- **CP-2 Data REST derivation.** Two-part prediction: (a) with
+- **CP-2 Data REST derivation.** THREE-part prediction now — (0) is the most
+  load-bearing, added 2026-09-04 after a user challenge about what static
+  analysis can honestly claim. **(0) The repository DETECTION STRATEGY.** Spring
+  Data REST decides WHICH repositories it exposes by a configurable strategy
+  (all public repositories / annotated-only / by visibility). Establish the
+  DEFAULT and the effect of each setting. This gates everything below it: with
+  an annotated-only strategy, the un-annotated repositories this whole section
+  exists to surface serve NOTHING, and a derived route set would be emptied by
+  a one-line config we already read. (a) with
   `org.atteo:evo-inflector` on the app's classpath, the collection path is the
   Evo Inflector pluralization of the uncapitalized entity simple name; WITHOUT
   it, the uncapitalized simple name stands unpluralized (Spring HATEOAS selects
@@ -305,10 +313,25 @@ depends on which CRUD interface is extended, not on any member's own annotations
   **extractor capability 9.14 (generic superinterface references) is CERTAIN
   work in this phase**, not contingent. (Revision 1's CP-3 mislabeled this;
   the docs already answer it.)
-- The catalog gates on `detect.coordinates` naming the Data REST artifacts —
-  the SHIPPED jar-presence mechanism; when no `ClasspathEntry` carries a
-  readable coordinate, the catalog reports SKIPPED in the manifest (the
-  existing, visible degradation — not silence).
+- The catalog gates on the Data REST dependency being DECLARED by the module's
+  build. **Correction (2026-09-04): this spec previously called
+  `detect.coordinates` "the SHIPPED jar-presence mechanism". It is not one.**
+  `detect:`/`coordinates:` appears in shipped catalog YAML but is absent from
+  the `Catalog` model and never read by the loader; `ClasspathEntry` and
+  `ModuleFact` are both defined and never constructed; `documents.origin`
+  carries a coordinate only for libraries a repo opted into extracting. Task 6
+  must therefore MAKE the gate real (the detectors already parse the POM and
+  report the Gradle classpath, so the data exists at detection time).
+  **Why the gate is justified, stated precisely:** not as a deployment check —
+  Sextant never observes a deployment, and every row it emits is a claim about
+  declared code, not running systems. The framework rule here is CONDITIONAL:
+  *if* Spring Data REST is present, repositories are exposed at these paths.
+  Deriving the consequent without the antecedent applies a rule whose
+  PRECONDITION is unmet, and DR-6 makes the precondition part of the rule. A
+  dependency declared in the build file is intention at exactly the tier an
+  annotation is — just in a different file. When the gate cannot be answered,
+  the catalog reports SKIPPED in the manifest (visible degradation, not
+  silence).
 - `@RepositoryRestResource` is optional; `exported=false` removes a repository;
   per-method `@RestResource` removes or renames one route.
 
