@@ -862,8 +862,9 @@ def assemble_module_document(
             response = _descriptor_entry(
                 "Response", endpoint.get("response_shape"), fields_by_shape, shape_names
             )
+            streaming = _streaming_entry(endpoint.get("response_shape"))
             via = _via_entry(endpoint, origin_by_symbol)
-            entries = [entry for entry in (via, request, response) if entry is not None]
+            entries = [entry for entry in (via, request, response, streaming) if entry is not None]
             identity = _wire_identity(endpoint, redactor)
             header = _detail_header(identity, _handler_identity(endpoint))
             sections.append(MachineDetail((header, *entries)))
@@ -1365,6 +1366,22 @@ def _descriptor_entry(
     if not fields_by_shape.get(shape_id):
         return DetailEntry(_text(label), _text(_SHAPE_NONE_RECORDED), None)
     return DetailEntry(_text(label), _shape_ref(shape_names[shape_id]), None)
+
+
+def _streaming_entry(descriptor_json: object) -> DetailEntry | None:
+    """gRPC's `unary | server-streaming | client-streaming | bidi` (2O design
+    §1a), when the descriptor carries one — a typed 2M Detail line, not a new
+    `endpoints` column, `schema_operations.py`'s own ruling for exactly this
+    reason. `_grpc_operation_row` writes the word under a `streaming` key
+    beside `response_shape`'s own `shape_id`, a key no other schema format's
+    descriptor ever carries, so a bare presence check is the whole rule:
+    every non-gRPC row's `None` here is silence, not a gap."""
+    if descriptor_json is None:
+        return None
+    streaming = json.loads(str(descriptor_json)).get("streaming")
+    if streaming is None:
+        return None
+    return DetailEntry(_text("Streaming"), _text(str(streaming)), None)
 
 
 @dataclass(frozen=True)

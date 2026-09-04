@@ -274,6 +274,28 @@ class DeclaredFieldFact(BaseModel):
     enum_symbols: list[str] | None = None
 
 
+class OperationRecord(BaseModel):
+    """What a service operation declares beyond its name (2O design §1a).
+
+    Optional on `DeclaredShapeFact`, populated only when `role == "operation"`
+    — a fact-schema amendment (`fact_schema_version` bumped, D00 §5's own
+    amendment note records the estate cost). Added for gRPC, whose methods
+    carry a request AND a response type plus the two streaming flags; 2I's
+    SOAP operations may fill the same record later — today their output side
+    is honestly NULL and nothing changes for them, because `wsdl_xsd.py`
+    never constructs one."""
+
+    model_config = {"frozen": True}
+    # The descriptor's own fully-qualified message names — an intra-descriptor
+    # join to the SAME descriptor's `declared_shape` universe (2O design §1a),
+    # never a guess across universes. `None` for a format that has not filled
+    # this record's output side yet (SOAP, today).
+    input_ref: str | None
+    output_ref: str | None
+    client_streaming: bool
+    server_streaming: bool
+
+
 class DeclaredShapeFact(BaseModel):
     """One message or record type, as its schema declares it (D00 §5,
     D01 §3). Never emitted by an extractor: it is the interpreter's output,
@@ -304,6 +326,13 @@ class DeclaredShapeFact(BaseModel):
     # hang off, which a schema format may equally state. NULL for every type
     # that is an ordinary payload, which is nearly all of them.
     role: Literal["query", "mutation", "subscription", "operation"] | None = None
+    # What a `role == "operation"` shape declares beyond its name — a gRPC
+    # method's request/response refs and streaming flags (2O design §1a).
+    # NULL for every shape `role` does not mark `"operation"`, and NULL today
+    # even for a WSDL one (2I's own boundary, restated on `OperationRecord`
+    # itself): a fact-schema amendment gains a field, never fills it
+    # retroactively for a format that does not populate it.
+    operation: OperationRecord | None = None
     fields: list[DeclaredFieldFact] = Field(default_factory=list)
 
 

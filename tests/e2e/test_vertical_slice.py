@@ -400,9 +400,20 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # an operation declared in a jar and in no source file here. `soap`
     # outbound becomes 2; inbound is untouched, because a stub declares calls
     # and never a service.
+    # 2O Task 4 (`grpc-schema.yml`, `schema_operations`'s gRPC analog of 2H
+    # Task 4's `graphql-schema.yml` and 2I Task 4's `wsdl-schema.yml`): +2 grpc
+    # inbound — `sextant.orders.OrderService/GetOrder` (unary) and
+    # `sextant.orders.OrderService/StreamOrders` (server-streaming), the two
+    # methods `order.proto`'s new `service OrderService` block declares. A NEW
+    # protocol bucket — the fifth D00's closed set gains live in this fixture
+    # (`graphql`, `sse`, `websocket`, `soap`, now `grpc`) — and nothing
+    # outbound: no annotation catalog implements either method here, so
+    # neither row has a bytecode twin to merge with or a caller to derive.
+    # `soap` stays 6/2; `grpc` is new at 2/0.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "graphql": 12,
+        "grpc": 2,
         "http": 34,
         "jms": 5,
         "kafka": 15,
@@ -563,7 +574,14 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # appears here only because `.sextant.yml` names the library — outbound
     # 40 + 1 = 41 — the 125-endpoint total (6 + 78 + 41 = 125). Nothing merges:
     # `stubCharge` is an operation nothing in this module serves.
-    assert rows == [("both", 6), ("inbound", 78), ("outbound", 41)]
+    # 2O Task 4 (`grpc-schema.yml`): +2 inbound grpc — `order.proto`'s new
+    # `service OrderService` block (comment above, `metadata["endpoints"]`) —
+    # inbound 78 + 2 = 80 — the 127-endpoint total (6 + 80 + 41 = 127).
+    # Nothing outbound and nothing `both`: the catalog is `direction: inbound`
+    # with no reply mechanism, and a grpc row cannot merge with anything else
+    # in the fixture — wire identity is protocol-scoped (D01 §3), and no
+    # annotation catalog implements either method here.
+    assert rows == [("both", 6), ("inbound", 80), ("outbound", 41)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(

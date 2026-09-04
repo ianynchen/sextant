@@ -53,6 +53,24 @@ scope (a later task's to read, honestly absent until then). Every other
 column — `handler`, `caller`, `evidence`, `resolution` — reads exactly as the
 per-field case above.
 
+**gRPC (2O design §1a, Task 4) is the same per-shape branch, over a shape that
+answers the output side WSDL's own boundary leaves NULL.** A descriptor
+`service` method's own shape carries `DeclaredShapeFact.operation` — the
+`{input_ref, output_ref, client_streaming, server_streaming}` sub-record the
+2G interpreter's protobuf branch now fills — so the branch below reads it
+straight off the fact rather than self-referencing the shape the way the WSDL
+case does: `request_shape`/`response_shape` are two DIFFERENT descriptors,
+each an intra-descriptor join to the SAME descriptor's message shapes
+(`input_ref`/`output_ref`, never a guess across universes). Streaming carries
+alongside `response_shape`'s own `shape_id`, under a `streaming` key no other
+format's descriptor ever writes — `unary`, `server-streaming`,
+`client-streaming` or `bidi` — read by the module document's detail block
+(2M design §5b) and nowhere else: it joins on nothing, so it is not a new
+`endpoints` column, the explicit ruling 2O design §1a states. `path` is the
+shape's own `schema_name` (`<protoPackage>.<Service>/<Method>`, D01's gRPC
+identity table) exactly as the WSDL case's `path` is; `method` stays NULL for
+the same reason — gRPC is as verbless as SOAP (D02 §2, amended).
+
 **Agreement with the annotation catalogs rides two existing mechanics** (2H
 design §3), neither of them new:
 
@@ -150,21 +168,44 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # are the identical value: `wsdl_xsd.py`'s own `_add_shape` writes
             # `symbol=qualified, schema_name=qualified` because a contract
             # file compiles to no class, so there is no second naming for
-            # `schema_name` to bridge. Reading `symbol` here is reading
-            # `schema_name` under the one name this query carries.
+            # `schema_name` to bridge; `protobuf.py`'s `_service_shapes`
+            # (2O design §1a) gives an RPC method's shape the identical
+            # treatment for the identical reason — it travels as no class of
+            # its own either. Reading `symbol` here is reading `schema_name`
+            # under the one name this query carries.
             path = str(shape["symbol"])
             if (None, path) in seen:
                 continue
             seen.add((None, path))
-            rows.append(_operation_row(catalog, path, str(shape["evidence"])))
+            # `payload -> 'operation'` (the JSON, not text, extractor —
+            # `workspace.py`'s own choice, kept so `json.loads` below can read
+            # a nested object): a JSON `null` value comes back as the STRING
+            # `"null"`, not SQL NULL, because pydantic always writes the key
+            # (`OperationRecord | None = None` still dumps `"operation":
+            # null` for every message-typed shape) — so parsing FIRST and
+            # checking the parsed result, rather than the raw column, is what
+            # tells a WSDL shape's absent record apart from a gRPC shape's
+            # real one either way a duckdb version happens to hand it back.
+            raw_operation = shape["operation"]
+            operation = None if raw_operation is None else json.loads(str(raw_operation))
+            if operation is None:
+                rows.append(_operation_row(catalog, path, str(shape["evidence"])))
+            else:
+                # gRPC's own shape of this branch (2O design §1a): the
+                # sub-record names BOTH sides, so there is a real response to
+                # derive here, not merely a request self-reference.
+                rows.append(_grpc_operation_row(catalog, path, str(shape["evidence"]), operation))
             # No stamp: `stamps` fills a row's `response_shape` from the
-            # OUTPUT side of an operation, and 2I Task 3 marks INPUT elements
-            # only — no `declared_shape` fact links an operation to what its
-            # WSDL output message names, so there is nothing here to
-            # coalesce a response from. Inventing one by, say, guessing at an
-            # output element's name would be exactly the guess D00 §3 rules
-            # out; `response_shape` stays NULL, honestly, until a later task
-            # reads the output side.
+            # OUTPUT side of an operation, coalescing what a pre-existing
+            # annotation twin left NULL — and gRPC's row above already CARRIES
+            # its own `response_shape`, so stamping it would only ever find a
+            # row that has nothing to coalesce. 2I Task 3 marks WSDL's INPUT
+            # elements only — no `declared_shape` fact links a WSDL operation
+            # to what its output message names, so there is nothing here to
+            # coalesce a response from either. Inventing one by, say, guessing
+            # at an output element's name would be exactly the guess D00 §3
+            # rules out; the WSDL row's `response_shape` stays NULL, honestly,
+            # until a later task reads the output side.
             continue
         for field in json.loads(str(shape["fields"])):
             # GraphQL renames nothing and the interpreter says so by writing
@@ -259,6 +300,80 @@ def _operation_row(catalog: Catalog, path: str, evidence: str) -> dict[str, Any]
         separators=(",", ":"),
     )
     return row
+
+
+def _grpc_operation_row(
+    catalog: Catalog, path: str, evidence: str, operation: dict[str, Any]
+) -> dict[str, Any]:
+    """gRPC's own shape of the per-shape `"operation"` row (2O design §1a,
+    Task 4) — everything but the two payload columns reads exactly as
+    `_operation_row` above (`method` NULL, `handler`/`caller` NULL), so this
+    wraps `_row` the identical way rather than repeating its fields.
+
+    Both `request_shape` AND `response_shape` are set here, unlike the WSDL
+    case: a gRPC method names TWO independent message types, never one shape
+    wrapping the other, so there is no self-reference to make — `operation`'s
+    own `input_ref`/`output_ref` are the descriptor's fully-qualified names
+    for the SAME descriptor's message shapes, read straight off the fact
+    (an intra-descriptor join `protobuf.py`'s `_service_shapes` already made,
+    never a guess across universes here).
+
+    Streaming rides beside `response_shape`'s own `shape_id` rather than
+    becoming a new `endpoints` column — the explicit ruling 2O design §1a
+    states. It could as easily sit on `request_shape` (client streaming is a
+    property of the REQUEST side); it sits on the response side instead
+    because gRPC's four-way vocabulary (`unary`/`server-streaming`/
+    `client-streaming`/`bidi`) is a property of the OPERATION as a whole, and
+    one column needs to carry the combined word rather than each side stating
+    its own half. `_shape_descriptor`'s `streaming` key is written under a
+    name no other schema format's descriptor ever uses — every existing
+    reader of `request_shape`/`response_shape` (`document.py`'s detail block,
+    `shapes/contracts.py`'s expansion) either ignores an unknown key or reads
+    only `shape_id`/`item`, so this costs nothing beside the columns that
+    already exist."""
+    row = _row(catalog, None, path, evidence)
+    row["request_shape"] = _shape_descriptor(str(operation["input_ref"]))
+    row["response_shape"] = _shape_descriptor(
+        str(operation["output_ref"]), streaming=_streaming_word(operation)
+    )
+    return row
+
+
+def _streaming_word(operation: dict[str, Any]) -> str:
+    """The four-way vocabulary 2O design §1a states verbatim, derived from
+    the two flags the descriptor itself carries — never a guess, since a
+    protobuf `service` method states both independently and every one of the
+    four combinations is a real, legal RPC shape."""
+    client = bool(operation["client_streaming"])
+    server = bool(operation["server_streaming"])
+    if client and server:
+        return "bidi"
+    if server:
+        return "server-streaming"
+    if client:
+        return "client-streaming"
+    return "unary"
+
+
+def _shape_descriptor(shape_id: str, streaming: str | None = None) -> str:
+    """D01 §5's `{wire_type, wire_format, nullable, shape_id}` descriptor for
+    a gRPC operation's own request or response — always `object`, never
+    nullable (a gRPC message field is always present, protobuf's own
+    proto3 rule `protobuf.py`'s `_protobuf_element` already applies to every
+    message-typed field) — with `streaming` appended only where the caller
+    passes one, the one column-pair use of that key (this module's own,
+    `_grpc_operation_row`'s docstring). Serialised the same deterministic way
+    (`sort_keys`, compact separators — NFR-1) every other writer of these two
+    columns uses."""
+    described: dict[str, Any] = {
+        "wire_type": "object",
+        "wire_format": None,
+        "nullable": False,
+        "shape_id": shape_id,
+    }
+    if streaming is not None:
+        described["streaming"] = streaming
+    return json.dumps(described, sort_keys=True, separators=(",", ":"))
 
 
 def _declared_response(field: dict[str, Any]) -> str:

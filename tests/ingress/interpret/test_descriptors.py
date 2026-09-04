@@ -96,6 +96,31 @@ message Blob {
 }
 """
 
+# 2O Task 4: a `service` alongside its own two message types, own file and
+# own package — kept apart from `ORDER_PROTO` rather than folded into it, so
+# `test_every_message_becomes_a_shape_and_nothing_else_does`'s exact shape
+# list stays about MESSAGES only, undisturbed by the new operation shapes a
+# service now also yields. One unary and one server-streaming method is
+# enough to tell the two derived operation shapes apart.
+SERVICE_PROTO = """syntax = "proto3";
+package sextant.orders.grpc;
+option java_package = "com.example.orders.grpc.proto";
+option java_outer_classname = "OrderServiceProtos";
+
+message OrderQuery {
+  string order_id = 1;
+}
+
+message OrderSnapshot {
+  string status = 1;
+}
+
+service OrderQueryService {
+  rpc GetOrder(OrderQuery) returns (OrderSnapshot);
+  rpc StreamOrders(OrderQuery) returns (stream OrderSnapshot);
+}
+"""
+
 
 def _diamond(name: str, imports: tuple[str, ...], fields: str) -> str:
     """One corner of the import diamond: A imports B and C, both import D."""
@@ -116,6 +141,7 @@ PROTOS = {
     "order.proto": ORDER_PROTO,
     "common.proto": COMMON_PROTO,
     "blob.proto": BLOB_PROTO,
+    "service.proto": SERVICE_PROTO,
     "d.proto": _diamond("D", (), "  string id = 1;"),
     "b.proto": _diamond("B", ("d.proto",), "  diamond.D held = 1;"),
     "c.proto": _diamond("C", ("d.proto",), "  diamond.D held = 1;"),
@@ -132,6 +158,7 @@ HOLDERS = {
     "order.proto": "com/example/orders/proto/OrderProtos#",
     "common.proto": "com/example/orders/proto/CommonProtos#",
     "blob.proto": "com/example/orders/proto/BlobProtos#",
+    "service.proto": "com/example/orders/grpc/proto/OrderServiceProtos#",
     "a.proto": "com/example/diamond/AProtos#",
     "b.proto": "com/example/diamond/BProtos#",
     "c.proto": "com/example/diamond/CProtos#",
@@ -430,6 +457,81 @@ def test_a_source_origin_shape_is_named_by_its_schema_full_name(tmp_path: Path):
     assert {shape.evidence for shape in shapes} == {"declared"}
     price = _fields(_shape(shapes, "sextant.orders.OrderRequest"))["price"]
     assert price.shape_ref == "sextant.orders.Money"
+
+
+# 2O Task 4: a descriptor `service`'s methods become `role: operation`
+# shapes, the identity layer Task 5's bytecode-side derivation merges
+# against.
+
+
+def test_a_descriptor_service_yields_one_operation_shape_per_method(tmp_path: Path):
+    """`schema_name = f"{file.package}.{service.name}/{method.name}"` (2O
+    design §1a) — one shape per RPC method, never per message, and named by
+    the wire identity D01 requires rather than by anything a code generator
+    would call it."""
+    shapes, failed = _interpret(_descriptors_from(tmp_path, "service.proto"))
+
+    assert failed == []
+    operations = [shape for shape in shapes if shape.role == "operation"]
+    assert [shape.schema_name for shape in operations] == [
+        "sextant.orders.grpc.OrderQueryService/GetOrder",
+        "sextant.orders.grpc.OrderQueryService/StreamOrders",
+    ]
+    # A compiled origin still names an operation by its schema identity, not
+    # by a generated class: unlike a message, an RPC method travels as no
+    # class of its own — naming the `<Service>Grpc`/`ImplBase` stub is Task
+    # 5's, from bytecode, not this interpreter's (ARCHITECTURE §10).
+    assert all(shape.symbol == shape.schema_name for shape in operations)
+    assert all(shape.evidence == "compiler" for shape in operations)
+    assert all(shape.schema_format == "protobuf" for shape in operations)
+    # No fields projected for an operation shape — a service method's own
+    # payload is what its `operation.input_ref`/`output_ref` name, never a
+    # field list of its own.
+    assert all(shape.fields == [] for shape in operations)
+
+
+def test_the_operation_record_carries_streaming_and_both_refs(tmp_path: Path):
+    """`input_ref`/`output_ref` join to the SAME descriptor's message shapes
+    — an intra-descriptor join, never a guess across universes — and the two
+    streaming flags are read straight off the descriptor's own method,
+    independently: `GetOrder` sets neither, `StreamOrders` sets only the
+    server-side one."""
+    shapes, failed = _interpret(_descriptors_from(tmp_path, "service.proto"))
+
+    assert failed == []
+    unary = _shape(shapes, "sextant.orders.grpc.OrderQueryService/GetOrder")
+    stream = _shape(shapes, "sextant.orders.grpc.OrderQueryService/StreamOrders")
+    assert unary.operation is not None
+    assert (unary.operation.client_streaming, unary.operation.server_streaming) == (False, False)
+    assert stream.operation is not None
+    assert stream.operation.client_streaming is False
+    assert stream.operation.server_streaming is True
+    assert stream.operation.input_ref == "sextant.orders.grpc.OrderQuery"
+    assert stream.operation.output_ref == "sextant.orders.grpc.OrderSnapshot"
+    # A message shape's `operation` stays NULL — the sub-record is written
+    # only where `role == "operation"`, never retrofitted onto an ordinary
+    # payload type the same file also declares.
+    query = _shape(shapes, "com/example/orders/grpc/proto/OrderServiceProtos$OrderQuery#")
+    assert query.role is None
+    assert query.operation is None
+
+
+def test_a_source_origin_service_is_named_by_its_own_schema_name(tmp_path: Path):
+    """A `.proto` read off disk has no generated class to name an operation
+    by either — same boundary `test_a_source_origin_shape_is_named_by_its_
+    schema_full_name` states for a message, and the reason `symbol` is
+    already `schema_name`'s own value for a COMPILED operation shape too
+    (the test above): there is no second naming to bridge for either
+    origin."""
+    shapes, failed = _interpret(_descriptors_from(tmp_path, "service.proto", origin="source"))
+
+    assert failed == []
+    operations = [shape for shape in shapes if shape.role == "operation"]
+    assert {shape.evidence for shape in operations} == {"declared"}
+    assert [shape.symbol for shape in operations] == [
+        "sextant.orders.grpc.OrderQueryService/GetOrder",
+        "sextant.orders.grpc.OrderQueryService/StreamOrders",
+    ]
 
 
 # --- avro ----------------------------------------------------------------

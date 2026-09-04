@@ -36,3 +36,17 @@ message OrderRequest {
 message OrderReply {
   string order_id = 1;
 }
+
+// 2O Task 4: the identity layer's own fixture — a unary and a
+// server-streaming method, both reusing the message types above rather than
+// inventing new ones, is enough to exercise the descriptor-side derivation
+// (2O design §1a). No `io.grpc` codegen plugin runs over this file (the
+// `<Service>Grpc`/`ImplBase` stub Task 5 reads is a separate, later concern,
+// CP-8) — plain protoc still embeds the service definition into the same
+// `OrderProtos` descriptor this file's messages already reach the workspace
+// through, because a service is a first-class descriptor construct whether
+// or not a language plugin generates stub code for it.
+service OrderService {
+  rpc GetOrder(OrderRequest) returns (OrderReply);
+  rpc StreamOrders(OrderRequest) returns (stream OrderReply);
+}

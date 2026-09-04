@@ -131,14 +131,19 @@ _NAMED_QUERIES = {
     # `schema_operations` engine (D02 §2, 2H design §3): the operation root a
     # type serves, where its schema names one — re-added here WITH a consumer,
     # which is the rule the 2G trim enforced, and read by nothing else.
-    # `schema_name`/`origin` stay unselected — DR-4 precedence is settled
-    # upstream, in `analyze`'s `_prefer_compiled`, before a fact reaches this
-    # table.
+    # `operation` (2O design §1a) is that same engine's consumer, one role
+    # later: the `{input_ref, output_ref, client_streaming, server_streaming}`
+    # sub-record a `role == "operation"` shape carries, SQL NULL for every
+    # other shape (the amendment added the key; it did not fill it
+    # retroactively). `schema_name`/`origin` stay unselected — DR-4 precedence
+    # is settled upstream, in `analyze`'s `_prefer_compiled`, before a fact
+    # reaches this table.
     "declared_shapes": """
         SELECT payload ->> 'symbol'        AS symbol,
                payload ->> 'evidence'      AS evidence,
                payload ->> 'schema_format' AS schema_format,
                payload ->> 'role'          AS role,
+               payload ->  'operation'     AS operation,
                payload ->  'fields'        AS fields
         FROM raw_facts WHERE kind = 'declared_shape'
         ORDER BY symbol, document_id

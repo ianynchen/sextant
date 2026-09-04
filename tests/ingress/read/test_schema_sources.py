@@ -145,11 +145,17 @@ def test_proto_source_reader_round_trips_through_the_real_interpreter():
 
     assert failed == []
     names = {shape.schema_name for shape in shapes}
+    # 2O Task 4: `order.proto`'s new `service OrderService` block adds two
+    # `role: operation` shapes beside the four message ones above — the same
+    # `.proto` files, read source-origin this time, so the service reaches
+    # the interpreter here too.
     assert names == {
         "sextant.orders.Money",
         "sextant.orders.OrderRequest",
         "sextant.orders.OrderRequest.Line",
         "sextant.orders.OrderReply",
+        "sextant.orders.OrderService/GetOrder",
+        "sextant.orders.OrderService/StreamOrders",
     }
     assert all(shape.origin == "source" for shape in shapes)
 

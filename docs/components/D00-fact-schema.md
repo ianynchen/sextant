@@ -508,6 +508,16 @@ Each such fact carries, beside its `fields`:
   and not a derivation because a schema may *rename* its roots, so which type holds the
   role cannot be recovered from the type's own name by anything downstream — and only the
   interpreter may read a schema format at all.
+- **`operation`** — optional, populated only where `role` is `operation`: `{input_ref,
+  output_ref, client_streaming, server_streaming}`. A gRPC descriptor `service` method
+  fills every field, `input_ref`/`output_ref` naming the SAME descriptor's message shapes
+  by their own `schema_name` (an intra-descriptor join, never a guess across universes);
+  a WSDL operation (2I) leaves it NULL today, its output side unrecorded until a later
+  task fills it. **Amendment (2O Task 4, `fact_schema_version` 1.0.0 → 1.1.0):** this
+  field is new. The estate cost is re-analysis of every already-scanned workspace to gain
+  it — accepted pre-gate, because every fact file already on disk still validates
+  unchanged, with the field simply absent (D01 §7's cache-key rule already treats a
+  `fact_schema_version` change as one reason a cached result may no longer be reused).
 
 Per field: the schema's own `name` and the encoded `wire_name` (a protobuf `json_name`,
 **read from the descriptor, never computed** — protoc puts the computed default and an
