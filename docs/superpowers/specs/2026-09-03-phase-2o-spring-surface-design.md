@@ -421,12 +421,30 @@ alongside §8's, one audited golden update, one release-notes callout.
 
 ### 3b. The catalogs
 
+- **THREE catalogs, not one** — a `Catalog` carries exactly one `style`, one
+  `protocol` and one `direction` (`application/ports/catalogs.py:18-20`), and
+  `derive_endpoints` resolves exactly one engine per catalog, so the single
+  `spring-rabbit.yml` this section first described could not load. The shipped
+  convention is one file per triple (`spring-kafka.yml` + `spring-kafka-template.yml`):
+  **`spring-rabbit.yml`** (annotation_driven / amqp / inbound),
+  **`spring-pulsar.yml`** (annotation_driven / pulsar / inbound), and
+  **`spring-rabbit-template.yml`** (single_call / amqp / outbound).
 - **`spring-rabbit.yml`** — `@RabbitListener(queues=…)` inbound (protocol
-  `amqp`; queue names verbatim; `${…}` placeholders through the shipped ladder;
-  SpEL `#{…}` renders UNRESOLVED verbatim — no SpEL reader exists and none is
-  built; `bindings=` nested annotations are a STATED BOUNDARY — D00's literal
-  model has no nested annotations). `@PulsarListener` sibling rows (protocol
-  `pulsar`). Outbound `RabbitTemplate.convertAndSend(exchange, routingKey, …)`:
+  `amqp`; queue names verbatim). **Placeholders are PRESERVED, not resolved:**
+  a `${…}` queue name stays in the path exactly as written, which is what every
+  placeholder-bearing address already does (`derive_endpoints.sql:629-631`
+  leaves a composed path containing `${` untouched, and 2F's ladder is a
+  call-site mechanism `annotation_driven` never invokes). SpEL `#{…}` likewise
+  — no SpEL reader exists and none is built — **but a SpEL destination must
+  NOT publish at `resolved`**: `derive_endpoints.sql:648` hardcodes
+  `'resolved'` for every annotation-derived row today, so this section scopes
+  the one change that makes a non-literal address honest — a path-shape gate
+  setting `unresolved` for a path carrying `#{` or `${`. Publishing a SpEL
+  expression as a resolved address is a confidently-wrong address, which is
+  the failure `derive_endpoints.sql:386-390`'s own guards exist to prevent.
+  `bindings=` nested annotations are a STATED BOUNDARY — D00's literal model
+  has no nested annotations. Outbound
+  `RabbitTemplate.convertAndSend(exchange, routingKey, …)`:
   AMQP's wire identity is the exchange+routing-key PAIR, which `single_call`'s
   one-address contract refuses — `single_call` gains an optional
   **secondary-address capture** (`address_arg_2` + a catalog-declared join
@@ -445,26 +463,67 @@ alongside §8's, one audited golden update, one release-notes callout.
   the base operation path with the boundary stated (CP-5 trimmed accordingly).
   Built-in endpoints (health/info/metrics — dependency + property, no user
   code): stated boundary.
-- **`jakarta-servlet.yml`** — `@WebServlet` inbound via `annotation_driven`
-  (urlPatterns verbatim). `@WebFilter`, `FilterRegistrationBean`,
-  `ServletRegistrationBean`: stated boundaries.
+- **Servlets are ENGINE work, not a catalog file** — `@WebServlet` carries the
+  address at TYPE level, and `annotation_driven`'s derivation joins only method
+  symbols, stating so itself: *"A type-level annotation mints no row of its
+  own"* (`derive_endpoints.sql:398-400`). Routing it through
+  `members: public_methods` + the `path_fallback` that key requires would
+  compose `/legacy/*` + `/` + `doGet` — four fabricated URLs per servlet
+  (`/doGet`, `/doPost`, `/init`, `/destroy`), none of them served.
+  The Servlet spec's own rule is what to mirror: **address from the type
+  annotation, verb from the overridden `doXxx` method name**, evidence being
+  the class extending `HttpServlet`. `supertype_derived` (2O Task 5) already
+  reads "class extends X → the methods it overrides", so the shape exists —
+  but its member selector filters `visibility == "public"`
+  (`supertype_derived.py:328`) and servlet handlers are `protected`, so the
+  selector widens (visibility IS in the fact stream —
+  `workspace.py:163-168` projects it).
+  **Correct requires all of:** each of multiple `urlPatterns` is its own
+  endpoint; `value` and `urlPatterns` are aliases; a class overriding
+  `service()` bypasses `doXxx` dispatch entirely so the verb map does not
+  apply; a `GenericServlet` subclass has no HTTP verb semantics at all; and
+  `HttpServlet` serves HEAD and OPTIONS implicitly from `doGet`, which needs a
+  ruling rather than an assumption. `web.xml` and programmatic
+  `ServletContext.addServlet` are the other two registration routes and are
+  STATED BOUNDARIES — the annotation is one of three.
+  A probe answers the annotation-shape questions before the engine is written
+  (§0a). `@WebFilter`, `FilterRegistrationBean`, `ServletRegistrationBean`:
+  stated boundaries.
 
 ## 4. Non-wire sections — two new styles, two new tables
 
 The endpoint table stays wire-true (user ruling). Each family gets a small
 dedicated engine style (neutral; annotation names from catalogs), a D01 table, a
 D06 bundle artifact, an M07 section, and an M08 export slot — the full
-derive→render→export pattern, stated as four schema/doc touches per family.
+derive→render→export pattern.
+
+**Those four are DOCUMENTATION touches. The code registrations are six more per
+family, each with exactly one consumer, and this section previously omitted all
+of them:** DDL in `storage/duckdb/schema.sql`; a derive plus a **reset** SQL
+registered in the derive map (`workspace.py:561-579`) — the reset runs ONCE per
+resolve in `pipeline.py`, never inside the engine, because `derive_endpoints`
+empties `endpoints` outside its per-catalog loop for the reason it states
+(`endpoints.py:83-88`: a per-catalog rebuild would leave only whichever ran
+last), and §4a's own "Quartz: later catalog, same table" is precisely the
+two-catalogs-one-table case that makes it matter; a read query in
+`_NAMED_QUERIES`; an export query in `_EXPORT_QUERIES` plus membership in
+`_EXPORTED_TABLES`; a typed section in `egress/render/document.py`; and a
+`ResolveReport` field (`pipeline.py:17-27`) if the table is reported. Times two
+families.
 
 ### 4a. `style: scheduled_work` → `scheduled_work` table
 
 `spring-scheduling.yml` (`@Scheduled`, `@Schedules`): handler symbol, trigger
 kind (`cron | fixedRate | fixedDelay`), expression verbatim (placeholders through
 the ladder; unresolvable → unresolved). Renders as a "Scheduled work" section.
-**Stated consequence:** D00's `root_kind: scheduled` closed-set member stays
-unfed this phase — `trace_of` roots on inbound endpoints and scheduled handlers
-are deliberately not endpoints; the 2Q call-graph phase, which builds traversal,
-is where scheduled roots come alive. Quartz: later catalog, same table.
+**Stated consequence, corrected:** scheduled handlers are deliberately not
+endpoints. D00 documents a `root_kind` set including `scheduled`, and D01
+documents a `trace_of` walk — **neither exists anywhere in `src/`**
+(documented-not-implemented register #7 and #11), so this phase neither feeds
+nor reads either, and the engine's docstring must say that rather than implying
+a live set with one unfed member. This omission becomes wrong the moment a
+`root_kind` producer ships, at which point scheduled rows must be re-examined as
+roots — 2Q, which builds traversal, is where that happens. Quartz: later catalog, same table.
 
 ### 4b. `style: error_advice` → `error_handlers` table
 
@@ -635,10 +694,23 @@ against the fake seam. Retrying is the operator's re-run, by design.
 - Schema changes (`declared_shape.operation`, protocols `amqp`/`pulsar`, the
   binder migration, the §8 identity migration, §1c's service-level gRPC
   identity form in D01's identity table, the three new `open_questions` kinds
-  with their candidates shapes and renderer/export switch arms, and §6's
-  collision-detector interface/implementor exemption in D01's
-  routing-ambiguity rule) each carry a D00/D01 amendment note and a migration
-  line in the manifest discipline.
+  with their candidates shapes — **their renderer/export arms shipped ahead of
+  their writers in `cf3f841`**, after the same gap crashed render on a
+  `service_identity` question — and §6's merge-precedence rule) each carry a
+  D00/D01 amendment note and a migration line in the manifest discipline.
+  **Ruling R12 governs §6's line:** there is no collision detector and no
+  findings mechanism in `src/`; D01:296 describes a PROPERTY of content-derived
+  identity — two handlers sharing one wire contract merge into one row — so the
+  amendment states which handler symbol survives the dedup, and claims no
+  suppression of a finding that nothing emits.
+  **Already shipped, not to be redone (Tasks 1-5):** `declared_shape.operation`
+  and the `fact_schema_version` bump (D00:505-520), protocols `amqp`/`pulsar`
+  with the binder migration, the §8 identity migration, §1c's service-level gRPC
+  identity form (D01:340-341), and the D02 style sections for
+  `supertype_derived` and `injected_client` (D02:1287, :1384). What remains is
+  `derived_resource`, `scheduled_work` and `error_advice`, plus D00:190's
+  protocol list, which still omits `amqp` and `pulsar` while
+  `closed_sets.py:86-87` ships both — a live §5.1 divergence.
 - **COVERAGE.md is a first-class deliverable of this phase, not an
   afterthought** — the spec defers to it a dozen times and gap B's whole point
   is the ratings it carries. Every task that ships a surface updates its rows

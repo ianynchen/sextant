@@ -198,13 +198,20 @@ def test_a_project_whose_classpath_resolves_nothing_reports_no_coordinates():
     assert model.modules[0].dependency_coordinates == ()
 
 
-def test_publishing_evidence_makes_the_kind_library_the_gradle_only_deviation():
-    """2M design §2: `library` is unreadable from a POM alone, so Maven never
-    returns it — Gradle CAN read publishing evidence from the evaluated
-    model, and this fixture pins that deviation."""
+def test_a_publishing_project_is_not_classified_library():
+    """The near-miss for the inference removed by the 2026-09-04 user ruling:
+    publishing says where artifacts GO, not what a module CONTAINS, so it is
+    never read. `pricing-lib` applies `maven-publish` and has no container
+    file — the exact shape that used to return `library` and be SKIPPED
+    outright. It must now read `undetermined` and be analyzed like anything
+    else, which is what the same repo already did under Maven, whose own
+    `_classify` refuses the identical guess ("every POM declares coordinates
+    whether anything is published or not"). Before the ruling this asserted
+    `library`; the divergence meant one repo analyzed differently under the
+    two build systems."""
     model = _repository_model(CAPTURE)
     pricing_lib = next(m for m in model.modules if m.module_id == "com.acme:pricing-lib")
-    assert pricing_lib.kind == "library"
+    assert pricing_lib.kind == "undetermined"
     assert pricing_lib.packaging == "jar"
 
 

@@ -49,21 +49,26 @@ def test_a_missing_home_directory_is_reported_as_a_message_not_a_stack_trace(
     assert "could not determine the user's home directory" in str(excinfo.value)
 
 
-def test_skip_reason_names_library_kind():
-    """Gradle-only today (Maven never returns `library`, spec §2) — pinned
-    directly against `_skip_reason` since no real `MavenDetector` fixture
-    can produce it."""
-    module = ModuleModel(
-        module_id="g:a",
-        coordinates="g/a",
-        version="1.0.0",
-        root=Path("."),
-        kind="library",
-        languages=frozenset(),
-        source_roots=(),
-        output_dirs=(),
-    )
-    assert api._skip_reason(module) == "kind is library"
+def test_no_module_kind_causes_a_skip():
+    """The near-miss for the removed `library` skip (2026-09-04 user ruling):
+    module KIND no longer decides analysis at all. Even the value that used to
+    skip outright is analyzed now — nothing produces `library` any more, and a
+    module nothing references costs only facts nobody links to, while skipping
+    a referenced one loses its outbound clients and shapes entirely. The one
+    surviving skip rests on evidence, not inference: Maven's own declaration
+    that a module produces no jar."""
+    for kind in ("library", "service", "undetermined"):
+        module = ModuleModel(
+            module_id="g:a",
+            coordinates="g/a",
+            version="1.0.0",
+            root=Path("."),
+            kind=kind,
+            languages=frozenset(),
+            source_roots=(),
+            output_dirs=(),
+        )
+        assert api._skip_reason(module) is None, kind
 
 
 def test_skip_reason_names_packaging_pom():

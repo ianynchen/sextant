@@ -55,6 +55,19 @@ messaging) both exist.
 | **2M** | Build systems and output quality | delivered — [spec](../specs/2026-09-02-phase-2m-build-and-output-design.md) | `GradleDetector` (the project's own wrapper + a read-only init script, offline-first, three honest failure classes); Maven's recursive `<modules>` walk with each non-library, non-BOM module analyzed into its own workspace and pinned in `modules.json`; the four rendered-output fixes — backtick-quoted mermaid identifiers, typed HTML sections replacing the `<pre>` blocks, endpoint/shape readability, inline-code in LLM prose; commit-pinned field checks against two live Boot 4.1 repos | detection by asking the build tool itself — DR-6 applied to Gradle |
 | **2N** | Enrichment polish | delivered — [spec](../specs/2026-09-03-phase-2n-enrichment-polish-design.md) | the Tradewind adapter replacing `claude-api` (subscription and api-key auth, module-local session store, the redesigned no-progress guard); config-shaped verdict identities so unresolved-configuration rows become LLM-answerable; the flight-1 INSTRUCTIONS fixes; the `sextant.api` library facade (embed the four verbs, typed errors, CLI byte-unchanged); the first verdict-engine validation flight | the agent behind the port becomes swappable in practice, not just in design |
 | **2O** | Spring surface | planned | the A-tier unshipped rows — gRPC (both starters), `@RabbitListener`, Actuator `@Endpoint`, `@Scheduled`, older `@SqsListener` spellings, Spring Integration adapters; the `@HttpExchange` server-side fence; module-kind evidence widening; leading-slash normalization | catalogs-only again — every row a rehearsal for 2J's acceptance test |
+**Nothing from 2O is deferred to a new phase. Two items were mis-sized inside
+it, not misplaced (ruled 2026-09-04):** servlets (`@WebServlet`) and Spring
+Integration destinations are Spring surface, so they stay in **2O** and their
+tasks are re-scoped to state the engine work each needs, rather than being cut
+to a later letter. Servlets need a member selector that admits `protected` plus
+the Servlet spec's own address/verb rule; Spring Integration needs whatever the
+committed destination probe (`scripts/probes/spring-integration-destinations.md`)
+shows is actually readable. **Project catalogs — letting a repo declare its own
+catalogs — are deliberately NOT scheduled anywhere.** The probe may make them
+unnecessary for Integration, and they carry a commitment worth deciding on its
+own merits: they would turn D02's catalog schema into a public API, after which
+every schema change is a breaking change for users.
+
 | **2P** | Spring Cloud + Meridian contract + docs-honesty backlog | planned | Spring Cloud Gateway's config-declared proxy routes (today invisible — a live gateway analysis showed four `lb://` routes the tables cannot see); `lb://` discovery URIs; the Config Server honesty story; **the Meridian integration** ([docs/meridian-integration.md](../../meridian-integration.md), ruled into 2P 2026-09-03): boundary vocabulary (FR-21), derivation diff (FR-22), observability map (FR-23) — FR-24's library embedding largely delivered by 2N's `sextant.api` facade | config-declared endpoints — routes that exist in YAML, not code — plus the typed diff/observability contract a consumer can gate PRs on |
 
 **2P carries the documented-but-unimplemented backlog, and it runs FIRST within

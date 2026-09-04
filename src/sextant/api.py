@@ -316,13 +316,17 @@ def _root_relative(root: Path, target: Path) -> str:
 
 def _skip_reason(module: ModuleModel) -> str | None:
     """Why a module is skip-listed rather than analyzed, or `None` when it
-    should be analyzed (2M design §2, ruled amendment). `library`
-    (Gradle-only — Maven never returns it) and a leaf
-    `<packaging>pom</packaging>` are the only two KNOWN-not-a-service
-    shapes; everything else, `kind == "undetermined"` included, is
-    analyzed."""
-    if module.kind == "library":
-        return "kind is library"
+    should be analyzed (2M design §2, amended by the 2026-09-04 user ruling).
+
+    **A leaf `<packaging>pom</packaging>` is now the only skip**, and it is
+    not a judgement about the module's purpose: Maven's own declaration that
+    the module produces no jar means there is provably nothing to scan. The
+    former `kind == "library"` skip is gone with the publishing inference that
+    fed it (see `GradleDetector._classify`) — no detector returns `library`
+    any more. Everything with code is analyzed, `undetermined` included: a
+    module nothing references simply yields facts nobody links to, which
+    costs a little time and risks nothing, while skipping one that IS
+    referenced loses its outbound clients and shapes entirely."""
     if module.packaging == "pom":
         return "packaging is pom"
     return None

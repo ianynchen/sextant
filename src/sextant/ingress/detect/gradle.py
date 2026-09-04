@@ -429,15 +429,27 @@ class GradleDetector:
 
     @staticmethod
     def _classify(path: Path, project: dict[str, Any]) -> str:
-        """Service, library, or undetermined (M02, widened by 2M design §2):
-        a container file beside the project is the same framework-neutral
-        service evidence `MavenDetector` reads. `library` is the
-        Gradle-only deviation — a publishing plugin applied is evidence a
-        POM alone can never carry, so `MavenDetector` never returns it."""
+        """Service or undetermined, from evidence — the same two answers
+        `MavenDetector._classify` gives, from the same framework-neutral
+        container-file evidence.
+
+        **`library` is never returned, and publishing is never read** (user
+        ruling, 2026-09-04). A publishing plugin says where artifacts GO, not
+        what the module CONTAINS: a user has many ways to publish, may publish
+        by a mechanism invisible to us, or may build locally and never publish
+        at all. Whether a module is worth reading is decided by code
+        reference, not by distribution. `MavenDetector` already refuses the
+        same guess in almost these words — "every POM declares coordinates
+        whether anything is published or not — reading that as evidence would
+        be the guess this method exists to refuse" — and this method used to
+        make exactly that guess for Gradle, which made the SAME repo analyze
+        differently under the two build systems.
+
+        This holds as long as skipping is decided from module kind at all; a
+        future skip rule must rest on there being provably nothing to scan
+        (`packaging=pom`), never on an inference about a module's purpose."""
         if any((path / name).is_file() for name in CONTAINER_FILES):
             return "service"
-        if project["publishing"]:
-            return "library"
         return "undetermined"
 
     @staticmethod
