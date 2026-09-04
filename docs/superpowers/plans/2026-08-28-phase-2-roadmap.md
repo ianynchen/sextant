@@ -55,6 +55,23 @@ messaging) both exist.
 | **2M** | Build systems and output quality | delivered — [spec](../specs/2026-09-02-phase-2m-build-and-output-design.md) | `GradleDetector` (the project's own wrapper + a read-only init script, offline-first, three honest failure classes); Maven's recursive `<modules>` walk with each non-library, non-BOM module analyzed into its own workspace and pinned in `modules.json`; the four rendered-output fixes — backtick-quoted mermaid identifiers, typed HTML sections replacing the `<pre>` blocks, endpoint/shape readability, inline-code in LLM prose; commit-pinned field checks against two live Boot 4.1 repos | detection by asking the build tool itself — DR-6 applied to Gradle |
 | **2N** | Enrichment polish | delivered — [spec](../specs/2026-09-03-phase-2n-enrichment-polish-design.md) | the Tradewind adapter replacing `claude-api` (subscription and api-key auth, module-local session store, the redesigned no-progress guard); config-shaped verdict identities so unresolved-configuration rows become LLM-answerable; the flight-1 INSTRUCTIONS fixes; the `sextant.api` library facade (embed the four verbs, typed errors, CLI byte-unchanged); the first verdict-engine validation flight | the agent behind the port becomes swappable in practice, not just in design |
 | **2O** | Spring surface | planned | the A-tier unshipped rows — gRPC (both starters), `@RabbitListener`, Actuator `@Endpoint`, `@Scheduled`, older `@SqsListener` spellings, Spring Integration adapters; the `@HttpExchange` server-side fence; module-kind evidence widening; leading-slash normalization | catalogs-only again — every row a rehearsal for 2J's acceptance test |
+**2O gains extractor capability 9.15 — varargs argument modelling — on measured
+evidence, and it is the phase's most reusable single change** (ruled 2026-09-04
+from `scripts/probes/spring-integration-destinations.md`). `MethodFlow.argumentJson`
+does not model the `ANEWARRAY` that builds a varargs array, so every `String...`
+destination — `Amqp.inboundAdapter`, `setQueueNames`, `Kafka.messageDrivenChannelAdapter`
+— emits one opaque `unresolved` and the literal never enters the fact stream. A
+control arm proved the cause is the varargs shape alone: the same eight
+destination spellings into a single-`String` sink discriminate every one. So JMS
+reads and AMQP does not, purely on signature shape, and today a hard-coded
+literal is indistinguishable from an externally configured value for any varargs
+API. 9.15 repairs all of them at once — it is not a Spring Integration feature.
+**Where a value is still not statically knowable after 9.15, it is marked, not
+guessed:** a `channel_destination` open question carrying the channel and
+handler, which is already the enrichment pass's inbox (2K §8, 2N's verdict
+engine), so the model is pointed at exactly the uncertainties rather than at the
+whole document.
+
 **Nothing from 2O is deferred to a new phase. Two items were mis-sized inside
 it, not misplaced (ruled 2026-09-04):** servlets (`@WebServlet`) and Spring
 Integration destinations are Spring surface, so they stay in **2O** and their

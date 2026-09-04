@@ -537,7 +537,67 @@ annotation value, else the parameter type — Spring's rule, DR-6), status from
 `fluent`-style body analysis that derives no endpoint, deferred. Response shape
 symbol where the return type names one. Renders as an "Error handling" section.
 
-## 5. Spring Integration — a `config_join` extension, honestly priced
+## 5. Spring Integration — measured, and the blocker is an extractor gap
+
+**Revision 5, 2026-09-04. The committed probe
+(`scripts/probes/spring-integration-destinations.md`, harness at
+`fixtures/spring-integration-probe/`) replaced every guess in this section.**
+What it found, all with fact JSON as evidence:
+
+**The channel join EXISTS, in both shapes.** `setOutputChannelName("amqpInputChannel")`
+appears as a `call_site` string argument and `@ServiceActivator(inputChannel="amqpInputChannel")`
+as an annotation argument — **the same literal on both sides**, so the named-channel
+join is real. The DSL shape resolves too, and better than hoped: an anonymous
+`IntegrationFlows.from(...).handle(...)` chain reconstructs as a within-method
+`result` ↔ `receiver`/`arguments[].source` join, with handler bodies named as
+`{"kind":"lambda","symbol":…}`. **The two shapes do not need two mechanisms.**
+
+**The destination does NOT survive, and the cause is not Spring Integration.**
+AMQP and Kafka inbound adapters take `String...` — `Amqp.inboundAdapter(cf, String...)`,
+`setQueueNames(String...)`, `Kafka.messageDrivenChannelAdapter(cf, String...)`. The
+argument's producer is an `ANEWARRAY`, which `MethodFlow.argumentJson` does not
+model, so it emits `{"kind":"unresolved"}` **with no `source` id** and the string
+is absent from the fact stream entirely — a grep for `orders.queue` across all 284
+probe facts returns **zero**. A control arm isolates the cause exactly: the same
+eight destination spellings (literal, compile-time constant, `static final`,
+`@Value` field, `@Value` parameter, `${placeholder}`, properties getter,
+concatenation) into a **single-`String`** sink discriminate every one, and into a
+varargs sink collapse to one byte-identical `unresolved`. So **JMS works and AMQP
+does not, purely on method signature shape** — and today we cannot tell a
+hard-coded literal from an externally configured value for any varargs API.
+
+### What §5 therefore ships, in two parts
+
+**Part 1 — fix it programmatically where we can: extractor capability 9.15,
+varargs argument modelling.** `MethodFlow.argumentJson` learns the
+`ANEWARRAY`/`AASTORE` construction at an argument slot, so a varargs parameter
+yields the element arguments rather than one opaque `unresolved`. This is not a
+Spring Integration feature — it repairs **every** `String...` API in the estate,
+and it is why this section stopped reaching for catalogs and project catalogs:
+the fact we needed was never emitted, so no derivation could have recovered it.
+
+**Part 2 — for what remains genuinely unreadable, mark it and let the enrichment
+seat focus there** (user ruling, 2026-09-04). A destination that is still not
+statically knowable after 9.15 — a runtime-computed name, a value only the
+deployed environment holds — files a `channel_destination` open question
+carrying the channel name and the handler symbol. That ledger is already the
+enrichment pass's inbox (2K §8, 2N's verdict engine), and the enrichment brief
+directs the model at exactly these uncertainties, with jailed read access to the
+source. **Deterministic where the bytecode answers; a stated question where it
+does not; never a guess.** This is the honest division of labour the
+`open_questions` ledger was built for, and it is what makes "we cannot see it"
+a route to an answer rather than a dead end.
+
+### Two incidental findings the probe recorded
+
+Nested annotation arguments are silently dropped — `@Poller` inside
+`@InboundChannelAdapter` produces **no key at all**, because the collecting
+visitor has no `visitAnnotation` override. (Same root cause as §3b's `bindings=`
+boundary and §4a's `@Schedules` boundary — one gap, three symptoms.) And an
+XML-configured Integration flow contributes **zero** facts; XML config is a
+stated boundary.
+
+## 5a. Spring Integration — the catalog and engine, on the measured evidence
 
 COVERAGE's own row says these adapters have "no catalog yet" and the shape is
 channel indirection, "not a bean's own functional shape" — revision 1 read that
