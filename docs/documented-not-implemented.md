@@ -28,6 +28,7 @@ mechanism exists.** A spec that depends on one must verify it in `src/` first.
 | 5 | `resolves:` / `resolves.direction` with `when: {owner_implemented_in_module: true}` | D02 only | Zero occurrences in `src/`. Contrast `declared_on`, which IS implemented (`derive_endpoints.sql:675`, `engines/annotation_driven.py`). | **2O Task 10** |
 | 6 | `default_produces` | D02 ("specified here, not yet used"); 2E's spec and plan | Zero occurrences in `src/`. Pending since **2E** — the longest-standing entry. | **2O Task 6** |
 | 7 | `root_kind` | D00:181, with a full member list | The token appears **nowhere in `src/`** — not merely the `scheduled` member, the whole concept. | **Open — must be resolved before 2P's Meridian vocabulary is specified** |
+| 9 | Routing-ambiguity "finding" | D01:296 — "that collision is a routing-ambiguity finding" | No findings mechanism exists anywhere in `src/`. D01 describes a *property* of content-derived identity (two handlers sharing one wire contract merge into a single row), not a detector that reports anything. Found 2026-09-04 by the mechanism-existence pass, **before** Task 10 was dispatched against it. | Open — 2O Task 10 restated around merge precedence |
 | 8 | Rung 5 marker semantics | D02: markers are "package families whose presence **anywhere in the module** is evidence" | Code read annotation FQNs only — narrower than documented. | **CLOSED, 2O Task 2** |
 
 ---
@@ -86,6 +87,18 @@ proposals, cheapest first:
    is silence, not intent.
 
 ---
+
+## The check that works, demonstrated
+
+Entry #9 was found by grepping `src/` for every mechanism the remaining tasks
+cite — minutes of work, and it landed *before* a task was dispatched against a
+detector that does not exist. The same pass applied at spec-writing time would
+have caught six of the first eight.
+
+This is worth stating because the alternative was tried and failed: **four
+rounds of adversarial spec review did not catch entries #1 or #4**, because the
+reviewer read the same documents the author did and cited the same lines back.
+A shared false premise is invisible to review. It is only visible to a grep.
 
 ## Rule for future specs
 
