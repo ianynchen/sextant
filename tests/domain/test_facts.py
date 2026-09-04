@@ -396,6 +396,58 @@ def test_call_site_fact_accepts_a_field_kind_argument():
     assert reloaded.arguments[0].symbol == "com/acme/OrdersRestClient#url."
 
 
+def test_call_site_fact_accepts_an_array_kind_argument_carrying_its_elements():
+    # Capability 9.15: ONE argument that happens to be an array, with its own
+    # element arguments beside it. Each element is an entry of the same
+    # grammar, so a literal reads `string` and a `@Value` field reads `field`
+    # exactly as they would at a single-`String` parameter — which is the
+    # whole discrimination the varargs array used to erase.
+    array = CallArgument(
+        kind="array",
+        elements=[
+            CallArgument(kind="string", value="orders.queue"),
+            CallArgument(kind="field", symbol="com/acme/orders/Destinations#LATE_QUEUE."),
+        ],
+    )
+    call_site = CallSiteFact(
+        document_id="doc_1",
+        caller="sextant-jvm maven com.acme/orders 1.0 com/acme/OrdersFlow#inbound().",
+        target=CallTarget(
+            owner="org/springframework/integration/amqp/dsl/Amqp#",
+            name="inboundAdapter",
+            descriptor="([Ljava/lang/String;)Ljava/lang/Object;",
+        ),
+        invoke_kind="static",
+        ordinal=0,
+        arguments=[array],
+    )
+
+    dumped = call_site.model_dump(mode="json")
+    reloaded = TypeAdapter(Fact).validate_python(dumped)
+
+    assert reloaded == call_site
+    # One slot, not two: unpacking the elements would renumber every argument
+    # after it and make the call's own arity unreadable.
+    assert len(reloaded.arguments) == 1
+    assert reloaded.arguments[0].kind == "array"
+    assert [element.kind for element in reloaded.arguments[0].elements or []] == [
+        "string",
+        "field",
+    ]
+
+
+def test_a_zero_length_array_argument_keeps_an_empty_element_list():
+    # The empty list is the fact — `foo()` against `foo(String...)` is a real
+    # call with no values, which is a different statement from "the array
+    # could not be read". `unresolved` is what says the latter, and it is
+    # what every other kind's absent `elements` means.
+    empty = CallArgument(kind="array", elements=[])
+    unreadable = CallArgument(kind="unresolved")
+
+    assert TypeAdapter(CallArgument).validate_python(empty.model_dump(mode="json")).elements == []
+    assert unreadable.elements is None
+
+
 def test_field_write_fact_survives_a_fact_file_round_trip(tmp_path: Path):
     write = FieldWriteFact(
         document_id="doc_1",

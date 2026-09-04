@@ -122,20 +122,27 @@ matches:
     # 2E checkpoint (3)/F1, frozen ruling: every `accept`/`contentType` call
     # in the fixture — Java and Kotlin alike — is a vararg
     # (`([Lorg/springframework/http/MediaType;)…`), and the extractor's
-    # `MethodFlow.argumentJson` has no case for the `ANEWARRAY` that produces
-    # a vararg array argument, so every media predicate reaches the facts as
+    # `MethodFlow.argumentJson` had no case for the `ANEWARRAY` that produces
+    # a vararg array argument, so every media predicate reached the facts as
     # a bare `{"kind":"unresolved"}` with no `source` and no `symbol` — this
-    # table has NOTHING to read against the 2E fixture, and every
-    # predicate-derived media column comes back NULL (row resolution
+    # table had NOTHING to read against the 2E fixture, and every
+    # predicate-derived media column came back NULL (row resolution
     # untouched: the verb and path are the wire identity and both are known).
     # Declared anyway, at the one member the checkpoint confirms the fixture
     # actually carries — `MediaType.APPLICATION_JSON`, seen only by accident
     # on an unrelated Kotlin null-check fact — because `MediaType` is a real,
     # stable enum and this is the table the extractor's own varargs case
-    # reads against the day it exists. Until then this block is
-    # specified-but-unused, proven by a synthetic-facts unit test
+    # reads against the day it exists.
+    #
+    # **That day is half here: extractor capability 9.15** now emits
+    # `{"kind":"array","elements":[{"kind":"enum","symbol":"…/MediaType#APPLICATION_JSON."}]}`
+    # for exactly these calls, verified against the compiled fixture. The
+    # combinator engine still reads positional arguments and has not been
+    # taught to look inside `elements`, so this block stays
+    # specified-but-unused — proven by a synthetic-facts unit test
     # (`test_combinator_engine.py`) rather than by anything the live fixture
-    # exercises.
+    # exercises — and the media columns still come back NULL. The missing
+    # half is engine work, ledgered rather than done.
     media_values:
       owner: org.springframework.http.MediaType
       values:

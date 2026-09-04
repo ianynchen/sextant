@@ -30,11 +30,15 @@ matches:
   # two-topic call derives. `Arrays.asList` is declared here too, but review
   # round 1 disassembled a real probe: it is a genuine varargs call, one
   # single `anewarray` argument in bytecode, never several positional ones —
-  # the scanner never unpacks an array argument into its elements, so
-  # `all_strings` can NEVER yield a per-topic row for it. It still derives
-  # honestly rather than silently matching nothing: `linked_channels`'s own
-  # documented varargs answer is the one trailing unresolved tuple, exactly
-  # what this form degrades to. `singletonList` and `Pattern.compile` each
+  # `all_strings` reads positional arguments, so it yields no per-topic row
+  # for it. It still derives honestly rather than silently matching nothing:
+  # `linked_channels`'s own documented varargs answer is the one trailing
+  # unresolved tuple, exactly what this form degrades to. (Extractor
+  # capability 9.15 DOES now read the array's contents — that slot carries
+  # `{kind: array, elements: [...]}` rather than a bare `unresolved` — but
+  # `all_strings` has not been taught to look inside `elements`, so the
+  # derived answer here is unchanged. Teaching it is engine work, ledgered
+  # rather than done.) `singletonList` and `Pattern.compile` each
   # take exactly one string argument, so `arg: 0` alone reads it — a topic
   # pattern lands on `path` verbatim, never expanded into real topic names,
   # the same rule `spring-kafka.yml`'s own `topicPattern` listener row

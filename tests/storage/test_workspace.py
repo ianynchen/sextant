@@ -687,9 +687,20 @@ def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tm
     # as SQL NULL, not the string "null" or an error.
     assert row["receiver"] is None
     assert row["result"] is None
+    # Every optional key of the argument grammar is dumped, null included —
+    # `elements` (capability 9.15) among them, which is None on every kind but
+    # `array`. Pinned exactly rather than by subset: this view is what a
+    # consumer reads, and a key silently appearing or vanishing here is the
+    # drift the round trip exists to catch.
     assert json.loads(row["arguments"]) == [
-        {"kind": "string", "value": "/billing/invoices", "symbol": None, "source": None},
-        {"kind": "unresolved", "value": None, "symbol": None, "source": 7},
+        {
+            "kind": "string",
+            "value": "/billing/invoices",
+            "symbol": None,
+            "source": None,
+            "elements": None,
+        },
+        {"kind": "unresolved", "value": None, "symbol": None, "source": 7, "elements": None},
     ]
 
 

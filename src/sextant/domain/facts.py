@@ -173,12 +173,25 @@ class CallArgument(BaseModel):
         # The caller's own parameter N — `value` is that index, never the
         # local slot a JVM happens to keep it in (D00 §5).
         "parameter",
+        # Capability 9.15: ONE argument that happens to be an array, with its
+        # own element arguments in `elements`. Never N arguments — unpacking
+        # would renumber every slot after it and make arity unreadable.
+        "array",
         "null",
         "unresolved",
     ]
     value: LiteralValue | None = None
     symbol: str | None = None
     source: int | None = None
+    # Capability 9.15's own key, on the `array` kind alone: the argument list
+    # a varargs call site's `ANEWARRAY`/`AASTORE` construction builds, each
+    # element carrying the same kind it would carry as a single argument in
+    # the same position. `None` on every other kind, and — the one place an
+    # empty value says something an absent one would not — an EMPTY list for
+    # a zero-length varargs call, which is a real call rather than a failure
+    # to read one. An array the extractor could not read end to end stays
+    # `unresolved`, so `elements` is never a partial list.
+    elements: list["CallArgument"] | None = None
 
 
 class CallTarget(BaseModel):

@@ -1,6 +1,7 @@
 package dev.sextant.extractor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.InputStream;
@@ -523,6 +524,163 @@ class MethodFlowTest {
             MethodFlow.callSites("doc", "sextant-jvm maven c v o/P#loads().", method);
         assertEquals(1, lines.size());
         assertTrue(lines.get(0).contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), lines.get(0));
+    }
+
+    /** Capability 9.15's happy path. The value reaching a `String...` slot is
+     *  the array the {@code ANEWARRAY} produced, so before this capability both
+     *  literals were absent from the fact stream entirely and the arity was
+     *  unreadable — one `unresolved` says nothing about whether a flow consumes
+     *  one queue or twenty (measured:
+     *  `scripts/probes/spring-integration-destinations.md`). */
+    @Test
+    void reads_the_elements_of_a_varargs_array_argument() throws Exception {
+        String line = last(callSites("varargsLiterals"));
+        assertTrue(line.contains("\"arguments\":[{\"elements\":["
+            + "{\"kind\":\"string\",\"value\":\"orders.queue\"},"
+            + "{\"kind\":\"string\",\"value\":\"orders.retry.queue\"}],\"kind\":\"array\"}]"), line);
+    }
+
+    /** The element list is the point: one argument that happens to be an array,
+     *  with its contents beside it, never N arguments. A consumer reading
+     *  arity off `arguments` must still see the ONE slot the descriptor
+     *  declares — unpacking would renumber every slot after it. */
+    @Test
+    void keeps_a_varargs_array_as_one_argument_slot() throws Exception {
+        String line = last(callSites("varargsLiterals"));
+        assertTrue(line.contains("\"descriptor\":\"([Ljava/lang/String;)V\""), line);
+        assertEquals(1, line.split("\"kind\":\"array\"", -1).length - 1, line);
+    }
+
+    /** Each element carries the SAME kind a single-`String` parameter in the
+     *  same position would — a field reads `field`, a parameter reads
+     *  `parameter`, an unreadable call result reads `unresolved` WITH its
+     *  `source`. That is the whole defect this capability closes: the probe's
+     *  control arm discriminated all eight destination spellings through a
+     *  single-`String` sink while the varargs sink collapsed them to one
+     *  byte-identical `unresolved`, and the elements now discriminate the same
+     *  way. */
+    @Test
+    void gives_each_varargs_element_the_kind_a_single_argument_would_have() throws Exception {
+        List<String> lines = callSites("varargsMixedProducers");
+        String line = last(lines);
+        assertTrue(line.contains("{\"kind\":\"field\",\"symbol\":\""
+            + OWNER + "#url.\"}"), line);
+        assertTrue(line.contains("{\"kind\":\"parameter\",\"value\":0}"), line);
+        // The unreadable one keeps its instruction id, so the call that
+        // produced it is a join away — exactly what the varargs `unresolved`
+        // never had.
+        assertTrue(line.contains("{\"kind\":\"unresolved\",\"source\":"), line);
+    }
+
+    /** Zero-length varargs — `foo()` against `foo(String...)` — compiles to an
+     *  empty {@code ANEWARRAY}, and the empty list is written rather than
+     *  omitted: "called with no destinations" is a different statement from
+     *  "the array could not be read", and `unresolved` is what says the
+     *  latter. */
+    @Test
+    void reports_a_zero_length_varargs_array_as_an_empty_element_list() throws Exception {
+        String line = last(callSites("varargsEmpty"));
+        assertTrue(line.contains("\"arguments\":[{\"elements\":[],\"kind\":\"array\"}]"), line);
+    }
+
+    /** A primitive varargs array is {@code NEWARRAY}/{@code IASTORE}, the other
+     *  creation opcode and the other end of the eight store opcodes. */
+    @Test
+    void reads_the_elements_of_a_primitive_varargs_array() throws Exception {
+        String line = last(callSites("varargsPrimitives"));
+        assertTrue(line.contains("\"arguments\":[{\"elements\":["
+            + "{\"kind\":\"int\",\"value\":1},{\"kind\":\"int\",\"value\":2}],"
+            + "\"kind\":\"array\"}]"), line);
+    }
+
+    /** The declared element type is load-bearing one level down exactly as it
+     *  is at the top level: {@code ICONST_1} is both the int 1 and the flag
+     *  `true`, and only `boolean...`'s element type tells them apart. */
+    @Test
+    void tells_a_boolean_varargs_element_from_an_int_one() throws Exception {
+        String line = last(callSites("varargsBooleans"));
+        assertTrue(line.contains("\"arguments\":[{\"elements\":["
+            + "{\"kind\":\"boolean\",\"value\":true},{\"kind\":\"boolean\",\"value\":false}],"
+            + "\"kind\":\"array\"}]"), line);
+    }
+
+    /** An explicitly written `new String[]{…}` against a varargs parameter is
+     *  byte-identical to the sugar — the ACC_VARARGS flag lives on the callee,
+     *  a class this pass has not read — so the two MUST agree. They are the
+     *  same call, and `elements` states what the callee receives. */
+    @Test
+    void reads_an_explicit_array_argument_exactly_as_it_reads_varargs_sugar() throws Exception {
+        assertEquals(last(callSites("varargsLiterals")).replace("varargsLiterals", "X"),
+                     last(callSites("explicitArray")).replace("explicitArray", "X"));
+    }
+
+    /** NEAR MISS — an array filled by a loop. Creation and stores are the same
+     *  opcodes as the happy path; the index is a loop counter rather than a
+     *  constant, so there is no element list. The assertion is that NOTHING was
+     *  produced (GUIDELINES §10) — no `elements` key at all, not a different
+     *  one. */
+    @Test
+    void produces_no_element_list_for_an_array_filled_in_a_loop() throws Exception {
+        String line = last(callSites("varargsFilledInALoop"));
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        assertFalse(line.contains("\"elements\""), line);
+    }
+
+    /** NEAR MISS — a conditionally populated array. Constant length, constant
+     *  index, every slot written: only the branch separates it from the happy
+     *  path, and each element then has two producing stores. Naming either
+     *  would assert a path that may never run — the merge rule a plain
+     *  conditional argument already obeys, one level down. */
+    @Test
+    void produces_no_element_list_for_a_conditionally_populated_array() throws Exception {
+        String line = last(callSites("varargsPopulatedConditionally"));
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        assertFalse(line.contains("\"elements\""), line);
+    }
+
+    /** NEAR MISS — a partially populated array: constant length 2, one constant
+     *  store, the second element left null. Reporting the written half as the
+     *  whole would claim an arity the call does not have. */
+    @Test
+    void produces_no_element_list_for_a_partially_populated_array() throws Exception {
+        String line = last(callSites("varargsPartiallyPopulated"));
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        assertFalse(line.contains("\"elements\""), line);
+    }
+
+    /** NEAR MISS — an array handed in from elsewhere. Its producer is no array
+     *  creation, so it never reaches the array branch and keeps the
+     *  `parameter` kind it already had: 9.15 does not turn every array-typed
+     *  slot into an element list. */
+    @Test
+    void leaves_an_array_that_arrived_as_a_parameter_alone() throws Exception {
+        String line = last(callSites("varargsFromAnArrayParameter"));
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"parameter\",\"value\":0}]"), line);
+        assertFalse(line.contains("\"elements\""), line);
+    }
+
+    /** NEAR MISS — the array reaches another method between construction and
+     *  the call that consumes it. Every element is a constant store at a
+     *  constant index, so it reads perfectly at the moment it is built; what
+     *  this pass cannot see is whether the callee rewrote it, and an element
+     *  list would be a claim about the wrong instant. */
+    @Test
+    void produces_no_element_list_for_an_array_that_escapes_to_another_call() throws Exception {
+        String line = last(callSites("varargsMutatedElsewhere"));
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        assertFalse(line.contains("\"elements\""), line);
+    }
+
+    /** NEAR MISS — a store into the array after the call that consumes it. The
+     *  callee holds the reference, so the elements this slot would claim are
+     *  not the ones it ultimately sees. */
+    @Test
+    void produces_no_element_list_for_an_array_mutated_after_the_call() throws Exception {
+        List<String> lines = callSites("varargsMutatedAfterTheCall");
+        String line = lines.get(0);
+        assertTrue(line.contains("\"name\":\"destinations\""), line);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        assertFalse(line.contains("\"elements\""), line);
     }
 
     /** A method with no body — an interface method, an abstract one — has no

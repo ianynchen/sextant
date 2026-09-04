@@ -642,3 +642,89 @@ def test_a_scan_records_its_origin_coordinate_only_when_one_was_asked_for(tmp_pa
         tmp_path / "without" / "com" / "acme" / "orders" / "contracts" / "OrderView.jsonl"
     ).read_text(encoding="utf-8")
     assert "origin" not in json.loads(plain.splitlines()[0])
+
+
+def _call_sites(path: Path, name: str) -> list[dict]:
+    """Every `call_site` fact in a scanned file whose target method has this
+    name — filtered by name rather than indexed, for the same reason
+    `_class_symbol` filters: an ordinal is a property of the method body and
+    moves the moment the fixture grows a statement."""
+    return [
+        fact
+        for line in path.read_text().splitlines()
+        if (fact := json.loads(line)).get("kind") == "call_site" and fact["target"]["name"] == name
+    ]
+
+
+def test_a_varargs_argument_carries_its_elements_rather_than_one_unresolved(tmp_path: Path):
+    """Capability 9.15 against real compiled bytecode. `RequestPredicates
+    .accept(MediaType...)` is the shape `spring-webflux-router.yml`'s own
+    `media_values` table was written for and could never read: the value
+    reaching the slot is the array the `ANEWARRAY` produced, so before this
+    capability every media predicate was a bare `{"kind": "unresolved"}` with
+    no `source` and no `symbol`, and `MediaType.APPLICATION_JSON` was absent
+    from the fact stream entirely.
+
+    The element keeps the `enum` kind it would have carried as a single
+    argument — which is the whole point: the probe's control arm showed a
+    single-`String` sink discriminating eight destination spellings while the
+    varargs sink collapsed them to one byte-identical `unresolved`
+    (`scripts/probes/spring-integration-destinations.md`)."""
+    out = _scan(tmp_path)
+    accepts = _call_sites(
+        out / "com" / "acme" / "orders" / "routes" / "OrderRoutes.jsonl", "accept"
+    )
+    assert accepts, "the WebFlux router fixture declares an accept predicate"
+    assert accepts[0]["arguments"] == [
+        {
+            "kind": "array",
+            "elements": [
+                {"kind": "enum", "symbol": "org/springframework/http/MediaType#APPLICATION_JSON."}
+            ],
+        }
+    ]
+
+
+def test_a_zero_length_varargs_argument_is_an_empty_element_list(tmp_path: Path):
+    """`uri(String, Object...)` called with no URI variables — the ordinary
+    WebClient spelling — compiles to an empty `ANEWARRAY`. The empty list is
+    the fact: "called with no URI variables" is a different statement from
+    "the array could not be read", and it is what makes the argument's arity
+    readable at all. The slot count is the assertion beside it: an array is
+    ONE argument, and unpacking it would have renumbered the path literal's
+    neighbour out of position."""
+    out = _scan(tmp_path)
+    uris = _call_sites(
+        out / "com" / "acme" / "orders" / "clients" / "InventoryWebClient.jsonl", "uri"
+    )
+    assert uris, "the WebClient fixture declares a uri call"
+    assert uris[0]["arguments"] == [
+        {"kind": "string", "value": "/v2/inventory/levels"},
+        {"kind": "array", "elements": []},
+    ]
+
+
+def test_an_argument_that_is_not_an_array_carries_no_elements_key(tmp_path: Path):
+    """The near miss on the emission side: `elements` belongs to the `array`
+    kind alone, so every other argument in the estate must be byte-identical
+    to what it was before 9.15. A key written on every argument would change
+    every fact file in the fixture and every assertion pinned to one."""
+    out = _scan(tmp_path)
+    for line in (
+        (out / "com" / "acme" / "orders" / "clients" / "BillingRestTemplate.jsonl")
+        .read_text()
+        .splitlines()
+    ):
+        fact = json.loads(line)
+        if fact.get("kind") != "call_site":
+            continue
+        for argument in fact["arguments"]:
+            assert ("elements" in argument) == (argument["kind"] == "array"), argument
+
+
+def test_scanner_declares_the_array_arguments_capability():
+    """A call-site argument's `elements` (capability 9.15) is only trustworthy
+    for a catalog reading a `String...` destination once the scanner that
+    wrote it says it produces them — the same gate `generic_interfaces` and
+    `superclass` pass through."""
+    assert "array_arguments" in AsmScanner(JAR).capabilities()

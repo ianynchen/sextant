@@ -1355,7 +1355,7 @@ Task 5):**
 | Java | Micronaut `@KafkaListener`/`@KafkaClient` + `@Topic` | — | `annotation` | A |
 | Java | `ReplyingKafkaTemplate.sendAndReceive(ProducerRecord)`, and a `@KafkaListener` method returning a value annotated `@SendTo` | the reply derives as its own outbound row | `registration_call` + `annotation` | ✅ shipped |
 | Java | `KafkaTemplate.send(topic, …)`, `.sendDefault(…)` | — | `registration_call` | ✅ shipped |
-| Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)` | `List.of` (≤10 elements) resolves per topic; `Collections.singletonList`/`Pattern.compile` resolve their one argument; `Arrays.asList` is genuine varargs and degrades to one unresolved row | `registration_call` | ✅ shipped |
+| Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)` | `List.of` (≤10 elements) resolves per topic; `Collections.singletonList`/`Pattern.compile` resolve their one argument; `Arrays.asList` is genuine varargs and degrades to one unresolved row — the elements are IN the facts since capability 9.15 (`{kind: array, elements: […]}`), but `all_strings` reads positional arguments and has not been taught to look inside `elements` | `registration_call` | ✅ shipped |
 | Java | **`KafkaProducer.send(ProducerRecord)`** | **topic is a constructor argument of `ProducerRecord`**, not of `send` | `fluent_chain` | ✅ shipped |
 | Java | `KafkaTemplate.send(Message)` with topic in a header | topic read from a `setHeader(KafkaHeaders.TOPIC, …)` value-guarded step | `fluent_chain` | ✅ shipped |
 | Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination` | `config_join` | ✅ shipped |

@@ -23,6 +23,18 @@ public class VarianceSources {
         this.properties = properties;
     }
 
+    /** (0) a plain literal. Added with capability 9.15 so the varargs arm
+     *  carries the SAME eight spellings {@link SingleStringControl}'s
+     *  single-`String` arm does — the control arm's first row had no varargs
+     *  counterpart here, and the two arms have to be compared row for row for
+     *  "the varargs side discriminates every one" to mean anything. */
+    @Bean
+    public IntegrationFlow literalQueueFlow(ConnectionFactory connectionFactory) {
+        return IntegrationFlow.from(Amqp.inboundAdapter(connectionFactory, "variance.literal.queue"))
+                .handle(String.class, (payload, headers) -> null)
+                .get();
+    }
+
     /** (a) a compile-time constant — javac must inline it. */
     @Bean
     public IntegrationFlow constantQueueFlow(ConnectionFactory connectionFactory) {

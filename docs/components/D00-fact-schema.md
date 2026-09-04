@@ -639,6 +639,7 @@ recovered later. Kinds:
 | `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR (§5a) and the one-hop body follow ([D02](D02-catalog-schema.md) §2h). Always carries `source`: the constructed value's id, which is also the `receiver` of that object's own `<init>` call site, so the follow is a join on one number rather than a search for a nearby constructor |
 | `field` | GETFIELD/GETSTATIC that is not the enum-constant shape | symbol reference — the field's own bare descriptor |
 | `parameter` | a load of the caller's own parameter | `value` is the parameter's **index**, never the local slot holding it |
+| `array` | an array construction reaching the slot (JVM: `ANEWARRAY`/`NEWARRAY` plus its `xASTORE`s) | `elements` carries one entry per element, each an argument of this same grammar. **One slot, not N** — a varargs call passes one array |
 | `null` | ACONST_NULL | |
 | `unresolved` | anything else | a first-class honest answer, never an omission |
 
@@ -672,6 +673,34 @@ it is deliberately **not** the local slot: a `long` parameter occupies two slots
 index and slot diverge, and a slot is a JVM detail no other language shares. Strictly
 additive: an engine that does not consult `parameter` must treat it exactly as it always
 treated `unresolved` — the value is still unread, only its origin is now stated.
+
+**`array` is the canonical cross-language kind for "this argument is an array built
+here"** — a varargs call in any language that has one, and an explicitly written array
+literal, which are the same call. `elements` carries the element arguments, each of them
+an entry of this same grammar, so an element reads exactly as it would have read as a
+single argument in the same position: a literal is `string`, a `@Value` field is `field`,
+an unreadable expression is `unresolved` **with its `source`**. The shape is deliberately
+**self-describing rather than unpacked**: one argument that happens to be an array, never
+N arguments — unpacking would renumber every slot after it and make arity unreadable, the
+same reason `unresolved` is an answer rather than an absence.
+
+The JVM mapping (capability 9.15): an argument slot whose producing instruction is an
+`ANEWARRAY`/`NEWARRAY` reads its `xASTORE`s and becomes `{kind: array, elements: […]}`.
+It fires **only where the whole construction is readable** — a constant length, every
+index a distinct constant, every index written, no store outside the window between the
+construction and this invoke, and the array reaching no other invoke that might mutate it.
+An array built in a loop, populated on a branch, left partly unwritten, or handed to
+another method first is `unresolved` with no element list at all; an array arriving from
+elsewhere keeps the `parameter`/`field`/`unresolved` answer its own producer gives it.
+A **zero-length** varargs call is `{kind: array, elements: []}` — the empty list is the
+fact, and it is the one place in this grammar where an empty value says something an
+absent key would not, because "called with no values" is a different statement from "the
+array could not be read". A **varargs call and an explicitly written array are reported
+identically**, deliberately: javac erases the sugar at the call site and the callee's
+`ACC_VARARGS` flag lives on a class the pass has not read, so they are the same call and
+`elements` states what the callee receives either way. Strictly additive: an engine that
+does not consult `array` treats it exactly as it always treated `unresolved`, which is
+what every varargs slot read as before 9.15.
 
 **`field_write` is a fact of its own, constructors only, direct traces only** — a
 constructor assigns parameter N directly to field F. The JVM mapping: a PUTFIELD inside

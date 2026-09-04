@@ -149,4 +149,7 @@ def test_the_scanner_reports_the_version_that_harvests_descriptors(tmp_path: Pat
             out_dir=tmp_path,
         )
     )
-    assert report.scanner_version == "9.14"
+    # 9.14 -> 9.15 with varargs argument modelling: a `String...` slot now
+    # carries its element arguments, and a loader reading `array` against a
+    # jar that predates it would find the key missing rather than wrong.
+    assert report.scanner_version == "9.15"

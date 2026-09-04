@@ -461,3 +461,74 @@ Stated as observations of the fact stream, not as a design.
   currently erases.
 - An XML-configured flow is not in scope for any bytecode mechanism at all; it needs a
   resource reader.
+
+---
+
+## Re-run after extractor capability 9.15 — 2026-09-04
+
+Everything above records what the fact stream said at **scanner_version 9.14**, and it is
+left unedited: it is a measurement, not a design. This section records the same harness
+re-run against **9.15**, which teaches `MethodFlow.argumentJson` the `ANEWARRAY`/`AASTORE`
+construction Q1's "Why" paragraph identified as the cause.
+
+One fixture change, and it is the reason the comparison is now row-for-row: `VarianceSources`
+gained a **plain literal** bean (`literalQueueFlow`, `"variance.literal.queue"`), which the
+control arm always had and the varargs arm did not. Eight spellings each side now.
+
+```
+Report: {"documents":9,"facts":292,"scanner_id":"asm","scanner_version":"9.15","uncovered":[]}
+        — 145 call_site, 95 symbol, 50 annotation, 9 document, 2 field_write
+```
+
+The one-line falsifier **flips**, which is the whole verdict:
+
+```bash
+grep -r "dsl.orders.queue\|bean.orders.queue\|kafka.orders.topic" /tmp/si_probe_out | wc -l   # -> 3   (was 0)
+```
+
+### Q5's table, re-measured — the varargs arm now discriminates all eight
+
+Same eight expressions, same `Amqp.inboundAdapter(ConnectionFactory, String...)` sink,
+argument position 1:
+
+| # | source expression | emitted `arguments[1]` |
+| --- | --- | --- |
+| 0 | `"variance.literal.queue"` | `{"elements":[{"kind":"string","value":"variance.literal.queue"}],"kind":"array"}` |
+| a | `Destinations.ORDERS_QUEUE` (compile-time constant) | `{"elements":[{"kind":"string","value":"const.orders.queue"}],"kind":"array"}` |
+| b | `Destinations.LATE_QUEUE` (static final, not compile-time) | `{"elements":[{"kind":"field","symbol":"com/example/siprobe/Destinations#LATE_QUEUE."}],"kind":"array"}` |
+| c | `this.valueQueue` (`@Value` field) | `{"elements":[{"kind":"field","symbol":"com/example/siprobe/VarianceSources#valueQueue."}],"kind":"array"}` |
+| d | `paramQueue` (`@Value` parameter) | `{"elements":[{"kind":"parameter","value":1}],"kind":"array"}` |
+| e | `"${probe.placeholder-queue}"` | `{"elements":[{"kind":"string","value":"${probe.placeholder-queue}"}],"kind":"array"}` |
+| f | `this.properties.getQueue()` | `{"elements":[{"kind":"unresolved","source":9}],"kind":"array"}` |
+| g | `env + ".orders.queue"` | `{"elements":[{"kind":"unresolved","source":8}],"kind":"array"}` |
+
+Compare row for row with the control arm's table in Q5: **identical discrimination**, with
+each answer wrapped in the array slot it actually occupies. Rows 0 and a still collapse to
+each other, and that is javac inlining a compile-time constant — the same collapse the
+single-`String` control arm has, recorded there as "a mechanism cannot tell row 1 from row 2".
+It is not a varargs property and 9.15 does not change it. The control arm itself re-measures
+byte-identical: nothing outside an array-valued slot moved.
+
+### What else the flip recovers
+
+- **Shape 1** — `Amqp.inboundAdapter`: `[{"kind":"parameter","value":0},{"elements":[{"kind":"string","value":"dsl.orders.queue"}],"kind":"array"}]`.
+- **Shape 2** — `setQueueNames(String...)`: `[{"elements":[{"kind":"string","value":"bean.orders.queue"}],"kind":"array"}]`. Q3's "the join you hypothesised exists, the thing you wanted to join to does not" is now half wrong in the good direction: the destination is there.
+- **Kafka, and the arity with it** — `Kafka.messageDrivenChannelAdapter`: `{"elements":[{"kind":"string","value":"kafka.orders.topic"},{"kind":"string","value":"kafka.orders.retry.topic"}],"kind":"array"}`. Two topics read as two elements; Q1's "the arity is unreadable too" no longer holds.
+- **`setQueues(Queue...)`** — `{"elements":[{"kind":"parameter","value":1}],"kind":"array"}`. Not a string, and it was never going to be: it is a bean reference, and the element now names the parameter carrying it, where before even that was erased.
+
+### What did NOT change, and stays a stated boundary
+
+- **The XML arm** still contributes zero facts. Unrelated to varargs.
+- **Nested annotation arguments** (`@Poller`) are still silently dropped — Q2's caveat is untouched; 9.15 is a `MethodFlow` change and that gap is in `ClassScanner.useCollectingVisitor`.
+- **A `@Value` placeholder still does not join to the call site by itself.** `{"kind":"parameter","value":1}` inside `elements` numbers a parameter exactly as the control arm's did, so Q5's closing note about bridging a lambda's synthetic parameters to the enclosing bean method's `@Value` applies unchanged.
+- **The consumers have not moved.** `spring-webflux-router.yml`'s `media_values` table and `kafka-consumer.yml`'s `all_strings` read positional arguments, not `elements`, so their derived output is byte-identical. The facts are there; reading them is engine work.
+
+### Bounds (§5.4)
+
+Same fixture, same BOM (Spring Boot 3.2.5, Spring Integration 6.2.4, spring-amqp 3.1.4,
+spring-kafka 3.1.4, Spring Framework 6.1.6), **javac release 21**, extractor
+scanner_version 9.15. The array-construction shape 9.15 reads is javac's, and it is the
+shape the JVM specification requires any compiler to emit for a varargs call site — but
+only javac 21 was measured. A compiler that spilled the array through a local, populated it
+across a branch, or reordered the stores would fall to the near-miss rules and read
+`unresolved`, which is the honest degradation rather than a wrong answer.

@@ -28,16 +28,23 @@ _CAPABILITIES = {
     # its signature is generic. D00 §4's `relationship_kind: extends`, made
     # real (2O CP-3 found it absent from the fact stream).
     "superclass",
+    # Capability 9.15: a call-site argument whose producer is an
+    # `ANEWARRAY`/`AASTORE` construction reads as `{kind: array, elements:
+    # […]}` rather than one opaque `unresolved`. Every `String...` API in the
+    # estate depends on it — the measured defect is
+    # `scripts/probes/spring-integration-destinations.md`.
+    "array_arguments",
 }
 
 
 class AsmScanner:
-    """One backend covering every JVM language, declaring ten capabilities:
+    """One backend covering every JVM language, declaring eleven capabilities:
     the four Phase 1 read from declarations, the three Phase 2C's per-method
     dataflow pass added — the call sites themselves, the literals they carry,
     and the within-method value ids a chain is rebuilt from — plus a class
     symbol's own declared interfaces, its generic superinterface references,
-    and its erased superclass (2O capabilities 9.14 and 9.13)."""
+    its erased superclass, and the elements of an array-valued argument (2O
+    capabilities 9.14, 9.13 and 9.15)."""
 
     def __init__(self, jar: Path) -> None:
         self._jar = jar
