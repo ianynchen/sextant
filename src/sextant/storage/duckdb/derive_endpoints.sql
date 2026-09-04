@@ -111,14 +111,16 @@
 --                           of characters, so a multi-character separator
 --                           would trim each of its characters individually.
 --   $canonical_path      -- 2O design §8: whether the composed address is a
---                           served URL, whose identity is the address the
---                           framework actually answers at, rather than an
---                           opaque destination name to be recorded verbatim.
---                           The caller decides from the catalog's own declared
---                           protocol, so this file names none; false leaves
---                           every composed address exactly as it was before
---                           the parameter existed, which is what keeps every
---                           non-URL catalog's derivation byte-identical.
+--                           URL THIS MODULE SERVES, whose identity is the
+--                           address the framework actually answers at, rather
+--                           than an address to be recorded exactly as the
+--                           declaration wrote it. The caller decides from the
+--                           catalog's own declared protocol and direction
+--                           (`domain/paths.py::serves_urls`), so this file
+--                           names neither; false leaves every composed address
+--                           exactly as it was before the parameter existed,
+--                           which is what keeps every other catalog's
+--                           derivation byte-identical.
 --   $members             -- 2I design §2, word 3: what a GATED CLASS exposes
 --                           on its own, with no member-level annotation
 --                           anywhere, or NULL where a catalog declares no such
@@ -595,14 +597,21 @@ derived AS (
              ELSE rtrim(p.prefix, $path_separator) || $path_separator
                   || ltrim(scoped_name, $path_separator) END AS composed,
         -- THE CANONICAL-ADDRESS GATE, wrapped around the whole seam above.
-        -- `$canonical_path` says the composed address IS a served URL rather
-        -- than an opaque destination name, and the two rules it applies are
-        -- the framework's own: one separator per boundary, and an address
-        -- that omits its leading separator names the same thing as one that
-        -- spells it (2O design §8, checkpoint CP-1 — confirmed live). Without
-        -- it a mapping written `owners/{id}` and one written `/owners/{id}`
-        -- were two identities for one URL, which splits dedup and splits
-        -- every path-keyed anchor downstream.
+        -- `$canonical_path` says the composed address IS a URL this module
+        -- serves rather than an address recorded as written, and the two
+        -- rules it applies are the framework's own: one separator per
+        -- boundary, and an address that omits its leading separator names the
+        -- same thing as one that spells it (2O design §8, checkpoint CP-1 —
+        -- confirmed live). Without it a mapping written `owners/{id}` and one
+        -- written `/owners/{id}` were two identities for one URL, which
+        -- splits dedup and splits every path-keyed anchor downstream.
+        --
+        -- The caller says false for a broker destination (a topic has no
+        -- separators to normalize) AND for a CLIENT-side declaration (ruling
+        -- R8): a client mapping without a leading separator resolves against
+        -- its base address's path, while one with a leading separator is
+        -- root-relative, so prefixing the first would rewrite an address
+        -- rather than normalize a spelling.
         --
         -- The rules are stated HERE as well as in `domain/paths.py` because
         -- this address is composed from columns that layer never sees, and

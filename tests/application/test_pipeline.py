@@ -217,16 +217,15 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("GET", "/billing/invoices"),
         ("GET", "/v1/inventory/levels"),
         ("POST", "/v1/inventory/reserve"),
-        # `LegacyBillingApi`'s two Retrofit declarations, written WITHOUT a
-        # leading separator (`@GET("legacy/invoices/{id}")`). They are the
-        # only two rows on this whole fixture that 2O Task 2's canonical
-        # address gate moves: an HTTP identity is the URL the framework
-        # serves, and a mapping that omits its leading `/` names the same URL
-        # as one that spells it (CP-1, confirmed live). Every other HTTP row
-        # here already spelled it, which is exactly why the split identity
-        # went unnoticed for so long.
-        ("GET", "/legacy/invoices/{id}"),
-        ("POST", "/legacy/invoices"),
+        # `LegacyBillingApi`'s two Retrofit declarations, recorded WITHOUT a
+        # leading separator because that is what they wrote. 2O Task 2's
+        # canonical-address gate does NOT reach them (ruling R8): it applies
+        # to inbound HTTP alone, and a CLIENT's slashless path resolves
+        # against its base address's own path while a leading separator is
+        # root-relative — two different URLs, so prefixing one here would
+        # rewrite an address rather than normalize a spelling.
+        ("GET", "legacy/invoices/{id}"),
+        ("POST", "legacy/invoices"),
         # Outbound (Phase 2C): BillingRestTemplate's `single_call` surface —
         # one route per verb shape the spring-resttemplate catalog's
         # `methods` rows match on its own.

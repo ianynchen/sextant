@@ -12,9 +12,22 @@ until the peer join splits them, and prefixing one fabricates a URL nobody
 serves. `is_path_shaped` is the guard, and it is conservative: anything
 carrying a scheme or a placeholder is left exactly as written.
 
-**Scope.** HTTP only (SSE rows inherit it — `protocol_hint` reclassifies after
-identity is minted). GraphQL paths are FIELD NAMES, not URLs; websocket is
+**Scope.** INBOUND HTTP only (SSE rows inherit it — `protocol_hint` reclassifies
+after identity is minted). GraphQL paths are FIELD NAMES, not URLs; websocket is
 deferred until a path-kind marker exists (2O §8).
+
+**Why OUTBOUND http is excluded (ruling R8).** CP-1 is evidence about what a
+server SERVES, and a client's declaration is not the same kind of value. A
+client mapping written without a leading separator is resolved against its
+configured base address's PATH, while one written with a leading separator is
+root-relative: against a base of `https://host/v1/`, `invoices` and
+`/invoices` are two different URLs, so prefixing the first REWRITES an address
+rather than normalizing a spelling — the approximation DR-6 forbids, and the
+reason divergent frameworks get separate units here rather than one averaged
+rule. §8's whole purpose — one identity per route the module SERVES, so dedup,
+the path-keyed anchors and L's cross-service joins agree — is served by the
+inbound half alone. An outbound row's identity is a composed address that the
+peer join governs, and it keeps whatever half the declaration actually wrote.
 
 **The one mirror.** `derive_endpoints.sql` composes its own path in SQL, from
 columns this layer never sees, so it applies the same two rules there under
@@ -28,8 +41,22 @@ storage may not simply import this module: ARCHITECTURE §10 forbids a
 protocol name in `storage/`, and this seam's name is one.
 """
 
+from sextant.domain.closed_sets import Direction, Protocol
+
 _SCHEME = "://"
 _PLACEHOLDER_OPEN = "${"
+
+
+def serves_urls(protocol: str, direction: str) -> bool:
+    """Whether a catalog's addresses are URLs THIS MODULE SERVES — the one
+    gate every caller of `canonical_http_path` asks (ruling R8).
+
+    Spelled once, here, rather than four times in four engines plus a fifth
+    time as the `$canonical_path` bind `derive_endpoints.sql` reads: the two
+    halves of that pair are pinned against each other by a test, and a gate
+    restated per engine is the drift that test could not see.
+    """
+    return protocol == Protocol.HTTP and direction == Direction.INBOUND
 
 
 def is_path_shaped(raw: str) -> bool:

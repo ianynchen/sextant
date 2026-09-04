@@ -16,7 +16,7 @@ from sextant.domain.facts import (
     SymbolFact,
     TypeRef,
 )
-from sextant.domain.paths import canonical_http_path
+from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -1560,21 +1560,22 @@ def test_a_malformed_withdrawal_filter_is_refused_by_file(tmp_path: Path, declar
 # the fixture, through `spring-web.yml` (`tests/e2e/test_vertical_slice.py`).
 
 
-def _seam_catalog(protocol: str = "http", **mapping: object) -> Catalog:
+def _seam_catalog(protocol: str = "http", direction: str = "inbound", **mapping: object) -> Catalog:
     """A gated catalog whose type-level annotation carries a prefix and whose
     method-level annotation carries a suffix — the two halves of one seam,
     with whatever composition vocabulary a test layers on.
 
-    `protocol` is a parameter because 2O design §8 made it one: an HTTP
-    catalog's composed address goes on to be canonicalized as the URL the
-    framework serves, so a test about the SEAM alone — what the join does and
-    does not insert — has to ask a catalog whose addresses are names rather
-    than URLs."""
+    `protocol` and `direction` are parameters because 2O design §8 and ruling
+    R8 made them the canonical-address gate (`domain/paths.py::serves_urls`).
+    A composed address is canonicalized into the URL the framework serves only
+    for an INBOUND HTTP catalog, so a test about the SEAM alone — what the
+    join does and does not insert — asks one of the other three combinations.
+    """
     return Catalog(
         id="invented-seam",
         style="annotation_driven",
         protocol=protocol,
-        direction="inbound",
+        direction=direction,
         requires=("annotation_args",),
         source=Path("tests/invented-seam.yml"),
         matches={
@@ -1742,7 +1743,11 @@ def test_a_catalog_declaring_no_separator_concatenates_exactly_as_it_always_did(
         "${service.base}/orders",
     ],
 )
-def test_the_sql_path_seam_answers_exactly_what_the_domain_seam_answers(tmp_path: Path, raw: str):
+@pytest.mark.parametrize("protocol", ["http", "kafka"])
+@pytest.mark.parametrize("direction", ["inbound", "outbound"])
+def test_the_sql_path_seam_answers_exactly_what_the_domain_seam_answers(
+    tmp_path: Path, raw: str, protocol: str, direction: str
+):
     """The anti-drift pin `domain/paths.py` and `derive_endpoints.sql` both
     name (2O design §8).
 
@@ -1753,10 +1758,49 @@ def test_the_sql_path_seam_answers_exactly_what_the_domain_seam_answers(tmp_path
     own alias-reading rule one level down. This asserts the two answers
     against EACH OTHER rather than against a literal, so neither side can be
     edited into disagreement without a failure here.
-    """
-    derived = _seam_path(tmp_path, _seam_catalog(path_separator="/"), "", raw)
 
-    assert derived == canonical_http_path(raw)
+    Run over all four protocol/direction combinations, because the GATE is as
+    driftable as the rule: the SQL reads a `$canonical_path` bind and the
+    domain side reads `serves_urls`, and a gate that disagreed would be
+    invisible to a test pinning only the inbound-HTTP answers. `serves_urls`
+    decides the expectation here too — deliberately, since it is the one
+    place the gate is spelled and both implementations are being pinned to
+    it.
+    """
+    catalog = _seam_catalog(protocol=protocol, direction=direction, path_separator="/")
+    derived = _seam_path(tmp_path, catalog, "", raw)
+
+    expected = canonical_http_path(raw) if serves_urls(protocol, direction) else raw
+    assert derived == expected
+
+
+def test_a_client_side_http_path_keeps_the_separator_the_declaration_wrote(tmp_path: Path):
+    """Ruling R8's boundary, pinned on its own so nobody "fixes" the
+    inconsistency later.
+
+    A CLIENT declaration is not a served URL. Retrofit's `@GET("legacy/
+    invoices")` is resolved against the configured `baseUrl`'s own PATH, while
+    `@GET("/legacy/invoices")` is root-relative: against a base of
+    `https://host/v1/` the two name `https://host/v1/legacy/invoices` and
+    `https://host/legacy/invoices`, which are different URLs on different
+    services. Prefixing the first would therefore REWRITE an address rather
+    than normalize a spelling — the approximation DR-6 forbids, reached by
+    applying evidence about Spring's server side (CP-1) to client
+    composition.
+
+    §8's purpose is unharmed: it asks for one identity per route the module
+    SERVES, so that dedup, the path-keyed anchors and L's cross-service joins
+    agree. An outbound row's identity is a composed address the peer join
+    governs, and it keeps the half the declaration actually wrote.
+    """
+    outbound = _seam_catalog(direction="outbound", path_separator="/")
+
+    assert _seam_path(tmp_path, outbound, "", "legacy/invoices") == "legacy/invoices"
+    assert _seam_path(tmp_path / "b", outbound, "", "") == ""
+    # And the inbound twin of the very same declaration IS canonicalized —
+    # the pair is what makes the boundary a boundary rather than an omission.
+    inbound = _seam_catalog(path_separator="/")
+    assert _seam_path(tmp_path / "c", inbound, "", "legacy/invoices") == "/legacy/invoices"
 
 
 def test_a_multi_character_separator_is_refused_by_file(tmp_path: Path):
@@ -2715,11 +2759,7 @@ def test_a_catalog_with_no_type_gate_matches_on_method_annotations_alone(tmp_pat
     is the whole evidence."""
     workspace = _ungated_workspace(tmp_path)
     rows = [e for e in workspace.query("endpoints") if e["direction"] == "outbound"]
-    # `/legacy/invoices`, not the `legacy/invoices` the annotation spells: an
-    # HTTP catalog's identity is the URL the framework serves (2O design §8,
-    # CP-1), canonicalized once in `domain/paths.py` and mirrored by
-    # `derive_endpoints.sql`'s own `$canonical_path` gate.
-    assert [e["path"] for e in rows] == ["/legacy/invoices"]
+    assert [e["path"] for e in rows] == ["legacy/invoices"]
     workspace.close()
 
 
@@ -2804,7 +2844,7 @@ def test_a_gateless_catalog_never_synthesizes_onto_an_implementing_class(tmp_pat
 
     assert len(rows) == 1
     [row] = rows
-    assert row["path"] == "/legacy/invoices"
+    assert row["path"] == "legacy/invoices"
     assert row["caller"] == "com/acme/legacy/ClientIface#fetch(sig_2a77e410)."
 
 

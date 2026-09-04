@@ -18,8 +18,7 @@ from sextant.application.resolve.effective_annotations import (
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
-from sextant.domain.closed_sets import Protocol
-from sextant.domain.paths import canonical_http_path
+from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import bare_descriptor
 
 
@@ -125,15 +124,17 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # inert while absent, so a catalog composing a Kafka topic — which has
         # no segments to join — keeps the bare concatenation it always had.
         path_separator=mapping.get("path_separator"),
-        # 2O design §8: this catalog's addresses are served URLs, so the
-        # derivation composes the URL THE FRAMEWORK SERVES rather than the
-        # characters the two annotations happened to spell (CP-1). Decided
-        # here, from the catalog's own protocol, because `storage/` may name
-        # no protocol (ARCHITECTURE §10) — the same reason the rule itself is
-        # mirrored there rather than imported from `domain/paths.py`, which
-        # every OTHER minting site in this engine and in `combinator`/
-        # `single_call`/`fluent` calls directly (`_served_path`, below).
-        canonical_path=catalog.protocol == Protocol.HTTP,
+        # 2O design §8: this catalog's addresses are URLs THIS MODULE SERVES,
+        # so the derivation composes the URL the framework serves rather than
+        # the characters the two annotations happened to spell (CP-1). Decided
+        # here, from the catalog's own protocol and direction, because
+        # `storage/` may name no protocol (ARCHITECTURE §10) — the same reason
+        # the rule itself is mirrored there rather than imported from
+        # `domain/paths.py`, which every OTHER minting site in this engine and
+        # in `combinator`/`single_call`/`fluent` calls directly
+        # (`_served_path`, below). The gate is `serves_urls`, spelled once so
+        # this bind and those calls cannot answer differently.
+        canonical_path=serves_urls(catalog.protocol, catalog.direction),
         # 2E design §2, §3: the effective-annotations pre-pass widens
         # this catalog's own mapping fqns to every module-local annotation
         # type transitively meta-annotated with one of them PLUS, for a
@@ -686,12 +687,13 @@ def _destinations_of(args: dict[str, Any], name: str) -> list[str]:
 
 
 def _served_path(path: str | None, catalog: Catalog) -> str | None:
-    """`path` as the URL the framework serves it at, for an HTTP catalog only
-    (2O design §8). The gate is the CATALOG's protocol rather than the row's:
-    a row's protocol is still the catalog's while identity is being minted —
-    `protocol_hint` reclassifies afterwards, which is how an SSE row inherits
-    this seam without `sse` ever being named here."""
-    if path is None or catalog.protocol != Protocol.HTTP:
+    """`path` as the URL the framework serves it at, for an INBOUND HTTP
+    catalog only (2O design §8, ruling R8). The gate is the CATALOG's protocol
+    and direction rather than the row's: both are still the catalog's while
+    identity is being minted — `protocol_hint` reclassifies afterwards (which
+    is how an SSE row inherits this seam without `sse` ever being named here),
+    and D02 §3's merge mints `both` later still."""
+    if path is None or not serves_urls(catalog.protocol, catalog.direction):
         return path
     return canonical_http_path(path)
 

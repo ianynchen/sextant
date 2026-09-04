@@ -212,26 +212,34 @@ matches:
   otherwise: the dedupe is `rtrim`/`ltrim`, which trim a *set* of characters, so a longer
   separator would strip each of its characters individually.
 
-  > **OVERTURNED for `protocol: http` (2O design §8, Phase 2O Task 2).** The rule above is
-  > about the JOIN, and the join still inserts nothing into an empty half. What changed is
-  > what happens *after* it for a catalog whose addresses are served URLs: the composed
-  > address is canonicalized into **the URL the framework serves** — leading separator
-  > guaranteed, one separator per boundary, trailing separator preserved as distinct —
-  > because `@RequestMapping("users")` and `@RequestMapping("/users")` are the same URL to
-  > Spring (checkpoint CP-1, confirmed live against Boot 4.0.1) and recording them as two
-  > identities splits dedup and every path-keyed anchor downstream. So a slashless HTTP
-  > mapping DOES end up with a leading `/` — from the canonical gate, which knows it is
-  > looking at a URL, and never from the seam, which does not.
+  > **OVERTURNED for an INBOUND `protocol: http` catalog (2O design §8, Phase 2O Task 2, as
+  > narrowed by ruling R8).** The rule above is about the JOIN, and the join still inserts
+  > nothing into an empty half. What changed is what happens *after* it for a catalog whose
+  > addresses are URLs the module SERVES: the composed address is canonicalized into **the
+  > URL the framework serves** — leading separator guaranteed, one separator per boundary,
+  > trailing separator preserved as distinct — because `@RequestMapping("users")` and
+  > `@RequestMapping("/users")` are the same URL to Spring (checkpoint CP-1, confirmed live
+  > against Boot 4.0.1) and recording them as two identities splits dedup and every
+  > path-keyed anchor downstream. So a slashless inbound HTTP mapping DOES end up with a
+  > leading `/` — from the canonical gate, which knows it is looking at a served URL, and
+  > never from the seam, which does not.
   >
-  > **Scoped to `http`, and to path-shaped values.** STOMP, websocket and every messaging
-  > composition keep the rule above unchanged: a topic is not a URL, and a `/` invented into
-  > one names a destination no broker carries. GraphQL is out for the same reason from the
-  > other end — its address is a FIELD NAME. Inside `http`, a `path` holding a whole address
-  > or a placeholder-bearing composition (`https://${billing.host}/orders`) is untouched;
-  > D02 keeps those whole until the peer join splits them, and prefixing one would publish a
-  > URL nobody serves. The rule itself lives in `sextant.domain.paths`, with a mirror in
-  > `derive_endpoints.sql` (whose address is composed from columns that layer never sees)
-  > pinned against it by a test.
+  > **Scoped to INBOUND `http`, and to path-shaped values.** STOMP, websocket and every
+  > messaging composition keep the rule above unchanged: a topic is not a URL, and a `/`
+  > invented into one names a destination no broker carries. GraphQL is out for the same
+  > reason from the other end — its address is a FIELD NAME. **Client-side HTTP is out too**
+  > (R8): a `@GET("legacy/invoices")` on a client interface is resolved against the
+  > configured base address's own path, while `@GET("/legacy/invoices")` is root-relative —
+  > against `https://host/v1/` those are different URLs on different services, so
+  > canonicalizing one would rewrite an address rather than normalize a spelling. CP-1 is
+  > evidence about a server, and applying it to client composition is the approximation DR-6
+  > forbids. Inside inbound `http`, a `path` holding a whole address or a
+  > placeholder-bearing composition (`https://${billing.host}/orders`) is untouched; D02
+  > keeps those whole until the peer join splits them, and prefixing one would publish a URL
+  > nobody serves. The gate is `sextant.domain.paths::serves_urls` and the rule is
+  > `canonical_http_path` beside it, with a mirror in `derive_endpoints.sql` (whose address
+  > is composed from columns that layer never sees) pinned against both by a test that runs
+  > every protocol/direction combination.
 
   **It is not the qualifier seam, and does not touch it.** `qualifier_separator` joins a scope
   to the member it qualifies and dedupes nothing, because both halves are written by one author

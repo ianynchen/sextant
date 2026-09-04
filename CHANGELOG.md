@@ -14,7 +14,7 @@ here would restate those documents rather than add anything.
 
 ### Changed
 
-- **Endpoint identity for `http` is now the URL the framework serves**
+- **Endpoint identity for INBOUND `http` is now the URL the framework serves**
   (2O design §8, checkpoint CP-1 confirmed live against Boot 4.0.1).
   `@RequestMapping("users")` and `@RequestMapping("/users")` were two endpoint
   identities and are one; every combine boundary carries exactly one `/`; a
@@ -22,7 +22,11 @@ here would restate those documents rather than add anything.
   matching. A `path` holding a whole address or a placeholder-bearing
   composition (`https://${billing.host}/orders`) is untouched, and GraphQL
   (field names) and websocket/STOMP (a shared protocol with handshake-path
-  rows) are out of scope. The rule lives in `sextant.domain.paths`.
+  rows) are out of scope. **Client-side HTTP rows are out of scope too**: a
+  client's slashless path resolves against its configured base address's own
+  path while a leading separator is root-relative, so canonicalizing one would
+  rewrite an address rather than normalize a spelling. The rule and its gate
+  live in `sextant.domain.paths`.
 - **Spring Cloud Stream's `rabbit` binder now derives `amqp`, not `jms`**
   (2O design §3a). The `jms` stopgap was chosen when D00 had no AMQP member;
   keeping it would leave a Stream producer and a `@RabbitListener` consumer on
@@ -40,9 +44,12 @@ here would restate those documents rather than add anything.
 These four are the whole blast radius 2O design §8 names, and each is a
 consequence of the same one change:
 
-1. **Goldens moved.** Every recorded HTTP path that omitted its leading
-   separator now carries one. On this repository's own fixture that is exactly
-   two rows, both Retrofit declarations.
+1. **Goldens moved.** Every recorded INBOUND HTTP path that omitted its
+   leading separator now carries one. On this repository's own fixture that is
+   no rows at all: every inbound route it declares already spelled its leading
+   separator, and the two slashless declarations it has are client-side, which
+   this change deliberately does not touch. A codebase with a slashless
+   `@RequestMapping` will see those rows move.
 2. **Curation and view overlays naming an old endpoint id are REJECTED WHOLE**
    by M01's existing rule — an overlay is validated as a unit, so one stale
    anchor rejects the file rather than silently dropping a claim. Re-anchor the

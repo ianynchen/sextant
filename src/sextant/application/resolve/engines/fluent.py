@@ -58,8 +58,7 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
-from sextant.domain.closed_sets import Protocol
-from sextant.domain.paths import canonical_http_path
+from sextant.domain.paths import canonical_http_path, serves_urls
 
 # The capture fields whose declared value is an `argN` reference into
 # the matched call site's own arguments, rather than a literal already known
@@ -411,8 +410,11 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     for peer, path, url_resolution in destinations:
         # 2O design §8, folded in from single_call: identity is the URL the
         # framework serves, canonicalized before the dedup key below is built
-        # from it (`domain/paths.py`).
-        if path is not None and context.catalog.protocol == Protocol.HTTP:
+        # from it (`domain/paths.py`). Inert for every fluent catalog shipped
+        # today, all of which are outbound — R8's exclusion, stated here
+        # rather than left implicit, because a future inbound fluent catalog
+        # would need it and would otherwise have to rediscover it.
+        if path is not None and serves_urls(context.catalog.protocol, context.catalog.direction):
             path = canonical_http_path(path)
         # Checkpoint ruling I1, folded in from single_call: a capture that
         # WAS reached but which the scanner could not read drops the row's
