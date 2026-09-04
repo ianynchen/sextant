@@ -299,3 +299,28 @@ swapped for `gitignore` on this agent's own judgment — a factory-name substitu
 exactly the kind of unrequested deviation §1.1 rules against. The warning is harmless
 (non-fatal, no `filterwarnings=error` in this suite) and worth revisiting the day
 `gitwildmatch` is actually removed rather than merely deprecated.
+
+### A document naming a mechanism is not evidence the mechanism exists
+
+Phase 2O's spec called `detect.coordinates` "the SHIPPED jar-presence mechanism"
+and had a task read a `constant` fact kind's value. Neither exists: `detect:` is
+declared by every one of the 41 shipped catalogs and read by nothing, and D00's
+`constant` kind has no producer at all. Nine such mechanisms are now registered
+in [documented-not-implemented.md](documented-not-implemented.md), one of which
+(a routing-ambiguity "collision detector" that D01 describes as a *property* of
+identity, not a component) reached an implementation task's dispatch before a
+grep caught it.
+
+**What did not work:** four rounds of adversarial spec review. The reviewer read
+the same documents the author did and cited the same lines back — a premise both
+share is invisible to review.
+
+**What worked, in minutes:** grepping `src/` for every mechanism the remaining
+tasks named. Before writing a spec section or dispatching a task that depends on
+a mechanism, verify it in the code and cite the `file:line`. GUIDELINES §5.3 now
+requires this.
+
+**The tell to watch for:** a doc sentence that reads as description ("that
+collision is a routing-ambiguity finding", "the shipped jar-presence mechanism")
+rather than as specification. Descriptive prose about a design's *consequences*
+is easy to promote into a component that was never built.

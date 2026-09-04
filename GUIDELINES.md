@@ -88,6 +88,21 @@ The schema contract can described in several files at once; they must never drif
 
 Architectural change should not take place silently. Always ask for approval before making an architectural change, and always record such changes as ADRs after approval. Clearly state what's replaced in the ADRs. Always apply architectural unit tests to ensure there is no authorized architectural changes. Exact architectural test framework is to be specified in ARCHITECTURE.md file.
 
+### 5.3 Documents are authoritative for intent; code is authoritative for existence  
+
+§5's ordering settles what the system **should** do. It does not establish what is **built**. Before any spec, plan, or review cites a mechanism as shipped — a catalog key, a fact kind, an engine style or capability, a table, a column, a detector — **verify it in `src/` and record the `file:line` that proves it**. A mechanism named only under `docs/` is a proposal until the code says otherwise.  
+
+This is not a hypothetical risk. [docs/documented-not-implemented.md](docs/documented-not-implemented.md) is the register of mechanisms this repository documents and never built — including a catalog key declared by **every shipped catalog** and ignored by the loader, two fact types defined and never constructed, and a fact kind D00 specifies with no producer anywhere. Phase 2O's design was written against two of them as though they were shipped.  
+
+**Why this rule is a grep and not another review round:** four rounds of adversarial spec review did not catch those two, because the reviewer read the same documents the author did and cited the same lines back. A premise the author and reviewer share is invisible to review. It is visible to a grep, in minutes.  
+
+Two corollaries:  
+
+- **When a document and the code disagree about what exists, the code wins and the document is wrong** — fix it under §6 rather than building on it. (This is narrower than §6's conflict rule, which governs *behaviour*; this one governs *existence*.)  
+- **Where a document deliberately describes something ahead of its implementation, it must say so in the document**, in words a reader cannot mistake for a shipped feature — `default_produces`'s own "specified here, not yet used" is the model. Silence is the failure mode, not intent.  
+
+Prefer making this mechanical over remembering it: an architecture test that asserts every catalog key `D02` declares is read by the loader, and every fact field `D00` declares exists on its model, enforces §5.3 the way §8 requires rules to be enforced rather than aspirational.  
+
 ---  
 
 ## 6. Conflict Resolution  
