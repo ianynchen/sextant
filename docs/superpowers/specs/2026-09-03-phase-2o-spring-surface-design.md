@@ -206,8 +206,13 @@ matches:
   descriptor IS present it supplies the identity by itself, so the falsified
   constants cost only the standalone case.
 - **Stated boundary — stubs from a PUBLISHED jar:** a module consuming
-  `*-grpc-stubs` as a dependency has no generated classes in its own output,
-  so the extends target is not in module facts and the style sees nothing.
+  `*-grpc-stubs` as a dependency has no generated classes in its own output.
+  Precisely what is lost is the IDENTITY, not the edge: the class's own
+  `extends` fact still names its supertype symbol, but the jar holding that
+  supertype is unscanned, so its `SERVICE_NAME` constant — the only honest
+  source of `<protoPackage>.<Service>` — cannot be read, and nothing else
+  proves the supertype is a gRPC service at all (name-shape guessing is
+  exactly the glob grammar this style refuses).
   The escape is the shipped `.sextant.yml` library opt-in (D02 §4a — extract
   the stubs coordinate, and the generated classes' facts arrive under
   `facts/lib`); without the opt-in, COVERAGE states the boundary. For the
@@ -254,15 +259,19 @@ matches:
 - **The fence** (SEI precedent): outbound rows derive only for services NOT
   locally implemented (no local class extends that service's `ImplBase`).
   **The fence and §1b's published-jar boundary interact, and the ruling is
-  explicit:** the fence's evidence is the very supertype edge the boundary says
-  can be invisible, so a module that implements a service against PUBLISHED
-  stubs would pass the fence and derive a self-directed outbound row. The
-  guard is a second, cheaper test that survives the boundary — the module
-  declares a `@GrpcService`-annotated (or otherwise service-marked) class
-  whose stub type shares the injected stub's outer class. Where even that is
-  absent (unannotated Spring gRPC + published stubs — the same cell §1b sends
-  to COVERAGE), no outbound row derives at all: the fence fails CLOSED, since
-  a missing boundary is cheaper than a fabricated one.
+  explicit:** stated by IDENTITY ("that service's `ImplBase`"), the fence
+  cannot fire where §1b says the identity is unreadable — so a module
+  implementing a service against PUBLISHED stubs would pass it and derive a
+  self-directed outbound row. The fence is therefore stated by SYMBOL NAME
+  instead, which the jar cannot withhold: a module class whose `extends`
+  target shares an OUTER CLASS with the injected stub's type
+  (`…OrderServiceGrpc$OrderServiceImplBase` against
+  `…OrderServiceGrpc$OrderServiceBlockingStub`) is implementing the service
+  it would otherwise appear to call. The extends RELATIONSHIP is a fact of the
+  module's own class even when its target lives in an unscanned jar — what the
+  jar withholds is the `SERVICE_NAME` constant, i.e. the identity, not the
+  edge. Where the module genuinely calls a service it does not implement, no
+  such sibling exists and the outbound row derives normally.
 - **Bare `newBlockingStub(channel)` without `@GrpcClient` is a STATED BOUNDARY
   this phase**: no engine derives from a type reference alone, and the call's
   argument is a Channel object, not an address. COVERAGE gets the row.
