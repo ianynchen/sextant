@@ -97,7 +97,7 @@ consumer. A fabrication that survives to that point stops being our bug and
 becomes someone else's data. Auditing after 2J would be cheaper per phase and
 far more expensive per defect.
 
-Five sweeps, each mechanical enough to run independently, ordered by what
+Six sweeps, each mechanical enough to run independently, ordered by what
 actually found defects in 2O:
 
 1. **Near-miss coverage (§10) — highest yield.** For every engine style and
@@ -121,6 +121,23 @@ actually found defects in 2O:
    renderer's "unreached while QUESTIONS stays the two-kind set", and
    `# No stamp — the row already carries its own value`, true under one minter
    and false under two.
+6. **Invented language rules (§8.1's language rule).** *Added 2026-09-05 on the
+   user's instruction, and it is the sweep with the sharpest precedent: 2O's
+   worst shipped defect was one.* For every place we decide what a piece of Java
+   *is* — which method a call resolves to, what a type erases to, what a
+   modifier permits, when two declarations are the same declaration — is the
+   rule the **Java Language Specification's**, or one we invented because it was
+   easier to compute from the facts we happened to have? `_matching_method`
+   selected an overload by name and ARGUMENT COUNT, which is not a rule Java has,
+   and it published a message payload as a wire destination in two shipped
+   catalogs. Arity was convenient because the facts carried an argument list;
+   the parameter-type list was right there too. **The tell is a rule that is a
+   projection of our fact schema rather than a sentence from the JLS.** Named
+   candidates to audit: erasure and generic-signature handling (9.13/9.14),
+   `outer_class`/nested-name parsing, visibility (D00 §5a is two-valued, which
+   Task 7b found the hard way), override identity, varargs and array arguments
+   (9.15), annotation inheritance and meta-annotation resolution, and anywhere a
+   descriptor is compared, split, or constructed by string surgery.
 
 The output is corrections, not a report: each finding either fixes shipped
 behaviour, retires a boundary, or lands in the register with its evidence.
