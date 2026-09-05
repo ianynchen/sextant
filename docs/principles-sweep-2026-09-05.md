@@ -2073,7 +2073,7 @@ Q5 (what `getMethods()` returns for an override), Q6 (`isCustomMethod`) and Q7
 | 8 | (harness) | **FIXED (0b49bd3), by removing a guard rather than repairing a test.** The `spring-actuator` near-miss is guarded twice over and pins neither half; `spring-actuator.operations-are-the-mapping-annotations`' weakening mints a CLASS-target declaration that the handler-is-a-method join drops on its own account, and `@Endpoint` is `@Target(TYPE)` so it can never sit elsewhere. That is a NO-OP mutation, which the harness's own design forbids counting. The registry entry is gone and the test carries no marker and says why |
 
 **`_DOES_NOT_DISCRIMINATE_YET` is empty and `scripts/check.sh --guards` reports
-30 killed, 0 survived, 0 unmeasurable.** Sweep 1's `test_a_protocol_agnostic_
+31 killed, 0 survived, 0 unmeasurable.** Sweep 1's `test_a_protocol_agnostic_
 supertype_derives_nothing` (S1-MAJ-5) is closed with them.
 
 ### 12.1 What this round disputes

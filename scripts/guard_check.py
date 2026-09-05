@@ -425,8 +425,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/storage/duckdb/derive_call_endpoints.sql",
-                find="WHERE NOT (r.resolution = 'resolved' AND coalesce(r.path, '') = ''"
-                " AND r.peer IS NULL)",
+                find="WHERE NOT (r.resolution = 'resolved' AND r.path IS NULL AND r.peer IS NULL)",
                 replace="WHERE TRUE  -- guard disabled by scripts/guard_check.py",
             ),
         ),

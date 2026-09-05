@@ -228,8 +228,13 @@ here would restate those documents rather than add anything.
   and a silent under-report: an `unresolved` row with no path is a real, distinct fact — "this
   method calls something whose destination nobody could read" — which the same file's dedup
   paragraph already turns on. A `resolved` row with no path claims the address was read and
-  that there is none. The under-report it trades for is stated in `docs/COVERAGE.md`: a
-  constraint-only WebFlux route IS served and we cannot express its address.
+  that there is none. It is also scoped to a **NULL** path rather than to an empty one: on
+  this side a `path` is either an address an engine read or NULL, and whether an empty address
+  is real is a protocol question `domain/paths.py` owns — `supertype_dispatch` publishes its
+  patterns verbatim, so `@WebServlet(urlPatterns = "")` reaches this insert as `''` and no
+  probe has measured what we should publish for it. The under-report the gate does trade for
+  is stated in `docs/COVERAGE.md`: a constraint-only WebFlux route IS served and we cannot
+  express its address.
 
   The test that asserted the old row now asserts emptiness, and `scripts/guard_check.py` kills
   it with the gate disabled. `spring-webflux-router` leaves the near-miss backlog.
@@ -272,7 +277,7 @@ here would restate those documents rather than add anything.
   harness's own design forbids counting, so the registry entry is removed and the test carries
   no marker and says why.
 
-  `_DOES_NOT_DISCRIMINATE_YET` is now **empty**: `scripts/check.sh --guards` reports **30
+  `_DOES_NOT_DISCRIMINATE_YET` is now **empty**: `scripts/check.sh --guards` reports **31
   killed, 0 survived, 0 unmeasurable**. The harness's own self-test no longer depends on a live
   defect existing — it constructs a guard whose edit rewrites a comment, so that "the edit
   changes no behaviour" is a property the test guarantees rather than a fact about another

@@ -71,11 +71,27 @@ FROM (SELECT UNNEST(
 -- A `peer` alone is still an address: a client chain that resolved a host and
 -- no path is a call to that service's base address, which is real.
 --
+-- AND `path IS NULL` RATHER THAN `coalesce(path, '') = ''`, which is the
+-- narrower reading on purpose. On this side a `path` is either an address an
+-- engine READ or NULL, and the two say different things: NULL is "nothing here
+-- names an address", while the empty STRING is an address that was read and is
+-- empty. Whether an empty address is real is a protocol question
+-- `domain/paths.py` owns — `canonical_http_path` already spells an empty
+-- inbound-HTTP address `/`, so `combinator` cannot produce one — and at least
+-- one shipped catalog can: `supertype_dispatch` publishes its patterns
+-- verbatim (CP-9), so `@WebServlet(urlPatterns = "")`, which the Servlet
+-- specification defines as the exact-match context-root pattern, arrives here
+-- as `''`. What we should publish for that has been measured by no probe, and
+-- dropping it here would be answering an unmeasured question by side effect.
+-- `derive_endpoints.sql`'s twin does test the empty string, and correctly: its
+-- `path` is a COMPOSED string that is never NULL, and its canonical gate has
+-- already spelled a real root route `/` by the time the test runs.
+--
 -- This stops being right the day an engine can derive a row whose identity is
 -- carried by neither `path` nor `peer` — a protocol addressed by something
 -- else entirely — at which point the answer belongs beside `serves_urls` in
 -- `domain/paths.py`, where the protocol question already lives.
-WHERE NOT (r.resolution = 'resolved' AND coalesce(r.path, '') = '' AND r.peer IS NULL)
+WHERE NOT (r.resolution = 'resolved' AND r.path IS NULL AND r.peer IS NULL)
   AND NOT EXISTS (
     SELECT 1 FROM endpoints existing
     WHERE existing.protocol  = r.protocol
