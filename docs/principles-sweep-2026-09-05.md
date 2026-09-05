@@ -1949,42 +1949,89 @@ a later dispatch and stay `OPEN`.
 proves it, with the near-miss shown to discriminate by mutation. `OPEN —
 <reason>` is a deliberate decision, not a gap that was forgotten.
 
-### The durable artifact
+**Fifteen of sixteen closed. One left open with its framework half measured**
+(`A-M14`), because closing it needs data the fact stream does not carry — §8.1
+rule 4, not a gap.
 
-`scripts/probes/cp12_sweep_round1b{,.md}` (`d943eb0`) — a committed harness
-answering twelve framework questions across nine resolved artifacts, every
-answer being the framework's WHOLE set rather than a check of ours. That
-direction is the point: CP-10 asks whether every descriptor a catalog declares
-names a real method and never the converse, and eight of these sixteen findings
-live on the converse side (`A-Mi5`).
-`tests/architecture/test_sweep_round1b_framework_surfaces.py` is the offline
-half and pins the shipped catalogs against the generated table.
+### The durable artifacts
+
+* `scripts/probes/cp12_sweep_round1b{,.md}` (`d943eb0`) — twelve framework
+  questions across nine resolved artifacts, every answer the framework's WHOLE
+  set rather than a check of ours. That direction is the point: CP-10 asks
+  whether every descriptor a catalog declares names a real method and never the
+  converse, and eight of these findings live on the converse side (`A-Mi5`).
+* `scripts/probes/cp13_inherited_members{,.md}` (`3a976e3`) — one question asked
+  of three sites: when a type inherits a member, does the framework treat it as
+  the type's own? It turned out to be answerable from bytecode without deploying
+  anything, because in every case the question reduces to which reflective
+  enumeration is called and what is filtered out of the result. It states what
+  it does NOT settle: nothing was deployed.
+* `scripts/probes/cp9_servlet{,_shapes.md}` (`3cb9f9f`) — six new rows on the
+  EXISTING live-container harness, measuring the configuration `A-M2`'s verdict
+  was generalised past, on both `service` signatures and all three containers.
+* `scripts/probes/cp10_catalog_descriptors.md` (`4c2bfe6`) — regenerated, from
+  51 pinned descriptors to 75.
+
+`tests/architecture/test_sweep_round1b_framework_surfaces.py` is CP-12's offline
+half and pins the shipped catalogs against its table.
 
 ### Class A Majors
 
 | id | status |
 |---|---|
-| `A-M1` | OPEN |
-| `A-M2` | OPEN |
-| `A-M3` | FIXED (74684e5) — `head`/`options` roots on both clients; `method(HttpMethod)` derives its address at `unresolved` with `method` NULL, because its verb is an enum constant a string-literal scanner cannot read |
-| `A-M4` | FIXED (74684e5) — `exchangeToMono`/`exchangeToFlux` added, `exchange` kept as dead-at-7.0.2 data, and `spring-restclient`'s own `exchange` family added; both lists version-scoped in the catalog and pinned against CP-12's 7.0.2 column |
-| `A-M5` | FIXED (d9ab742) — `@OPTIONS` ships; `@HTTP` is a stated, test-pinned boundary because the engine's `method_from` read would give it `method: ''` |
-| `A-M6` | OPEN |
-| `A-M7` | OPEN |
-| `A-M8` | FIXED (d9ab742) — `path_from: [value, queueNames]`, measured off the `@AliasFor` pair. §7.7 had already settled the failure mode and round 1a had already corrected `COVERAGE.md` |
-| `A-M9` | OPEN |
-| `A-M10` | OPEN |
-| `A-M11` | OPEN |
-| `A-M12` | OPEN |
-| `A-M13` | OPEN |
-| `A-M14` | OPEN |
-| `A-M15` | OPEN |
-| `A-M16` | OPEN |
+| `A-M1` | FIXED (f85cac7) — the selector is name AND parameter types (JLS 8.4.2); several candidates nothing can tell apart resolve to a NULL handler, which is what the engine's docstring already promised. Falsifies §6.1 rows #31 and #32 |
+| `A-M2` | FIXED (3cb9f9f) — CP-9 rows 35-40 measure the delegating wrapper on both `service` signatures and all three containers; the bypass now discards only a class declaring no dispatch member. Three shipped tests asserted the defect and are corrected |
+| `A-M3` | FIXED (74684e5) — `head`/`options` roots on both clients; `method(HttpMethod)` derives its address at `unresolved` with `method` NULL, its verb being an enum constant a string-literal scanner cannot read |
+| `A-M4` | FIXED (74684e5) — `exchangeToMono`/`exchangeToFlux` added, `exchange` kept as dead-at-7.0.2 data, `spring-restclient`'s own `exchange` family added; both lists version-scoped in the catalog and pinned against CP-12's 7.0.2 column |
+| `A-M5` | FIXED (d9ab742) — `@OPTIONS` ships; `@HTTP` is a stated, test-pinned boundary, because `$method_from`'s enum-symbol extract would give its plain-String verb `method: ''` |
+| `A-M6` | FIXED (4c2bfe6) — the callback, rebalance-listener and partition-carrying overloads; `assign` stated as a boundary, its topic being two hops inside a `TopicPartition` |
+| `A-M7` | FIXED (4c2bfe6) — ten more of `Session`'s eleven consumer factories; `createBrowser` stated and test-pinned as an exclusion, since a browser enumerates without consuming |
+| `A-M8` | FIXED (d9ab742) — `path_from: [value, queueNames]`, measured off the `@AliasFor` pair. §7.7 settled the failure mode before round 1a and round 1a corrected `COVERAGE.md` |
+| `A-M9` | FIXED (960737c) — nine vocabulary rows, no engine change; `method(HttpMethod)`/`methods(...)` stay a stated boundary |
+| `A-M10` | FIXED (3cb9f9f) — both seams drop one leading `[` and recurse, so `String[][]` and `String[]` are no longer byte-identical facts |
+| `A-M11` | FIXED (c4f9665, round 1a) — closed by `A-C4`'s `superclasses` edge exactly as §3.3 predicted. Verified here rather than re-fixed: `test_effective_annotations.py::test_an_ancestor_that_declares_no_method_at_all_still_carries_its_prefix` pins the shape |
+| `A-M12` | FIXED (3a976e3) — `superclasses` added to the ancestry walk, and both stale "a plain `extends` is NOT in the fact stream" sentences deleted in the same commit |
+| `A-M13` | FIXED (3a976e3) — the walk crosses module-local superinterfaces, own-first, stopping short of a `contracts` entry. Framework half MEASURED (CP-13 Q1) rather than left unverified |
+| `A-M14` | **OPEN — measured and not closable from the fact stream.** CP-13 Q2 confirms the framework compares a name, a parameter count AND parameter types (a signature, JLS 8.4.2) where `crud_methods` is 25 bare identifiers. Closing it needs `crud_methods` to carry parameter types per contract per store AND the type-variable resolution the framework does through `getMostSpecificMethod`; the facts support neither, and half of it is §8.1 rule 4. Stated in `docs/COVERAGE.md` §5.1 with what falsifies it |
+| `A-M15` | FIXED (3cb9f9f) — a `gate_ancestry` CTE walks the transitive superclass closure for the member join, and rows carry the type that annotated them. Framework half MEASURED (CP-13 Q3/Q4). Two divergences from the RI stated: a `public final` operation, and Apache CXF unmeasured |
+| `A-M16` | FIXED (44d1089) — loaded at the analysed root, matched relative to the root it was loaded at. A module OUTSIDE that root keeps its own, since `<module>../x</module>` is legal and the reactor fixture is that shape |
 
 ### The three §7 settlements
 
 | item | status |
 |---|---|
 | `A-M8` / `COVERAGE.md:1444-1447` (§7.7) | SETTLED before round 1a and corrected there; the catalog half is `A-M8` above |
-| `stamp_media.sql` (§7.4) | OPEN |
-| sweep 2's negative-claim arithmetic (§7.3) | OPEN |
+| `stamp_media.sql` (§7.4) | **SETTLED (44d1089).** Sweep 2's #25 is TRUE, both halves, and two shipped tests already proved each. Sweep 1's row 33 is HALF true: the UPDATE does match on `(protocol, direction)` alone and so reaches rows other catalogs derived — the mechanism, since this catalog derives none of its own — but the CROSS-MODULE half has no path to exist, because `endpoints` carries no module column, every module gets its own workspace, and `resolve()` runs once per module. The residual is an over-report onto a raw-producer row within one module, on a carried column rather than an identity one, now recorded in the SQL and in COVERAGE and pinned in both directions |
+| sweep 2's negative-claim arithmetic (§7.3) | **SETTLED. Nothing was mine to raise.** §6.1's table is **54 numbered rows** (1–53 plus 3b), and their verdicts are **PROVEN 2, VERIFIED 35, VERIFIED-with-a-caveat 2 (#17, #22), FALSE 9, UNVERIFIED 6** — which sums to 54 and confirms §7.3's "9 FALSE, not 5". The header's 44 and the closing 3/30/5/6 are unusable and stay so. Of the nine FALSE rows, #3 and #30 were corrected in place before the sweep and are not live; the other seven map to six live sites and **every one has a finding**: #4→`A-C2`, #6→`A-C3`, #15 (+#17's "ONE")→`A-M2`, #31/#32→`A-M1`, #44→`A-Mi1`, #49→`A-Mi3`. #25 is no longer UNVERIFIED after §7.4's settlement, so the live UNVERIFIED count is 5 |
+
+### 11.1 Where round 1b disputes this document
+
+- **§3.3's `A-M5` fix — "`@HTTP` needs `path_from: [path]` and a verb read from
+  `method`" — cannot be taken, and the alternative it offers is the right one.**
+  `$method_from`'s read in `derive_endpoints.sql` is
+  `regexp_extract(v, '#([A-Za-z0-9_]+)\.$')`, because every framework this
+  grammar serves holds its verb in an enum constant whose symbol ends that way.
+  On `@HTTP(method = "REPORT")` — a plain `String` — that extract returns the
+  EMPTY STRING, so declaring the row would ship a verb no evidence supports.
+  Stated as a boundary and pinned by a test, which is §3.3's own second option.
+- **`A-M2`'s prescribed interim is superseded by measuring it.** §3.3 proposes
+  that a `service()`-overriding class declaring dispatch members "is ambiguous
+  and should derive an `open_question` naming the class rather than vanishing".
+  It is not ambiguous: CP-9 rows 35-40 measure it on both `service` signatures
+  and all three containers, and the class serves exactly its declared verbs. An
+  `open_question` would have recorded a doubt the evidence does not have.
+- **`A-M13`/`A-M14`/`A-M15`'s framework halves were reachable without a live
+  run**, which §7.10 carries as "each needing one live run". Each reduces to
+  which reflective enumeration the framework calls, and that is an instruction:
+  CP-13 reads it. What a live run would add — an observed route, a published
+  WSDL — is still absent and the probe says so.
+- **`A-M14` is confirmed and deliberately NOT fixed**, which §3.3 anticipates
+  ("if that is too expensive, the honest interim is a COVERAGE row"). It is not
+  expense: `crud_methods` would need parameter types per contract per store,
+  and the framework resolves type variables through `getMostSpecificMethod`
+  against the concrete repository, which the facts cannot do. Deriving on half
+  of that is §8.1 rule 4.
+- **§7.4's framing of `stamp_media.sql` as one open question is two.** Sweep 1's
+  allegation has a cross-catalog half that is true and by design, and a
+  cross-module half that is impossible. Reading it as one row would have led to
+  scoping the rule by `catalog_id`, which would make it stamp nothing at all.
