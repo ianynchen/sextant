@@ -483,3 +483,38 @@ against the principles that already exist, and where it violates one, stop and
 settle the mechanism rather than recording the finding and moving on. A rule
 already written and broken twice needs enforcement, not another correction. This
 entry is the worked example in §13.8 and the sole hit in its audit list.
+
+---
+
+## A test that describes a module which cannot exist (principles sweep round 1a)
+
+Four gates were added to catalogs this round, each mirroring what a framework
+measurably does: a WebSocket endpoint is a class carrying `@ServerEndpoint`, a
+STOMP handler lives on a `@Controller`, a Retrofit or `@HttpExchange` client is
+an interface, a Spring Cloud Stream binding needs Spring Cloud Stream on the
+build. **Every one of the four found a shipped test or fixture that had been
+describing something the framework would never serve**, and each went red the
+moment the gate landed:
+
+- a Retrofit-shaped fact set whose docstring said "interface method" while its
+  own `construct_kind` said `class`;
+- a STOMP handler on a class carrying no stereotype at all;
+- `fixtures/orders-service`, which has modelled a Spring Cloud Stream module
+  since 2F — functional beans, `spring.cloud.function.definition`,
+  `spring.cloud.stream.bindings.*` — while its POM declared no Spring Cloud
+  Stream, a module with no binder and therefore no bindings.
+
+None of these was caught by review, and none could have been: they are all
+*plausible*, and the pipeline derived rows from them happily because nothing
+encoded the framework's own precondition. **A synthetic fact set is a claim
+about a module, and an unfalsifiable one is where a wrong rule hides.** The
+practical form: when a fixture is built by hand, write down which real
+declaration it is standing in for, and when a gate lands, expect the fixtures to
+tell you which of them were fiction. The gate going red is the cheapest audit of
+the fixture set anybody runs.
+
+**And a mechanical one, learned the annoying way.** Recording a commit SHA in a
+document and then `git commit --amend`ing that commit invalidates every SHA
+written into it. Stamp the identifier after the commit is final, or in a
+separate commit — the same "record identity from the run's own output" rule
+§5.4 states for probes, applied to git.

@@ -1881,22 +1881,22 @@ forgotten.
 | mechanism | status |
 |---|---|
 | M1 — no derivation publishes a defaulted value at `resolved`/`compiler` | FIXED (aff29fc) — shipped as the §8.3 audit list, `tests/architecture/test_defaulted_identity_values.py`. See §10.1 for where this document's own §4.4 prediction is disputed. |
-| M2 — the dependency gate covers more than one style | FIXED (2cbaa4b) — `config_join` admitted; the per-style reasoning is recorded in `resolve/dependencies.py` |
-| M3 — the empty-address guard says what it means | FIXED (ed4e18c) — replaced by an addresses-nothing gate; closes `A-C1`'s fabrication half across all seven separator-declaring catalogs |
+| M2 — the dependency gate covers more than one style | FIXED (c182373) — `config_join` admitted; the per-style reasoning is recorded in `resolve/dependencies.py` |
+| M3 — the empty-address guard says what it means | FIXED (fc97244) — replaced by an addresses-nothing gate; closes `A-C1`'s fabrication half across all seven separator-declaring catalogs |
 
 ### Class A Criticals
 
 | id | status |
 |---|---|
-| `A-C1` | FIXED (85af4c7) — the empty-address half by M3, the type gates and the direction inversion here; the `@OnOpen`-only under-report and the RSocket hazard are stated in COVERAGE §5.5, not closed |
-| `A-C2` | FIXED (330835b) |
-| `A-C3` | FIXED (b5cb293) — at the projection, not in the nine catalogs; the mirror invariant is now a ratchet |
-| `A-C4` | FIXED (584676b) — and `A-M11` with it, as §3.3 predicted |
-| `A-C5` | FIXED (2cbaa4b) — the fabrication is closed by M2; the residual (`@Bean` conjunct, unmeasured) is stated in COVERAGE §5.8 |
-| `A-C6` | FIXED (85af4c7) |
-| `A-C7` | FIXED (329483c) — the composed-stereotype divergence; the superclass and interface divergences left OPEN with a stated reason, see §10.1 |
-| `A-C8` | FIXED (d3f72de) |
-| `A-C9` | FIXED (d3f72de) — the abort now names the real cause, and both documents carry an amendment; the repository file is NOT built (roadmap `:201-205`'s standing ruling) and retiring §2 outright stays the documentation-debt checkpoint's call |
+| `A-C1` | FIXED (81c45f0) — the empty-address half by M3, the type gates and the direction inversion here; the `@OnOpen`-only under-report and the RSocket hazard are stated in COVERAGE §5.5, not closed |
+| `A-C2` | FIXED (f0e6efc) |
+| `A-C3` | FIXED (0dec4b5) — at the projection, not in the nine catalogs; the mirror invariant is now a ratchet |
+| `A-C4` | FIXED (c4f9665) — and `A-M11` with it, as §3.3 predicted |
+| `A-C5` | FIXED (c182373) — the fabrication is closed by M2; the residual (`@Bean` conjunct, unmeasured) is stated in COVERAGE §5.8 |
+| `A-C6` | FIXED (81c45f0) |
+| `A-C7` | FIXED (0c4b879) — the composed-stereotype divergence; the superclass and interface divergences left OPEN with a stated reason, see §10.1 |
+| `A-C8` | FIXED (eedb582) |
+| `A-C9` | FIXED (eedb582) — the abort now names the real cause, and both documents carry an amendment; the repository file is NOT built (roadmap `:201-205`'s standing ruling) and retiring §2 outright stays the documentation-debt checkpoint's call |
 
 ### 10.1 Where round 1a disputes this document
 
