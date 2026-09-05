@@ -1,0 +1,48 @@
+id: spring-scheduling
+displayName: Spring scheduling (@Scheduled)
+style: scheduled_work
+
+# NO `protocol` AND NO `direction`, and their absence is a claim rather than an
+# omission (2O design §4). This catalog derives into `scheduled_work`, a table
+# with no protocol, no address and no direction: work started on a clock speaks
+# no wire. `resolve/endpoints.py` refuses a non-wire style that declares either
+# key, and refuses a wire style that declares neither — so the absence here is
+# checked rather than merely written.
+
+detect:
+  coordinates: ["org.springframework:spring-context"]
+
+# `nested_annotation_args` (capability 9.16) as well as `annotation_args`, and
+# the second is not optional hardening. Two or more `@Scheduled` on one method
+# are folded by javac into a single `@Schedules` whose `value` is an ARRAY OF
+# ANNOTATIONS, so on a scanner that cannot read a nested annotation such a
+# method carries no readable trigger at all — while its single-schedule
+# neighbour carries its own. Requiring the capability makes that scanner skip
+# this catalog VISIBLY (M04, FR-17) instead of reporting part of a module's
+# scheduled surface and staying silent about the rest.
+requires: [annotation_args, nested_annotation_args]
+
+matches:
+  annotation: org.springframework.scheduling.annotation.Scheduled
+  # The container javac folds a repeated `@Scheduled` into. Named explicitly
+  # rather than derived from the annotation's own `@Repeatable`, which is a
+  # fact of a class file in a jar this analysis does not scan.
+  container: org.springframework.scheduling.annotation.Schedules
+
+  # WHICH ATTRIBUTES NAME A SCHEDULE, and what the framework calls each kind.
+  # This is an ALIAS SET, not the annotation's attribute list: `@Scheduled`
+  # also carries `initialDelay`, `initialDelayString`, `zone`, `timeUnit` and
+  # `scheduler`, and not one of them is a schedule. `initialDelay` is the
+  # sharpest — it is a duration, it sits beside a rate, and reading it would
+  # publish the delay before the FIRST run as the interval between every run.
+  #
+  # The `String` spellings map to the same kind as their numeric twins because
+  # they ARE the same schedule declared in another notation; the difference is
+  # that a string may hold a `${...}` placeholder, which the engine carries
+  # verbatim and marks `unresolved`.
+  triggers:
+    cron: cron
+    fixedDelay: fixedDelay
+    fixedDelayString: fixedDelay
+    fixedRate: fixedRate
+    fixedRateString: fixedRate
