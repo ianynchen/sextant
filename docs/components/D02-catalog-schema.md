@@ -2654,9 +2654,18 @@ and be read straight back out of the same workspace.
 
 ## 6. Where catalogs live
 
-Built-in catalogs ship with Sextant. A repository adds its own — for an in-house client
+Built-in catalogs ship with Sextant. ~~A repository adds its own — for an in-house client
 library — through `sextant.yml` ([D04](D04-config-and-exclusion.md)). Both sets are loaded
-together and neither is privileged.
+together and neither is privileged.~~
+
+> **Amendment (2026-09-05, principles sweep `A-C9`).** **There is no mechanism by which a
+> repository catalog could load.** `YamlCatalogSource` globs the installed package's own
+> directory and nothing else, and the `sextant.yml` D04 §2 specifies is never opened — see
+> that section's own amendment. The sentence above is struck rather than deleted because
+> NFR-9 names this as the supported extension path and a reader needs to know it is not one;
+> project catalogs are deliberately unscheduled (2O roadmap `:201-205`), because they would
+> make this schema a public API after which every change here is breaking. Recorded in
+> [documented-not-implemented.md](../documented-not-implemented.md).
 
 The active set for a module is decided by `detect.coordinates` against the dependencies
 [M02](M02-detector.md) resolved. `module status` lists which catalogs were active, which

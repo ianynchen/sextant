@@ -178,6 +178,27 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-C8`: ARCHITECTURE said redaction happens during extraction; it does not** (principles
+  sweep §3.2). Masking runs at the two EXITS — `render` and `export` — and the workspace holds
+  verbatim values, which D04 §4 has recorded as an approved amendment since 2026-09-02 and
+  ARCHITECTURE was never updated (a §5.1 miss). The second sentence described a cache key, and
+  there is no cache. A confidentiality claim (NFR-8) that was false in the first document a
+  reader opens, and the one that decides whether somebody believes `<module>/.sextant/facts/**`
+  is safe to copy, share or commit. Corrected in place, with the old text quoted so the
+  correction is visible rather than silent.
+
+- **`A-C9`: following the documented configuration aborted every command** (principles sweep
+  §3.2). D04 §2 specifies `~/.sextant/config.yml` and a repository-root `sextant.yml`; neither
+  is ever opened by anything. The file that IS read is the per-module `.sextant.yml` — one
+  character from the documented repository name, with a closed key set — so in a single-module
+  repository, where the two roots coincide, writing any documented key raised
+  `SextantConfigError` and stopped the run, with a message saying only that the key is "read
+  nowhere". That is equally true of a typo and points at nothing. The refusal now names the
+  mistake: which file the key belongs to, and that Sextant does not read that file either.
+  Amendment boxes in D04 §2 and D02 §6 say the same to a reader, and the register gains its
+  missing row — including the standing ruling that project catalogs are deliberately
+  unscheduled, so NFR-9's stated extension path is knowingly unmet.
+
 - **`A-C3`: an endpoint returning no body was published as returning an object** (principles
   sweep §3.2). `WireTypes` mapped the primitive `void` to the empty string and let
   `java/lang/Void` fall through to `default -> "object"`, so `ResponseEntity<Void>` /

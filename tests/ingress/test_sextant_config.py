@@ -220,3 +220,50 @@ def test_an_unrecognized_auth_value_is_refused(tmp_path: Path):
     third auth mode rather than a mistake to report."""
     with pytest.raises(SextantConfigError):
         read_enrich_defaults(_config(tmp_path, "enrich:\n  auth: apikey\n"))
+
+
+# --- `A-C9` (principles sweep §3.2): the abort names the real cause ---------
+
+
+def test_a_documented_repository_config_key_is_refused_by_name(tmp_path: Path):
+    """`A-C9`. `docs/components/D04-config-and-exclusion.md` §2 specifies a
+    repository-root `sextant.yml` and a `~/.sextant/config.yml`. **Neither file
+    is ever opened** — no code reads either name — and in a single-module
+    repository, where the module root and the repository root coincide, a user
+    following that document writes those keys into the file that IS read, whose
+    name differs by one character.
+
+    The refusal was correct and useless: it said the key is "read nowhere",
+    which is true of every typo, and left a reader who had just followed the
+    documentation with no way to tell that the file they meant is a different,
+    unread one. That is the difference between a degraded run and a stopped
+    user — all four commands share this reader, so the whole run is refused.
+
+    The fix is not to accept the key. It is to say which mistake this is."""
+    root = _config(tmp_path, "catalogs:\n  - ./catalogs/acme.yml\n")
+
+    with pytest.raises(SextantConfigError) as raised:
+        read_extract_libraries(root)
+
+    message = str(raised.value)
+    assert "catalogs" in message
+    # The two things the old message could not say: that this key belongs to a
+    # DIFFERENT file, and that the different file is not read at all.
+    assert "sextant.yml" in message
+    assert "not read" in message
+
+
+def test_an_ordinary_typo_still_gets_the_ordinary_refusal(tmp_path: Path):
+    """The paired near-miss. `extract_libaries` is a misspelling, not somebody
+    following D04 §2, and telling them about a repository-level file they never
+    mentioned would send them the wrong way. The documented-key message must
+    fire on the documented keys and nothing else."""
+    root = _config(tmp_path, "extract_libaries: []\n")
+
+    with pytest.raises(SextantConfigError) as raised:
+        read_extract_libraries(root)
+
+    message = str(raised.value)
+    assert "extract_libaries" in message
+    assert "reads nowhere" in message
+    assert "not read" not in message

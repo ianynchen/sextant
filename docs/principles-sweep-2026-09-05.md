@@ -1895,8 +1895,8 @@ forgotten.
 | `A-C5` | FIXED (2cbaa4b) — the fabrication is closed by M2; the residual (`@Bean` conjunct, unmeasured) is stated in COVERAGE §5.8 |
 | `A-C6` | FIXED (85af4c7) |
 | `A-C7` | FIXED (329483c) — the composed-stereotype divergence; the superclass and interface divergences left OPEN with a stated reason, see §10.1 |
-| `A-C8` | OPEN |
-| `A-C9` | OPEN |
+| `A-C8` | FIXED (d3f72de) |
+| `A-C9` | FIXED (d3f72de) — the abort now names the real cause, and both documents carry an amendment; the repository file is NOT built (roadmap `:201-205`'s standing ruling) and retiring §2 outright stays the documentation-debt checkpoint's call |
 
 ### 10.1 Where round 1a disputes this document
 

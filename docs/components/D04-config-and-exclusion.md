@@ -22,6 +22,37 @@ the catalog.
 
 ## 2. Two configuration files
 
+> **Amendment (2026-09-05, principles sweep `A-C9`).** Of the three files in the table
+> below, **only `.sextant.yml` beside a module is ever opened.** Neither
+> `~/.sextant/config.yml` nor the repository-root `sextant.yml` has a reader anywhere in
+> `src/`: `grep -rn "sextant\.yml" src/ | grep -v "\.sextant\.yml"` returns nothing, the
+> catalog set is hard-wired to the package's own directory
+> (`api.py` → `resources.py` → `ingress/catalogs/yaml_source.py`), `scanners.pin` has no
+> parameter to reach (`ports/scanner.py::select_scanner` takes no pin), and `tools.helm` has
+> no reader. Everything below about those two files, including the precedence chain and the
+> merge rule, describes a mechanism that was designed and never built.
+>
+> **This is not a degraded path, it is a stopped one.** The file that IS read is the
+> per-module `.sextant.yml`, one character from the documented repository name, and it
+> enforces a closed key set. In a single-module repository the module root and the
+> repository root coincide, so following §2 as written writes `catalogs:`/`first_party:`/
+> `modules:`/`redaction:` into the file Sextant does read — and all four commands share that
+> reader, so the whole run is refused. `ingress/detect/sextant_config.py` now names this
+> mistake specifically rather than saying only that the key is read nowhere.
+>
+> **What is supported instead, today:** command-line flags, then the per-module
+> `.sextant.yml`'s three keys (§2a), then built-in defaults. The precedence chain at `:33`
+> is that, with the two middle rungs removed.
+>
+> **The `catalogs:` half is deliberately unscheduled**, and that is a standing ruling rather
+> than a backlog item (2O roadmap `:201-205`): a repository-supplied catalog would turn
+> [D02](D02-catalog-schema.md)'s schema into a public API, after which every schema change
+> is breaking. NFR-9's stated case — extension without modification, for an in-house client
+> library — is therefore unmet and knowingly so. Recorded in
+> [documented-not-implemented.md](../documented-not-implemented.md), which is where a
+> retirement decision belongs; retiring the SECTION is the documentation-debt checkpoint's
+> call, not this pass's, so the text stays and this box says what is true of it.
+
 Different settings have different owners, so one file is not enough.
 
 | File | Owner | Holds |
