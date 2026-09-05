@@ -39,9 +39,26 @@ matches:
   # `sendDefault(V)` targets the
   # config-borne default topic: no channel argument at the call site at all,
   # so no `channel_arg` is declared for it — `path` NULL, `resolution:
-  # unresolved` (I1), verified live. `sendDefault` has three further
-  # overloads (`(K, V)`, `(Integer, K, V)`, `(Integer, Long, K, V)`) the
-  # fixture never calls; only the exercised arity is declared.
+  # unresolved` (I1), verified live.
+  #
+  # MEASURED, at spring-kafka 3.1.4 (CP-12 Q8,
+  # `scripts/probes/cp12_sweep_round1b.md`): `KafkaTemplate` declares TEN
+  # `send`/`sendDefault` overloads and this list held six. The four that were
+  # missing are the partition-carrying forms — `send(String, Integer, K, V)`,
+  # `send(String, Integer, Long, K, V)` — and three of `sendDefault`'s four,
+  # and the note that stood here said of them "the fixture never calls; only
+  # the exercised arity is declared" (`A-M6`). That is the fixture's own
+  # vocabulary encoded as the framework's, §8.1 rule 1's shape: a call to any
+  # of them derived NOTHING, because `_matching_method` filters on arity before
+  # descriptors, while COVERAGE listed this catalog "✅ shipped" with no arity
+  # qualification.
+  #
+  # Every `send` overload takes its topic at argument 0 and its payload LAST,
+  # which is what makes the four new rows a mirror rather than a guess: the
+  # partition and timestamp arguments sit between them and are read by nothing.
+  # The three new `sendDefault` rows keep their sibling's rule — no
+  # `channel_arg`, because the destination is config-borne — so each derives an
+  # honest `path: NULL` at `unresolved` rather than vanishing.
   # Every row states its own erased JVM `descriptor` (descriptor sweep R2/R3),
   # because Java identifies a method by name and parameter types in order and
   # never by argument count (GUIDELINES §8.1's language rule). Arities 2 and 3
@@ -63,9 +80,24 @@ matches:
         record_arg: 0 }
     - { name: send, arity: 1,
         descriptor: "(Lorg/springframework/messaging/Message;)Ljava/util/concurrent/CompletableFuture;" }
+    - { name: send, arity: 4,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, body_arg: 3 }
+    - { name: send, arity: 5,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, body_arg: 4 }
     - { name: sendDefault, arity: 1,
         descriptor: "(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
         body_arg: 0 }
+    - { name: sendDefault, arity: 2,
+        descriptor: "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        body_arg: 1 }
+    - { name: sendDefault, arity: 3,
+        descriptor: "(Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        body_arg: 2 }
+    - { name: sendDefault, arity: 4,
+        descriptor: "(Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        body_arg: 3 }
   # `ReplyingKafkaTemplate.sendAndReceive` gets its own file
   # (`spring-kafka-replying.yml`): `matches.owner` is single-valued, and it
   # is a different owner type from `KafkaTemplate` (checkpoint ruling).

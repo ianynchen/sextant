@@ -6335,6 +6335,244 @@ _CLAIMED_ARITIES = [
         [CallArgument(kind="class", symbol=ORDER_VIEW)],
         id="RabbitTemplate.convertAndSend/1 — hypothetical arity-1 sibling",
     ),
+    # --- `A-M6`/`A-M7` (principles sweep §3.3): the overloads three broker
+    # catalogs left undeclared, each of which derived NOTHING because
+    # `_matching_method` filters on arity before it consults a descriptor.
+    # Measured at CP-12 Q6/Q7/Q8/Q9 and pinned to bytecode by CP-10.
+    pytest.param(
+        "kafka-clients",
+        "org/apache/kafka/clients/producer/KafkaProducer#",
+        "send",
+        "(Lorg/apache/kafka/clients/producer/ProducerRecord;"
+        "Lorg/apache/kafka/clients/producer/Callback;)Ljava/util/concurrent/Future;",
+        "(Lorg/apache/kafka/clients/producer/ProducerRecord;Ljava/lang/String;)"
+        "Ljava/util/concurrent/Future;",
+        [CallArgument(kind="instance", symbol=_PRODUCER_RECORD), CallArgument(kind="unresolved")],
+        id="KafkaProducer.send(record, callback) — hypothetical arity-2 sibling",
+    ),
+    pytest.param(
+        "kafka-consumer",
+        "org/apache/kafka/clients/consumer/KafkaConsumer#",
+        "subscribe",
+        "(Ljava/util/Collection;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V",
+        "(Ljava/util/Collection;Ljava/lang/String;)V",
+        [CallArgument(kind="unresolved"), CallArgument(kind="unresolved")],
+        id="KafkaConsumer.subscribe(Collection, listener) — hypothetical arity-2 sibling",
+    ),
+    pytest.param(
+        "kafka-consumer",
+        "org/apache/kafka/clients/consumer/KafkaConsumer#",
+        "subscribe",
+        "(Ljava/util/regex/Pattern;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V",
+        "(Ljava/util/regex/Pattern;Ljava/lang/String;)V",
+        [CallArgument(kind="unresolved"), CallArgument(kind="unresolved")],
+        id="KafkaConsumer.subscribe(Pattern, listener) — hypothetical arity-2 sibling",
+    ),
+    pytest.param(
+        "spring-kafka-template",
+        "org/springframework/kafka/core/KafkaTemplate#",
+        "send",
+        "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)"
+        "Ljava/util/concurrent/CompletableFuture;",
+        "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;Ljava/util/Map;)"
+        "Ljava/util/concurrent/CompletableFuture;",
+        [
+            CallArgument(kind="string", value="orders"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        id="KafkaTemplate.send(topic, partition, key, value) — hypothetical arity-4 sibling",
+    ),
+    pytest.param(
+        "spring-kafka-template",
+        "org/springframework/kafka/core/KafkaTemplate#",
+        "send",
+        "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)"
+        "Ljava/util/concurrent/CompletableFuture;",
+        "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/util/Map;)"
+        "Ljava/util/concurrent/CompletableFuture;",
+        [
+            CallArgument(kind="string", value="orders"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        id="KafkaTemplate.send(topic, partition, timestamp, key, value) — "
+        "hypothetical arity-5 sibling",
+    ),
+    pytest.param(
+        "spring-kafka-template",
+        "org/springframework/kafka/core/KafkaTemplate#",
+        "sendDefault",
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        "(Ljava/lang/Object;Ljava/util/Map;)Ljava/util/concurrent/CompletableFuture;",
+        [CallArgument(kind="unresolved"), CallArgument(kind="class", symbol=ORDER_VIEW)],
+        id="KafkaTemplate.sendDefault(key, value) — hypothetical arity-2 sibling",
+    ),
+    pytest.param(
+        "spring-kafka-template",
+        "org/springframework/kafka/core/KafkaTemplate#",
+        "sendDefault",
+        "(Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)"
+        "Ljava/util/concurrent/CompletableFuture;",
+        "(Ljava/lang/Integer;Ljava/lang/Object;Ljava/util/Map;)"
+        "Ljava/util/concurrent/CompletableFuture;",
+        [
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        id="KafkaTemplate.sendDefault(partition, key, value) — hypothetical arity-3 sibling",
+    ),
+    pytest.param(
+        "spring-kafka-template",
+        "org/springframework/kafka/core/KafkaTemplate#",
+        "sendDefault",
+        "(Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)"
+        "Ljava/util/concurrent/CompletableFuture;",
+        "(Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/util/Map;)"
+        "Ljava/util/concurrent/CompletableFuture;",
+        [
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        id="KafkaTemplate.sendDefault(partition, timestamp, key, value) — "
+        "hypothetical arity-4 sibling",
+    ),
+    pytest.param(
+        "jakarta-jms",
+        "jakarta/jms/Session#",
+        "createConsumer",
+        "(Ljakarta/jms/Destination;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;",
+        "(Ljakarta/jms/Destination;Ljava/lang/Integer;)Ljakarta/jms/MessageConsumer;",
+        [
+            CallArgument(kind="instance", symbol="jakarta/jms/Queue#"),
+            CallArgument(kind="unresolved"),
+        ],
+        id="Session.createConsumer/2 (selector) — hypothetical arity-2 sibling",
+    ),
+    pytest.param(
+        "jakarta-jms",
+        "jakarta/jms/Session#",
+        "createConsumer",
+        "(Ljakarta/jms/Destination;Ljava/lang/String;Z)Ljakarta/jms/MessageConsumer;",
+        "(Ljakarta/jms/Destination;Ljava/lang/String;Ljava/lang/String;"
+        ")Ljakarta/jms/MessageConsumer;",
+        [
+            CallArgument(kind="instance", symbol="jakarta/jms/Queue#"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+        ],
+        id="Session.createConsumer/3 (selector + noLocal) — hypothetical arity-3 sibling",
+    ),
+    pytest.param(
+        "jakarta-jms",
+        "jakarta/jms/Session#",
+        "createSharedConsumer",
+        "(Ljakarta/jms/Topic;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;",
+        "(Ljakarta/jms/Topic;Ljava/lang/Integer;)Ljakarta/jms/MessageConsumer;",
+        [
+            CallArgument(kind="instance", symbol="jakarta/jms/Topic#"),
+            CallArgument(kind="unresolved"),
+        ],
+        id="Session.createSharedConsumer/2 (shared subscription) — hypothetical arity-2 sibling",
+    ),
+    pytest.param(
+        "jakarta-jms",
+        "jakarta/jms/Session#",
+        "createSharedConsumer",
+        "(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;",
+        "(Ljakarta/jms/Topic;Ljava/lang/String;Z)Ljakarta/jms/MessageConsumer;",
+        [
+            CallArgument(kind="instance", symbol="jakarta/jms/Topic#"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+        ],
+        id="Session.createSharedConsumer/3 (shared subscription + selector) — hypothetical arity-3 sibling",
+    ),
+    pytest.param(
+        "jakarta-jms",
+        "jakarta/jms/Session#",
+        "createDurableSubscriber",
+        "(Ljakarta/jms/Topic;Ljava/lang/String;)Ljakarta/jms/TopicSubscriber;",
+        "(Ljakarta/jms/Topic;Ljava/lang/Integer;)Ljakarta/jms/TopicSubscriber;",
+        [
+            CallArgument(kind="instance", symbol="jakarta/jms/Topic#"),
+            CallArgument(kind="unresolved"),
+        ],
+        id="Session.createDurableSubscriber/2 (durable subscription) — hypothetical arity-2 sibling",
+    ),
+    pytest.param(
+        "jakarta-jms",
+        "jakarta/jms/Session#",
+        "createDurableSubscriber",
+        "(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;Z)Ljakarta/jms/TopicSubscriber;",
+        "(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
+        ")Ljakarta/jms/TopicSubscriber;",
+        [
+            CallArgument(kind="instance", symbol="jakarta/jms/Topic#"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+        ],
+        id="Session.createDurableSubscriber/4 (durable subscription + selector + noLocal) — hypothetical arity-4 sibling",
+    ),
+    pytest.param(
+        "jakarta-jms",
+        "jakarta/jms/Session#",
+        "createDurableConsumer",
+        "(Ljakarta/jms/Topic;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;",
+        "(Ljakarta/jms/Topic;Ljava/lang/Integer;)Ljakarta/jms/MessageConsumer;",
+        [
+            CallArgument(kind="instance", symbol="jakarta/jms/Topic#"),
+            CallArgument(kind="unresolved"),
+        ],
+        id="Session.createDurableConsumer/2 (durable consumer) — hypothetical arity-2 sibling",
+    ),
+    pytest.param(
+        "jakarta-jms",
+        "jakarta/jms/Session#",
+        "createDurableConsumer",
+        "(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;Z)Ljakarta/jms/MessageConsumer;",
+        "(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
+        ")Ljakarta/jms/MessageConsumer;",
+        [
+            CallArgument(kind="instance", symbol="jakarta/jms/Topic#"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+        ],
+        id="Session.createDurableConsumer/4 (durable consumer + selector + noLocal) — hypothetical arity-4 sibling",
+    ),
+    pytest.param(
+        "jakarta-jms",
+        "jakarta/jms/Session#",
+        "createSharedDurableConsumer",
+        "(Ljakarta/jms/Topic;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;",
+        "(Ljakarta/jms/Topic;Ljava/lang/Integer;)Ljakarta/jms/MessageConsumer;",
+        [
+            CallArgument(kind="instance", symbol="jakarta/jms/Topic#"),
+            CallArgument(kind="unresolved"),
+        ],
+        id="Session.createSharedDurableConsumer/2 (shared durable subscription) — hypothetical arity-2 sibling",
+    ),
+    pytest.param(
+        "jakarta-jms",
+        "jakarta/jms/Session#",
+        "createSharedDurableConsumer",
+        "(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;",
+        "(Ljakarta/jms/Topic;Ljava/lang/String;Z)Ljakarta/jms/MessageConsumer;",
+        [
+            CallArgument(kind="instance", symbol="jakarta/jms/Topic#"),
+            CallArgument(kind="unresolved"),
+            CallArgument(kind="unresolved"),
+        ],
+        id="Session.createSharedDurableConsumer/3 (shared durable subscription + selector) — hypothetical arity-3 sibling",
+    ),
     # --- R3: rows that legitimately mean several overloads, split one row per
     # overload. Each overload's own row is a case, so the near-miss proves the
     # arity is claimed against everything NEITHER row declares and the positive
@@ -7016,3 +7254,190 @@ def test_the_map_variable_overload_of_a_name_derives_beside_the_varargs_one(tmp_
     workspace.close()
 
     assert paths == ["/billing/by-map/{id}", "/billing/by-varargs/{id}"]
+
+
+# --- `A-M6`/`A-M7`: the idiomatic calls three broker catalogs dropped --------
+#
+# The parametrized pair above proves each new descriptor claims its own arity
+# and nothing else. These prove the thing the finding is actually about: the
+# call a real module writes derives its real destination, where before it
+# derived nothing at all.
+
+_KAFKA_PRODUCER = "org/apache/kafka/clients/producer/KafkaProducer#"
+
+
+def test_the_kafka_producers_callback_overload_reads_the_records_own_topic(tmp_path: Path):
+    """`A-M6`. `producer.send(new ProducerRecord<>("orders", event), (m, e) -> …)`
+    is the idiomatic asynchronous producer call, and `kafka-clients.yml`
+    declared the arity-1 form alone. `_matching_method` filters candidates on
+    `row.get("arity") in (None, len(arguments))` BEFORE consulting descriptors,
+    so this call never saw the arity-1 row and derived nothing — while
+    `docs/COVERAGE.md` listed the catalog "✅ shipped" with no arity
+    qualification.
+
+    The callback is a TRAILING argument, so the record stays at position 0 and
+    the new row reads it exactly as its sibling does. That is what makes this a
+    mirror rather than a second rule."""
+    caller = "com/acme/orders/messaging/EventProducers#publishAsync()."
+    facts = [
+        _record_ctor(
+            caller,
+            0,
+            10,
+            [
+                CallArgument(kind="string", value="orders"),
+                CallArgument(kind="class", symbol=ORDER_EVENT),
+            ],
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=_KAFKA_PRODUCER,
+                name="send",
+                descriptor="(Lorg/apache/kafka/clients/producer/ProducerRecord;"
+                "Lorg/apache/kafka/clients/producer/Callback;)Ljava/util/concurrent/Future;",
+            ),
+            invoke_kind="virtual",
+            ordinal=1,
+            receiver=3,
+            result=None,
+            arguments=[
+                CallArgument(kind="instance", source=10, symbol=PRODUCER_RECORD),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+    ]
+    workspace = _resolve_shipped(tmp_path, facts, "kafka-clients")
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["path"], r["direction"], r["resolution"]) for r in rows] == [
+        ("orders", "outbound", "resolved")
+    ]
+
+
+def test_the_consumer_group_subscribe_reads_the_topics_beside_its_listener(tmp_path: Path):
+    """`A-M6`. `consumer.subscribe(List.of("a", "b"), rebalanceListener)` is the
+    idiomatic consumer-group call and `kafka-consumer.yml` declared only the
+    arity-1 forms, so it derived nothing. The listener is a trailing argument
+    and the destination stays at position 0, so the new row carries the same
+    `channel_via` list its arity-1 twin does — and the `Collection` row's list
+    rather than the `Pattern` row's, which is the split R3 already established
+    and which this must not undo."""
+    caller = "com/acme/orders/messaging/raw/RawConsumer#subscribeGrouped()."
+    facts = [
+        _list_of_call(
+            caller,
+            0,
+            7,
+            [
+                CallArgument(kind="string", value="orders.created"),
+                CallArgument(kind="string", value="orders.shipped"),
+            ],
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=KAFKA_CONSUMER,
+                name="subscribe",
+                descriptor="(Ljava/util/Collection;"
+                "Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V",
+            ),
+            invoke_kind="virtual",
+            ordinal=1,
+            receiver=3,
+            result=None,
+            arguments=[CallArgument(kind="unresolved", source=7), CallArgument(kind="unresolved")],
+        ),
+    ]
+    workspace = _resolve_shipped(tmp_path, facts, "kafka-consumer")
+    paths = sorted(str(row["path"]) for row in workspace.query("endpoints"))
+    workspace.close()
+
+    assert paths == ["orders.created", "orders.shipped"]
+
+
+def _create_receiver_call(
+    caller: str, name: str, descriptor: str, ordinal: int, source: int, arity: int
+) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(owner=SESSION, name=name, descriptor=descriptor),
+        invoke_kind="interface",
+        ordinal=ordinal,
+        receiver=5,
+        result=None,
+        arguments=[CallArgument(kind="instance", source=source, symbol="jakarta/jms/Queue#")]
+        + [CallArgument(kind="string", value="orderType = 'RUSH'")] * (arity - 1),
+    )
+
+
+def test_a_durable_jms_subscription_derives_the_destination_it_subscribes_to(tmp_path: Path):
+    """`A-M7`. `jakarta.jms.Session` declares eleven factories that open a
+    consumer on a destination (CP-12 Q9) and `jakarta-jms.yml` modelled ONE, so
+    every selector-carrying consumer and every durable or shared subscription
+    derived nothing — a real inbound JMS endpoint on a destination
+    `channel_via` could already resolve, silently absent with no COVERAGE row.
+
+    All eleven take their destination at argument 0; the selector, the
+    subscription name and the `noLocal` flag are trailing. So the ten new rows
+    read the destination through the same `createQueue`/`createTopic` link the
+    original row uses, which is why this asserts the resolved topic rather than
+    merely a row."""
+    caller = "com/acme/orders/messaging/JmsRoutes#durable()."
+    facts = [
+        _create_queue_call(caller, 0, 11, "orders.audit"),
+        _create_receiver_call(
+            caller,
+            "createDurableConsumer",
+            "(Ljakarta/jms/Topic;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;",
+            1,
+            11,
+            2,
+        ),
+    ]
+    workspace = _resolve_shipped(tmp_path, facts, "jakarta-jms")
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["path"], r["direction"], r["resolution"]) for r in rows] == [
+        ("orders.audit", "inbound", "resolved")
+    ]
+
+
+@pytest.mark.declines("jakarta-jms")
+def test_a_jms_queue_browser_is_not_a_subscription(tmp_path: Path):
+    """`A-M7`'s stated boundary, pinned so it cannot be added by momentum.
+    `createBrowser(Queue[, String])` is the twelfth and thirteenth factory CP-12
+    Q9 found, and it returns a `QueueBrowser`: it ENUMERATES a queue without
+    consuming from it. Publishing it as an inbound endpoint would say the
+    module receives messages the broker never delivers to it.
+
+    Identical to the positive above in every conjunct the catalog reads — same
+    session, same linked `createQueue`, same argument 0 — and different only in
+    which factory was called, so it measures the factory and nothing else.
+
+    That reading is the specification's rather than a measurement of a running
+    broker, and it stops being right if the model wants every READ of a
+    destination on the graph regardless of delivery semantics — which is a
+    modelling decision and not a catalog one."""
+    caller = "com/acme/orders/messaging/JmsRoutes#browse()."
+    facts = [
+        _create_queue_call(caller, 0, 11, "orders.audit"),
+        _create_receiver_call(
+            caller,
+            "createBrowser",
+            "(Ljakarta/jms/Queue;)Ljakarta/jms/QueueBrowser;",
+            1,
+            11,
+            1,
+        ),
+    ]
+    workspace = _resolve_shipped(tmp_path, facts, "jakarta-jms")
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []

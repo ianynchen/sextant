@@ -27,16 +27,41 @@ matches:
   # route exists, not the send/receive call, so both rows below carry no
   # `body_arg` at all and their payload is honestly absent.
   #
-  # Each row states its own erased JVM `descriptor` even though each is the ONLY
-  # overload at its arity (`createConsumer` also declares `(Destination, String)`
-  # and `(Destination, String, boolean)`, which are arities 2 and 3 — javap -p -s,
-  # jakarta.jms-api 3.1.0, recorded in
-  # `scripts/probes/cp10_catalog_descriptors.md`). Java identifies a method by
+  # Each row states its own erased JVM `descriptor`. Java identifies a method by
   # name and parameter types in order, never by argument count (GUIDELINES
-  # §8.1's language rule), and a unique overload's descriptor can only ever
-  # equal what a matching call carries — so today's answer is unchanged, and a
-  # future one-argument sibling derives NOTHING rather than being read through
-  # `channel_arg: 0`. Re-running the CP-10 harness is the check.
+  # §8.1's language rule), so a future sibling at the same arity derives
+  # NOTHING rather than being read through `channel_arg: 0`. Re-running the
+  # CP-10 harness is the check.
+  #
+  # MEASURED, at jakarta.jms-api 3.1.0 (CP-12 Q9,
+  # `scripts/probes/cp12_sweep_round1b.md`): `jakarta.jms.Session` declares
+  # THIRTEEN factories that open a receiver on a destination — read off the jar
+  # as "returns a `MessageConsumer`, a `TopicSubscriber` or a `QueueBrowser`",
+  # which is the framework's own statement that the call opens one. ELEVEN of
+  # them are consumers, and this file modelled ONE (`A-M6`'s sibling finding
+  # `A-M7`). Every selector-carrying consumer, and every durable or shared
+  # subscription, derived nothing: a real inbound JMS endpoint on a destination
+  # `channel_via` could already resolve, silently absent, with no COVERAGE row.
+  # The comment that stood here mentioned the arity-2 and arity-3
+  # `createConsumer` overloads and declined them; the durable and shared
+  # families were not mentioned at all.
+  #
+  # ALL ELEVEN TAKE THEIR DESTINATION AT ARGUMENT 0, which is what makes the
+  # ten new rows a mirror rather than a guess — the selector, the subscription
+  # name, the client-id spelling and the `noLocal` flag are all trailing
+  # arguments this catalog reads nothing from. `Topic` and `Queue` both extend
+  # `Destination`, so the same `createQueue`/`createTopic` `channel_via` pair
+  # resolves every one.
+  #
+  # `createBrowser(Queue[, String])` is the twelfth and thirteenth and is
+  # DELIBERATELY ABSENT, stated in COVERAGE §5.9 rather than left silent. A
+  # `QueueBrowser` ENUMERATES a queue without consuming from it — it is not a
+  # subscription, and publishing it as an inbound endpoint would say the module
+  # receives messages the broker never delivers to it. That reading is the
+  # specification's, not a measurement of a running broker, and it is why the
+  # row is declined rather than derived: it stops being right if a reader wants
+  # every read of a destination on the graph regardless of delivery semantics,
+  # which is a modelling decision and not a catalog one.
   methods:
     - name: createProducer
       arity: 1
@@ -49,6 +74,86 @@ matches:
     - name: createConsumer
       arity: 1
       descriptor: "(Ljakarta/jms/Destination;)Ljakarta/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
+        - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
+    - name: createConsumer
+      arity: 2
+      descriptor: "(Ljakarta/jms/Destination;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
+        - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
+    - name: createConsumer
+      arity: 3
+      descriptor: "(Ljakarta/jms/Destination;Ljava/lang/String;Z)Ljakarta/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
+        - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
+    - name: createSharedConsumer
+      arity: 2
+      descriptor: "(Ljakarta/jms/Topic;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
+        - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
+    - name: createSharedConsumer
+      arity: 3
+      descriptor: "(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
+        - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
+    - name: createDurableSubscriber
+      arity: 2
+      descriptor: "(Ljakarta/jms/Topic;Ljava/lang/String;)Ljakarta/jms/TopicSubscriber;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
+        - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
+    - name: createDurableSubscriber
+      arity: 4
+      descriptor: "(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;Z)Ljakarta/jms/TopicSubscriber;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
+        - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
+    - name: createDurableConsumer
+      arity: 2
+      descriptor: "(Ljakarta/jms/Topic;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
+        - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
+    - name: createDurableConsumer
+      arity: 4
+      descriptor: "(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;Z)Ljakarta/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
+        - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
+    - name: createSharedDurableConsumer
+      arity: 2
+      descriptor: "(Ljakarta/jms/Topic;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
+        - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
+    - name: createSharedDurableConsumer
+      arity: 3
+      descriptor: "(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;"
       direction: inbound
       channel_arg: 0
       channel_via:

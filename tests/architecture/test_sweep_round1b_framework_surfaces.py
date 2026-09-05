@@ -254,3 +254,94 @@ def test_the_sqs_listener_catalog_reads_both_spellings_of_one_attribute():
         "spring-sqs.yml reads `@SqsListener` attributes it does not declare: "
         f"{sorted(declared - set(aliases))}"
     )
+
+
+def _declared_signatures(catalog_id: str) -> set[str]:
+    """`name(Largs;)` for every `single_call` row a catalog declares, rebuilt
+    from its own `descriptor` so it is comparable with the probe's cells."""
+    return {
+        f"{row['name']}{str(row['descriptor']).split(')')[0]})"
+        for row in catalog(catalog_id)["matches"]["methods"]
+    }
+
+
+def _missing(question: str, catalog_id: str, keep: str | None = None) -> list[str]:
+    observed = set().union(*measured_signatures(question).values())
+    if keep is not None:
+        observed = {name for name in observed if name.startswith(keep + "(")}
+    return sorted(observed - _declared_signatures(catalog_id))
+
+
+def measured_signatures(question: str) -> dict[str, set[str]]:
+    """`version -> the whole signatures` the probe recorded for one question.
+
+    `measured()` above reduces to names because the `fluent` grammar keys on
+    names; a `single_call` row keys on the erased descriptor, so these
+    comparisons need the argument list too."""
+    found: dict[str, set[str]] = {}
+    for number, row in probe_rows().items():
+        if number.rstrip("abcdefgh") != question:
+            continue
+        found.setdefault(row["version"], set()).update(row["observed"].split(", "))
+    assert found, f"CP-12's table carries no question {question}"
+    return found
+
+
+def test_the_kafka_catalogs_declare_every_overload_that_names_a_destination():
+    """`A-M6`. Three catalogs declared the arity the fixture happened to call
+    and nothing else, and `_matching_method` filters candidates on arity BEFORE
+    it consults a descriptor — so `producer.send(record, callback)`,
+    `consumer.subscribe(topics, listener)` and
+    `kafkaTemplate.send(topic, partition, key, value)` each matched no row and
+    derived nothing, while COVERAGE listed all three "✅ shipped" with no arity
+    qualification.
+
+    `assign` is excluded by name and the exclusion is asserted: its argument is
+    a collection of `TopicPartition` OBJECTS with the topic inside each, which
+    is two hops from the call site where every `channel_via` form is one, so it
+    is a COVERAGE §5.8 boundary rather than a row."""
+    assert _missing("6", "kafka-clients") == []
+    assert _missing("7", "kafka-consumer", keep="subscribe") == []
+    assert _missing("8", "spring-kafka-template") == []
+    assert "assign(Ljava/util/Collection;)" in set().union(*measured_signatures("7").values()), (
+        "`KafkaConsumer.assign` is no longer in the measurement the COVERAGE boundary describes"
+    )
+    assert not any(
+        row["name"] == "assign" for row in catalog("kafka-consumer")["matches"]["methods"]
+    ), (
+        "`assign` is declared, and its topic lives inside a `TopicPartition` constructor two hops "
+        "from the call site — `channel_arg: 0` would read the partition list as a destination"
+    )
+
+
+def test_jakarta_jms_declares_every_factory_that_opens_a_consumer():
+    """`A-M7`. `jakarta.jms.Session` declares thirteen factories that open a
+    receiver on a destination (CP-12 Q9, read off the jar as "returns a
+    `MessageConsumer`, a `TopicSubscriber` or a `QueueBrowser`"), of which
+    ELEVEN are consumers and the catalog modelled one. Every selector-carrying
+    consumer and every durable or shared subscription derived nothing.
+
+    The two `createBrowser` forms are excluded, and the exclusion is asserted
+    rather than skipped: a `QueueBrowser` enumerates a queue without consuming
+    from it, so publishing it as an inbound endpoint would claim delivery the
+    broker never makes."""
+    browsers = {
+        name
+        for name in set().union(*measured_signatures("9").values())
+        if name.startswith("createBrowser(")
+    }
+    assert len(browsers) == 2, f"CP-12 Q9's browser set changed: {sorted(browsers)}"
+    consumers = set().union(*measured_signatures("9").values()) - browsers
+    assert len(consumers) == 11, (
+        f"CP-12 Q9 no longer finds eleven consumer factories: {len(consumers)}"
+    )
+    missing = sorted(consumers - _declared_signatures("jakarta-jms"))
+    assert missing == [], (
+        "jakarta-jms.yml declares no row for `Session` factories that open a consumer: "
+        f"{missing}. Each is a real inbound JMS endpoint on a destination `channel_via` can "
+        "already resolve, and it derives nothing."
+    )
+    assert not (browsers & _declared_signatures("jakarta-jms")), (
+        "`createBrowser` is declared: a `QueueBrowser` enumerates a queue without consuming from "
+        "it, so the row would claim a delivery the broker does not make"
+    )

@@ -192,6 +192,26 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-M6` / `A-M7`: four broker catalogs declared the arity their fixture happened to call**
+  (principles sweep §3.3). `_matching_method` filters candidates on
+  `row.get("arity") in (None, len(arguments))` **before** it consults a descriptor, so a call at
+  an undeclared arity reaches no row at all and derives nothing. That silenced
+  `producer.send(record, callback)` and `consumer.subscribe(topics, rebalanceListener)` — the
+  idiomatic asynchronous producer call and the idiomatic consumer-group call — the four
+  partition- and timestamp-carrying `KafkaTemplate.send`/`sendDefault` forms, and ten of
+  `jakarta.jms.Session`'s eleven consumer factories, which is every selector-carrying consumer
+  and every durable or shared subscription. COVERAGE listed all four catalogs "✅ shipped" with
+  no arity qualification. Measured at kafka-clients 3.6.2, spring-kafka 3.1.4 and
+  jakarta.jms-api 3.1.0 (CP-12 Q6-Q9), with every new descriptor pinned to bytecode by a
+  re-run of CP-10. Each addition is a TRAILING argument, so every new row reads its
+  destination at the position its sibling already does.
+
+  Two exclusions are stated and pinned rather than left silent.
+  `KafkaConsumer.assign(Collection<TopicPartition>)` carries its topic inside a constructor two
+  hops from the call site, where every `channel_via` form is one hop; `Session.createBrowser`
+  returns a `QueueBrowser`, which enumerates a queue without consuming from it, so an inbound
+  row would claim a delivery the broker does not make.
+
 - **`A-M5` / `A-M8`: two annotation catalogs read a subset of their annotation set** (principles
   sweep §3.3). `retrofit.yml` declared six of Retrofit's eight request-method annotations, so an
   `@OPTIONS("/x")` method derived nothing at all with no boundary stated; `@OPTIONS` now derives,

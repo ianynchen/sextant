@@ -1535,9 +1535,9 @@ Task 5):**
 | Java | Spring `@KafkaListener` (`topics`, `topicPattern`), class-level `@KafkaListener` + `@KafkaHandler` included | — | `annotation` | ✅ shipped |
 | Java | Micronaut `@KafkaListener`/`@KafkaClient` + `@Topic` | — | `annotation` | A |
 | Java | `ReplyingKafkaTemplate.sendAndReceive(ProducerRecord)`, and a `@KafkaListener` method returning a value annotated `@SendTo` | the reply derives as its own outbound row | `registration_call` + `annotation` | ✅ shipped |
-| Java | `KafkaTemplate.send(topic, …)`, `.sendDefault(…)` | — | `registration_call` | ✅ shipped |
-| Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)` | `List.of` (≤10 elements) resolves per topic; `Collections.singletonList`/`Pattern.compile` resolve their one argument; `Arrays.asList` is genuine varargs and degrades to one unresolved row — the elements are IN the facts since capability 9.15 (`{kind: array, elements: […]}`), but `all_strings` reads positional arguments and has not been taught to look inside `elements` | `registration_call` | ✅ shipped |
-| Java | **`KafkaProducer.send(ProducerRecord)`** | **topic is a constructor argument of `ProducerRecord`**, not of `send` | `fluent_chain` | ✅ shipped |
+| Java | `KafkaTemplate.send(topic, …)`, `.sendDefault(…)` | **all ten overloads** since `A-M6` — the partition- and timestamp-carrying `send` forms take the topic at argument 0 and the payload last, and every `sendDefault` form derives `path: NULL` at `unresolved` because its destination is config-borne | `registration_call` | ✅ shipped |
+| Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)`, **with or without a `ConsumerRebalanceListener`** | `List.of` (≤10 elements) resolves per topic; `Collections.singletonList`/`Pattern.compile` resolve their one argument; `Arrays.asList` is genuine varargs and degrades to one unresolved row — the elements are IN the facts since capability 9.15 (`{kind: array, elements: […]}`), but `all_strings` reads positional arguments and has not been taught to look inside `elements` | `registration_call` | ✅ shipped |
+| Java | **`KafkaProducer.send(ProducerRecord[, Callback])`** | **topic is a constructor argument of `ProducerRecord`**, not of `send`; the callback overload is a trailing argument and reads the same position (`A-M6`) | `fluent_chain` | ✅ shipped |
 | Java | `KafkaTemplate.send(Message)` with topic in a header | topic read from a `setHeader(KafkaHeaders.TOPIC, …)` value-guarded step | `fluent_chain` | ✅ shipped |
 | Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination`; gated on the build declaring `org.springframework.cloud:spring-cloud-stream`, and **any** method returning one of the three function interfaces is a candidate — see the boundary note below | `config_join` | ✅ shipped |
 | Java | **SmallRye** `@Incoming("orders")` / `@Outgoing` | channel in code, topic in `application.properties` | `config_join` | **B** — rides 2F's `config_join` once catalogued |
@@ -1609,6 +1609,27 @@ The scanner does not capture a parameter's own generic type arguments — only a
 so a `ConsumerRecord<K, V>` payload parameter reads as honestly absent rather than resolving to
 `V`, the same reason a `List<T>` parameter's element type never reaches `request_shape.item`.
 
+**The three Kafka catalogs now declare every overload that names a destination** (`A-M6`,
+principles sweep §3.3). Each previously declared the arity its fixture happened to call:
+`KafkaProducer.send(record, callback)`, `KafkaConsumer.subscribe(topics, rebalanceListener)`
+and the four partition- or timestamp-carrying `KafkaTemplate` forms derived **nothing at all**,
+because `_matching_method` filters candidates on `row.get("arity") in (None, len(arguments))`
+**before** it consults a descriptor — so a call at an undeclared arity never reaches any row.
+The first two are the idiomatic asynchronous producer call and the idiomatic consumer-group
+call, and this section listed all three catalogs "✅ shipped" with no arity qualification.
+Measured at kafka-clients 3.6.2 and spring-kafka 3.1.4 (CP-12 Q6/Q7/Q8) and pinned to bytecode
+by CP-10; every new row's argument positions are its sibling's, because in each case the
+addition is a trailing argument.
+
+**`KafkaConsumer.assign(Collection<TopicPartition>)` is a stated boundary and still derives
+nothing.** Its argument is a collection of `TopicPartition` **objects**, and the topic name is
+a constructor argument inside each one — two hops from the call site, where every `channel_via`
+form is one hop to a call returning the destination itself. `channel_arg: 0` would read a
+partition list as a destination, and a row with no channel at all would assert a subscription
+with no address. Neither is taken as a side effect of `A-M6`. **Falsified by** a module whose
+consumers use manual partition assignment; closes when `record_wrappers`' constructor-argument
+read can be declared over a collection of records rather than one.
+
 A `KafkaConsumer.subscribe(Pattern)` call derives a resolved row whose `path` is the pattern's
 own regex text, recorded verbatim — not an expanded list of the topics it might match. That is
 an honest capture, never a guess, but it also means the row can never participate in a link
@@ -1637,7 +1658,7 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 | Java | Spring `@JmsListener` (`destination`, `selector`, `subscription`, `concurrency`) | — | `annotation` | ✅ shipped |
 | Java | Micronaut `@JMSListener` + `@Queue`/`@Topic` | — | `annotation` | A |
 | Java | `JmsTemplate.send` / `convertAndSend` | the declared row is `convertAndSend(String destinationName, Object message)`, pinned to that overload by its `descriptor` | `registration_call` | ✅ shipped — **read with the two collision rows below**, which it shares with `RabbitTemplate` |
-| Java | Direct `jakarta.jms.{Session, MessageProducer, MessageConsumer}` | `createProducer`/`createConsumer` linked to `createQueue`/`createTopic` via `channel_via`; `send()` deliberately unread | `registration_call` | ✅ shipped |
+| Java | Direct `jakarta.jms.{Session, MessageProducer, MessageConsumer}` | `createProducer` and **all eleven consumer factories** — plain, selector-carrying, shared, durable and shared-durable — linked to `createQueue`/`createTopic` via `channel_via`; `send()` deliberately unread, `createBrowser` deliberately undeclared | `registration_call` | ✅ shipped |
 | Java | Spring AMQP `@RabbitListener(queues = …)`, plus class-level `@RabbitListener` + `@RabbitHandler` | `queues` is a `String[]` (javap, spring-rabbit 3.1.4); the class-level form doubles as the destination prefix, `spring-kafka.yml`'s shape | `annotation` | ✅ **shipped** (2O Task 7) |
 | Java | `@RabbitListener(bindings = @QueueBinding(…))` / `queuesToDeclare = @Queue(…)` | the destination lives inside a NESTED annotation | `annotation` | **Boundary — derives nothing.** Nested-annotation arguments are readable only from extractor capability 9.16 onward and no catalog reads them yet; the addresses-nothing gate drops the would-be row rather than publishing an empty destination. Closes when a `path_from` alias can name an attribute inside a nested annotation |
 | Java | A listener destination written as SpEL `#{…}` or a property `${…}` | the value is a bean property or a config key, resolved at container start | `annotation` | ✅ **shipped as `unresolved`** (2O Task 7) — the expression is published VERBATIM beside `resolution: unresolved`, never canonicalized and never resolved. Nothing here resolves it: the config ladder is a call-site mechanism `annotation_driven` never invokes |
@@ -1668,6 +1689,26 @@ a `single_call` catalog: `createProducer`/`createConsumer` each link to their ow
 `createQueue`/`createTopic` call through `channel_via`, and `send()` is deliberately never read
 — a raw `jakarta.jms.Message` is an opaque envelope no rule can pull a payload out of, so the
 registration call itself is the evidence that a route exists, not the call that later uses it.
+
+**`Session` opens eleven kinds of consumer and the catalog modelled one** (`A-M7`, principles
+sweep §3.3). Measured at jakarta.jms-api 3.1.0 (CP-12 Q9), reading the set off the jar as
+"declared on `Session` and returning a `MessageConsumer`, a `TopicSubscriber` or a
+`QueueBrowser`" — the framework's own statement that the call opens a receiver. Thirteen
+factories, of which eleven are consumers. Every selector-carrying consumer and every durable or
+shared subscription derived **nothing**: a real inbound JMS endpoint, on a destination
+`channel_via` could already resolve, silently absent with no row here saying so. The catalog's
+own comment mentioned the two extra `createConsumer` overloads and declined them; the durable
+and shared families were not mentioned at all. All eleven take their destination at argument 0
+— the selector, the subscription name and the `noLocal` flag are trailing — so the ten new rows
+read it exactly as the original does.
+
+**`createBrowser(Queue[, String])` is a stated boundary and derives nothing.** A `QueueBrowser`
+enumerates a queue without consuming from it, so publishing it as an inbound endpoint would say
+the module receives messages the broker never delivers to it. That reading is the
+specification's rather than a measurement of a running broker, and a test pins the exclusion so
+it cannot be added by momentum. **Falsified by** a model that wants every READ of a destination
+on the graph regardless of delivery semantics — which is a modelling decision, not a catalog
+one.
 
 ### 5.10 AWS SQS
 

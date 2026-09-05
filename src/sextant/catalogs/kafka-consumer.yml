@@ -37,9 +37,33 @@ matches:
   # A THIRD arity-1 `subscribe` would now derive nothing rather than being read
   # through whichever row it reached first; `javap -p -s KafkaConsumer`, and
   # re-running `scripts/probes/cp10_catalog_descriptors/run.sh`, is the check.
-  # (`subscribe(Collection, ConsumerRebalanceListener)` and
-  # `subscribe(Pattern, ConsumerRebalanceListener)` are arity 2 and remain
-  # undeclared, so they match no row at all — unchanged by this.)
+  #
+  # THE TWO REBALANCE-LISTENER OVERLOADS ARE NOW DECLARED TOO (`A-M6`).
+  # MEASURED at kafka-clients 3.6.2 (CP-12 Q7): `KafkaConsumer` declares five
+  # methods that name what this consumer reads — `subscribe` in four forms and
+  # `assign`. The note that stood here said the two arity-2 `subscribe`
+  # overloads "remain undeclared, so they match no row at all — unchanged by
+  # this", which was an accurate description of a silent drop rather than a
+  # boundary: `consumer.subscribe(topics, rebalanceListener)` is the IDIOMATIC
+  # consumer-group call, `_matching_method` filters on arity before descriptors
+  # so it never reached the arity-1 rows, and it derived nothing while
+  # `docs/COVERAGE.md` listed this catalog "✅ shipped" with no arity
+  # qualification. Each arity-2 row carries the same `channel_arg`/`channel_via`
+  # as its arity-1 twin, because the listener is a TRAILING argument and the
+  # destination stays at position 0.
+  #
+  # `assign(Collection<TopicPartition>)` is the fifth and is DELIBERATELY
+  # ABSENT, stated in COVERAGE §5.8 rather than left silent. Its argument is a
+  # collection of `TopicPartition` OBJECTS, and the topic name is a constructor
+  # argument INSIDE each one — two hops from the call site, where every
+  # `channel_via` form above is one hop to a call returning the destination
+  # itself. Declaring it with `channel_arg: 0` would read a `TopicPartition`
+  # list as a destination; declaring it with no channel at all would derive a
+  # path-less row. The first is a fabrication and the second is a choice worth
+  # making deliberately rather than as a side effect of this fix, so neither is
+  # taken here. It closes when `record_wrappers`' constructor-argument read —
+  # which `kafka-clients.yml` already uses for `ProducerRecord` — can be
+  # declared over a COLLECTION of records rather than one.
   #
   # `List.of` binds a FIXED-ARITY overload for up to 10 elements (checkpoint
   # ruling, also `linked_channels`'s own docstring): each element is its own
@@ -73,6 +97,20 @@ matches:
     - name: subscribe
       arity: 1
       descriptor: "(Ljava/util/regex/Pattern;)V"
+      channel_arg: 0
+      channel_via:
+        - { owner: java.util.regex.Pattern, method: compile, arg: 0 }
+    - name: subscribe
+      arity: 2
+      descriptor: "(Ljava/util/Collection;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V"
+      channel_arg: 0
+      channel_via:
+        - { owner: java.util.List, method: of, arg: all_strings }
+        - { owner: java.util.Arrays, method: asList, arg: all_strings }
+        - { owner: java.util.Collections, method: singletonList, arg: 0 }
+    - name: subscribe
+      arity: 2
+      descriptor: "(Ljava/util/regex/Pattern;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V"
       channel_arg: 0
       channel_via:
         - { owner: java.util.regex.Pattern, method: compile, arg: 0 }
