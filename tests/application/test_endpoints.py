@@ -4618,3 +4618,108 @@ def test_a_retrofit_annotation_on_an_interface_still_derives(tmp_path: Path):
         method_annotation=_RETROFIT_GET,
         method_args={"value": ["/orders"]},
     ) == [("http", "outbound", "GET", "/orders")]
+
+
+# --- `A-M5` / `A-M8`: the annotation sets that were shorter than the framework's
+
+
+_RETROFIT_OPTIONS = "retrofit2/http/OPTIONS#"
+_RETROFIT_HTTP = "retrofit2/http/HTTP#"
+_SQS_LISTENER = "io/awspring/cloud/sqs/annotation/SqsListener#"
+
+
+@pytest.mark.declines("retrofit")
+def test_retrofits_generic_http_annotation_derives_nothing_and_that_is_stated(tmp_path: Path):
+    """`A-M5`'s stated boundary, pinned so it cannot be half-implemented.
+
+    `@HTTP(method = "REPORT", path = "/x")` is a real Retrofit request method
+    (CP-12 Q5) and this catalog does not declare it, for a reason the engine
+    makes unavoidable: `$method_from`'s read in `derive_endpoints.sql` runs
+    `regexp_extract(v, '#([A-Za-z0-9_]+)\\.$')` over the attribute's value,
+    because every other framework in scope holds its verb in an ENUM constant
+    whose symbol ends that way. `@HTTP.method` is a plain `String`, so the
+    extract returns the empty string and the row would ship with `method: ''` —
+    a verb no evidence supports, which is the fabrication this whole sweep is
+    about. Its path is in `path` rather than `value` as well, and `path_from`
+    is one list for the whole catalog.
+
+    So the honest answer is to derive nothing and say so in COVERAGE §5.2
+    rather than derive half of it. This test is what stops the entry being
+    added without the engine change: it goes red the moment `@HTTP` starts
+    matching, which is the point at which somebody has to look at the verb.
+
+    It stops being right when `method_from` can name a plain-string attribute
+    and `path_from` can be declared per annotation."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "retrofit",
+            owner_kind=ConstructKind.INTERFACE,
+            type_annotations={},
+            method_annotation=_RETROFIT_HTTP,
+            method_args={"method": "REPORT", "path": "/orders"},
+        )
+        == []
+    )
+
+
+def test_retrofits_options_annotation_derives_the_call_it_names(tmp_path: Path):
+    """`A-M5`, the positive half, and the paired control for the near-miss
+    above: the SAME interface, the same shape of attribute, one annotation
+    different. `retrofit2.http.OPTIONS` is one of Retrofit's eight
+    request-method annotations, declares a scalar `String value()` exactly as
+    `@GET` does (CP-12 Q5), and derived nothing — silently, with no COVERAGE
+    row."""
+    assert _gate_rows(
+        tmp_path,
+        "retrofit",
+        owner_kind=ConstructKind.INTERFACE,
+        type_annotations={},
+        method_annotation=_RETROFIT_OPTIONS,
+        method_args={"value": ["/orders"]},
+    ) == [("http", "outbound", "OPTIONS", "/orders")]
+
+
+def test_an_sqs_listener_naming_its_queue_the_way_aws_documents_it_derives(tmp_path: Path):
+    """`A-M8`, the positive half. `@SqsListener` declares `value()` and
+    `queueNames()`, and `queueNames` carries
+    `@AliasFor(value = "value")` — Spring's own statement that they are ONE
+    attribute under two spellings (CP-12 Q10, spring-cloud-aws-sqs 3.1.1). The
+    catalog read `value` alone, so `queueNames` — the spelling AWS's own
+    documentation uses — read as absent, the composed destination was empty,
+    and the addresses-nothing gate withheld the row entirely.
+
+    That is a silent under-report and not the fabrication `docs/COVERAGE.md`
+    used to describe: the listener was ABSENT from the export, not present with
+    a blank address, which is the harder of the two for a reader to notice
+    (sweep §7.7)."""
+    assert _gate_rows(
+        tmp_path,
+        "spring-sqs",
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={},
+        method_annotation=_SQS_LISTENER,
+        method_args={"queueNames": ["orders"]},
+    ) == [("sqs", "inbound", None, "orders")]
+
+
+@pytest.mark.declines("spring-sqs")
+def test_an_sqs_listener_naming_no_destination_at_all_still_derives_nothing(tmp_path: Path):
+    """`A-M8`'s near-miss, and it is what keeps the alias pair from becoming
+    "read any attribute". `maxConcurrentMessages` is a real `@SqsListener`
+    attribute (CP-12 Q10) and it is not the destination under any spelling, so
+    a listener declaring only that names no queue and must derive nothing.
+
+    It discriminates: adding `maxConcurrentMessages` to `path_from` makes this
+    fail with a row whose `path` is a thread count."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "spring-sqs",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={},
+            method_annotation=_SQS_LISTENER,
+            method_args={"maxConcurrentMessages": "10"},
+        )
+        == []
+    )

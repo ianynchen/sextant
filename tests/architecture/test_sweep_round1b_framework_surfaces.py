@@ -174,3 +174,83 @@ def test_restclient_does_not_borrow_webclients_reactive_terminals():
     assert {"exchangeToMono", "exchangeToFlux"} & declared == set()
     missing = sorted(measured("4")["7.0.2"] - declared)
     assert missing == [], f"spring-restclient.yml declares no terminal for: {missing}"
+
+
+# `NAME[attr():Ldescriptor;,…]` as `probe.py` prints one Retrofit annotation.
+_ANNOTATION = re.compile(r"^(\w+)\[(.*)\]$")
+# A request-method annotation's own path attribute: a SCALAR `String`. `@Headers`
+# is method-targeted too and declares a `String[] value()` of header lines, which
+# is the framework's own way of saying it names no path.
+_NAMES_A_PATH = "value():Ljava/lang/String;"
+
+
+def test_retrofit_declares_every_annotation_that_names_a_request_method():
+    """`A-M5`. `retrofit2.http` holds eight request-method annotations at
+    2.11.0 (CP-12 Q5) and the catalog declared six, with `@OPTIONS` deriving
+    nothing and no COVERAGE row saying so.
+
+    The seven path-carrying ones are identified by the framework's own
+    declaration rather than by a list typed here: a scalar `String value()`.
+    `@HTTP` is the eighth and is deliberately absent — it holds its verb in a
+    plain `String` that `$method_from`'s enum-symbol extract would turn into
+    the empty string — so it is asserted as an EXCLUSION rather than skipped,
+    which is what stops the boundary from being lost the next time this list is
+    read."""
+    [observed] = [row["observed"] for number, row in probe_rows().items() if number == "5"]
+    parsed = {
+        match.group(1): match.group(2)
+        for part in observed.split(", ")
+        if (match := _ANNOTATION.match(part))
+    }
+    path_carrying = {name for name, attributes in parsed.items() if _NAMES_A_PATH in attributes}
+    assert "HTTP" in parsed and _NAMES_A_PATH not in parsed["HTTP"], (
+        "`@HTTP` no longer looks the way the boundary in `retrofit.yml` describes; re-read it"
+    )
+
+    declared = {
+        str(entry["fqn"]).rpartition(".")[2]
+        for entry in catalog("retrofit")["matches"]["mapping"]["annotations"]
+    }
+    assert sorted(path_carrying - declared) == [], (
+        "retrofit.yml declares no mapping entry for request-method annotations Retrofit has: "
+        f"{sorted(path_carrying - declared)}. A method wearing one derives nothing at all."
+    )
+    assert "HTTP" not in declared, (
+        "`retrofit2.http.HTTP` is declared, and the engine cannot read its verb: "
+        "`$method_from` extracts an enum constant's name and `@HTTP.method` is a plain String, "
+        "so the row would ship with `method: ''`. Change the engine first."
+    )
+
+
+# `name:Ldescriptor;` and `name:Ldescriptor;=AliasFor(target)`, as `probe.py`
+# prints one annotation attribute.
+_ATTRIBUTE = re.compile(r"^(\w+):([^=]+)(?:=AliasFor\((\w+)\))?$")
+
+
+def test_the_sqs_listener_catalog_reads_both_spellings_of_one_attribute():
+    """`A-M8`. `@SqsListener` declares `value()` and `queueNames()`, and
+    `queueNames` carries `@AliasFor(value = "value")` (CP-12 Q10) — Spring's
+    own statement that they are ONE attribute. The catalog read `value` alone,
+    so a `queueNames` listener composed an empty destination and the
+    addresses-nothing gate withheld the row: absent from the export, not
+    present with a blank address.
+
+    Read out of the probe's alias record rather than hard-coded, so a second
+    alias added by a later Spring Cloud AWS fails here instead of going
+    silent."""
+    [observed] = [row["observed"] for number, row in probe_rows().items() if number == "10"]
+    aliases = {
+        match.group(1): match.group(3)
+        for part in observed.split(", ")
+        if (match := _ATTRIBUTE.match(part))
+    }
+    destination = {name for name, target in aliases.items() if target == "value"} | {"value"}
+    declared = set(catalog("spring-sqs")["matches"]["mapping"]["path_from"])
+    assert sorted(destination - declared) == [], (
+        "spring-sqs.yml does not read every spelling of `@SqsListener`'s destination attribute: "
+        f"{sorted(destination - declared)}. A listener using one derives nothing at all."
+    )
+    assert declared <= set(aliases), (
+        "spring-sqs.yml reads `@SqsListener` attributes it does not declare: "
+        f"{sorted(declared - set(aliases))}"
+    )

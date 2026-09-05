@@ -15,9 +15,28 @@ matches:
                   fallback: sole_unannotated,
                   excludes: [io.awspring.cloud.sqs.listener.acknowledgement.Acknowledgement] }
   mapping:
-    # CHECKPOINT FACT: `@SqsListener.value` is always a `String[]` in
-    # bytecode, even for a bare-string source declaration.
-    path_from: [value]
+    # MEASURED, at spring-cloud-aws-sqs 3.1.1 (CP-12 Q10,
+    # `scripts/probes/cp12_sweep_round1b.md`), replacing a checkpoint note:
+    # `io.awspring.cloud.sqs.annotation.SqsListener` declares BOTH
+    # `String[] value()` and `String[] queueNames()`, and `queueNames` carries
+    # `RuntimeVisibleAnnotations:
+    # org.springframework.core.annotation.AliasFor(value="value")`. They are one
+    # attribute under two spellings — the same shape `jakarta-servlet.yml`
+    # handles with `args: [urlPatterns, value]` and `spring-web.yml` with
+    # `path_from: [value, path]` — and `queueNames` is the spelling AWS's own
+    # documentation uses.
+    #
+    # This list held `value` alone (`A-M8`), so a `queueNames` listener read as
+    # having no destination, the composed address was empty, and the
+    # addresses-nothing gate withheld the row: the listener was ABSENT from the
+    # export, not present with a blank address. Both attributes are still
+    # `String[]` in bytecode even for a bare-string source declaration, which is
+    # what the checkpoint note said and remains true.
+    #
+    # First-alias-wins is `value`, and that mirrors `@AliasFor`: Spring refuses
+    # an annotation setting both to different values, so the two can never
+    # disagree on a declaration the framework would accept.
+    path_from: [value, queueNames]
     # No class-level listener shape for SQS — no prefix annotation to declare.
     prefix_from: []
     method_from: method

@@ -192,6 +192,20 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-M5` / `A-M8`: two annotation catalogs read a subset of their annotation set** (principles
+  sweep §3.3). `retrofit.yml` declared six of Retrofit's eight request-method annotations, so an
+  `@OPTIONS("/x")` method derived nothing at all with no boundary stated; `@OPTIONS` now derives,
+  and `@HTTP` is a boundary the suite pins rather than a silence — its verb is a plain `String`
+  and `$method_from`'s read extracts an enum constant's name, so declaring it would ship
+  `method: ''`, and a test goes red the moment somebody adds the row without changing the engine.
+  `spring-sqs.yml` read `@SqsListener.value` alone while `queueNames()` carries
+  `@AliasFor(value = "value")` — one attribute under two spellings, measured at
+  spring-cloud-aws-sqs 3.1.1 (CP-12 Q10) — so a listener using the spelling AWS's own
+  documentation uses composed an empty destination and the addresses-nothing gate withheld it:
+  absent from the export, not present with a blank address. Both spellings are now read, `value`
+  first, which mirrors `@AliasFor`'s own rule that the two can never carry different values.
+  `retrofit` and `spring-sqs` leave the near-miss backlog.
+
 - **`A-M3` / `A-M4`: the two Spring HTTP clients knew five of eight verbs, and a terminal set
   that was wrong at both measured Spring minors** (principles sweep §3.3). `spring-webclient.yml`
   and `spring-restclient.yml` each declared five request-starting roots —

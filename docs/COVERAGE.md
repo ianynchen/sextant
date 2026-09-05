@@ -1004,6 +1004,21 @@ The versions each list was read against are recorded in the catalogs themselves 
 `tests/architecture/test_sweep_round1b_framework_surfaces.py`, which asserts against the
 **7.0.2** column rather than the union so that a dead entry is never made compulsory.
 
+**Retrofit reads seven of its eight request-method annotations, and the eighth is a stated
+boundary** (`A-M5`). `retrofit2.http` declares eight annotations that name a request method —
+identified from the jar rather than a list: `@Target(METHOD)`, tested for by
+`RequestFactory$Builder`, and declaring a scalar `String value()` holding the path (CP-12 Q5,
+retrofit 2.11.0). The catalog declared six, so `@OPTIONS("/x")` derived nothing, silently.
+`@OPTIONS` now derives. **`@HTTP(method = "REPORT", path = "/x")` still derives nothing**, and
+the reason is the engine rather than the framework: its path is in `path` while `path_from` is
+one list for the whole catalog, and its verb is a plain `String` where `$method_from`'s read
+extracts an enum constant's name — `regexp_extract(v, '#([A-Za-z0-9_]+)\.$')` — which on
+`"REPORT"` returns the **empty string**. Declaring the row would ship a verb no evidence
+supports, which is deriving on half a measured rule (§8.1 rule 4). A test asserts `@HTTP`
+derives nothing, so adding it without the engine change goes red rather than quiet.
+**Falsified by** any module using `@HTTP` for a non-standard verb; closes when `method_from`
+can name a plain-string attribute and `path_from` can be declared per annotation.
+
 | Language | Library | Shape | Tier |
 |---|---|---|---|
 | Java | Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange` | `annotation` | ✅ shipped |
@@ -1572,16 +1587,23 @@ resolution: unresolved` — the same honesty rule an unreadable OkHttp verb argu
 §5.2, never a fabricated name.
 
 A listener annotation that puts its destination in an attribute the catalog does not list —
-`@KafkaListener(topicPartitions = …)` here, `@SqsListener(queueNames = …)` in §5.10 beside the
-shipped `value` alias — derives **nothing at all**: the composed destination is empty, and the
-addresses-nothing gate (`derive_endpoints.sql`) withholds a row that names no endpoint. This
-paragraph previously said such a listener "derives a resolved row with an **empty** path today
-rather than an unresolved one; a known wart", which was measurably false — sweep 1 measured zero
-rows on the shipped `spring-sqs` catalog and the sweep's §7.7 settled it. **The correction
-matters in the direction that costs a reader**: it told them the row was present-but-empty when
-the listener is absent from the export entirely, which is the harder of the two to notice.
-Closes for the `@SqsListener` case by reading the `@AliasFor` pair (`A-M8`); for the
-`topicPartitions` case by a `path_from` that can fan out a nested annotation.
+`@KafkaListener(topicPartitions = …)` is the one still live here — derives **nothing at all**:
+the composed destination is empty, and the addresses-nothing gate (`derive_endpoints.sql`)
+withholds a row that names no endpoint. This paragraph previously said such a listener "derives
+a resolved row with an **empty** path today rather than an unresolved one; a known wart", which
+was measurably false — sweep 1 measured zero rows on the shipped `spring-sqs` catalog and the
+sweep's §7.7 settled it. **The correction matters in the direction that costs a reader**: it
+told them the row was present-but-empty when the listener is absent from the export entirely,
+which is the harder of the two to notice. Closes for the `topicPartitions` case by a `path_from`
+that can fan out a nested annotation.
+
+**`@SqsListener(queueNames = …)` was the other half of this and is now shipped** (`A-M8`,
+principles sweep §3.3). `value()` and `queueNames()` are one attribute under two spellings —
+`queueNames` carries `@AliasFor(value = "value")`, measured at spring-cloud-aws-sqs 3.1.1
+(CP-12 Q10) — and `spring-sqs.yml` read `value` alone, so the spelling AWS's own documentation
+uses composed an empty destination and the listener vanished from the export. Both are now in
+`path_from`, `value` first, which mirrors `@AliasFor`: Spring refuses an annotation that sets
+both to different values, so first-alias-wins can never pick between two live answers.
 
 The scanner does not capture a parameter's own generic type arguments — only a return type's —
 so a `ConsumerRecord<K, V>` payload parameter reads as honestly absent rather than resolving to
@@ -1651,7 +1673,7 @@ registration call itself is the evidence that a route exists, not the call that 
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
-| Java | Spring Cloud AWS 3.x `io.awspring.cloud.sqs.annotation.SqsListener`, `SqsTemplate` | — | `annotation` | ✅ shipped |
+| Java | Spring Cloud AWS 3.x `io.awspring.cloud.sqs.annotation.SqsListener`, `SqsTemplate` | `value()` and `queueNames()` are ONE attribute — `queueNames` carries `@AliasFor(value = "value")` (`javap -v`, 3.1.1, CP-12 Q10) | `annotation` | ✅ shipped — **both spellings** since `A-M8` |
 | Java | Spring Cloud AWS 2.x `io.awspring.cloud.messaging.listener.annotation.SqsListener` | **different package**; declares exactly `value()` as `String[]` and `deletionPolicy()`, `@Target(METHOD)` (javap, 2.4.4) | `annotation` | ✅ **shipped** (2O Task 7, `spring-sqs-legacy.yml`) |
 | Java | Spring Cloud AWS 1.x/2.2 `org.springframework.cloud.aws.messaging.listener.annotation.SqsListener` | **a third generation**, under the old `org.springframework.cloud` group; identical shape (javap, 2.2.6.RELEASE) | `annotation` | ✅ **shipped** (2O Task 7, same file) |
 | Java | Either legacy `@SqsListener` on a container-managed argument other than `Acknowledgment` | `@Header`/`@Headers` parameters, the visibility handle, the raw `Message` | `annotation` | **Boundary — the payload reads as absent** rather than wrong: `sole_unannotated` needs exactly one bare parameter, and two leave the request shape NULL. The two `Acknowledgment` types are excluded by name; anything else the framework injects is not |

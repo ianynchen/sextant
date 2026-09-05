@@ -42,13 +42,49 @@ matches:
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS]
     prefix_annotation: null
     prefix_from: []
+    # MEASURED, at retrofit 2.11.0 (CP-12 Q5,
+    # `scripts/probes/cp12_sweep_round1b.md`). `retrofit2.http` holds eight
+    # annotations that name a request method — read as the intersection of two
+    # facts the jar states: `@Target(METHOD)`, and tested for by
+    # `RequestFactory$Builder`, the class that turns a method's annotations
+    # into a request. Seven declare a scalar `String value()` holding the path;
+    # `@HTTP` declares `method()`/`path()`/`hasBody()`. The three other
+    # method-targeted members — `@Headers`, `@Multipart`, `@FormUrlEncoded` —
+    # are modifiers, and `@Headers` is told apart by its `value()` being a
+    # `String[]` of header lines rather than a scalar path.
+    #
+    # This list held six (`A-M5`): `@OPTIONS` derived nothing at all, silently
+    # and with no COVERAGE row.
     annotations:
-      - { fqn: retrofit2.http.GET,    method: [GET] }
-      - { fqn: retrofit2.http.POST,   method: [POST] }
-      - { fqn: retrofit2.http.PUT,    method: [PUT] }
-      - { fqn: retrofit2.http.DELETE, method: [DELETE] }
-      - { fqn: retrofit2.http.PATCH,  method: [PATCH] }
-      - { fqn: retrofit2.http.HEAD,   method: [HEAD] }
+      - { fqn: retrofit2.http.GET,     method: [GET] }
+      - { fqn: retrofit2.http.POST,    method: [POST] }
+      - { fqn: retrofit2.http.PUT,     method: [PUT] }
+      - { fqn: retrofit2.http.DELETE,  method: [DELETE] }
+      - { fqn: retrofit2.http.PATCH,   method: [PATCH] }
+      - { fqn: retrofit2.http.HEAD,    method: [HEAD] }
+      - { fqn: retrofit2.http.OPTIONS, method: [OPTIONS] }
+      # `retrofit2.http.HTTP` is the eighth and is DELIBERATELY ABSENT, stated
+      # in COVERAGE §5.2 rather than left silent — and the reason is the engine,
+      # not the framework. Two of this grammar's fields are one-per-catalog and
+      # `@HTTP` needs both of them different:
+      #
+      #   * its path is in `path`, not `value`, and `path_from` above is one
+      #     list for every annotation in the file. Adding `path` to it would
+      #     make every OTHER annotation read a `path` attribute none of them
+      #     has — harmless today, and a rule nobody measured.
+      #   * its verb is a plain `String`, and `$method_from`'s read in
+      #     `derive_endpoints.sql` is
+      #     `regexp_extract(v, '#([A-Za-z0-9_]+)\.$')`, because every framework
+      #     this grammar serves holds its verb in an ENUM constant whose symbol
+      #     ends that way. On `@HTTP(method = "REPORT")` that extract returns
+      #     the EMPTY STRING, so the row would ship carrying a verb no evidence
+      #     supports — the exact fabrication §8 forbids, arrived at by deriving
+      #     on half a rule (§8.1 rule 4).
+      #
+      # `tests/application/test_endpoints.py` pins this boundary: a test asserts
+      # `@HTTP` derives nothing, so adding the row without the engine change
+      # goes red rather than quiet. It closes when `method_from` can name a
+      # plain-string attribute and `path_from` can be declared per annotation.
 
 # Shipped Jackson-converter-shaped (the common Spring Boot configuration);
 # Gson/Moshi naming annotations are a later catalog addition.
