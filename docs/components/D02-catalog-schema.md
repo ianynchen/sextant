@@ -37,10 +37,27 @@ matches:
 |---|---|
 | `id` | Stable. Appears in `evidence` and in skip reports. |
 | `style` | Which engine interprets `matches` |
-| `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c |
+| `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c. Omitted only by a NON-WIRE style, below |
 | `detect` | Coordinates that make this catalog's framework rule applicable to a module. **Read since Phase 2O Task 6, by one style** — see below |
 | `requires` | Capabilities — scanner-declared or pipeline-declared (below). **If unmet, the catalog does not run and the skip is reported.** |
 | `matches` | Style-specific |
+
+**`protocol` and `direction` are omitted by a NON-WIRE style, and their absence is a claim**
+(Phase 2O design §4, Task 8). Every style before that phase derives into `endpoints`, whose
+identity IS `(protocol, direction, method, path)`, so a catalog omitting either is a broken
+file. The two non-wire styles — `scheduled_work` and `error_advice` — derive into tables
+with no such columns: work started on a clock speaks no protocol, and an exception handler
+is not a boundary anyone can address. Writing one of [D00](D00-fact-schema.md)'s protocols
+on those catalogs to satisfy a required field would put a wire claim in a shipped file that
+nothing reads and every reader believes, which is §5.3's failure introduced deliberately.
+
+So the loader accepts the two keys as absent, **and refuses a value outside the closed set
+either way** — a typo is not an absence, and `protocol: htp` must never be read as "no wire
+identity". Which styles need one is checked in `application/resolve/endpoints.py`, the one
+module that knows: it refuses a wire style declaring neither and a non-wire style declaring
+either, naming the file in both messages. That is the same split this document already makes
+for `style` itself, and for the same reason — the loader may not import the layer that knows
+what an engine does.
 
 **Every type name a catalog writes — `owner`, `fqn`, `type` — is dotted**
 (`reactor.core.publisher.Mono`), never the SCIP symbol form the fact stream uses

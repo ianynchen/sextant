@@ -16,6 +16,24 @@ from typing import Any, Protocol
 class Catalog:
     id: str
     style: str
+    # D00's closed sets, and the EMPTY STRING where the catalog declares
+    # neither — which is a catalog claiming no wire identity at all, not a
+    # catalog that forgot one (2O design §4).
+    #
+    # Every style before this phase derives rows into `endpoints`, whose
+    # identity IS (protocol, direction, method, path), so a missing protocol
+    # there is a broken file and the loader still refuses it. The two NON-WIRE
+    # styles are the first that derive into a table with no such columns: work
+    # started on a clock speaks no protocol, and an exception handler is not a
+    # boundary anyone can address. Writing one of D00's twelve protocols on
+    # those catalogs to satisfy a required field would put a wire claim in a
+    # shipped file that nothing reads and every reader believes.
+    #
+    # `resolve/endpoints.py` is where the two cases are told apart, because
+    # that is the one module that knows which styles derive wire rows — the
+    # same seam `_RUNS_LAST` and `_DERIVES_ROWS` already live in, and the same
+    # reason `_engine_for` refuses an unimplemented style there rather than in
+    # the loader.
     protocol: str
     direction: str
     requires: tuple[str, ...]

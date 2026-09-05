@@ -15,9 +15,11 @@ from sextant.application.resolve.engines import (
     combinator,
     config_join,
     derived_resource,
+    error_advice,
     fluent,
     injected_client,
     interface_implementation,
+    scheduled_work,
     schema_operations,
     single_call,
     supertype_derived,
@@ -80,7 +82,7 @@ def derive_endpoints(
     # Every style is resolved before anything is written. A catalog naming an
     # engine that does not exist is a broken file, and a broken file must not
     # leave a half-emptied endpoints table behind it.
-    engines = [(catalog, _engine_for(catalog)) for catalog in catalogs]
+    engines = [(catalog, _engine_for(_wire_identity_checked(catalog))) for catalog in catalogs]
     # Emptied once, here, rather than once per catalog: D02 §5 has two
     # catalogs both matching and both producing endpoints, so a per-catalog
     # rebuild would leave only whichever ran last. Unconditional, so a resolve
@@ -148,6 +150,49 @@ def _derives_rows(catalog: Catalog) -> int:
     return 0 if declared is None or declared(catalog) else 1
 
 
+# The styles that derive into a table of their own rather than into
+# `endpoints` (2O design §4). They are the only styles whose catalogs may
+# declare no `protocol`/`direction`, and the only ones that must not — see
+# `_wire_identity_checked`.
+_NON_WIRE = frozenset({"scheduled_work", "error_advice"})
+
+
+def _wire_identity_checked(catalog: Catalog) -> Catalog:
+    """Refuses a catalog whose declared wire identity does not match what its
+    style derives, and returns it otherwise.
+
+    Here rather than in the loader for the reason `_engine_for` below is here:
+    which styles derive wire rows is knowledge of this layer, and `ingress`
+    may not import it. Both directions are refused, and both are real:
+
+    * a WIRE style declaring no protocol would bind SQL NULL into
+      `endpoints.protocol` — a row with no protocol is a boundary nobody can
+      address, and D01's wire identity is protocol-scoped, so it would also
+      never merge or link. Every catalog written before 2O declares one, so
+      this refuses a mistake rather than a shape that used to work.
+    * a NON-WIRE style declaring one is the failure this whole split exists to
+      prevent: a `protocol` on a `scheduled_work` catalog is read by nothing —
+      neither table has the column — so it can only ever be a claim a reader
+      believes and no derivation honours. §5.3's "a name existing is not a
+      mechanism existing", written the moment it would be introduced rather
+      than found in an audit later.
+    """
+    declared = catalog.protocol or catalog.direction
+    if catalog.style in _NON_WIRE and declared:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `style: {catalog.style}` derives no wire "
+            f"identity, so it must declare neither `protocol` nor `direction` — got "
+            f"protocol={catalog.protocol!r}, direction={catalog.direction!r} (2O design §4)"
+        )
+    if catalog.style not in _NON_WIRE and not (catalog.protocol and catalog.direction):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `style: {catalog.style}` derives endpoint rows, "
+            f"so it must declare both `protocol` and `direction` — got "
+            f"protocol={catalog.protocol!r}, direction={catalog.direction!r} (D02 §1)"
+        )
+    return catalog
+
+
 def _engine_for(catalog: Catalog) -> "Callable[[Workspace, Catalog], None]":
     """Resolves the engine for a catalog's declared style, or refuses it.
 
@@ -192,4 +237,17 @@ _ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
     # `resolve/dependencies.py` for the gate that decides whether the rule
     # applies to this module at all.
     "derived_resource": derived_resource.run,
+    # 2O design §4 (Task 8): the two NON-WIRE styles. They are registered here,
+    # and run inside `derive_endpoints`'s own loop, because everything that
+    # loop does for a catalog applies to them unchanged — the style is resolved
+    # before anything is written, capability gating and the dependency gate
+    # report a skip through the same channel, and the ordering is the same
+    # deterministic one. What they do NOT share is the table: each writes to
+    # its own, so neither is affected by `endpoints_reset` or by the merge, and
+    # neither belongs in `_RUNS_LAST` — a scheduled declaration and an
+    # exception handler are facts of the declaring class, not enrichments of
+    # rows another engine minted. Their own tables are emptied once per resolve
+    # by the pipeline, for the reason `_NON_WIRE` states.
+    "scheduled_work": scheduled_work.run,
+    "error_advice": error_advice.run,
 }

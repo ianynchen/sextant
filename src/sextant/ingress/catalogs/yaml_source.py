@@ -38,8 +38,8 @@ class YamlCatalogSource:
                 Catalog(
                     id=_required(raw, "id", path),
                     style=_required(raw, "style", path),
-                    protocol=_closed(raw, "protocol", Protocol, path),
-                    direction=_closed(raw, "direction", Direction, path),
+                    protocol=_closed_or_absent(raw, "protocol", Protocol, path),
+                    direction=_closed_or_absent(raw, "direction", Direction, path),
                     requires=tuple(raw.get("requires", [])),
                     matches=_required(raw, "matches", path),
                     source=path,
@@ -112,6 +112,28 @@ def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
             f"`groupId:artifactId` coordinates — got {declared!r} (D02 §1)"
         )
     return tuple(declared)
+
+
+def _closed_or_absent(raw: dict[str, Any], key: str, values: type[StrEnum], path: Path) -> str:
+    """`protocol`/`direction`: one of D00's closed sets, or the empty string
+    where the catalog declares the key at all (2O design §4).
+
+    Absence is a CLAIM — "this catalog derives nothing with a wire identity" —
+    and it is checked where the claim can be judged, not here. This layer knows
+    which values are legal; it does not know which styles need one, because
+    that is knowledge of `application/resolve`, which this layer must not
+    import. `resolve/endpoints.py` refuses a wire style declaring no protocol
+    and a non-wire style declaring one, carrying `Catalog.source` so either
+    error still names the file — exactly the split the module docstring above
+    states for `style` itself.
+
+    A key written with a value outside the set is still refused right here: a
+    typo is not an absence, and `protocol: htp` must never be read as "no wire
+    identity".
+    """
+    if key not in raw:
+        return ""
+    return _closed(raw, key, values, path)
 
 
 def _closed(raw: dict[str, Any], key: str, values: type[StrEnum], path: Path) -> str:
