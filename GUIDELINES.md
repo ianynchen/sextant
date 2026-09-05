@@ -188,6 +188,41 @@ Every catalog, engine, detector and rule that claims to know what a framework do
 
 **Diagrams:** Use Mermaid for L1/L2 in docs; L3 only if non-obvious. Use ASCII art for L2, class, and sequence diagrams during chat conversations. A lying diagram is worse than none.  
 
+### 8.2 Code is truth; anything a deployment can overwrite is a possibility  
+
+Sort every fact by whether it can change **without rebuilding the artifact**.  
+
+**Truth:** source and compiled bytecode. A class, a method, an annotation and its arguments are what they are in the jar we read.  
+
+**A declared default:** in-repo configuration. `application.yml`, `.properties`, and every value like them are the *lowest*-precedence source at runtime — an OS environment variable, a Kubernetes ConfigMap, a Helm value, `SPRING_APPLICATION_JSON`, a command-line argument or an external config location all beat them, and none of those is visible from a repository. So in-repo config is truth about **what the repository declares**, never about what runs.  
+
+The rule this yields is asymmetric, and the asymmetry is the point:  
+
+- **Never gate on an overridable value.** Excluding a row because the packaged config would disable it is excluding on inference, which §8 forbids. Gate only where the *code path does not exist* — an absent dependency, an unimplemented interface.  
+- **Never assert one as a property of the running system.** "This endpoint is exposed" is not derivable; "this endpoint is declared and registered" is.  
+- **Report the code fact, and name the dependency.** A row that depends on deployment says so, in COVERAGE and in the catalog.  
+
+**The decision procedure**, because recognising the category is harder than running the test: before gating, ask *"what is the smallest change that makes this row appear at runtime?"* If the answer is a redeploy with different configuration, it is not a gate. If it is adding a dependency or writing code, it is. A writer does not need to know Spring's precedence table to answer that.  
+
+**The direction it is violated:** both shipped instances suppressed a real code fact because a default said it was off. Neither fabricated by trusting config positively. A reviewer should look for the *missing* row, not the wrong one.  
+
+Two rulings came from this before it was written: Spring Boot Actuator endpoints (`management.endpoints.web.exposure.include`, whose default is `health` alone and which any deployment routinely overrides) and servlet `TRACE` handlers (Tomcat's connector `allowTrace`, default false). Both were briefly treated as absent because the in-repo default said so. Contrast Spring Data REST, which we **do** gate: absent that dependency, no code path exists to serve those routes at all.  
+
+**Its §8.3 audit list, run the day this was written — clean, and structurally so.** Every gating decision in the pipeline is one of two, both in `resolve/dependencies.py` and `resolve/capabilities.py`: the build declares a coordinate, or the scan produced the fact kinds a catalog needs. Neither reads configuration. `config_entries` is read in exactly one place, `resolve/config.py`, and only to **derive** `resolved_config` rows — a derivation, never an existence decision. Every catalog `when:` clause keys on a code fact (`implements`, an argument's value), none on a property. The four catalogs that name a config property are the two rulings above plus Spring Data REST, which gates on the dependency.  
+
+So the rule holds today by construction rather than by discipline, and the invariant is the enforceable form: **no gating or exclusion decision may read `config_entries` or `resolved_config`.** The condition that would falsify this audit is a catalog gaining a gate keyed on a property — at which point the allowlist §8.3 requires starts at one.  
+
+### 8.3 A new principle ships with its retroactive audit list  
+
+Every rule in §5.3, §5.4, §8, §8.1, §8.2, §9 and §10 was written **after** the code it governs, because each was derived from a failure. That is the normal way a rule is earned — and it means writing one is a claim that *other places are broken the same way*.  
+
+So a principle does not ship as prose alone. It ships with **every existing site the rule now governs, enumerated as a failing allowlist that must shrink**. An allowlist entry is a deliberate edit with a reason; an omission is a test failure.  
+
+The cost of skipping this is measurable. §8.1's language rule says Java identifies a method by name and parameter types in order. It landed as prose and audited **zero** existing sites — while twenty-three shipped catalog rows were matching calls by argument count, three of which were publishing a message payload as a wire destination. The rule was right, and it reached nothing. The descriptor ratchet that followed (`tests/architecture/test_catalog_descriptor_coverage.py`) is what the rule should have shipped with.  
+
+**A principle that audits nothing on the day it lands is a note, not a rule.** This is §8's "architecture rules are enforceable, not aspirational" applied to the moment of writing rather than to the rule's steady state — and it is the harder half, because a new rule is exactly when the backlog is invisible and the author is thinking about the defect in front of them.  
+
+
 ---  
 
 ## 9. Coding Standards  
