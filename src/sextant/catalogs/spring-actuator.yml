@@ -43,7 +43,16 @@ matches:
     # AND THE LARGER ONE, ON THE SAME SEAM (2O Task 7 review, Critical 3).
     # The base path decides WHERE an address is served; web EXPOSURE decides
     # whether it is served at all, and
-    # `management.endpoints.web.exposure.include` defaults to `health` ALONE.
+    # `management.endpoints.web.exposure.include` defaults to `health` ALONE —
+    # a runtime property, and the reason this comment states a dependency
+    # rather than an apology. The endpoint below is a CODE FACT: declared,
+    # registered, correctly addressed. Whether it is published over HTTP is
+    # decided at deployment, which a repository cannot tell us and which we
+    # must not predict. A default is not proof of absence (GUIDELINES §8),
+    # and deployments routinely set this key — that is why the endpoint was
+    # written. This holds as long as we cannot read the key; the day an
+    # annotation-derived row can read `resolved_config`, a module that sets
+    # it in its own `application.yml` becomes readable and this sharpens.
     # Measured on both versions (CP-5 rows 9-10): with Boot's own default,
     # `/actuator/probe` is a 404 and absent from the discovery document while
     # `/actuator/health` is a 200. Every 200 in CP-5 rows 1-8 was conditional

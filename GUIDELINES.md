@@ -115,6 +115,13 @@ A checkpoint, probe, or experiment establishes its verdict **only for the config
 
 Two failures this prevents, both from Phase 2O. A path-normalisation rule was measured against one framework's **server** side and then applied to every catalog sharing that protocol, including a client library whose relative-path semantics differ — so it rewrote addresses instead of normalising spellings. And a checkpoint was written with two branches for a framework conditional whose second branch is unreachable, because the framework's own non-optional dependency pins the antecedent true; implementing the unreachable branch would have produced a wrong address on every module of one build system.  
 
+**Record identity from the run's own output, never from the parameter you passed in.** A probe that builds with `-Dversion=4.1.1` and then labels its results "4.1.1" has recorded an *intention*. It is evidence only if the running process said so itself — the banner it printed, the artifact it resolved, the version it reported. CP-5 in Phase 2O passed `-Dboot.version=4.1.1`, rebuilt without `clean`, ran the previous version's jar twice, and recorded eight observation cells for a configuration that never executed. Every claim in that table was independently true; none of it was measured where it said.  
+
+Two consequences follow, and both are cheap:  
+
+- **Generate the evidence table from the run; do not write it.** A hand-written table can drift from the run silently. A generated one can only be wrong if somebody edits it, which a diff shows.  
+- **Make the mismatch fatal.** If the recorded identity and the observed identity disagree, the harness aborts. An advisory echo that nobody reads is not a check — CP-5's first version printed the version it *believed* alongside output from the version it *ran*, and the two disagreed in plain sight for a full review cycle.  
+
 Hence, before writing a checkpoint with branches, ask **which branches are reachable**. That is a dependency-tree question, not a code-reading one, and it is cheap to answer before a spec is written and expensive to discover during implementation.  
 
 ---  
@@ -174,6 +181,8 @@ Every catalog, engine, detector and rule that claims to know what a framework do
 3. **Raise what the framework supports and we cannot see; never drop it silently.** A shape the framework serves and we miss gets a COVERAGE row naming the shape and why it is invisible. Under-reporting a stated boundary is honest; under-reporting an unstated one is a defect. **Where the escape is a USER ACTION, saying so in COVERAGE is not enough — it belongs in user-facing documentation.** COVERAGE records what we can see; the usage docs are where the person who can actually change the outcome will look. Supplying a dependency's bytecode is the user's responsibility; telling them plainly that a contract living in a dependency jar is invisible until they opt in via `extract_libraries`, and how, is ours.  
 
 4. **Never add behaviour the framework does not have under the exact circumstances.** The test is not "would this be reasonable" but "does the framework do this, here, under these conditions". A class implementing an `@HttpExchange` interface is served only when it is a controller bean; deriving an inbound route for a plain `@Service` implementation invents an endpoint nothing serves.  
+
+**A language's rules bind exactly as a framework's do.** The four rules above say "framework" throughout; a language is the same discipline with a stricter source. Java identifies a method by **name and parameter types in order** — arity is a consequence of that list, never the rule — so a catalog matching a call by name and argument COUNT has invented a rule the language does not use, and two overloads sharing a count are then indistinguishable. That is not a framework quirk to be probed; it is in the language specification, and mirroring it is not optional. The same holds for any language construct we key on: read the rule, encode the rule.  
 
 **Operationally:** the framework's rule must be **measured before it is built on** (§5.4) — a rule taken from memory, from a reviewer's citation, or from documentation is a *prediction*, and two of Phase 2O's checkpoints falsified exactly such predictions. State the versions measured, because a framework's rule is version-scoped, and a rule verified on one version is evidence about that version only.  
 
