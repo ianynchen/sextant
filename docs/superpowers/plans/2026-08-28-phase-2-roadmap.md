@@ -205,6 +205,132 @@ own merits: they would turn D02's catalog schema into a public API, after which
 every schema change is a breaking change for users.
 
 
+### 2Q — the full request-to-response trace. Scope ruled 2026-09-05, on measured evidence
+
+**The user's requirement, verbatim in effect: the ENTIRE trace, from request to
+response, and inside lambda bodies. Not inside MyBatis or any third party — the
+third-party boundary is where a trace stops, as already agreed.**
+
+This section exists because the feasibility was PROVEN, not argued, against a
+real application. Everything below was measured on `macrozheng/mall`
+(524 Java files, 31 service implementations, Maven, Spring Boot), built with
+JDK 21 and analysed with the shipped pipeline.
+
+#### What already works, measured
+
+| | mall-admin |
+|---|---|
+| inbound endpoints with a handler | 160 |
+| produce a trace with at least one hop | 159 |
+| **reach a real terminal** (DB / cache / object store) | **158** |
+| reach no terminal, and correctly so | 2 |
+| calls whose target class the workspace scanned | 668 |
+| **resolved to a method symbol** | **655 (98%)** |
+| interface calls into own code | 389 |
+| **sole implementer → RESOLVED** (2Q's own rule) | **180** |
+| several implementers → narrowed branch | 0 — the rule is UNTESTED on real code |
+
+The two endpoints reaching no terminal are correct: `GET /admin/refreshToken` is
+pure JWT string manipulation, and `POST /aliyun/oss/callback` only reads request
+parameters. Both verified in source.
+
+Terminals are the RIGHT ones, not merely present. `/admin/login` derives
+`UmsAdminMapper`, `UmsAdminRoleRelationDao` AND `UmsAdminLoginLogMapper` — the
+third reached only through a private helper two levels down.
+`/brand/update/{id}` derives `PmsBrandMapper` AND `PmsProductMapper`, the second
+being the denormalised write the source comments call out. And it is
+per-METHOD, not per-class: the same `UmsAdminServiceImpl` yields 1, 3 and 1
+terminals for three different endpoints.
+
+The caller-to-callee join is **arithmetic, not a lookup**: `sig_<hex>` is the
+first four bytes of SHA-256 of the JVM descriptor (`ClassScanner.disambiguatorOf`),
+and a `call_site` carries owner, name and descriptor. Inherited calls need one
+walk up `superclass`/`interfaces` — on `spring-petclinic` that lifted resolution
+from 67% to 95%, and the residue was five calls to a method declared in a
+LIBRARY, which is correctly external.
+
+#### The three things missing, and what each costs
+
+**1. Lambda bodies are orphaned. PROVEN RECOVERABLE.** An `invokedynamic` call
+site records the BOOTSTRAP method (`LambdaMetafactory#metafactory`), not the
+implementation it creates. `javap -v` on `OmsOrderServiceImpl` shows the class
+file naming the body outright:
+
+```
+BootstrapMethods:
+  0: LambdaMetafactory.metafactory
+     Method arguments:
+       #322 REF_invokeStatic OmsOrderServiceImpl.lambda$delivery$0:(...)
+```
+
+ASM hands that to the visitor as `bootstrapMethodArguments[1]`, a `Handle` with
+owner, name and descriptor. **The fix is to record the handle instead of the
+factory.** 15 lambda bodies are unreachable in mall-admin alone. None of them
+happened to contain a terminal — **by luck, not design**, which is the same
+shape as the gRPC fabrication the golden fixture missed. A
+`list.forEach(x -> mapper.insert(x))` is silently lost today.
+
+The same table carries `StringConcatFactory`'s format recipes
+(`"订单关闭:\u0001"`), which is how a composed string could be recovered — the
+constant-folding gap, closed by the same read.
+
+**2. The return value is never recorded.** `ARETURN` appears in the extractor
+only inside a comment. Yet the value chain that makes the round trip possible is
+ALREADY EXTRACTED — this is `OmsOrderController#list`, from the facts:
+
+```
+ord=0   OmsOrderService#list      result=7
+ord=1   CommonPage#restPage       args=[source:7]     result=12
+ord=2   CommonResult#success      args=[source:12]    result=13
+```
+
+The DB result flows into `restPage`, which flows into `success` — the response.
+**993 of 1,817 arguments carry a `source` value-id**, so this is systemic.
+The only missing link is that nothing records value 13 as what the method
+returns. The extractor already maintains the value stack that produces
+`result`/`receiver`/`source`; recording what `ARETURN` pops is the same
+machinery, one instruction further.
+
+**3. Cross-method return propagation.** Without (2), a callee's returned value
+cannot be linked to the caller's `result` id — we know
+`OmsOrderService#list` produced value 7, but not that 7 came from
+`orderDao.getList`. This is the actual work of the three; (1) and (2) are small.
+
+With all three, a trace runs **request → handler → service → terminal → back
+through the composition → response**, every hop a compiler fact.
+
+#### Stated boundaries — where a trace stops, deliberately
+
+- **The third-party boundary.** A MyBatis mapper, a Spring Data repository, a
+  JDBC driver: the call is the terminal. We do not trace into it, and we do not
+  read MyBatis XML — so a terminal is `OmsOrderMapper#selectByExample`, never a
+  table name or a statement. **Ruled: this is out of scope, not a gap.**
+- **Values through library code.** `stream().map(f).collect()` leaves for the
+  JDK and returns; the `collect` result is visible, per-element provenance is
+  not.
+- **Values parked in a field** between calls — `FieldWriteFact` is
+  constructors-only by design.
+- **Responses built by mutation** rather than composition
+  (`result.setFilename(x); return result;`). The setters ARE visible with a
+  receiver id matching the returned value, so this is attributable; nothing does
+  it today. Decide in the spec.
+- **Branches.** Two return statements yield a set of possible responses, not the
+  one that runs. A trace is reachability, never execution.
+- **AOP, interceptors, `@Transactional`** — applied to runtime proxies, absent
+  from the call graph.
+- **Cross-module depth.** 1,041 of mall-admin's calls leave for sibling Maven
+  modules, each with its own workspace. Harmless where the mapper IS the
+  terminal; a service delegating real logic to a sibling module would stop early
+  and we would not know. That is `Bundle`/`Link` work, not 2Q.
+
+#### Acceptance
+
+`macrozheng/mall` is the acceptance corpus, kept precisely because the user can
+check any trace against source without trusting a report. `mall-admin` is built
+and analysed; `mall-portal` (15 more service implementations) was not reached by
+the build and is the natural second module. **The "several implementers →
+narrowed branch" rule has never run on real code and must not ship unexercised.**
+
 ### The order after round 1, ruled 2026-09-05
 
 Agreed with the user after the sweep landed. Recorded because the sweep's
