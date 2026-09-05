@@ -12,14 +12,21 @@ requires: [call_site, string_constants]
 matches:
   owner: com.google.cloud.spring.pubsub.core.PubSubTemplate
   # CHECKPOINT FACT (real javap descriptors, spring-cloud-gcp-pubsub 5.1.2):
-  # `publish(String, T)` is arity 2, the outbound row. `publish(String,
-  # PubsubMessage)` is ALSO arity 2, and `publish(String, T, Map)` is arity
-  # 3 — neither is exercised by the fixture. The `PubsubMessage` overload
-  # shares this SAME declared row (matched by name+arity alone, never by
-  # argument type — a second `publish arity: 2` row would never be reached
-  # at all, since `_matching_method`'s first match wins), degrading honestly
-  # to whatever its own `body_arg` capture reads rather than a crash; the
-  # arity-3 overload matches no declared row at all and simply never
+  # `publish(String, T)` and `publish(String, PubsubMessage)` are BOTH arity 2,
+  # and `publish(String, T, Map)` is arity 3.
+  #
+  # TWO ROWS, ONE PER OVERLOAD (descriptor sweep R3), each declaring its own
+  # erased JVM `descriptor`. **The note that stood here said a second
+  # `publish arity: 2` row "would never be reached at all, since
+  # `_matching_method`'s first match wins" — that was true of arity matching
+  # and is false now.** Under descriptor matching the two rows are reached by
+  # their own overloads and are the right shape; a second row is no longer dead
+  # data. Both put the topic at 0 and the payload at 1, so nothing wrong was
+  # derivable before the split — this closes the shape, it does not fix a bug.
+  # It stops being right if a future release re-types either parameter, which
+  # re-running `scripts/probes/cp10_catalog_descriptors/run.sh` detects.
+  #
+  # The arity-3 overload still matches no declared row at all and simply never
   # derives, the same "undeclared arity" shape `sendDefault`'s three unused
   # overloads take in `spring-kafka-template.yml`.
   #
@@ -47,8 +54,19 @@ matches:
   # Consumer<BasicAcknowledgeablePubsubMessage>)` overload is not declared:
   # no fixture call reaches it, and it carries no payload capture at all.
   methods:
-    - { name: publish, arity: 2, channel_arg: 0, body_arg: 1 }
-    - { name: subscribeAndConvert, arity: 3, channel_arg: 0, body_arg: 2, direction: inbound }
+    - { name: publish, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: publish, arity: 2,
+        descriptor: "(Ljava/lang/String;Lcom/google/pubsub/v1/PubsubMessage;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, body_arg: 1 }
+    # `subscribeAndConvert(String, Consumer, Class)` is the only overload of
+    # that name at any arity in this jar; its descriptor is declared for R2's
+    # reason — the claim costs nothing while it is unique, and buys silence
+    # rather than a misread position the day a sibling appears.
+    - { name: subscribeAndConvert, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/util/function/Consumer;Ljava/lang/Class;)Lcom/google/cloud/pubsub/v1/Subscriber;",
+        channel_arg: 0, body_arg: 2, direction: inbound }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full

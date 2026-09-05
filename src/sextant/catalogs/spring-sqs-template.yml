@@ -30,9 +30,36 @@ matches:
   # a channel captured from the wrong argument. Verified live: the fixture's
   # own builder-lambda row still derives identically (`path: NULL,
   # resolution: unresolved`) with no `channel_arg` declared at all.
+  #
+  # FOUR ROWS, ONE PER OVERLOAD (descriptor sweep R3), each declaring its own
+  # erased JVM `descriptor`, because Java identifies a method by name and
+  # parameter types in order and never by argument count (GUIDELINES §8.1's
+  # language rule). Arity 2 is `(String, T)` and `(String, Message<T>)`, both
+  # inherited from `AbstractMessagingTemplate` and both carrying the queue at 0
+  # and the payload at 1 — benign either way, so this closes the shape rather
+  # than fixing a bug. Arity 1 is `(T)` and `(Consumer<SqsSendOptions<T>>)`,
+  # and the reasoning above is why NEITHER row declares a capture: the two rows
+  # exist so both overloads still MATCH and derive their honest empty row, not
+  # so one of them can start reading argument 0.
+  #
+  # Every descriptor here returns `SendResult` because that is what the erasure
+  # says; `javap -p -s SqsTemplate` alone does not show three of the four,
+  # which are declared on `AbstractMessagingTemplate` — a call on a variable
+  # typed `SqsTemplate` records `SqsTemplate` as the owner all the same,
+  # because javac records the compile-time qualifying type. Re-running
+  # `scripts/probes/cp10_catalog_descriptors/run.sh`, whose check walks
+  # superclasses for exactly this reason, is what keeps that true.
   methods:
-    - { name: send, arity: 2, channel_arg: 0, body_arg: 1 }
-    - { name: send, arity: 1 }
+    - { name: send, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: send, arity: 2,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/messaging/Message;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: send, arity: 1,
+        descriptor: "(Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;" }
+    - { name: send, arity: 1,
+        descriptor: "(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;" }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full

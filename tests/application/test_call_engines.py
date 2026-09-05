@@ -5972,12 +5972,203 @@ _CLAIMED_ARITIES = [
         [CallArgument(kind="class", symbol=ORDER_VIEW)],
         id="RabbitTemplate.convertAndSend/1 — hypothetical arity-1 sibling",
     ),
+    # --- R3: rows that legitimately mean several overloads, split one row per
+    # overload. Each overload's own row is a case, so the near-miss proves the
+    # arity is claimed against everything NEITHER row declares and the positive
+    # proves BOTH still fire — the failure a single descriptor would have caused
+    # here is the second row going silent, which only a positive can catch.
+    pytest.param(
+        "kafka-consumer",
+        "org/apache/kafka/clients/consumer/KafkaConsumer#",
+        "subscribe",
+        "(Ljava/util/Collection;)V",
+        "(Ljava/lang/String;)V",
+        [CallArgument(kind="unresolved")],
+        id="KafkaConsumer.subscribe(Collection) — hypothetical third arity-1 overload",
+    ),
+    pytest.param(
+        "kafka-consumer",
+        "org/apache/kafka/clients/consumer/KafkaConsumer#",
+        "subscribe",
+        "(Ljava/util/regex/Pattern;)V",
+        "(Ljava/lang/String;)V",
+        [CallArgument(kind="unresolved")],
+        id="KafkaConsumer.subscribe(Pattern) — hypothetical third arity-1 overload",
+    ),
+    pytest.param(
+        "spring-pubsub",
+        "com/google/cloud/spring/pubsub/core/PubSubTemplate#",
+        "publish",
+        "(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        "(Ljava/lang/String;Ljava/util/Map;)Ljava/util/concurrent/CompletableFuture;",
+        [
+            CallArgument(kind="string", value="orders-topic"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        id="PubSubTemplate.publish(String, T) — hypothetical third arity-2 overload",
+    ),
+    pytest.param(
+        "spring-pubsub",
+        "com/google/cloud/spring/pubsub/core/PubSubTemplate#",
+        "publish",
+        "(Ljava/lang/String;Lcom/google/pubsub/v1/PubsubMessage;)"
+        "Ljava/util/concurrent/CompletableFuture;",
+        "(Ljava/lang/String;Ljava/util/Map;)Ljava/util/concurrent/CompletableFuture;",
+        [
+            CallArgument(kind="string", value="orders-topic"),
+            CallArgument(kind="instance", symbol=_PUBSUB_MESSAGE),
+        ],
+        id="PubSubTemplate.publish(String, PubsubMessage) — the overload a single descriptor "
+        "would have silenced",
+    ),
+    pytest.param(
+        "spring-pubsub",
+        "com/google/cloud/spring/pubsub/core/PubSubTemplate#",
+        "subscribeAndConvert",
+        "(Ljava/lang/String;Ljava/util/function/Consumer;Ljava/lang/Class;)"
+        "Lcom/google/cloud/pubsub/v1/Subscriber;",
+        "(Ljava/lang/String;Ljava/util/function/Consumer;"
+        "Lorg/springframework/core/ParameterizedTypeReference;)"
+        "Lcom/google/cloud/pubsub/v1/Subscriber;",
+        [
+            CallArgument(kind="string", value="orders-subscription"),
+            CallArgument(kind="lambda"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        id="PubSubTemplate.subscribeAndConvert — hypothetical arity-3 sibling",
+    ),
+    pytest.param(
+        "spring-sqs-template",
+        "io/awspring/cloud/sqs/operations/SqsTemplate#",
+        "send",
+        "(Ljava/lang/String;Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        "(Ljava/lang/String;Ljava/util/Map;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        [
+            CallArgument(kind="string", value="orders-queue"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        id="SqsTemplate.send(String, T) — hypothetical third arity-2 overload",
+    ),
+    pytest.param(
+        "spring-sqs-template",
+        "io/awspring/cloud/sqs/operations/SqsTemplate#",
+        "send",
+        "(Ljava/lang/String;Lorg/springframework/messaging/Message;)"
+        "Lio/awspring/cloud/sqs/operations/SendResult;",
+        "(Ljava/lang/String;Ljava/util/Map;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        [
+            CallArgument(kind="string", value="orders-queue"),
+            CallArgument(kind="instance", symbol=_SPRING_MESSAGE),
+        ],
+        id="SqsTemplate.send(String, Message) — the overload a single descriptor would "
+        "have silenced",
+    ),
+    pytest.param(
+        "spring-sqs-template",
+        "io/awspring/cloud/sqs/operations/SqsTemplate#",
+        "send",
+        "(Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        "(Ljava/util/Collection;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        [CallArgument(kind="string", value="A PAYLOAD THAT IS A STRING")],
+        id="SqsTemplate.send(T) — the destination-less form, still capture-free",
+    ),
+    pytest.param(
+        "spring-sqs-template",
+        "io/awspring/cloud/sqs/operations/SqsTemplate#",
+        "send",
+        "(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        "(Ljava/util/Collection;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        [CallArgument(kind="lambda")],
+        id="SqsTemplate.send(Consumer) — the queue-in-lambda builder form",
+    ),
+    pytest.param(
+        "spring-kafka-template",
+        "org/springframework/kafka/core/KafkaTemplate#",
+        "send",
+        "(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        "(Ljava/lang/String;Lorg/springframework/messaging/Message;)"
+        "Ljava/util/concurrent/CompletableFuture;",
+        [
+            CallArgument(kind="string", value="orders.created"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        id="KafkaTemplate.send(String, V) — hypothetical arity-2 sibling",
+    ),
+    pytest.param(
+        "spring-kafka-template",
+        "org/springframework/kafka/core/KafkaTemplate#",
+        "send",
+        "(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)"
+        "Ljava/util/concurrent/CompletableFuture;",
+        "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;)"
+        "Ljava/util/concurrent/CompletableFuture;",
+        [
+            CallArgument(kind="string", value="orders.created"),
+            CallArgument(kind="string", value="order-key"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        id="KafkaTemplate.send(String, K, V) — hypothetical arity-3 sibling",
+    ),
+    pytest.param(
+        "spring-kafka-template",
+        "org/springframework/kafka/core/KafkaTemplate#",
+        "send",
+        "(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/CompletableFuture;",
+        "(Lorg/apache/kafka/common/header/Headers;)Ljava/util/concurrent/CompletableFuture;",
+        [CallArgument(kind="instance", symbol=_PRODUCER_RECORD)],
+        id="KafkaTemplate.send(ProducerRecord) — hypothetical third arity-1 overload",
+    ),
+    pytest.param(
+        "spring-kafka-template",
+        "org/springframework/kafka/core/KafkaTemplate#",
+        "send",
+        "(Lorg/springframework/messaging/Message;)Ljava/util/concurrent/CompletableFuture;",
+        "(Lorg/apache/kafka/common/header/Headers;)Ljava/util/concurrent/CompletableFuture;",
+        [CallArgument(kind="instance", symbol=_SPRING_MESSAGE)],
+        id="KafkaTemplate.send(Message) — the capture-free row that keeps today's recall",
+    ),
+    pytest.param(
+        "spring-kafka-template",
+        "org/springframework/kafka/core/KafkaTemplate#",
+        "sendDefault",
+        "(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        "(Lorg/springframework/messaging/Message;)Ljava/util/concurrent/CompletableFuture;",
+        [CallArgument(kind="class", symbol=ORDER_VIEW)],
+        id="KafkaTemplate.sendDefault — hypothetical arity-1 sibling",
+    ),
+    pytest.param(
+        "spring-kafka-replying",
+        "org/springframework/kafka/requestreply/ReplyingKafkaTemplate#",
+        "sendAndReceive",
+        "(Lorg/apache/kafka/clients/producer/ProducerRecord;)"
+        "Lorg/springframework/kafka/requestreply/RequestReplyFuture;",
+        "(Lorg/apache/kafka/common/header/Headers;)"
+        "Lorg/springframework/kafka/requestreply/RequestReplyFuture;",
+        [CallArgument(kind="instance", symbol=_PRODUCER_RECORD)],
+        id="ReplyingKafkaTemplate.sendAndReceive(ProducerRecord) — hypothetical third overload",
+    ),
+    pytest.param(
+        "spring-kafka-replying",
+        "org/springframework/kafka/requestreply/ReplyingKafkaTemplate#",
+        "sendAndReceive",
+        "(Lorg/springframework/messaging/Message;)"
+        "Lorg/springframework/kafka/requestreply/RequestReplyMessageFuture;",
+        "(Lorg/apache/kafka/common/header/Headers;)"
+        "Lorg/springframework/kafka/requestreply/RequestReplyFuture;",
+        [CallArgument(kind="instance", symbol=_SPRING_MESSAGE)],
+        id="ReplyingKafkaTemplate.sendAndReceive(Message) — the capture-free row",
+    ),
 ]
 
 
 @pytest.mark.declines("google-pubsub-client")
 @pytest.mark.declines("jakarta-jms")
 @pytest.mark.declines("kafka-clients")
+@pytest.mark.declines("kafka-consumer")
+@pytest.mark.declines("spring-pubsub")
+@pytest.mark.declines("spring-sqs-template")
+@pytest.mark.declines("spring-kafka-template")
+@pytest.mark.declines("spring-kafka-replying")
 @pytest.mark.parametrize(
     ("catalog_id", "owner", "name", "declared", "sibling", "arguments"), _CLAIMED_ARITIES
 )
@@ -6085,3 +6276,109 @@ def test_the_ws_arity_one_row_still_derives_its_own_overload(tmp_path: Path):
     workspace.close()
 
     assert endpoint["path"] == "{http://acme.example/orders}placeOrderRequest"
+
+
+# --- R3, the case a single descriptor would have half-answered:
+# `kafka-consumer.yml`'s `subscribe` row named FOUR `channel_via` resolvers for
+# TWO overloads, and splitting the row without splitting that list would have
+# left one overload reaching resolvers that can never fire for it.
+
+_SUBSCRIBE_COLLECTION = "(Ljava/util/Collection;)V"
+_SUBSCRIBE_PATTERN = "(Ljava/util/regex/Pattern;)V"
+_SUBSCRIBER = "com/acme/orders/messaging/raw/RawConsumer#subscribeAll()."
+
+
+def _shipped_subscribe(descriptor: str, ordinal: int, source: int) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=_SUBSCRIBER,
+        target=CallTarget(owner=KAFKA_CONSUMER, name="subscribe", descriptor=descriptor),
+        invoke_kind="virtual",
+        ordinal=ordinal,
+        receiver=3,
+        result=None,
+        arguments=[CallArgument(kind="unresolved", source=source)],
+    )
+
+
+def _pattern_compile_call(ordinal: int, result: int, pattern: str) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=_SUBSCRIBER,
+        target=CallTarget(
+            owner="java/util/regex/Pattern#",
+            name="compile",
+            descriptor="(Ljava/lang/String;)Ljava/util/regex/Pattern;",
+        ),
+        invoke_kind="static",
+        ordinal=ordinal,
+        result=result,
+        receiver=None,
+        arguments=[CallArgument(kind="string", value=pattern)],
+    )
+
+
+def test_the_collection_and_pattern_subscribe_rows_each_read_their_own_resolvers(
+    tmp_path: Path,
+):
+    """The paired positive for R3's split, and the reason a single descriptor
+    was the wrong fix for this row: `List.of` produces a `Collection` and
+    `Pattern.compile` produces a `Pattern`, so the two overloads do not share a
+    resolver list. One descriptor would have claimed arity 1 for one of them and
+    deleted the other half of the row's stated purpose — silently, since a
+    claimed arity derives nothing rather than erroring.
+
+    Both halves are asserted in one run, over the SHIPPED catalog: the
+    `Collection` call resolves one row per topic (`all_strings`), and the
+    `Pattern` call resolves the pattern verbatim, never expanded into topic
+    names."""
+    facts = [
+        _list_of_call(
+            _SUBSCRIBER,
+            0,
+            7,
+            [
+                CallArgument(kind="string", value="orders.created"),
+                CallArgument(kind="string", value="orders.shipped"),
+            ],
+        ),
+        _shipped_subscribe(_SUBSCRIBE_COLLECTION, 1, 7),
+        _pattern_compile_call(2, 11, "orders\\..*"),
+        _shipped_subscribe(_SUBSCRIBE_PATTERN, 3, 11),
+    ]
+    workspace = _resolve_shipped(tmp_path, facts, "kafka-consumer")
+    paths = sorted(str(row["path"]) for row in workspace.query("endpoints"))
+    workspace.close()
+
+    assert paths == ["orders.created", "orders.shipped", "orders\\..*"]
+
+
+def test_the_pattern_row_does_not_borrow_the_collection_rows_resolvers(tmp_path: Path):
+    """§10 near-miss for the SPLIT itself rather than for the descriptor: a
+    `subscribe(Pattern)` call whose argument was produced by `List.of` is not a
+    shape either overload can be written as, and the `Pattern` row declares only
+    `Pattern.compile`. So the linked read finds no form, and the row derives its
+    honest `path` NULL rather than the two topic names the OTHER row's resolver
+    list would have handed it.
+
+    A row is derived here, not nothing: the call matched its own descriptor.
+    What must be absent is the destination — which is what a shared resolver
+    list would have fabricated, and what makes this test fail if the two
+    `channel_via` lists are merged back into one."""
+    facts = [
+        _list_of_call(
+            _SUBSCRIBER,
+            0,
+            7,
+            [
+                CallArgument(kind="string", value="orders.created"),
+                CallArgument(kind="string", value="orders.shipped"),
+            ],
+        ),
+        _shipped_subscribe(_SUBSCRIBE_PATTERN, 1, 7),
+    ]
+    workspace = _resolve_shipped(tmp_path, facts, "kafka-consumer")
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")

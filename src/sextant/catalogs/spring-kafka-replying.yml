@@ -19,13 +19,23 @@ matches:
   # CHECKPOINT FACT: `sendAndReceive(ProducerRecord<K, V>)` is arity 1, the
   # record wrapper the only source for its channel and payload — exactly
   # like `KafkaTemplate.send(ProducerRecord)`. `sendAndReceive(Message<?>)`
-  # is ALSO arity 1 — not exercised by the fixture, and not given a second
-  # `sendAndReceive arity: 1` row for the same reason `spring-kafka-
-  # template.yml`'s own `send(Message<?>)` sibling isn't: `_matching_method`
-  # matches by name+arity alone, first row wins, so a second row at the same
-  # arity is unreachable dead data, never a second answer. It shares this
-  # SAME `record_arg` row, degrading honestly to `path` NULL, `resolution:
-  # unresolved` (a `Message` symbol names no `record_wrappers` entry).
+  # is ALSO arity 1, and it now has ITS OWN ROW (descriptor sweep R3).
+  # **The note that stood here said a second `sendAndReceive arity: 1` row was
+  # "unreachable dead data" — that was true of arity matching and is false
+  # now**: each row declares its own erased JVM `descriptor` and each overload
+  # reaches its own row. The two are trivially separable because they even
+  # differ in RETURN type — `RequestReplyFuture` against
+  # `RequestReplyMessageFuture` — which the erased descriptor carries.
+  #
+  # The `Message` row declares NO capture keys at all
+  # (`spring-sqs-template.yml`'s precedent), and that preserves today's answer
+  # exactly: before the split a `Message` call reached the `record_arg` row and
+  # `_record_arguments` degraded honestly to `(None, None)` — `path` NULL,
+  # `resolution: unresolved` — because a `Message` symbol names no
+  # `record_wrappers` entry. Without the row, the `ProducerRecord` descriptor
+  # would claim arity 1 and the call would derive NOTHING; an honest empty row
+  # is the answer this file already gives, and closing an ambiguity is not a
+  # reason to spend recall.
   # `sendAndReceive(ProducerRecord, Duration)`, `(Message, Duration)`,
   # `(Message, ParameterizedTypeReference<P>)` and `(Message, Duration,
   # ParameterizedTypeReference<P>)` are the further, arity-2/3 overloads;
@@ -37,7 +47,11 @@ matches:
   # all — `response_shape` is NULL by design, not a capture failure (D02
   # §3: "No overload exposes the reply type... stated, not hedged").
   methods:
-    - { name: sendAndReceive, arity: 1, record_arg: 0 }
+    - { name: sendAndReceive, arity: 1,
+        descriptor: "(Lorg/apache/kafka/clients/producer/ProducerRecord;)Lorg/springframework/kafka/requestreply/RequestReplyFuture;",
+        record_arg: 0 }
+    - { name: sendAndReceive, arity: 1,
+        descriptor: "(Lorg/springframework/messaging/Message;)Lorg/springframework/kafka/requestreply/RequestReplyMessageFuture;" }
   record_wrappers:
     - { type: org.apache.kafka.clients.producer.ProducerRecord,
         channel_ctor_arg: 0, payload_ctor_arg: last }

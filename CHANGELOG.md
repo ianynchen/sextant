@@ -166,6 +166,21 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A row that meant several overloads is now several rows** (descriptor sweep R3). Five
+  catalogs carried one `methods` row standing for two real overloads, which is the language's
+  own rule missing rather than a simplification: `KafkaConsumer.subscribe(Collection)` and
+  `(Pattern)`; `PubSubTemplate.publish(String, T)` and `(String, PubsubMessage)`;
+  `SqsTemplate.send` at both arity 1 and arity 2; and the `Message` siblings of
+  `KafkaTemplate.send(ProducerRecord)` and `ReplyingKafkaTemplate.sendAndReceive(ProducerRecord)`.
+  Each is now one row per overload, each with its own descriptor. **A single descriptor would
+  have been the wrong fix in every one of these**: it claims the arity, so the undeclared
+  sibling goes silent. `kafka-consumer`'s `channel_via` resolver list splits with the row —
+  `List.of`/`Arrays.asList`/`Collections.singletonList` to the `Collection` overload,
+  `Pattern.compile` to the `Pattern` one — and the two `Message` rows declare no capture keys
+  at all (`spring-sqs-template.yml`'s precedent), which preserves today's honest empty row
+  rather than spending recall to close an ambiguity. Three catalog comments asserting a second
+  row at the same arity "would never be reached" were true of arity matching and are false
+  under descriptor matching; all three are corrected.
 - **Every unique-overload `methods` row now names the overload it means** (descriptor sweep
   R2). A row matched on name and argument COUNT is matching on a rule Java does not have —
   the language identifies a method by name and parameter types in order (GUIDELINES §8.1's

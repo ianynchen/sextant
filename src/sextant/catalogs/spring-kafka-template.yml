@@ -16,27 +16,56 @@ matches:
   # moves from arg 1 to arg 2 once the key joins the call, so `arity` tells
   # the two overloads apart (Task 6). `send(ProducerRecord<K, V>)` carries
   # both identity and payload in the record's own constructor — Task 7's
-  # `record_arg` / `record_wrappers` below. `send(Message<?>)` is ALSO
-  # arity 1 (a third `send` overload, alongside `send(ProducerRecord<K,V>)`)
-  # — not exercised by the fixture, and NOT given a second `send arity: 1`
-  # row: `_matching_method`'s first match wins by name+arity alone, never by
-  # argument type, so a second row at the same arity would simply never be
-  # reached (dead catalog data), never a second answer. It shares this SAME
-  # `record_arg` row instead: a `Message` argument's own symbol names no
-  # `record_wrappers` entry, so `_record_arguments` degrades honestly to
-  # `(None, None)` — `path` NULL, `resolution: unresolved` — rather than
-  # crashing or mis-reading the record wrapper's own ctor rule against a
-  # type it was never declared for. `sendDefault(V)` targets the
+  # `record_arg` / `record_wrappers` below.
+  #
+  # `send(Message<?>)` is ALSO arity 1, and it now has ITS OWN ROW (descriptor
+  # sweep R3). **The note that stood here said a second `send arity: 1` row
+  # "would simply never be reached (dead catalog data)" — that was true of
+  # arity matching and is false now**: each row declares its own erased JVM
+  # `descriptor`, so each overload reaches its own row. That row declares NO
+  # capture keys at all, following `spring-sqs-template.yml`'s own precedent,
+  # and the reason is that it preserves today's answer EXACTLY. Before the
+  # split, a `Message` call reached the `record_arg` row and `_record_arguments`
+  # degraded honestly to `(None, None)` — `path` NULL, `resolution:
+  # unresolved` — because a `Message` symbol names no `record_wrappers` entry.
+  # A capture-less row derives the same honest empty row. Without it, the
+  # `ProducerRecord` descriptor would claim arity 1 and a `Message` call would
+  # derive NOTHING, which is a recall loss this sweep has no reason to take:
+  # `spring-kafka-message.yml`'s fluent chain resolves that call's TOPIC and
+  # this row's sibling stands beside it carrying a NULL path — two honestly
+  # different facts about one call, which is that file's own documented
+  # duplicate-row ruling and is verified end-to-end over real bytecode by
+  # `test_the_messagebuilder_kafka_chain_resolves_its_topic_but_not_its_bare_payload`.
+  # `sendDefault(V)` targets the
   # config-borne default topic: no channel argument at the call site at all,
   # so no `channel_arg` is declared for it — `path` NULL, `resolution:
   # unresolved` (I1), verified live. `sendDefault` has three further
   # overloads (`(K, V)`, `(Integer, K, V)`, `(Integer, Long, K, V)`) the
   # fixture never calls; only the exercised arity is declared.
+  # Every row states its own erased JVM `descriptor` (descriptor sweep R2/R3),
+  # because Java identifies a method by name and parameter types in order and
+  # never by argument count (GUIDELINES §8.1's language rule). Arities 2 and 3
+  # are each a single overload here, so their claims cost nothing today and buy
+  # silence rather than a misread position the day spring-kafka adds a sibling;
+  # arity 1 is genuinely two overloads and is two rows. `sendDefault`'s three
+  # further overloads are arities 2, 3 and 4 and remain undeclared, so they
+  # match no row at all — unchanged by this. Re-running
+  # `scripts/probes/cp10_catalog_descriptors/run.sh` is the check on all six.
   methods:
-    - { name: send, arity: 2, channel_arg: 0, body_arg: 1 }
-    - { name: send, arity: 3, channel_arg: 0, body_arg: 2 }
-    - { name: send, arity: 1, record_arg: 0 }
-    - { name: sendDefault, arity: 1, body_arg: 0 }
+    - { name: send, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: send, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, body_arg: 2 }
+    - { name: send, arity: 1,
+        descriptor: "(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/CompletableFuture;",
+        record_arg: 0 }
+    - { name: send, arity: 1,
+        descriptor: "(Lorg/springframework/messaging/Message;)Ljava/util/concurrent/CompletableFuture;" }
+    - { name: sendDefault, arity: 1,
+        descriptor: "(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        body_arg: 0 }
   # `ReplyingKafkaTemplate.sendAndReceive` gets its own file
   # (`spring-kafka-replying.yml`): `matches.owner` is single-valued, and it
   # is a different owner type from `KafkaTemplate` (checkpoint ruling).
