@@ -14,6 +14,28 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **The two NON-WIRE families: `scheduled_work` and `error_handlers`** (2O design §4). Work a
+  framework starts on a clock, and the exceptions a module answers, each in a table of its own
+  with the full derive → render → export chain: two engine styles (`scheduled_work`,
+  `error_advice`), two catalogs (`spring-scheduling.yml`, `spring-advice.yml`), two D01 tables,
+  two bundle artifacts and two document sections. **Neither reaches `endpoints`, and that is the
+  design** — the endpoint table is wire-true, a scheduled method speaks no protocol and has no
+  address, and an error handler is not a boundary anyone can address but what happens inside one
+  that already exists. Giving either a wire identity would invent a route nothing serves.
+  Schedule expressions are carried verbatim, with a property placeholder reported `unresolved`
+  rather than substituted; an error handler's exception comes from the annotation's value, else
+  from a parameter this workspace can PROVE is a throwable. Both tables are reset once per
+  resolve from the pipeline, never by the engine, so a second catalog describing the same family
+  cannot erase the first's rows.
+
+- **`protocol` and `direction` may be ABSENT from a catalog, and only from a non-wire one**
+  ([D02](docs/components/D02-catalog-schema.md) §1). Absence is a claim — "this catalog derives
+  nothing addressable" — checked in `resolve/endpoints.py`, which refuses a wire style declaring
+  neither and a non-wire style declaring either. A value outside D00's closed sets is still
+  refused at the loader: a typo is not an absence. Writing one of the twelve protocols on a
+  scheduling catalog to satisfy a required field would have put a wire claim in a shipped file
+  that nothing reads and every reader believes.
+
 - **CP-12: the framework surfaces the round-1b fix pass mirrors are measured**
   (`scripts/probes/cp12_sweep_round1b.md`). Eight Class A Majors share one shape — the catalog
   encodes a SUBSET of the framework's surface and no COVERAGE row names the rest — and CP-10's

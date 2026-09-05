@@ -207,6 +207,7 @@ backwards from the system architecture document:
 | Naming things | `symbols` for the symbols those tables reference |
 | Honest rendering | The trust fields on every row above |
 | **The enrichment tier's inbox** | `open_questions` — what no programmatic pass could answer |
+| **The non-wire surfaces** | `scheduled_work` and `error_handlers` — what a service runs on a clock, and what it answers an exception with |
 
 **The sequence-diagram row is the one to notice.** Traces are a named query, not a table
 ([D01](D01-graph-schema.md)): they travel implicitly, as the tables `trace_of` walks over.
@@ -248,6 +249,30 @@ never look observed" forbids. **No row reaches the renderer that way today** —
 runs after the merge and answers every row, so the pair holds live — but the rendering rule
 is written against the column's contract rather than against today's data, which is what
 makes it still correct on the day a format is stamped before the merge.
+
+## 5a-i. The two non-wire tables
+
+**`scheduled_work` and `error_handlers` ([D01](D01-graph-schema.md) §3) travel like any
+other graph table** — `graph/scheduled_work.parquet` and `graph/error_handlers.parquet`,
+each exported through its own named query so the row order is the one NFR-1 already fixed,
+and each named in `contents.tables`. Neither is masked on the way out, and the reason is
+that neither carries a masked column: the export projections mask the columns that can hold
+a whole URL (`endpoints.path`/`.peer`, the ledger's `path`) and `resolved_config`'s values,
+and a trigger expression, a scope attribute and a status are none of those.
+
+**The rendered module document shows both as their own sections**, "Scheduled work" and
+"Error handling", below the endpoint tables. Unlike "Open questions" above, **both render
+even when empty**, with the endpoint tables' own "None found." — the difference is what an
+absent section would mean. An empty inbox is not a finding; "this service runs no
+background work" and "this service declares no error contract" both are, and a section that
+simply disappears leaves a reader unable to tell that answer from a Sextant that never
+looked.
+
+The error-handling table leads with the exception, because that is what a reader looks a
+row up by, and prints `Declared by` beside `Scope` because the two are one claim in two
+columns ([D01](D01-graph-schema.md) §3): read alone, either gets a controller's own handler
+and an application-wide advice the wrong way round. A NULL in any optional column renders
+as an em dash, never a blank cell — the same rule Media already keeps.
 
 **Declared shapes render through the existing shape tables unchanged**, with one addition:
 a field's `field_number` rides beside its wire name as `totalAmount (1)` where the format

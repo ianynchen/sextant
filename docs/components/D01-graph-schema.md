@@ -517,6 +517,57 @@ own unanswered questions back would be answering them.
 differ only in their answers — and finally `evidence`. Two rows agreeing on all six are the
 same question asked twice and may appear in either order without changing a byte.
 
+### Non-wire surfaces
+
+| Table | Holds |
+|---|---|
+| `scheduled_work` | The scheduled method, the trigger kind, the declared expression |
+| `error_handlers` | The handler, its container and scope, the exception, the status, the response shape |
+
+**Two tables rather than two more `endpoints` rows, and that is the whole design**
+(Phase 2O design §4). `endpoints` is wire-true: every row is a boundary something can
+address, and its identity is `(protocol, direction, method, path)`. A method the framework
+calls on a clock speaks no protocol and has no address; an exception handler is not a
+boundary at all — it is what happens inside one that already exists. Giving either a wire
+identity would invent a route nothing serves, which is the failure this schema exists to
+prevent. So both families get their own table, with no protocol, direction, method or path
+column between them.
+
+**`scheduled_work`** carries `handler` (the method's own symbol), `trigger` (the framework's
+own word for the schedule kind — `cron`, `fixedRate`, `fixedDelay`, catalog vocabulary
+rather than one of [D00](D00-fact-schema.md) §4's closed sets), `expression` (the declared
+schedule **verbatim** — a cron string normalised or a delay re-spelled names a different
+schedule from the one that runs), `resolution`, `evidence` and `catalog_id`. `resolution`
+is `unresolved` where the expression is a property placeholder this analysis did not
+substitute, with the placeholder carried exactly as written; the value comes from
+configuration a deployment overwrites, so substituting one would publish a schedule the
+repository cannot know.
+
+**`error_handlers`** carries `handler`, `advice` (the type that declares it), `declared_by`,
+`scope`, `exception`, `status`, `response_shape`, `resolution`, `evidence` and `catalog_id`.
+One row per `(handler, exception)` pair: each is separately answerable, and an array in one
+cell joins against nothing. `declared_by` — the class-level annotation that made `advice` a
+handler container — is load-bearing rather than provenance: an advice class declaring no
+narrowing attributes applies to **every** controller in the application, while a
+controller's own handler applies to **that** controller, and both carry a NULL `scope`. A
+reader with only `scope` would read the second as the first and widen one controller's
+error contract across the estate. `status` and `response_shape` are NULL where nothing
+declared them, and NULL is an answer: a status computed inside a response-entity body is a
+stated boundary, never a gap the column fills in.
+
+**Both are replaced whole per resolve, and emptied once per resolve rather than by the
+engine that writes them** — the `open_questions` rule, for the same reason: more than one
+catalog may describe the same family (a second scheduler, a second framework's advice
+mechanism), and a reset owned by the engine would run once per catalog and leave only
+whichever ran last. Both are pre-declared empty like `endpoints` and `shapes`, so the query
+answers with an empty result rather than an error on a module that schedules nothing.
+
+**Neither feeds a root set.** [D00](D00-fact-schema.md) §4 documents a `root_kind` set whose
+members include `scheduled`, and §5 below documents a `trace_of` walk. Neither exists in the
+implementation, so a scheduled row is not a root today and nothing traverses from one.
+**That becomes wrong the moment a `root_kind` producer ships**, at which point these rows
+must be re-examined as roots rather than left as a table nobody walks.
+
 ---
 
 ## 4. Search

@@ -144,6 +144,8 @@ _SINGLE_CALL = "sextant/application/resolve/engines/single_call.py"
 _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py"
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
 _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
+_SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
+_ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 
 
 GUARDS: dict[str, Guard] = {
@@ -413,6 +415,68 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    # --- the two NON-WIRE styles (2O design §4) ----------------------------
+    "scheduled_work.declaration-is-a-method": Guard(
+        what="a schedule annotation counts only where its target is a METHOD — a use on an "
+        "annotation TYPE is a composition, not scheduled work",
+        why="`@Scheduled` is `@Target`-legal on an annotation type, which is how a module "
+        "composes its own `@Nightly`. No method runs there, so publishing it reports work on "
+        "a clock nobody set — `derive_endpoints.handler-is-a-method` is the same conjunct on "
+        "the wire side, and the same fabrication when it is gone",
+        edits=(
+            Edit(
+                path=_SCHEDULED_WORK,
+                find="        if target not in methods:",
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "error_advice.container-gate": Guard(
+        what="a handler method counts only where its declaring type is a handler CONTAINER — "
+        "advice, or a controller",
+        why="the framework finds handler methods by first finding the container, so a handler "
+        "annotation on an ordinary service registers nothing. A row there reports an error "
+        "contract the running system never answers with, and has to INVENT `declared_by` and "
+        "`scope` to do it, since there is no container declaration to read either from",
+        edits=(
+            Edit(
+                path=_ERROR_ADVICE,
+                find="        return self.containers.get(owner)",
+                replace='        return self.containers.get(owner) or _Container("", None)',
+            ),
+        ),
+    ),
+    "error_advice.handler-annotation-is-declared": Guard(
+        what="a method of a container is a handler only where it carries the catalog's handler "
+        "annotation",
+        why="advice is a CONTAINER, not a claim that every method in it answers for an "
+        "exception. Without the annotation conjunct an ordinary helper taking an exception "
+        "argument — a logger, a mapper — is published as the module's error contract for that "
+        "exception",
+        edits=(
+            Edit(
+                path=_ERROR_ADVICE,
+                find='            if row["annotation"] == handler_fqn and str(row["target"]) '
+                "in methods",
+                replace='            if str(row["target"]) in methods  # guard disabled',
+            ),
+        ),
+    ),
+    "error_advice.exception-is-required": Guard(
+        what="a handler whose exception types could not be read derives no row",
+        why="the weakening is not deleting a check — the row-minting loop simply iterates zero "
+        "times — but publishing the handler at the EMPTY exception, which is what "
+        '"we could not read it" becomes the moment the requirement is relaxed: an error '
+        "contract for an exception nobody named, at `resolved`/`compiler`. The "
+        "`supertype_dispatch.address-is-required` shape, one table over",
+        edits=(
+            Edit(
+                path=_ERROR_ADVICE,
+                find="        for exception in rules.exceptions_of(method):",
+                replace='        for exception in rules.exceptions_of(method) or [""]:',
+            ),
+        ),
+    ),
     # --- the call-site insert ---------------------------------------------
     "derive_call_endpoints.addresses-nothing": Guard(
         what="a `resolved` row whose address is empty and whose `peer` is NULL names no "
@@ -478,6 +542,20 @@ GUARDS: dict[str, Guard] = {
     # (`test_an_endpoint_class_with_no_operation_annotation_derives_nothing`)
     # now says plainly that its emptiness has two independent causes and pins
     # neither.
+    "spring-scheduling.triggers-are-the-schedule-attributes": Guard(
+        what="`triggers` names the attributes that ARE a schedule, and nothing else",
+        why="`initialDelay` is a real `@Scheduled` attribute, it is a duration, and it sits "
+        "beside the rate it delays — it is not a schedule. Reading it publishes the wait "
+        "before the FIRST run as the interval between EVERY run: a clock the framework never "
+        "ticks on, at `resolved`/`compiler`",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-scheduling.yml",
+                find="    fixedDelay: fixedDelay",
+                replace="    fixedDelay: fixedDelay\n    initialDelay: fixedDelay",
+            ),
+        ),
+    ),
     "spring-sqs.path-from-is-the-destination-aliases": Guard(
         what="`path_from` names the destination attribute under both its spellings, and "
         "nothing else",

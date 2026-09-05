@@ -405,7 +405,7 @@ the gap list:
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ 4A 3B 5C | ◐ 2A 2B | ◐ — | ◐ — | ◐ — | ◐ 1A |
+| **Java / Kotlin** | ✅ ASM | ◐ 4A 3B 4C | ◐ 2A 2B | ◐ — | ◐ — | ◐ — | ◐ 1A |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -419,7 +419,7 @@ SNS and Redis are **out of scope by decision**, not oversight — each would be 
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ 1A | ◐ 1A 2B | ◐ 1A | ◐ 1B | ◐ 1A 1B | 2A 2B 1C |
+| **Java / Kotlin** | ◐ 1A | ◐ 1A 2B | ◐ 1A | ◐ 1B | ◐ 1A 1B | ◐ 2A 2B 1C |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -452,11 +452,12 @@ the topic is a constructor argument of a *different object*; and Spring Cloud St
 SmallRye put the topic in a properties file under a key derived from a bean name. A cell
 reading "A" would have been true and useless.
 
-**Java REST inbound is still the largest gap spread in the document, at `4A 3B 5C`** — a
+**Java REST inbound is still the largest gap spread in the document, at `4A 3B 4C`** — a
 dozen distinct ways of declaring an HTTP endpoint in one language that we do not yet read,
 beside the many we do. (The prose here read `8A 8B 5C` until Phase 2O Task 7b, a
 hand-written headline left behind by the phases that burned it down; the number above is
-the generator's, like every cell in the matrices.) That spread, more than anything here, is
+the generator's, like every cell in the matrices, and it lost a `C` in Task 8 when
+`@ControllerAdvice` stopped being one.) That spread, more than anything here, is
 the argument for catalogs being data.
 
 **SSE is the worst column in either matrix**, and the only one worse in every language than
@@ -844,7 +845,13 @@ is, what it costs.
 | Java | Data REST — REACTIVE repository contracts (`ReactiveCrudRepository`…) | Data REST is built on Spring MVC; no reactive store was probed | — | **Boundary — not enumerated**, so nothing derives. Absent evidence, produce nothing |
 | Java | Data REST — projections, excerpts, HAL affordances, `@CrossOrigin`, event handlers, QueryDSL web support | each changes the representation or adds routes | — | **C — stated boundaries** (2O design §2c) |
 | Java | Data REST — the `HEAD`/`OPTIONS` verbs and the `/{basePath}/search` index route it also serves | observed live, deliberately not derived | — | **Boundary — §2b's table is what ships** |
-| Java | `@ControllerAdvice` + `@ExceptionHandler` | defines the error contract of every endpoint | — | C |
+| Java | `@ControllerAdvice` / `@RestControllerAdvice` + `@ExceptionHandler` | defines the error contract of every endpoint | `error_advice` | ✅ **shipped** (2O Task 8) — into `error_handlers`, its own table, never `endpoints`: an error handler is not a boundary anyone can address. Advice class, `declared_by`, scope attributes verbatim, exception type, status and response shape |
+| Java | `@ExceptionHandler` declared inside a CONTROLLER | Spring scopes such a handler to that controller alone, where an advice class declaring no attributes applies to every controller | `error_advice` | ✅ shipped — the two are told apart by `declared_by`, because both carry a NULL `scope` and reading `scope` alone would widen one controller's contract across the application |
+| Java | Error handling — a module-local stereotype composed from `@ControllerAdvice` (or from `@Controller`/`@RestController`) | the framework's own container test is meta-annotation aware, the same `AnnotatedElementUtils` rule the handler gate above uses | `error_advice` | ✅ shipped — through the composition pre-pass. A composed annotation whose TYPE lives in an unscanned jar is the pre-pass's own stated boundary, unchanged here |
+| Java | Error handling — the exception type taken from the handler's PARAMETER, where `@ExceptionHandler` names none | the framework asks whether the parameter is assignable to `Throwable` | `error_advice` | ◐ **shipped, narrower than the framework's rule.** A parameter is read as an exception only where the chain is READABLE — it IS one of the catalog's declared roots, or its own scanned `superclass` chain reaches one. A handler whose exception comes from an unscanned jar derives **nothing** from that parameter. **UNDER-reports**, which is the only safe direction: nothing but a throwable reaches a throwable root, so this can never publish an ordinary argument as a handled exception. Closes when a dependency's hierarchy is scannable (`extract_libraries`, a USER ACTION documented in the usage docs) |
+| Java | Error handling — a status set inside a `ResponseEntity` body (`ResponseEntity.status(NOT_FOUND).body(…)`) | body analysis, not a declaration | — | **Boundary — `status` is NULL, deliberately** (2O design §4b). Reading it is `fluent`-style body analysis that derives no endpoint. NULL is an answer here rather than a gap: inventing a status would present a value nothing declared as one the framework returns |
+| Java | Error handling — `@ResponseStatus` on the EXCEPTION CLASS | the framework's default for every handler that declares none | `error_advice` | ◐ shipped **only where that class is in this module's own facts.** A third-party exception carries its annotation in a jar this workspace never scanned, so such a handler's `status` is NULL. Same escape as the row above it: `extract_libraries` |
+| Java | Error handling — `ResponseEntityExceptionHandler` subclasses, `@ExceptionHandler` on an interface or superclass, `ErrorController`, `ProblemDetail` bodies | four more ways the error contract is declared, none probed | — | **Boundary — derives nothing.** Absent evidence, produce nothing (§8); each needs its own probe before it can be catalogued |
 | Java | Jakarta Servlet — `@WebServlet` on an `HttpServlet` subclass | address on the TYPE annotation, verb from the overridden `doXxx`; every `urlPatterns` entry is its own endpoint | `supertype_dispatch` | ✅ **shipped** (2O Task 7b) — every row of CP-9 confirmed live on Apache Tomcat 10.1.50, 11.0.24 AND 9.0.121 (`scripts/probes/cp9_servlet_shapes.md`), each column identified by the container the process itself reported. `value` and `urlPatterns` are read as the aliases they are. **Read with the boundary rows below: the annotation is one of THREE registration routes, a deployment descriptor can switch it off wholesale, and the verbs the container serves implicitly are deliberately not derived** |
 | Java | Servlets — `web.xml` `<servlet-mapping>` and programmatic `ServletContext.addServlet` | the other two registration routes the Servlet specification defines, both registering the same servlets with no annotation anywhere | — | **Boundary — derives nothing, for either.** A WAR that maps everything in `web.xml` reports zero servlet endpoints, and neither route was probed. §8.1 rule 3: the shape is named here rather than left silent. Closes for `web.xml` when a deployment-descriptor reader exists, and for `addServlet` when a call-site catalog is written and probed |
 | Java | Servlets — a module whose `WEB-INF/web.xml` declares `metadata-complete="true"` (or a `web-app` version below 3.0) | CP-9 rows 33-34: the same classes, the same container, one descriptor — `GET /metadata-complete/getonly` is a **404** on all three, beside a **200** for the servlet that same descriptor registers by hand, which is the positive control separating a suppressed scan from a context that never started. The specification switches the annotation deployment scan off wholesale, so every `@WebServlet` in the module is inert | `supertype_dispatch` | **Boundary — OVER-reports EVERY servlet row in such a module**, which is the anti-fabrication rule's own direction and the reason this row sits beside the under-report above rather than among them. Nothing in the pipeline reads `WEB-INF/web.xml`, so no fact can suppress a row and the catalogs apply unconditionally; the whole servlet surface of a metadata-complete WAR is published and served by nothing. Unlike Actuator's `exposure.include` this is not deployment configuration we cannot see — it is a file in the module's own tree we chose not to read. **Falsified by** a metadata-complete module appearing in an export; closed by a deployment-descriptor reader, which closes the `web.xml` registration route above at the same time |
@@ -1881,7 +1888,13 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 
 | Language | Mechanism | Shape | Tier |
 |---|---|---|---|
-| Java | `@Scheduled`, Quartz | `annotation` | A |
+| Java | `@Scheduled` — `cron`, `fixedRate(String)`, `fixedDelay(String)` | `annotation` | ✅ **shipped** (2O Task 8) — into `scheduled_work`, its own table, never `endpoints`: a method the framework calls on a clock speaks no protocol and has no address. Handler, trigger kind, expression **verbatim** |
+| Java | `@Schedules` — two or more `@Scheduled` on one method, folded by javac | `annotation` (nested) | ✅ shipped — through capability 9.16. The catalog REQUIRES that capability rather than degrading: on a scanner without it a two-schedule method would carry no readable trigger while its single-schedule neighbour carried its own, so the whole catalog is skipped **visibly** instead |
+| Java | `@Scheduled(cron = "${orders.sweep.cron}")` — a property placeholder | `annotation` | ◐ shipped as **`unresolved`, expression carried verbatim.** The value comes from configuration a deployment overwrites, so it is never substituted here. Closes when a non-wire row can read `resolved_config`, which needs an environment column this table does not have |
+| Java | `@Scheduled(cron = <the framework's disable sentinel>)` | a cron value the framework reads as "never schedule this" | `annotation` | **Boundary — OVER-reports one row.** Nothing here treats any cron value as a disable, because no probe has measured which value the framework so reads, and encoding one from memory is what §8.1 forbids. Bounded to declarations that write it. **Falsified by** a disabled schedule appearing in an export; closes with a probe and one catalog key |
+| Java | `@Scheduled` naming two trigger attributes at once, or none | what the container does at startup with such a declaration | `annotation` | **Boundary — one row per attribute written, and none where none is.** Whether the container refuses to start is a startup question a repository cannot answer, so each declared trigger is reported as the code fact it is. A declaration naming no trigger derives nothing: there is no expression to carry |
+| Java | `initialDelay`, `initialDelayString`, `zone`, `timeUnit`, `scheduler` | real `@Scheduled` attributes that are not a schedule | `annotation` | ✅ shipped — **none of them is read**, and `spring-scheduling.triggers-are-the-schedule-attributes` measures that a near-miss notices if one ever is. Reading `initialDelay` would publish the wait before the FIRST run as the interval between EVERY run |
+| Java | Quartz `@DisallowConcurrentExecution` / `Job` implementations / `JobDetail` builders | a second scheduler, writing to the same `scheduled_work` table | `annotation` + `fluent_chain` | A for the annotation half, B for the builder half — neither catalogued |
 | Java | Temporal / Cadence `@WorkflowInterface`, `@ActivityInterface` | `annotation` | A |
 | Java | **Vert.x event bus** `vertx.eventBus().send("addr", m)` / `.consumer("addr", h)` | in-process pub/sub with **string addresses**, matchable like topics | `registration_call` | B |
 | Java | Spring Integration `@ServiceActivator`, `@InboundChannelAdapter` | channels, not destinations | `config_join` | B — rides 2F's `config_join` once catalogued |
