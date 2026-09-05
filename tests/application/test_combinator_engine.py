@@ -2052,6 +2052,8 @@ def test_the_router_builder_dsl_derives_nothing_and_that_is_a_stated_boundary(tm
     assert rows == []
 
 
+@pytest.mark.declines("spring-webflux-router")
+@pytest.mark.pins("derive_call_endpoints.addresses-nothing")
 def test_a_request_predicate_that_is_not_a_verb_factory_names_no_verb_or_address(
     tmp_path: Path,
 ):
@@ -2068,25 +2070,32 @@ def test_a_request_predicate_that_is_not_a_verb_factory_names_no_verb_or_address
     `route` call, same handler, same string argument shape — so it measures the
     predicate factory and nothing else.
 
-    A row IS derived here, and asserting that rather than emptiness is the
-    honest form: `RouterFunctions.route` really was called, so a route exists,
-    and the engine's own answer for a tree whose constraints it cannot read is
-    a row with no identity at all. What must be absent is the VERB and the
-    ADDRESS — which is what a vocabulary that swallowed every factory would
-    have fabricated. It discriminates: adding an `accept` row to `verbs` makes
-    this fail with `("ACCEPT", "application/json")`.
+    **NOTHING is derived here, and this test used to assert the opposite**
+    (round-1 review, MAJOR 6). It asserted
+    `(None, None, <handler>, "resolved")` — a `resolved`/`compiler` inbound-HTTP
+    row with a NULL method AND a NULL path — and defended it as "the engine's
+    own answer for a tree whose constraints it cannot read". A row that names
+    no verb and no address names no endpoint, and at the top evidence tier
+    nothing downstream can tell it from an observation. That is precisely what
+    mechanism 3's addresses-nothing gate exists to stop on the annotation path;
+    `derive_call_endpoints.sql` had no such gate, and NULL paths skip its dedup
+    key, so N such routes inserted N undeduped rows.
 
-    The row carries `resolution: resolved` and that is this engine's own
-    pre-existing rule rather than anything this finding changed: no capture was
-    reached and failed, so nothing narrows it. Asserted verbatim rather than
-    softened, so a later change to that rule shows up here as a diff."""
+    The under-report this trades for is real and is stated in
+    `docs/COVERAGE.md`: `route(accept(...), handler)` IS a route, served at
+    every path with that Accept header, and we cannot express it. Silence is
+    the honest answer; a boundary claiming nothing was the dishonest one.
+
+    It still measures the verb vocabulary and nothing else: adding an `accept`
+    row to `verbs` makes this fail with `("ACCEPT", "application/json")`, which
+    is a fabricated verb AND a fabricated address."""
     facts: list = [_method_symbol(LIST_ORDERS)]
     facts += _java_route(0, "accept", "application/json", LIST_ORDERS)
     workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
     identities = _identities(_rows(workspace))
     workspace.close()
 
-    assert identities == [(None, None, _MODULE + LIST_ORDERS, "resolved")]
+    assert identities == []
 
 
 def _kotlin_route(ordinal: int, verb: str, path: str, handler: str) -> CallSiteFact:

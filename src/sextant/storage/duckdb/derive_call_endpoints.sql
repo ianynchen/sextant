@@ -47,7 +47,36 @@ FROM (SELECT UNNEST(
         request_shape VARCHAR, response_shape VARCHAR, consumes VARCHAR, produces VARCHAR
     )[]
 ) AS r)
-WHERE NOT EXISTS (
+-- THE ADDRESSES-NOTHING GATE, mechanism 3's twin on the call-site side.
+--
+-- `derive_endpoints.sql` has carried one since `A-C1`: a row whose address is
+-- empty and whose `peer` is NULL names no endpoint, and publishing one at
+-- `resolved`/`compiler` presents a boundary the running system does not serve
+-- as an observation. This file had none, and the asymmetry was live —
+-- `combinator` sets `resolution: resolved` whenever nothing poisoned the read,
+-- and `_path_of` returns NULL when a folded route accumulated no path part, so
+-- `RouterFunctions.route(RequestPredicates.accept("application/json"), h)`
+-- inserted exactly that row. NULL paths also skip the dedup key below (SQL's
+-- `NULL = NULL` is unknown), so N such routes inserted N of them.
+--
+-- SCOPED TO `resolved`, and the scope is the whole difference between this
+-- gate and a silent under-report. An `unresolved` row with no path is a real,
+-- distinct fact — "this method calls something whose destination nobody could
+-- read" — and the paragraph above says so of the dedup for the same reason. A
+-- `resolved` row with no path is the opposite: it claims the address was read
+-- and that there is none. `derive_endpoints.sql`'s twin needs no such scope
+-- only because its `path` is a composed string that is never NULL, and its
+-- one `unresolved` shape (an expression) always carries the expression text.
+--
+-- A `peer` alone is still an address: a client chain that resolved a host and
+-- no path is a call to that service's base address, which is real.
+--
+-- This stops being right the day an engine can derive a row whose identity is
+-- carried by neither `path` nor `peer` — a protocol addressed by something
+-- else entirely — at which point the answer belongs beside `serves_urls` in
+-- `domain/paths.py`, where the protocol question already lives.
+WHERE NOT (r.resolution = 'resolved' AND coalesce(r.path, '') = '' AND r.peer IS NULL)
+  AND NOT EXISTS (
     SELECT 1 FROM endpoints existing
     WHERE existing.protocol  = r.protocol
       AND existing.direction = r.direction

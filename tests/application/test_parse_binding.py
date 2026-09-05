@@ -571,6 +571,14 @@ def test_open_questions_deterministic(tmp_path: Path):
     rows sharing a real path would collapse into one before this pass ever
     saw them. Two listeners on one destination reach the same tie through
     `derive_endpoints.sql` in the live fixture.
+
+    **The seeded rows are `unresolved`, and that is what a listener whose
+    destination could not be read actually is** — `single_call` and `fluent`
+    both stamp `resolved` only where the address argument itself resolved. They
+    were `resolved` here, which `derive_call_endpoints.sql`'s addresses-nothing
+    gate now refuses: a row claiming its address was READ and that there is
+    none names no endpoint. The tie this test is about is untouched, because
+    the tie is in the path and the question kind.
     """
     facts: list[Fact] = [
         _marked(SCROLL),
@@ -595,8 +603,8 @@ def test_open_questions_deterministic(tmp_path: Path):
         workspace = _workspace(directory, *facts)
         _seed(
             workspace,
-            {"path": None},
-            {"path": None, "handler": _handler("onOther")},
+            {"path": None, "resolution": "unresolved"},
+            {"path": None, "resolution": "unresolved", "handler": _handler("onOther")},
         )
         bind_parse_calls(workspace, [_catalog()])
         return workspace.query("open_questions")

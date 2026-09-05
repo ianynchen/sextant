@@ -413,6 +413,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    # --- the call-site insert ---------------------------------------------
+    "derive_call_endpoints.addresses-nothing": Guard(
+        what="a `resolved` row whose address is empty and whose `peer` is NULL names no "
+        "endpoint, and is not inserted — mechanism 3's twin on the call-site side",
+        why="`combinator` stamps `resolved` whenever nothing poisoned the read and returns a "
+        "NULL path when a folded route accumulated none, so a WebFlux route whose only "
+        "predicate is a media constraint inserted an inbound-HTTP row with a NULL method AND "
+        "a NULL path at `resolved`/`compiler` — and NULL paths skip the dedup key, so N such "
+        "routes inserted N of them",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/derive_call_endpoints.sql",
+                find="WHERE NOT (r.resolution = 'resolved' AND coalesce(r.path, '') = ''"
+                " AND r.peer IS NULL)",
+                replace="WHERE TRUE  -- guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     # --- guards that live in a shipped CATALOG rather than in an engine ----
     #
     # A conjunct a catalog states is a guard exactly as an engine's `if` is:

@@ -192,6 +192,31 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **The call-site insert had no addresses-nothing gate, and `combinator` reached it**
+  (round-1 review, MAJOR 6). `derive_endpoints.sql` has carried mechanism 3's gate since
+  `A-C1` — a row whose address is empty and whose `peer` is NULL names no endpoint, and
+  publishing one at `resolved`/`compiler` presents a boundary the running system does not
+  serve as an observation. `derive_call_endpoints.sql`, which every call-site engine inserts
+  through, had none: its only `WHERE NOT` was the dedup.
+
+  `combinator` stamps `resolution: resolved` whenever nothing poisoned the read and returns a
+  NULL path when a folded route accumulated no path part, so
+  `RouterFunctions.route(RequestPredicates.accept("application/json"), handler)` inserted an
+  inbound-HTTP row with a NULL method AND a NULL path, at the top evidence tier — and NULL
+  paths skip the dedup key, so N such routes inserted N of them. Round 1b called this
+  pre-existing and out of scope; it is the exact shape mechanism 3 exists for, and mechanism 3
+  made the asymmetry sharper rather than softer.
+
+  The gate is **scoped to `resolved`**, and the scope is the whole difference between a gate
+  and a silent under-report: an `unresolved` row with no path is a real, distinct fact — "this
+  method calls something whose destination nobody could read" — which the same file's dedup
+  paragraph already turns on. A `resolved` row with no path claims the address was read and
+  that there is none. The under-report it trades for is stated in `docs/COVERAGE.md`: a
+  constraint-only WebFlux route IS served and we cannot express its address.
+
+  The test that asserted the old row now asserts emptiness, and `scripts/guard_check.py` kills
+  it with the gate disabled. `spring-webflux-router` leaves the near-miss backlog.
+
 - **`A-M9` closed one of FOUR WebFlux routing surfaces and COVERAGE claimed all four**
   (round-1 review, MAJOR 3). `docs/COVERAGE.md` listed
   `RouterFunctions.route().GET(…)` — the BUILDER DSL — as "✅ shipped", and the `A-M9` pass
