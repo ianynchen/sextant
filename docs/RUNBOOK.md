@@ -399,3 +399,29 @@ that; one upstream question would have.
 **The lesson is not "be more careful."** Every individual fix was correct, and
 correctness at the instance level is precisely what hides the cause — each fix
 feels like progress and leaves the generator running.
+
+### A shared working tree is a shared failure surface
+
+Three occurrences in one phase, one cause (GUIDELINES §13.9): agents and the
+controller share one working tree AND one git index, and the pre-commit hook
+validates the whole tree rather than the staged paths.
+
+1. An implementer's unformatted in-flight file blocked an unrelated docs commit.
+2. A second agent's bare `git commit` swept a first agent's staged files into
+   its own commit — caught only because that agent ran `git show --stat`
+   afterwards and recognised files it had not written.
+3. A **read-only reviewer**'s probe files, created under `tests/`, blocked the
+   controller's commit exactly as (1) did.
+
+**Explicit pathspecs stop contamination, not blocking.** After (2) the rule was
+"commit with `git commit -- <paths>`", which correctly prevents sweeping someone
+else's staged work — and (3) happened anyway, because the tree is shared whether
+or not your commit is scoped.
+
+**The tell for (3) specifically:** a reviewer is asked to verify by execution,
+execution means writing probes, and nothing in the brief said where to put them.
+A reviewer that leaves files in the repository has modified the tree it was asked
+to judge — which is a correctness problem before it is a hygiene one.
+
+Isolated worktrees would also solve this and were rejected on cost: several trees
+to merge is worse than one writer at a time.

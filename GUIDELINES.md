@@ -336,3 +336,13 @@ Phase 2O is the worked example, twice over:
 - **Four fabrications, four frameworks.** A gRPC endpoint minted from an ordinary `extends` pair; a module excluded because it published an artifact; an endpoint derived with an empty name; a message payload published as part of a destination. One cause: a rule matches on SHAPE and then publishes a specific MEANING, with nothing checking that the shape entails the meaning. Four separate fixes found it; one upstream question would have.  
 
 ---
+
+### 13.9 One writer per branch; everyone else reads or uses the scratchpad  
+
+Agents and the controller share **one working tree and one git index**. Only ONE agent may do write-related work on a branch at a time. Every other agent working that branch is **read-only**, and anything it needs to create — probe scripts, scratch fixtures, throwaway harnesses — goes to the session scratchpad, **never into the repository**.  
+
+This applies most sharply to reviewers. A review verifies by execution, which means writing probes; those belong in the scratchpad, because a reviewer that leaves files in `tests/` has changed the tree it was asked to judge.  
+
+**Why a shared tree is not survivable without this rule**, from three occurrences of one class in Phase 2O: an implementer's unformatted in-flight file blocked an unrelated docs commit, because the pre-commit hook validates the WHOLE tree rather than the staged paths; a second agent's bare `git commit` swept a first agent's staged files into its own commit; and a read-only reviewer's probe files blocked the controller's commit the same way as the first. Explicit pathspecs (`git commit -- <paths>`) stop the contamination but not the blocking — the tree is shared whether or not your commit is scoped.  
+
+Isolated worktrees would also solve it and are deliberately NOT the answer here: the merge cost of several trees exceeds the coordination cost of one writer.  
