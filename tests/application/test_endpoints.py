@@ -611,12 +611,17 @@ def test_a_catalog_declaring_no_naming_forms_derives_exactly_what_it_always_did(
     lets them ship without touching the behaviour of every catalog written
     before them.
 
-    The empty paths below are the PRE-2H behaviour, recorded here rather than
-    quietly fixed: an absent attribute defaulted to `''`. That is the bug the
-    next test removes, and it is only reachable by a catalog that asks for
-    none of the vocabulary that removes it.
+    The two declarations that name nothing derive NO ROW here, and the set
+    below is exactly the two that do. That is 2O Task 7's empty-name gate
+    rather than the naming vocabulary: an absent attribute still defaults to
+    `''`, but a catalog composing an OPAQUE NAME (no `path_separator`) has no
+    destination at all once that composition is empty, so the row is dropped
+    instead of published as an endpoint addressing nothing. Before the gate,
+    this same set carried a third member, the bare `''`. The next test shows
+    the other route out — `path_fallback`, which gives such a declaration a
+    real name instead of dropping it.
     """
-    assert _paths_of(tmp_path, _naming_forms_catalog()) == {"named", "member", ""}
+    assert _paths_of(tmp_path, _naming_forms_catalog()) == {"named", "member"}
 
 
 def test_an_absent_name_attribute_falls_back_to_the_constructs_own_name(
@@ -1679,14 +1684,20 @@ def _seam_facts(root: Path, prefix: str, suffix: str) -> None:
     )
 
 
-def _seam_path(tmp_path: Path, catalog: Catalog, prefix: str, suffix: str) -> str:
+def _seam_row(tmp_path: Path, catalog: Catalog, prefix: str, suffix: str) -> dict[str, object]:
+    """The whole derived row, for the tests that ask about a column the
+    composed path is not — `resolution`, above all."""
     _seam_facts(tmp_path / "facts", prefix, suffix)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
     [row] = workspace.query("endpoints")
     workspace.close()
-    return str(row["path"])
+    return dict(row)
+
+
+def _seam_path(tmp_path: Path, catalog: Catalog, prefix: str, suffix: str) -> str:
+    return str(_seam_row(tmp_path, catalog, prefix, suffix)["path"])
 
 
 @pytest.mark.parametrize(
@@ -1839,6 +1850,161 @@ def test_a_client_side_http_path_keeps_the_separator_the_declaration_wrote(tmp_p
     # the pair is what makes the boundary a boundary rather than an omission.
     inbound = _seam_catalog(path_separator="/")
     assert _seam_path(tmp_path / "c", inbound, "", "legacy/invoices") == "/legacy/invoices"
+
+
+@pytest.mark.parametrize(
+    ("prefix", "suffix", "composed"),
+    [
+        # A SpEL expression on the method annotation. The live shape:
+        # `@RabbitListener(queues = "#{ordersQueue.name}")`, where the queue's
+        # real name is a bean property this workspace never sees.
+        ("", "#{ordersQueue.name}", "#{ordersQueue.name}"),
+        # A property placeholder — the same claim, a different notation.
+        ("", "${orders.queue}", "${orders.queue}"),
+        # On the PREFIX half, which is the same defect one level out: a
+        # class-level annotation whose destination is an expression.
+        ("#{prefixBean.name}", "", "#{prefixBean.name}"),
+        # An expression EMBEDDED in an otherwise literal address. The address
+        # is unknown as a whole, not merely decorated, so the whole row is
+        # unresolved rather than resolved-with-a-hole.
+        ("", "orders.#{env.suffix}", "orders.#{env.suffix}"),
+    ],
+)
+def test_an_annotation_derived_path_carrying_an_expression_is_published_unresolved(
+    tmp_path: Path, prefix: str, suffix: str, composed: str
+):
+    """§8: never assert what the evidence does not support.
+
+    An annotation-derived row used to be stamped `resolved`/`compiler`
+    unconditionally, so a destination the author wrote as an expression —
+    a SpEL `#{…}`, a property `${…}` — was published as though the characters
+    of the expression WERE the address. Nothing downstream can tell such a row
+    from an observation, which is the confidently-wrong-address failure the
+    composed-path guards already exist to prevent, reached by the one column
+    those guards do not set.
+
+    The expression is carried VERBATIM rather than dropped or resolved:
+    unresolved is an answer, and the expression is the only true thing known
+    about the address. Resolving it is not this pass's job and not any pass's
+    job today — the config ladder is a call-site mechanism this engine never
+    invokes, and its product is an expression rather than a value.
+    """
+    row = _seam_row(tmp_path, _seam_catalog(protocol="amqp"), prefix, suffix)
+
+    assert row["path"] == composed
+    assert row["resolution"] == "unresolved"
+    # The row is still evidence that this method listens on something: the
+    # handler, the protocol and the direction are all read, and only the
+    # address is unknown. Dropping it would lose all four.
+    assert row["evidence"] == "compiler"
+    assert row["handler"] is not None
+
+
+def test_an_expression_bearing_path_is_never_canonicalized_into_a_url(tmp_path: Path):
+    """The verbatim half of the rule above, on the one catalog shape that
+    would otherwise rewrite it.
+
+    An INBOUND HTTP catalog canonicalizes its composed address into the URL
+    the framework serves (2O design §8), and that rewrite must not touch an
+    expression: `#{…}` is a whole address nobody has resolved yet, so
+    prefixing a separator onto it would publish an address that is neither
+    what was written nor what will be served. `${…}` was already left alone
+    where the seam is stated; `#{…}` is the same claim in the other notation,
+    and the two are spelled together so neither can drift from the other.
+    """
+    http = _seam_catalog(path_separator="/")
+
+    assert _seam_path(tmp_path, http, "", "#{routeBean.path}") == "#{routeBean.path}"
+    assert _seam_path(tmp_path / "b", http, "", "${route.path}") == "${route.path}"
+    # The control: an ordinary address on the very same catalog IS
+    # canonicalized, so the two assertions above pin a boundary rather than a
+    # gate that has quietly stopped firing at all.
+    assert _seam_path(tmp_path / "c", http, "", "orders") == "/orders"
+
+
+def test_an_ordinary_annotation_derived_path_stays_resolved(tmp_path: Path):
+    """The inertness pin for the gate above: an address with no expression in
+    it is exactly as resolved as it always was. Without this, a gate that
+    matched too widely — every path, say — would look like a passing suite."""
+    row = _seam_row(tmp_path, _seam_catalog(protocol="amqp"), "", "orders.created")
+
+    assert row["path"] == "orders.created"
+    assert row["resolution"] == "resolved"
+
+
+@pytest.mark.parametrize(
+    ("constant", "prefix", "suffix", "composed"),
+    [
+        # The shipped shape: no type-level prefix at all, the whole address is
+        # the framework's fixed base plus the name the declaration states.
+        ("/actuator", "", "health", "/actuator/health"),
+        # Either half spelling the separator still composes exactly one — the
+        # constant is joined by the SAME deduping seam a type-level prefix is,
+        # rather than by a concatenation of its own.
+        ("/actuator/", "", "/health", "/actuator/health"),
+        # A type-level prefix as well: the constant goes in FRONT of it, and
+        # both seams dedupe.
+        ("/actuator", "/admin/", "/health", "/actuator/admin/health"),
+        # A declaration carrying no name of its own contributes nothing, and
+        # takes no separator with it.
+        ("/actuator", "/admin", "", "/actuator/admin"),
+    ],
+)
+def test_a_constant_prefix_joins_the_front_of_every_address_the_catalog_composes(
+    tmp_path: Path, constant: str, prefix: str, suffix: str, composed: str
+):
+    """A framework whose whole surface is served under one fixed base states
+    that base nowhere on the declaration — there is no annotation attribute to
+    read it from — so it is catalog data. Without it the derived address is
+    the bare id, which is a URL the framework does not serve (CP-5 row 5:
+    `/probe` is a 404 while `/actuator/probe` is a 200)."""
+    catalog = _seam_catalog(path_separator="/", path_prefix=constant)
+
+    assert _seam_path(tmp_path, catalog, prefix, suffix) == composed
+
+
+def test_a_catalog_declaring_no_constant_prefix_composes_exactly_what_it_always_did(
+    tmp_path: Path,
+):
+    """The inertness pin. Every catalog written before this word declares no
+    `path_prefix`, and the seam must reduce to the expression it was — a
+    parameter that changed the answer for a catalog that never asked for it
+    would move forty shipped files' addresses at once."""
+    catalog = _seam_catalog(path_separator="/")
+
+    assert (
+        _seam_path(tmp_path, catalog, "/api/gateway", "owners/{id}") == "/api/gateway/owners/{id}"
+    )
+    assert _seam_path(tmp_path / "b", catalog, "", "owners") == "/owners"
+
+
+@pytest.mark.parametrize("declared", ["", 5, True, ["/actuator"]])
+def test_a_constant_prefix_that_is_not_a_non_empty_string_is_refused_by_file(
+    tmp_path: Path, declared: object
+):
+    """The value is bound straight into every address this catalog composes,
+    so an unusable one prefixes characters nobody wrote — a wrong address
+    rather than a missing one, published at `resolved`/`compiler`. An
+    explicitly EMPTY prefix is refused rather than silently doing what
+    omitting the key already does, the `path_separator` precedent."""
+    with pytest.raises(CatalogError) as raised:
+        _seam_path(tmp_path, _seam_catalog(path_separator="/", path_prefix=declared), "", "health")
+
+    assert "path_prefix" in str(raised.value)
+    assert "invented-seam.yml" in str(raised.value)
+
+
+def test_a_constant_prefix_without_a_separator_is_refused_rather_than_concatenated_bare(
+    tmp_path: Path,
+):
+    """`/actuator` + `health` is `/actuatorhealth` — an address the framework
+    does not serve, and the confidently-wrong-address class again. The two
+    words are declared together or not at all."""
+    with pytest.raises(CatalogError) as raised:
+        _seam_path(tmp_path, _seam_catalog(path_prefix="/actuator"), "", "health")
+
+    assert "path_prefix" in str(raised.value)
+    assert "path_separator" in str(raised.value)
 
 
 def test_a_multi_character_separator_is_refused_by_file(tmp_path: Path):
@@ -3667,3 +3833,343 @@ def test_the_soap_template_catalog_skips_visibly_without_annotation_arguments(
     workspace.close()
 
     assert skipped == [SkippedCatalog("spring-ws-template", ("annotation_args",))]
+
+
+# --- 2O Task 7: the messaging and annotation catalogs, proved against the
+# REAL shipped files (no fixture module carries any of these annotations yet
+# — the 2H Task 5 precedent for `spring-websocket.yml`).
+#
+# Every catalog here is paired: one test that the rule FIRES, and one §10
+# near-miss per matcher asserting that NOTHING is derived. The near-miss is
+# derived from the rule's own conjuncts — an input satisfying every condition
+# but one — because a suite where every fixture demonstrates the rule firing
+# cannot tell you the rule declines correctly. This phase's worst defect was
+# exactly that shape: an engine fabricated an endpoint out of an ordinary
+# `extends` pair, and the golden fixture missed it by luck.
+
+_TASK_7_CAPABILITIES = frozenset(
+    {
+        "annotation_args",
+        "type_annotations",
+        "typed_signatures",
+        "call_site",
+        "string_constants",
+        "implemented_interfaces",
+        "superclass",
+        "generic_interfaces",
+        "chain_reconstruction",
+        "resolved_config",
+    }
+)
+
+
+def _shipped(catalog_id: str) -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == catalog_id)
+
+
+def _annotated_facts(
+    root: Path,
+    class_symbol: str,
+    method_symbol: str,
+    class_annotations: dict[str, dict] | None = None,
+    method_annotations: dict[str, dict] | None = None,
+) -> None:
+    """One class, one method on it, and whatever annotations each carries.
+
+    Annotations are keyed by the SCIP symbol form the facts carry (D00 §5a) —
+    the same form `_seam_facts` writes — so a test states the fqn once and the
+    catalog's own `_catalog_symbol` conversion is what has to agree with it.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/task7/Subject.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    facts: list[object] = [
+        SymbolFact(document_id="doc_1", symbol=class_symbol, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=method_symbol,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=class_symbol,
+            visibility="public",
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void")),
+        ),
+    ]
+    for target, declared in (
+        (class_symbol, class_annotations or {}),
+        (method_symbol, method_annotations or {}),
+    ):
+        for annotation, args in declared.items():
+            facts.append(
+                AnnotationFact(
+                    document_id="doc_1",
+                    target=target,
+                    retention="runtime",
+                    use=AnnotationUse(annotation=annotation, args=args),
+                )
+            )
+    write_fact_file(root / "Subject.jsonl", document, facts)
+
+
+def _rows_from(tmp_path: Path, catalogs: list[Catalog], **facts: object) -> list[dict[str, object]]:
+    _annotated_facts(tmp_path / "facts", **facts)  # type: ignore[arg-type]
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, catalogs, capabilities=set(_TASK_7_CAPABILITIES))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return rows
+
+
+_LISTENER_CLASS = "com/acme/task7/Subject#"
+_LISTENER_METHOD = "com/acme/task7/Subject#onMessage(sig_7a1)."
+_RABBIT_LISTENER = "org/springframework/amqp/rabbit/annotation/RabbitListener#"
+_RABBIT_HANDLER = "org/springframework/amqp/rabbit/annotation/RabbitHandler#"
+
+
+def test_a_rabbit_listener_derives_one_inbound_amqp_row_per_declared_queue(tmp_path: Path):
+    """The queue names arrive as a `String[]` on `queues` (javap, spring-rabbit
+    3.1.4), and a multi-queue listener is that many wire identities — one
+    method serving two queues is two destinations, not one."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-rabbit")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_RABBIT_LISTENER: {"queues": ["orders.q", "orders.dlq"]}},
+    )
+
+    assert {(r["protocol"], r["direction"], r["method"], r["path"]) for r in rows} == {
+        ("amqp", "inbound", None, "orders.q"),
+        ("amqp", "inbound", None, "orders.dlq"),
+    }
+    assert {r["handler"] for r in rows} == {_LISTENER_METHOD}
+
+
+def test_a_class_level_rabbit_listener_gives_its_queue_to_every_rabbit_handler(tmp_path: Path):
+    """The polymorphic shape: the class-level `@RabbitListener` carries no
+    method of its own to map, so it doubles as the prefix, and a
+    `@RabbitHandler` — which declares no queue attribute at all — reaches a
+    destination only through it. The queue name is composed BARE, with no
+    separator: a queue name has no segments, and a `/` here would invent a
+    destination no broker carries."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-rabbit")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_RABBIT_LISTENER: {"queues": ["orders.q"]}},
+        method_annotations={_RABBIT_HANDLER: {}},
+    )
+
+    assert [(r["protocol"], r["path"], r["handler"]) for r in rows] == [
+        ("amqp", "orders.q", _LISTENER_METHOD)
+    ]
+
+
+def test_a_rabbit_handler_on_a_class_carrying_no_listener_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the polymorphic matcher, negating its second
+    conjunct: the method is annotated exactly as a real handler is, and the
+    enclosing class carries no `@RabbitListener`.
+
+    `@RabbitHandler` states no destination of its own, so the only thing such
+    a row could carry is the EMPTY address — a resolved endpoint addressing
+    nothing, which is the confidently-wrong-address failure `path_fallback`
+    and the qualifier gate both already close from other directions. Spring
+    itself derives nothing here: `@RabbitHandler` outside a class-level
+    `@RabbitListener` is never registered with any container.
+    """
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-rabbit")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_RABBIT_HANDLER: {}},
+    )
+
+    assert rows == []
+
+
+_PULSAR_LISTENER = "org/springframework/pulsar/annotation/PulsarListener#"
+
+
+def test_a_pulsar_listener_derives_one_inbound_pulsar_row_per_declared_topic(tmp_path: Path):
+    """`topics` is a `String[]` and `topicPattern` a scalar `String` (javap,
+    spring-pulsar 1.2.11) — the `@KafkaListener` shape, so the same
+    scalar-or-array, first-alias-wins read serves both."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-pulsar")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_PULSAR_LISTENER: {"topics": ["persistent://public/default/orders"]}},
+    )
+
+    assert [(r["protocol"], r["direction"], r["path"]) for r in rows] == [
+        ("pulsar", "inbound", "persistent://public/default/orders")
+    ]
+
+
+def test_a_type_level_pulsar_listener_alone_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the Pulsar matcher, negating the conjunct that the
+    annotation sits on a METHOD. `@PulsarListener` is
+    `@Target({TYPE, METHOD, ANNOTATION_TYPE})`, but the framework ships no
+    class-level handler annotation for it to dispatch to, so a type-level use
+    registers no listener and names no destination for any method of the
+    class. A row here would give every method of an annotated class the
+    class's own topic — endpoints nobody serves."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-pulsar")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_PULSAR_LISTENER: {"topics": ["persistent://public/default/orders"]}},
+    )
+
+    assert rows == []
+
+
+_LEGACY_SPRING_SQS = "org/springframework/cloud/aws/messaging/listener/annotation/SqsListener#"
+_LEGACY_AWSPRING_SQS = "io/awspring/cloud/messaging/listener/annotation/SqsListener#"
+_CURRENT_SQS = "io/awspring/cloud/sqs/annotation/SqsListener#"
+
+
+@pytest.mark.parametrize("annotation", [_LEGACY_SPRING_SQS, _LEGACY_AWSPRING_SQS])
+def test_both_legacy_sqs_spellings_derive_the_same_inbound_row(tmp_path: Path, annotation: str):
+    """The annotation moved package twice and kept its shape: both legacy
+    spellings declare exactly `value()` as `String[]` and `deletionPolicy()`
+    (javap, spring-cloud-aws-messaging 2.2.6.RELEASE and
+    io.awspring.cloud:spring-cloud-aws-messaging 2.4.4). That is why the file
+    is pure data — one more `annotations` entry, no engine word."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-sqs-legacy")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={annotation: {"value": ["orders-queue"]}},
+    )
+
+    assert [(r["protocol"], r["direction"], r["path"]) for r in rows] == [
+        ("sqs", "inbound", "orders-queue")
+    ]
+
+
+def test_the_legacy_sqs_catalog_declines_the_current_annotation(tmp_path: Path):
+    """§10 near-miss for the legacy matchers: the CURRENT 3.x annotation is
+    the same simple name, the same `value` attribute and the same protocol —
+    everything but the package. `spring-sqs.yml` is the file that describes
+    it, and it is a different dependency coordinate; a legacy catalog that
+    also matched it would claim a module declares an artifact it does not,
+    and would double every current listener's row once the two catalogs
+    both ran."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-sqs-legacy")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_CURRENT_SQS: {"value": ["orders-queue"]}},
+    )
+
+    assert rows == []
+
+
+_ENDPOINT = "org/springframework/boot/actuate/endpoint/annotation/Endpoint#"
+_READ_OPERATION = "org/springframework/boot/actuate/endpoint/annotation/ReadOperation#"
+_WRITE_OPERATION = "org/springframework/boot/actuate/endpoint/annotation/WriteOperation#"
+_DELETE_OPERATION = "org/springframework/boot/actuate/endpoint/annotation/DeleteOperation#"
+
+
+@pytest.mark.parametrize(
+    ("operation", "verb"),
+    [(_READ_OPERATION, "GET"), (_WRITE_OPERATION, "POST"), (_DELETE_OPERATION, "DELETE")],
+)
+def test_an_actuator_operation_is_served_under_the_constant_prefix_with_its_own_verb(
+    tmp_path: Path, operation: str, verb: str
+):
+    """CP-5 rows 1-3, confirmed live on Boot 3.5.10 and 4.1.1: the address is
+    `/actuator/<id>` and the verb is the operation annotation's own. The id
+    lives on the TYPE and the verb on the METHOD, so neither half alone is an
+    endpoint — which is exactly why the catalog gates on both."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-actuator")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_ENDPOINT: {"id": "probe"}},
+        method_annotations={operation: {}},
+    )
+
+    assert [(r["protocol"], r["direction"], r["method"], r["path"]) for r in rows] == [
+        ("http", "inbound", verb, "/actuator/probe")
+    ]
+
+
+def test_an_endpoint_class_with_no_operation_annotation_derives_nothing(tmp_path: Path):
+    """§10 near-miss, and CP-5 row 6 measured rather than assumed: an
+    `@Endpoint` class whose methods carry no operation annotation serves
+    nothing — `GET /actuator/empty` was a 404 on both versions probed, and the
+    endpoint did not appear in the discovery document at all. A class-level
+    rule would have published `/actuator/empty` at `resolved`/`compiler`."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-actuator")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_ENDPOINT: {"id": "empty"}},
+    )
+
+    assert rows == []
+
+
+def test_an_actuator_operation_outside_an_endpoint_class_derives_nothing(tmp_path: Path):
+    """§10 near-miss on the other conjunct: the operation annotation is
+    present and the class gate is not. The operation annotations carry no
+    address at all, so such a row could only ever be `/actuator` itself —
+    the discovery document, which this method does not serve."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-actuator")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_READ_OPERATION: {}},
+    )
+
+    assert rows == []
+
+
+def test_a_web_filter_derives_nothing_from_any_shipped_catalog(tmp_path: Path):
+    """§10 near-miss for the STATED BOUNDARY rather than for one matcher.
+
+    `@WebFilter` is a servlet-container registration carrying `urlPatterns` —
+    an annotation that looks exactly like an address-bearing inbound mapping
+    and is not one: a filter intercepts URLs that other components serve, and
+    publishing its patterns as endpoints would invent a service surface out of
+    cross-cutting plumbing. No shipped catalog claims it, and this asserts that
+    against EVERY shipped catalog at once rather than against the one that
+    might have — the check that would have caught this phase's worst defect,
+    where an engine fabricated an endpoint out of an ordinary `extends` pair
+    and the golden fixture missed it by luck.
+
+    Servlet registration is Task 7b's subject, and `@WebFilter` is not in it.
+    """
+    rows = _rows_from(
+        tmp_path,
+        YamlCatalogSource(CATALOGS).load(),
+        class_symbol="com/acme/task7/AuditFilter#",
+        method_symbol="com/acme/task7/AuditFilter#doFilter(sig_7b2).",
+        class_annotations={
+            "jakarta/servlet/annotation/WebFilter#": {"urlPatterns": ["/api/*"]},
+        },
+    )
+
+    assert rows == []

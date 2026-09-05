@@ -87,6 +87,45 @@ here would restate those documents rather than add anything.
   — the annotation names no service — and files a `service_identity` question for any
   class it flags that no gRPC endpoint names as a handler, which is the published-stubs
   case that previously produced nothing at all.
+- **Five messaging and annotation catalogs** (2O Task 7): `spring-rabbit.yml`
+  (`@RabbitListener`, plus the class-level `@RabbitListener` + `@RabbitHandler` shape),
+  `spring-pulsar.yml` (`@PulsarListener`), `spring-rabbit-template.yml`
+  (`RabbitTemplate.convertAndSend`), `spring-sqs-legacy.yml` (both older `@SqsListener`
+  packages, so all three generations of the annotation now ship) and `spring-actuator.yml`
+  (`@Endpoint` + `@ReadOperation`/`@WriteOperation`/`@DeleteOperation`). Every annotation's
+  attribute shape was read off the real class files with `javap`, and the Actuator address
+  and verb rules were confirmed live against Boot 3.5.10 AND 4.1.1
+  (`scripts/probes/cp5_actuator_paths.md`, harness committed beside it).
+- **`address_arg_2` — a composite outbound destination** (`single_call`). AMQP's wire
+  identity is the exchange AND the routing key, which the one-address contract could not
+  express: a row now names a second capture and a catalog-declared `address_separator`
+  renders the pair as `exchange/routingKey`. An overload with no exchange is the routing key
+  alone, and an explicitly empty exchange renders as the routing key alone too, so the two
+  spellings of one destination stay one identity. If either half cannot be read the row
+  publishes NO address — half a composite identity is a different destination, not a partial
+  answer.
+- **`path_prefix` — a framework's constant base path** (`annotation_driven`). A catalog may
+  declare a fixed prefix that no annotation carries; it joins the front of the type-level
+  prefix under the same deduping seam. Refused at load without a `path_separator`, since the
+  two halves would otherwise concatenate bare.
+
+### Fixed
+
+- **An annotation-derived path carrying an expression is no longer published as an
+  observation** (§8). Every such row was stamped `resolved`/`compiler` unconditionally, so a
+  destination written as SpEL `#{…}` or a property `${…}` was published as though the
+  characters of the expression were the address. It now publishes `unresolved` with the
+  expression VERBATIM — uncanonicalized, and never resolved: the config ladder is a
+  call-site mechanism this derivation does not invoke. `domain/paths.py` learned the `#{`
+  notation beside the `${` it already refused to rewrite.
+- **A declaration that composes an EMPTY name derives no row.** For a catalog whose address
+  is an opaque name rather than a sequence of segments (no `path_separator`), an empty
+  composition is not a destination — nothing subscribes to it and nothing publishes to it —
+  so the row is dropped instead of published as an endpoint addressing nothing. Two real
+  shapes reached it: a member-level handler annotation outside the class-level annotation
+  that would have named its destination, and a listener declaring its destination only
+  through nested annotations no catalog reads yet. Segmented addresses are untouched: an
+  empty segmented address is the base address itself.
 
 ### Changed
 

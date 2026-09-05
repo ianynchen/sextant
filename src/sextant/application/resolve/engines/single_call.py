@@ -67,6 +67,18 @@ _IDENTITY_FORMATS = frozenset({"qname"})
 _DEFAULT_ADDRESS = "default_address"
 _DEFAULT_ADDRESS_KEYS = frozenset({"method", "arg"})
 
+# 2O Task 7's PAIRED destination (D02 §2's single_call style). Some protocols
+# name a destination with TWO values at the call, neither of which is the
+# identity on its own — AMQP's wire identity is the exchange AND the routing
+# key, and a row publishing either alone names a different destination from
+# the one the call reaches. `address_arg_2` is the second capture's position,
+# declared on the row beside `channel_arg`; `address_separator` is the single
+# character the framework's own rendering of the pair puts between them, and
+# it is CATALOG data rather than row data because how a protocol spells its
+# composite identity is a property of the protocol, not of one overload.
+_ADDRESS_ARG_2 = "address_arg_2"
+_ADDRESS_SEPARATOR = "address_separator"
+
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
     """Derives one endpoint row per matching call site, via `call_endpoints`
@@ -89,6 +101,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # `_matching_method` scans it per call site instead.
     methods = list(matches["methods"])
     _validate_methods(methods, catalog)
+    # Read once per run, beside `_validate_methods`, because it is checked
+    # against the rows: a separator with no paired row, or a paired row with
+    # no separator, is a file that cannot be honoured either way.
+    address_separator = _address_separator(matches, methods, catalog)
     # `channel_via`'s declared `owner`s converted to the SCIP symbol form
     # once, at run start, rather than once per matched call site — the
     # `record_wrapper_args` precedent below, and the same binding-seam
@@ -298,6 +314,22 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 not address_declared or address_resolution == "resolved"
             )
             destinations = [(peer, path, "resolved" if resolved else "unresolved")]
+        elif _ADDRESS_ARG_2 in method:
+            # THE PAIRED DESTINATION. `_validate_methods` already refused this
+            # row alongside `url_arg`, `record_arg` and `channel_via`, so the
+            # first half is always `channel_arg`'s verbatim read and the
+            # second is read the same way — a routing key is an opaque
+            # destination fragment exactly as an exchange is, and CP-2's
+            # peer/path split has nothing to say about either.
+            destinations = [
+                _paired_destination(
+                    read_destination(url_argument),
+                    address_argument(
+                        _arg_at(arguments, method[_ADDRESS_ARG_2]), field_sources, facts, caller
+                    ),
+                    str(address_separator),
+                )
+            ]
         elif "channel_via" in method:
             literal = read_destination(url_argument)
             forms = method["channel_via"]
@@ -506,9 +538,38 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                     f"`channel_via` entry that must be `{{owner, method, "
                     f'arg: int|"all_strings"}}`, got {entry!r}'
                 )
+        if _ADDRESS_ARG_2 in row:
+            # The second half of a PAIR, so it means nothing without the
+            # first. Read as "no pair", a stray `address_arg_2` would publish
+            # the exchange alone as the whole identity — a destination the
+            # broker does not route to, at `resolved` where nothing downstream
+            # can tell it from an observation.
+            if "channel_arg" not in row:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{row['name']}` declares "
+                    f"`{_ADDRESS_ARG_2}` without `channel_arg` — it names the SECOND half of a "
+                    f"composite destination, never a position on its own (D02 §2's single_call "
+                    f"style)"
+                )
+            # `url_arg` asks for CP-2's peer/path split and `channel_via` for a
+            # linked-call read; neither has an answer for half of a pair, so a
+            # row declaring either with this one states two incompatible
+            # readers for one destination. Refused rather than resolved by a
+            # precedence nobody wrote down — the `channel_via`/`url_arg`
+            # precedent above, for the same reason.
+            paired_conflicts = [key for key in ("url_arg", "channel_via") if key in row]
+            if paired_conflicts:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{row['name']}` declares "
+                    f"`{_ADDRESS_ARG_2}` together with {', '.join(paired_conflicts)} — a paired "
+                    f"destination is read verbatim on both halves, and neither of those readers "
+                    f"can answer for half of one (D02 §2's single_call style)"
+                )
         if "record_arg" in row:
             conflicts = [
-                key for key in ("url_arg", "channel_arg", "body_arg", "response_arg") if key in row
+                key
+                for key in ("url_arg", "channel_arg", _ADDRESS_ARG_2, "body_arg", "response_arg")
+                if key in row
             ]
             if conflicts:
                 raise CatalogError(
@@ -745,6 +806,79 @@ def _default_address(matches: dict[str, Any], catalog: Catalog) -> dict[str, Any
             f"`{{method: str, arg: int}}`, got {declared!r} (2I design §4)"
         )
     return dict(declared)
+
+
+def _address_separator(
+    matches: dict[str, Any], methods: list[dict[str, Any]], catalog: Catalog
+) -> str | None:
+    """The character joining the two halves of a PAIRED destination, checked
+    against the rows that need it — the `_validate_methods` discipline, and
+    the same stakes `annotation_driven.py::_validate_naming` names for
+    `path_separator`.
+
+    Declared with no row naming `address_arg_2` is a key this catalog never
+    reads, refused rather than ignored: a file whose author believed they had
+    asked for a composite identity would otherwise get the first half alone,
+    with nothing saying so. Declared as anything but exactly one STRING
+    character is refused for `path_separator`'s reason — a YAML int or bool
+    coerces to text and would join two halves with a character nobody wrote,
+    composing a destination the broker does not route to.
+    """
+    declared = matches.get(_ADDRESS_SEPARATOR)
+    if not any(_ADDRESS_ARG_2 in row for row in methods):
+        if declared is not None:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{_ADDRESS_SEPARATOR}: {declared!r}` is "
+                f"declared with no `methods` row naming `{_ADDRESS_ARG_2}` — it describes how a "
+                f"composite destination composes, and this catalog reads none (D02 §2's "
+                f"single_call style)"
+            )
+        return None
+    if not isinstance(declared, str) or len(declared) != 1:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{_ADDRESS_SEPARATOR}: {declared!r}` is not a "
+            f"single character — what joins the two halves of a composite destination is catalog "
+            f"data, and a value that isn't exactly one character would compose a destination "
+            f"nothing routes to (D02 §2's single_call style)"
+        )
+    return declared
+
+
+def _paired_destination(
+    head: tuple[str | None, str | None, str],
+    tail_argument: dict[str, Any] | None,
+    separator: str,
+) -> tuple[str | None, str | None, str]:
+    """One destination from the TWO captures a composite identity needs.
+
+    Both halves must read, or the row is `unresolved` with no path at all —
+    and that is the rule rather than a conservatism. Half of a composite
+    identity is not a partial answer, it is a DIFFERENT destination: an
+    exchange published without its routing key names everything bound to that
+    exchange, and a routing key published without its exchange names whatever
+    the default exchange routes it to. Either would be a confidently-wrong
+    address at `resolved`/`compiler`, which is the one failure D02 §2's
+    unresolved-is-an-answer exists to prevent.
+
+    An EMPTY first half is the composite's own degenerate spelling, and the
+    identity is then the second half alone — the framework mirroring §8.1
+    rule 1 asks for, rather than the approximation `'' + separator + tail`
+    would be. This holds as long as the protocols reaching here treat an empty
+    first half as "the default routing", which AMQP's default exchange does;
+    a protocol whose empty first half means something else needs its own rule
+    here rather than this one widened.
+
+    `peer` is unconditionally NULL, `channel_of`'s contract: a destination
+    fragment is an opaque expression the broker resolves, never a URL with an
+    authority to split off.
+    """
+    _, first, first_resolution = head
+    _, second, second_resolution = channel_of(tail_argument)
+    if first_resolution != "resolved" or second_resolution != "resolved":
+        return None, None, "unresolved"
+    if first == "":
+        return None, second, "resolved"
+    return None, f"{first}{separator}{second}", "resolved"
 
 
 def _validate_identity(row: dict[str, Any], catalog: Catalog) -> None:

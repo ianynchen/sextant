@@ -104,8 +104,11 @@ output-quality assertions) and how "the first diagram parses" is defined without
 ## `.sextant.yml` — reading a dependency's own code
 
 Some declarations a module depends on are not in the module. A generated SOAP client stub,
-for instance, is usually published as a jar. A file beside the module's build file names
-the dependencies whose **own bytecode** should be scanned alongside it:
+for instance, is usually published as a jar — and so are Spring Boot Actuator's built-in
+endpoints (`/actuator/health`, `/actuator/info` and the rest), which live in the actuator jar
+rather than in your code and are therefore invisible until you ask for that jar here. A file
+beside the module's build file names the dependencies whose **own bytecode** should be scanned
+alongside it:
 
 ```yaml
 # .sextant.yml, beside pom.xml

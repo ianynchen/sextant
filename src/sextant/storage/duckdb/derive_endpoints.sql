@@ -551,6 +551,28 @@ derived AS (
                     -- '' silently, which is the empty-address failure again.
                     THEN regexp_extract(s.symbol, '#([A-Za-z0-9_$]+)\(', 1)
                     ELSE m.path_suffix END AS scoped_name,
+        -- THE CONSTANT PREFIX ($path_prefix), joined onto the FRONT of the
+        -- type-level prefix under the same seam rule the address seam below
+        -- uses. It is a framework constant rather than anything an annotation
+        -- states — a family whose whole surface is served under one fixed base
+        -- has nothing on the declaration to read it from — so it cannot come
+        -- through `prefixes`, which reads attributes off an annotation that
+        -- was found on the type.
+        --
+        -- NULL for every catalog that declares none, which is every catalog
+        -- written before this parameter: the first branch then reduces the
+        -- expression to `coalesce(p.prefix, '')`, exactly what the seam below
+        -- read before. `annotation_driven.py::_validate_naming` refuses a
+        -- constant prefix declared without `$path_separator`, so the middle
+        -- branch is reached only for a catalog that has one and whose
+        -- type-level prefix is empty — the common case, since a framework
+        -- with a fixed base rarely also carries a type-level prefix
+        -- annotation.
+        CASE WHEN $path_prefix IS NULL THEN coalesce(p.prefix, '')
+             WHEN coalesce(p.prefix, '') = ''
+             THEN $path_prefix
+             ELSE rtrim($path_prefix, $path_separator) || $path_separator
+                  || ltrim(p.prefix, $path_separator) END AS type_prefix,
         -- THE PREFIX SEAM. What joins here, what does not, and why:
         --
         -- A catalog that declares `$path_separator` composes SEGMENTED
@@ -591,10 +613,10 @@ derived AS (
         -- separator this engine would be inventing), and an empty
         -- `scoped_name` — the catalogs whose method-level annotation
         -- carries no path attribute at all — leaves the prefix alone.
-        CASE WHEN coalesce(p.prefix, '') = '' OR scoped_name = ''
+        CASE WHEN type_prefix = '' OR scoped_name = ''
                   OR $path_separator IS NULL
-             THEN coalesce(p.prefix, '') || scoped_name
-             ELSE rtrim(p.prefix, $path_separator) || $path_separator
+             THEN type_prefix || scoped_name
+             ELSE rtrim(type_prefix, $path_separator) || $path_separator
                   || ltrim(scoped_name, $path_separator) END AS composed,
         -- THE CANONICAL-ADDRESS GATE, wrapped around the whole seam above.
         -- `$canonical_path` says the composed address IS a URL this module
@@ -626,8 +648,12 @@ derived AS (
         -- address carrying a scheme or a placeholder is a whole address
         -- rather than a path half (D02 keeps those whole until the peer join
         -- splits them), and prefixing one would publish a URL nobody serves.
+        -- BOTH expression notations, mirroring `domain/paths.py`'s own
+        -- `_EXPRESSION_OPENS`: a rule that knew only `${` would rewrite an
+        -- expression-language address into a URL nobody serves.
         CASE WHEN NOT $canonical_path
-                  OR contains(composed, '://') OR contains(composed, '${')
+                  OR contains(composed, '://')
+                  OR contains(composed, '${') OR contains(composed, '#{')
              THEN composed
              WHEN composed = '' THEN '/'
              -- `regexp_replace(..., 'g')` is the collapse `domain/paths.py`
@@ -645,7 +671,32 @@ derived AS (
         CASE WHEN $direction = 'outbound' THEN s.symbol END AS caller,
         p.peer      AS peer,
         s.signature AS handler_signature,
-        'resolved'  AS resolution,
+        -- THE UNRESOLVED-PATH GATE (2O Task 7 Step 1). Every row this CTE
+        -- derives used to be stamped `resolved` unconditionally, which is a
+        -- claim about the ADDRESS that the address itself can contradict: a
+        -- destination the author wrote as an expression — a SpEL `#{…}`, a
+        -- property `${…}` — is not a value anything here read, and publishing
+        -- one at `resolved`/`compiler` presents the characters of the
+        -- expression as an observed address (§8). The expression is carried in
+        -- `path` VERBATIM (the gate above leaves it uncanonicalized for the
+        -- same reason): unresolved is an answer, and the expression is the
+        -- only true thing known about the address.
+        --
+        -- Nothing here RESOLVES the expression, and that is deliberate rather
+        -- than a gap: the configuration ladder is a call-site mechanism this
+        -- derivation never invokes, and its product is an expression rather
+        -- than a value. The comment stops being true the day an
+        -- annotation-derived row can read `resolved_config` — today only
+        -- `resolve/engines/config_join.py:528` and
+        -- `resolve/engines/derived_resource.py:578` read it at all.
+        --
+        -- Tested against `path`, not `composed`: the two are the same string
+        -- for every expression-bearing address (the canonical gate hands one
+        -- straight through), and reading the published column is what makes
+        -- the claim "the address in this row is unknown" rather than "some
+        -- fragment of it was".
+        CASE WHEN contains(path, '${') OR contains(path, '#{')
+             THEN 'unresolved' ELSE 'resolved' END AS resolution,
         'compiler'  AS evidence,
         $catalog_id AS catalog_id,
         -- Raw per-row lists (evidence kind (a): mapping attributes) — still
@@ -734,7 +785,32 @@ unioned AS (
     GROUP BY ALL
 )
 SELECT * FROM unioned d
-WHERE NOT EXISTS (
+-- THE EMPTY-NAME GATE (2O Task 7 Step 4). A catalog that declares no
+-- `$path_separator` composes an OPAQUE NAME rather than a sequence of
+-- segments — its own seam comment above says why: a broker destination has no
+-- segments to join. An empty name is not a destination: nothing subscribes to
+-- it and nothing publishes to it, so a row carrying one is an endpoint
+-- addressing nothing, published at `resolved`/`compiler` where nothing
+-- downstream can tell it from an observation. Silence is the honest answer,
+-- and it is the answer the same WHERE clause already gives a declaration
+-- whose scope was never found.
+--
+-- Two real shapes reach it, both boundaries a catalog states rather than
+-- reads: a member-level handler annotation that names no destination of its
+-- own sitting outside the class-level annotation that would have named one,
+-- and a listener that declares its destination only through NESTED
+-- annotations, whose arguments no catalog reads yet.
+--
+-- SEGMENTED addresses are deliberately untouched, and that is not the same
+-- claim: an empty segmented address IS the base address — for an inbound HTTP
+-- catalog the root route `/` (CP-1 row 5: a class prefix with an empty method
+-- mapping is served), and for a client one the configured base URL, which
+-- `tests/application/test_endpoints.py::
+-- test_a_client_side_http_path_keeps_the_separator_the_declaration_wrote`
+-- pins. This stops being right the day a catalog composes an opaque name
+-- for which the empty string is a real destination.
+WHERE NOT ($path_separator IS NULL AND d.path = '')
+  AND NOT EXISTS (
     SELECT 1 FROM endpoints existing
     WHERE existing.protocol  = d.protocol
       AND existing.direction = d.direction

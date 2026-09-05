@@ -288,6 +288,10 @@ _TOPIC_ENDPOINT_KWARGS = {
     # composes a segmented address, so the seam stays the bare concatenation
     # every assertion below already pins.
     "path_separator": None,
+    # 2O Task 7's constant prefix, inert for the same reason and refused
+    # without the separator above in any case: no catalog in this file is
+    # served under a framework-fixed base path.
+    "path_prefix": None,
     # 2I Task 5's construct gate, inert as well: no catalog in this file
     # confines itself to one construct kind, so every declaration the fixture
     # annotates still derives regardless of what encloses it.

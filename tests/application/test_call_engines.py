@@ -1931,6 +1931,207 @@ def test_a_malformed_channel_via_entry_is_refused_at_run_start(tmp_path: Path, e
     assert "invented-bad-channel-via.yml" in str(raised.value)
 
 
+# --- 2O Task 7: `address_arg_2` — the PAIRED destination (D02 §2's
+# single_call style). Some protocols name a destination with two values at
+# the call, neither of which is the identity on its own: AMQP routes on the
+# exchange AND the routing key, so a row publishing either alone names a
+# different destination from the one the call reaches. `single_call`'s
+# one-address contract refuses that pair, which is what this word adds.
+
+_PAIRED_MATCHES = {
+    "owner": "com.acme.messaging.Producer",
+    "address_separator": "/",
+    "methods": [
+        # The pair, and the overload that carries only the second half — a
+        # default first half is not declared at the call, so the row names one
+        # capture and the identity is that capture alone.
+        {"name": "publish", "arity": 3, "channel_arg": 0, "address_arg_2": 1, "body_arg": 2},
+        {"name": "publish", "arity": 2, "channel_arg": 0, "body_arg": 1},
+    ],
+}
+
+
+def _paired_catalog(matches: dict | None = None, catalog_id: str = "invented-paired") -> Catalog:
+    return _single_call_catalog(matches or _PAIRED_MATCHES, catalog_id, protocol="amqp")
+
+
+def _publish_call(caller: str, arguments: list) -> CallSiteFact:
+    return _send_call(caller, 0, arguments, name="publish")
+
+
+def test_a_paired_destination_renders_both_captures_joined_by_the_declared_separator(
+    tmp_path: Path,
+):
+    """The whole reason the word exists: the wire identity of this protocol is
+    the PAIR, and the one-address contract could only publish half of it.
+    `exchange/routingKey` is one destination; `exchange` alone names
+    everything bound to it, and `routingKey` alone names whatever the default
+    routing sends it to — two different destinations, either of which would be
+    published at `resolved`/`compiler` where nothing downstream could tell it
+    from an observation."""
+    caller = "com/acme/messaging/Producer#publishBoth()."
+    facts = [
+        _publish_call(
+            caller,
+            [
+                CallArgument(kind="string", value="orders.exchange"),
+                CallArgument(kind="string", value="order.created"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _paired_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "orders.exchange/order.created"
+    assert endpoint["resolution"] == "resolved"
+    # A destination is opaque, never a URL with an authority to split off
+    # (`channel_of`'s contract, which both halves are read through).
+    assert endpoint["peer"] is None
+
+
+def test_an_overload_declaring_only_one_capture_publishes_that_capture_alone(tmp_path: Path):
+    """The overload that names no first half at all. The framework supplies a
+    default for it, and the default is not written at the call site — so the
+    honest identity is the one capture the call DID make, never that capture
+    joined to a first half this pass invented."""
+    caller = "com/acme/messaging/Producer#publishDefault()."
+    facts = [
+        _publish_call(
+            caller,
+            [
+                CallArgument(kind="string", value="order.created"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _paired_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "order.created"
+    assert endpoint["resolution"] == "resolved"
+
+
+def test_an_explicitly_empty_first_half_names_the_same_destination_as_the_shorter_overload(
+    tmp_path: Path,
+):
+    """§8.1 rule 1 — mirror the framework's rule, not an approximation that
+    fits the examples. `publish("", key, body)` and `publish(key, body)` reach
+    the SAME destination: an empty first half IS the default routing spelled
+    out. Composing `"" + "/" + key` would mint a second identity for one
+    wire destination, splitting dedup and every path-keyed join downstream."""
+    caller = "com/acme/messaging/Producer#publishEmptyExchange()."
+    facts = [
+        _publish_call(
+            caller,
+            [
+                CallArgument(kind="string", value=""),
+                CallArgument(kind="string", value="order.created"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _paired_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "order.created"
+    assert endpoint["resolution"] == "resolved"
+
+
+@pytest.mark.parametrize(
+    ("head", "tail"),
+    [
+        # The second half unreadable — a routing key handed in as a parameter.
+        (CallArgument(kind="string", value="orders.exchange"), CallArgument(kind="parameter")),
+        # The first half unreadable, the second a literal.
+        (CallArgument(kind="parameter"), CallArgument(kind="string", value="order.created")),
+    ],
+)
+def test_half_a_paired_destination_publishes_no_path_at_all(
+    tmp_path: Path, head: CallArgument, tail: CallArgument
+):
+    """Half of a composite identity is not a partial answer — it is a
+    DIFFERENT destination. So an unread half drops the whole address rather
+    than publishing the half that read, which is exactly D02 §2's
+    unresolved-is-an-answer: the row still records that this method publishes
+    over this protocol, and says plainly that nobody read where."""
+    caller = "com/acme/messaging/Producer#publishHalfRead()."
+    facts = [_publish_call(caller, [head, tail, CallArgument(kind="class", symbol=ORDER_VIEW)])]
+    workspace = _resolve(tmp_path, facts, _paired_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+@pytest.mark.parametrize(
+    ("matches_edit", "expected"),
+    [
+        # The second half with no first half: read as "no pair", it would
+        # publish the first capture alone as the whole identity.
+        ({"methods": [{"name": "publish", "address_arg_2": 1, "body_arg": 2}]}, "address_arg_2"),
+        # `url_arg` asks for CP-2's peer/path split, which has no answer for
+        # half of a pair.
+        (
+            {
+                "methods": [
+                    {"name": "publish", "url_arg": 0, "address_arg_2": 1, "body_arg": 2},
+                ]
+            },
+            "address_arg_2",
+        ),
+        # A separator this catalog never composes with.
+        ({"methods": [{"name": "publish", "channel_arg": 0, "body_arg": 1}]}, "address_separator"),
+    ],
+)
+def test_a_paired_destination_declared_in_a_shape_that_cannot_be_honoured_is_refused(
+    tmp_path: Path, matches_edit: dict, expected: str
+):
+    """Every check here catches a file that would derive a quietly WRONG
+    destination rather than fail — the `_validate_methods` discipline, and the
+    same stakes `annotation_driven.py::_validate_naming` names. A separator
+    declared with no paired row is the mirror case: the author believed they
+    had asked for a composite identity and would silently get half of one."""
+    catalog = _paired_catalog({**_PAIRED_MATCHES, **matches_edit}, "invented-paired-broken")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert expected in str(raised.value)
+    assert "invented-paired-broken.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize("separator", [5, True, "", "::"])
+def test_a_non_single_character_address_separator_is_refused_by_type_and_length(
+    tmp_path: Path, separator: object
+):
+    """`path_separator`'s check, for `path_separator`'s reason: a YAML int or
+    bool coerces to text and would pass a naive length test, joining two
+    halves with a character nobody wrote; an empty one declares a composition
+    with nothing between the halves, which makes `exchange` + `key` read as
+    one opaque name."""
+    catalog = _paired_catalog(
+        {**_PAIRED_MATCHES, "address_separator": separator}, "invented-paired-broken"
+    )
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "address_separator" in str(raised.value)
+
+
 # --- 2H Task 5: `spring-websocket.yml`'s own `WebSocketHandlerRegistry.
 # addHandler` entry (D02 §2's `single_call` style). No live fixture surface
 # exists for it — Task 1 built none, the 2H Task 5 brief's own explicit
@@ -5076,3 +5277,95 @@ def test_the_declared_format_is_what_composes_the_identity(
     workspace.close()
 
     assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")
+
+
+# --- 2O Task 7: `spring-rabbit-template.yml`, proved against the REAL shipped
+# file (no fixture module calls a `RabbitTemplate` — the `spring-websocket.yml`
+# precedent above), and its §10 near-miss.
+
+RABBIT_TEMPLATE = "org/springframework/amqp/rabbit/core/RabbitTemplate#"
+
+
+def _rabbit_template_catalog() -> Catalog:
+    return next(
+        c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-rabbit-template"
+    )
+
+
+def _convert_and_send(caller: str, owner: str, arguments: list) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=owner,
+            name="convertAndSend",
+            descriptor="(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V",
+        ),
+        invoke_kind="virtual",
+        ordinal=0,
+        receiver=3,
+        result=None,
+        arguments=arguments,
+    )
+
+
+def test_the_rabbit_template_renders_the_exchange_and_routing_key_as_one_identity(
+    tmp_path: Path,
+):
+    """AMQP routes on the exchange AND the routing key, so the pair is the
+    wire identity. Either half published alone names a different destination —
+    the exchange alone names everything bound to it, the routing key alone
+    names whatever the default exchange routes it to — and this is the shipped
+    file's own `address_arg_2` + `address_separator` doing the composing."""
+    caller = "com/acme/orders/messaging/OrderPublisher#publish()."
+    facts = [
+        _convert_and_send(
+            caller,
+            RABBIT_TEMPLATE,
+            [
+                CallArgument(kind="string", value="orders.exchange"),
+                CallArgument(kind="string", value="order.created"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _rabbit_template_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["protocol"], endpoint["direction"]) == ("amqp", "outbound")
+    assert endpoint["path"] == "orders.exchange/order.created"
+    assert endpoint["resolution"] == "resolved"
+    assert endpoint["peer"] is None
+
+
+def test_a_convertandsend_on_an_owner_that_is_not_a_rabbit_template_derives_nothing(
+    tmp_path: Path,
+):
+    """§10 near-miss, negating the catalog's `owner` conjunct while satisfying
+    every other one: the method name, the arity and all three argument kinds
+    are exactly a matching call, and only the receiver's type differs.
+
+    `convertAndSend` is not a name Spring AMQP owns — `JmsTemplate` declares
+    it too, and so may any application class. A row derived here would publish
+    an AMQP destination for a call that never reached a broker, at
+    `resolved`/`compiler` where nothing downstream could tell it from an
+    observation. It would also DOUBLE every JMS publication, since
+    `spring-jms-template.yml` matches the same name."""
+    caller = "com/acme/orders/messaging/OrderPublisher#publish()."
+    facts = [
+        _convert_and_send(
+            caller,
+            "com/acme/orders/messaging/HomeGrownTemplate#",
+            [
+                CallArgument(kind="string", value="orders.exchange"),
+                CallArgument(kind="string", value="order.created"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _rabbit_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []

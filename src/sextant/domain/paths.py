@@ -44,7 +44,16 @@ protocol name in `storage/`, and this seam's name is one.
 from sextant.domain.closed_sets import Direction, Protocol
 
 _SCHEME = "://"
-_PLACEHOLDER_OPEN = "${"
+# The two notations an unresolved address arrives in: a property placeholder
+# and an expression-language reference. BOTH, not one, because the guard's
+# claim is "this is not a path half yet" and neither notation is — a rule that
+# knew only `${` would rewrite `#{…}` into a URL nobody serves, which is the
+# fabrication this guard exists to refuse. They are listed here together, and
+# mirrored together in `derive_endpoints.sql`'s own `$canonical_path` gate;
+# a third notation belongs in both places or in neither. This stays right for
+# as long as no framework spells a SERVED path with either sequence — a
+# framework that did would have its literal address left uncanonicalized here.
+_EXPRESSION_OPENS = ("${", "#{")
 
 
 def serves_urls(protocol: str, direction: str) -> bool:
@@ -61,7 +70,7 @@ def serves_urls(protocol: str, direction: str) -> bool:
 
 def is_path_shaped(raw: str) -> bool:
     """False for anything that is a whole address rather than a path half."""
-    return _SCHEME not in raw and _PLACEHOLDER_OPEN not in raw
+    return _SCHEME not in raw and not any(open_ in raw for open_ in _EXPRESSION_OPENS)
 
 
 def canonical_http_path(raw: str) -> str:

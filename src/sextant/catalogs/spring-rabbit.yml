@@ -1,0 +1,112 @@
+id: spring-rabbit
+displayName: Spring AMQP (RabbitListener)
+style: annotation_driven
+protocol: amqp
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework.amqp:spring-rabbit"]
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # No type-level gate: a listener method carries its own `@RabbitListener`
+  # (or, on a class-level, polymorphic listener, `@RabbitHandler`) directly.
+  # The `spring-kafka.yml` shape exactly, and for its reason — there is no
+  # marker interface or class annotation every listener shares.
+  request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
+                  fallback: sole_unannotated,
+                  excludes: [com.rabbitmq.client.Channel] }
+  mapping:
+    # CHECKPOINT FACT (javap, spring-rabbit 3.1.4): `@RabbitListener` declares
+    # `queues()` as `String[]`, `queuesToDeclare()` as `Queue[]` and
+    # `bindings()` as `QueueBinding[]`, and is `@Target({TYPE, METHOD,
+    # ANNOTATION_TYPE})`; `@RabbitHandler` is `@Target({METHOD,
+    # ANNOTATION_TYPE})` and declares only `isDefault()`.
+    #
+    # Only `queues` names a destination as TEXT. `queuesToDeclare` and
+    # `bindings` carry NESTED ANNOTATIONS, whose arguments the extractor
+    # reads only from capability 9.16 onward and which no catalog reads yet,
+    # so a listener that names its queue only through one of those derives
+    # NOTHING rather than a guess — a stated boundary in docs/COVERAGE.md,
+    # which stops being true the day a `path_from` alias can name an
+    # attribute inside a nested annotation.
+    path_from: [queues]
+    # CHECKPOINT FACT (class-level `@RabbitListener` + `@RabbitHandler`): the
+    # `spring-kafka.yml` shape, one framework over. A class-level
+    # `@RabbitListener` carries no method of its own to map, so it doubles as
+    # the `prefix_annotation` — its own `queues` value (the same known
+    # limitation: element 0 only, for a multi-queue class-level listener)
+    # becomes the prefix for every `@RabbitHandler` the class declares.
+    prefix_from: [queues]
+    # DELIBERATELY no `path_separator`, `spring-kafka.yml`'s reason exactly:
+    # the prefix above is a QUEUE NAME, and a queue name has no segments to
+    # join. A `/` at this seam would invent a destination no broker carries.
+    # A `@RabbitHandler` — carrying no queue attribute at all, so an empty
+    # suffix — is then the class-level queue unchanged.
+    method_from: method
+    # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
+    all_methods: []
+    prefix_annotation: org.springframework.amqp.rabbit.annotation.RabbitListener
+    annotations:
+      # A plain, method-level `@RabbitListener` — the ordinary listener shape.
+      - { fqn: org.springframework.amqp.rabbit.annotation.RabbitListener }
+      # `@RabbitHandler` carries no queue attribute of its own (path suffix
+      # ''), and reaches a destination only through the class-level prefix
+      # above — the polymorphic, class-level shape.
+      - { fqn: org.springframework.amqp.rabbit.annotation.RabbitHandler }
+
+# Copied verbatim from spring-resttemplate.yml, for the same reason
+# `nullability` below is copied from spring-mvc.yml: shape (type) expansion
+# is a *global*, insert-if-absent pass keyed on the type symbol alone
+# (`derive_shapes`), so the FIRST catalog to reach a shared payload type is
+# the one that expands it, and every later catalog finds it already there.
+# Whichever catalog that turns out to be, ITS
+# `wrappers`/`serialization`/`known_types` are the rules that describe the
+# type for everyone, regardless of protocol or direction — so a file whose
+# copy disagreed would make the answer depend on catalog sort order.
+#
+# No broker envelope is added here: a `@RabbitListener` method's raw-message
+# parameter type is `org.springframework.amqp.core.Message`, which is not a
+# generic envelope around a payload type the way Kafka's `ConsumerRecord<K,
+# V>` is — there is no type argument to unwrap.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

@@ -253,8 +253,11 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         namespace_template=None,
         members=None,
         # Inert for the same reason: this regression is about WHETHER a
-        # prefix joins at all, not what joins it.
+        # prefix joins at all, not what joins it — and 2O Task 7's constant
+        # prefix is inert on the same grounds, at the value every catalog
+        # declaring none binds.
         path_separator=None,
+        path_prefix=None,
         # 2I Task 5's construct gate, inert — this regression's own facts
         # declare no enclosing type at all, and NULL applies the rules to
         # every construct exactly as every pre-2I catalog gets.

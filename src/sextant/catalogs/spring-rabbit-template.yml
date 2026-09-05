@@ -1,0 +1,112 @@
+id: spring-rabbit-template
+displayName: Spring AMQP (RabbitTemplate)
+style: single_call
+protocol: amqp
+direction: outbound
+
+detect:
+  coordinates: ["org.springframework.amqp:spring-rabbit"]
+
+requires: [call_site, string_constants]
+
+matches:
+  owner: org.springframework.amqp.rabbit.core.RabbitTemplate
+  # AMQP's wire identity is the exchange AND the routing key: a broker routes
+  # on the pair, and either half alone names a different destination — the
+  # exchange alone names everything bound to it, the routing key alone
+  # names whatever the DEFAULT exchange routes it to. `address_separator`
+  # is what renders the pair as one identity.
+  address_separator: "/"
+  # CHECKPOINT FACT (real javap descriptors, spring-rabbit 3.1.4). The three
+  # declared rows and what each is:
+  #   * `convertAndSend(Object)` arity 1 — both halves of the identity come
+  #     from the template's own configuration, so there is no address
+  #     argument at the call site at all and no capture is declared: `path`
+  #     NULL, `resolution: unresolved` (I1). The `spring-jms-template.yml`
+  #     `convertAndSend(Object)` precedent exactly.
+  #   * `convertAndSend(String routingKey, Object message)` arity 2 — the
+  #     DEFAULT-EXCHANGE overload. There is no exchange at the call, so the
+  #     identity is the routing key alone rather than a routing key joined to
+  #     an exchange this pass would be inventing. That is the framework's own
+  #     rule and not a simplification: the default exchange routes a message
+  #     to the queue whose name equals the routing key, so the routing key IS
+  #     the destination. It stops being right if a future overload at this
+  #     arity puts an exchange first.
+  #   * `convertAndSend(String exchange, String routingKey, Object message)`
+  #     arity 3 — the pair, rendered `exchange/routingKey`. An explicitly
+  #     EMPTY exchange is the default exchange spelled out, and
+  #     `_paired_destination` renders it as the routing key alone, so the two
+  #     spellings of one wire destination stay ONE identity.
+  #
+  # THE OVERLOAD COLLISION, stated rather than hidden (§8.1 rule 2, and the
+  # `spring-jms-template.yml` precedent for the same shape one framework
+  # over). `_matching_method` selects a row by NAME AND ARITY, never by
+  # argument type, and `convertAndSend` overloads at every arity declared
+  # here: arity 2 is also `(Object, MessagePostProcessor)`, and arity 3 is
+  # also `(String, Object, CorrelationData)` and `(String, Object,
+  # MessagePostProcessor)`. A call to one of those siblings reaches the row
+  # below and reads a PAYLOAD argument at an address position. In every case
+  # but one that degrades honestly — a payload that is not a string literal
+  # reads `unresolved`, and a paired row drops the whole address when either
+  # half fails — but a sibling call whose payload IS a string literal would
+  # publish that literal as part of the destination. That is a stated
+  # boundary in docs/COVERAGE.md, and it stops being one the day `methods`
+  # can discriminate on the call's own target descriptor.
+  #
+  # NOT declared, and each therefore deriving no row at all: `send(...)` (the
+  # pre-converted `Message` form, at four arities), `convertSendAndReceive`
+  # (request/reply), and the arity-4 and arity-5 `convertAndSend` overloads
+  # carrying a `MessagePostProcessor` and/or a `CorrelationData`. Each is a
+  # COVERAGE boundary rather than a silent miss.
+  methods:
+    - { name: convertAndSend, arity: 3, channel_arg: 0, address_arg_2: 1, body_arg: 2 }
+    - { name: convertAndSend, arity: 2, channel_arg: 0, body_arg: 1 }
+    - { name: convertAndSend, arity: 1, body_arg: 0 }
+
+# Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
+# discipline as spring-kafka-template.yml — see its own comment for the full
+# rationale). `nullability` is harvested from spring-mvc.yml.
+#
+# No broker-specific wrapper is added: a `convertAndSend` call's payload
+# argument is read directly off its declared position, never through an
+# envelope type a `wrappers` rule would need to unwrap.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

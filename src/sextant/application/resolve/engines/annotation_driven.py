@@ -134,6 +134,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # inert while absent, so a catalog composing a Kafka topic — which has
         # no segments to join — keeps the bare concatenation it always had.
         path_separator=mapping.get("path_separator"),
+        # 2O Task 7 Step 3: a CONSTANT prefix the framework itself puts in
+        # front of every address this catalog derives — not read from any
+        # annotation, because no annotation states it. It joins the front of
+        # the type-level prefix under the same seam rule, so a catalog
+        # declaring none composes exactly what it always did.
+        path_prefix=mapping.get("path_prefix"),
         # 2O design §8: this catalog's addresses are URLs THIS MODULE SERVES,
         # so the derivation composes the URL the framework serves rather than
         # the characters the two annotations happened to spell (CP-1). Decided
@@ -408,6 +414,36 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
             f"single character — the prefix seam is deduped character-wise, so a separator that "
             f"isn't exactly one character would compose an address the framework does not serve"
         )
+    prefix = mapping.get("path_prefix")
+    if prefix is not None:
+        # A constant the derivation binds straight into the composed address,
+        # so an unusable value is a wrong address rather than a missing one —
+        # `yaml_source.py`'s own reason for checking at the edge. A non-string
+        # scalar would compose whatever `str()` made of it; an empty one
+        # declares a prefix with nothing in it, which is what omitting the key
+        # already says, so it is refused rather than silently doing the same
+        # thing (the `path_separator` precedent).
+        if not isinstance(prefix, str) or prefix == "":
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.path_prefix: {prefix!r}` is not a "
+                f"non-empty string — it is bound into every address this catalog composes, and "
+                f"a value that is not one would prefix characters nobody wrote"
+            )
+        # A prefix and the address it prefixes are two SEGMENTED halves, and
+        # what joins them is the same seam `path_separator` governs. Without
+        # one they concatenate bare — `/actuator` + `health` is
+        # `/actuatorhealth`, an address the framework does not serve,
+        # published at `resolved`/`compiler`. Declared together or not at all.
+        # This stays right for as long as every constant prefix is segmented;
+        # a framework prefixing an OPAQUE name (a broker destination, which
+        # has no segments to join) would need this pair relaxed rather than
+        # a separator invented for it.
+        if mapping.get("path_separator") is None:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.path_prefix: {prefix}` is declared "
+                f"with no `mapping.path_separator` — the two halves would concatenate bare into "
+                f"an address the framework does not serve"
+            )
     fallback = mapping.get("path_fallback")
     if fallback is not None and fallback not in _PATH_FALLBACKS:
         # An unrecognised word would fall through to the empty default,

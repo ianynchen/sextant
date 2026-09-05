@@ -140,7 +140,9 @@ and `implemented_interfaces`. Verified end-to-end on spring-petclinic: 17 endpoi
 across runs.
 
 **Phase 2D gave §2b the same texture.** `@KafkaListener` (class-level `@KafkaListener` +
-`@KafkaHandler` included), `@JmsListener` and `@SqsListener` are read as inbound catalogs;
+`@KafkaHandler` included), `@JmsListener` and `@SqsListener` are read as inbound catalogs
+— joined in 2O Task 7 by `@RabbitListener` (with `@RabbitHandler`), `@PulsarListener`, the
+two legacy `@SqsListener` spellings and `RabbitTemplate.convertAndSend`;
 `KafkaTemplate`, `ReplyingKafkaTemplate`, the raw `KafkaProducer`, `JmsTemplate`, `SqsTemplate`
 and `PubSubTemplate` (publish, and typed `subscribeAndConvert` inbound) are read outbound by the
 same `single_call` engine 2C shipped, pointed at `send`-shaped methods; a `@KafkaListener` method
@@ -278,7 +280,9 @@ module today produces:
   `@Controller`; outbound Feign, `@HttpExchange`, Retrofit, `RestTemplate`, `RestClient`,
   `WebClient`, OkHttp — plus, since Phase 2D, `@KafkaListener`, `@JmsListener` and
   `@SqsListener` inbound, and `KafkaTemplate`, `ReplyingKafkaTemplate`, `KafkaProducer`,
-  `JmsTemplate`, `SqsTemplate` and `PubSubTemplate` outbound — and since 2E-prep, direct
+  `JmsTemplate`, `SqsTemplate` and `PubSubTemplate` outbound — and since 2O Task 7,
+  `@RabbitListener`, `@PulsarListener`, the two legacy `@SqsListener` spellings and Actuator
+  `@Endpoint` inbound, plus `RabbitTemplate.convertAndSend` outbound — and since 2E-prep, direct
   `jakarta.jms.Session` producers/consumers, `KafkaConsumer.subscribe` and AWS SDK v2
   `SqsClient`/co-located Google `Publisher` outbound, plus `Subscriber` + `MessageReceiver`
   inbound through the new `interface_implementation` style — and since Phase 2E, WebFlux
@@ -402,7 +406,7 @@ the gap list:
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ 5A 3B 5C | ◐ 2A 2B | ◐ — | ◐ — | ◐ — | ◐ 1A |
+| **Java / Kotlin** | ✅ ASM | ◐ 4A 3B 5C | ◐ 2A 2B | ◐ — | ◐ — | ◐ — | ◐ 1A |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -416,7 +420,7 @@ SNS and Redis are **out of scope by decision**, not oversight — each would be 
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ 1A | ◐ 1A 2B | ◐ 2A | ◐ 2A 1B | ◐ 1A 1B | 2A 2B 1C |
+| **Java / Kotlin** | ◐ 1A | ◐ 1A 2B | ◐ 1A | ◐ 1B | ◐ 1A 1B | 2A 2B 1C |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -587,8 +591,8 @@ far that reaches today:
 | **Pub/Sub** | Nothing. The message is `bytes`. Only the **parse call** reveals it — `Order.parseFrom(data)` versus `objectMapper.readValue(data, Order.class)` | `syntax` | Unknown | the parse-call binding is built and protocol-neutral, but **not reached here**: the shipped bytes-payload vocabulary is `String` and `byte[]` only, and a `MessageReceiver`'s payload parameter is a `PubsubMessage` envelope |
 | **SQS** | Nothing. The body is a string; same as Pub/Sub | `syntax` | Unknown | ✅ **the parse call**, binding the payload type — which, where that type is schema-described, then answers **rung 4** at `narrowed`, and otherwise makes the row an ordinary rung-5 one |
 | JMS | `TextMessage` / `BytesMessage` / `ObjectMessage`, then the parse call | `syntax` | Unknown | ✅ as SQS, for a `String`/`byte[]` payload parameter. The **message-type distinction** (`TextMessage` versus `BytesMessage`) is not read |
-| **AMQP** | Not yet known — no catalog reads it | — | — | Protocol only. 2O design §3a adds `amqp` to the closed protocol set ahead of the catalog that will own it, the same one-line-now precedent `graphql`/`websocket`/`sse` set in 2H — **no shipped catalog owns it yet; one arrives in Task 7** |
-| **Pulsar** | Not yet known — no catalog reads it | — | — | Protocol only, same as AMQP — **no shipped catalog owns it yet; one arrives in Task 7** |
+| **AMQP** | Nothing on the wire declaration. A message body is `byte[]` plus a `content_type` property set at publish time, which no annotation carries | `syntax` | Unknown | ◐ **the protocol shipped, the format did not** (2O Task 7). `spring-rabbit.yml` and `spring-rabbit-template.yml` derive the rows; nothing reads a format for them, so they answer at rung 5 or 6 like every other broker row whose payload parameter is an ordinary type |
+| **Pulsar** | The consumer's `schemaType` attribute, and the Pulsar `Schema<T>` a template is built with | `annotation` + `config_join` | Unknown | ◐ **the protocol shipped, the format did not** (2O Task 7). `spring-pulsar.yml` derives the rows. `@PulsarListener.schemaType` is **not read**: it is an enum-valued attribute naming a schema family (`JSON`, `AVRO`, `PROTOBUF`, `NONE`), and no `format_from` rule is declared for it — a boundary, not an absence of evidence |
 
 Kafka is the interesting one, because the answer sits in configuration rather than code —
 `config_join` again (§7), the same shape as Spring Cloud Stream destinations. **Since Phase
@@ -784,7 +788,11 @@ is, what it costs.
 | Java | Micronaut `@Controller` + `@Get`/`@Post`… (`value`/`uri` String, **`uris` String[]**) | — | `annotation` | A |
 | Java | Quarkus / JAX-RS **`jakarta.ws.rs`** `@Path` + `@GET`… | `@Path` value is a scalar String | `annotation` | A |
 | Java | Quarkus `io.quarkus.vertx.web.Route` | second Quarkus style | `annotation` | A |
-| Java | Actuator `@Endpoint` / `@ReadOperation` | — | `annotation` | A |
+| Java | Actuator `@Endpoint` / `@ReadOperation` / `@WriteOperation` / `@DeleteOperation` | address is the type's `id` under a constant `/actuator` prefix; verb is the operation annotation's own | `annotation` | ✅ **shipped** (2O Task 7) — every row of CP-5 confirmed live on Boot 3.5.10 and 4.1.1 (`scripts/probes/cp5_actuator_paths.md`) |
+| Java | Actuator — `management.endpoints.web.base-path` moving the whole surface | CP-5 rows 7-8: `/manage/probe` is a 200 and `/actuator/probe` a 404 on both versions probed | `config_join` | **Boundary — OVER-reports the address.** `annotation_driven` never touches `resolved_config` (only `config_join.py:528` and `derived_resource.py:578` read it), so a module that overrides the base path is published under `/actuator`. Closes the day an annotation-derived row can read a configuration key |
+| Java | Actuator — `@Selector` path segments (`/actuator/env/{toMatch}`) | a path segment contributed by a PARAMETER annotation | `annotation` | **Boundary — the segment is dropped**, so such an endpoint is published at its bare id. `mapping` has no vocabulary for a name a parameter contributes; adding one closes it |
+| Java | Actuator — `@WebEndpoint`, `@ControllerEndpoint`, `@RestControllerEndpoint`, `@ServletEndpoint`, `@EndpointExtension` | four more registration annotations and one extension mechanism, none probed | — | **Boundary — derives nothing.** Absent evidence, produce nothing (§8); each needs its own probe before it can be catalogued |
+| Java | Actuator — the BUILT-IN endpoints (`/actuator/health`, `/actuator/info`, …) | their `@Endpoint` classes live in the actuator jar, not in the module | — | **Boundary — invisible until the user opts in.** They are ordinary `@Endpoint` classes, so the catalog reads them the moment their bytecode is scanned — which needs `extract_libraries`, a USER ACTION, documented in the usage docs rather than only here (§8.1 rule 3) |
 | Java | `@RequestMapping` on an **interface or superclass** | Spring inherits mappings | `annotation` + hierarchy | ✅ shipped |
 | Java | **Meta-annotations** — custom `@ApiGet` composed from `@RequestMapping(method = GET)` | Spring resolves transitively | `annotation` (recursive) | ✅ shipped |
 | Java | Nested / inner classes | the phase-1 skip lifted in Phase 2C — read as ordinary class files, so `@RestController`/`@Controller` resolve the same nested or not | `annotation` | ✅ shipped |
@@ -806,7 +814,8 @@ is, what it costs.
 | Java | Data REST — projections, excerpts, HAL affordances, `@CrossOrigin`, event handlers, QueryDSL web support | each changes the representation or adds routes | — | **C — stated boundaries** (2O design §2c) |
 | Java | Data REST — the `HEAD`/`OPTIONS` verbs and the `/{basePath}/search` index route it also serves | observed live, deliberately not derived | — | **Boundary — §2b's table is what ships** |
 | Java | `@ControllerAdvice` + `@ExceptionHandler` | defines the error contract of every endpoint | — | C |
-| Java | Servlets, filters, interceptors, built-in Actuator endpoints | `@WebServlet`, `FilterRegistrationBean`, dependency + property | — | C |
+| Java | Servlets, filters, interceptors | `@WebServlet`, `FilterRegistrationBean` | — | C. **Custom Actuator endpoints left this row in 2O Task 7** (above); the built-in ones are their own row there |
+| Java | `@WebFilter` / `@WebListener` | `@WebFilter` carries `urlPatterns` and looks exactly like an address-bearing inbound mapping | `annotation` | **Boundary — deliberately derives nothing, and pinned.** A filter intercepts URLs other components serve; publishing its patterns would invent a service surface out of cross-cutting plumbing. `test_a_web_filter_derives_nothing_from_any_shipped_catalog` asserts it against EVERY shipped catalog at once |
 | Java | `@ConditionalOnProperty` / `@Profile` controllers | exists in one environment only | — | C |
 | Go | `net/http` 1.22+ `mux.HandleFunc("GET /items/{id}", h)` | **verb and path in one literal** | `registration_call` | A |
 | Go | `gin`, `echo`, `chi`, `fiber` | `r.GET("/p", h)`, groups nest a prefix | `registration_call` | A |
@@ -1425,7 +1434,17 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 | Java | Micronaut `@JMSListener` + `@Queue`/`@Topic` | — | `annotation` | A |
 | Java | `JmsTemplate.send` / `convertAndSend` | — | `registration_call` | ✅ shipped |
 | Java | Direct `jakarta.jms.{Session, MessageProducer, MessageConsumer}` | `createProducer`/`createConsumer` linked to `createQueue`/`createTopic` via `channel_via`; `send()` deliberately unread | `registration_call` | ✅ shipped |
-| Java | `@RabbitListener`, `@PulsarListener` | — | `annotation` | A |
+| Java | Spring AMQP `@RabbitListener(queues = …)`, plus class-level `@RabbitListener` + `@RabbitHandler` | `queues` is a `String[]` (javap, spring-rabbit 3.1.4); the class-level form doubles as the destination prefix, `spring-kafka.yml`'s shape | `annotation` | ✅ **shipped** (2O Task 7) |
+| Java | `@RabbitListener(bindings = @QueueBinding(…))` / `queuesToDeclare = @Queue(…)` | the destination lives inside a NESTED annotation | `annotation` | **Boundary — derives nothing.** Nested-annotation arguments are readable only from extractor capability 9.16 onward and no catalog reads them yet; the empty-name gate drops the would-be row rather than publishing an empty destination. Closes when a `path_from` alias can name an attribute inside a nested annotation |
+| Java | A listener destination written as SpEL `#{…}` or a property `${…}` | the value is a bean property or a config key, resolved at container start | `annotation` | ✅ **shipped as `unresolved`** (2O Task 7) — the expression is published VERBATIM beside `resolution: unresolved`, never canonicalized and never resolved. Nothing here resolves it: the config ladder is a call-site mechanism `annotation_driven` never invokes |
+| Java | `@RabbitHandler` outside a class-level `@RabbitListener`, and a class-level `@RabbitListener` naming more than one queue | the first names no destination at all; the second is read element-0-only | `annotation` | **Boundary.** The first derives NOTHING (the empty-name gate, pinned by a §10 near-miss); the second takes the first queue, `spring-kafka.yml`'s own class-level limitation |
+| Java | A class carrying BOTH a class-level and a method-level `@RabbitListener` | Spring registers the two independently; this catalog composes the class queue in front of the method one | `annotation` | **Boundary — OVER-reports one composed destination.** Inherited from `spring-kafka.yml`'s prefix shape, which has the same seam. Closes when a prefix annotation can be scoped to the member annotations it actually prefixes |
+| Java | `@RabbitListener` + `@SendTo` (the declared reply destination) | `spring-kafka.yml` reads its own via D02 §2's `reply` block | `annotation` | **Boundary — no `reply` block is declared**, so a Rabbit listener's declared reply derives no outbound row. One `reply` block closes it |
+| Java | `@RabbitListeners` / `@PulsarListeners` — the `@Repeatable` container | a repeated annotation reaches the bytecode as its container, never as N annotations | `annotation` | **Boundary — derives nothing** for the repeated form. The single form is unaffected. Closes when a catalog can name a container annotation and read the array inside it |
+| Java | Spring for Apache Pulsar `@PulsarListener(topics = …/topicPattern = …)` | `topics` is a `String[]` and `topicPattern` a scalar (javap, spring-pulsar 1.2.11) — the `@KafkaListener` shape | `annotation` | ✅ **shipped** (2O Task 7). A TYPE-level use derives nothing: the framework ships no class-level handler annotation to dispatch to |
+| Java | `RabbitTemplate.convertAndSend(exchange, routingKey, message)` | the wire identity is the exchange+routing-key PAIR, rendered `exchange/routingKey`; the two-argument overload targets the default exchange and is the routing key alone | `registration_call` | ✅ **shipped** (2O Task 7), via `single_call`'s new `address_arg_2` |
+| Java | `RabbitTemplate` — `send(…)`, `convertSendAndReceive(…)`, and the arity-4/5 `convertAndSend` overloads | pre-converted `Message`, request/reply, and the `MessagePostProcessor`/`CorrelationData` forms | `registration_call` | **Boundary — derives nothing.** Only three `convertAndSend` arities are declared |
+| Java | `RabbitTemplate` — overloads that COLLIDE on arity | `_matching_method` selects by name and arity, never by argument type: arity 2 is also `(Object, MessagePostProcessor)`, arity 3 also `(String, Object, CorrelationData)` | `registration_call` | **Boundary — can OVER-report one destination.** A sibling call degrades to `unresolved` unless its payload is a string literal, in which case that literal is published as part of the destination. Inherited from `spring-jms-template.yml`'s identical shape; closes the day `methods` can discriminate on the call's own target descriptor |
 | Go | `rabbitmq/amqp091-go` (was `streadway/amqp`) `ch.Publish(exchange, key, …)` | — | `registration_call` | A |
 | TS | `amqplib` `ch.publish(exchange, key, …)`, `ch.consume(queue, cb)` | — | `registration_call` | A |
 | Python | `pika`, `kombu` `channel.basic_publish(exchange, routing_key, …)` | — | `registration_call` | A |
@@ -1450,8 +1469,9 @@ registration call itself is the evidence that a route exists, not the call that 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
 | Java | Spring Cloud AWS 3.x `io.awspring.cloud.sqs.annotation.SqsListener`, `SqsTemplate` | — | `annotation` | ✅ shipped |
-| Java | Spring Cloud AWS 2.x `io.awspring.cloud.messaging.listener.annotation.SqsListener` | **different package** | `annotation` | A |
-| Java | Spring Cloud AWS 1.x/2.2 `org.springframework.cloud.aws.messaging.listener.annotation.SqsListener` | **a third generation**, under the old `org.springframework.cloud` group | `annotation` | A |
+| Java | Spring Cloud AWS 2.x `io.awspring.cloud.messaging.listener.annotation.SqsListener` | **different package**; declares exactly `value()` as `String[]` and `deletionPolicy()`, `@Target(METHOD)` (javap, 2.4.4) | `annotation` | ✅ **shipped** (2O Task 7, `spring-sqs-legacy.yml`) |
+| Java | Spring Cloud AWS 1.x/2.2 `org.springframework.cloud.aws.messaging.listener.annotation.SqsListener` | **a third generation**, under the old `org.springframework.cloud` group; identical shape (javap, 2.2.6.RELEASE) | `annotation` | ✅ **shipped** (2O Task 7, same file) |
+| Java | Either legacy `@SqsListener` on a container-managed argument other than `Acknowledgment` | `@Header`/`@Headers` parameters, the visibility handle, the raw `Message` | `annotation` | **Boundary — the payload reads as absent** rather than wrong: `sole_unannotated` needs exactly one bare parameter, and two leave the request shape NULL. The two `Acknowledgment` types are excluded by name; anything else the framework injects is not |
 | Java | AWS SDK v2 `SqsClient.sendMessage(SendMessageRequest)`, `…builder().queueUrl(u)` | `SendMessageRequest.builder()` root, `queueUrl`/`messageBody` steps, `build` reaches `sendMessage` | `fluent_chain` | ✅ shipped |
 | Go | `aws-sdk-go-v2` `client.SendMessage(ctx, &sqs.SendMessageInput{QueueUrl: …})` | struct literal | `registration_call` | A |
 | TS | `@aws-sdk/client-sqs` v3 `client.send(new SendMessageCommand({QueueUrl}))` | **command classes are real, statically visible types** | `registration_call` | A |
@@ -1816,7 +1836,9 @@ confirming one.
 `org.springframework.cloud.aws.messaging.listener.annotation` (1.x/2.2, old Maven group),
 `io.awspring.cloud.messaging.listener.annotation` (2.x) and
 `io.awspring.cloud.sqs.annotation` (3.x). A catalog matching two of the three silently misses
-the rest.
+the rest. **All three now ship** — 3.x on `spring-sqs.yml`, the two older spellings on
+`spring-sqs-legacy.yml`, kept a separate file because each generation carries its own
+dependency coordinate and `detect.coordinates` names the module a catalog's rule applies to.
 
 **Rust Pub/Sub has no inbound side.** The official `google-cloud-pubsub` crate is pre-GA and
 **does not implement receiving messages**, so there is nothing to detect on the consumer side

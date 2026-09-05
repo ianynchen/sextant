@@ -1,0 +1,121 @@
+id: spring-actuator
+displayName: Spring Boot Actuator (@Endpoint)
+style: annotation_driven
+protocol: http
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework.boot:spring-boot-actuator"]
+
+requires: [annotation_args, type_annotations, typed_signatures]
+
+matches:
+  # THE CLASS GATE. CP-5 row 6: an `@Endpoint` class carrying no operation
+  # annotation serves nothing and does not even appear in the discovery
+  # document, and an operation annotation outside such a class is not an
+  # endpoint either. Both halves are required, which is exactly a
+  # `type_annotation` plus method-level `mapping.annotations`.
+  type_annotation: org.springframework.boot.actuate.endpoint.annotation.Endpoint
+  mapping:
+    # THE ADDRESS IS ON THE TYPE. `@Endpoint` carries the `id`; the operation
+    # annotations carry a verb and no address at all (javap, spring-boot-
+    # actuator 4.1.1: `ReadOperation`/`WriteOperation`/`DeleteOperation`
+    # declare only `produces()` and `producesFrom()`). So `path_from` is
+    # empty — every operation's own suffix is '' — and the whole address is
+    # the constant prefix plus the type-level `id`.
+    path_from: []
+    prefix_from: [id]
+    # THE FRAMEWORK'S FIXED BASE (CP-5 rows 1 and 5: `/actuator/probe` is a
+    # 200 and `/probe` is a 404). Stated nowhere on the declaration, because
+    # no annotation carries it — which is what makes it catalog data.
+    #
+    # It is a DEFAULT rather than a constant: CP-5 rows 7-8 confirm that
+    # `management.endpoints.web.base-path` moves the whole surface, on both
+    # Boot 3.5.10 and 4.1.1. Nothing reads it here, and nothing can —
+    # `annotation_driven` never touches `resolved_config` (only
+    # `resolve/engines/config_join.py:528` and
+    # `resolve/engines/derived_resource.py:578` read it) — so a module that
+    # overrides the base path is published under `/actuator` regardless.
+    # That over-claim is a stated boundary in docs/COVERAGE.md, and it stops
+    # being one the day an annotation-derived row can read a configuration
+    # key.
+    path_prefix: /actuator
+    # An HTTP address, so the seam composes segments and dedupes to exactly
+    # one separator (CP-1's rule, the same one every Spring HTTP catalog
+    # here rides).
+    path_separator: "/"
+    method_from: method
+    # Never consulted: every annotation below pre-sets its own verb, and this
+    # list is only read for one that does not. Left empty rather than filled
+    # with the three verbs, so a fourth operation annotation added without a
+    # `method` fails visibly (a verbless HTTP row) instead of silently
+    # deriving three.
+    all_methods: []
+    prefix_annotation: org.springframework.boot.actuate.endpoint.annotation.Endpoint
+    # CP-5 rows 1-4: one verb per operation annotation, and the framework
+    # serves no verb it was given no operation for (PUT is a 405).
+    annotations:
+      - { fqn: org.springframework.boot.actuate.endpoint.annotation.ReadOperation,
+          method: [GET] }
+      - { fqn: org.springframework.boot.actuate.endpoint.annotation.WriteOperation,
+          method: [POST] }
+      - { fqn: org.springframework.boot.actuate.endpoint.annotation.DeleteOperation,
+          method: [DELETE] }
+
+# Copied verbatim from spring-resttemplate.yml, for the same reason
+# `nullability` below is copied from spring-mvc.yml: shape (type) expansion
+# is a *global*, insert-if-absent pass keyed on the type symbol alone
+# (`derive_shapes`), so the FIRST catalog to reach a shared payload type is
+# the one that expands it, and every later catalog finds it already there.
+# Whichever catalog that turns out to be, ITS
+# `wrappers`/`serialization`/`known_types` are the rules that describe the
+# type for everyone, regardless of protocol or direction — so a file whose
+# copy disagreed would make the answer depend on catalog sort order.
+#
+# `WebEndpointResponse<T>` is this framework's own status-plus-body envelope
+# (javap, spring-boot-actuator 4.1.1: `public final class
+# WebEndpointResponse<T>`), so an operation returning one carries `T` on the
+# wire exactly as a `ResponseEntity<T>` does. Without the entry the envelope
+# TYPE would be published as the contract.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: org.springframework.boot.actuate.endpoint.web.WebEndpointResponse,
+      payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.math.BigDecimal, wire: number }
+  # A `class` literal or a constructed `instance` reaches payload rooting as a
+  # bare symbol: the extractor's own wire projection travels on a type
+  # reference (D00 §5a), and a call argument carries none. So the types that
+  # projection already flattens — the boxes and String — are declared here
+  # too, with exactly the `wire`/`format` it emits for each, so a captured
+  # `String.class` and a scanned `String` field can never disagree. `Void`
+  # reaches no wire type at all: the empty `wire` a `void` return already
+  # carries reads as "no payload", never as a shape nobody can expand.
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

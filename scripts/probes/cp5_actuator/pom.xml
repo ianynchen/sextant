@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CP-5 probe app (2O Task 7 Step 0). Deliberately NOT built on
+     spring-boot-starter-parent: a parent's version cannot come from a
+     property, and this probe's whole point is to run the same source against
+     more than one Boot version (§5.4 — the base-path property name and the
+     `/actuator` default are version-scoped). `-Dboot.version=` selects one. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>sextant.probe</groupId>
+  <artifactId>cp5-actuator</artifactId>
+  <version>0.0.1</version>
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <boot.version>4.1.1</boot.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>${boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>cp5-actuator-0.0.1</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <version>${boot.version}</version>
+        <executions>
+          <execution><goals><goal>repackage</goal></goals></execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
