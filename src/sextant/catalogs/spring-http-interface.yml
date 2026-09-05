@@ -14,7 +14,26 @@ requires: [annotation_args, typed_signatures]
 
 matches:
   # No type gate: @HttpExchange at type level is optional — methods alone may
-  # carry the exchange annotations.
+  # carry the exchange annotations. That is true and it is not the whole rule,
+  # which is what `A-C1` cost: with no gate of ANY kind, a lone `@GetExchange`
+  # on a class minted a row, and where neither half named a path it minted one
+  # at the EMPTY address, claiming the module calls a service at no address at
+  # all.
+  #
+  # MEASURED (`A-C1`, CP-11 Q6, spring-web / spring-aop 6.1.6): the gate the
+  # framework does have is on the CONSTRUCT, not on an annotation.
+  # `HttpServiceProxyFactory.createClient` hands the client type to Spring
+  # AOP's `ProxyFactory.getProxy(Class, Interceptor)`, and two hops down
+  # `AdvisedSupport.addInterface` tests `Class.isInterface()` and throws
+  # otherwise. An exchange annotation on a concrete class is therefore not an
+  # HTTP-interface client, and deriving one invents an outbound dependency.
+  #
+  # As on `retrofit.yml`, this also opts the catalog into the SEI fence: an
+  # interface the module itself implements is subtracted, on the reading that
+  # an outbound interface-gated derivation claims somebody ELSE answers the
+  # call. Stated in COVERAGE §5.2 as an under-report for the module that both
+  # declares an `@HttpExchange` client and implements it locally.
+  declared_on: interface
   request_body: { annotation: org.springframework.web.bind.annotation.RequestBody,
                   fallback: none }
   mapping:

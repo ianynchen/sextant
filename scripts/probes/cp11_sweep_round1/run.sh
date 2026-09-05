@@ -6,8 +6,10 @@
 # approximates (DR-6, GUIDELINES §8.1): OkHttp's complete verb-setter set
 # (`A-C2`), Spring MVC's server-side handler predicate (`A-C7`), which
 # jakarta.websocket artifact declares which annotation and what each targets
-# (`A-C1`), and what `Retrofit.create` does with a non-interface (`A-C6`). Every
-# one of the four was previously encoded from documentation or memory.
+# (`A-C1`), what `Retrofit.create` does with a non-interface (`A-C6`), Spring
+# STOMP's own handler predicate, and whether an `@HttpExchange` client has to be
+# an interface (both `A-C1`). Every one was previously encoded from
+# documentation, a checkpoint note, or memory.
 #
 # THE TABLE IS GENERATED, AND ITS COLUMN HEADERS COME FROM THE JARS' OWN BYTES
 # (GUIDELINES §5.4, and CP-5's failure it exists to prevent). Each artifact
@@ -40,12 +42,18 @@ M2="${HOME}/.m2/repository"
 # okhttp 4.12.0 is the version the sweep's own `A-C2` reproduction used. The two
 # jakarta.websocket artifacts are the current release of the 2.2 API, and the
 # question they answer — which jar declares which annotation — is why BOTH are
-# resolved rather than either.
+# resolved rather than either. spring-aop, spring-messaging and spring-web are
+# at the same 6.1.6 the fixture pins: Q6's answer lives across three jars,
+# because the HTTP-interface factory delegates the interface requirement two
+# hops down into Spring AOP rather than asserting it itself.
 ARTIFACTS=(
   "com.squareup.okhttp3|okhttp|4.12.0|class:okhttp3.OkHttp|VERSION"
   "com.squareup.retrofit2|retrofit|2.11.0|-|-"
   "jakarta.websocket|jakarta.websocket-api|2.2.0|META-INF/MANIFEST.MF|Implementation-Version"
   "jakarta.websocket|jakarta.websocket-client-api|2.2.0|META-INF/MANIFEST.MF|Implementation-Version"
+  "org.springframework|spring-aop|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
+  "org.springframework|spring-messaging|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
+  "org.springframework|spring-web|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-webmvc|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-webmvc|6.2.15|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-webmvc|7.0.2|META-INF/MANIFEST.MF|Implementation-Version"

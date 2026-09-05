@@ -42,9 +42,12 @@ _CONSTANT_VALUE = re.compile(r"^\s*ConstantValue:\s*String\s+(\S+)\s*$")
 # `javap -p -s`'s two lines: the declaration, then the erased descriptor.
 _DECLARATION = re.compile(r"^\s{2}\S.*?([\w$]+)\s*\(")
 _DESCRIPTOR_LINE = re.compile(r"^\s*descriptor:\s*(\S+)\s*$")
-# One `javap -c` instruction: ordinal, mnemonic, and the trailing `// comment`
-# naming the constant-pool entry it operates on.
-_INSTRUCTION = re.compile(r"^\s*\d+:\s+(\S+)(?:\s+\S+)?(?:\s*//\s*(.*?)\s*)?$")
+# One `javap -c` instruction line: ordinal, mnemonic, then whatever operands
+# and trailing `// comment` follow. The operands are matched loosely on purpose
+# — `invokedynamic #21,  0` and `invokeinterface #25,  2` carry two of them,
+# and a pattern that assumed one silently ENDED the body at the first such
+# instruction, which is how Q6a first printed an empty cell.
+_INSTRUCTION = re.compile(r"^\s*\d+:\s+(\S+)(.*)$")
 
 _ASSUMED = "-"
 # Markdown tables are `|`-delimited, so an instruction sequence is joined with
@@ -169,7 +172,9 @@ def _body(output: str, method: str) -> list[str]:
         match = _INSTRUCTION.match(line)
         if not match:
             break
-        body.append(f"{match.group(1)} {match.group(2) or ''}".strip())
+        operands = match.group(2)
+        comment = operands.split("//", 1)[1].strip() if "//" in operands else ""
+        body.append(f"{match.group(1)} {comment}".strip())
     return body
 
 
@@ -270,11 +275,74 @@ def _named(artifacts: list[Artifact], name: str) -> list[Artifact]:
     return found
 
 
+def q5_spring_stomp_is_handler(artifacts: list[Artifact]) -> list[tuple[str, str, str]]:
+    """Q5 (`A-C1`, `spring-stomp`). The catalog declared NO type-level gate at
+    all, so one method annotation minted an endpoint. The framework does have a
+    gate, and it is the same predicate Q2 measures for MVC — which is the fact
+    that makes adding one to the catalog a mirror rather than an invention."""
+    rows = []
+    for artifact in _named(artifacts, "spring-messaging"):
+        output = _javap(
+            "-p",
+            "-c",
+            "org.springframework.messaging.simp.annotation.support."
+            "SimpAnnotationMethodMessageHandler",
+            classpath=artifact.jar,
+        )
+        rows.append((artifact.name, artifact.observed, _STEP.join(_body(output, "isHandler"))))
+    return rows
+
+
+def q6_http_interface_requires_an_interface(
+    artifacts: list[Artifact],
+) -> list[tuple[str, str, str]]:
+    """Q6 (`A-C1`, `spring-http-interface`). Whether an `@HttpExchange` client
+    must be an interface, which decides whether `declared_on: interface` is a
+    mirror or a guess.
+
+    TWO rows, because the answer is not in one place and saying so is the
+    point: `HttpServiceProxyFactory.createClient` hands the type to Spring
+    AOP's `ProxyFactory.getProxy(Class, Interceptor)`, and the requirement is
+    asserted two hops down in `AdvisedSupport.addInterface`. Recording both
+    bodies is what keeps the verdict a measurement instead of a chain somebody
+    reasoned through once.
+    """
+    rows = []
+    for artifact in _named(artifacts, "spring-web"):
+        output = _javap(
+            "-p",
+            "-c",
+            "org.springframework.web.service.invoker.HttpServiceProxyFactory",
+            classpath=artifact.jar,
+        )
+        body = [
+            step for step in _body(output, "createClient") if "aop/framework/ProxyFactory" in step
+        ]
+        rows.append((artifact.name, artifact.observed, _STEP.join(body)))
+    for artifact in _named(artifacts, "spring-aop"):
+        output = _javap(
+            "-p", "-c", "org.springframework.aop.framework.AdvisedSupport", classpath=artifact.jar
+        )
+        body = _body(output, "public void addInterface")[:7]
+        rows.append((artifact.name, artifact.observed, _STEP.join(body)))
+    return rows
+
+
 _QUESTIONS: list[tuple[str, str, Callable[[list[Artifact]], list[tuple[str, str, str]]]]] = [
     ("1", "okhttp `Request$Builder` verb setters", q1_okhttp_verb_setters),
     ("2", "Spring MVC `RequestMappingHandlerMapping.isHandler`", q2_spring_is_handler),
     ("3", "jakarta.websocket annotation homes and targets", q3_websocket_annotation_homes),
     ("4", "`Retrofit.create`'s interface guard", q4_retrofit_interface_only),
+    (
+        "5",
+        "Spring STOMP `SimpAnnotationMethodMessageHandler.isHandler`",
+        q5_spring_stomp_is_handler,
+    ),
+    (
+        "6",
+        "`@HttpExchange` client proxying, and its interface assertion",
+        q6_http_interface_requires_an_interface,
+    ),
 ]
 
 

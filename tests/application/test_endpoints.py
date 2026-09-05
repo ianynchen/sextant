@@ -3289,6 +3289,17 @@ def _sendtouser_facts(root: Path) -> None:
     notify = "com/acme/ws/StompUserHandler#notify(sig_11112222)."
     facts = [
         SymbolFact(document_id="doc_1", symbol=handler_type, construct_kind=ConstructKind.CLASS),
+        # `@Controller`, because Spring STOMP's own handler test is
+        # `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)`
+        # (CP-11 Q5) and `spring-stomp.yml` gates on it since `A-C1`. These
+        # facts described a class the container would never dispatch to, which
+        # is exactly the shape the sweep found in the catalog.
+        AnnotationFact(
+            document_id="doc_1",
+            target=handler_type,
+            retention="runtime",
+            use=AnnotationUse(annotation="org/springframework/stereotype/Controller#", args={}),
+        ),
         SymbolFact(
             document_id="doc_1",
             symbol=notify,
@@ -4382,3 +4393,228 @@ def test_a_module_local_annotation_composed_from_nothing_is_not_a_handler(tmp_pa
     `@Component`, `@Service` and home-grown marker in the module as a
     controller."""
     assert _stereotype_rows(tmp_path, meta_annotated=False) == []
+
+
+# --- `A-C1` / `A-C6`: the gates that say which declaration is real ----------
+
+
+def _gate_facts(
+    root: Path,
+    *,
+    owner_kind: ConstructKind,
+    type_annotations: dict[str, dict],
+    method_annotation: str,
+    method_args: dict,
+) -> None:
+    """One type of the given construct kind carrying the given type-level
+    annotations, and one method on it carrying one mapping annotation.
+
+    Deliberately generic: the four gates below differ only in which of those
+    three knobs the framework's own rule turns, and writing four near-identical
+    fact builders is how a near-miss ends up differing from its positive in
+    more than the one conjunct under test."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/gate/Subject.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    owner = "com/acme/gate/Subject#"
+    handler = "com/acme/gate/Subject#onMessage(sig_5a5a5a5a)."
+    facts: list = [
+        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=owner_kind),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handler,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=owner,
+            # A void return, spelled rather than omitted: a catalog with a
+            # `reply` block reads the handler's own signature, and a method
+            # fact carrying none is a shape the extractor never emits.
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void#", wire_type="")),
+        ),
+    ]
+    facts += [
+        AnnotationFact(
+            document_id="doc_1",
+            target=owner,
+            retention="runtime",
+            use=AnnotationUse(annotation=fqn, args=args),
+        )
+        for fqn, args in type_annotations.items()
+    ]
+    facts.append(
+        AnnotationFact(
+            document_id="doc_1",
+            target=handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=method_annotation, args=method_args),
+        )
+    )
+    write_fact_file(root / "Subject.jsonl", document, facts)
+
+
+def _gate_rows(tmp_path: Path, catalog_id: str, **facts) -> list[tuple]:
+    _gate_facts(tmp_path / "facts", **facts)
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == catalog_id)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(
+        workspace,
+        [catalog],
+        capabilities={"annotation_args", "typed_signatures", "type_annotations"},
+    )
+    rows = [
+        (r["protocol"], r["direction"], r["method"], r["path"])
+        for r in workspace.query("endpoints")
+    ]
+    workspace.close()
+    return rows
+
+
+_ON_MESSAGE = "jakarta/websocket/OnMessage#"
+_SERVER_ENDPOINT = "jakarta/websocket/server/ServerEndpoint#"
+_CLIENT_ENDPOINT = "jakarta/websocket/ClientEndpoint#"
+_MESSAGE_MAPPING = "org/springframework/messaging/handler/annotation/MessageMapping#"
+_CONTROLLER = "org/springframework/stereotype/Controller#"
+_GET_EXCHANGE = "org/springframework/web/service/annotation/GetExchange#"
+_RETROFIT_GET = "retrofit2/http/GET#"
+
+
+def test_a_websocket_client_endpoint_is_not_an_inbound_server_endpoint(tmp_path: Path):
+    """`A-C1`, and the worst row in it: a `@ClientEndpoint` class — one that
+    DIALS OUT — carrying the `@OnMessage` callback was published as an INBOUND
+    WebSocket endpoint at the empty address. Direction inverted and address
+    invented in one row.
+
+    `@OnMessage` cannot mint anything on its own: it is `@Target(METHOD)`, it
+    carries no address, and it ships in the CLIENT api jar, so it is the
+    message callback for both kinds of endpoint (CP-11 Q3). `@ServerEndpoint`
+    is what makes a class served."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "jakarta-websocket",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={_CLIENT_ENDPOINT: {"value": "ws://billing/live"}},
+            method_annotation=_ON_MESSAGE,
+            method_args={},
+        )
+        == []
+    )
+
+
+def test_a_websocket_server_endpoint_still_derives_its_destination(tmp_path: Path):
+    """The paired positive. One annotation different from the near-miss above,
+    and the row the container really does serve comes back — which is what
+    stops the gate from being a rule that declines everything."""
+    assert _gate_rows(
+        tmp_path,
+        "jakarta-websocket",
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={_SERVER_ENDPOINT: {"value": "/live"}},
+        method_annotation=_ON_MESSAGE,
+        method_args={},
+    ) == [("websocket", "inbound", None, "/live")]
+
+
+def test_a_stomp_mapping_on_a_class_that_is_not_a_controller_derives_nothing(tmp_path: Path):
+    """`A-C1`. With no type gate, a lone `@MessageMapping` minted a declaration
+    — and with no class-level annotation to prefix it, at the empty
+    destination. Spring dispatches to `@Controller` beans and nothing else
+    (CP-11 Q5, the same predicate MVC runs)."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "spring-stomp",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={},
+            method_annotation=_MESSAGE_MAPPING,
+            method_args={"value": ["/place"]},
+        )
+        == []
+    )
+
+
+def test_a_stomp_mapping_on_a_controller_still_derives_its_destination(tmp_path: Path):
+    """The paired positive: the same handler on a `@Controller`."""
+    assert _gate_rows(
+        tmp_path,
+        "spring-stomp",
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={_CONTROLLER: {}},
+        method_annotation=_MESSAGE_MAPPING,
+        method_args={"value": ["/place"]},
+    ) == [("websocket", "inbound", None, "/place")]
+
+
+def test_an_http_exchange_annotation_on_a_class_derives_no_outbound_call(tmp_path: Path):
+    """`A-C1`. `HttpServiceProxyFactory` proxies through Spring AOP's
+    `ProxyFactory`, which refuses a non-interface (CP-11 Q6), so an exchange
+    annotation on a concrete class is not a client at all and the outbound row
+    published for one was a dependency the module does not have."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "spring-http-interface",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={},
+            method_annotation=_GET_EXCHANGE,
+            method_args={"value": ["/orders"]},
+        )
+        == []
+    )
+
+
+def test_an_http_exchange_annotation_on_an_interface_still_derives(tmp_path: Path):
+    """The paired positive: one construct kind different."""
+    assert _gate_rows(
+        tmp_path,
+        "spring-http-interface",
+        owner_kind=ConstructKind.INTERFACE,
+        type_annotations={},
+        method_annotation=_GET_EXCHANGE,
+        method_args={"value": ["/orders"]},
+    ) == [("http", "outbound", "GET", "/orders")]
+
+
+def test_a_retrofit_annotation_on_a_concrete_class_derives_nothing(tmp_path: Path):
+    """`A-C6`. `Retrofit.create` throws `IllegalArgumentException("API
+    declarations must be interfaces.")` on anything else (CP-11 Q4), so a
+    `@GET`-annotated method on a concrete class is a hand-written class in a
+    codebase that also uses Retrofit, or a test double — never a call site.
+    The row published for one was a plausible-looking outbound dependency that
+    does not exist, which is the worst kind: nothing downstream can tell a
+    plausible fabricated address from an observed one."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "retrofit",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={},
+            method_annotation=_RETROFIT_GET,
+            method_args={"value": ["/orders"]},
+        )
+        == []
+    )
+
+
+def test_a_retrofit_annotation_on_an_interface_still_derives(tmp_path: Path):
+    """The paired positive: one construct kind different, and the real
+    Retrofit shape comes back."""
+    assert _gate_rows(
+        tmp_path,
+        "retrofit",
+        owner_kind=ConstructKind.INTERFACE,
+        type_annotations={},
+        method_annotation=_RETROFIT_GET,
+        method_args={"value": ["/orders"]},
+    ) == [("http", "outbound", "GET", "/orders")]

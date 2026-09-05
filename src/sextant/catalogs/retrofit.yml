@@ -12,6 +12,29 @@ requires: [annotation_args, typed_signatures]
 matches:
   # No type gate and no prefix: a Retrofit interface is its method
   # annotations, and the base URL lives in builder code (call-site phase).
+  #
+  # MEASURED (`A-C6`, CP-11 Q4, retrofit 2.11.0): `Retrofit.create` calls
+  # `validateServiceInterface`, whose first act is `Class.isInterface()` and
+  # whose else-branch is an unconditional
+  # `throw new IllegalArgumentException("API declarations must be
+  # interfaces.")`. Retrofit therefore proxies interfaces and nothing else, so
+  # a `@GET`-annotated method on a CONCRETE CLASS is not a Retrofit call site:
+  # it is a hand-written class in a codebase that also uses Retrofit, or a test
+  # double. Without this key such a method published `(http, outbound, GET,
+  # /orders, resolved, compiler)` — a plausible-looking outbound dependency
+  # that does not exist, which is the worst kind, because nothing downstream
+  # can tell a plausible fabricated address from an observed one.
+  #
+  # It also opts this catalog into the SEI fence (`derive_endpoints.sql`): an
+  # interface THIS MODULE IMPLEMENTS is subtracted, because an outbound
+  # interface-gated derivation is claiming "somebody else answers this". For
+  # Retrofit that is a stated under-report rather than a mirror — `create()`
+  # proxies the interface whether or not a local class also implements it — and
+  # it is accepted because the shape it costs (a Retrofit service interface
+  # with a local implementation in MAIN sources) is rarer than the shape it
+  # fixes. Stated in COVERAGE §5.2; it stops being the right trade if a module
+  # ships local fallbacks for its Retrofit services.
+  declared_on: interface
   request_body: { annotation: retrofit2.http.Body, fallback: none }
   mapping:
     path_from: [value]

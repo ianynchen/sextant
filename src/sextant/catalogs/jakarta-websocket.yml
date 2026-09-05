@@ -10,11 +10,30 @@ detect:
 requires: [annotation_args, typed_signatures]
 
 matches:
-  # No type-level gate distinct from the prefix (spring-jms.yml/spring-kafka.yml
-  # precedent): `@ServerEndpoint` on the class IS both the marker and the path
-  # prefix, so it plays only the `prefix_annotation` role below — the same
-  # double duty a class-level, polymorphic `@KafkaListener` plays for
-  # `@KafkaHandler` in spring-kafka.yml.
+  # THE TYPE GATE (`A-C1`). `@ServerEndpoint` plays both roles — the marker AND
+  # the path prefix — and until this key it played only the second, on the
+  # spring-jms.yml/spring-kafka.yml precedent that a prefix annotation gates by
+  # side effect. It does not. `derive_endpoints.sql:725` is a no-op for a
+  # catalog declaring no `$type_annotation`, so a lone `@OnMessage` minted a
+  # declaration and the absent prefix composed as the empty address.
+  #
+  # MEASURED (CP-11 Q3, jakarta.websocket-api / -client-api 2.2.0):
+  # `@OnMessage` is `@Target(METHOD)`, declares one attribute
+  # (`maxMessageSize`), carries no address, and ships in the CLIENT api jar —
+  # it is the message callback for a `@ClientEndpoint` class exactly as much as
+  # for a `@ServerEndpoint` one. `@ClientEndpoint` and `@ServerEndpoint` are
+  # both `@Target(TYPE)`, and only the second makes a class SERVED. So a
+  # `@ClientEndpoint` class with an `@OnMessage` handler — a class that dials
+  # OUT — was published as an INBOUND WebSocket endpoint: direction inverted
+  # and address invented in one row. `docs/COVERAGE.md:1211-1216` names exactly
+  # this failure mode as the reason the `javax` spelling is left
+  # detection-only; the same hazard was live on the `jakarta` path and stated
+  # nowhere.
+  #
+  # Naming the same annotation here and as `prefix_annotation` below is the
+  # spring-cloud-openfeign shape, not a new one: the two CTEs join it on
+  # different roles.
+  type_annotation: jakarta.websocket.server.ServerEndpoint
   #
   # Deliberately NO `request_body` block (unlike every other catalog here):
   # checkpoint answer 5 (Phase 2H Task 2) rules that a WebSocket frame is

@@ -937,6 +937,28 @@ unmatched step and leave GET standing (CP-11). What stays unread is
 step serves both overloads and the arity-1 form's payload is absent. Everything else in this
 table remains unimplemented; the system tier still has nothing to match against them.
 
+**Both annotation clients are now gated on the construct the framework actually proxies**
+(`A-C6` and `A-C1`, principles sweep §3.2). Retrofit and Spring's HTTP interface declared
+neither a type gate nor `declared_on`, so an exchange annotation on a **concrete class**
+derived an outbound row at `resolved`/`compiler` — a plausible-looking dependency the module
+does not have, and the worst kind, because nothing downstream can tell a plausible fabricated
+address from an observed one. Measured (CP-11): `Retrofit.create` throws
+`IllegalArgumentException("API declarations must be interfaces.")` on anything else, and
+`HttpServiceProxyFactory.createClient` hands its type to Spring AOP's `ProxyFactory`, whose
+`AdvisedSupport.addInterface` asserts `Class.isInterface()`. Both catalogs declare
+`declared_on: interface`.
+
+**The stated cost of that key, on both files:** `declared_on: interface` on an OUTBOUND catalog
+also engages the SEI fence, which subtracts every interface the module's own classes implement
+— the fence exists because a generated server stub and a hand-written client interface are
+annotated identically, and an interface the module IMPLEMENTS is one it answers. Neither
+framework has that rule: `Retrofit.create` and `createClient` proxy the interface whether or not
+a local class also implements it. So a module that both declares one of these clients and ships
+a local implementation of it in MAIN sources loses that client's rows. Accepted as the smaller
+error — the shape it costs is rarer than the concrete-class fabrication it fixes — and
+**falsified by** any module shipping local fallbacks for its Retrofit or `@HttpExchange`
+services. Closes when the fence can be declared separately from the construct gate.
+
 | Language | Library | Shape | Tier |
 |---|---|---|---|
 | Java | Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange` | `annotation` | ✅ shipped |
@@ -1218,8 +1240,35 @@ or `@SubscribeMapping("/board")` exactly as `@RequestMapping` paths do; and a `@
 handler derives its reply as a second, outbound row. STOMP payloads answer the format
 ladder at rung 5 (`json`, `narrowed` — Spring's default converter with Jackson present).
 
+**`A-C1` (principles sweep §3.2) put a type gate on both catalogs.** Neither declared one, so
+`derive_endpoints.sql`'s controller join was a no-op and a lone method annotation minted a
+declaration: on Jakarta WebSocket a `@ClientEndpoint` class — one that DIALS OUT — carrying the
+`@OnMessage` callback was published as an INBOUND endpoint at the empty address, direction
+inverted and address invented in one row; on STOMP a bare `@MessageMapping` on any class did the
+same. Both gates are measured rather than chosen (CP-11): `@OnMessage` is `@Target(METHOD)`,
+carries no address and ships in the CLIENT api jar, so it is the callback for both kinds of
+endpoint and `@ServerEndpoint` is what makes a class served; and Spring STOMP's
+`SimpAnnotationMethodMessageHandler.isHandler` is byte for byte the
+`AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` call Spring MVC runs. **Output
+changes for real modules**: a WebSocket client and a STOMP handler on a non-`@Controller` class
+stop deriving; everything the container actually serves is unaffected.
+
 Boundaries, each verified against the shipped code:
 
+- **A `@ServerEndpoint` class whose only lifecycle method is `@OnOpen`/`@OnClose` derives
+  nothing.** It is a real served endpoint, and `mapping.annotations` lists `@OnMessage` alone —
+  so a connection-oriented endpoint that never declares a message handler is absent from the
+  export entirely. Silent before `A-C1`, stated here now. **Falsified by** any
+  `@ServerEndpoint` class with no `@OnMessage`; closes by listing the lifecycle annotations
+  beside it, which needs a probe of what the container serves for each.
+- **`spring-stomp.yml` claims `org.springframework.messaging.handler.annotation.MessageMapping`,
+  and that annotation is also THE routing annotation for Spring RSocket controllers.** An
+  RSocket handler in a scanned module would be published by this catalog as a `websocket`
+  endpoint — a wrong-PROTOCOL fabrication rather than an empty-address one. The FQN identity is
+  certain; what a real RSocket controller derives is **unverified**, and the `@Controller` gate
+  `A-C1` added does not separate the two (an RSocket controller is a `@Controller` too).
+  Raised, not closed: separating them needs a fact that tells an RSocket registration from a
+  STOMP one, and neither catalog reads one.
 - **A raw WebSocket frame is untyped, and the row says so.** `jakarta-websocket.yml`
   deliberately declares no `request_body` block: `@OnMessage(String frame)`'s parameter is
   an opaque frame, not a declared contract, and the protocol offers no `@Payload`-shaped

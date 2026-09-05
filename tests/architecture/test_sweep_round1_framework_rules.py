@@ -75,10 +75,10 @@ def catalog(name: str) -> dict:
 
 def test_the_probe_table_is_readable_at_all():
     """A pin that parses nothing passes for the wrong reason: an empty table has
-    no disagreements either. Asserts the four questions are all present before
-    any of them is compared against a catalog."""
+    no disagreements either. Asserts every question is present before any of
+    them is compared against a catalog."""
     numbers = {number.rstrip("abcdefgh") for number in probe_rows()}
-    assert numbers == {"1", "2", "3", "4"}, (
+    assert numbers == {"1", "2", "3", "4", "5", "6"}, (
         f"CP-11's observation table is missing questions — found {sorted(numbers)}"
     )
 
@@ -127,3 +127,67 @@ def test_the_spring_handler_gate_names_the_annotation_the_framework_tests_for():
     tested = "org/springframework/stereotype/Controller"
     assert f"class {tested}" in body
     assert catalog("spring-mvc")["matches"]["type_annotation"] == tested.replace("/", ".")
+
+
+def test_the_websocket_gate_is_the_annotation_that_marks_a_SERVED_endpoint():
+    """`A-C1`. `@OnMessage` is `@Target(METHOD)`, carries no address, and ships
+    in the CLIENT api jar (CP-11 Q3) — it is the message callback for a
+    dialling-out `@ClientEndpoint` class exactly as much as for a served
+    `@ServerEndpoint` one. A catalog with no type gate therefore published a
+    WebSocket client as an inbound server endpoint, direction inverted and
+    address invented in one row.
+
+    `@ServerEndpoint` is the annotation that makes a class served, it is
+    `@Target(TYPE)`, and the catalog's gate must name it — never `@OnMessage`,
+    and never nothing."""
+    observed = probe_rows()["3"]["observed"]
+    assert "OnMessage in jakarta.websocket-client-api @Target(METHOD)" in observed
+    assert "ServerEndpoint in jakarta.websocket-api @Target(TYPE)" in observed
+    matches = catalog("jakarta-websocket")["matches"]
+    assert matches["type_annotation"] == "jakarta.websocket.server.ServerEndpoint"
+    assert "jakarta.websocket.ClientEndpoint" not in yaml.dump(matches)
+
+
+def test_the_stomp_gate_is_the_predicate_spring_stomp_itself_runs():
+    """`A-C1`. `spring-stomp.yml` declared no type-level gate at all, so one
+    method annotation minted an endpoint at the empty address. Spring STOMP's
+    own handler test is the SAME `AnnotatedElementUtils.hasAnnotation(beanType,
+    Controller.class)` call MVC runs (CP-11 Q5) — which is what makes adding
+    the gate a mirror rather than a tightening somebody chose."""
+    stomp = probe_rows()["5"]["observed"]
+    mvc = probe_rows()["2a"]["observed"]
+    # `ldc` vs `ldc_w` is a constant-pool index width, not a different rule.
+    assert stomp.replace("ldc_w", "ldc") == mvc
+    assert (
+        catalog("spring-stomp")["matches"]["type_annotation"]
+        == "org.springframework.stereotype.Controller"
+    )
+
+
+def test_an_http_interface_client_must_be_an_interface():
+    """`A-C1`. `spring-http-interface.yml` declared neither a type gate nor
+    `declared_on`, so an exchange annotation on a concrete CLASS derived an
+    outbound row for a client the framework would never create.
+
+    The requirement is real but it is not asserted where the client is created:
+    `createClient` hands the type to Spring AOP's `ProxyFactory`, and
+    `AdvisedSupport.addInterface` is what refuses a non-interface (CP-11 Q6a,
+    Q6b). Both rows are pinned, because a verdict that rests on a two-hop chain
+    is only a measurement while both hops are recorded."""
+    assert "aop/framework/ProxyFactory.getProxy" in probe_rows()["6a"]["observed"]
+    guard = probe_rows()["6b"]["observed"]
+    assert "java/lang/Class.isInterface" in guard
+    assert "IllegalArgumentException" in guard
+    assert catalog("spring-http-interface")["matches"]["declared_on"] == "interface"
+
+
+def test_retrofit_only_ever_proxies_an_interface():
+    """`A-C6`. `Retrofit.create` validates its argument before proxying it, and
+    a non-interface throws `IllegalArgumentException("API declarations must be
+    interfaces.")` (CP-11 Q4). A `@GET`-annotated method on a concrete class is
+    therefore not a Retrofit call site at all, and the outbound row the catalog
+    published for one was a plausible-looking dependency that does not exist."""
+    guard = probe_rows()["4"]["observed"]
+    assert "java/lang/Class.isInterface" in guard
+    assert "API declarations must be interfaces." in guard
+    assert catalog("retrofit")["matches"]["declared_on"] == "interface"

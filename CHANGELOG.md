@@ -178,6 +178,27 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-C1` / `A-C6`: four catalogs derived from evidence the framework does not act on**
+  (principles sweep §3.2). `jakarta-websocket` and `spring-stomp` declared no type-level gate at
+  all, so a lone method annotation minted a declaration — and with no class-level annotation to
+  prefix it, at the EMPTY address. Worst of them: a `@ClientEndpoint` class, one that dials OUT,
+  carrying the `@OnMessage` callback was published as an INBOUND WebSocket endpoint, direction
+  inverted and address invented in one row. `retrofit` and `spring-http-interface` declared no
+  `declared_on`, so an exchange annotation on a concrete CLASS derived an outbound row for a
+  client the framework would never create. All four gates are now measured rather than chosen
+  (CP-11): `@OnMessage` is `@Target(METHOD)`, addressless, and ships in the CLIENT api jar, so
+  `@ServerEndpoint` is what makes a class served; Spring STOMP's `isHandler` is byte for byte
+  the `@Controller` predicate Spring MVC runs; `Retrofit.create` throws on a non-interface; and
+  `HttpServiceProxyFactory` proxies through Spring AOP's `ProxyFactory`, which asserts
+  `isInterface`. **Output changes for real modules**: a WebSocket client, a STOMP handler on a
+  non-`@Controller` class, and an exchange annotation on a concrete class all stop deriving. The
+  stated cost is on the two outbound catalogs — `declared_on: interface` also engages the SEI
+  fence, so a module that ships a local implementation of its own Retrofit or `@HttpExchange`
+  client loses that client's rows; recorded in COVERAGE §5.2. Two under-reports `A-C1` names are
+  stated rather than closed: a `@ServerEndpoint` class whose only lifecycle method is
+  `@OnOpen`/`@OnClose`, and Spring RSocket controllers, whose routing annotation
+  `spring-stomp.yml` claims and whose derived output is unverified.
+
 - **`A-C7`: a custom stereotype deleted its controller's entire HTTP surface** (principles sweep
   §3.2). `spring-web`, `spring-mvc` and `spring-graphql` gated on string equality against one
   annotation FQN over a type's own direct annotations. Spring's rule is

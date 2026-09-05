@@ -11,6 +11,8 @@ the framework's own bytecode say?**
 | `A-C2` | `okhttp.yml` seeds `http_method: GET` at the chain root and declares six verb steps | which methods of `okhttp3.Request$Builder` set the verb — ALL of them, because an uncovered one leaves the seeded GET standing |
 | `A-C7` | `spring-web`/`spring-mvc`/`spring-graphql` gate on string equality against `org.springframework.stereotype.Controller` | what `RequestMappingHandlerMapping.isHandler` actually executes, per Spring minor |
 | `A-C1` | `jakarta-websocket.yml` mints an inbound endpoint from a lone `@OnMessage` | which artifact declares `@OnMessage`, `@ClientEndpoint` and `@ServerEndpoint`, and what each targets |
+| `A-C1` | `spring-stomp.yml` declares no type-level gate at all | what Spring STOMP's own handler test is |
+| `A-C1` | `spring-http-interface.yml` declares neither a type gate nor `declared_on` | whether an `@HttpExchange` client has to be an interface |
 | `A-C6` | `retrofit.yml` declares no `declared_on`, so a `@GET` method on a CLASS derives an outbound row | what `Retrofit.create` does when handed a non-interface |
 
 The questions are worth a probe because of the failure mode rather than the
@@ -21,7 +23,8 @@ an address on a class that dials OUT, and a missing `declared_on` publishes an
 outbound dependency nobody has.
 
 **Version scope (§5.4).** Read against **okhttp 4.12.0, retrofit 2.11.0,
-jakarta.websocket-api 2.2.0, jakarta.websocket-client-api 2.2.0 and
+jakarta.websocket-api 2.2.0, jakarta.websocket-client-api 2.2.0,
+spring-aop 6.1.6, spring-messaging 6.1.6, spring-web 6.1.6 and
 spring-webmvc 6.1.6, 6.2.15, 7.0.2 and 7.0.9**. Four Spring minors rather than
 one because `A-C7`'s whole claim is that the handler predicate is stable and the
 catalogs' literal compare is not — a verdict from a single minor could not say
@@ -54,6 +57,8 @@ edited without re-running this harness fails the suite rather than going quiet.
 | 2 | `RequestMappingHandlerMapping.isHandler`, per Spring minor | one `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` call, identical across minors |
 | 3 | `jakarta.websocket.OnMessage` | `@Target(METHOD)`, declared by the CLIENT api jar — so it cannot mint a served endpoint alone |
 | 4 | `retrofit2.Retrofit.validateServiceInterface` | an `isInterface` test guarding a thrown `IllegalArgumentException` |
+| 5 | `SimpAnnotationMethodMessageHandler.isHandler` | the SAME predicate as row 2 — which is what makes a `@Controller` gate on `spring-stomp.yml` a mirror rather than an invention |
+| 6 | `HttpServiceProxyFactory.createClient`, and `AdvisedSupport.addInterface` two hops below it | the client type reaches Spring AOP's `ProxyFactory`, which asserts `isInterface` |
 
 ## Observations
 
@@ -70,7 +75,7 @@ row beneath the headers says `assumed` for it rather than `yes`.
 
 | what the run read | 2.11.0 | 2.2.0 | 4.12.0 | 6.1.6 | 6.2.15 | 7.0.2 | 7.0.9 |
 |---|---|---|---|---|---|---|---|
-| artifacts reporting this version | retrofit | jakarta.websocket-api, jakarta.websocket-client-api | okhttp | spring-webmvc | spring-webmvc | spring-webmvc | spring-webmvc |
+| artifacts reporting this version | retrofit | jakarta.websocket-api, jakarta.websocket-client-api | okhttp | spring-aop, spring-messaging, spring-web, spring-webmvc | spring-webmvc | spring-webmvc | spring-webmvc |
 | identity read from the archive itself | assumed | yes | yes | yes | yes | yes | yes |
 
 | # | question | artifact | version | observed |
@@ -82,3 +87,6 @@ row beneath the headers says `assumed` for it rather than `yes`.
 | 2d | Spring MVC `RequestMappingHandlerMapping.isHandler` | `spring-webmvc` | 7.0.9 | `aload_1 ; ldc class org/springframework/stereotype/Controller ; invokestatic Method org/springframework/core/annotation/AnnotatedElementUtils.hasAnnotation:(Ljava/lang/reflect/AnnotatedElement;Ljava/lang/Class;)Z ; ireturn` |
 | 3 | jakarta.websocket annotation homes and targets | `jakarta.websocket-api+jakarta.websocket-client-api` | 2.2.0 | `OnMessage in jakarta.websocket-client-api @Target(METHOD); ClientEndpoint in jakarta.websocket-client-api @Target(TYPE); ServerEndpoint in jakarta.websocket-api @Target(TYPE)` |
 | 4 | `Retrofit.create`'s interface guard | `retrofit` | 2.11.0 | `aload_1 ; invokevirtual Method java/lang/Class.isInterface:()Z ; ifne ; new class java/lang/IllegalArgumentException ; dup ; ldc String API declarations must be interfaces.` |
+| 5 | Spring STOMP `SimpAnnotationMethodMessageHandler.isHandler` | `spring-messaging` | 6.1.6 | `aload_1 ; ldc_w class org/springframework/stereotype/Controller ; invokestatic Method org/springframework/core/annotation/AnnotatedElementUtils.hasAnnotation:(Ljava/lang/reflect/AnnotatedElement;Ljava/lang/Class;)Z ; ireturn` |
+| 6a | `@HttpExchange` client proxying, and its interface assertion | `spring-web` | 6.1.6 | `invokestatic Method org/springframework/aop/framework/ProxyFactory.getProxy:(Ljava/lang/Class;Lorg/aopalliance/intercept/Interceptor;)Ljava/lang/Object;` |
+| 6b | `@HttpExchange` client proxying, and its interface assertion | `spring-aop` | 6.1.6 | `aload_1 ; ldc String Interface must not be null ; invokestatic Method org/springframework/util/Assert.notNull:(Ljava/lang/Object;Ljava/lang/String;)V ; aload_1 ; invokevirtual Method java/lang/Class.isInterface:()Z ; ifne ; new class java/lang/IllegalArgumentException` |

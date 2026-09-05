@@ -1708,7 +1708,10 @@ def _retrofit_shaped_caller_facts(root: Path) -> None:
         root / "PricingClient.jsonl",
         _document("doc_pricing", "com/acme/orders/clients/PricingClient.java"),
         [
-            _type("doc_pricing", _RETROFIT_CALLER_OWNER),
+            # An INTERFACE, as the docstring above already said it was and as
+            # the facts did not: `Retrofit.create` throws on anything else
+            # (CP-11 Q4), and `retrofit.yml` gates on it since `A-C6`.
+            _type("doc_pricing", _RETROFIT_CALLER_OWNER, "interface"),
             caller,
             _annotation(
                 "doc_pricing",
