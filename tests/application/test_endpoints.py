@@ -1790,6 +1790,15 @@ def test_a_catalog_declaring_no_separator_concatenates_exactly_as_it_always_did(
         "https://billing.example/orders",  # a whole address, not a path half
         "https://${billing.host}/orders",  # placeholder-bearing composition
         "${service.base}/orders",
+        # BOTH expression notations, not one (2O Task 7 review, Critical 4).
+        # `_EXPRESSION_OPENS` lists `${` and `#{` together and the SQL's
+        # `$canonical_path` gate mirrors the pair, but with only `${` cases
+        # here the domain side could be reverted to `("${",)` and the whole
+        # suite still passed — the pin the Task 7 report claimed existed did
+        # not cover the notation Task 7 added. SpEL is what a Spring
+        # `@JmsListener(destination = "#{…}")` actually carries.
+        "#{orderProperties.topic}",
+        "#{serviceBase}/orders",
     ],
 )
 @pytest.mark.parametrize("protocol", ["http", "kafka"])

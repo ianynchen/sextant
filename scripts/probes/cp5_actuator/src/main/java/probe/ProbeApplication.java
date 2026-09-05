@@ -1,6 +1,7 @@
 package probe;
 
 import org.springframework.boot.SpringApplication;
+import org.springframework.boot.actuate.endpoint.Access;
 import org.springframework.boot.actuate.endpoint.annotation.DeleteOperation;
 import org.springframework.boot.actuate.endpoint.annotation.Endpoint;
 import org.springframework.boot.actuate.endpoint.annotation.ReadOperation;
@@ -34,5 +35,18 @@ public class ProbeApplication {
     @Endpoint(id = "empty")
     public static class EmptyEndpoint {
         public String notAnOperation() { return "not served"; }
+    }
+
+    /**
+     * Row 11: shape identical to ProbeEndpoint, exposed by the same
+     * `exposure.include=*`, and closed by the annotation's OWN second
+     * attribute instead. `defaultAccess()` is declared on `@Endpoint` in both
+     * probed versions (javap) and nothing in Sextant reads it.
+     */
+    @Component
+    @Endpoint(id = "closed", defaultAccess = Access.NONE)
+    public static class ClosedEndpoint {
+        @ReadOperation
+        public String read() { return "read"; }
     }
 }

@@ -15,12 +15,35 @@ matches:
   # `convertAndSend(String, Object)` arity 2; `convertAndSend(Object)` arity
   # 1 targets the template's own configured default destination — no
   # destination argument at the call site at all, so no `channel_arg` is
-  # declared — `path` NULL, `resolution: unresolved` (I1). `convertAndSend`
-  # also overloads on `jakarta.jms.Destination` and with a trailing
-  # `MessagePostProcessor`; neither is exercised by the fixture, so neither
-  # is declared.
+  # declared — `path` NULL, `resolution: unresolved` (I1).
+  #
+  # THE OVERLOAD COLLISION, CLOSED (2O Task 7 review, Critical 1). Arity 2 is
+  # THREE overloads, not one: `(String, Object)`, `(Destination, Object)` and
+  # `(Object, MessagePostProcessor)`. Matching on name+arity alone reached
+  # this row for all three, so a `convertAndSend(payload, postProcessor)` call
+  # whose payload itself READS — an ordinary lambda-free
+  # `MessagePostProcessor` passed as a `class`/`instance` literal — published
+  # the message BODY as the queue name at `resolved`/`compiler` (§8: the
+  # failure mode is fabrication). The earlier note here said those overloads
+  # were "not exercised by the fixture, so neither is declared", which implied
+  # no consequence; arity matching meant they WERE matched, and that rationale
+  # was false. The arity-2 row now states its own erased JVM descriptor, which
+  # `_matching_method` compares verbatim against the call's own
+  # `target.descriptor`.
+  #
+  # THE CONSEQUENCE: the arity is claimed by that descriptor, so the
+  # `Destination` and `MessagePostProcessor` forms now derive NOTHING where
+  # they used to derive an `unresolved` row — a stated under-report in
+  # docs/COVERAGE.md rather than a fabricated destination. It stops being
+  # right if spring-jms changes the `(String, Object)` descriptor; `javap
+  # JmsTemplate` is the check.
+  #
+  # Arity 1 is `convertAndSend(Object)` and nothing else — no sibling to
+  # collide with, so no descriptor is declared and the row keeps matching
+  # every arity-1 call. `javap JmsTemplate` is the check that stays true.
   methods:
-    - { name: convertAndSend, arity: 2, channel_arg: 0, body_arg: 1 }
+    - { name: convertAndSend, arity: 2, descriptor: "(Ljava/lang/String;Ljava/lang/Object;)V",
+        channel_arg: 0, body_arg: 1 }
     - { name: convertAndSend, arity: 1, body_arg: 0 }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same

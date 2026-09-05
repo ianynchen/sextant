@@ -585,8 +585,9 @@ matches:
     - { name: exchange,      method_arg: 1,     url_arg: 0, body_arg: 2, response_arg: 3 }
 ```
 
-Each `methods` row is `{name, arity?, http_method | method_arg | neither, url_arg |
-channel_arg, body_arg?, response_arg?, record_arg?, direction?, path_from_argument_type?}`,
+Each `methods` row is `{name, arity?, descriptor?, http_method | method_arg | neither,
+url_arg | channel_arg, body_arg?, response_arg?, record_arg?, direction?,
+path_from_argument_type?}`,
 beside the catalog-level `default_address?` both described below.
 **`http_method` is a literal when the catalog already knows the verb** — `postForObject` is
 always a POST, so the catalog states it once. **`method_arg` is a position when the call
@@ -603,6 +604,24 @@ call has no response to root.
 it matches every overload, so the shipped 2C catalogs parse unchanged; a catalog that
 needs to tell `send(topic, payload)` from `send(topic, key, payload)` apart writes one row
 per arity instead.
+
+**`descriptor` restricts a row to ONE overload, by argument type.** Arity cannot separate
+`convertAndSend(String routingKey, Object message)` from `convertAndSend(Object message,
+MessagePostProcessor after)` — same name, same owner, same count — and where a row reads an
+ADDRESS out of a position, matching the wrong one publishes a message payload as a wire
+destination. The value is the overload's erased JVM method descriptor, compared verbatim
+against the call site's own `target.descriptor`
+([D00](D00-fact-schema.md) §5); `javap -s` prints it. It is validated at load to open with
+`(`, because a descriptor no call can equal fails INVISIBLY.
+
+**Declaring one on any row CLAIMS that (name, arity) for every row.** A call at a claimed
+arity whose descriptor matches no row derives **nothing** — it does not fall through to a
+descriptor-less sibling, because falling through is exactly the fabrication the key exists
+to stop. So a catalog adding `descriptor` to one overload accepts an under-report on the
+others until it declares them too, and that under-report belongs in `docs/COVERAGE.md`
+(§8). Arities no row claims are unaffected: `spring-rabbit-template.yml` declares
+descriptors at arities 2 and 3 and none at arity 1, whose `convertAndSend(Object)` has no
+sibling to collide with.
 
 **`channel_arg` is an alias of `url_arg` for protocols whose identity is a destination
 rather than a URL** — a topic or queue name in place of a path. Declaring both `url_arg`

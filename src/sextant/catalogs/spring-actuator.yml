@@ -39,6 +39,28 @@ matches:
     # That over-claim is a stated boundary in docs/COVERAGE.md, and it stops
     # being one the day an annotation-derived row can read a configuration
     # key.
+    #
+    # AND THE LARGER ONE, ON THE SAME SEAM (2O Task 7 review, Critical 3).
+    # The base path decides WHERE an address is served; web EXPOSURE decides
+    # whether it is served at all, and
+    # `management.endpoints.web.exposure.include` defaults to `health` ALONE.
+    # Measured on both versions (CP-5 rows 9-10): with Boot's own default,
+    # `/actuator/probe` is a 404 and absent from the discovery document while
+    # `/actuator/health` is a 200. Every 200 in CP-5 rows 1-8 was conditional
+    # on the probe app passing `exposure.include=*`, which the earlier verdict
+    # recorded as a run condition and never as a boundary. So under a module's
+    # own defaults EVERY row this catalog publishes at `resolved`/`compiler`
+    # is a URL nothing serves. Nothing here can read the key, for the same
+    # reason as above; it is a stated OVER-REPORT in docs/COVERAGE.md,
+    # falsified the day the default changes or an annotation-derived row can
+    # read configuration.
+    #
+    # `@Endpoint(defaultAccess = Access.NONE)` is a SECOND, smaller unread
+    # conjunct on the very annotation this catalog matches: CP-5 row 11 —
+    # exposed by `*` and still a 404 on both versions. `prefix_from: [id]`
+    # reads `id` and nothing reads `defaultAccess`, so such a class is
+    # published too. Also a stated boundary; it closes when an annotation
+    # attribute can gate a row rather than only name one.
     path_prefix: /actuator
     # An HTTP address, so the seam composes segments and dedupes to exactly
     # one separator (CP-1's rule, the same one every Spring HTTP catalog

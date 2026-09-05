@@ -995,11 +995,17 @@ def _single_call_catalog(
     )
 
 
-def _send_call(caller: str, ordinal: int, arguments: list, name: str = "send") -> CallSiteFact:
+def _send_call(
+    caller: str,
+    ordinal: int,
+    arguments: list,
+    name: str = "send",
+    descriptor: str = "()V",
+) -> CallSiteFact:
     return CallSiteFact(
         document_id="doc_1",
         caller=caller,
-        target=CallTarget(owner=PRODUCER, name=name, descriptor="()V"),
+        target=CallTarget(owner=PRODUCER, name=name, descriptor=descriptor),
         invoke_kind="virtual",
         ordinal=ordinal,
         receiver=3,
@@ -1054,6 +1060,174 @@ def test_two_arities_of_the_same_name_route_the_body_capture_to_their_own_positi
 
     assert json.loads(two_arg["request_shape"])["shape_id"] == ORDER_VIEW
     assert json.loads(three_arg["request_shape"])["shape_id"] == ORDER_REQUEST
+
+
+# --- 2O Task 7 review, Critical 1: `descriptor`, the overload discriminator.
+# Arity cannot separate `send(String topic, Object body)` from
+# `send(Object body, Callback after)`, and where a catalog reads an ADDRESS out
+# of a position, guessing wrong publishes a payload as a destination.
+
+_STRING_THEN_BODY = "(Ljava/lang/String;Ljava/lang/Object;)V"
+_BODY_THEN_CALLBACK = "(Ljava/lang/Object;Lcom/acme/messaging/Callback;)V"
+
+
+def test_a_row_declaring_a_descriptor_matches_only_the_overload_it_names(tmp_path: Path):
+    """The positive half: `descriptor` is compared verbatim against the call
+    site's own `target.descriptor` (`storage/duckdb/schema.sql:243`, read at
+    `single_call.py:208`), so the row fires for the overload it names and the
+    address it reads is that overload's own address argument."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [
+            {
+                "name": "send",
+                "arity": 2,
+                "descriptor": _STRING_THEN_BODY,
+                "http_method": "SEND",
+                "channel_arg": 0,
+                "body_arg": 1,
+            }
+        ],
+    }
+    caller = "com/acme/messaging/Producer#publish()."
+    facts = [
+        _send_call(
+            caller,
+            0,
+            [
+                CallArgument(kind="string", value="orders.created"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+            descriptor=_STRING_THEN_BODY,
+        )
+    ]
+    catalog = _single_call_catalog(matches, "invented-descriptor")
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == ("orders.created", "resolved")
+
+
+def test_a_claimed_arity_never_falls_through_to_a_descriptorless_sibling_row(tmp_path: Path):
+    """§10 near-miss, and the whole design constraint of `descriptor` in one
+    assertion. Every conjunct of the descriptor row is satisfied — same owner,
+    same name, same arity, a string literal at position 0 — and ONLY the
+    descriptor differs: this is `send(Object body, Callback after)`, whose
+    position 0 is the PAYLOAD.
+
+    A descriptor-less sibling row sits in the same `methods` list, so
+    first-match-wins would happily fall through to it and read the payload at
+    an address position — publishing a message body as a destination at
+    `resolved`/`compiler`, which is exactly the live fabrication this key
+    exists to stop (§8). So once ANY candidate row for a name and arity
+    declares a descriptor, that arity is CLAIMED and an unmatched call derives
+    NOTHING.
+
+    Delete the `if any(... ) : return None` guard in `_matching_method` and
+    this test derives one endpoint at `path == 'SECRET PAYLOAD BODY'`,
+    `resolution == 'resolved'` — verified by reverting the guard, not
+    assumed."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [
+            {
+                "name": "send",
+                "arity": 2,
+                "descriptor": _STRING_THEN_BODY,
+                "http_method": "SEND",
+                "channel_arg": 0,
+                "body_arg": 1,
+            },
+            # The fall-through target, and the reason the guard is not merely
+            # "no row matched": a catalog may legitimately carry a
+            # descriptor-less row for another arity of the same name.
+            {"name": "send", "http_method": "SEND", "channel_arg": 0},
+        ],
+    }
+    caller = "com/acme/messaging/Producer#publish()."
+    facts = [
+        _send_call(
+            caller,
+            0,
+            [
+                CallArgument(kind="string", value="SECRET PAYLOAD BODY"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+            descriptor=_BODY_THEN_CALLBACK,
+        )
+    ]
+    catalog = _single_call_catalog(matches, "invented-claimed-arity")
+    workspace = _resolve(tmp_path, facts, catalog)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_an_arity_no_row_claims_still_matches_every_overload(tmp_path: Path):
+    """The claim is scoped to the (name, arity) some row declared a descriptor
+    FOR, never to the name. The shipped `spring-rabbit-template.yml` needs
+    exactly this: its arity-1 row declares no descriptor because
+    `convertAndSend(Object)` has no sibling (javap, spring-rabbit 3.1.4), and
+    it must keep matching even though its arity-2 and arity-3 siblings are
+    claimed. Without this, adding one descriptor anywhere would silence a
+    whole name."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [
+            {
+                "name": "send",
+                "arity": 2,
+                "descriptor": _STRING_THEN_BODY,
+                "http_method": "SEND",
+                "channel_arg": 0,
+                "body_arg": 1,
+            },
+            {"name": "send", "arity": 1, "http_method": "SEND", "channel_arg": 0},
+        ],
+    }
+    caller = "com/acme/messaging/Producer#publishDefault()."
+    facts = [
+        _send_call(
+            caller,
+            0,
+            [CallArgument(kind="string", value="orders.created")],
+            descriptor="(Ljava/lang/String;)V",
+        )
+    ]
+    catalog = _single_call_catalog(matches, "invented-unclaimed-arity")
+    workspace = _resolve(tmp_path, facts, catalog)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "orders.created"
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        pytest.param("convertAndSend(String, Object)", id="a source-level signature"),
+        pytest.param("Ljava/lang/String;Ljava/lang/Object;", id="no parameter list"),
+        pytest.param(2, id="not a string"),
+    ],
+)
+def test_a_descriptor_that_is_not_a_jvm_descriptor_is_refused_at_load(
+    tmp_path: Path, declared: object
+):
+    """Checked rather than trusted, because the failure is INVISIBLE: a
+    descriptor no call site can ever equal still CLAIMS its arity, so the whole
+    overload set would derive nothing at all — silence indistinguishable from a
+    framework nobody uses, which is what `ports/catalogs.py`'s discipline
+    refuses."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [
+            {"name": "send", "arity": 2, "descriptor": declared, "channel_arg": 0, "body_arg": 1}
+        ],
+    }
+    with pytest.raises(CatalogError):
+        _resolve(tmp_path, [], _single_call_catalog(matches, "invented-bad-descriptor"))
 
 
 def test_channel_arg_fills_path_exactly_as_url_arg_would(tmp_path: Path):
@@ -5292,15 +5466,28 @@ def _rabbit_template_catalog() -> Catalog:
     )
 
 
-def _convert_and_send(caller: str, owner: str, arguments: list) -> CallSiteFact:
+# Every descriptor below is `javap -s`'s own output, spring-rabbit 3.1.4 and
+# spring-jms 6.1.6 — the versions the catalogs' comments name.
+_RABBIT_EXCHANGE_KEY_BODY = "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V"
+_RABBIT_KEY_BODY = "(Ljava/lang/String;Ljava/lang/Object;)V"
+_RABBIT_KEY_BODY_POST = (
+    "(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/amqp/core/MessagePostProcessor;)V"
+)
+_RABBIT_BODY_POST = "(Ljava/lang/Object;Lorg/springframework/amqp/core/MessagePostProcessor;)V"
+_JMS_DESTINATION_BODY = "(Ljava/lang/String;Ljava/lang/Object;)V"
+_JMS_BODY_POST = "(Ljava/lang/Object;Lorg/springframework/jms/core/MessagePostProcessor;)V"
+
+
+def _convert_and_send(
+    caller: str,
+    owner: str,
+    arguments: list,
+    descriptor: str = _RABBIT_EXCHANGE_KEY_BODY,
+) -> CallSiteFact:
     return CallSiteFact(
         document_id="doc_1",
         caller=caller,
-        target=CallTarget(
-            owner=owner,
-            name="convertAndSend",
-            descriptor="(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V",
-        ),
+        target=CallTarget(owner=owner, name="convertAndSend", descriptor=descriptor),
         invoke_kind="virtual",
         ordinal=0,
         receiver=3,
@@ -5369,3 +5556,154 @@ def test_a_convertandsend_on_an_owner_that_is_not_a_rabbit_template_derives_noth
     workspace.close()
 
     assert rows == []
+
+
+# --- 2O Task 7 review, Critical 1, against the SHIPPED files: the two calls the
+# reviewer reproduced, each of which published a MESSAGE PAYLOAD as a wire
+# destination at `resolved`/`compiler`. Both descriptor sets are `javap -s`
+# output (spring-rabbit 3.1.4, spring-jms 6.1.6), not recollection.
+
+
+def test_the_rabbit_arity_three_post_processor_overload_derives_nothing(tmp_path: Path):
+    """§10 near-miss, and the exact fabrication the review reproduced against
+    the shipped catalog: `convertAndSend(String routingKey, Object message,
+    MessagePostProcessor after)`. Every conjunct of the arity-3 row is
+    satisfied — the owner, the name, the arity, a string literal at position 0
+    and another at position 1 — and only the descriptor differs.
+
+    Position 1 of THIS overload is the payload, not a routing key, so before
+    the descriptor key the row published `order.created/SECRET PAYLOAD BODY`
+    as an AMQP destination at `resolved`/`compiler`."""
+    caller = "com/acme/orders/messaging/OrderPublisher#publish()."
+    facts = [
+        _convert_and_send(
+            caller,
+            RABBIT_TEMPLATE,
+            [
+                CallArgument(kind="string", value="order.created"),
+                CallArgument(kind="string", value="SECRET PAYLOAD BODY"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+            descriptor=_RABBIT_KEY_BODY_POST,
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _rabbit_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_the_rabbit_arity_two_post_processor_overload_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the arity the shipped catalog's comment did not even
+    admit was exposed: arity 2 is `(String, Object)` AND `(Object,
+    MessagePostProcessor)`. Position 0 of the second is the PAYLOAD, so a
+    string-literal payload — ordinary over AMQP — was published as the routing
+    key."""
+    caller = "com/acme/orders/messaging/OrderPublisher#publishDefaultExchange()."
+    facts = [
+        _convert_and_send(
+            caller,
+            RABBIT_TEMPLATE,
+            [
+                CallArgument(kind="string", value="SECRET PAYLOAD BODY"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+            descriptor=_RABBIT_BODY_POST,
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _rabbit_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_the_rabbit_arity_two_routing_key_overload_still_derives(tmp_path: Path):
+    """The positive that stops the fix above from being a silencer: the
+    DECLARED arity-2 overload, `convertAndSend(String routingKey, Object
+    message)`, still resolves — and to the routing key alone, because the
+    default exchange has no name (the `_paired_destination` rule the file
+    already documents)."""
+    caller = "com/acme/orders/messaging/OrderPublisher#publishDefaultExchange()."
+    facts = [
+        _convert_and_send(
+            caller,
+            RABBIT_TEMPLATE,
+            [
+                CallArgument(kind="string", value="order.created"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+            descriptor=_RABBIT_KEY_BODY,
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _rabbit_template_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == ("order.created", "resolved")
+
+
+JMS_TEMPLATE = "org/springframework/jms/core/JmsTemplate#"
+
+
+def _jms_template_catalog() -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-jms-template")
+
+
+def test_the_jms_arity_two_post_processor_overload_derives_nothing(tmp_path: Path):
+    """§10 near-miss, the second live fabrication the review reproduced:
+    `JmsTemplate.convertAndSend(Object message, MessagePostProcessor after)`
+    published `SECRET PAYLOAD BODY` as a JMS destination. Arity 2 is three
+    overloads on this class — `(String, Object)`, `(Destination, Object)` and
+    this one (javap, spring-jms 6.1.6) — and the shipped comment claimed the
+    other two were simply "not declared", which arity matching made false."""
+    caller = "com/acme/orders/messaging/OrderPublisher#publish()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(owner=JMS_TEMPLATE, name="convertAndSend", descriptor=_JMS_BODY_POST),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=None,
+            arguments=[
+                CallArgument(kind="string", value="SECRET PAYLOAD BODY"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _jms_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_the_jms_arity_two_destination_name_overload_still_derives(tmp_path: Path):
+    """The paired positive: `convertAndSend(String destinationName, Object
+    message)` is the overload the catalog declares, and it keeps resolving."""
+    caller = "com/acme/orders/messaging/OrderPublisher#publish()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=JMS_TEMPLATE, name="convertAndSend", descriptor=_JMS_DESTINATION_BODY
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=None,
+            arguments=[
+                CallArgument(kind="string", value="orders.queue"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _jms_template_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == ("orders.queue", "resolved")

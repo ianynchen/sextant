@@ -79,6 +79,17 @@ _DEFAULT_ADDRESS_KEYS = frozenset({"method", "arg"})
 _ADDRESS_ARG_2 = "address_arg_2"
 _ADDRESS_SEPARATOR = "address_separator"
 
+# 2O Task 7 review, Critical 1: the OVERLOAD DISCRIMINATOR. `name` + `arity`
+# cannot tell `convertAndSend(String routingKey, Object message)` from
+# `convertAndSend(Object message, MessagePostProcessor after)` — both are
+# `convertAndSend` at arity 2 on the same owner — so a row declaring an
+# address position read the SECOND call's payload as its destination. The
+# call site already carries the one value that separates them, the target's
+# own erased JVM descriptor (`storage/duckdb/schema.sql:243`, projected onto
+# every `call_sites` row), and a row declaring `descriptor` is matched on it
+# exactly.
+_DESCRIPTOR = "descriptor"
+
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
     """Derives one endpoint row per matching call site, via `call_endpoints`
@@ -194,7 +205,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         if site["owner"] != owner:
             continue
         arguments = site["arguments"]
-        method = _matching_method(methods, site["name"], arguments)
+        method = _matching_method(methods, site["name"], site[_DESCRIPTOR], arguments)
         if method is None:
             continue
         # A row declaring neither `http_method` nor `method_arg` is verbless
@@ -453,24 +464,46 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 
 
 def _matching_method(
-    rows: list[dict[str, Any]], name: str, arguments: list[dict[str, Any]]
+    rows: list[dict[str, Any]], name: str, descriptor: Any, arguments: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
-    """The one `methods` row matching a call site's own name and argument
-    count (D02 §2's `arity`) — first match wins. A row without `arity`
-    matches every overload, so the shipped 2C catalogs (none of which
-    declare it) parse unchanged; a catalog that needs to tell
-    `send(topic, payload)` from `send(topic, key, payload)` apart writes one
-    row per arity instead, and this is the scan that replaces the old
-    dict-by-name (`:40` before Task 6), which could only ever keep one row
-    per name."""
-    for row in rows:
-        if row["name"] != name:
-            continue
-        arity = row.get("arity")
-        if arity is not None and arity != len(arguments):
-            continue
-        return row
-    return None
+    """The one `methods` row matching a call site's own name, argument count
+    (D02 §2's `arity`) and, where any candidate row declares one, the target's
+    own JVM `descriptor` — first match wins. A row without `arity` matches
+    every overload, so the shipped 2C catalogs (none of which declare it)
+    parse unchanged; a catalog that needs to tell `send(topic, payload)` from
+    `send(topic, key, payload)` apart writes one row per arity instead, and
+    this is the scan that replaces the old dict-by-name (`:40` before Task 6),
+    which could only ever keep one row per name.
+
+    **Arity alone cannot separate same-arity overloads, and where it cannot,
+    an unmatched call derives NOTHING** (2O Task 7 review, Critical 1).
+    `RabbitTemplate.convertAndSend` overloads at arity 2 as both
+    `(String routingKey, Object message)` and `(Object message,
+    MessagePostProcessor after)`; first-match-wins on name+arity handed the
+    second call's PAYLOAD to a row declaring `channel_arg: 0`, publishing a
+    message body as a destination at `resolved`/`compiler`. So once ANY
+    candidate row for this name and arity declares `descriptor`, that arity is
+    CLAIMED: a call whose own descriptor matches none of them falls through to
+    no row at all rather than to a descriptor-less sibling, because falling
+    through is exactly the fabrication the key exists to stop. The cost is a
+    stated under-report — the unclaimed overloads derive nothing where they
+    used to derive an `unresolved` row — which is §8's honest direction and a
+    `docs/COVERAGE.md` boundary, not a silent miss.
+
+    `descriptor` is compared verbatim against the call's own
+    `target.descriptor` (`storage/duckdb/schema.sql:243`), which is the ERASED
+    JVM descriptor: it discriminates the declared parameter types of an
+    overload, never the payload's own type (`_IdentityFacts` below reads the
+    caller's signature for that, and says why)."""
+    candidates = [
+        row for row in rows if row["name"] == name and row.get("arity") in (None, len(arguments))
+    ]
+    for row in candidates:
+        if _DESCRIPTOR in row and row[_DESCRIPTOR] == descriptor:
+            return row
+    if any(_DESCRIPTOR in row for row in candidates):
+        return None
+    return candidates[0] if candidates else None
 
 
 def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
@@ -565,6 +598,29 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                     f"destination is read verbatim on both halves, and neither of those readers "
                     f"can answer for half of one (D02 §2's single_call style)"
                 )
+        if _DESCRIPTOR in row and not (
+            isinstance(row[_DESCRIPTOR], str) and row[_DESCRIPTOR].startswith("(")
+        ):
+            # Checked rather than trusted, because the failure is INVISIBLE:
+            # a `descriptor` that no call site can ever equal claims its arity
+            # all the same (`_matching_method` above), so the whole overload
+            # set silently derives nothing. A target descriptor always opens
+            # its parameter list with `(`, which is the cheapest check that
+            # separates a real one from a source-level signature someone wrote
+            # from memory.
+            #
+            # The MESSAGE names no language, deliberately (ARCHITECTURE §10,
+            # and `test_jvm_names_stay_in_the_jvm_extractor` enforces it on
+            # string literals): `descriptor` is whatever the extractor for the
+            # module's own language records at `target.descriptor`, and this
+            # engine may not assume which one that is.
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{row['name']}` declares "
+                f"`{_DESCRIPTOR}: {row[_DESCRIPTOR]!r}`, which is not a method "
+                f"descriptor — it is compared verbatim against a call site's own "
+                f"`target.descriptor`, so it must be spelled the way the extractor "
+                f"records one, opening with `(` (D02 §2's single_call style)"
+            )
         if "record_arg" in row:
             conflicts = [
                 key

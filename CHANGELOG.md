@@ -111,6 +111,29 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A message PAYLOAD could be published as a wire destination** (2O Task 7 review,
+  §8). `single_call` selected a `methods` row by name and ARITY only, and both
+  `RabbitTemplate.convertAndSend` and `JmsTemplate.convertAndSend` overload on argument type
+  at the arities the shipped catalogs declare — arity 2 as well as arity 3, which neither
+  file admitted. A call passing a `MessagePostProcessor` therefore reached a row expecting a
+  destination at that position, and a string-literal payload was published as an AMQP or JMS
+  destination at `resolved`/`compiler`, indistinguishable from an observation. A `methods`
+  row may now declare the overload's own erased JVM `descriptor`, compared verbatim against
+  the call site's `target.descriptor`; both shipped catalogs declare one per
+  address-carrying row. Once any row for a name and arity declares a descriptor that arity
+  is CLAIMED — an unmatched call derives NOTHING rather than falling through to a
+  descriptor-less sibling, which is the fabrication the key exists to stop. The cost is a
+  stated under-report in `docs/COVERAGE.md`: the undeclared overloads, which used to derive
+  an `unresolved` row, now derive none.
+- **The Actuator catalog's rows are now stated as conditional on WEB EXPOSURE** (§8, 2O
+  Task 7 review). `management.endpoints.web.exposure.include` is Boot's gate on whether a
+  custom `@Endpoint` is served over HTTP at all, and its default is `health` alone: measured
+  on Boot 3.5.10 and 4.1.1, `/actuator/probe` is a **404** under the default while
+  `/actuator/health` is a 200. Nothing in Sextant reads the key, so under a module's own
+  defaults every `/actuator/<id>` published at `resolved`/`compiler` is a URL nothing
+  serves. No derivation changed; the over-report is now a stated boundary in
+  `docs/COVERAGE.md`, in the catalog and in the probe verdict, together with
+  `@Endpoint(defaultAccess = Access.NONE)`, the same conjunct in miniature.
 - **An annotation-derived path carrying an expression is no longer published as an
   observation** (§8). Every such row was stamped `resolved`/`compiler` unconditionally, so a
   destination written as SpEL `#{…}` or a property `${…}` was published as though the

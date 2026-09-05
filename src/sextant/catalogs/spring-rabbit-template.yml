@@ -38,29 +38,45 @@ matches:
   #     `_paired_destination` renders it as the routing key alone, so the two
   #     spellings of one wire destination stay ONE identity.
   #
-  # THE OVERLOAD COLLISION, stated rather than hidden (§8.1 rule 2, and the
-  # `spring-jms-template.yml` precedent for the same shape one framework
-  # over). `_matching_method` selects a row by NAME AND ARITY, never by
-  # argument type, and `convertAndSend` overloads at every arity declared
-  # here: arity 2 is also `(Object, MessagePostProcessor)`, and arity 3 is
-  # also `(String, Object, CorrelationData)` and `(String, Object,
-  # MessagePostProcessor)`. A call to one of those siblings reaches the row
-  # below and reads a PAYLOAD argument at an address position. In every case
-  # but one that degrades honestly — a payload that is not a string literal
-  # reads `unresolved`, and a paired row drops the whole address when either
-  # half fails — but a sibling call whose payload IS a string literal would
-  # publish that literal as part of the destination. That is a stated
-  # boundary in docs/COVERAGE.md, and it stops being one the day `methods`
-  # can discriminate on the call's own target descriptor.
+  # THE OVERLOAD COLLISION, CLOSED (2O Task 7 review, Critical 1) rather than
+  # stated. `convertAndSend` overloads on argument TYPE at both arities that
+  # carry an address here (javap, spring-rabbit 3.1.4):
+  #   arity 2 — `(String, Object)` and `(Object, MessagePostProcessor)`
+  #   arity 3 — `(String, String, Object)`, `(String, Object, CorrelationData)`,
+  #             `(String, Object, MessagePostProcessor)` and
+  #             `(Object, MessagePostProcessor, CorrelationData)`
+  # Matching on name+arity alone handed a sibling's PAYLOAD to `channel_arg`,
+  # and a payload argument that itself READS — an ordinary lambda-free
+  # `MessagePostProcessor` passed as a `class`/`instance` literal — published
+  # a message body as a destination at `resolved`/`compiler`, indistinguishable
+  # from an observation (§8: the failure mode is fabrication). So each address-
+  # carrying row states its own erased JVM `descriptor`, which
+  # `_matching_method` compares verbatim against the call site's own
+  # `target.descriptor`.
+  #
+  # THE CONSEQUENCE, which is the boundary that replaces the old one: once ANY
+  # row for a name+arity declares a descriptor, that arity is claimed, so a
+  # call to an UNDECLARED arity-2 or arity-3 overload now derives NOTHING where
+  # it used to derive an `unresolved` row. Under-reporting a stated boundary is
+  # honest; publishing a payload as a destination is not. Recorded in
+  # docs/COVERAGE.md, and it stops being right if a future spring-rabbit
+  # release changes either declared descriptor — a re-typed parameter
+  # falsifies it, and the check is `javap -s RabbitTemplate`.
   #
   # NOT declared, and each therefore deriving no row at all: `send(...)` (the
   # pre-converted `Message` form, at four arities), `convertSendAndReceive`
-  # (request/reply), and the arity-4 and arity-5 `convertAndSend` overloads
-  # carrying a `MessagePostProcessor` and/or a `CorrelationData`. Each is a
-  # COVERAGE boundary rather than a silent miss.
+  # (request/reply), and every `convertAndSend` overload carrying a
+  # `MessagePostProcessor` and/or a `CorrelationData` (arities 2 through 5).
+  # Each is a COVERAGE boundary rather than a silent miss.
   methods:
-    - { name: convertAndSend, arity: 3, channel_arg: 0, address_arg_2: 1, body_arg: 2 }
-    - { name: convertAndSend, arity: 2, channel_arg: 0, body_arg: 1 }
+    - { name: convertAndSend, arity: 3, descriptor: "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V",
+        channel_arg: 0, address_arg_2: 1, body_arg: 2 }
+    - { name: convertAndSend, arity: 2, descriptor: "(Ljava/lang/String;Ljava/lang/Object;)V",
+        channel_arg: 0, body_arg: 1 }
+    # Arity 1 is `convertAndSend(Object)` and nothing else — no sibling to
+    # collide with, so no descriptor is declared and the row keeps matching
+    # every arity-1 call. That stops being true if spring-rabbit adds a second
+    # one-argument `convertAndSend`; `javap RabbitTemplate` is the check.
     - { name: convertAndSend, arity: 1, body_arg: 0 }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
