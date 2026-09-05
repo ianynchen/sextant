@@ -30,7 +30,10 @@ import org.apache.catalina.startup.Tomcat;
  * the same `WEB-INF/classes` under a deployment descriptor declaring
  * `metadata-complete="true"`, which the specification says switches the
  * annotation scan off wholesale — the shape in which every `@WebServlet` in a
- * module is inert.
+ * module is inert. That descriptor (written by `run.sh`, not here) also
+ * registers ONE servlet by hand, because `metadata-complete` suppresses the
+ * annotation scan and not the descriptor's own declarations: the 200 it serves
+ * is what tells row 33's 404 apart from a context that never started.
  */
 public final class ProbeApplication {
 

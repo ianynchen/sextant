@@ -216,6 +216,19 @@ for entry in "${VERSIONS[@]}"; do
   # The schema is the one that build's own servlet level ships; a descriptor
   # naming a `web-app` version below 3.0 would suppress the scan for a second,
   # different reason and is not what this row measures.
+  #
+  # THE DESCRIPTOR ALSO REGISTERS ONE SERVLET EXPLICITLY, and that is row 34's
+  # POSITIVE CONTROL rather than a second measurement. Row 33's 404 is the
+  # evidence that the scan was suppressed — but Tomcat also answers 404 for a
+  # context that is mapped and failed to start, so on its own the row cannot
+  # tell "the annotation was ignored" from "this webapp never came up", and
+  # nothing else here asserts that the second context started (the `identify`
+  # line speaks for the FIRST one only). `metadata-complete` suppresses the
+  # ANNOTATION scan and never the descriptor's own `<servlet>` declarations, so
+  # the same class the annotation would have registered, registered here by
+  # hand at a different path, must answer 200 in the same run. 200 on 34 beside
+  # 404 on 33 separates the two causes completely; 404 on both means the
+  # context is down and row 33 measures nothing.
   mkdir -p target/mcbase/WEB-INF/classes
   cp -R target/classes/probe target/mcbase/WEB-INF/classes/
   if [ "$spelling" = javax ]; then
@@ -232,6 +245,14 @@ for entry in "${VERSIONS[@]}"; do
          xsi:schemaLocation="$mc_namespace $mc_namespace/web-app_${mc_version//./_}.xsd"
          version="$mc_version"
          metadata-complete="true">
+  <servlet>
+    <servlet-name>descriptor-registered</servlet-name>
+    <servlet-class>probe.GetOnlyServlet</servlet-class>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>descriptor-registered</servlet-name>
+    <url-pattern>/descriptor-registered</url-pattern>
+  </servlet-mapping>
 </web-app>
 XML
 
@@ -276,6 +297,10 @@ XML
   # --- the descriptor that switches the annotation scan off -----------------
   probe 33 GET /metadata-complete/getonly \
     "the same classes under \`metadata-complete=\"true\"\`"
+  # Row 33's positive control, in the SAME run and the SAME webapp: a 404 above
+  # means the annotation was ignored only if this context is serving at all.
+  probe 34 GET /metadata-complete/descriptor-registered \
+    "the same class registered by that descriptor's own \`<servlet>\` — row 33's positive control"
 
   kill $pid 2>/dev/null || true
   wait $pid 2>/dev/null || true

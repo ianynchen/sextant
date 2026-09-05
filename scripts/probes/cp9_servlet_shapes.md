@@ -62,7 +62,11 @@ setting, `allowTrace="true"`, so a connector default can be told apart from the
 specification's dispatch. And it deploys the same `WEB-INF/classes` a SECOND
 time under `/metadata-complete`, beneath a descriptor declaring
 `metadata-complete="true"`, so the only difference between the two webapps is
-that descriptor.
+that descriptor — a descriptor that ALSO registers one servlet by hand, which
+is row 34 and is a control rather than a measurement: `metadata-complete`
+suppresses the annotation scan and never the descriptor's own `<servlet>`
+declarations, so a 200 there is what tells row 33's 404 apart from a context
+that failed to start.
 
 ## Expectation table
 
@@ -84,6 +88,7 @@ that descriptor.
 | 30 | the running container's own servlet API package | which spelling that column measured | the one the build asked for, or the run is mislabelled |
 | 31-32 | a connector with `allowTrace="true"` | TRACE `/explicit` (overridden) and `/getonly` (not) | **unknown — whether the 405 is the connector or the dispatch** |
 | 33 | the same classes under `metadata-complete="true"` | GET `/metadata-complete/getonly` | **unknown — whether the annotation scan is suppressed wholesale** |
+| 34 | the same class registered by that descriptor's own `<servlet>` | GET `/metadata-complete/descriptor-registered` | 200 — `metadata-complete` suppresses the ANNOTATION scan, not the descriptor; row 33's positive control |
 
 ## Observations
 
@@ -131,6 +136,7 @@ produced.
 | 31 | `TRACE /explicit` on a connector with `allowTrace="true"` — `doTrace` overridden | 200 | 200 | 200 |
 | 32 | `TRACE /getonly` on a connector with `allowTrace="true"` — no `doTrace` — `HttpServlet`'s own | 200 | 200 | 200 |
 | 33 | `GET /metadata-complete/getonly` — the same classes under `metadata-complete="true"` | 404 | 404 | 404 |
+| 34 | `GET /metadata-complete/descriptor-registered` — the same class registered by that descriptor's own `<servlet>` — row 33's positive control | 200 | 200 | 200 |
 
 Every row identical on all three containers, and the `javax` column identical
 to the other two modulo the package name (rows 25-28 and 30, which are the only
@@ -245,8 +251,16 @@ falsified.
     servlets are the population that uses this spelling, so a jakarta-only
     catalog would have under-served the estate the style exists for.
 16. **A `metadata-complete="true"` descriptor suppresses every annotated
-    servlet, and NOTHING IN THE FACTS CAN SEE IT** (row 33). The same classes,
-    the same container, one deployment descriptor: 404 on all three. This is
+    servlet, and NOTHING IN THE FACTS CAN SEE IT** (rows 33-34). The same
+    classes, the same container, one deployment descriptor: 404 on all three.
+    **Row 34 is what makes that 404 mean the annotation was ignored.** Tomcat
+    answers 404 for a context that is mapped and failed to start too, and
+    nothing else here asserts the second context came up — `identify` speaks
+    for the first webapp only. So the same descriptor registers
+    `probe.GetOnlyServlet` by hand at `/descriptor-registered`, which
+    `metadata-complete` does not suppress, and it answers **200 on all three**
+    in the same run. 200 beside 404, one webapp, one descriptor: the scan was
+    suppressed and the context was serving. This is
     the one shape in which these catalogs fabricate a whole module's surface
     rather than under-reporting it — nothing in the pipeline reads
     `WEB-INF/web.xml`, so every rule applies unconditionally. Stated as a
@@ -259,8 +273,10 @@ falsified.
 - **`web.xml` `<servlet-mapping>` and `ServletContext.addServlet`.** The other
   two registration routes the Servlet specification defines. Neither probed and
   neither catalogued; stated boundaries in `docs/COVERAGE.md`, with the
-  annotation named as one of three (§8.1 rule 3). Row 33 measured a descriptor
-  only for what it SUPPRESSES, never for what it registers.
+  annotation named as one of three (§8.1 rule 3). Rows 33-34 measured a
+  descriptor for what it SUPPRESSES; row 34 registers one servlet through it
+  solely as row 33's positive control, and no `<servlet-mapping>` it declares
+  is read by anything in the pipeline.
 - **A `web-app` version below 3.0.** The specification's second route to the
   same suppression row 33 measured, and it is not separately probed: row 33's
   descriptor names its own build's current version and switches the scan off

@@ -145,8 +145,10 @@ matches:
 # `metadata-complete="true"` (or a `web-app` version below 3.0): the container
 # then registers nothing from annotations, and every URL this file would
 # derive for such a module is a 404. CP-9
-# row 33 measured it — the same classes, the same container, one descriptor,
-# 404 on all three. Nothing in the fact stream reads a deployment descriptor,
+# rows 33-34 measured it — the same classes, the same container, one
+# descriptor, 404 on all three, beside a 200 for the servlet that same
+# descriptor registers by hand, which is what says the context was serving
+# rather than dead. Nothing in the fact stream reads a deployment descriptor,
 # so every rule in this file applies unconditionally and such a module has its
 # whole servlet surface fabricated. Closed by a deployment-descriptor reader,
 # which would also close the `web.xml` registration route we under-report.
