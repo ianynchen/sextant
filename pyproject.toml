@@ -109,6 +109,14 @@ markers = [
   # statically and fails for any catalog that has neither one nor a place on
   # its stated backlog.
   "declines(catalog_id): proves the named shipped catalog declines on near-miss input",
+  # The other half of the same rule, and the one that is measured rather than
+  # declared: a `declines` marker says WHICH catalog a near-miss covers, and
+  # this says WHICH GUARD it would notice the loss of. `scripts/guard_check.py`
+  # disables that one guard and reruns only the tests naming it; a test that
+  # still passes is measuring nothing. Two markers rather than one argument
+  # because the two name different subjects, and one test may cover nine
+  # catalogs while measuring exactly one guard.
+  "pins(guard_id): names the guard in scripts/guard_check.py this test must notice the loss of",
 ]
 
 [tool.importlinter]

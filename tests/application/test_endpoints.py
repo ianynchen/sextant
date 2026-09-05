@@ -4177,6 +4177,7 @@ def test_a_class_level_rabbit_listener_gives_its_queue_to_every_rabbit_handler(t
 
 
 @pytest.mark.declines("spring-rabbit")
+@pytest.mark.pins("derive_endpoints.qualifier-scope")
 def test_a_rabbit_handler_on_a_class_carrying_no_listener_derives_nothing(tmp_path: Path):
     """§10 near-miss for the polymorphic matcher, negating its second
     conjunct: the method is annotated exactly as a real handler is, and the
@@ -4221,6 +4222,7 @@ def test_a_pulsar_listener_derives_one_inbound_pulsar_row_per_declared_topic(tmp
 
 
 @pytest.mark.declines("spring-pulsar")
+@pytest.mark.pins("derive_endpoints.handler-is-a-method")
 def test_a_type_level_pulsar_listener_alone_derives_nothing(tmp_path: Path):
     """§10 near-miss for the Pulsar matcher, negating the conjunct that the
     annotation sits on a METHOD. `@PulsarListener` is
@@ -4266,6 +4268,7 @@ def test_both_legacy_sqs_spellings_derive_the_same_inbound_row(tmp_path: Path, a
 
 
 @pytest.mark.declines("spring-sqs-legacy")
+@pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")
 def test_the_legacy_sqs_catalog_declines_the_current_annotation(tmp_path: Path):
     """§10 near-miss for the legacy matchers: the CURRENT 3.x annotation is
     the same simple name, the same `value` attribute and the same protocol —
@@ -4317,6 +4320,7 @@ def test_an_actuator_operation_is_served_under_the_constant_prefix_with_its_own_
 
 
 @pytest.mark.declines("spring-actuator")
+@pytest.mark.pins("spring-actuator.operations-are-the-mapping-annotations")
 def test_an_endpoint_class_with_no_operation_annotation_derives_nothing(tmp_path: Path):
     """§10 near-miss, and CP-5 row 6 measured rather than assumed: an
     `@Endpoint` class whose methods carry no operation annotation serves
@@ -4335,6 +4339,7 @@ def test_an_endpoint_class_with_no_operation_annotation_derives_nothing(tmp_path
 
 
 @pytest.mark.declines("spring-actuator")
+@pytest.mark.pins("derive_endpoints.type-annotation-gate")
 def test_an_actuator_operation_outside_an_endpoint_class_derives_nothing(tmp_path: Path):
     """§10 near-miss on the other conjunct: the operation annotation is
     present and the class gate is not. The operation annotations carry no
@@ -4724,6 +4729,7 @@ _SQS_LISTENER = "io/awspring/cloud/sqs/annotation/SqsListener#"
 
 
 @pytest.mark.declines("retrofit")
+@pytest.mark.pins("retrofit.declared-request-methods")
 def test_retrofits_generic_http_annotation_derives_nothing_and_that_is_stated(tmp_path: Path):
     """`A-M5`'s stated boundary, pinned so it cannot be half-implemented.
 
@@ -4799,6 +4805,7 @@ def test_an_sqs_listener_naming_its_queue_the_way_aws_documents_it_derives(tmp_p
 
 
 @pytest.mark.declines("spring-sqs")
+@pytest.mark.pins("spring-sqs.path-from-is-the-destination-aliases")
 def test_an_sqs_listener_naming_no_destination_at_all_still_derives_nothing(tmp_path: Path):
     """`A-M8`'s near-miss, and it is what keeps the alias pair from becoming
     "read any attribute". `maxConcurrentMessages` is a real `@SqsListener`

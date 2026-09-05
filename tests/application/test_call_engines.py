@@ -2452,6 +2452,7 @@ def test_addhandler_with_a_second_path_is_the_same_two_argument_call(tmp_path: P
 
 
 @pytest.mark.declines("spring-websocket")
+@pytest.mark.pins("single_call.claimed-arity")
 def test_an_addhandler_overload_the_registry_does_not_declare_derives_nothing(tmp_path: Path):
     """§10 near-miss, replacing one whose premise was false. Every conjunct of
     the row holds — the owner, the name, two arguments, a handler instance and
@@ -3694,6 +3695,7 @@ def test_webclient_head_and_options_start_a_request_the_way_get_does(tmp_path: P
 
 
 @pytest.mark.declines("spring-webclient")
+@pytest.mark.pins("fluent.root-is-a-declared-request-starter")
 def test_a_webclient_method_the_framework_does_not_declare_roots_nothing(tmp_path: Path):
     """`A-M3`, the near-miss. The fix is to mirror the framework's request
     starters, not to root on any nullary call: `WebClient` declares no `trace()`
@@ -5891,6 +5893,7 @@ def test_the_rabbit_template_renders_the_exchange_and_routing_key_as_one_identit
 
 
 @pytest.mark.declines("spring-rabbit-template")
+@pytest.mark.pins("single_call.call-site-owner")
 def test_a_convertandsend_on_an_owner_that_is_not_a_rabbit_template_derives_nothing(
     tmp_path: Path,
 ):
@@ -5930,6 +5933,7 @@ def test_a_convertandsend_on_an_owner_that_is_not_a_rabbit_template_derives_noth
 
 
 @pytest.mark.declines("spring-rabbit-template")
+@pytest.mark.pins("single_call.claimed-arity")
 def test_the_rabbit_arity_three_post_processor_overload_derives_nothing(tmp_path: Path):
     """§10 near-miss, and the exact fabrication the review reproduced against
     the shipped catalog: `convertAndSend(String routingKey, Object message,
@@ -5961,6 +5965,7 @@ def test_the_rabbit_arity_three_post_processor_overload_derives_nothing(tmp_path
 
 
 @pytest.mark.declines("spring-rabbit-template")
+@pytest.mark.pins("single_call.claimed-arity")
 def test_the_rabbit_arity_two_post_processor_overload_derives_nothing(tmp_path: Path):
     """§10 near-miss for the arity the shipped catalog's comment did not even
     admit was exposed: arity 2 is `(String, Object)` AND `(Object,
@@ -6019,6 +6024,7 @@ def _jms_template_catalog() -> Catalog:
 
 
 @pytest.mark.declines("spring-jms-template")
+@pytest.mark.pins("single_call.claimed-arity")
 def test_the_jms_arity_two_post_processor_overload_derives_nothing(tmp_path: Path):
     """§10 near-miss, the second live fabrication the review reproduced:
     `JmsTemplate.convertAndSend(Object message, MessagePostProcessor after)`
@@ -6160,6 +6166,7 @@ def _ws_root_annotation() -> AnnotationFact:
 
 
 @pytest.mark.declines("spring-ws-template")
+@pytest.mark.pins("single_call.claimed-arity")
 def test_the_ws_arity_two_callback_overload_derives_nothing(tmp_path: Path):
     """§10 near-miss, and the live fabrication R1 exists to close. Every
     conjunct of the shipped arity-2 row is satisfied — the owner, the name, the
@@ -6870,6 +6877,7 @@ _CLAIMED_ARITIES = [
 @pytest.mark.declines("spring-kafka-template")
 @pytest.mark.declines("spring-kafka-replying")
 @pytest.mark.declines("spring-resttemplate")
+@pytest.mark.pins("single_call.claimed-arity")
 @pytest.mark.parametrize(
     ("catalog_id", "owner", "name", "declared", "sibling", "arguments"), _CLAIMED_ARITIES
 )
@@ -6924,6 +6932,7 @@ def test_the_declared_overload_of_a_claimed_arity_still_derives(
 
 
 @pytest.mark.declines("spring-ws-template")
+@pytest.mark.pins("single_call.claimed-arity")
 def test_the_ws_arity_one_and_three_rows_decline_an_overload_they_do_not_declare(
     tmp_path: Path,
 ):
@@ -7409,6 +7418,7 @@ def test_a_durable_jms_subscription_derives_the_destination_it_subscribes_to(tmp
 
 
 @pytest.mark.declines("jakarta-jms")
+@pytest.mark.pins("jakarta-jms.consuming-factories-only")
 def test_a_jms_queue_browser_is_not_a_subscription(tmp_path: Path):
     """`A-M7`'s stated boundary, pinned so it cannot be added by momentum.
     `createBrowser(Queue[, String])` is the twelfth and thirteenth factory CP-12

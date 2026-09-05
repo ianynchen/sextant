@@ -389,6 +389,7 @@ def test_the_payload_columns_stay_null_because_the_parameters_are_the_container_
 
 
 @pytest.mark.declines("jakarta-servlet")
+@pytest.mark.pins("supertype_dispatch.address-is-required")
 def test_a_dispatch_subclass_with_no_address_annotation_derives_nothing(tmp_path: Path):
     """CP-9 rows 19 and 29: the annotation IS the registration. A class
     extending the dispatch supertype and overriding `doGet` — every other
@@ -404,6 +405,7 @@ def test_a_dispatch_subclass_with_no_address_annotation_derives_nothing(tmp_path
 
 
 @pytest.mark.declines("jakarta-servlet")
+@pytest.mark.pins("supertype_dispatch.bypassed-by")
 def test_a_class_overriding_service_and_declaring_no_verb_derives_nothing(tmp_path: Path):
     """CP-9 rows 14-15, verdict 8 as amended for `A-M2`.
     `service(HttpServletRequest, HttpServletResponse)` is the very method that
@@ -459,6 +461,7 @@ def test_a_wrapper_that_overrides_service_still_derives_the_verbs_it_declares(
 
 
 @pytest.mark.declines("jakarta-servlet")
+@pytest.mark.pins("supertype_dispatch.bypassed-by")
 def test_the_protocol_agnostic_service_alone_still_derives_nothing(tmp_path: Path):
     """The second bypass signature's own near-miss, and the reason
     `bypassed_by` is a LIST of `{name, parameters}` rather than a list of names:
@@ -476,6 +479,7 @@ def test_the_protocol_agnostic_service_alone_still_derives_nothing(tmp_path: Pat
 
 
 @pytest.mark.declines("jakarta-servlet")
+@pytest.mark.pins("supertype_dispatch.declared-supertype")
 def test_a_protocol_agnostic_supertype_derives_nothing(tmp_path: Path):
     """CP-9 rows 16-17 and 28, verdict 9. A `GenericServlet` subclass carries
     the SAME address annotation and serves GET and PUT alike through one
@@ -492,6 +496,7 @@ def test_a_protocol_agnostic_supertype_derives_nothing(tmp_path: Path):
 
 
 @pytest.mark.declines("jakarta-servlet")
+@pytest.mark.pins("supertype_dispatch.member-selector-is-name-and-parameter-types")
 def test_a_same_named_method_with_other_parameter_types_derives_nothing(tmp_path: Path):
     """CP-9 rows 18 and 26 — GUIDELINES §8.1's language rule, pinned.
 
@@ -515,6 +520,7 @@ def test_a_same_named_method_with_other_parameter_types_derives_nothing(tmp_path
 
 
 @pytest.mark.declines("jakarta-servlet")
+@pytest.mark.pins("supertype_dispatch.address-arg-is-a-declared-alias")
 def test_an_address_annotation_naming_no_pattern_derives_nothing(tmp_path: Path):
     """An address that cannot be read is not an address. `@WebServlet(name =
     "orders")` carries a servlet NAME and no URL at all; publishing the class
@@ -530,6 +536,7 @@ def test_an_address_annotation_naming_no_pattern_derives_nothing(tmp_path: Path)
 
 
 @pytest.mark.declines("jakarta-servlet")
+@pytest.mark.pins("supertype_dispatch.address-args-are-an-alias-set")
 def test_an_address_annotation_writing_BOTH_SPELLINGS_derives_nothing(tmp_path: Path):
     """The two argument spellings are ALIASES of one attribute, and writing
     both is a declaration the container refuses to deploy — so the module
@@ -554,6 +561,7 @@ def test_an_address_annotation_writing_BOTH_SPELLINGS_derives_nothing(tmp_path: 
 
 
 @pytest.mark.declines("jakarta-servlet")
+@pytest.mark.pins("supertype_dispatch.registered-and-serving-nothing")
 def test_a_declared_address_with_no_dispatch_override_derives_nothing(tmp_path: Path):
     """The address alone is not a boundary: a registered class overriding no
     dispatch method answers 405 to every verb (CP-9 row 6 is that default
@@ -680,6 +688,7 @@ def test_the_second_spelling_derives_its_own_endpoint(tmp_path: Path):
 
 
 @pytest.mark.declines("javax-servlet")
+@pytest.mark.pins("javax-servlet.every-type-is-spelled-javax")
 def test_a_jakarta_spelled_servlet_derives_nothing_from_the_javax_catalog(tmp_path: Path):
     """The near-miss the second catalog introduces, and the only one that is
     new: a module compiled against the OTHER API. Every conjunct is satisfied
@@ -699,6 +708,7 @@ def test_a_jakarta_spelled_servlet_derives_nothing_from_the_javax_catalog(tmp_pa
 
 
 @pytest.mark.declines("jakarta-servlet")
+@pytest.mark.pins("jakarta-servlet.every-type-is-spelled-jakarta")
 def test_a_javax_spelled_servlet_derives_nothing_from_the_jakarta_catalog(tmp_path: Path):
     """The mirror, and it is not redundant: the leak this guards runs in the
     other direction — a `jakarta` catalog that had kept a `javax` name would
@@ -709,6 +719,7 @@ def test_a_javax_spelled_servlet_derives_nothing_from_the_jakarta_catalog(tmp_pa
 
 
 @pytest.mark.declines("javax-servlet")
+@pytest.mark.pins("supertype_dispatch.bypassed-by")
 def test_a_javax_class_overriding_service_and_declaring_no_verb_derives_nothing(
     tmp_path: Path,
 ):
