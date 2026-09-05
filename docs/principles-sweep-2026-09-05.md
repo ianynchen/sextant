@@ -1697,7 +1697,48 @@ rather than the headline. The version-scope counts do close: 20 stated, 32 silen
 Recorded at `A-C7`: sweep 4 graded it Critical and wrote *"If the grading is strictly 'fabricates
 a row', it is Major."* The grade in §3 is the auditor's. **This document re-scored no finding.**
 
-### 7.7 COVERAGE:1444-1447 disagrees with a measurement
+### 7.7 COVERAGE:1444-1447 disagrees with a measurement — RESOLVED 2026-09-05
+
+**Settled by the session controller before the round-1 fix pass. Sweep 1's
+measurement is correct; `COVERAGE.md:1444-1447` is FALSE, and sweep 4's `A-M8`
+mis-states the failure mode.**
+
+The discriminator is `path_separator`, and the guard is
+`derive_endpoints.sql:812`:
+
+```sql
+WHERE NOT ($path_separator IS NULL AND d.path = '')
+```
+
+An empty derived address is dropped **only when the catalog declares no
+`path_separator`**. Exactly seven catalogs declare one — `jakarta-websocket`,
+`spring-actuator`, `spring-cloud-openfeign`, `spring-http-interface`,
+`spring-mvc`, `spring-stomp`, `spring-web` — and `spring-sqs` is not among them,
+so its separator is NULL, the guard fires, and an unlisted destination attribute
+derives **nothing**. Sweep 1 measured zero rows and was right.
+
+Two consequences for the fix pass:
+
+1. **`A-M8` is a silent under-report, not a fabrication.** Its fix is to read
+   the `@AliasFor` pair so the row exists at all — not to stop a wrong row being
+   published. `COVERAGE.md:1444-1447` must be corrected in the same commit: it
+   tells a reader the row is present-but-empty when the row is absent, which is
+   the more misleading of the two.
+2. **`A-C1`'s blast radius is seven catalogs, not three.** Every catalog
+   declaring `path_separator: "/"` is unguarded against an empty address, and
+   sweep 1 named three because three had a reachable bare-annotation path — not
+   because the other four are safe.
+
+**And the guard itself is a third instance of the sweep's root pattern.**
+Whether an empty address is meaningful is a question about the *protocol* — a
+root route `/` is real, an empty AMQP destination is not. `path_separator` is a
+*formatting* property: how segments are joined. Keying a validity gate on a
+formatting field is the same substitution as matching a method by argument
+count, and it is why the guard protects `spring-rabbit` and not its structural
+twin `spring-stomp`. The round-1 mechanism should replace it with a gate that
+says what it means, not one that is a projection of an unrelated field.
+
+### 7.7a The original disagreement, as recorded before it was settled
 
 Sweep 4's `A-M8` quotes `docs/COVERAGE.md:1444-1447`, which says an unlisted destination attribute
 *"derives a **resolved** row with an **empty** path today"*. Sweep 1 measured the sibling case on
