@@ -178,6 +178,19 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-C3`: an endpoint returning no body was published as returning an object** (principles
+  sweep §3.2). `WireTypes` mapped the primitive `void` to the empty string and let
+  `java/lang/Void` fall through to `default -> "object"`, so `ResponseEntity<Void>` /
+  `Mono<Void>` / `Call<Void>` — the idiomatic "no body" in nine catalogs' frameworks — published
+  an object response shape AND filed `java/lang/Void#` as an unexpanded type, a gap report
+  pointing at a type with nothing to expand. Thirty-three catalogs carried a `known_types`
+  repair for it and nine did not; `derive_shapes` is global and insert-if-absent, so the first
+  catalog to reach the type described it for every other one. Fixed in the projection, where it
+  belongs: `java.lang.Void` is an uninstantiable placeholder whose only value is null, which is
+  language knowledge and not catalog knowledge. A new architecture test refuses any catalog
+  `known_types` entry that contradicts the extractor's own switch — the invariant twenty-eight
+  catalog comments already claimed and nothing enforced.
+
 - **`A-C1` / `A-C6`: four catalogs derived from evidence the framework does not act on**
   (principles sweep §3.2). `jakarta-websocket` and `spring-stomp` declared no type-level gate at
   all, so a lone method annotation minted a declaration — and with no class-level annotation to

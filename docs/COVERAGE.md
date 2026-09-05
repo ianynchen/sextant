@@ -937,6 +937,19 @@ unmatched step and leave GET standing (CP-11). What stays unread is
 step serves both overloads and the arity-1 form's payload is absent. Everything else in this
 table remains unimplemented; the system tier still has nothing to match against them.
 
+**`java.lang.Void` reaches no wire type, in every catalog** (`A-C3`, principles sweep §3.2).
+`WireTypes` mapped only the PRIMITIVE `void` to the empty string; `java/lang/Void` is an object
+sort and fell through to `default -> "object"`, so `ResponseEntity<Void>`, `Mono<Void>` and
+`Call<Void>` — the idiomatic "no body" in nine catalogs' frameworks — published an endpoint
+returning nothing as returning an OBJECT, and filed `java/lang/Void#` as an unexpanded type: a
+gap report pointing at a type with nothing to expand. Thirty-three catalogs carried a
+`known_types` REPAIR for it and nine did not, and because `derive_shapes` is global and
+insert-if-absent, whichever catalog reached the type first described it for all of them. Fixed
+at the source, where it is language knowledge — `java.lang.Void` is an uninstantiable
+placeholder whose only value is null — and `tests/architecture/
+test_known_types_mirror_the_projection.py` now refuses any catalog entry that contradicts the
+projection, which is the invariant twenty-eight catalog comments already claimed.
+
 **Both annotation clients are now gated on the construct the framework actually proxies**
 (`A-C6` and `A-C1`, principles sweep §3.2). Retrofit and Spring's HTTP interface declared
 neither a type gate nor `declared_on`, so an exchange annotation on a **concrete class**

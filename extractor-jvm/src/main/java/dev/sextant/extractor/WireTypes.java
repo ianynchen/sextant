@@ -51,6 +51,24 @@ final class WireTypes {
     // object — never guessed at here.
     private static String objectLike(Type type) {
         return switch (type.getInternalName()) {
+            // `A-C3`. Not a box, and the reason it belongs here rather than in
+            // a catalog's `known_types`: `java.lang.Void` is an
+            // UNINSTANTIABLE placeholder — its only value is null — so it
+            // reaches no wire type at all, exactly as the primitive `void`
+            // above it does, and for the same reason the comment there gives.
+            // That is language knowledge, which is what this switch is for.
+            //
+            // Falling through to `object` was a shape claim about a method
+            // that returns nothing: nine catalogs' frameworks make
+            // `ResponseEntity<Void>` / `Mono<Void>` / `Call<Void>` the
+            // idiomatic "no body", each published such an endpoint as
+            // returning an OBJECT, and each filed `java/lang/Void#` as an
+            // unexpanded type — a gap report pointing at a type with nothing
+            // to expand. Thirty-three catalogs carried a `known_types` REPAIR
+            // for it and nine did not; because the `shapes` table is global
+            // and insert-if-absent, whichever catalog reached the type first
+            // described it for all of them.
+            case "java/lang/Void" -> "";
             case "java/lang/String" -> "string";
             case "java/lang/Boolean" -> "boolean";
             case "java/lang/Integer", "java/lang/Long", "java/lang/Short",

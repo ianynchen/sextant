@@ -54,6 +54,37 @@ class WireTypesTest {
         assertEquals("float", WireTypes.format(boxedFloat));
     }
 
+    /** `A-C3` (principles sweep §3.2). `Void` is not a box and must not be
+     *  projected like one. Nine catalogs' frameworks make `ResponseEntity<Void>`
+     *  / `Mono<Void>` / `Call<Void>` the idiomatic "no body", and every one of
+     *  them published an endpoint returning nothing as returning an OBJECT —
+     *  then filed `java/lang/Void#` as an unexpanded type, a gap report
+     *  pointing at a type with nothing to expand. Because the `shapes` table is
+     *  global and insert-if-absent, the first catalog to reach it described it
+     *  wrongly for every other one.
+     *
+     *  This is language knowledge, not catalog knowledge: `java.lang.Void` is
+     *  an uninstantiable placeholder whose only value is `null`, so it reaches
+     *  no wire type at all — the same answer the primitive `void` already
+     *  gets four lines above it in {@code of()}, and for the same reason. */
+    @Test
+    void projects_the_void_placeholder_to_no_wire_type_like_the_primitive() {
+        Type placeholder = Type.getType("Ljava/lang/Void;");
+        assertEquals("", WireTypes.of(placeholder));
+        assertEquals("", WireTypes.format(placeholder));
+        assertEquals("", WireTypes.of(Type.VOID_TYPE));
+    }
+
+    /** The paired near-miss: the projection must not have widened into "any
+     *  `java.lang` type nobody catalogued reaches no wire type". An ordinary
+     *  reference type is still an open object, which is what makes the shape
+     *  pass go looking for its fields. */
+    @Test
+    void an_ordinary_reference_type_is_still_an_object() {
+        assertEquals("object", WireTypes.of(Type.getType("Ljava/lang/Thread;")));
+        assertEquals("object", WireTypes.of(Type.getType("Lcom/acme/orders/OrderView;")));
+    }
+
     @Test
     void projects_a_boxed_boolean_to_boolean() {
         assertEquals("boolean", WireTypes.of(Type.getType("Ljava/lang/Boolean;")));

@@ -1890,7 +1890,7 @@ forgotten.
 |---|---|
 | `A-C1` | FIXED (85af4c7) — the empty-address half by M3, the type gates and the direction inversion here; the `@OnOpen`-only under-report and the RSocket hazard are stated in COVERAGE §5.5, not closed |
 | `A-C2` | FIXED (330835b) |
-| `A-C3` | OPEN |
+| `A-C3` | FIXED (b5cb293) — at the projection, not in the nine catalogs; the mirror invariant is now a ratchet |
 | `A-C4` | FIXED (584676b) — and `A-M11` with it, as §3.3 predicted |
 | `A-C5` | FIXED (2cbaa4b) — the fabrication is closed by M2; the residual (`@Bean` conjunct, unmeasured) is stated in COVERAGE §5.8 |
 | `A-C6` | FIXED (85af4c7) |
