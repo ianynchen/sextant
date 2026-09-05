@@ -72,6 +72,19 @@ from sextant.domain.paths import canonical_http_path, serves_urls
 # the `url` capture at derive time rather than read as an address of its own.
 _ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")
 
+# The capture fields a catalog may spell EITHER as its own literal or as an
+# `argN` reference (`A-C2`, principles sweep §3.2). Only `http_method`, and
+# only because the framework itself offers both spellings: OkHttp names the
+# verb in the method (`.post(body)`) AND takes it as an argument
+# (`.method(verb, body)`), so a grammar that could read only the first left
+# the second as an unmatched step, passing through uncaptured while the root's
+# own `http_method: GET` default stood at `resolved`/`compiler` — a verb no
+# evidence supports. Kept apart from `_ARGUMENT_FIELDS` rather than folded
+# into it because those five are argument positions ALWAYS, which is what
+# `_validate_captures` refuses a non-`argN` value for; a verb literal is the
+# ordinary case here and must keep loading.
+_LITERAL_OR_ARGUMENT_FIELDS = ("http_method",)
+
 # The two captures that are halves of one address (2F design §4's base
 # composition) — `channel`'s alternative, and what
 # `_validate_url_channel_exclusivity` weighs against it as a group.
@@ -356,16 +369,21 @@ def _walk(
 
 
 def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
-    verb = captures.get("http_method")
+    # A verb the catalog spelled as a literal is that literal; one it spelled
+    # as `argN` (`A-C2`) is whatever the matched call's own argument reads as a
+    # string, and None where nothing could read it — the honest gap, not the
+    # root's default.
+    declared_verb = captures.get("http_method")
+    verb = declared_verb if isinstance(declared_verb, str) else _string_value(declared_verb)
     # A chain whose root (and every step it folded through) never captured
     # `http_method` is verbless by declaration — mirroring single_call's D02
     # §2 `verbless` row (a topic has no verb, precondition commit, 2E-prep
     # Task 11): SQS's `SendMessageRequest.builder()` chain never seeds one.
     # `"http_method" not in captures` is what tells "no root ever declared
-    # one" apart from a read failure — every fluent `http_method` is the
-    # catalog's own literal (never an `argN` read, D02 §4), so it can never
-    # itself fail to resolve; the only way `verb` reads None here is that the
-    # key was never folded in at all.
+    # one" apart from a read failure, and since `A-C2` the two are genuinely
+    # different answers: a verb read off an argument CAN fail to resolve, and
+    # the row below is then `unresolved` with `method` NULL rather than
+    # carrying whichever literal an earlier step happened to seed.
     verbless = "http_method" not in captures
     body_argument = captures.get("body")
     response_argument = captures.get("response")
@@ -907,22 +925,43 @@ def _step_captures(step: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]
         if guard["value"] == when["equals"]:
             return _resolve_captures(step["captures"], site)
         return {}
-    return {field: _UNRESOLVED_ARGUMENT for field in step["captures"] if field in _ARGUMENT_FIELDS}
+    return {
+        field: _UNRESOLVED_ARGUMENT
+        for field, value in step["captures"].items()
+        if _reads_an_argument(field, value)
+    }
 
 
 def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]:
     """One matched row's own captured values: `url`/`body`/`response` read
     the `argN`-addressed argument off `site` itself (the raw D00 §5 argument,
     resolved later exactly as `single_call` resolves a positional one);
-    every other field (`http_method`, `response_is`) is the catalog's own
-    literal, unchanged."""
+    `http_method` reads one too where the catalog spelled `argN`, and is the
+    catalog's own literal otherwise; every other field (`response_is`) is
+    always the literal, unchanged.
+
+    The two-spelling field is decided HERE rather than at load, because
+    `argN` is a positional read and a verb literal is not: the same key means
+    "read argument 0" in one row and "the verb is DELETE" in the next, and
+    only the value itself says which."""
     resolved: dict[str, Any] = {}
     for field, value in declared.items():
-        if field in _ARGUMENT_FIELDS:
+        if _reads_an_argument(field, value):
             resolved[field] = _arg_at(site["arguments"], _arg_index(value))
         else:
             resolved[field] = value
     return resolved
+
+
+def _reads_an_argument(field: str, value: Any) -> bool:
+    """Whether one declared capture addresses a call-site position rather than
+    stating a value. Spelled once because `_resolve_captures` and
+    `_step_captures`'s guard-poisoning must agree exactly: a field poisoned in
+    one and read as a literal in the other would write the poison mapping
+    itself into the `method` column."""
+    return field in _ARGUMENT_FIELDS or (
+        field in _LITERAL_OR_ARGUMENT_FIELDS and _ARG_REFERENCE.match(str(value)) is not None
+    )
 
 
 def _arg_index(value: Any) -> int | None:

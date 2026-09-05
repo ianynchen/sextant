@@ -1820,7 +1820,8 @@ report. They are quoted here as independently confirmed.
 
 ## 9. Status and ownership
 
-**Every finding in this document starts `OPEN`.** Nothing here has been fixed; the sweeps were
+**Every finding in this document started `OPEN`** and §10 is the live status table.
+Nothing was fixed when this file landed; the sweeps were
 read-only and this commit adds one file.
 
 **The fix pass is one writer at a time (§13.9).** Agents and the controller share one working tree
@@ -1862,3 +1863,63 @@ is already missing two of the six instances RUNBOOK counts and skips two entry n
 **Citation.** Later commits cite these ids. They are stable: `A-C1`–`A-C9`, `A-M1`–`A-M16`,
 `A-Mi1`–`A-Mi23`, `B-C1`–`B-C7`, `B-M1`–`B-M18`, `B-Mi1`–`B-Mi9`. Where a finding merges two
 sweeps, both are credited in its row.
+
+---
+
+## 10. Fix-pass status — round 1a (mechanisms + Class A Criticals)
+
+Round 1a's scope is §4's three mechanisms and `A-C1`–`A-C9`. The sixteen Majors
+and every Minor are a later dispatch and are untouched here; they stay `OPEN`
+below so this table is the whole record rather than half of one.
+
+`FIXED (<sha>)` means the behaviour changed and a paired near-miss/positive
+proves it. `OPEN — <reason>` is a deliberate decision, not a gap that was
+forgotten.
+
+### Mechanisms
+
+| mechanism | status |
+|---|---|
+| M1 — no derivation publishes a defaulted value at `resolved`/`compiler` | FIXED (aff29fc) — shipped as the §8.3 audit list, `tests/architecture/test_defaulted_identity_values.py`. See §10.1 for where this document's own §4.4 prediction is disputed. |
+| M2 — the dependency gate covers more than one style | OPEN |
+| M3 — the empty-address guard says what it means | OPEN |
+
+### Class A Criticals
+
+| id | status |
+|---|---|
+| `A-C1` | OPEN |
+| `A-C2` | FIXED (330835b) |
+| `A-C3` | OPEN |
+| `A-C4` | OPEN |
+| `A-C5` | OPEN |
+| `A-C6` | OPEN |
+| `A-C7` | OPEN |
+| `A-C8` | OPEN |
+| `A-C9` | OPEN |
+
+### 10.1 Where round 1a disputes this document
+
+Recorded here rather than by editing the analysis above, so the disagreement is
+visible rather than silently resolved.
+
+- **§4.4 claims M1 closes `A-C4`. It does not, and implementing it as written
+  would be a large under-report.** The reasoning there is that an absent prefix
+  is "a defaulted `''` in an identity column", so the row should be withheld.
+  But an absent type-level prefix is the ORDINARY case for the highest-volume
+  catalogs in the tree: `@RestController class Foo { @GetMapping("/orders") }`
+  carries no class-level `@RequestMapping`, and Spring serves `/orders`.
+  Withholding every prefix-less controller row would delete most of the shipped
+  HTTP surface. `A-C4`'s defect is not a default standing in for evidence — it
+  is an inheritance edge the walk never reads, so the evidence exists and was
+  not looked at. It needs its own fix and gets one.
+- **§4.4 claims M1 closes `A-C1`. M3 does.** The empty prefix is not a value
+  standing in for a missing one; the whole composed address is empty, which is
+  the "where the whole address is defaulted, the row does not ship" clause —
+  and that clause is a statement about the ADDRESS, which is exactly what M3
+  makes enforceable. M1's per-value form has nothing to attach to.
+- **`A-C2`'s cause is an unmodelled framework method, not a defaulted value.**
+  The root's `http_method: GET` is a true statement about a bare
+  `Request.Builder`; what made it wrong was that the call which overrides it was
+  not declared. M1's enforceable form therefore admits the seed and pins its
+  CONDITION — every verb-setting method declared — rather than banning the seed.

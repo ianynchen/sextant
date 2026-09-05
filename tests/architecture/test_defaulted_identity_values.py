@@ -46,6 +46,7 @@ It is OFFLINE and deterministic (NFR-1): it reads the shipped catalogs and runs
 nothing.
 """
 
+import re
 from pathlib import Path
 
 import yaml
@@ -61,6 +62,14 @@ CATALOGS = REPO / "src" / "sextant" / "catalogs"
 # at all — and it is the one that shipped wrong.
 _IDENTITY_CAPTURES = ("http_method",)
 
+# A capture spelled `argN` addresses the matched call's own argument, so it IS
+# the evidence and can never be a seeded default: where the argument cannot be
+# read the engine answers NULL at `unresolved` rather than falling back to a
+# literal (`fluent._derive`). Excluded from the scan for that reason and not as
+# a convenience — an `argN` value on an identity field is the shape this rule
+# wants catalogs to move TOWARD.
+_READS_THE_CALL_SITE = re.compile(r"^arg\d+$")
+
 # Sites where a `fluent` entry seeds an identity value its own method name does
 # not name. An ALLOWLIST, not a backlog: each entry records a framework DEFAULT
 # that is genuinely true of the matched call, together with the condition that
@@ -73,11 +82,12 @@ _FRAMEWORK_DEFAULT_AT_THE_ROOT = {
         "(deleting it under-reports every plain `.url().build()` chain). This is "
         "admissible only while every `Request.Builder` method that SETS the verb "
         "is a declared step, because an unmatched step passes through uncaptured "
-        "and leaves this literal standing. That condition is NOT met as this "
-        "entry lands: `Request.Builder.method(String, RequestBody)` is undeclared "
-        "and publishes GET for every verb (`A-C2`), closed in the next commit. It "
-        "stops being right again the day OkHttp adds a verb-setting builder "
-        "method this catalog does not declare."
+        "and leaves this literal standing. That condition is met at okhttp "
+        "4.12.0: `javap -p -s` gives eight verb-setting methods and `okhttp.yml` "
+        "declares a step for every one, pinned by "
+        "`test_sweep_round1_framework_rules.py` against CP-11 "
+        "(`scripts/probes/cp11_sweep_round1.md`). It stops being right the day "
+        "OkHttp adds a ninth this catalog does not declare."
     ),
 }
 
@@ -99,7 +109,7 @@ def literal_identity_captures() -> list[dict[str, str]]:
             for entry in matches.get(where) or []:
                 captures = entry.get("captures") or {}
                 for field in _IDENTITY_CAPTURES:
-                    if field not in captures:
+                    if field not in captures or _READS_THE_CALL_SITE.match(str(captures[field])):
                         continue
                     found.append(
                         {

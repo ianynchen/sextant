@@ -14,6 +14,18 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **CP-11: the four framework rules the principles-sweep fix pass mirrors are measured**
+  (`scripts/probes/cp11_sweep_round1.md`). Each of `A-C2`, `A-C7`, `A-C1` and `A-C6` encoded a
+  framework rule taken from documentation, a checkpoint note or memory, and each was plausible
+  and wrong. The committed harness resolves each artifact through Maven, reads every jar's
+  self-reported version out of the archive it opened — aborting rather than filling a
+  mislabelled column — and asks `javap` four questions: OkHttp's complete `Request.Builder`
+  verb-setter set, `RequestMappingHandlerMapping.isHandler`'s body across four Spring minors,
+  which jakarta.websocket artifact declares which annotation and what each targets, and what
+  `Retrofit.create` does with a non-interface. `tests/architecture/
+  test_sweep_round1_framework_rules.py` is the offline half and pins the shipped catalogs
+  against the generated table.
+
 - **CP-10: every catalog `descriptor:` is now pinned to bytecode somebody read**
   (`scripts/probes/cp10_catalog_descriptors.md`, descriptor sweep R7). Load-time validation
   refuses a `descriptor` that is not a string opening with `(`, and that is all it can do: a
@@ -165,6 +177,18 @@ here would restate those documents rather than add anything.
   two halves would otherwise concatenate bare.
 
 ### Fixed
+
+- **`A-C2`: OkHttp's `.method("DELETE", body)` no longer publishes `GET`** (principles sweep
+  §3.2). `okhttp3.Request$Builder`'s generic verb setter was not a declared step, so it passed
+  through uncaptured (D02 §4) and the chain root's `http_method: GET` — OkHttp's real default
+  for a bare builder — stood uncorrected: a module issuing DELETE was published as issuing GET
+  at `resolved`/`compiler`, where nothing downstream can tell an asserted verb from an observed
+  one. The `fluent` grammar now accepts `http_method: argN` beside the literal spelling, and
+  `okhttp.yml` declares the step. A verb the scanner cannot read as a string literal derives
+  `method: NULL` at `unresolved` — the honest gap the catalog's own comment claimed to be
+  taking while publishing a guess. Rows change for any module using
+  `Request.Builder.method(...)`: previously one `GET` row per such call, now the real verb, or
+  an unresolved row where the verb is computed.
 
 - **A client held by its INTERFACE derives nothing, and that is now written down** (descriptor
   sweep R8). A call site records the compile-time qualifying type javac emitted, and every

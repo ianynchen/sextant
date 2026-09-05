@@ -915,9 +915,15 @@ Spring `@HttpExchange` are read as outbound annotation clients; `RestTemplate` i
 `single_call` engine and `RestClient`, `WebClient` and OkHttp by the `fluent` engine
 reconstructing their builder chains — all from the same linked `call_site` facts, calls made
 inside lambdas included. OkHttp's generic `Request.Builder.method(String, RequestBody)` verb
-call is not readable — only the named verb methods (`get`/`post`/`put`/`patch`/`delete`/
-`head`) derive. Everything else in this table remains unimplemented; the system tier still
-has nothing to match against them.
+call reads its verb off argument 0 like any other captured argument, so it derives beside the
+named verb methods (`get`/`post`/`put`/`patch`/`delete`/`head`); a verb the scanner cannot read
+as a string literal derives `method: NULL` at `unresolved` rather than the builder's own GET
+default (`A-C2`). All eight verb-setting methods `Request.Builder` declares are covered, which
+is the property that keeps that default honest — an uncovered one would fall through as an
+unmatched step and leave GET standing (CP-11). What stays unread is
+`delete(RequestBody)`'s **body**: a `fluent` step matches on name alone, so the one `delete`
+step serves both overloads and the arity-1 form's payload is absent. Everything else in this
+table remains unimplemented; the system tier still has nothing to match against them.
 
 | Language | Library | Shape | Tier |
 |---|---|---|---|
@@ -1438,8 +1444,8 @@ outcome, not a deduplication the engine owes anyone.
 `KafkaTemplate.sendDefault`, `JmsTemplate.convertAndSend(Object)` with no destination and
 `SqsTemplate`'s builder-lambda `send(Consumer<SqsSendOptions<T>>)` all put the destination
 somewhere the engine cannot read a literal from, so each derives a real row with `path: NULL,
-resolution: unresolved` — the same honesty rule OkHttp's un-named verb call established in §5.2,
-never a fabricated name.
+resolution: unresolved` — the same honesty rule an unreadable OkHttp verb argument follows in
+§5.2, never a fabricated name.
 
 A listener annotation that puts its destination in an attribute the catalog does not list —
 `@KafkaListener(topicPartitions = …)` here, `@SqsListener(queueNames = …)` in §5.10 beside the

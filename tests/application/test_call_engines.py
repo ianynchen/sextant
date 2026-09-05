@@ -3503,6 +3503,110 @@ def test_okhttp_put_patch_delete_head_steps_derive_their_own_verb_not_the_roots_
     assert by_caller[callers["head"]]["method"] == "HEAD"
 
 
+# --- `A-C2` (principles sweep §3.2): the generic verb setter -----------------
+
+
+def _okhttp_generic_method_chain(caller: str, verb_argument: CallArgument) -> list:
+    """`new Request.Builder().url(…).method(<verb>, body).build()`, then
+    `client.newCall(request)` — the shape `okhttp.yml` did not model, spelled
+    once so the positive and the near-miss differ ONLY in the verb argument."""
+    builder = "okhttp3/Request$Builder#"
+    return [
+        _call(caller, builder, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _call(
+            caller,
+            builder,
+            "url",
+            1,
+            receiver=2,
+            result=8,
+            arguments=[CallArgument(kind="string", value="/orders/1")],
+        ),
+        _call(
+            caller,
+            builder,
+            "method",
+            2,
+            receiver=8,
+            result=11,
+            # A readable body on BOTH sides, so the only thing separating the
+            # positive from the near-miss below is the verb argument: an
+            # unreadable body would demote the row on its own (ruling I1) and
+            # the near-miss would then prove nothing about the verb.
+            arguments=[
+                verb_argument,
+                CallArgument(kind="instance", source=5, symbol="okhttp3/RequestBody#"),
+            ],
+        ),
+        _call(caller, builder, "build", 3, receiver=11, result=14),
+        _call(
+            caller,
+            "okhttp3/OkHttpClient#",
+            "newCall",
+            4,
+            receiver=99,
+            result=20,
+            arguments=[CallArgument(kind="instance", source=14, symbol="okhttp3/Request#")],
+        ),
+    ]
+
+
+def test_okhttps_generic_verb_setter_derives_the_verb_it_was_handed(tmp_path: Path):
+    """`A-C2`, the positive half. `Request.Builder.method("DELETE", body)` is
+    OkHttp's fully generic verb setter, and until this fix it was an unmatched
+    step: it passed through uncaptured and the ROOT's `http_method: GET`
+    default stood, so a module issuing DELETE was published as issuing GET at
+    `resolved`/`compiler` — a verb no evidence supports, at the top tier.
+
+    The paired near-miss below is what makes this assertion worth making: a
+    rule that read the verb off argument 0 and then failed to read it at all
+    would still pass every "declares nothing" test in the file."""
+    catalogs = YamlCatalogSource(CATALOGS_DIR).load()
+    okhttp = next(c for c in catalogs if c.id == "okhttp")
+    caller = "com/acme/http/Client#cancel()."
+    facts = _okhttp_generic_method_chain(caller, CallArgument(kind="string", value="DELETE"))
+
+    workspace = _resolve_fluent(tmp_path, facts, okhttp)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["path"], r["resolution"], r["evidence"]) for r in rows] == [
+        ("DELETE", "/orders/1", "resolved", "compiler")
+    ]
+
+
+def test_a_verb_argument_nothing_can_read_derives_no_verb_rather_than_the_roots_default(
+    tmp_path: Path,
+):
+    """`A-C2`, the near-miss, and the whole point of the mechanism (sweep §4):
+    a value that comes from a catalog DEFAULT rather than from evidence is
+    `unresolved`, never `resolved`.
+
+    Same chain as the positive, one argument different — a verb held in a
+    variable the scanner cannot read. The honest answer is `method: NULL` at
+    `unresolved`; the answer this replaces was `GET` at `resolved`/`compiler`,
+    which `okhttp.yml:26-31` itself called "a known gap, not silently guessed"
+    while four lines above describing the mechanism that made it a guess.
+
+    Asserting the whole tuple rather than `method is None` on purpose: the row
+    must still SHIP (the module does call `/orders/1`, and dropping it would
+    trade a fabrication for a silent under-report), and it must be demoted off
+    `resolved` — a NULL verb beside `resolved` would claim the call has no verb
+    at all, which is a different and equally wrong statement."""
+    catalogs = YamlCatalogSource(CATALOGS_DIR).load()
+    okhttp = next(c for c in catalogs if c.id == "okhttp")
+    caller = "com/acme/http/Client#dynamic()."
+    facts = _okhttp_generic_method_chain(caller, CallArgument(kind="unresolved"))
+
+    workspace = _resolve_fluent(tmp_path, facts, okhttp)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["path"], r["resolution"]) for r in rows] == [
+        (None, "/orders/1", "unresolved")
+    ]
+
+
 # --- Task 8 (2E-prep): `when` — the value-guarded step (D02 §2's fluent) ---
 #
 # Checkpoint-confirmed (task-6-report.md javap evidence, reviewer-reproduced):
