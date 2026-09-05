@@ -79,7 +79,32 @@ handler, which is already the enrichment pass's inbox (2K §8, 2N's verdict
 engine), so the model is pointed at exactly the uncertainties rather than at the
 whole document.
 
-### The principles sweep — a checkpoint between 2O and 2P, not a new phase
+### The principles sweep — pulled forward, mid-2O
+
+**Rescheduled 2026-09-05 (user ruling), from "a checkpoint between 2O and 2P".**
+Run the sweeps NOW, against everything shipped to date; fix what they find;
+then resume 2O at Task 8.
+
+The reason is the arity defect. `single_call` matched a catalog row by method
+name and ARGUMENT COUNT — a rule Java does not have — and published a message
+payload as an AMQP destination, a JMS destination and a SOAP service address.
+It was found **by luck**, during an unrelated review of Task 7, five days after
+it shipped and after four earlier reviews had passed the file. Nothing was
+looking for it, because §8.1's language rule did not exist when the code was
+written and a new rule reaches backwards through nothing (§8.3).
+
+Two consequences follow, and they are why the schedule moved:
+
+1. **Every remaining 2O task adds to an unswept pile.** Sweeping after 2O means
+   auditing work written under rules that will themselves be revised by the
+   audit. Sweeping first means Tasks 8-13 are written under settled rules.
+2. **We do not know the count.** One invented language rule was found by
+   accident. The sweep is the only mechanism that turns that into a number, and
+   until it has run, every estimate of what is left in 2A-2N is a guess.
+
+The sweeps are read-only audits and run in parallel; the fixes that follow are
+one writer at a time (§13.9).
+
 
 **Ruled 2026-09-04.** Phases 2A–2N were built before the principles now written
 into GUIDELINES §5.3, §5.4, §8, §8.1, §9 and §10 — because **those principles
