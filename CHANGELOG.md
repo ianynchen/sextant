@@ -178,6 +178,23 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Mechanism 3: the empty-address guard was keyed on a formatting property** (principles sweep
+  §4, §7.7). `derive_endpoints.sql` dropped a row with an empty address only when the catalog
+  declared no `path_separator` — a property about how two halves of an address are JOINED, which
+  says nothing about whether the empty address means anything. The result was that a broker
+  catalog whose destinations have no slashes was protected and its structural twin on a
+  slash-separated protocol was not, because declaring a separator to compose destinations
+  switched the twin's own validity gate off in the same line. Seven shipped catalogs declared one
+  and were all unguarded. The gate now asks whether anything in the row names an endpoint at all:
+  an empty address ships only where a resolved `peer` names the service, and the one protocol for
+  which the empty address is real — an inbound HTTP root route — has already been spelled `/` by
+  the canonical-address gate before this runs. **Output changes for real modules**: a
+  `websocket`- or outbound-HTTP-shaped annotation catalog that composed an empty address stops
+  publishing that row (`A-C1`'s fabrication half); inbound HTTP root routes, named destinations
+  and Feign clients calling their base address are all unaffected. `docs/COVERAGE.md`'s claim
+  that an unlisted destination attribute "derives a resolved row with an empty path today" was
+  already false before this change and is corrected with it.
+
 - **`A-C5`: a module with no Spring Cloud Stream asserted four Kafka boundaries** (principles
   sweep §3.2). `config_join`'s candidate scan reads every declared method and keeps the ones
   returning `Function`/`Consumer`/`Supplier` — platform interfaces, not framework ones — and with

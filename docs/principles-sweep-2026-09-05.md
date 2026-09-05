@@ -1882,7 +1882,7 @@ forgotten.
 |---|---|
 | M1 — no derivation publishes a defaulted value at `resolved`/`compiler` | FIXED (aff29fc) — shipped as the §8.3 audit list, `tests/architecture/test_defaulted_identity_values.py`. See §10.1 for where this document's own §4.4 prediction is disputed. |
 | M2 — the dependency gate covers more than one style | FIXED (2cbaa4b) — `config_join` admitted; the per-style reasoning is recorded in `resolve/dependencies.py` |
-| M3 — the empty-address guard says what it means | OPEN |
+| M3 — the empty-address guard says what it means | FIXED (ed4e18c) — replaced by an addresses-nothing gate; closes `A-C1`'s fabrication half across all seven separator-declaring catalogs |
 
 ### Class A Criticals
 

@@ -1436,7 +1436,7 @@ identity. A method-level `@KafkaListener` nested inside a class already carrying
 unread territory — the engine's generic prefix-join rule (`coalesce(p.prefix,'') ||
 m.path_suffix`) concatenates the class-level topic onto the method's own topic and derives a
 confidently `resolved` row under a topic name nobody wrote: a known fabrication boundary, not
-exercised by the fixture, slated for tightening alongside the empty-path wart below. Where a
+exercised by the fixture, slated for tightening alongside the addresses-nothing gate described below. Where a
 class-level `@KafkaListener` does derive, every `@KafkaHandler` method on it derives its own row
 against the shared topic identity — several payload contracts riding one topic is the deliberate
 outcome, not a deduplication the engine owes anyone.
@@ -1467,8 +1467,15 @@ resolution: unresolved` — the same honesty rule an unreadable OkHttp verb argu
 
 A listener annotation that puts its destination in an attribute the catalog does not list —
 `@KafkaListener(topicPartitions = …)` here, `@SqsListener(queueNames = …)` in §5.10 beside the
-shipped `value` alias — derives a resolved row with an **empty** path today rather than an
-unresolved one; a known wart, slated for tightening rather than shipped as designed.
+shipped `value` alias — derives **nothing at all**: the composed destination is empty, and the
+addresses-nothing gate (`derive_endpoints.sql`) withholds a row that names no endpoint. This
+paragraph previously said such a listener "derives a resolved row with an **empty** path today
+rather than an unresolved one; a known wart", which was measurably false — sweep 1 measured zero
+rows on the shipped `spring-sqs` catalog and the sweep's §7.7 settled it. **The correction
+matters in the direction that costs a reader**: it told them the row was present-but-empty when
+the listener is absent from the export entirely, which is the harder of the two to notice.
+Closes for the `@SqsListener` case by reading the `@AliasFor` pair (`A-M8`); for the
+`topicPartitions` case by a `path_from` that can fan out a nested annotation.
 
 The scanner does not capture a parameter's own generic type arguments — only a return type's —
 so a `ConsumerRecord<K, V>` payload parameter reads as honestly absent rather than resolving to
@@ -1504,9 +1511,9 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 | Java | `JmsTemplate.send` / `convertAndSend` | the declared row is `convertAndSend(String destinationName, Object message)`, pinned to that overload by its `descriptor` | `registration_call` | ✅ shipped — **read with the two collision rows below**, which it shares with `RabbitTemplate` |
 | Java | Direct `jakarta.jms.{Session, MessageProducer, MessageConsumer}` | `createProducer`/`createConsumer` linked to `createQueue`/`createTopic` via `channel_via`; `send()` deliberately unread | `registration_call` | ✅ shipped |
 | Java | Spring AMQP `@RabbitListener(queues = …)`, plus class-level `@RabbitListener` + `@RabbitHandler` | `queues` is a `String[]` (javap, spring-rabbit 3.1.4); the class-level form doubles as the destination prefix, `spring-kafka.yml`'s shape | `annotation` | ✅ **shipped** (2O Task 7) |
-| Java | `@RabbitListener(bindings = @QueueBinding(…))` / `queuesToDeclare = @Queue(…)` | the destination lives inside a NESTED annotation | `annotation` | **Boundary — derives nothing.** Nested-annotation arguments are readable only from extractor capability 9.16 onward and no catalog reads them yet; the empty-name gate drops the would-be row rather than publishing an empty destination. Closes when a `path_from` alias can name an attribute inside a nested annotation |
+| Java | `@RabbitListener(bindings = @QueueBinding(…))` / `queuesToDeclare = @Queue(…)` | the destination lives inside a NESTED annotation | `annotation` | **Boundary — derives nothing.** Nested-annotation arguments are readable only from extractor capability 9.16 onward and no catalog reads them yet; the addresses-nothing gate drops the would-be row rather than publishing an empty destination. Closes when a `path_from` alias can name an attribute inside a nested annotation |
 | Java | A listener destination written as SpEL `#{…}` or a property `${…}` | the value is a bean property or a config key, resolved at container start | `annotation` | ✅ **shipped as `unresolved`** (2O Task 7) — the expression is published VERBATIM beside `resolution: unresolved`, never canonicalized and never resolved. Nothing here resolves it: the config ladder is a call-site mechanism `annotation_driven` never invokes |
-| Java | `@RabbitHandler` outside a class-level `@RabbitListener`, and a class-level `@RabbitListener` naming more than one queue | the first names no destination at all; the second is read element-0-only | `annotation` | **Boundary.** The first derives NOTHING (the empty-name gate, pinned by a §10 near-miss); the second takes the first queue, `spring-kafka.yml`'s own class-level limitation. **Falsified by** a listener whose `queues` array has more than one element — every queue after the first is missing from the export, and the row that does derive claims one destination for a consumer that serves N. Closes when `path_from` can fan one annotation out to a row per array element |
+| Java | `@RabbitHandler` outside a class-level `@RabbitListener`, and a class-level `@RabbitListener` naming more than one queue | the first names no destination at all; the second is read element-0-only | `annotation` | **Boundary.** The first derives NOTHING (the addresses-nothing gate, pinned by a §10 near-miss); the second takes the first queue, `spring-kafka.yml`'s own class-level limitation. **Falsified by** a listener whose `queues` array has more than one element — every queue after the first is missing from the export, and the row that does derive claims one destination for a consumer that serves N. Closes when `path_from` can fan one annotation out to a row per array element |
 | Java | A class carrying BOTH a class-level and a method-level `@RabbitListener` | Spring registers the two independently; this catalog composes the class queue in front of the method one | `annotation` | **Boundary — OVER-reports one composed destination.** Inherited from `spring-kafka.yml`'s prefix shape, which has the same seam. Closes when a prefix annotation can be scoped to the member annotations it actually prefixes |
 | Java | `@RabbitListener` + `@SendTo` (the declared reply destination) | `spring-kafka.yml` reads its own via D02 §2's `reply` block | `annotation` | **Boundary — no `reply` block is declared**, so a Rabbit listener's declared reply derives no outbound row. One `reply` block closes it |
 | Java | `@RabbitListeners` / `@PulsarListeners` — the `@Repeatable` container | a repeated annotation reaches the bytecode as its container, never as N annotations | `annotation` | **Boundary — derives nothing** for the repeated form. The single form is unaffected. Closes when a catalog can name a container annotation and read the array inside it |

@@ -612,14 +612,14 @@ def test_a_catalog_declaring_no_naming_forms_derives_exactly_what_it_always_did(
     before them.
 
     The two declarations that name nothing derive NO ROW here, and the set
-    below is exactly the two that do. That is 2O Task 7's empty-name gate
+    below is exactly the two that do. That is the addresses-nothing gate
     rather than the naming vocabulary: an absent attribute still defaults to
-    `''`, but a catalog composing an OPAQUE NAME (no `path_separator`) has no
-    destination at all once that composition is empty, so the row is dropped
-    instead of published as an endpoint addressing nothing. Before the gate,
-    this same set carried a third member, the bare `''`. The next test shows
-    the other route out — `path_fallback`, which gives such a declaration a
-    real name instead of dropping it.
+    `''`, and a row whose whole composed address is empty — with no peer
+    naming an endpoint either — is an endpoint addressing nothing, so it is
+    dropped instead of published. Before the gate, this same set carried a
+    third member, the bare `''`. The next test shows the other route out —
+    `path_fallback`, which gives such a declaration a real name instead of
+    dropping it.
     """
     assert _paths_of(tmp_path, _naming_forms_catalog()) == {"named", "member"}
 
@@ -1761,6 +1761,75 @@ def test_an_empty_half_takes_no_separator_with_it(tmp_path: Path):
     assert _seam_path(tmp_path / "c", catalog, "", "owners") == "/owners"
 
 
+def _seam_rows(tmp_path: Path, catalog: Catalog, prefix: str, suffix: str) -> list[dict]:
+    """Every row the seam derived — zero of them included, which `_seam_row`'s
+    single-row unpack cannot express and which is the whole question below."""
+    _seam_facts(tmp_path / "facts", prefix, suffix)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    rows = [dict(row) for row in workspace.query("endpoints")]
+    workspace.close()
+    return rows
+
+
+# --- Mechanism 3 (principles sweep §4, §7.7): the empty-address gate ---------
+
+
+@pytest.mark.parametrize("separator", [None, "/"])
+def test_an_empty_composed_destination_derives_nothing_whatever_the_separator(
+    tmp_path: Path, separator: str | None
+):
+    """Whether an empty address means anything is a question about the
+    PROTOCOL, and `path_separator` is a formatting property — how segments are
+    joined. The gate used to be keyed on it (`WHERE NOT ($path_separator IS
+    NULL AND d.path = '')`), which is why it protected `spring-rabbit` and not
+    its structural twin `spring-stomp`: the twin's destinations contain
+    slashes, so its author declared a separator, and declaring one switched the
+    validity gate off. Seven shipped catalogs declare one and were all
+    unguarded (§7.7); `A-C1` names three of them because three had a reachable
+    bare-annotation path, not because the other four were safe.
+
+    Parametrized over both spellings on purpose: a gate that says what it means
+    cannot give two answers to the same question about the same protocol."""
+    catalog = _seam_catalog(protocol="websocket", direction="inbound", **_separator(separator))
+
+    assert _seam_rows(tmp_path, catalog, "", "") == []
+
+
+@pytest.mark.parametrize("separator", [None, "/"])
+def test_the_same_declaration_with_a_destination_still_derives(
+    tmp_path: Path, separator: str | None
+):
+    """The paired positive, and it is not decoration: the near-miss above is
+    satisfied by a rule that derives nothing at all, and a catalog silenced
+    outright would pass it forever."""
+    catalog = _seam_catalog(protocol="websocket", direction="inbound", **_separator(separator))
+
+    [row] = _seam_rows(tmp_path, catalog, "/live", "")
+    assert (row["path"], row["resolution"], row["evidence"]) == ("/live", "resolved", "compiler")
+
+
+def test_a_served_http_root_route_is_a_real_address_and_still_derives(tmp_path: Path):
+    """The one protocol for which the empty address DOES name something, and
+    the reason the gate cannot simply be "drop the empty string" at the seam:
+    a class prefix with an empty method mapping is served at `/` (CP-1 row 5).
+
+    It survives because the canonical-address gate has already turned the
+    empty composition into `/` by the time the validity gate runs — inbound
+    HTTP is exactly `domain/paths.py::serves_urls`, so the two seams agree
+    about which protocol this is without the validity gate having to ask
+    twice."""
+    [row] = _seam_rows(tmp_path, _seam_catalog(path_separator="/"), "", "")
+
+    assert row["path"] == "/"
+    assert row["resolution"] == "resolved"
+
+
+def _separator(separator: str | None) -> dict[str, object]:
+    return {} if separator is None else {"path_separator": separator}
+
+
 def test_a_catalog_declaring_no_separator_concatenates_exactly_as_it_always_did(
     tmp_path: Path,
 ):
@@ -1826,10 +1895,19 @@ def test_the_sql_path_seam_answers_exactly_what_the_domain_seam_answers(
     it.
     """
     catalog = _seam_catalog(protocol=protocol, direction=direction, path_separator="/")
-    derived = _seam_path(tmp_path, catalog, "", raw)
+    rows = _seam_rows(tmp_path, catalog, "", raw)
 
     expected = canonical_http_path(raw) if serves_urls(protocol, direction) else raw
-    assert derived == expected
+    if expected == "":
+        # `raw=""` on a protocol whose empty address names nothing: the two
+        # seams still agree — both compose the empty string — and the
+        # addresses-nothing gate then withholds the row (mechanism 3, §4).
+        # Asserting emptiness IS the comparison's observable form here; the
+        # inbound-HTTP row of the same parametrization is the paired positive,
+        # where `serves_urls` makes the same composition the root route `/`.
+        assert rows == []
+    else:
+        assert [row["path"] for row in rows] == [expected]
 
 
 def test_a_client_side_http_path_keeps_the_separator_the_declaration_wrote(tmp_path: Path):
@@ -1854,7 +1932,13 @@ def test_a_client_side_http_path_keeps_the_separator_the_declaration_wrote(tmp_p
     outbound = _seam_catalog(direction="outbound", path_separator="/")
 
     assert _seam_path(tmp_path, outbound, "", "legacy/invoices") == "legacy/invoices"
-    assert _seam_path(tmp_path / "b", outbound, "", "") == ""
+    # A client declaration that names NO path and no service either addresses
+    # nothing at all, and derives no row (mechanism 3, §4). What the boundary
+    # claims is that a client path is not canonicalized — never that an empty
+    # one is an address — and the assertion above is where that is pinned. A
+    # client whose type-level annotation DOES name the service keeps its
+    # empty-path row: the peer is what makes the base address real.
+    assert _seam_rows(tmp_path / "b", outbound, "", "") == []
     # And the inbound twin of the very same declaration IS canonicalized —
     # the pair is what makes the boundary a boundary rather than an omission.
     inbound = _seam_catalog(path_separator="/")

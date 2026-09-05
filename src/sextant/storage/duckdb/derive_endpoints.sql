@@ -785,31 +785,54 @@ unioned AS (
     GROUP BY ALL
 )
 SELECT * FROM unioned d
--- THE EMPTY-NAME GATE (2O Task 7 Step 4). A catalog that declares no
--- `$path_separator` composes an OPAQUE NAME rather than a sequence of
--- segments — its own seam comment above says why: a broker destination has no
--- segments to join. An empty name is not a destination: nothing subscribes to
--- it and nothing publishes to it, so a row carrying one is an endpoint
--- addressing nothing, published at `resolved`/`compiler` where nothing
--- downstream can tell it from an observation. Silence is the honest answer,
--- and it is the answer the same WHERE clause already gives a declaration
--- whose scope was never found.
+-- THE ADDRESSES-NOTHING GATE (2O Task 7 Step 4; rewritten by the principles
+-- sweep's mechanism 3, §4 and §7.7). An empty address is not a destination:
+-- nothing subscribes to it and nothing publishes to it, so a row carrying one
+-- and nothing else that names an endpoint is an endpoint addressing nothing,
+-- published at `resolved`/`compiler` where nothing downstream can tell it from
+-- an observation. Silence is the honest answer, and it is the answer the same
+-- WHERE clause already gives a declaration whose scope was never found.
 --
--- Two real shapes reach it, both boundaries a catalog states rather than
+-- **What this gate used to ask, and why it was the wrong question.** It read
+-- `NOT ($path_separator IS NULL AND d.path = '')` — it fired only for a
+-- catalog that declared NO separator. `$path_separator` is a FORMATTING
+-- property: it says how two halves of an address are joined, and nothing at
+-- all about whether the empty address means something. Keying a validity gate
+-- on it is the same substitution as matching a method by argument count, and
+-- it had the same result: an AMQP broker catalog was protected because an
+-- exchange name has no slashes in it, while its structural twin — the same
+-- shape, on a protocol whose destinations ARE slash-separated — declared a
+-- separator to compose them and switched its own validity gate off in the same
+-- line. Seven shipped catalogs declared one and were all unguarded; three had
+-- a reachable bare-annotation path and fabricated (`A-C1`), and the other four
+-- were safe by luck.
+--
+-- **What it asks now.** Whether anything in the row names an endpoint at all.
+-- Two things can, and the second is not the path:
+--   * The address itself, once the protocol has had its say. For the one
+--     protocol where the empty address IS real — an inbound HTTP root route,
+--     CP-1 row 5, a class prefix with an empty method mapping — the
+--     canonical-address gate above has already spelled it `/` by the time this
+--     runs, because `$canonical_path` is exactly `domain/paths.py::serves_urls`.
+--     So `d.path = ''` here means the protocol had nothing to say, never that
+--     the root route was dropped.
+--   * A resolved `peer`. A client declaration whose type-level annotation names
+--     the service but neither half names a path is a call to that service's
+--     base address — real, and exactly one shipped catalog declares a
+--     `peer_from` at all. Dropping it would trade `A-C1`'s fabrication for an
+--     under-report.
+--
+-- Two real shapes reach the drop, both boundaries a catalog states rather than
 -- reads: a member-level handler annotation that names no destination of its
 -- own sitting outside the class-level annotation that would have named one,
 -- and a listener that declares its destination only through NESTED
 -- annotations, whose arguments no catalog reads yet.
 --
--- SEGMENTED addresses are deliberately untouched, and that is not the same
--- claim: an empty segmented address IS the base address — for an inbound HTTP
--- catalog the root route `/` (CP-1 row 5: a class prefix with an empty method
--- mapping is served), and for a client one the configured base URL, which
--- `tests/application/test_endpoints.py::
--- test_a_client_side_http_path_keeps_the_separator_the_declaration_wrote`
--- pins. This stops being right the day a catalog composes an opaque name
--- for which the empty string is a real destination.
-WHERE NOT ($path_separator IS NULL AND d.path = '')
+-- This stops being right the day a protocol arrives for which the empty
+-- address is a real destination AND the row carries no peer to say so — at
+-- which point the answer belongs in `domain/paths.py` beside `serves_urls`,
+-- which is where the protocol question already lives, rather than here.
+WHERE NOT (d.path = '' AND d.peer IS NULL)
   AND NOT EXISTS (
     SELECT 1 FROM endpoints existing
     WHERE existing.protocol  = d.protocol
