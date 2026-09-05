@@ -4271,3 +4271,114 @@ def test_a_web_filter_derives_nothing_from_any_shipped_catalog(tmp_path: Path):
     )
 
     assert rows == []
+
+
+# --- `A-C7` (principles sweep §3.2): the handler gate is a predicate --------
+
+
+def _stereotype_facts(root: Path, *, meta_annotated: bool) -> None:
+    """A module-local stereotype and one controller wearing it.
+
+    `@MyApi` is an ordinary annotation type this module compiles, so its own
+    `@Controller` — or, in the near-miss, its absence — is sitting in the
+    `annotations` facts like any other annotation-on-a-type row. The controller
+    itself carries NO framework stereotype at all, which is the whole point:
+    Spring's handler test is a predicate over the composition, so `@MyApi`
+    alone makes this a handler.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/api/OrderApi.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    stereotype = "com/acme/api/MyApi#"
+    controller = "com/acme/api/OrderApi#"
+    list_ = "com/acme/api/OrderApi#list(sig_08c5be17)."
+    facts: list = [
+        # An annotation type is an interface in bytecode, which is what puts it
+        # in `interface_symbols` — the module-local half of the composition
+        # rule (a stereotype living in a jar is out of reach, D02 §7).
+        SymbolFact(document_id="doc_1", symbol=stereotype, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(document_id="doc_1", symbol=controller, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=list_,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=controller,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=controller,
+            retention="runtime",
+            use=AnnotationUse(annotation=stereotype, args={}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=list_,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/web/bind/annotation/GetMapping#",
+                args={"value": ["/orders"]},
+            ),
+        ),
+    ]
+    if meta_annotated:
+        facts.insert(
+            3,
+            AnnotationFact(
+                document_id="doc_1",
+                target=stereotype,
+                retention="runtime",
+                use=AnnotationUse(annotation="org/springframework/stereotype/Controller#", args={}),
+            ),
+        )
+    write_fact_file(root / "OrderApi.jsonl", document, facts)
+
+
+def _stereotype_rows(tmp_path: Path, *, meta_annotated: bool) -> list[tuple]:
+    _stereotype_facts(tmp_path / "facts", meta_annotated=meta_annotated)
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-mvc")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args", "type_annotations"})
+    rows = [(r["method"], r["path"]) for r in workspace.query("endpoints")]
+    workspace.close()
+    return rows
+
+
+def test_a_module_local_stereotype_meta_annotated_controller_is_a_handler(tmp_path: Path):
+    """`A-C7`. Spring's server-side handler test is
+    `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` — a
+    four-instruction body, identical across spring-webmvc 6.1.6, 6.2.15, 7.0.2
+    and 7.0.9 (CP-11 Q2) — and `AnnotatedElementUtils.hasAnnotation` is
+    meta-annotation aware. The catalogs encoded string equality against one
+    FQN over the type's own direct annotations, so a controller wearing a
+    module-local `@MyApi` composed from `@RestController` matched nothing and
+    **every endpoint of that controller disappeared from the export**: a
+    silent drop of a whole HTTP surface, which is the failure §8's second
+    clause names.
+
+    The composition pre-pass already answered exactly this question for
+    METHOD-level mapping annotations and its own docstring said so. The type
+    gate simply was never widened with it."""
+    assert _stereotype_rows(tmp_path, meta_annotated=True) == [("GET", "/orders")]
+
+
+def test_a_module_local_annotation_composed_from_nothing_is_not_a_handler(tmp_path: Path):
+    """The paired near-miss, and the reason widening the gate is safe: the
+    same controller wearing the same annotation, with the annotation's own
+    `@Controller` removed, derives NOTHING. What makes the class a handler is
+    the composition, never the fact that some module-local annotation is on
+    it — a gate that matched any annotated class would publish every
+    `@Component`, `@Service` and home-grown marker in the module as a
+    controller."""
+    assert _stereotype_rows(tmp_path, meta_annotated=False) == []

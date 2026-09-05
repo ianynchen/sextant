@@ -104,3 +104,26 @@ def test_okhttp_declares_a_step_for_every_verb_setter_the_builder_has():
         f"`okhttp.yml` has no step for: {missing}. Each one falls through as an unmatched step "
         "and publishes the root's `http_method: GET` default for a request that is not a GET."
     )
+
+
+def test_the_spring_handler_gate_names_the_annotation_the_framework_tests_for():
+    """`A-C7`. Two claims, and the second is the one that rots: the handler
+    test is a PREDICATE call rather than a literal compare, and it names
+    `org.springframework.stereotype.Controller`.
+
+    Pinned per Spring minor, which is the point of measuring four of them: the
+    sentence GUIDELINES §8.1 used to teach this rule with ("accepts
+    `@Controller` **or** a type-level `@RequestMapping`") was an older Spring's
+    behaviour asserted from memory, and it shipped wrong for a month. A single
+    minor could not have caught that; four identical bodies can say the rule is
+    stable, and a fifth that differs will fail here."""
+    bodies = {row["observed"] for number, row in probe_rows().items() if number.startswith("2")}
+    assert len(bodies) == 1, f"`isHandler` is not identical across the measured minors: {bodies}"
+    [body] = bodies
+    assert "AnnotatedElementUtils.hasAnnotation" in body, (
+        "`isHandler` is no longer a predicate call — if it became a literal annotation compare, "
+        "the composition widening `A-C7` added is over-reporting and must be re-decided"
+    )
+    tested = "org/springframework/stereotype/Controller"
+    assert f"class {tested}" in body
+    assert catalog("spring-mvc")["matches"]["type_annotation"] == tested.replace("/", ".")

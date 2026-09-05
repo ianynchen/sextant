@@ -178,6 +178,21 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-C7`: a custom stereotype deleted its controller's entire HTTP surface** (principles sweep
+  §3.2). `spring-web`, `spring-mvc` and `spring-graphql` gated on string equality against one
+  annotation FQN over a type's own direct annotations. Spring's rule is
+  `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` — a four-instruction body,
+  measured identical across spring-webmvc 6.1.6, 6.2.15, 7.0.2 and 7.0.9 (CP-11 Q2) — and that
+  predicate is meta-annotation aware, so a controller wearing a module-local `@MyApi` composed
+  from `@RestController` matched nothing and every one of its endpoints was silently absent from
+  the export. The type gate now seeds the same composition closure the method-level mapping
+  annotations already used, so the composition it was always able to see reaches it. **Output
+  changes for real modules**: a module with its own composed stereotype gains its whole
+  controller surface. Two of the three divergences the sweep names stay OPEN on purpose and are
+  stated in COVERAGE §5.1: a stereotype inherited from a superclass or an interface makes
+  `isHandler` true, but `@Component` is not `@Inherited` and whether component scanning admits
+  such a class is unmeasured — deriving on half a rule is what §8.1 rule 4 forbids.
+
 - **`A-C4`: a class inherited from its superclass only when the superclass was generic**
   (principles sweep §3.2). The annotation-inheritance walk read the `supertype` fact, which the
   extractor emits only where the superclass carries type ARGUMENTS, so `class OrderController

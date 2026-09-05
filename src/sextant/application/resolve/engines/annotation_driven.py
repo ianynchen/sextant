@@ -163,7 +163,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # inheritance walk each time) and handed to the SQL as synthetic
         # `annotations` rows rather than as a second code path there.
         synthetic_annotations=_synthetic_annotations(
-            workspace, mapping_annotations, prefix_fqn, type_annotation_fqn is not None
+            workspace, mapping_annotations, prefix_fqn, type_annotation_fqn
         ),
     )
     # Optional (D02 §2, amended): a catalog with no `reply` block declares no
@@ -639,7 +639,7 @@ def _synthetic_annotations(
     workspace: Workspace,
     mapping_annotations: list[dict[str, object]],
     prefix_fqn: str | None,
-    run_inheritance: bool,
+    type_annotation_fqn: str | None,
 ) -> list[dict[str, str]]:
     """The bound-parameter form `derive_endpoints.sql`'s `annotations_effective`
     CTE expects (D02 §2, §3): every row `composed_mapping_rows` and, where
@@ -685,7 +685,25 @@ def _synthetic_annotations(
     ]
     scanned_targets = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
     mapping_fqns = {str(m["fqn"]) for m in mapping_annotations}
-    composed = composed_mapping_rows(annotation_rows, scanned_targets, mapping_fqns)
+    # The type-level GATE composes exactly as a method-level mapping does
+    # (`A-C7`), so it seeds the same closure rather than a second one. Spring's
+    # own handler test is `AnnotatedElementUtils.hasAnnotation(beanType,
+    # Controller.class)` — measured identical across four Spring minors, CP-11
+    # Q2 — and that predicate is meta-annotation aware, so a controller wearing
+    # a module-local `@MyApi` composed from `@RestController` IS a handler. The
+    # catalogs encoded string equality against one FQN, which matched it not at
+    # all and deleted the controller's whole surface.
+    #
+    # The synthesized row targets the CLASS and carries the gate's own fqn, so
+    # `derive_endpoints.sql`'s `controllers` CTE finds it with no second code
+    # path — the same trick the mapping half already uses. It cannot leak into
+    # `mappings`, which joins `construct_kind IN ('method', 'function')`.
+    composed = composed_mapping_rows(
+        annotation_rows,
+        scanned_targets,
+        mapping_fqns | ({type_annotation_fqn} if type_annotation_fqn is not None else set()),
+    )
+    run_inheritance = type_annotation_fqn is not None
     inherited = (
         inherited_rows(
             [*annotation_rows, *composed],

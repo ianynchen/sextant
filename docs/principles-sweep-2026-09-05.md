@@ -1894,7 +1894,7 @@ forgotten.
 | `A-C4` | FIXED (584676b) — and `A-M11` with it, as §3.3 predicted |
 | `A-C5` | FIXED (2cbaa4b) — the fabrication is closed by M2; the residual (`@Bean` conjunct, unmeasured) is stated in COVERAGE §5.8 |
 | `A-C6` | OPEN |
-| `A-C7` | OPEN |
+| `A-C7` | FIXED (329483c) — the composed-stereotype divergence; the superclass and interface divergences left OPEN with a stated reason, see §10.1 |
 | `A-C8` | OPEN |
 | `A-C9` | OPEN |
 
@@ -1918,6 +1918,20 @@ visible rather than silently resolved.
   the "where the whole address is defaulted, the row does not ship" clause —
   and that clause is a statement about the ADDRESS, which is exactly what M3
   makes enforceable. M1's per-value form has nothing to attach to.
+- **`A-C7`'s fix is the composition half only, and the hierarchy half is
+  deliberately not taken.** §3.2 proposes widening the composition pre-pass AND
+  walking `supertypes`/`implementations` for the type gate. The first is
+  measured and safe: `AnnotatedElementUtils.hasAnnotation` is meta-annotation
+  aware, and a class wearing a composed stereotype is also a component-scan
+  candidate, because the scan's default include filter considers
+  meta-annotations. The second is not. `isHandler` answers true for a subclass
+  of an `@Controller` base — the sweep measured that — but a class is a handler
+  only if it is a handler-shaped BEAN, `@Component` is not `@Inherited`, and
+  whether the component scan admits such a subclass at all is exactly what §3.2
+  records as **Not settled**. Deriving on the strength of `isHandler` alone
+  would add rows under conditions nobody checked, which is §8.1 rule 4. Both
+  divergences are stated in COVERAGE §5.1 with the probe that would close them.
+
 - **`A-C2`'s cause is an unmodelled framework method, not a defaulted value.**
   The root's `http_method: GET` is a true statement about a bare
   `Request.Builder`; what made it wrong was that the call which overrides it was
