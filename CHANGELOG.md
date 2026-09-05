@@ -166,6 +166,19 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A client held by its INTERFACE derives nothing, and that is now written down** (descriptor
+  sweep R8). A call site records the compile-time qualifying type javac emitted, and every
+  `single_call` client catalog declares a single concrete `matches.owner` — so
+  `SqsOperations`, `AmqpTemplate`, `JmsOperations`, `KafkaOperations`, `RestOperations`,
+  `WebServiceOperations`, `PubSubOperations`, `org.apache.kafka.clients.consumer.Consumer` and
+  `jakarta.jms.QueueSession`/`TopicSession` calls match nothing at all. The highest-risk case
+  is `SqsTemplate.newSyncTemplate(...)`, which **returns `SqsOperations`** — the idiomatic
+  construction misses entirely, and both `send` arities are inherited so nothing anchors them
+  to the class. This is an owner problem a descriptor cannot fix, and making `matches.owner`
+  multi-valued is engine work that was out of scope for the sweep; recorded as a
+  `docs/COVERAGE.md` boundary with its falsifier rather than left silent (§8.1 rule 3). The
+  descriptors themselves are identical through either type, so they carry over unchanged when
+  it closes.
 - **`spring-resttemplate.yml` converts wholesale: seven rows become twenty-six** (descriptor
   sweep R4). Its rows carried neither `arity` nor `descriptor`, which makes each of them a
   candidate at EVERY argument count — so adding one descriptor to one row would have claimed

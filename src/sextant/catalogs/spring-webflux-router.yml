@@ -23,6 +23,16 @@ matches:
     # (checkpoint (1a)). `nest` is ALSO declared as a `prefixes` rule below —
     # dispatch there wins, so this entry's own `handler_arg` is read only for
     # `route`; `nest` never reaches it.
+    #
+    # NO `descriptor` HERE, and that is a ruling rather than an omission
+    # (descriptor sweep, out of scope). `methods` in a `combinator` entry is a
+    # bare list of NAMES, matched by `engines/combinator.py` on owner and name
+    # alone — a different grammar from `single_call`'s `methods` rows, whose
+    # `descriptor` key pins a row to one overload's erased signature. This
+    # engine has no such key to declare, so closing the same overload question
+    # here is an engine change, not a catalog edit. It stops being theoretical
+    # the day `RouterFunctions` declares a `route` or `nest` overload whose
+    # position 1 is not the handler; `javap -p -s RouterFunctions` is the check.
     - owner: org.springframework.web.reactive.function.server.RouterFunctions
       methods: [route, nest]
       handler_arg: 1
