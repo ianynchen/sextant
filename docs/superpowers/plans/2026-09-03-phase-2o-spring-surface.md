@@ -1183,15 +1183,25 @@ The count is re-derived from the flips, never carried (2H/2I discipline). Run
 this, 2O ships two capabilities with no visible output — the outcome the phase
 exists to avoid.
 
-**Files:** `src/sextant/catalogs/spring-webflux-router.yml`, `kafka-consumer.yml`, and whichever engine reads their keys
+**Files:** `src/sextant/catalogs/spring-webflux-router.yml`, `kafka-consumer.yml`, `spring-websocket.yml`, and whichever engine reads their keys
 
-- [ ] **Step 1: `media_values` and `all_strings` read `elements`**
+- [ ] **Step 1: `media_values`, `all_strings` and `channel_of` read `elements`**
 
-Both read positional arguments today, so WebFlux media columns are NULL even
+All three read positional arguments today, so WebFlux media columns are NULL even
 though `MediaType.APPLICATION_JSON` is now in the facts, and Kafka's multi-topic
 arity is readable but unread. Their comments and a COVERAGE row asserted the
 extractor could not read varargs — 9.15 corrected the claim in place; this makes
 the behaviour match it.
+
+`channel_of` is the third consumer, added 2026-09-05: the descriptor sweep
+measured that `WebSocketHandlerRegistry.addHandler`'s varargs paths collapse
+into ONE `kind: "array"` argument, so `spring-websocket.yml`'s `channel_arg: 1`
+resolves nothing for any call — single- or multi-path. Both that file and
+`docs/COVERAGE.md` name this step as the closer of that boundary, so it is named
+here. `channel_of` resolves only `kind: "string"` today
+(`shapes/arguments.py`); reading an `array`'s own `elements` turns the row's
+NULL into one row per registered path, the way each `urlPatterns` entry is
+already its own row.
 
 - [ ] **Step 2: a nested-annotation consumer, if one is honest**
 
