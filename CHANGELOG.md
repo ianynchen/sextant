@@ -14,6 +14,21 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **CP-10: every catalog `descriptor:` is now pinned to bytecode somebody read**
+  (`scripts/probes/cp10_catalog_descriptors.md`, descriptor sweep R7). Load-time validation
+  refuses a `descriptor` that is not a string opening with `(`, and that is all it can do: a
+  wrong return type, a misspelled package or a stale erasure is well-formed and WRONG — it
+  claims its candidate set in `_matching_method` and every overload of that name then derives
+  nothing, with no error, no COVERAGE row, and every absence-asserting test still passing.
+  The committed harness resolves each artifact through Maven, reads every `descriptor:` out
+  of the shipped catalogs, indexes class → jar off the archives it opened, and asks
+  `javap -p -s` whether the owner — or a superclass on the same classpath, which is what
+  `SqsTemplate`'s inherited `send` needs — declares that exact erased descriptor. Each
+  column is the version the JAR reported about itself, and a jar disagreeing with the
+  coordinate that resolved it ABORTS the run (§5.4). `tests/architecture/test_catalog_descriptors.py`
+  is the offline half: it pins the shipped catalogs against the generated table in both
+  directions and fails on any verdict other than `declared`, so a descriptor added without
+  re-running the harness fails the suite rather than going quiet.
 - **Servlets: the oldest HTTP surface on the platform derives, under both package
   spellings** (2O design §3b, Task 7b). A new `supertype_dispatch` engine style
   (`jakarta-servlet.yml` and `javax-servlet.yml`) reads three pieces of evidence jointly —
