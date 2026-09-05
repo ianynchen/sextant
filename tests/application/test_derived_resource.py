@@ -1069,3 +1069,70 @@ def test_the_inherited_walk_stops_at_the_frameworks_own_contract(tmp_path: Path)
     workspace.close()
 
     assert routes == FULL_ROUTES
+
+
+def _fragment_repository(fragment: str, method: str) -> list[SymbolFact]:
+    """`interface OrderRepository extends CrudRepository<Order, Long>,
+    OrderRepositoryCustom` beside the fragment interface itself — the shape
+    every hand-written repository method in a real codebase takes.
+
+    The fragment carries NO `@NoRepositoryBean`, which is the whole of what
+    tells it from a shared base (CP-13 Q7), and it extends nothing: a fragment
+    interface is an ordinary interface whose `…Impl` supplies the body."""
+    return [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + fragment,
+            construct_kind=ConstructKind.INTERFACE,
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=f"{_MODULE}{fragment}{method}(sig).",
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + fragment,
+            signature=Signature(),
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + ORDER_REPOSITORY,
+            construct_kind=ConstructKind.INTERFACE,
+            visibility="public",
+            interfaces=[_MODULE + CRUD, _MODULE + fragment],
+            generic_interfaces=[
+                TypeRef(symbol=CRUD, arguments=[TypeRef(symbol=ORDER), TypeRef(symbol=LONG)])
+            ],
+        ),
+    ]
+
+
+@pytest.mark.pins("derived_resource.inherited-interfaces-are-no-repository-beans")
+def test_a_custom_fragment_method_is_not_a_search_route(tmp_path: Path):
+    """`A-M13`'s regression, and CRITICAL 2 of the round-1 review. The widened
+    walk crossed EVERY module-local superinterface, so
+    `OrderRepositoryCustom#searchByFullText` — a hand-written fragment method
+    whose body lives in `OrderRepositoryCustomImpl` — was published as
+    `GET /orders/search/searchByFullText`. Spring Data REST serves no such
+    route. **Before `A-M13` that input derived no search route at all.**
+
+    The framework's rule, MEASURED in both halves this time (CP-13 Q6/Q7,
+    identical bytecode at spring-data-commons 3.2.5 and 4.1.1):
+    `calculateQueryMethods` filters `getMethods()` through `isCustomMethod`,
+    which is `RepositoryComposition.getMethod(m) != null` — a method the
+    FRAGMENT composition resolves is a custom method and therefore not a query
+    method; and `FragmentMetadata.getFragmentInterfaces` is the repository
+    interface's own `getInterfaceNames()` filtered to those NOT carrying
+    `@NoRepositoryBean`. Q1 recorded `isCustomMethod` by name and the fix read
+    only the enumeration beside it — §5.4 exactly.
+
+    Its paired positive is `test_a_query_method_inherited_from_a_module_local_
+    base_is_still_a_search_route` above: the same shape with `@NoRepositoryBean`
+    on the superinterface, where the route IS served and DOES derive. The full
+    CRUD set is asserted here rather than emptiness, because the repository
+    itself is exposed exactly as before — what must be absent is the one
+    `/search/` row."""
+    facts = _fragment_repository("com/acme/orders/data/OrderRepositoryCustom#", "searchByFullText")
+    workspace, _ = _resolve(tmp_path, facts)
+    routes = _routes(workspace)
+    workspace.close()
+
+    assert routes == FULL_ROUTES

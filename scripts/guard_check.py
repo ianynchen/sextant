@@ -363,6 +363,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    # --- `derived_resource` -----------------------------------------------
+    "derived_resource.inherited-interfaces-are-no-repository-beans": Guard(
+        what="the query-method walk crosses a module-local superinterface only where it "
+        "carries the catalog's `no_repository_bean` annotation — every other superinterface "
+        "is a custom FRAGMENT",
+        why="Spring Data REST serves no `/search/` route for a fragment method: "
+        "`calculateQueryMethods` filters through `isCustomMethod`, which the fragment "
+        "composition answers (CP-13 Q6/Q7). Crossing an unannotated superinterface publishes "
+        "`GET /orders/search/searchByFullText` for a hand-written method whose body lives in "
+        "an `…Impl` the framework never routes to",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/derived_resource.py",
+                find="        if no_repository_bean not in annotations.get(parent, {}):",
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "derive_endpoints.one-exposed-member-per-signature": Guard(
         what="a gated class exposes ONE member per `(name, parameter types)` — the nearest "
         "declaration in its ancestry — and the exclusions and the annotation anti-join are "

@@ -192,6 +192,29 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-M13`'s own regression: a Spring Data custom-fragment method was published as a
+  `/search/` route** (round-1 review, CRITICAL 2). The `A-M13` fix widened the query-method
+  walk to cross every module-local superinterface, so
+  `interface OrderRepository extends CrudRepository<Order, Long>, OrderRepositoryCustom`
+  derived `GET /orders/search/searchByFullText` — a route Spring Data REST does not serve, on
+  a method whose body lives in a hand-written `OrderRepositoryCustomImpl`. **Before the
+  `A-M13` fix that input derived no search route at all.**
+
+  CP-13 Q1 recorded `calculateQueryMethods`' filter and named `isCustomMethod` inside it; the
+  fix read the ENUMERATION beside it and reasoned about the rest. Q6 and Q7 now open the
+  filter, identical bytecode at spring-data-commons 3.2.5 and 4.1.1: `isCustomMethod` is
+  `RepositoryComposition.getMethod(m) != null`, so a method the custom-fragment composition
+  resolves is not a query method; and `FragmentMetadata.getFragmentInterfaces` is the
+  repository interface's own `getInterfaceNames()` filtered to those NOT carrying
+  `@NoRepositoryBean`. So the annotation — already catalog data, as `no_repository_bean` — is
+  the whole of what tells a shared base from a fragment, and the walk now crosses only the
+  annotated ones. Pinned by
+  `derived_resource.inherited-interfaces-are-no-repository-beans` in `scripts/guard_check.py`.
+
+  An under-report rides with it and is stated in `docs/COVERAGE.md`: a module-local base that
+  extends a contract WITHOUT the annotation is a fragment by the same measured rule, so its
+  query methods reach no `/search/` route on the repository deriving from it.
+
 - **`A-M15`'s own regression: an OVERRIDDEN SOAP operation was published twice, and an
   `@WebMethod(exclude = true)` override republished the operation it withdraws** (round-1
   review, CRITICAL 1). The `A-M15` fix below widened the member rule to walk a gated class's

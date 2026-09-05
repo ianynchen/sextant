@@ -366,7 +366,14 @@ def _repositories(workspace: Workspace, catalog: Catalog) -> list[_Repository]:
                 collection=collection,
                 operations=operations,
                 queries=_queries(
-                    _exposed_methods(descriptor, declarations, contracts, methods),
+                    _exposed_methods(
+                        descriptor,
+                        declarations,
+                        contracts,
+                        methods,
+                        annotations,
+                        no_repository_bean,
+                    ),
                     annotations,
                     crud_methods,
                     member_annotation,
@@ -475,11 +482,14 @@ def _exposed_methods(
     declarations: "dict[str, _Declaration]",
     contracts: dict[str, frozenset[str]],
     methods: dict[str, list[tuple[str, str]]],
+    annotations: dict[str, dict[str, dict[str, Any]]],
+    no_repository_bean: str,
     seen: frozenset[str] = frozenset(),
 ) -> list[tuple[str, str]]:
-    """Every method a repository interface EXPOSES — its own, then those it
-    inherits from module-local superinterfaces — own-first, so an override
-    shadows the declaration it overrides in `_queries`' `setdefault`.
+    """Every method a repository interface EXPOSES as a QUERY-method candidate
+    — its own, then those it inherits from a module-local superinterface that
+    is a REPOSITORY BASE rather than a custom fragment — own-first, so an
+    override shadows the declaration it overrides in `_queries`' `setdefault`.
 
     **This used to be `methods.get(symbol, [])`: the ones it DECLARES**
     (`A-M13`). JLS 9.2/9.4.1 says an interface inherits its superinterfaces'
@@ -487,18 +497,40 @@ def _exposed_methods(
     exposed no search routes at all while the framework served every one of
     `BaseRepo`'s — silently, with no COVERAGE row and no wrong row to notice.
 
-    The framework half is MEASURED rather than reasoned (CP-13,
-    spring-data-commons 3.2.5): `RepositoryInformationSupport
-    .calculateQueryMethods` is `getRepositoryInterface().getMethods()` mapped
-    through `ClassUtils.getMostSpecificMethod` and filtered — `getMethods()`,
-    which returns inherited interface methods, never `getDeclaredMethods()`.
+    **The enumeration is MEASURED, and so is the filter beside it — the second
+    half only since the round-1 review's CRITICAL 2.**
+    `RepositoryInformationSupport.calculateQueryMethods` is
+    `getRepositoryInterface().getMethods()` mapped through
+    `ClassUtils.getMostSpecificMethod` and then filtered (CP-13 Q1) —
+    `getMethods()`, which returns inherited interface methods, never
+    `getDeclaredMethods()`. The `A-M13` fix read that and stopped, and the
+    filter Q1 recorded BY NAME is what it walked past: `isCustomMethod` is
+    `RepositoryComposition.getMethod(m) != null` (Q6), so a method the custom
+    FRAGMENT composition resolves is not a query method at all; and the
+    fragments are the repository interface's own `getInterfaceNames()` filtered
+    to those NOT carrying `@NoRepositoryBean` (Q7,
+    `FragmentMetadata.getFragmentInterfaces`/`isCandidate`). Identical bytecode
+    at spring-data-commons 3.2.5 and 4.1.1.
+
+    So the annotation is the whole of what tells a shared base from a fragment,
+    and this walk crosses only the annotated ones. Without that,
+    `interface OrderRepository extends CrudRepository<Order, Long>,
+    OrderRepositoryCustom` published `GET /orders/search/searchByFullText` — a
+    route Spring Data REST does not serve, on a method whose body lives in a
+    hand-written `…Impl`.
+
+    **The unannotated base is an under-report and a deliberate one.** A
+    module-local base extending a contract WITHOUT `@NoRepositoryBean` is a
+    fragment interface by Q7's rule, so its methods reach no `/search/` route;
+    it is also a repository bean of its own, which this engine derives
+    separately when its entity type is readable. Stated in `docs/COVERAGE.md`.
 
     **What keeps CRUD from becoming search routes is `_queries`' own
     `crud_methods` filter**, and that is measured too: `isBaseClassMethod`
     resolves through `RepositoryComposition.findMethod` into
     `MethodLookups$RepositoryAwareMethodLookup`, which compares a method's
     name, parameter count AND parameter types (`javap -p -c`,
-    spring-data-commons 3.2.5, CP-13). Our filter compares the name only,
+    spring-data-commons 3.2.5, CP-13 Q2). Our filter compares the name only,
     which is `A-M14` and is left open with a COVERAGE row.
 
     The `contracts` skip below is a second guard on the same fabrication and
@@ -520,8 +552,20 @@ def _exposed_methods(
     for parent in declaration.interfaces:
         if parent in contracts:
             continue
+        if no_repository_bean not in annotations.get(parent, {}):
+            # A FRAGMENT, not a base (CP-13 Q7). Its methods are custom methods
+            # and the framework serves no `/search/` route for any of them.
+            continue
         exposed.extend(
-            _exposed_methods(parent, declarations, contracts, methods, seen | {descriptor})
+            _exposed_methods(
+                parent,
+                declarations,
+                contracts,
+                methods,
+                annotations,
+                no_repository_bean,
+                seen | {descriptor},
+            )
         )
     return exposed
 
