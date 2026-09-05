@@ -34,7 +34,16 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
+from sextant.domain.facts import (
+    CallArgument,
+    CallSiteFact,
+    CallTarget,
+    Document,
+    Parameter,
+    Signature,
+    SymbolFact,
+    TypeRef,
+)
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CAPABILITIES = {"call_site", "string_constants", "implemented_interfaces"}
@@ -624,3 +633,116 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
     # lambda branch emitted the argument's own bare descriptor. This assertion
     # is what keeps either from silently regressing to a decorative string.
     assert {named["handler"], lambda_row["handler"]} <= declared_symbols
+
+
+# --- `A-M1` (principles sweep §3.3): which overload IS the handler ----------
+#
+# The lookup used to take the first match in `method_symbols`' own symbol
+# order — a SHA-256 prefix of the descriptor — and the comment defending it
+# reasoned about the INTERFACE ("the interface declares exactly one, which
+# makes that ordering a tiebreak rather than a choice") while the lookup ran
+# against the implementing CLASS. Nothing stops a class declaring a private
+# helper, a convenience form or a javac bridge beside its real override, and
+# `ClassScanner.visitMethod` deliberately keeps all three.
+
+_OVERLOAD_HANDLER = RECEIVER_TYPE + "receiveMessage(sig_0b978848)."
+
+
+def _overloaded_receiver_facts(*, declare_the_interface: bool) -> list:
+    """The registration, plus a receiver class declaring TWO
+    `receiveMessage`s: the real arity-2 override and a private helper whose
+    descriptor hash sorts FIRST.
+
+    `sig_0b978848` sorts before `sig_r1`, which is the sweep's own reproduction
+    — the wrong method is not merely reachable, it is the one the old
+    first-match-wins rule picked."""
+    facts: list = [
+        _linked_of_site(CALLER, "raw-notify"),
+        _registration_site(
+            CALLER,
+            CallArgument(kind="unresolved", source=7),
+            CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
+        ),
+        _symbol_fact(RECEIVER_TYPE, [_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
+        _signed_method(
+            RECEIVER_HANDLER, ["com/google/pubsub/v1/PubsubMessage#", "java/lang/Object#"]
+        ),
+        _signed_method(_OVERLOAD_HANDLER, ["java/lang/String#", "java/lang/String#"]),
+    ]
+    if declare_the_interface:
+        facts += [
+            _symbol_fact_of_kind(
+                "com/google/cloud/pubsub/v1/MessageReceiver#", ConstructKind.INTERFACE
+            ),
+            _signed_method(
+                "com/google/cloud/pubsub/v1/MessageReceiver#receiveMessage(sig_if).",
+                ["com/google/pubsub/v1/PubsubMessage#", "java/lang/Object#"],
+                enclosing="com/google/cloud/pubsub/v1/MessageReceiver#",
+            ),
+        ]
+    return facts
+
+
+def _symbol_fact_of_kind(type_symbol: str, kind: ConstructKind) -> SymbolFact:
+    return SymbolFact(document_id="doc_1", symbol=_MODULE + type_symbol, construct_kind=kind)
+
+
+def _signed_method(
+    bare: str, parameter_types: list[str], enclosing: str | None = None
+) -> SymbolFact:
+    """A method fact carrying its own parameter types — which is what makes a
+    selector (JLS 8.4.2: name AND parameter types in order) readable at all.
+    Every other method fact in this file omits the signature, and that is
+    deliberate: the rule below must keep answering for those too."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + bare,
+        construct_kind=ConstructKind.METHOD,
+        enclosing=_MODULE + (enclosing or bare.partition("#")[0] + "#"),
+        signature=Signature(
+            parameters=[
+                Parameter(name=f"p{index}", type=TypeRef(symbol=symbol, wire_type="object"))
+                for index, symbol in enumerate(parameter_types)
+            ],
+            returns=TypeRef(symbol="void#", wire_type=""),
+        ),
+    )
+
+
+def test_an_ambiguous_handler_is_unread_rather_than_guessed_by_hash_order(tmp_path: Path):
+    """`A-M1`'s near-miss, and the shape the fix is FOR. Two `receiveMessage`
+    methods on the implementing class, an interface this scan never opened
+    (which is every shipped catalog's case — `MessageReceiver` lives in a jar),
+    so nothing can say which one implements it.
+
+    The required answer is a NULL handler, which is exactly what this engine's
+    own docstring already promises: "the subscription still derives (the row
+    above), only its handler is unread, never fabricated". What it did instead
+    was publish the private helper — `sig_0b978848` sorts before `sig_r1` — at
+    `resolved`/`compiler`, where nothing downstream can tell an invented
+    attribution from an observed one.
+
+    The row itself must still derive: the destination is a separate fact and
+    withholding it would trade a fabrication for a silent drop."""
+    workspace = _resolve(tmp_path, _overloaded_receiver_facts(declare_the_interface=False))
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["handler"]) == ("raw-notify", None)
+
+
+def test_a_scanned_interfaces_own_parameter_types_name_which_overload_it_is(tmp_path: Path):
+    """`A-M1`'s paired positive. Same two candidates, one thing added: the
+    interface is itself in the scan and declares its `receiveMessage`'s
+    parameter types. That is the selector JLS 8.4.2 defines, and it names the
+    real override rather than the helper that sorts first.
+
+    Pairing this with the near-miss is what makes the near-miss an assertion
+    rather than a rule that declines everything — a fix that simply returned
+    None for every overloaded receiver would pass that test and lose a handler
+    the evidence names."""
+    workspace = _resolve(tmp_path, _overloaded_receiver_facts(declare_the_interface=True))
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["handler"] == _MODULE + RECEIVER_HANDLER

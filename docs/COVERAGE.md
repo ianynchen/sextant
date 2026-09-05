@@ -1790,6 +1790,26 @@ one-hop limitation, not a gap to close later — and a `MessageReceiver` impleme
 handed to `Subscriber.newBuilder` derives nothing at all, because the registration is the
 evidence, never the class's shape alone.
 
+**An ambiguous handler is now unread rather than picked by hash order** (`A-M1`, principles
+sweep §3.3). The receiver-to-handler lookup was a prefix scan over `method_symbols` ordered by
+symbol — a SHA-256 of the descriptor — taking the first match, and the comment defending it
+reasoned about the INTERFACE ("the interface declares exactly one, which makes that ordering a
+tiebreak rather than a choice") while the lookup ran against the implementing CLASS. Nothing
+stops a class declaring a private helper, a convenience form or a javac bridge beside its real
+override, and the scanner deliberately keeps all three, so the tiebreak was a coin flip between
+two methods one of which is wrong — published at `resolved`/`compiler`, and part of this
+engine's dedup key, so a wrong pick can split or merge rows as well as mis-attribute one.
+
+The selector is now name **and** parameter types (JLS 8.4.2), the same rule
+`supertype_dispatch._members` already applies. One candidate resolves as before; several
+resolve only when the interface is itself in the scan and its own declared parameter types name
+one of them; otherwise the handler is **NULL**, which is what this engine's docstring already
+promised. **The row still derives** — the destination is a separate fact, and withholding it
+would trade a fabrication for a silent drop. **Falsified by** a module whose receiver overloads
+its handler method while the interface lives in a jar: its subscription is now attributed to
+nothing rather than to the wrong method, and closing that needs the interface's own bytecode,
+which is D02 §7's unscanned-jar question.
+
 **Every messaging peer is NULL except one.** A broker address, a queue URL or a GCP
 project/topic pair is usually configuration, not code — `peer` stays NULL on every Kafka,
 JMS and Pub/Sub row, a different question from the DESTINATION Spring Cloud Stream's own

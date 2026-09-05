@@ -18,6 +18,7 @@ argument is the channel and which is the receiver — arrives as catalog data;
 this module never names a framework."""
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -29,7 +30,7 @@ from sextant.application.resolve.shapes.arguments import (
     linked_channels,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
-from sextant.domain.symbols import bare_descriptor
+from sextant.domain.symbols import bare_descriptor, method_name
 
 _REQUIRED_MATCHES = ("interface", "handler_method", "registration")
 _REQUIRED_REGISTRATION = ("owner", "method", "channel_arg", "receiver_arg")
@@ -57,6 +58,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     forms = _channel_via_forms(registration)
     implemented = _implemented_interfaces(workspace)
     method_symbols = _method_symbols(workspace)
+    declarations = _declarations(workspace)
 
     # Parsed once, as every other engine does: `call_sites` returns
     # `arguments` as raw JSON text.
@@ -109,7 +111,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             destinations = [literal]
         receiver_argument = _arg_at(arguments, receiver_arg)
         handler = _handler_of(
-            receiver_argument, handler_method, interface_symbol, implemented, method_symbols
+            receiver_argument,
+            handler_method,
+            interface_symbol,
+            implemented,
+            method_symbols,
+            declarations,
         )
         for peer, path, resolution in destinations:
             if path is not None:
@@ -146,6 +153,7 @@ def _handler_of(
     interface_symbol: str,
     implemented: dict[str, list[str]],
     method_symbols: dict[str, str],
+    declarations: "_Declarations",
 ) -> str | None:
     """D02 §2's `interface_implementation` handler rule, resolved against the
     method symbols the facts actually carry: a `lambda`-kind receiver names
@@ -166,10 +174,13 @@ def _handler_of(
     explicit walk this function has to refuse.
 
     Anything else — no receiver captured, an `unresolved` kind, a registered
-    instance whose type does not implement the interface, or a receiver whose
+    instance whose type does not implement the interface, a receiver whose
     handler method no scanned document declares (the implementer lives
-    outside the scanned module) — resolves to None: the subscription still
+    outside the scanned module), or several same-named candidates nothing can
+    tell apart (`_sole_handler`) — resolves to None: the subscription still
     derives (the row above), only its handler is unread, never fabricated.
+    Since `A-M1` that sentence is true; before it, the last case published
+    whichever overload's descriptor hash sorted first.
     """
     if argument is None:
         return None
@@ -187,17 +198,121 @@ def _handler_of(
             # descriptor form), so the descriptor searched for is
             # `<type>#<handler_method>(` without a second separator — a
             # prefix, not an equality, because the method symbol ends in the
-            # signature hash the registration site never carries. First match
-            # in the query's own symbol order wins, so a type declaring two
-            # overloads of the handler method reads the same way twice
-            # (NFR-1); the interface declares exactly one, which is what
-            # makes that ordering a tiebreak rather than a choice.
+            # signature hash the registration site never carries.
             prefix = f"{symbol}{handler_method}("
-            return next(
-                (found for bare, found in method_symbols.items() if bare.startswith(prefix)),
-                None,
-            )
+            candidates = [
+                found for bare, found in method_symbols.items() if bare.startswith(prefix)
+            ]
+            return _sole_handler(candidates, handler_method, interface_symbol, declarations)
     return None
+
+
+def _sole_handler(
+    candidates: list[str],
+    handler_method: str,
+    interface_symbol: str,
+    declarations: "_Declarations",
+) -> str | None:
+    """Which of an implementing type's same-named methods IS the handler.
+
+    **This used to take the first match in `method_symbols`' own symbol
+    order** — a SHA-256 prefix of the descriptor — and the comment justifying
+    it reasoned about the INTERFACE while the lookup ran against the
+    implementing CLASS (`A-M1`). The interface declaring exactly one
+    `receiveMessage` says nothing about how many the implementer declares:
+    nothing stops a private helper, a convenience form or a javac bridge
+    sitting beside it, and `ClassScanner.visitMethod` deliberately keeps all
+    three. So the "tiebreak" was a hash-order coin flip between two methods,
+    one of which is wrong — published at `resolved`/`compiler`, where nothing
+    downstream can tell it from an observation, and part of this engine's own
+    dedup key, so a wrong pick can also split or merge rows.
+
+    JLS 8.4.2: a method's signature is its name AND its parameter types in
+    order. So the selector is the pair, exactly as `supertype_dispatch._members`
+    already resolves the same question (§8.1's language rule, and sweep 6
+    clears that implementation as the reference one in this tree).
+
+    Three cases, and the third is the one the old code got wrong:
+
+    * ONE candidate — the overwhelmingly common shape, and the answer is
+      unchanged from before this fix.
+    * SEVERAL, and the interface is SCANNED and declares exactly one method of
+      this name — its parameter types name which candidate implements it.
+    * SEVERAL, and they cannot be told apart — the interface lives in a jar
+      this scan never opened (every shipped catalog's does), or it declares
+      overloads of its own. **None**, which is the unread handler `:172`
+      already promises: the subscription still derives, only its attribution
+      is absent. §8's "ambiguous evidence, produce nothing".
+
+    A generic interface's javac BRIDGE carries the interface's own erased
+    parameter types, so where the interface is scanned and generic the bridge
+    is what the selector names rather than the real override. That is a
+    narrower error than the coin flip it replaces and it is unreachable for
+    every shipped catalog (whose interfaces are all library types), and it
+    closes when the fact stream records `ACC_BRIDGE` — `methodModifiersJson`
+    records `static` and `synthetic` and neither reaches `method_declarations`
+    today.
+    """
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        return None
+    declared = [
+        parameters
+        for symbol, parameters in declarations.by_type.get(interface_symbol, [])
+        if symbol == handler_method
+    ]
+    if len(declared) != 1:
+        return None
+    matched = [
+        candidate
+        for candidate in candidates
+        if declarations.parameters.get(candidate) == declared[0]
+    ]
+    return matched[0] if len(matched) == 1 else None
+
+
+@dataclass(frozen=True)
+class _Declarations:
+    """The parameter half of a method's signature (JLS 8.4.2), read once.
+
+    `parameters` is keyed by the FULL symbol, because that is what
+    `method_symbols` hands back as a candidate. `by_type` is keyed by the BARE
+    enclosing type, because the interface a catalog names arrives through
+    `_catalog_symbol` with no module coordinates — the same coordinate space
+    `_implemented_interfaces` already normalises both its sides into.
+
+    A method with no `signature` fact contributes an empty tuple rather than
+    being absent: it is a declaration whose parameters could not be read, and
+    an empty tuple can only ever match an interface method that genuinely
+    takes none.
+    """
+
+    parameters: dict[str, tuple[str, ...]]
+    by_type: dict[str, list[tuple[str, tuple[str, ...]]]]
+
+
+def _declarations(workspace: Workspace) -> _Declarations:
+    parameters: dict[str, tuple[str, ...]] = {}
+    by_type: dict[str, list[tuple[str, tuple[str, ...]]]] = {}
+    for row in workspace.query("method_declarations"):
+        symbol = str(row["symbol"])
+        # `or {}` on BOTH sides: the column may be SQL NULL, and it may
+        # also hold the JSON literal `null` — a method fact written with no
+        # signature at all, which every hand-built unit fact in this repo is.
+        signature = (
+            json.loads(str(row["signature"])) if row["signature"] is not None else {}
+        ) or {}
+        types = tuple(
+            bare_descriptor(str((parameter.get("type") or {}).get("symbol", "")))
+            for parameter in signature.get("parameters") or []
+        )
+        parameters[symbol] = types
+        enclosing = row["enclosing"]
+        if enclosing is not None:
+            name = method_name(bare_descriptor(symbol))
+            by_type.setdefault(bare_descriptor(str(enclosing)), []).append((name, types))
+    return _Declarations(parameters=parameters, by_type=by_type)
 
 
 def _method_symbols(workspace: Workspace) -> dict[str, str]:

@@ -192,6 +192,20 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-M1`: an overloaded receiver's handler was picked by descriptor hash order** (principles
+  sweep §3.3). `interface_implementation` resolved a registration's receiver to a handler with a
+  prefix scan over `method_symbols` ordered by symbol — a SHA-256 of the descriptor — taking the
+  first match, and the comment defending it reasoned about the INTERFACE while the lookup ran
+  against the implementing CLASS. Nothing stops a class declaring a private helper, a
+  convenience form or a javac bridge beside its real override, so the "tiebreak" was a coin flip
+  between two methods, one of which is wrong, published at `resolved`/`compiler` and carried
+  into this engine's dedup key. The selector is now name AND parameter types (JLS 8.4.2), the
+  rule `supertype_dispatch._members` already applies and which sweep 6 clears as this tree's
+  reference implementation. One candidate resolves as before; several resolve only when the
+  interface is itself scanned and its declared parameter types name one; otherwise the handler
+  is NULL and the row still derives — which is what the engine's own docstring already promised
+  and did not do.
+
 - **`A-M9`: the WebFlux router catalog's verb vocabulary was the fixture's verb vocabulary**
   (principles sweep §3.3). `RequestPredicates` and `CoRouterFunctionDsl` each declare seven
   per-verb factories at spring-webflux 6.1.6 and 7.0.2 (CP-12 Q11/Q12), and
