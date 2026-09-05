@@ -21,6 +21,14 @@ class ResolveReport:
     skipped_catalogs: list[SkippedCatalog] = field(default_factory=list)
     coverage: dict[str, object] = field(default_factory=dict)
     shapes: list[dict[str, object]] = field(default_factory=list)
+    # The two NON-WIRE families (2O design §4): work the framework starts on a
+    # clock, and which exceptions the module answers. Carried on the report
+    # beside `endpoints` and `shapes` — never inside them — because the
+    # endpoint table is wire-true and neither of these has a wire identity at
+    # all. Empty lists for a module that schedules nothing and handles nothing,
+    # which is the same answer their pre-declared tables give.
+    scheduled_work: list[dict[str, object]] = field(default_factory=list)
+    error_handlers: list[dict[str, object]] = field(default_factory=list)
     # The types the expansion reached and could not open: no field facts and
     # no catalog entry describing them. Carried rather than counted, because a
     # count cannot be acted on and a catalog only grows from observation
@@ -53,6 +61,17 @@ def resolve(
     # skipped, visibly, the same as any unmet scanner capability, until this
     # line has run in THIS resolve.
     capabilities = capabilities | {"resolved_config"}
+    # The two NON-WIRE tables (2O design §4) are emptied once, here, ahead of
+    # the engines that write them rather than inside either engine — the
+    # `reset_open_questions` discipline, and for the same reason it exists:
+    # §4a's "Quartz: later catalog, same table" means MORE THAN ONE catalog
+    # writes to `scheduled_work`, and a reset owned by the engine would run
+    # once per catalog and leave only whichever ran last. `derive_endpoints`
+    # states the identical defect for `endpoints` at its own reset.
+    # Unconditional, so a resolve in which every catalog is skipped still
+    # leaves empty tables rather than the previous run's rows.
+    workspace.derive("scheduled_work_reset")
+    workspace.derive("error_handlers_reset")
     skipped = derive_endpoints(workspace, declared, capabilities)
     # After the endpoints, never beside them: an endpoint's payload types come
     # off its handler's signature, which is a column on the row derive_endpoints
@@ -106,6 +125,8 @@ def resolve(
         skipped_catalogs=skipped,
         coverage=workspace.query("coverage")[0],
         shapes=workspace.query("shapes"),
+        scheduled_work=workspace.query("scheduled_work"),
+        error_handlers=workspace.query("error_handlers"),
         # Both passes root payload types and both expand what they root, so
         # both can meet a type nothing opens. Reported as one list, deduped:
         # the gap is in the type, not in how many passes walked into it —

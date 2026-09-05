@@ -109,6 +109,10 @@ def _resolved_fixture(
             "chain_reconstruction",
             "implemented_interfaces",
             "superclass",
+            # `nested_annotation_args` (capability 9.16, 2O design §4a, Task 8)
+            # gates `spring-scheduling.yml`'s own `scheduled_work` style —
+            # granted, like the rest, because `AsmScanner` declares it.
+            "nested_annotation_args",
         },
     )
     return workspace, report

@@ -736,6 +736,12 @@ def _reconstructed_report(
         coverage=workspace.query("coverage")[0],
         skipped_catalogs=skipped_catalogs,
         shapes=workspace.query("shapes"),
+        # Read back off the workspace, exactly as `endpoints` and `shapes` are,
+        # so `render` shows the two non-wire sections without re-resolving
+        # (M00's "no analysis" rule). Not from `metadata.json`: these are rows,
+        # and the workspace is where rows live.
+        scheduled_work=workspace.query("scheduled_work"),
+        error_handlers=workspace.query("error_handlers"),
         unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
     )
     return reconstructed, report

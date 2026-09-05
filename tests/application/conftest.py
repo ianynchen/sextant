@@ -99,6 +99,14 @@ def resolved_fixture(
             "implemented_interfaces",
             "superclass",
             "generic_interfaces",
+            # `nested_annotation_args` (capability 9.16, 2O design §4a, Task 8)
+            # gates `spring-scheduling.yml`'s own `scheduled_work` style.
+            # GRANTED rather than withheld, for the reason 9.14 is above: with
+            # it withheld the catalog joins the skip list and this fixture stops
+            # answering the question it exists for, while with it met the
+            # catalog RUNS against a module that schedules nothing — which is
+            # the honest zero the `scheduled_work` table should hold here.
+            "nested_annotation_args",
         },
     )
     yield workspace, report
