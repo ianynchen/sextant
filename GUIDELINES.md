@@ -224,6 +224,12 @@ Every public method on a domain or application service has tests for the **happy
 
 **Anything that detects, matches, or classifies is tested on near-miss input that must NOT match** — and the assertion is that *nothing* was produced, not that something different was. A suite where every fixture demonstrates the rule firing cannot tell you the rule declines correctly; it only tells you it is capable of firing. Derive the near-miss from the rule's own conditions: for each conjunct, an input satisfying every other one. This is distinct from the boundary conditions above, which vary a *value*; this varies whether the thing is *the kind of thing at all*.  
 
+**And the near-miss needs a positive PAIRED with it: any rule or catalog key precise enough to be silently wrong needs a test proving the row still FIRES.** The near-miss proves the rule declines; the paired positive proves it still fires. A rule carrying only the first can rot into permanent silence and look correct all the way down — every near-miss still passes, because a rule that matches nothing declines everything.  
+
+The concrete instance is `single_call`'s `descriptor:` key, added in Phase 2O to stop an overload's PAYLOAD being published as a destination. It is validated for well-formedness at load (`application/resolve/engines/single_call.py:601`, which refuses a value not opening with `(`), and it is matched verbatim against the call site's own `target.descriptor` (`:502`). A descriptor that is well-formed and WRONG — one character off, or the source-level signature rather than the erased one — passes the load check, matches nothing, and CLAIMS its arity anyway (`:504`), so the whole overload set derives nothing. Silently: no error, no COVERAGE row, and every test that asserts absence still passes. Each of the three shipped `descriptor:` rows therefore has such a pair — `spring-rabbit-template.yml`'s arity 3 and arity 2, and `spring-jms-template.yml`'s arity 2, each with a near-miss that derives nothing beside a positive that still resolves.  
+
+The test for whether a key needs the pair: could a change to it be WRONG without being INVALID? A verbatim-compared string, an exact arity, a fully-qualified annotation name and a package coordinate all answer yes.  
+
 Branch and condition coverage are diagnostics, not targets. Coverage drops require justification; coverage increases driven by trivial tests are equally suspect. Bug fixes ship with a regression test that fails before the fix.  
 
 ### Behaviour  

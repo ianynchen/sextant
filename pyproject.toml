@@ -101,6 +101,15 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+  # GUIDELINES §10's near-miss rule, made countable per catalog. A test
+  # carrying this marker asserts that the named shipped catalog derives
+  # NOTHING from an input satisfying every conjunct of its rule but one.
+  # `tests/architecture/test_catalog_near_miss_coverage.py` reads the markers
+  # statically and fails for any catalog that has neither one nor a place on
+  # its stated backlog.
+  "declines(catalog_id): proves the named shipped catalog declines on near-miss input",
+]
 
 [tool.importlinter]
 root_package = "sextant"

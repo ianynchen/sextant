@@ -2395,6 +2395,7 @@ def test_addhandler_with_a_non_literal_path_derives_an_unresolved_row(tmp_path: 
     assert endpoint["resolution"] == "unresolved"
 
 
+@pytest.mark.declines("spring-websocket")
 def test_addhandler_with_a_second_path_argument_never_matches_the_two_arg_row(tmp_path: Path):
     """The catalog's own documented known limitation: `arity: 2` matches
     only the single-path call form. A three-argument call
@@ -5526,6 +5527,7 @@ def test_the_rabbit_template_renders_the_exchange_and_routing_key_as_one_identit
     assert endpoint["peer"] is None
 
 
+@pytest.mark.declines("spring-rabbit-template")
 def test_a_convertandsend_on_an_owner_that_is_not_a_rabbit_template_derives_nothing(
     tmp_path: Path,
 ):
@@ -5564,6 +5566,7 @@ def test_a_convertandsend_on_an_owner_that_is_not_a_rabbit_template_derives_noth
 # output (spring-rabbit 3.1.4, spring-jms 6.1.6), not recollection.
 
 
+@pytest.mark.declines("spring-rabbit-template")
 def test_the_rabbit_arity_three_post_processor_overload_derives_nothing(tmp_path: Path):
     """§10 near-miss, and the exact fabrication the review reproduced against
     the shipped catalog: `convertAndSend(String routingKey, Object message,
@@ -5594,6 +5597,7 @@ def test_the_rabbit_arity_three_post_processor_overload_derives_nothing(tmp_path
     assert rows == []
 
 
+@pytest.mark.declines("spring-rabbit-template")
 def test_the_rabbit_arity_two_post_processor_overload_derives_nothing(tmp_path: Path):
     """§10 near-miss for the arity the shipped catalog's comment did not even
     admit was exposed: arity 2 is `(String, Object)` AND `(Object,
@@ -5651,6 +5655,7 @@ def _jms_template_catalog() -> Catalog:
     return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-jms-template")
 
 
+@pytest.mark.declines("spring-jms-template")
 def test_the_jms_arity_two_post_processor_overload_derives_nothing(tmp_path: Path):
     """§10 near-miss, the second live fabrication the review reproduced:
     `JmsTemplate.convertAndSend(Object message, MessagePostProcessor after)`

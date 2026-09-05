@@ -3986,6 +3986,7 @@ def test_a_class_level_rabbit_listener_gives_its_queue_to_every_rabbit_handler(t
     ]
 
 
+@pytest.mark.declines("spring-rabbit")
 def test_a_rabbit_handler_on_a_class_carrying_no_listener_derives_nothing(tmp_path: Path):
     """§10 near-miss for the polymorphic matcher, negating its second
     conjunct: the method is annotated exactly as a real handler is, and the
@@ -4029,6 +4030,7 @@ def test_a_pulsar_listener_derives_one_inbound_pulsar_row_per_declared_topic(tmp
     ]
 
 
+@pytest.mark.declines("spring-pulsar")
 def test_a_type_level_pulsar_listener_alone_derives_nothing(tmp_path: Path):
     """§10 near-miss for the Pulsar matcher, negating the conjunct that the
     annotation sits on a METHOD. `@PulsarListener` is
@@ -4073,6 +4075,7 @@ def test_both_legacy_sqs_spellings_derive_the_same_inbound_row(tmp_path: Path, a
     ]
 
 
+@pytest.mark.declines("spring-sqs-legacy")
 def test_the_legacy_sqs_catalog_declines_the_current_annotation(tmp_path: Path):
     """§10 near-miss for the legacy matchers: the CURRENT 3.x annotation is
     the same simple name, the same `value` attribute and the same protocol —
@@ -4123,6 +4126,7 @@ def test_an_actuator_operation_is_served_under_the_constant_prefix_with_its_own_
     ]
 
 
+@pytest.mark.declines("spring-actuator")
 def test_an_endpoint_class_with_no_operation_annotation_derives_nothing(tmp_path: Path):
     """§10 near-miss, and CP-5 row 6 measured rather than assumed: an
     `@Endpoint` class whose methods carry no operation annotation serves
@@ -4140,6 +4144,7 @@ def test_an_endpoint_class_with_no_operation_annotation_derives_nothing(tmp_path
     assert rows == []
 
 
+@pytest.mark.declines("spring-actuator")
 def test_an_actuator_operation_outside_an_endpoint_class_derives_nothing(tmp_path: Path):
     """§10 near-miss on the other conjunct: the operation annotation is
     present and the class gate is not. The operation annotations carry no
