@@ -22,6 +22,11 @@ days after it shipped and after four earlier reviews had passed the file. Nothin
 for it, because §8.1's language rule did not exist when the code was written and a new rule
 reaches backwards through nothing (§8.3).
 
+**Read §12 before §11.** A whole-range review of the fix pass found that two of its own
+fixes shipped fabrications — `A-M13` and `A-M15`, both marked FIXED in §11 and both corrected
+since. §11's rows for them say so. The cause was one and it is worth carrying: a probe
+measured half a framework rule and the implementer reasoned about the other half.
+
 **The verdict.** The sweep cost six parallel read-only audits, a paused 2O (resuming at Task
 8 after the fix pass), and a documentation-debt checkpoint now scheduled between 2O and 2P.
 It bought a number in place of a guess. **48 Class A findings — 9 Critical, 16 Major, 23
@@ -1980,7 +1985,7 @@ half and pins the shipped catalogs against its table.
 | id | status |
 |---|---|
 | `A-M1` | FIXED (f85cac7) — the selector is name AND parameter types (JLS 8.4.2); several candidates nothing can tell apart resolve to a NULL handler, which is what the engine's docstring already promised. Falsifies §6.1 rows #31 and #32 |
-| `A-M2` | FIXED (3cb9f9f) — CP-9 rows 35-40 measure the delegating wrapper on both `service` signatures and all three containers; the bypass now discards only a class declaring no dispatch member. Three shipped tests asserted the defect and are corrected |
+| `A-M2` | **FIXED (3cb9f9f), then RE-SCOPED (0b49bd3).** Round 1b's narrowing was right about the delegating wrapper (CP-9 rows 35-40) and wrong past it: it derived the same verbs for a NON-delegating override, which CP-9 rows 41-43 now measure serving PUT 200 where the delegating twin refuses with 405. The bypass asks the delegation instead, read off the `super` call rows 44-46 measure in the fact stream. `bypassed_by` is load-bearing again rather than inert. See §12 |
 | `A-M3` | FIXED (74684e5) — `head`/`options` roots on both clients; `method(HttpMethod)` derives its address at `unresolved` with `method` NULL, its verb being an enum constant a string-literal scanner cannot read |
 | `A-M4` | FIXED (74684e5) — `exchangeToMono`/`exchangeToFlux` added, `exchange` kept as dead-at-7.0.2 data, `spring-restclient`'s own `exchange` family added; both lists version-scoped in the catalog and pinned against CP-12's 7.0.2 column |
 | `A-M5` | FIXED (d9ab742) — `@OPTIONS` ships; `@HTTP` is a stated, test-pinned boundary, because `$method_from`'s enum-symbol extract would give its plain-String verb `method: ''` |
@@ -1991,9 +1996,9 @@ half and pins the shipped catalogs against its table.
 | `A-M10` | FIXED (3cb9f9f) — both seams drop one leading `[` and recurse, so `String[][]` and `String[]` are no longer byte-identical facts |
 | `A-M11` | FIXED (c4f9665, round 1a) — closed by `A-C4`'s `superclasses` edge exactly as §3.3 predicted. Verified here rather than re-fixed: `test_effective_annotations.py::test_an_ancestor_that_declares_no_method_at_all_still_carries_its_prefix` pins the shape |
 | `A-M12` | FIXED (3a976e3) — `superclasses` added to the ancestry walk, and both stale "a plain `extends` is NOT in the fact stream" sentences deleted in the same commit |
-| `A-M13` | FIXED (3a976e3) — the walk crosses module-local superinterfaces, own-first, stopping short of a `contracts` entry. Framework half MEASURED (CP-13 Q1) rather than left unverified |
+| `A-M13` | **REGRESSED, then FIXED (3a976e3, corrected by a5e4ce7).** Round 1b's walk crossed EVERY module-local superinterface, so a custom FRAGMENT method was published as a `/search/` route Spring Data REST does not serve — a fabrication where the input previously derived nothing. CP-13 Q1 recorded `calculateQueryMethods`' filter and named `isCustomMethod` inside it; the fix read the enumeration beside it. Q6/Q7 open the filter and the walk now crosses only `@NoRepositoryBean` superinterfaces. See §12 |
 | `A-M14` | **OPEN — measured and not closable from the fact stream.** CP-13 Q2 confirms the framework compares a name, a parameter count AND parameter types (a signature, JLS 8.4.2) where `crud_methods` is 25 bare identifiers. Closing it needs `crud_methods` to carry parameter types per contract per store AND the type-variable resolution the framework does through `getMostSpecificMethod`; the facts support neither, and half of it is §8.1 rule 4. Stated in `docs/COVERAGE.md` §5.1 with what falsifies it |
-| `A-M15` | FIXED (3cb9f9f) — a `gate_ancestry` CTE walks the transitive superclass closure for the member join, and rows carry the type that annotated them. Framework half MEASURED (CP-13 Q3/Q4). Two divergences from the RI stated: a `public final` operation, and Apache CXF unmeasured |
+| `A-M15` | **REGRESSED, then FIXED (3cb9f9f, corrected by 9a50745).** The `gate_ancestry` CTE walks the transitive superclass closure correctly; the member rule then enumerated one row per DECLARATION where `Class.getMethods()` yields one per SIGNATURE, so an overridden operation shipped twice and an `@WebMethod(exclude = true)` override republished the operation it withdraws — again where the input previously derived nothing. CP-13 Q5 measures the enumeration's own semantics; `exposed_members` keeps the nearest declaration of each `(name, parameter types)`. Two divergences from the RI still stated: a `public final` operation, and Apache CXF unmeasured. See §12 |
 | `A-M16` | FIXED (44d1089) — loaded at the analysed root, matched relative to the root it was loaded at. A module OUTSIDE that root keeps its own, since `<module>../x</module>` is legal and the reactor fixture is that shape |
 
 ### The three §7 settlements
@@ -2035,3 +2040,77 @@ half and pins the shipped catalogs against its table.
   allegation has a cross-catalog half that is true and by design, and a
   cross-module half that is impossible. Reading it as one row would have led to
   scoping the rule by `catalog_id`, which would make it stamp nothing at all.
+
+
+---
+
+## 12. Fix-pass status — the round-1 review's own findings
+
+The whole-range review of `af1d5c9..1cb0c42` returned eight findings plus a
+minors list. **Two of them are fabrications the fix pass itself introduced**,
+and they are the only items in this document that were worse after the sweep
+than before it. Both have the same cause, stated here once because it is the
+finding rather than the two instances: **a probe measured half a framework rule
+and the implementer reasoned about the other half.** CP-13's Q1 recorded
+`isCustomMethod` inside `calculateQueryMethods`' filter and Q3 recorded
+`getMethods()` as the JAX-WS enumeration; both fixes read the enumeration and
+went no further. §5.4 says a verdict is bounded by what it measured; §8.1 rule 4
+says never derive on half a measured rule. Both were already written.
+
+The answer both times was to EXTEND THE PROBE rather than to argue: CP-13 gained
+Q5 (what `getMethods()` returns for an override), Q6 (`isCustomMethod`) and Q7
+(which superinterfaces are fragments), and CP-9 gained rows 41-46.
+
+| # | severity | status |
+|---|---|---|
+| 1 | Critical | **FIXED (9a50745).** `A-M15` republished a SOAP operation `@WebMethod(exclude = true)` withdraws, and shipped an overridden operation twice. `exposed_members` keeps the nearest declaration of each `(name, parameter types)` — the language's key, never the descriptor hash, which carries the return type — and the exclusions and the annotation anti-join are asked of that one member. Measured: CP-13 Q5. Pinned by `derive_endpoints.one-exposed-member-per-signature`, killed by the harness |
+| 2 | Critical | **FIXED (a5e4ce7).** `A-M13` published Spring Data custom-fragment methods as `/search/` routes. The walk crosses a module-local superinterface only where it carries the catalog's `no_repository_bean` annotation — a key the catalog already declared. Measured: CP-13 Q6/Q7, identical bytecode at spring-data-commons 3.2.5 and 4.1.1. Pinned by `derived_resource.inherited-interfaces-are-no-repository-beans`, killed by the harness. An under-report rides with it and is stated in COVERAGE: an unannotated module-local base is a fragment by the same measured rule |
+| 3 | Major | **FIXED (9b8abed) — by correcting both claims, not by closing the surfaces.** `RouterFunctions$Builder` (7 verbs x 4 overloads) and `RouterFunctionDslKt.router` with `RouterFunctionDsl` (7 x 5) are undeclared and derive nothing; `COVERAGE.md` listed the builder call as shipped and this pass added "Both routing DSLs now read all seven verbs". Two boundary rows name each surface, and a test pins the builder DSL's silence so that closing it is visible. Verified: `javap` against spring-webflux 6.1.6, and the builder shape driven through the shipped catalog for 0 rows |
+| 4 | Major | **FIXED (0b49bd3).** `bypassed_by` was inert and three near-misses claimed to pin it. **The decision (§5.3): it stays, and is load-bearing again** — the case for retiring it rested on round 1b's narrowing, and the narrowing was itself finding 5. All three near-misses now declare a dispatch member so the guard's absence has an outcome to change, and the harness kills all three |
+| 5 | Major | **FIXED (0b49bd3).** `A-M2` derived on a configuration CP-9 did not measure. CP-9 rows 41-43 measure it: a non-delegating `service()` override with `doGet`/`doPost` declared serves GET 200, POST 200 and **PUT 200** on all three containers, where the delegating twin refuses PUT with 405. Rows 44-46 measure that the distinguishing `super` call reaches the fact stream, as `invoke_kind: special` on a supertype target, under both entry-point signatures and both package spellings. `call_site` joins both servlet catalogs' `requires` |
+| 6 | Major | **FIXED (8d1aeb2).** `derive_call_endpoints.sql` gained mechanism 3's twin: a `resolved` row whose address is empty and whose `peer` is NULL is not inserted. Scoped to `resolved`, because an `unresolved` row with no path is a real, distinct fact and the same file's dedup paragraph already turns on that. The under-report — a constraint-only WebFlux route IS served and we cannot express its address — is stated in COVERAGE |
+| 7 | (harness) | **FIXED (0b49bd3).** The `spring-rabbit` near-miss named a conjunct its catalog does not declare. It names `derive_endpoints.addresses-nothing` now, which is registered for the first time — closing one of sweep 1's four unnamed fabrication-prevention guards (S1-MAJ-1 is now three) — and the qualifier gate is named by the near-miss that does reach it |
+| 8 | (harness) | **FIXED (0b49bd3), by removing a guard rather than repairing a test.** The `spring-actuator` near-miss is guarded twice over and pins neither half; `spring-actuator.operations-are-the-mapping-annotations`' weakening mints a CLASS-target declaration that the handler-is-a-method join drops on its own account, and `@Endpoint` is `@Target(TYPE)` so it can never sit elsewhere. That is a NO-OP mutation, which the harness's own design forbids counting. The registry entry is gone and the test carries no marker and says why |
+
+**`_DOES_NOT_DISCRIMINATE_YET` is empty and `scripts/check.sh --guards` reports
+30 killed, 0 survived, 0 unmeasurable.** Sweep 1's `test_a_protocol_agnostic_
+supertype_derives_nothing` (S1-MAJ-5) is closed with them.
+
+### 12.1 What this round disputes
+
+**Nothing.** Every one of the eight findings reproduced. Criticals 1 and 2 were
+reproduced as failing tests before any fix, finding 3 was reproduced by driving
+the builder shape through the shipped catalog, finding 5 was reproduced live on
+three containers, and findings 4, 7 and 8 were reproduced by the guard harness.
+
+Two of the reviewer's prescriptions were taken with a change of shape, and
+neither is a disagreement about the finding:
+
+- **CRITICAL 1's prescribed fix asked for the ancestry walk to be deduped
+  "own-first" by `(name, parameter types)`**, and said to verify the
+  prescription before taking it. Verified (CP-13 Q5) and taken — with the
+  ordering applied by ANCESTRY DEPTH rather than by "own", which is the same
+  rule stated so that a two-hop base is ordered too, and with the synthetic
+  exclusion moved AHEAD of the dedup so that a covariant-return bridge cannot
+  win the tie and take the operation with it.
+- **FINDING 8 asked for the test to be fixed and its allowlist entry removed.**
+  The entry is removed; the test is not fixed, because no input can reach that
+  guard alone. The registry entry went instead, which is the same finding
+  answered from the other end.
+
+### 12.2 Concerns carried forward
+
+1. **`A-M14` is still OPEN and is now the only Data REST finding that is.** CP-13
+   Q6/Q7 sharpened the neighbouring rule without touching it.
+2. **Apache CXF is still unmeasured** (`A-Mi7`), so every JAX-WS rule — the
+   override dedup included — is scoped to jaxws-rt 4.0.2.
+3. **The two undeclared WebFlux routing surfaces are a real recall gap**, now
+   stated rather than closed. The Kotlin one is a catalog addition; the builder
+   one is engine work.
+4. **CP-9 rows 41-43 measure a servlet the container serves every verb alike,
+   and we derive nothing for it.** That is the honest answer for a class whose
+   dispatch we cannot model, and it is an under-report: the class DOES serve.
+5. **An empty guard allowlist says every marked test notices its guard. It does
+   not say each pins the right one**, which is the harness's own stated limit,
+   and it says nothing about the three `derive_endpoints.sql` guards no
+   near-miss names at all.
