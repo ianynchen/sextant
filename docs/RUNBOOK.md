@@ -470,8 +470,16 @@ your two cases apart, it is measuring something else; change the configuration
 that might be doing the masking and probe again, rather than recording the
 answer.
 
-The generalisation, since twice is a pattern and §13.8 makes three the trigger:
-before a measured absence becomes an exclusion, ask **who can turn this on, and
-can we see them do it**. If the answer is "the deployment, and no" — derive the
-row and state the dependency. §8's "exclude only on proof, never on inference"
-is the same rule read from the other end.
+The generalisation: before a measured absence becomes an exclusion, ask **who
+can turn this on, and can we see them do it**. If the answer is "the deployment,
+and no" — derive the row and state the dependency. §8's "exclude only on proof,
+never on inference" is the same rule read from the other end.
+
+**Outcome, and why §13.8 was amended because of this entry.** Naming §8 here was
+the correct diagnosis and it changed nothing: the entry was written, the work
+continued, and §8.2 exists only because a human raised it afterwards. §13.8 now
+makes the SECOND occurrence the diagnosis point — state the cause, test it
+against the principles that already exist, and where it violates one, stop and
+settle the mechanism rather than recording the finding and moving on. A rule
+already written and broken twice needs enforcement, not another correction. This
+entry is the worked example in §13.8 and the sole hit in its audit list.

@@ -372,9 +372,20 @@ If something might not have worked, say so. Do not claim "migration completed" w
 
 New definition-model fields default to `None` — non-None defaults change the canonical snapshot dump and cause universal false drift.  
 
-### 13.8 The third occurrence is a signal to look upstream  
+### 13.8 The second occurrence is a diagnosis; the third is a stop  
 
 When the same class of error happens **twice**, record it — in the working ledger during a task, in [RUNBOOK.md](docs/RUNBOOK.md) across tasks. **The record is the mechanism, not the bookkeeping.** Without it the third occurrence looks like the first, which is how six instances of one defect can each feel novel in the moment.  
+
+**Then do the diagnosis, at the second — not the third.** Recording is not enough, because "stay alert" is not an action anyone takes. At the second occurrence:  
+
+1. **State the cause**, not the two symptoms. Why did this happen — what wrong assumption, missing fact, or misleading document produced both?  
+2. **Test the cause against the principles that already exist.** Read §5.3, §5.4, §8, §8.1, §8.2, §9 and §10 and ask whether the cause is something one of them already forbids.  
+3. **If it violates an existing principle, stop and raise it.** Do not fix the instance and continue. A rule we already wrote, already agreed, and still broke twice is not an implementer's slip — it is a rule with no reach, and the fix is a mechanism, not another correction. Bring it to your human partner and settle the mechanism before resuming.  
+4. **If no existing principle covers it, the missing principle is the finding.** Write it, with the audit list §8.3 requires.  
+
+The difference between 3 and 4 matters. A *new* rule needs the backlog it now governs. A *broken* rule needs enforcement — a test, a ratchet, a review instruction — because prose has already been tried on this exact cause and lost.  
+
+**The worked example is this rule's own second occurrence, and it is uncomfortable.** A deployment default was read as a code fact twice: Spring Boot Actuator's `management.endpoints.web.exposure.include`, then Tomcat's connector `allowTrace`. The RUNBOOK entry recorded the second correctly, generalised it correctly, and even *named the principle it violated* — "§8's 'exclude only on proof, never on inference' is the same rule read from the other end" — and then the work continued. The analysis was right, written down, and inert. §8.2 exists because a human raised it afterwards, not because the record did. **Naming the violated principle IS the trigger; it is not the conclusion.**  
 
 On the **third**, stop and raise it with your human partner. Do not fix it and continue. A defect class recurring three times is evidence of a systemic cause — a wrong assumption, a missing rule, a misleading document — and **fixing instances is what prevents you from finding it**. Each individual fix is correct, feels like progress, and leaves the cause untouched.  
 
@@ -384,6 +395,8 @@ Phase 2O is the worked example, twice over:
 
 - **Six phantom mechanisms.** `detect.coordinates`, the `constant` fact kind and the routing-ambiguity detector were each corrected individually before anyone asked why they kept appearing. The answer became §5.3 — a rule which, written at the third occurrence rather than the sixth, would have preceded the spec that four of them went on to break.  
 - **Four fabrications, four frameworks.** A gRPC endpoint minted from an ordinary `extends` pair; a module excluded because it published an artifact; an endpoint derived with an empty name; a message payload published as part of a destination. One cause: a rule matches on SHAPE and then publishes a specific MEANING, with nothing checking that the shape entails the meaning. Four separate fixes found it; one upstream question would have.  
+
+**Its §8.3 audit list — every recurring class recorded to date, re-read against step 3.** Two of the three had no existing principle to violate: "documentation as evidence about code" (six occurrences) produced §5.3, and the four fabrications produced §8's anti-fabrication and exclusion rules — in both cases the correct outcome was a new rule written late, which is step 4. **One is a real hit.** "A deployment default read as a code fact" reached its second occurrence *after* §8's "exclude only on proof, never on inference" was already written and while the entry recording it cited that very rule. Under this amendment it stops there. That is the only entry in the list, and the list is short because the record only began in Phase 2O — which is itself the argument for keeping it.  
 
 ---
 
