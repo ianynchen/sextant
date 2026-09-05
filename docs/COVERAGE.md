@@ -1418,7 +1418,7 @@ Task 5):**
 | Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)` | `List.of` (≤10 elements) resolves per topic; `Collections.singletonList`/`Pattern.compile` resolve their one argument; `Arrays.asList` is genuine varargs and degrades to one unresolved row — the elements are IN the facts since capability 9.15 (`{kind: array, elements: […]}`), but `all_strings` reads positional arguments and has not been taught to look inside `elements` | `registration_call` | ✅ shipped |
 | Java | **`KafkaProducer.send(ProducerRecord)`** | **topic is a constructor argument of `ProducerRecord`**, not of `send` | `fluent_chain` | ✅ shipped |
 | Java | `KafkaTemplate.send(Message)` with topic in a header | topic read from a `setHeader(KafkaHeaders.TOPIC, …)` value-guarded step | `fluent_chain` | ✅ shipped |
-| Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination` | `config_join` | ✅ shipped |
+| Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination`; gated on the build declaring `org.springframework.cloud:spring-cloud-stream`, and **any** method returning one of the three function interfaces is a candidate — see the boundary note below | `config_join` | ✅ shipped |
 | Java | **SmallRye** `@Incoming("orders")` / `@Outgoing` | channel in code, topic in `application.properties` | `config_join` | **B** — rides 2F's `config_join` once catalogued |
 | Java | Alpakka / Pekko Connectors `Consumer.plainSource(s, Subscriptions.topics("t"))` | — | `registration_call` | B |
 | Go | `segmentio/kafka-go` `kafka.NewReader(kafka.ReaderConfig{Topic: "t"})` | **topic is a struct-literal field** — easier than positional | `registration_call` | A |
@@ -1440,6 +1440,24 @@ exercised by the fixture, slated for tightening alongside the empty-path wart be
 class-level `@KafkaListener` does derive, every `@KafkaHandler` method on it derives its own row
 against the shared topic identity — several payload contracts riding one topic is the deliberate
 outcome, not a deduplication the engine owes anyone.
+
+**Spring Cloud Stream's candidate scan is the return type and nothing else, and the dependency
+is what fences it** (`A-C5`, principles sweep §3.2). `config_join`'s `_candidates` reads EVERY
+declared method in the module and keeps the ones whose return type is `Function`, `Consumer` or
+`Supplier` — there is no `@Bean` or `@Configuration` conjunct — and where
+`spring.cloud.function.definition` is absent the framework's own default is to bind every
+candidate. On a module with no Spring Cloud Stream at all that published four Kafka boundaries
+from three ordinary utility methods; the catalog is now dependency-gated
+(`resolve/dependencies.py`), so such a module is SKIPPED with its reason instead.
+
+**The residual, stated rather than closed:** on a module that DOES declare Spring Cloud Stream,
+a `Function`-returning helper that is not a bean still derives a binding row. Narrowing that
+needs to know which registration forms the framework actually binds — `@Bean`, `@Component`, a
+programmatic `FunctionRegistry` entry — and that is unmeasured (rank 3 in the sweep's probe
+backlog: this catalog has no probe, no `javap` reference and no version anywhere). §8.1 forbids
+inventing the conjunct, so it is stated here until a probe answers it. **Falsified by** a Spring
+Cloud Stream module with function-shaped utility methods outside its binding configuration: each
+derives a boundary row the broker does not carry.
 
 `KafkaTemplate.sendDefault`, `JmsTemplate.convertAndSend(Object)` with no destination and
 `SqsTemplate`'s builder-lambda `send(Consumer<SqsSendOptions<T>>)` all put the destination

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from shape_helpers import ORDER_REQUEST, ORDER_STATUS, shape_fields_of
 
+from conftest import write_fixture_module_fact
 from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
 from sextant.application.ports.catalogs import Catalog, CatalogSource
 from sextant.application.ports.scanner import ScanRequest
@@ -67,6 +68,10 @@ def _resolved_fixture(
             out_dir=facts,
         )
     )
+    # `A-C5`: the dependency-gated styles need a module fact and this helper
+    # runs no detector — see `conftest.write_fixture_module_fact` for which
+    # coordinates it declares and why that list is a deliberate subset.
+    write_fixture_module_fact(facts)
     root = FIXTURE / "src" / "main" / "resources"
     for reader, owned in group_files_by_reader(
         list_files(root, FIXTURE, IgnoreRules.load(FIXTURE)),

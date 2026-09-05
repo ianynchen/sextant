@@ -6,7 +6,9 @@ import pytest
 from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
 from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve.pipeline import ResolveReport, resolve
+from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import config_fact_target, write_fact_file
+from sextant.domain.facts import Document, ModuleFact
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import list_files
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
@@ -20,6 +22,59 @@ REPO = Path(__file__).parents[2]
 JAR = extractor_jar()
 FIXTURE = REPO / "fixtures" / "orders-service"
 CATALOGS = catalogs_dir()
+
+
+# The dependency coordinates the fixture's POM declares that a
+# dependency-gated style reads (`A-C5`). Neither this fixture nor
+# `test_pipeline._resolved_fixture` runs the DETECTOR, so no module fact
+# reaches the workspace unless one is written here — and without one every
+# dependency-gated catalog is skipped as unanswerable, which since
+# `config_join` joined `DEPENDENCY_GATED` would silently delete this fixture's
+# whole Spring Cloud Stream surface.
+#
+# Deliberately a SUBSET of what the POM declares, and the omission is the
+# point: `spring-data-rest-core` is in that POM too, and listing it here would
+# un-skip `spring-data-rest` and change what every endpoint count in
+# `test_pipeline.py` measures. The e2e suite runs the real detector and does
+# derive those rows; making the two agree is a separate change, named here
+# rather than smuggled into this one.
+FIXTURE_GATED_COORDINATES = (
+    "org.springframework.cloud:spring-cloud-stream",
+    "org.springframework.kafka:spring-kafka",
+)
+
+
+def write_fixture_module_fact(facts: Path) -> None:
+    """The module fact `resolve/dependencies.py` reads, written beside the
+    scanner's own fact files."""
+    write_fact_file(
+        facts / "module.jsonl",
+        Document(
+            document_id="doc_module",
+            relative_path="pom.xml",
+            module_id="com.acme:orders-service",
+            language="java",
+            sextant_version="0.1.0",
+            fact_schema_version="1.0.0",
+            scanner_id="asm",
+            scanner_version="9.8",
+            content_hash="sha256:module",
+            origin_entry="target/classes",
+            origin_tier=OriginTier.MODULE_OUTPUT,
+            redaction_set_hash="sha256:none",
+        ),
+        [
+            ModuleFact(
+                document_id="doc_module",
+                module_id="com.acme:orders-service",
+                module_kind="service",
+                languages=["java"],
+                source_roots=["src/main/java"],
+                output_dirs=["target/classes"],
+                dependency_coordinates=list(FIXTURE_GATED_COORDINATES),
+            )
+        ],
+    )
 
 
 @pytest.fixture(scope="session")
@@ -46,6 +101,7 @@ def resolved_fixture(
             out_dir=facts,
         )
     )
+    write_fixture_module_fact(facts)
     # 2F Task 7: the read half, mirroring `stages/analyze.py` — see
     # `test_pipeline._resolved_fixture`'s own copy for why a fixture resolved
     # without its configuration answers a different question entirely once a
@@ -83,9 +139,10 @@ def resolved_fixture(
         # same way the other capabilities here already are.
         #
         # Granting 9.14 rather than withholding it is deliberate: with the
-        # capability met, this fixture exercises the DEPENDENCY gate instead
-        # (it declares no Spring Data REST, and carries no module fact at
-        # all), which is the check worth having a live fixture behind.
+        # capability met, this fixture exercises the DEPENDENCY gate instead —
+        # the module fact written above deliberately omits Spring Data REST's
+        # coordinate (`FIXTURE_GATED_COORDINATES` says why), so the gate answers
+        # "not declared" and the skip is the check this live fixture is behind.
         {
             "annotation_args",
             "typed_signatures",

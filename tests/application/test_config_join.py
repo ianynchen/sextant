@@ -33,13 +33,16 @@ from sextant.domain.facts import (
     CallSiteFact,
     CallTarget,
     Document,
+    ModuleFact,
     Signature,
     SymbolFact,
     TypeRef,
 )
 from sextant.domain.symbols import type_descriptor
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
+CATALOGS_DIR = Path(__file__).parents[2] / "src" / "sextant" / "catalogs"
 CAPABILITIES = {"resolved_config", "typed_signatures", "implemented_interfaces"}
 # The module-coordinates prefix every real symbol fact carries (D00 §5a);
 # a signature's own type references stay bare, exactly as the extractor
@@ -55,6 +58,11 @@ RECEIPT = "com/acme/contracts/Receipt#"
 
 DESTINATION_KEY = "acme.bindings.{binding}.destination"
 SELECTION_KEY = "acme.function.definition"
+# The invented framework's own coordinate. `config_join` is dependency-gated
+# (`resolve/dependencies.py`, `A-C5`), so a catalog of this style that declares
+# none is refused at the gate — deliberately, since a `config_join` match can be
+# satisfied by code naming no framework at all.
+INVENTED_COORDINATE = "com.acme:acme-bindings"
 BINDER_KEY = "acme.bindings.{binding}.binder"
 DEFAULT_BINDER_KEY = "acme.default-binder"
 
@@ -71,6 +79,24 @@ def _document() -> Document:
     return Document(
         document_id="doc_1",
         relative_path="com/acme/streams/Bindings.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.8",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+
+
+def _module_document() -> Document:
+    """The document carrying the module fact the dependency gate reads."""
+    return Document(
+        document_id="doc_module",
+        relative_path="module",
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
@@ -166,6 +192,7 @@ def _catalog(matches: dict | None = None, *, direction: str = "inbound") -> Cata
         requires=("resolved_config",),
         matches=matches if matches is not None else {"address_from_config": _address()},
         source=Path("tests/invented-bindings.yml"),
+        detect_coordinates=(INVENTED_COORDINATE,),
     )
 
 
@@ -173,12 +200,38 @@ def _workspace(
     tmp_path: Path,
     facts: list[SymbolFact] | None = None,
     config: list[tuple[str, str, str | None]] | None = None,
+    *,
+    coordinates: tuple[str, ...] | None = None,
 ) -> DuckDbWorkspace:
     """A workspace holding the given symbol facts and the given already
     resolved configuration — `(key, environment, value)`, a `None` value
     meaning the environment has the key but never resolved it (D01's
-    unresolved-with-a-reason row, spelled `missing_key` here)."""
+    unresolved-with-a-reason row, spelled `missing_key` here).
+
+    `coordinates=None` writes no module fact at all, which is what every test
+    below that reaches the engine DIRECTLY wants: the dependency gate lives in
+    `derive_endpoints`, not in the engine, so a direct call never asks. The
+    three tests that go through `derive_endpoints` name their coordinates,
+    because since `config_join` joined `DEPENDENCY_GATED` the answer to "does
+    this module declare the framework" decides whether the catalog runs at all
+    (`test_derived_resource.py`'s own `_workspace` precedent)."""
     write_fact_file(tmp_path / "facts" / "Bindings.jsonl", _document(), list(facts or []))
+    if coordinates is not None:
+        write_fact_file(
+            tmp_path / "facts" / "module.jsonl",
+            _module_document(),
+            [
+                ModuleFact(
+                    document_id="doc_module",
+                    module_id="com.acme:orders-service",
+                    module_kind="service",
+                    languages=["java"],
+                    source_roots=["src/main/java"],
+                    output_dirs=["target/classes"],
+                    dependency_coordinates=list(coordinates),
+                )
+            ],
+        )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     if config:
@@ -758,6 +811,7 @@ def _media_catalog(rules: list[dict] | None = None, values: dict | None = None) 
             }
         },
         source=Path("tests/invented-media.yml"),
+        detect_coordinates=(INVENTED_COORDINATE,),
     )
 
 
@@ -1177,6 +1231,7 @@ def test_the_engine_is_registered_for_the_style_and_runs_after_every_other(
         tmp_path,
         facts,
         _selection("handle") + _destination("handle-in-0", "events"),
+        coordinates=(INVENTED_COORDINATE,),
     )
     call_site_catalog = Catalog(
         id="invented-caller",
@@ -1225,6 +1280,7 @@ def test_a_stamping_catalog_runs_after_every_deriving_one_whatever_its_filename(
         _selection("handle")
         + _destination("handle-in-0", "events")
         + [(MEDIA_KEY, "default", WRITER), (MEDIA_KEY, "prod", WRITER)],
+        coordinates=(INVENTED_COORDINATE,),
     )
     binding_catalog = Catalog(
         id="invented-z-bindings",
@@ -1234,6 +1290,7 @@ def test_a_stamping_catalog_runs_after_every_deriving_one_whatever_its_filename(
         requires=("resolved_config",),
         matches={"address_from_config": _address()},
         source=Path("tests/invented-z-bindings.yml"),
+        detect_coordinates=(INVENTED_COORDINATE,),
     )
     stamping_catalog = Catalog(
         id="invented-a-stamper",
@@ -1254,6 +1311,7 @@ def test_a_stamping_catalog_runs_after_every_deriving_one_whatever_its_filename(
             }
         },
         source=Path("tests/invented-a-stamper.yml"),
+        detect_coordinates=(INVENTED_COORDINATE,),
     )
     skipped = derive_endpoints(
         workspace, [stamping_catalog, binding_catalog], capabilities=CAPABILITIES
@@ -1429,3 +1487,83 @@ class _UnusedWorkspace:
 
     def derive(self, name: str, **params: object) -> None:
         raise AssertionError(f"derived {name} on a catalog that should have been refused")
+
+
+# --- `A-C5` (principles sweep §3.2): the dependency gate ---------------------
+#
+# Against the SHIPPED `spring-cloud-stream` catalog rather than an invented
+# stand-in, because the defect is not in the engine's reading of catalog data —
+# it is that the shipped file's whole match reduces, on a module with no
+# configuration, to "this method returns a `java.util.function` interface",
+# which ordinary Java satisfies constantly.
+
+_STREAM = "org.springframework.cloud:spring-cloud-stream"
+
+
+def _helpers_facts() -> list[SymbolFact]:
+    """Three ordinary utility methods on a plain class. No `@Bean`, no
+    `@Configuration`, nothing naming Spring Cloud Stream anywhere — the exact
+    input sweep 1 measured four fabricated Kafka boundaries from."""
+    return [
+        _bean(
+            "nameNormalizer",
+            "java.util.function.Function",
+            "java/lang/String#",
+            "java/lang/String#",
+        ),
+        _bean("auditSink", "java.util.function.Consumer", "java/lang/String#"),
+        _bean("clockSupplier", "java.util.function.Supplier", "java/time/Clock#"),
+    ]
+
+
+def _stream_catalog() -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-cloud-stream")
+
+
+def test_spring_cloud_stream_derives_nothing_for_a_module_that_does_not_declare_it(
+    tmp_path: Path,
+):
+    """`A-C5`, the near-miss. Three `java.util.function`-returning methods on a
+    plain class, in a module whose build declares no Spring Cloud Stream at
+    all, asserted four Kafka boundaries: `path` NULL at `unresolved`, naming
+    real application methods as their handlers.
+
+    Nothing about that row set is an address fabrication — it is worse in kind.
+    It asserts the EXISTENCE of four boundaries the module does not have, which
+    is §8's cardinal sin with the address column left honest.
+
+    `rows == []` is the assertion the sweep's Tier-1 backlog requires, and the
+    skip beside it is the other half: a catalog that derives nothing must be
+    distinguishable from a framework that exposes nothing (M04, FR-17)."""
+    workspace = _workspace(tmp_path, _helpers_facts(), coordinates=("com.acme:something-else",))
+    skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert [entry.catalog_id for entry in skipped] == ["spring-cloud-stream"]
+    assert _STREAM in skipped[0].missing_capabilities[0]
+
+
+def test_spring_cloud_stream_still_derives_for_a_module_that_does_declare_it(
+    tmp_path: Path,
+):
+    """The paired positive. Same facts, one coordinate different — so what the
+    near-miss above proves is the GATE and not some other conjunct quietly
+    matching nothing. A rule that declined everything would pass the near-miss
+    and look correct all the way down (§10).
+
+    It also records what the gate does NOT close, which is the honest half:
+    with the dependency present these same three utility methods still derive
+    four boundaries, because `_candidates` reads every declared method and
+    filters on the return type alone. Narrowing that needs a `@Bean` conjunct,
+    and whether Spring Cloud Stream actually requires `@Bean` is a framework
+    question no probe in this repository has answered — §8.1 forbids inventing
+    the conjunct, so it is stated in `docs/COVERAGE.md` instead."""
+    workspace = _workspace(tmp_path, _helpers_facts(), coordinates=(_STREAM,))
+    skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert skipped == []
+    assert {row["handler"] or row["caller"] for row in rows} != set()

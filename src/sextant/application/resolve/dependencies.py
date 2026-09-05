@@ -43,7 +43,44 @@ from sextant.application.ports.workspace import Workspace
 # request a catalog file makes — the same rule `endpoints._RUNS_LAST` follows,
 # and for the same reason: a catalog that could opt out of its own gate is not
 # gated.
-DEPENDENCY_GATED = frozenset({"derived_resource"})
+#
+# **The test for membership**, applied to all eleven styles and stated here
+# because the answer decides real output (`A-C5`, principles sweep §3.2): can
+# this style's match be satisfied by code that names the framework NOWHERE?
+#
+#   * `annotation_driven`, `single_call`, `fluent`, `injected_client`,
+#     `interface_implementation`, `supertype_dispatch`, `supertype_derived`
+#     and `combinator` all key on a framework-owned fully-qualified name — an
+#     annotation only that framework defines, a call on a type only it ships,
+#     a supertype or an interface only it declares. The dependency is implied
+#     by the match itself, and gating on the coordinate as well would only
+#     subtract rows the evidence already earned. Worse, under Maven — where
+#     only DIRECT declarations are recorded — it would subtract them from every
+#     module inheriting the framework through a parent or a starter.
+#   * `schema_operations` reads a `.proto`, `.graphql` or WSDL file in the
+#     repository. The schema is the evidence, and it is first-party; a build
+#     coordinate is not what makes its operations real.
+#   * `derived_resource` is the original case: an interface extending a generic
+#     repository contract mentions no HTTP anywhere, so the framework's
+#     presence is the only thing that turns it into an API.
+#   * `config_join` is the second, and is why this set grew. Its candidate scan
+#     (`engines/config_join.py::_candidates`) reads EVERY declared method and
+#     filters on the return TYPE — and the types `spring-cloud-stream.yml`
+#     filters on are the three standard function interfaces the PLATFORM ships,
+#     not the framework, so ordinary code satisfies them constantly. With no
+#     configuration present `_selected_entries` binds every candidate, so the
+#     whole match reduced to "this method returns a function", and three
+#     utility methods on a plain class asserted four Kafka boundaries on a
+#     module with no Spring Cloud Stream at all.
+#
+# `spring-kafka-media`, the other shipped `config_join` catalog, matches on a
+# `spring.kafka.*` configuration key and so does name its framework — but
+# membership is a property of the STYLE (above), so it is gated too. The cost
+# is bounded and stated: it stamps carried media onto rows other engines
+# derived and can mint nothing, so a Maven module inheriting spring-kafka
+# transitively loses a media DECORATION and keeps every row, visibly, through
+# the same SKIPPED channel.
+DEPENDENCY_GATED = frozenset({"derived_resource", "config_join"})
 
 # The caveat rides BOTH messages, and on this one it is the load-bearing half
 # (fix round 3, I-2): on Maven the recorded coordinates are the POM's direct

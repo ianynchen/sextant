@@ -1881,7 +1881,7 @@ forgotten.
 | mechanism | status |
 |---|---|
 | M1 — no derivation publishes a defaulted value at `resolved`/`compiler` | FIXED (aff29fc) — shipped as the §8.3 audit list, `tests/architecture/test_defaulted_identity_values.py`. See §10.1 for where this document's own §4.4 prediction is disputed. |
-| M2 — the dependency gate covers more than one style | OPEN |
+| M2 — the dependency gate covers more than one style | FIXED (2cbaa4b) — `config_join` admitted; the per-style reasoning is recorded in `resolve/dependencies.py` |
 | M3 — the empty-address guard says what it means | OPEN |
 
 ### Class A Criticals
@@ -1892,7 +1892,7 @@ forgotten.
 | `A-C2` | FIXED (330835b) |
 | `A-C3` | OPEN |
 | `A-C4` | OPEN |
-| `A-C5` | OPEN |
+| `A-C5` | FIXED (2cbaa4b) — the fabrication is closed by M2; the residual (`@Bean` conjunct, unmeasured) is stated in COVERAGE §5.8 |
 | `A-C6` | OPEN |
 | `A-C7` | OPEN |
 | `A-C8` | OPEN |

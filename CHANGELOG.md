@@ -178,6 +178,23 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-C5`: a module with no Spring Cloud Stream asserted four Kafka boundaries** (principles
+  sweep §3.2). `config_join`'s candidate scan reads every declared method and keeps the ones
+  returning `Function`/`Consumer`/`Supplier` — platform interfaces, not framework ones — and with
+  no `spring.cloud.function.definition` present the framework's own default binds every
+  candidate, so three ordinary utility methods on a plain class published four boundaries the
+  module does not have. `config_join` joins `derived_resource` in `DEPENDENCY_GATED`: the two
+  styles whose evidence names no framework are the two gated on the build declaring it, and
+  `resolve/dependencies.py` now records that test applied to all eleven styles. **Output changes
+  for real modules**: a module whose recorded coordinates do not name
+  `org.springframework.cloud:spring-cloud-stream` derives no Stream bindings and is reported
+  SKIPPED with its reason; the same applies to `spring-kafka-media`'s media stamps and
+  `org.springframework.kafka:spring-kafka`. Under Maven only DIRECT declarations are recorded,
+  so a module inheriting either through a parent or a starter is skipped — the skip message says
+  so, and the rows it loses are a Stream binding set or a carried media decoration, never a row
+  another engine derived. `fixtures/orders-service` gained the `spring-cloud-stream` dependency
+  it had always been modelling and never declared.
+
 - **`A-C2`: OkHttp's `.method("DELETE", body)` no longer publishes `GET`** (principles sweep
   §3.2). `okhttp3.Request$Builder`'s generic verb setter was not a declared step, so it passed
   through uncaptured (D02 §4) and the chain root's `http_method: GET` — OkHttp's real default

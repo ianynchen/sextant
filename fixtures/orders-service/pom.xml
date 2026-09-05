@@ -89,6 +89,26 @@
       <artifactId>spring-kafka</artifactId>
       <version>3.1.4</version>
     </dependency>
+    <!-- `A-C5` (principles sweep §3.2). `OrderStreamBindings` has modelled a
+         Spring Cloud Stream module since 2F — functional beans plus
+         `spring.cloud.function.definition` and `spring.cloud.stream.bindings.*`
+         in application.yml — while this POM declared no Spring Cloud Stream at
+         all. That is a module which cannot exist: without the dependency there
+         is no binder, and none of those bindings is created. The fixture got
+         away with it because nothing gated on the coordinate; `config_join`
+         now does (`resolve/dependencies.py`), and the fixture has to be a
+         module a runtime could actually be.
+
+         Compile scope and nothing imports it, deliberately: the beans stay
+         plain `java.util.function` types, so this declaration is evidence for
+         the POM detector and changes not one line of bytecode. 4.1.0 is the
+         Spring Cloud 2023.0.x line that pairs with the Boot 3.2 / Spring 6.1.6
+         versions every other dependency here pins. -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-stream</artifactId>
+      <version>4.1.0</version>
+    </dependency>
     <dependency>
       <groupId>org.apache.kafka</groupId>
       <artifactId>kafka-clients</artifactId>
