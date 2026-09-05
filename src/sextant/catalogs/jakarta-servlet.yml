@@ -1,0 +1,138 @@
+id: jakarta-servlet
+displayName: Jakarta Servlet (@WebServlet on an HttpServlet subclass)
+style: supertype_dispatch
+protocol: http
+direction: inbound
+
+# The Servlet API rather than any framework: `@WebServlet` is processed by the
+# CONTAINER's own deployment scan, so a class extending `HttpServlet` is served
+# the same whether the module is a plain WAR, a Spring Boot app with
+# `@ServletComponentScan`, or anything else. CP-9 measured it with no framework
+# in the picture at all (`scripts/probes/cp9_servlet_shapes.md`).
+#
+# The list is DIRECT API declarations only, and it is incomplete on purpose:
+# the API usually arrives transitively, through a container or a web starter,
+# and Maven records direct declarations only. Nothing reads it — `detect
+# .coordinates` gates exactly one style (`derived_resource`, 2O Task 6) and
+# this is not it — so an incomplete list costs nothing here and would cost
+# every servlet in the estate if it ever became an activation gate without
+# being completed first.
+detect:
+  coordinates: ["jakarta.servlet:jakarta.servlet-api"]
+
+requires: [annotation_args, type_annotations, typed_signatures, superclass]
+
+matches:
+  # THE SUPERTYPE IS THE CONTRACT. `HttpServlet.service` is what reads a
+  # request's method and dispatches to the matching `doXxx`; a class that does
+  # not extend it has no such dispatch, which is why a `GenericServlet`
+  # subclass — same annotation, same registration — derives nothing (CP-9 rows
+  # 16-17, 28). Matched on the DIRECT superclass: a class reaching
+  # `HttpServlet` through an intermediate base of its own is a stated boundary
+  # in docs/COVERAGE.md, not a guess.
+  supertype: jakarta.servlet.http.HttpServlet
+
+  # THE ADDRESS IS ON THE TYPE, which is the whole reason this is not an
+  # `annotation_driven` catalog: that engine's derivation joins method symbols
+  # and a type-level annotation mints no row of its own
+  # (`derive_endpoints.sql:398-400`).
+  #
+  # `urlPatterns` and `value` are the same attribute under two spellings
+  # (javap, jakarta.servlet-api via tomcat-embed-core 10.1.50 and 11.0.24:
+  # `WebServlet` declares `String[] value()` and `String[] urlPatterns()`,
+  # `@Target(TYPE)`, no `@Inherited`). Both reach the fact stream as their own
+  # argument key (CP-9 rows 21-22), so both are named — a catalog naming one
+  # would derive nothing for half the estate. Most preferred first: writing
+  # BOTH is a deployment error the container refuses, so there is no union to
+  # take, and the first key present is the attribute the author named.
+  #
+  # EACH PATTERN IS ITS OWN ENDPOINT (CP-9 rows 1-2). And each is published
+  # VERBATIM: `/legacy/*` and `*.do` are pattern grammars with their own
+  # precedence rules, and CP-9 measured only that a declared pattern is served
+  # at its own literal spelling — normalising one would publish an address no
+  # probe covered.
+  address:
+    annotation: jakarta.servlet.annotation.WebServlet
+    args: [urlPatterns, value]
+
+  # The one word this style's `members` vocabulary carries (2O design §3b).
+  members: overridden_dispatch_methods
+
+  # THE VERB IS THE OVERRIDDEN METHOD, one each, and the framework serves no
+  # verb it was given no override for (CP-9 rows 4-6: `PUT /verbs` is a 405
+  # where the class declares `doGet` and `doPost`).
+  #
+  # `parameters` is not decoration. A method is identified by its name AND its
+  # parameter types in order (GUIDELINES §8.1's language rule), and CP-9 row 18
+  # measured the consequence: `doGet(String, HttpServletResponse)` overrides
+  # nothing, `HttpServlet`'s own `doGet` still applies, and the container
+  # answers 405. A name-only selector would publish that address.
+  #
+  # Six entries, not seven. `HttpServlet` declares `doTrace` alongside these
+  # (javap, both versions) and it is deliberately absent: CP-9 rows 10 and 13
+  # measured TRACE as a 405 on both containers EVEN WITH `doTrace` explicitly
+  # overridden, because the connector refuses the method before dispatch
+  # (`allowTrace`, default false). Deriving a TRACE row would publish an
+  # address the deployment does not serve. Bounded to the two containers
+  # probed (§5.4) — one configured with `allowTrace=true` serves it and we
+  # then under-report, which is the honest direction; docs/COVERAGE.md states
+  # it. This entry returns the day a probe measures a container that serves it
+  # by default.
+  #
+  # `doHead` and `doOptions` ARE here, and that is not in tension with the
+  # ruling below: an EXPLICIT override is a handler the module declared, with
+  # a symbol to attribute, and CP-9 rows 11-12 measured both served.
+  dispatch:
+    - name: doGet
+      parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
+      method: GET
+    - name: doPost
+      parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
+      method: POST
+    - name: doPut
+      parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
+      method: PUT
+    - name: doDelete
+      parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
+      method: DELETE
+    - name: doHead
+      parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
+      method: HEAD
+    - name: doOptions
+      parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
+      method: OPTIONS
+
+  # OVERRIDING `service()` REPLACES THE DISPATCH ITSELF, so the table above
+  # describes nothing about such a class: CP-9 rows 14-15 measured GET and PUT
+  # both served by one `service` override, where the table would have claimed
+  # GET and denied PUT. A wrong answer, not a partial one — so the class
+  # derives NOTHING and docs/COVERAGE.md records the shape.
+  #
+  # Both overloads, because they are two different methods (`HttpServlet`
+  # declares `protected service(HttpServletRequest, HttpServletResponse)` and
+  # inherits/overrides `public service(ServletRequest, ServletResponse)`), and
+  # overriding either one bypasses dispatch just as completely.
+  bypassed_by:
+    - name: service
+      parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
+    - name: service
+      parameters: [jakarta.servlet.ServletRequest, jakarta.servlet.ServletResponse]
+
+# THE RULING ON IMPLICIT DISPATCH (CP-9 verdict 5), recorded here because a
+# reader of this file will ask why `doGet` alone does not also publish HEAD.
+# It IS served — CP-9 rows 7-9: 200 on both containers, `Allow: GET, HEAD,
+# OPTIONS` — and OPTIONS is served by every `HttpServlet` alive. Neither is
+# derived: the code serving them lives in the container's own jar, which this
+# workspace never scans, so the row would carry either no handler or the
+# symbol of a DIFFERENT method the implicit path merely calls. This style
+# publishes one row per handler the MODULE DECLARES. A stated under-report in
+# docs/COVERAGE.md, matching the identical ruling 2O Task 6 made for Spring
+# Data REST's own HEAD/OPTIONS; it is falsified the day an endpoint row can
+# name a handler outside the module.
+
+# No `wrappers`/`nullability`/`serialization`/`known_types` (grpc-java.yml's
+# identical omission, and a sharper reason): this style's rows carry no
+# payload at all. A dispatch method's declared parameters are the container's
+# own request and response objects, and the payload is read off a stream at
+# runtime — nothing static reaches a type these blocks could describe, so
+# `request_shape`/`response_shape` stay NULL and `handler_signature` with them.

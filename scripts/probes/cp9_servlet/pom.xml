@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CP-9 probe app (2O Task 7b, Step 0).
+
+     NO Spring anywhere, deliberately. The rule CP-9 measures belongs to the
+     Servlet specification and to `jakarta.servlet.http.HttpServlet`'s own
+     dispatch — which is what `jakarta-servlet.yml` models — so the container
+     is the thing under test and a framework wrapped around it would only add
+     a second registration route to confound the one being measured. Embedded
+     Tomcat is used directly: `Tomcat.addWebapp` runs the container's OWN
+     annotation deployment scan over `WEB-INF/classes`, which is how
+     `@WebServlet` is honoured in the spec rather than by anybody's shim.
+
+     `-Dtomcat.version=` selects the container, and the version is a property
+     rather than a hard-coded coordinate because a verdict about HttpServlet's
+     implicit dispatch is evidence about the implementations that ran (§5.4). -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>sextant.probe</groupId>
+  <artifactId>cp9-servlet</artifactId>
+  <version>0.0.1</version>
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <tomcat.version>11.0.24</tomcat.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.tomcat.embed</groupId>
+      <artifactId>tomcat-embed-core</artifactId>
+      <version>${tomcat.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>cp9-servlet-0.0.1</finalName>
+  </build>
+</project>

@@ -14,6 +14,37 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Servlets: the oldest HTTP surface on the platform derives** (2O design §3b, Task 7b). A
+  new `supertype_dispatch` engine style (`jakarta-servlet.yml`) reads three pieces of
+  evidence jointly — a TYPE-level `@WebServlet` for the address, `HttpServlet` for the
+  dispatch contract, and the `doXxx` methods the class overrides for the verbs — none of
+  which any shipped style could join: an annotation-driven derivation joins METHOD symbols
+  and mints no row for a type-level annotation, and `supertype_derived`'s match requires a
+  supertype whose own facts are in the module, which a container's abstract base never is.
+  Every `urlPatterns` entry is its own endpoint, `value` is read as its alias, and the
+  member selector matches a name AND its parameter types in order, because that is how the
+  language identifies a method (GUIDELINES §8.1): `doGet(String, HttpServletResponse)`
+  overrides nothing and derives nothing, where a name-keyed selector would have published
+  an address the container answers 405 to.
+- **CP-9, measured live on two container majors** (`scripts/probes/cp9_servlet_shapes.md`,
+  Apache Tomcat 10.1.50 and 11.0.24, each column identified by the container the process
+  itself reported). Its harness is committed beside it, deploys a real webapp so the
+  CONTAINER's own annotation scan is what registers each servlet, and runs the committed
+  extractor over the same build to record what actually reaches the fact stream. Three
+  questions the design left open are now answered by measurement: **HEAD and OPTIONS ARE
+  served implicitly from `doGet`** and are deliberately NOT derived (the code serving them
+  is in a container jar nothing scans, so the row would carry either no handler or a
+  handler that does not serve that verb — the same ruling Task 6 made for Data REST);
+  **TRACE is a 405 even with `doTrace` overridden**, so `doTrace` is absent from the verb
+  map rather than publishing an address nothing serves; and **a `protected` handler's
+  recorded visibility is `other`, not `protected`**, so the style reads no visibility at
+  all — an override may never narrow visibility, which makes the check both impossible and
+  unnecessary.
+- A class overriding `service()` derives **nothing**, and so does a `GenericServlet`
+  subclass: the first replaces the verb dispatch itself and serves every verb alike
+  (measured), so the verb map would publish a wrong verb set rather than a partial one;
+  the second declares no HTTP verb semantics at all.
+
 - **The API nobody wrote a controller for: Spring Data REST routes derive** (2O design §2,
   Task 6). A new `derived_resource` engine style (`spring-data-rest.yml`) derives the CRUD
   route table from a repository INTERFACE — six routes per exposed repository plus one

@@ -21,6 +21,7 @@ from sextant.application.resolve.engines import (
     schema_operations,
     single_call,
     supertype_derived,
+    supertype_dispatch,
 )
 
 # The styles that run after every call-site and annotation style, whatever
@@ -179,6 +180,12 @@ _ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
     # `_RUNS_LAST` above.
     "supertype_derived": supertype_derived.run,
     "injected_client": injected_client.run,
+    # 2O design §3b (Task 7b): a third style deriving from its OWN evidence,
+    # for the same reason as the two above — a type-level annotation, a
+    # declared supertype and the members a class overrides are all facts of
+    # the class itself, not rows another engine minted — so it stays out of
+    # `_RUNS_LAST` too.
+    "supertype_dispatch": supertype_dispatch.run,
     # 2O design §2 (Task 6): the first style that derives rows from a
     # FRAMEWORK RULE rather than from a declaration — see `_RUNS_LAST` above
     # for why it runs after every observing style, and

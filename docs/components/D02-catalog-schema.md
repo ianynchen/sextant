@@ -86,12 +86,12 @@ scanner capability above.
 
 ---
 
-## 2. The twelve styles
+## 2. The thirteen styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
 genuinely new shape needs a new engine. (Nine as of Phase 2H; `supertype_derived` and
 `injected_client`, Phase 2O Task 5, are the tenth and eleventh; `derived_resource`, Task 6,
-is the twelfth.)
+is the twelfth; `supertype_dispatch`, Task 7b, is the thirteenth.)
 
 ### `annotation_driven`
 
@@ -1551,6 +1551,99 @@ for it) and the query METHOD's own symbol on a search row.
 **Ordering (§3): this style is in the runs-last group.** A predicted route must never
 displace an observed controller's row, and `derive_call_endpoints.sql`'s insert-if-absent
 guard only means that if every observing style has already written.
+
+### `supertype_dispatch`
+
+The thirteenth style (Phase 2O Task 7b), and the second to read a SUPERCLASS — a sibling of
+`supertype_derived`, deliberately not a widening of it. There the supertype is a generated
+base the module COMPILES IN, whose own identity-building call sites carry the address, and
+the match is gated on those calls appearing in the module's facts. Here the supertype is an
+abstract base shipped in a DEPENDENCY, which the workspace never scans and which makes no
+call anything could read, so the address comes from somewhere else entirely: **a type-level
+annotation carries the address, the supertype fixes a dispatch contract, and the members the
+class overrides name the operations.** Three pieces of evidence, jointly.
+
+It is not `annotation_driven` either, and for the reason that engine states about itself: its
+derivation joins METHOD symbols, and *"a type-level annotation mints no row of its own"*
+(`derive_endpoints.sql:398-400`). Routing this shape through `members:` plus the
+`path_fallback` that key requires would compose the type's address with each member's own
+NAME — one fabricated address per member, none of them served (2O design §3b).
+
+```yaml
+style: supertype_dispatch
+protocol: http
+direction: inbound
+requires: [annotation_args, type_annotations, typed_signatures, superclass]
+matches:
+  supertype: jakarta.servlet.http.HttpServlet
+  address:
+    annotation: jakarta.servlet.annotation.WebServlet
+    args: [urlPatterns, value]
+  members: overridden_dispatch_methods
+  dispatch:
+    - name: doGet
+      parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
+      method: GET
+  bypassed_by:
+    - name: service
+      parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
+```
+
+**`supertype` matches the DIRECT superclass, by bare descriptor.** `superclasses` carries one
+hop, and its target is module-prefixed even when it lives in a dependency jar
+(CP-9 rows 27-28), so — unlike `supertype_derived` — the target being a module-local symbol
+is neither required nor possible. A class reaching the supertype through an intermediate base
+of its own is a STATED BOUNDARY, never a guess at what the intermediate declares.
+
+**`address` is `{annotation, args}`, and `args` is a PRECEDENCE list of the argument
+spellings that carry the address.** Aliased attributes reach the fact stream as their own
+distinct keys, so both must be named; the first one present wins rather than the union,
+because a declaration writing both is one the framework itself refuses to deploy and reading
+past the key the author wrote would answer with a different attribute. **Each value is its own
+endpoint** — one declaration is N addresses, never one — and each is published VERBATIM: an
+address argument may be a pattern grammar with its own precedence rules, and normalising one
+would publish an address no probe covered. The RAW annotation table is read, never the
+composed one: the frameworks reached by this style read the literal annotation written on the
+class, resolving neither meta-annotations nor inheritance, and reading the composed view would
+derive rows for a shape nothing serves (§8.1 rule 4).
+
+**`members: overridden_dispatch_methods`** is this style's one vocabulary word, and its
+selector is `{name, parameters}` — **a member is identified by its name AND its parameter
+types in order** (GUIDELINES §8.1's language rule; arity is a consequence of that list, never
+the rule). A same-named member whose parameter types differ overrides nothing, the supertype's
+own implementation still applies, and a name-only selector publishes an address the framework
+answers 405 to — measured, CP-9 rows 18 and 26.
+
+**No visibility is read, and that is mirroring rather than relaxing.** [D00](D00-fact-schema.md)
+§5a's `visibility` is two-valued, so a `protected` handler is recorded as `other` and the
+column cannot say which (CP-9 row 24). It need not: an override may only widen the visibility
+of the member it overrides, never narrow it, so a member declared under the supertype's own
+name and parameter types IS the override at every visibility the language permits.
+
+**`bypassed_by` discards the CLASS, never merely the member.** A class overriding the
+supertype's own dispatch ENTRY POINT has replaced the lookup the table describes, and serves
+every operation alike (CP-9 rows 14-15). Deriving the table's entries anyway would publish the
+ones it names and withhold the ones it does not — a wrong answer, not a partial one. The key is
+REQUIRED and may be empty: a supertype with no bypass says so, because an omitted bypass is
+indistinguishable from a forgotten one and the forgotten one publishes wrong verbs.
+
+**One row per handler the MODULE DECLARES.** A dispatch supertype may also serve operations
+IMPLICITLY, off a member the module never overrode — measured, it does (CP-9 rows 7-9). Those
+derive nothing: the code serving them is in a dependency this workspace never scanned, so the
+row would carry either no handler at all or the symbol of a DIFFERENT member the implicit path
+merely calls, and the second is false. A stated under-report in `docs/COVERAGE.md`, on the same
+terms as the identical ruling Task 6 made for `derived_resource`'s own HEAD/OPTIONS.
+
+`resolution` is always `resolved` (an address argument is a compile-time constant of the
+declaration itself; the one that cannot be read derives no row rather than an unresolved one);
+`caller`/`peer` are NULL; and `handler_signature`/`request_shape`/`response_shape` are NULL
+together, because a dispatch member's declared parameters are the framework's own request and
+response objects rather than the wire payload — a non-NULL `handler_signature` is what tells
+`derive_endpoint_contracts.sql` a row wants owner-keyed shape expansion, so writing one would
+publish the dependency's API as the module's contract.
+
+**Ordering (§3): NOT in the runs-last group.** Every one of its three evidence pieces is a fact
+of the class itself, so it observes rather than predicts.
 
 ### `protocol_hint`
 

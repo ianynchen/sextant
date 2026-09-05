@@ -1,0 +1,553 @@
+"""Tests for the `supertype_dispatch` engine (D02 §2's `supertype_dispatch`
+style, 2O design §3b, Task 7b).
+
+Facts are hand-built to mirror CP-9's real, checkpoint-recorded shapes exactly
+(`scripts/probes/cp9_servlet_shapes.md`, measured against Apache Tomcat 10.1.50
+and 11.0.24): `@WebServlet` arrives as a TYPE-level annotation whose `args`
+carry `urlPatterns` or `value` as a LIST even when one string was written
+(rows 20-23); a `protected` handler's recorded `visibility` is `other`, never
+`protected` (row 24); a handler's parameter types are readable off its own
+signature (rows 25-26); and the `extends` edge is present and module-prefixed
+even though `HttpServlet` lives in a container jar the workspace never scanned
+(rows 27-28). Rather than compiling real class files per case — which
+`scripts/probes/cp9_servlet/` already did once, for every one of these shapes,
+and recorded.
+
+Every address below is invented (`/orders/*`, never a pattern the probe
+served): the shipped catalog's live answer against real container bytecode
+belongs to the probe, not here (the `test_supertype_derived.py` precedent this
+file otherwise mirrors).
+"""
+
+from pathlib import Path
+
+import pytest
+
+from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve.endpoints import derive_endpoints
+from sextant.domain.closed_sets import ConstructKind, OriginTier
+from sextant.domain.factfile import write_fact_file
+from sextant.domain.facts import (
+    AnnotationFact,
+    AnnotationUse,
+    Document,
+    Parameter,
+    Signature,
+    SymbolFact,
+    TypeRef,
+)
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
+from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+CATALOGS = catalogs_dir()
+
+CAPABILITIES = {"annotation_args", "type_annotations", "typed_signatures", "superclass"}
+
+# The module-coordinates prefix a real symbol fact's own `symbol` carries
+# (D00 §5a) — `test_supertype_derived.py`'s own `_MODULE` precedent.
+_MODULE = "sextant-jvm maven com.acme/legacy-web 1.0.0 "
+
+DISPATCH_BASE = "jakarta/servlet/http/HttpServlet#"
+AGNOSTIC_BASE = "jakarta/servlet/GenericServlet#"
+ADDRESS_ANNOTATION = "jakarta/servlet/annotation/WebServlet#"
+REQUEST = "jakarta/servlet/http/HttpServletRequest#"
+RESPONSE = "jakarta/servlet/http/HttpServletResponse#"
+AGNOSTIC_REQUEST = "jakarta/servlet/ServletRequest#"
+AGNOSTIC_RESPONSE = "jakarta/servlet/ServletResponse#"
+SERVLET = "com/acme/legacy/OrderServlet#"
+
+_DISPATCH_PARAMETERS = [
+    "jakarta.servlet.http.HttpServletRequest",
+    "jakarta.servlet.http.HttpServletResponse",
+]
+_MATCHES: dict[str, object] = {
+    "supertype": "jakarta.servlet.http.HttpServlet",
+    "address": {
+        "annotation": "jakarta.servlet.annotation.WebServlet",
+        "args": ["urlPatterns", "value"],
+    },
+    "members": "overridden_dispatch_methods",
+    "dispatch": [
+        {"name": "doGet", "parameters": _DISPATCH_PARAMETERS, "method": "GET"},
+        {"name": "doPost", "parameters": _DISPATCH_PARAMETERS, "method": "POST"},
+        {"name": "doPut", "parameters": _DISPATCH_PARAMETERS, "method": "PUT"},
+        {"name": "doDelete", "parameters": _DISPATCH_PARAMETERS, "method": "DELETE"},
+        {"name": "doHead", "parameters": _DISPATCH_PARAMETERS, "method": "HEAD"},
+        {"name": "doOptions", "parameters": _DISPATCH_PARAMETERS, "method": "OPTIONS"},
+    ],
+    "bypassed_by": [
+        {"name": "service", "parameters": _DISPATCH_PARAMETERS},
+        {
+            "name": "service",
+            "parameters": ["jakarta.servlet.ServletRequest", "jakarta.servlet.ServletResponse"],
+        },
+    ],
+}
+
+
+def _document() -> Document:
+    return Document(
+        document_id="doc_1",
+        relative_path="com/acme/legacy/OrderServlet.java",
+        module_id="com.acme:legacy-web",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.16",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+
+
+def _class(symbol: str = SERVLET, *, superclass: str = DISPATCH_BASE) -> SymbolFact:
+    """One declared class carrying capability 9.13's `superclass` edge.
+
+    The edge is module-prefixed even though its target lives in a container
+    jar nothing here scanned — CP-9 row 27, and the reason this style matches
+    on the BARE descriptor rather than on `supertype_derived`'s own
+    "the extends target is itself in the module's facts" test.
+    """
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + symbol,
+        construct_kind=ConstructKind.CLASS,
+        superclass=_MODULE + superclass,
+    )
+
+
+def _method(
+    name: str, *parameters: str, owner: str = SERVLET, visibility: str = "other"
+) -> SymbolFact:
+    """One declared method with its parameter types.
+
+    `visibility` defaults to `other`, which is what CP-9 row 24 measured for a
+    `protected` handler: D00 §5a's column is two-valued and cannot say
+    `protected`, so no test here may depend on it saying so.
+    """
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=f"{_MODULE}{owner}{name}(sig_{name}).",
+        construct_kind=ConstructKind.METHOD,
+        enclosing=_MODULE + owner,
+        visibility=visibility,
+        signature=Signature(
+            parameters=[Parameter(type=TypeRef(symbol=symbol)) for symbol in parameters],
+            returns=TypeRef(symbol="void#"),
+        ),
+    )
+
+
+def _annotated(args: dict[str, object], *, owner: str = SERVLET) -> AnnotationFact:
+    return AnnotationFact(
+        document_id="doc_1",
+        target=_MODULE + owner,
+        use=AnnotationUse(annotation=ADDRESS_ANNOTATION, args=args),  # type: ignore[arg-type]
+        retention="RUNTIME",
+    )
+
+
+def _catalog(matches: dict[str, object] | None = None) -> Catalog:
+    """The SHIPPED catalog unless a test is about a malformed one.
+
+    Every behaviour test below runs `jakarta-servlet.yml` itself rather than a
+    copy of it — which is what makes each `declines` marker a statement about
+    the catalog that ships (`tests/architecture/test_catalog_near_miss_coverage.py`)
+    rather than about a fixture that could drift away from it. `_MATCHES`
+    above is the same vocabulary written out, and it is used only by the
+    validation cases, which need a block to break.
+    """
+    if matches is None:
+        return next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "jakarta-servlet")
+    return Catalog(
+        id="test-jakarta-servlet",
+        style="supertype_dispatch",
+        protocol="http",
+        direction="inbound",
+        requires=("annotation_args", "type_annotations", "typed_signatures", "superclass"),
+        matches=matches,
+        source=Path("test-jakarta-servlet.yml"),
+    )
+
+
+def _rows(tmp_path: Path, facts: list, catalog: Catalog | None = None) -> list[dict]:
+    write_fact_file(tmp_path / "facts" / "OrderServlet.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [catalog or _catalog()], capabilities=CAPABILITIES)
+    assert skipped == []
+    rows = [dict(row) for row in workspace.query("endpoints")]
+    workspace.close()
+    return rows
+
+
+def _identities(rows: list[dict]) -> set[tuple[str | None, str]]:
+    return {(row["method"], str(row["path"])) for row in rows}
+
+
+# --- (a) the address: every pattern is its own endpoint --------------------
+
+
+def test_each_url_pattern_is_its_own_endpoint(tmp_path: Path):
+    """CP-9 rows 1-2: one class, an array-valued address argument, and BOTH
+    patterns served. One declaration is N endpoints, never one — a reader
+    taking only the first would silently lose half a module's surface."""
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders/*", "/legacy/orders/*"]}),
+    ]
+    rows = _rows(tmp_path, facts)
+
+    assert _identities(rows) == {("GET", "/orders/*"), ("GET", "/legacy/orders/*")}
+    assert {row["protocol"] for row in rows} == {"http"}
+    assert {row["direction"] for row in rows} == {"inbound"}
+    assert {row["resolution"] for row in rows} == {"resolved"}
+    assert {row["handler"] for row in rows} == {f"{_MODULE}{SERVLET}doGet(sig_doGet)."}
+
+
+def test_the_alias_argument_names_the_same_address(tmp_path: Path):
+    """CP-9 rows 3 and 22: `value` and `urlPatterns` are the same attribute
+    under two spellings, and they reach the facts as DIFFERENT argument keys.
+    A catalog naming only one would derive nothing for half the estate."""
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"value": ["/orders/*"]}),
+    ]
+
+    assert _identities(_rows(tmp_path, facts)) == {("GET", "/orders/*")}
+
+
+def test_a_single_string_address_reads_the_same_as_a_one_element_list(tmp_path: Path):
+    """CP-9 row 23 measured the one-element ARRAY the compiler writes for
+    `urlPatterns = "/orders/*"`. D00 §5's `LiteralValue` also admits a bare
+    string, so both spellings must reach the same address rather than the
+    scalar one deriving nothing."""
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": "/orders/*"}),
+    ]
+
+    assert _identities(_rows(tmp_path, facts)) == {("GET", "/orders/*")}
+
+
+def test_the_pattern_is_published_verbatim_rather_than_interpreted(tmp_path: Path):
+    """A servlet pattern is a grammar (`/legacy/*`, `*.do`), not a path to be
+    composed or canonicalised. CP-9 measured only that a declared pattern is
+    served at its own literal spelling, so that is what is published — an
+    engine that normalised `*.do` would publish an address no probe covered."""
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["*.do"]}),
+    ]
+
+    assert _identities(_rows(tmp_path, facts)) == {("GET", "*.do")}
+
+
+# --- (b) the verb: one row per handler the module DECLARES ------------------
+
+
+def test_one_row_per_declared_dispatch_override(tmp_path: Path):
+    """CP-9 rows 4-6: the verb is the overridden method's own, one each, and
+    each row names that override as its handler."""
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _method("doPost", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+    rows = _rows(tmp_path, facts)
+
+    assert _identities(rows) == {("GET", "/orders"), ("POST", "/orders")}
+    by_method = {row["method"]: row["handler"] for row in rows}
+    assert by_method["POST"] == f"{_MODULE}{SERVLET}doPost(sig_doPost)."
+
+
+def test_an_explicitly_overridden_head_or_options_derives_its_own_row(tmp_path: Path):
+    """CP-9 rows 11-12: both are served, and — unlike the implicit case below
+    — the module DECLARED the handler, so there is a symbol to attribute and a
+    declaration to report."""
+    facts = [
+        _class(),
+        _method("doHead", REQUEST, RESPONSE),
+        _method("doOptions", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _identities(_rows(tmp_path, facts)) == {("HEAD", "/orders"), ("OPTIONS", "/orders")}
+
+
+def test_implicitly_dispatched_verbs_derive_no_row_of_their_own(tmp_path: Path):
+    """CP-9 rows 7-9 and verdict 5 — THE RULING, pinned.
+
+    `HttpServlet` really does serve HEAD and OPTIONS from a class declaring
+    only `doGet` (200 on both containers, `Allow: GET, HEAD, OPTIONS`). They
+    are nonetheless not derived, because the code serving them is in a
+    container jar this workspace never scanned: a HEAD row would carry either
+    a NULL handler or `doGet`'s symbol, and the second is false — `doGet` is
+    CALLED BY the HEAD path, it does not serve HEAD. It is also the ruling
+    this phase already made for the same two verbs on Spring Data REST
+    (`docs/COVERAGE.md`), and two catalogs answering one question two ways
+    would be the §6 blend. A stated under-report, falsified the day an
+    endpoint row can name a handler outside the module.
+    """
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _identities(_rows(tmp_path, facts)) == {("GET", "/orders")}
+
+
+def test_a_trace_override_derives_nothing_because_the_container_refuses_trace(tmp_path: Path):
+    """CP-9 rows 10 and 13, verdict 7: TRACE is a 405 on both containers even
+    with `doTrace` EXPLICITLY overridden — the connector refuses the method
+    before dispatch. `doTrace` is therefore absent from the catalog's verb
+    map, and a class declaring only it derives nothing rather than publishing
+    an address the deployment does not serve."""
+    facts = [
+        _class(),
+        _method("doTrace", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _rows(tmp_path, facts) == []
+
+
+def test_the_payload_columns_stay_null_because_the_parameters_are_the_container_s(
+    tmp_path: Path,
+):
+    """A dispatch handler's declared parameters are the container's own
+    request and response objects, never the wire payload — a servlet reads its
+    payload off a stream, which no static read can see. So the row carries no
+    `handler_signature` either: that column is what tells
+    `derive_endpoint_contracts.sql` a row WANTS owner-keyed shape expansion,
+    and expanding these two types would publish the container's API as the
+    module's contract."""
+    facts = [
+        _class(),
+        _method("doPost", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+    [row] = _rows(tmp_path, facts)
+
+    assert row["request_shape"] is None
+    assert row["response_shape"] is None
+    assert row["handler_signature"] is None
+    assert row["caller"] is None and row["peer"] is None
+
+
+# --- (c) the near-misses (§10), each paired with a positive above -----------
+
+
+@pytest.mark.declines("jakarta-servlet")
+def test_a_dispatch_subclass_with_no_address_annotation_derives_nothing(tmp_path: Path):
+    """CP-9 rows 19 and 29: the annotation IS the registration. A class
+    extending the dispatch supertype and overriding `doGet` — every other
+    conjunct satisfied — is a 404 without it, and carries no annotation fact
+    at all, so the absence is read rather than inferred.
+
+    Paired positive: `test_each_url_pattern_is_its_own_endpoint`, the same
+    class WITH the annotation.
+    """
+    facts = [_class(), _method("doGet", REQUEST, RESPONSE)]
+
+    assert _rows(tmp_path, facts) == []
+
+
+@pytest.mark.declines("jakarta-servlet")
+def test_a_class_overriding_service_derives_nothing(tmp_path: Path):
+    """CP-9 rows 14-15, verdict 8. `service(HttpServletRequest,
+    HttpServletResponse)` is the very method that reads the request's verb and
+    dispatches to `doXxx`; a class that overrides it serves GET and PUT alike
+    (200 and 200), so the verb map does not describe it. Applying the map
+    anyway would publish `GET` and withhold `PUT` — a WRONG answer, not a
+    partial one — which is why the bypass discards the class outright rather
+    than merely skipping the `service` member.
+
+    Paired positive: `test_one_row_per_declared_dispatch_override`, the same
+    class without the `service` override.
+    """
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _method("service", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _rows(tmp_path, facts) == []
+
+
+@pytest.mark.declines("jakarta-servlet")
+def test_a_class_overriding_the_protocol_agnostic_service_derives_nothing(tmp_path: Path):
+    """The second bypass signature, and the reason `bypassed_by` is a LIST of
+    `{name, parameters}` rather than a list of names: `service(ServletRequest,
+    ServletResponse)` is a different method from the one above — same name,
+    different parameter types — and overriding it bypasses dispatch just as
+    completely."""
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _method("service", AGNOSTIC_REQUEST, AGNOSTIC_RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _rows(tmp_path, facts) == []
+
+
+@pytest.mark.declines("jakarta-servlet")
+def test_a_protocol_agnostic_supertype_derives_nothing(tmp_path: Path):
+    """CP-9 rows 16-17 and 28, verdict 9. A `GenericServlet` subclass carries
+    the SAME address annotation and serves GET and PUT alike through one
+    protocol-agnostic `service` — it declares no verb dispatch at all. It is
+    excluded structurally, by its own `superclass` not being the one the
+    catalog names, rather than by a special case."""
+    facts = [
+        _class(superclass=AGNOSTIC_BASE),
+        _method("service", AGNOSTIC_REQUEST, AGNOSTIC_RESPONSE, visibility="public"),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _rows(tmp_path, facts) == []
+
+
+@pytest.mark.declines("jakarta-servlet")
+def test_a_same_named_method_with_other_parameter_types_derives_nothing(tmp_path: Path):
+    """CP-9 rows 18 and 26 — GUIDELINES §8.1's language rule, pinned.
+
+    A method identifies by name AND parameter types in order; arity is a
+    consequence of that list, never the rule. `doGet(String,
+    HttpServletResponse)` therefore overrides nothing, the supertype's own
+    `doGet` still applies, and the container answers 405. A member selector
+    keyed on the NAME alone would publish `GET /orders` here — an address
+    nothing serves.
+
+    Paired positive: `test_each_url_pattern_is_its_own_endpoint`, the same
+    method name with the parameter types that DO make it an override.
+    """
+    facts = [
+        _class(),
+        _method("doGet", "java/lang/String#", RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _rows(tmp_path, facts) == []
+
+
+@pytest.mark.declines("jakarta-servlet")
+def test_an_address_annotation_naming_no_pattern_derives_nothing(tmp_path: Path):
+    """An address that cannot be read is not an address. `@WebServlet(name =
+    "orders")` carries a servlet NAME and no URL at all; publishing the class
+    at an empty path would address nothing, which is the defect Task 7 fixed
+    for the annotation engine's own empty compositions."""
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"name": "orders"}),
+    ]
+
+    assert _rows(tmp_path, facts) == []
+
+
+@pytest.mark.declines("jakarta-servlet")
+def test_a_declared_address_with_no_dispatch_override_derives_nothing(tmp_path: Path):
+    """The address alone is not a boundary: a registered class overriding no
+    dispatch method answers 405 to every verb (CP-9 row 6 is that default
+    answering for one verb). "The registration is the evidence" cuts both
+    ways — this is the other conjunct missing."""
+    facts = [_class(), _annotated({"urlPatterns": ["/orders"]})]
+
+    assert _rows(tmp_path, facts) == []
+
+
+def test_an_unrelated_supertype_derives_nothing_from_this_style(tmp_path: Path):
+    """Ordinary class inheritance is not evidence of anything — the C-1 lesson
+    `supertype_derived` learned, restated for a style whose gate is a
+    supertype the catalog NAMES. A class extending some abstract base of its
+    own, annotated or not, is invisible here."""
+    facts = [
+        _class(superclass="com/acme/legacy/AbstractJob#"),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _rows(tmp_path, facts) == []
+
+
+# --- (d) two classes, and the identity dedup --------------------------------
+
+
+def test_two_classes_sharing_one_pattern_and_verb_derive_one_row(tmp_path: Path):
+    """D02 §5's wire identity is `(protocol, direction, method, path)`, and two
+    declarations of it are one endpoint. Deterministic in which handler
+    survives: the first by the fact stream's own symbol order, which every
+    named query is sorted by (NFR-1)."""
+    other = "com/acme/legacy/AaaServlet#"
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+        _class(other),
+        _method("doGet", REQUEST, RESPONSE, owner=other),
+        _annotated({"urlPatterns": ["/orders"]}, owner=other),
+    ]
+    rows = _rows(tmp_path, facts)
+
+    assert _identities(rows) == {("GET", "/orders")}
+    assert rows[0]["handler"] == f"{_MODULE}{other}doGet(sig_doGet)."
+
+
+# --- (e) the catalog is refused before any class is matched -----------------
+
+
+def _without(key: str) -> dict[str, object]:
+    return {name: value for name, value in _MATCHES.items() if name != key}
+
+
+@pytest.mark.parametrize(
+    "matches",
+    [
+        _without("supertype"),
+        _without("address"),
+        _without("members"),
+        _without("dispatch"),
+        _without("bypassed_by"),
+    ],
+)
+def test_a_catalog_missing_a_required_block_is_refused(tmp_path: Path, matches: dict):
+    """The `interface_implementation._validate_matches` precedent: a broken
+    catalog fails at the file that can be fixed, never as a silently empty
+    derivation. `bypassed_by` is required even though it may be empty — a
+    style whose supertype has no bypass says so explicitly rather than by
+    omission, because an omitted bypass is indistinguishable from a forgotten
+    one and the forgotten one publishes wrong verbs."""
+    with pytest.raises(CatalogError):
+        _rows(tmp_path, [_class()], _catalog(matches))
+
+
+@pytest.mark.parametrize(
+    "matches",
+    [
+        {**_MATCHES, "members": "public_methods"},
+        {**_MATCHES, "address": {"annotation": "a.B"}},
+        {**_MATCHES, "address": {"annotation": "a.B", "args": []}},
+        {**_MATCHES, "dispatch": []},
+        {**_MATCHES, "dispatch": [{"name": "doGet", "method": "GET"}]},
+        {**_MATCHES, "dispatch": [{"name": "doGet", "parameters": ["a.B"]}]},
+        {**_MATCHES, "bypassed_by": [{"name": "service"}]},
+    ],
+)
+def test_a_catalog_whose_vocabulary_is_malformed_is_refused(tmp_path: Path, matches: dict):
+    """Each of these is WRONG without being INVALID YAML, which is exactly the
+    §10 test for a key needing a guard. A `dispatch` entry with no
+    `parameters` is the sharpest: it would read as a name-only selector, which
+    CP-9 row 18 proves publishes an address nothing serves."""
+    with pytest.raises(CatalogError):
+        _rows(tmp_path, [_class()], _catalog(matches))

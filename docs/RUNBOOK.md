@@ -325,6 +325,27 @@ collision is a routing-ambiguity finding", "the shipped jar-presence mechanism")
 rather than as specification. Descriptive prose about a design's *consequences*
 is easy to promote into a component that was never built.
 
+### A column that exists is not a column that answers
+
+2O Task 7b's brief said, of servlet handlers being `protected`: *"Is `protected`
+visibility recorded? (It is — `workspace.py:163-168` projects it — confirm
+rather than assume.)"* The projection is real, the citation is correct, and the
+answer is still no: D00 §5a's `visibility` is TWO-VALUED, so a `protected`
+member is recorded as `other` and the column cannot say which. A design built on
+"widen the selector from `public` to `protected`" would have had nothing to
+widen it to.
+
+This is §5.3's second form — a mechanism that IS read but answers differently
+than assumed — and it cost nothing here only because the brief said "confirm
+rather than assume" and the probe printed the literal value. **The cheap check is
+to read the VALUE the mechanism produces, not the line that produces it.** A
+grep proves existence; only a value proves the answer.
+
+(The design survived intact, for a reason worth keeping: the language forbids an
+override from narrowing visibility, so the column was never needed. A rule that
+mirrors the language rather than the fact stream had one fewer thing to get
+wrong.)
+
 ### The rule that matters most was the one not written down
 
 Phase 2O shipped an engine that minted a gRPC endpoint from `NightlyJob extends

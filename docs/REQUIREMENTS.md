@@ -94,6 +94,21 @@ and a module that does not declare the framework — or one whose build system c
 the question, as Maven cannot for a transitively-inherited starter — is reported SKIPPED
 with its reason rather than derived or silently omitted.
 
+**Phase 2O Task 7b adds the oldest HTTP surface on the platform.** A Jakarta Servlet
+carries its address on a TYPE-level `@WebServlet` and its verb on the `doXxx` method it
+overrides, which no shipped style could join — an annotation-driven derivation joins method
+symbols, and `supertype_derived`'s match requires a supertype whose own facts are in the
+module. The new `supertype_dispatch` style reads all three pieces jointly: the type
+annotation for the address, a catalog-named supertype for the dispatch contract, and the
+members the class overrides — selected by name AND parameter types, which is how the
+language identifies one — for the operations
+([COVERAGE.md](COVERAGE.md) §5.1, measured live in `scripts/probes/cp9_servlet_shapes.md`
+against two container versions). Its boundaries are stated rather than closed: the
+annotation is one of three registration routes (`web.xml` and `ServletContext.addServlet`
+derive nothing), the `javax.servlet` spelling is unprobed and unshipped, and the HEAD and
+OPTIONS the container serves implicitly are deliberately not derived — the code serving
+them is not in the module, and the same ruling was already made for Data REST above.
+
 ### FR-4 — Shape catalog
 
 Sextant produces the shape of every payload crossing a boundary: its fields, their
