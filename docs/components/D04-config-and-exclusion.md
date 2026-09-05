@@ -199,6 +199,20 @@ indistinguishable from an unconfigured module for as long as nobody checked.
 >   `.sextantignore` is a stated fast-follow, not read today. One file, at the repository
 >   root, and every pattern in it is matched against a path made relative to THAT root —
 >   never to whatever resource or schema root a given walk happens to start from.
+>
+>   **Correction (2026-09-05, principles sweep `A-M16`).** That sentence describes what
+>   ships only since this correction. `analyze` loaded the file at the MODULE root, and
+>   `api.py` analyzes each submodule of a reactor with its own root — so a reactor-root
+>   `.sextantignore` was read for no submodule at all, and a pattern written relative to the
+>   reactor root would not have matched even if it had been. It is now loaded at the root
+>   the run was invoked against, which is the reactor's for a submodule and the module's own
+>   for a single-module repository, where the two coincide and nothing changes. **The
+>   built-in layer was never affected**: it applies at every depth, so this was a coverage
+>   gap in the repository-authored layer and never a credential leak. **Still true of the
+>   enrichment jail's own load** (`api.py::_tool_executor_for`): `sextant module enrich` is
+>   invoked against one module and has no reactor model to ask, so a reactor-root file does
+>   not reach it — stated here rather than fixed, because inferring a repository root from a
+>   directory is a rule nobody has decided.
 > - **The JVM subtlety below does not apply.** The extractor's `.class` walk is out of
 >   scope (ledgered, rarely wanted); `.sextantignore` governs the Python-side file
 >   enumerations only — config readers, schema readers, resource walks, and the

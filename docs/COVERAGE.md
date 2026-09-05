@@ -1641,6 +1641,20 @@ Measured at kafka-clients 3.6.2 and spring-kafka 3.1.4 (CP-12 Q6/Q7/Q8) and pinn
 by CP-10; every new row's argument positions are its sibling's, because in each case the
 addition is a trailing argument.
 
+**A serializer stamp reaches every `kafka/outbound` row in the module, whatever derived it**
+(principles sweep §7.4, settled). `stamp_media.sql` matches on `(protocol, direction)` and
+nothing else. That is the mechanism rather than a defect for the templates —
+`spring-kafka-media.yml` derives no rows of its own and exists only to fill a column on rows
+other engines minted — and it is an **over-report** for a raw `KafkaProducer` row, which builds
+its own `Properties` and reads no `spring.kafka.*` key. `produces`/`consumes` are carried data,
+never identity: no address, verb or protocol moves, and dedup and merge never compare them.
+Bounded by the dependency gate, so a module using the raw producer ALONE is never stamped.
+Narrowing it means declaring which catalogs a rule applies to, which is a D02 §2d schema
+change. **Falsified by** a module that declares spring-kafka and also publishes through a raw
+`KafkaProducer` configured differently. **Not** an over-report across modules: `endpoints`
+carries no module column, every module gets its own workspace, and one module's configuration
+has no path to another's rows.
+
 **`KafkaConsumer.assign(Collection<TopicPartition>)` is a stated boundary and still derives
 nothing.** Its argument is a collection of `TopicPartition` **objects**, and the topic name is
 a constructor argument inside each one — two hops from the call site, where every `channel_via`

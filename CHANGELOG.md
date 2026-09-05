@@ -192,6 +192,34 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-M16`: `.sextantignore` was loaded at the module root, so a reactor's never reached a
+  submodule** (principles sweep §3.3). D04 §3 is emphatic and is itself an amendment — "One
+  file, at the **repository root**, and every pattern in it is matched against a path made
+  relative to THAT root" — and `analyze` loaded it at `module.root` while `api.py` analyzes each
+  submodule with its own root. Both halves failed: the file was never read, and a pattern
+  written relative to the reactor root would not have matched if it had been. The rules are now
+  loaded at the root the run was invoked against, and the walk relativizes against
+  `ignore.repo_root` rather than `module.root` so the two cannot drift apart by construction.
+  A single-module repository is unchanged — the two roots coincide, which is why the old spelling
+  looked right. **A module OUTSIDE the analysed root keeps its own**:
+  `<module>../orders-service</module>` is legal Maven and `fixtures/orders-reactor` is exactly
+  that shape, and a path outside a root has no root-relative form for a pattern to address. The
+  built-in layer applies at every depth and always did, so this was a coverage gap in the
+  repository-authored layer and never a credential leak. The enrichment jail's own
+  load is unchanged and stated in D04: `enrich` is invoked against one module and has no reactor
+  model to ask.
+
+- **`stamp_media.sql`'s reach is settled** (principles sweep §7.4, where two sweeps touched the
+  file and neither read it). Sweep 2's claim — "a stamp lands only where every resolved
+  environment agrees, and never over a non-NULL column" — is TRUE, and two shipped tests already
+  proved each half. Sweep 1's is half true: the UPDATE really does match on
+  `(protocol, direction)` alone, so it stamps rows other catalogs derived — which is the
+  mechanism, since `spring-kafka-media.yml` derives none of its own — but the CROSS-MODULE half
+  is impossible, because `endpoints` has no module column, every module gets its own workspace,
+  and `resolve()` runs once per module. What remains is an over-report onto a raw
+  `KafkaProducer` row within one module, on a carried column rather than an identity one,
+  bounded by the dependency gate and now stated in COVERAGE and pinned in both directions.
+
 - **CP-13: what three frameworks do with an INHERITED member is now measured**
   (`scripts/probes/cp13_inherited_members.md`). `A-M13`, `A-M14` and `A-M15` encode the same
   invented rule — a type's members are the ones it DECLARES — and the sweep graded all three

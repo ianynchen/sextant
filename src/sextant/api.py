@@ -496,10 +496,19 @@ def _run_analyze(
     workspace_dir: Path,
     allow_resolve: bool,
     progress_factory: Callable[[], AbstractContextManager[Progress]] | None,
+    ignore_root: Path | None = None,
 ) -> _StageAnalyzeResult:
     """One module, analyzed into one workspace, and its `metadata.json`
     written — the body every `analyze` invocation shares, whether `path` is
-    a single-module root or one module inside a just-walked reactor."""
+    a single-module root or one module inside a just-walked reactor.
+
+    `ignore_root` is the root a `.sextantignore` sits at and every pattern in
+    it is written against (D04 §3, `A-M16`). It is the module's own root for a
+    single-module repository — where the two coincide, which is the case D04
+    describes — and the REACTOR root for a submodule, which is the case that
+    was wrong: a reactor-root ignore file reached no submodule at all, and a
+    pattern written relative to the reactor root would not have matched if it
+    had. Defaulted to `path` so every existing caller is unchanged."""
     render_dir = workspace_dir / "render"
     if render_dir.is_dir():
         shutil.rmtree(render_dir)
@@ -514,6 +523,7 @@ def _run_analyze(
                 progress,
                 [_KnownModuleDetector(module, notes)],
                 allow_resolve=allow_resolve,
+                ignore_root=ignore_root or path,
             )
         write_metadata(
             workspace_dir / "metadata.json",
@@ -541,6 +551,7 @@ def _analyzed(
     progress: Progress,
     detectors: Sequence[Detector],
     allow_resolve: bool = False,
+    ignore_root: Path | None = None,
 ) -> _StageAnalyzeResult:
     """`analyze`, with the one failure a USER caused turned into the message
     a user reads: a malformed `.sextant.yml` is Sextant's own input written
@@ -557,6 +568,7 @@ def _analyzed(
             readers=READERS,
             interpret=_JvmDescriptorInterpreter(),
             allow_resolve=allow_resolve,
+            ignore_root=ignore_root,
         )
     except SextantConfigError as refused:
         raise ConfigurationError(str(refused)) from refused
@@ -593,7 +605,18 @@ def _analyze_reactor(
         workspace_dir = _workspace_dir_of(module.root, None)
         try:
             stage_result = _run_analyze(
-                module.root, module, model.notes, workspace_dir, allow_resolve, progress_factory
+                module.root,
+                module,
+                model.notes,
+                workspace_dir,
+                allow_resolve,
+                progress_factory,
+                # `A-M16`: the reactor root, not the submodule's. D04 §3 is
+                # emphatic — "One file, at the repository root, and every
+                # pattern in it is matched against a path made relative to
+                # THAT root" — and loading at `module.root` meant a
+                # reactor-root `.sextantignore` reached no submodule at all.
+                ignore_root=path,
             )
         except Exception as failure:  # deliberately broad, see below
             # A batch run's own failure must name WHICH module failed — left

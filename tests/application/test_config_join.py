@@ -1567,3 +1567,112 @@ def test_spring_cloud_stream_still_derives_for_a_module_that_does_declare_it(
 
     assert skipped == []
     assert {row["handler"] or row["caller"] for row in rows} != set()
+
+
+# --- the `stamp_media.sql` settlement (principles sweep §7.4) ---------------
+#
+# Two sweeps touched this file and neither read it. Sweep 1 (backlog row 33)
+# alleged that the UPDATE matches on `(protocol, direction)` ONLY — no
+# `catalog_id`, no module scoping — so one module's
+# `spring.kafka.producer.value-serializer` would stamp every `kafka/outbound`
+# row in the workspace including rows other catalogs derived, and marked the
+# row unverified. Sweep 2 (#25) recorded `spring-kafka-media.yml`'s own
+# narrower claim — "a stamp lands only where every resolved environment agrees,
+# and never over a non-NULL column" — as UNVERIFIED for the opposite reason.
+#
+# The SQL settles both. Sweep 2's claim is TRUE, and two tests above already
+# proved each half against the engine. Sweep 1's is half true: the match really
+# is `(protocol, direction)` alone, so it does reach rows another catalog
+# derived — which is this catalog's whole PURPOSE, since it derives none of its
+# own — but the CROSS-MODULE half is impossible. `endpoints` has no `module`
+# column at all (`storage/duckdb/schema.sql`), `api.py` gives every submodule
+# its own workspace, and `resolve()` runs once per module, so one module's
+# configuration cannot reach another module's rows by any path.
+#
+# What is left is the reach WITHIN one module, and the two tests below pin it
+# against the SHIPPED catalog rather than an invented one, because the question
+# is about a real key on a real row set.
+
+_KAFKA_MEDIA_KEY = "spring.kafka.producer.value-serializer"
+_JSON_SERIALIZER = "org.springframework.kafka.support.serializer.JsonSerializer"
+
+
+def _shipped_media_catalog() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-kafka-media")
+
+
+def test_a_media_stamp_reaches_every_kafka_row_in_the_module_whatever_derived_it(
+    tmp_path: Path,
+):
+    """§7.4, settled and pinned. `stamp_media.sql` matches on
+    `(protocol, direction)` and nothing else, so a `spring.kafka.*` serializer
+    stamps rows `kafka-clients.yml` derived from a RAW `KafkaProducer` as well
+    as rows `spring-kafka-template.yml` derived.
+
+    That is deliberate for the template — `spring-kafka-media.yml` derives no
+    rows of its own and exists only to stamp others' — and it is an
+    OVER-REPORT for the raw producer, which builds its own `Properties` and
+    reads no `spring.kafka.*` key. The column is `produces`, carried data
+    rather than identity: no address, verb or protocol is affected, and dedup
+    and merge never compare it. It is recorded here rather than fixed because
+    scoping a rule to a set of catalog ids is a D02 §2d schema change, and
+    because the fix must not throw away the cross-catalog reach the rule needs.
+
+    Bounded by the dependency gate: `config_join` joined `DEPENDENCY_GATED` in
+    round 1a, so this catalog runs only on a module whose build declares
+    `org.springframework.kafka:spring-kafka` — a module using the raw producer
+    ALONE is never stamped at all. **Falsified by** a module that declares
+    spring-kafka and also publishes through a raw `KafkaProducer` configured
+    differently."""
+    workspace = _workspace(
+        tmp_path,
+        config=[
+            (_KAFKA_MEDIA_KEY, "default", _JSON_SERIALIZER),
+            (_KAFKA_MEDIA_KEY, "prod", _JSON_SERIALIZER),
+        ],
+    )
+    _seed(
+        workspace,
+        {"path": "orders", "catalog_id": "spring-kafka-template"},
+        {"path": "raw-audit", "catalog_id": "kafka-clients"},
+    )
+    config_join.run(workspace, _shipped_media_catalog())
+    rows = {row["path"]: row for row in _rows(workspace)}
+    workspace.close()
+
+    assert rows["orders"]["produces"] == JSON_MEDIA
+    assert rows["raw-audit"]["produces"] == JSON_MEDIA
+
+
+def test_a_media_stamp_reaches_no_row_of_another_protocol_or_direction(tmp_path: Path):
+    """The near-miss for the same settlement, and the half sweep 1's row does
+    NOT allege: the two columns the rule DOES name are honoured exactly. A
+    `kafka/inbound` row and an `amqp/outbound` row sit beside the stamped ones
+    and neither is touched, so the reach is wide within one `(protocol,
+    direction)` pair and zero outside it.
+
+    It discriminates: dropping either predicate from the UPDATE's WHERE makes
+    this fail with a producer's serializer stamped onto a consumer's row."""
+    workspace = _workspace(
+        tmp_path,
+        config=[
+            (_KAFKA_MEDIA_KEY, "default", _JSON_SERIALIZER),
+            (_KAFKA_MEDIA_KEY, "prod", _JSON_SERIALIZER),
+        ],
+    )
+    _seed(
+        workspace,
+        {"path": "orders"},
+        {"path": "orders-in", "direction": "inbound"},
+        {"path": "orders-amqp", "protocol": "amqp"},
+    )
+    config_join.run(workspace, _shipped_media_catalog())
+    rows = {row["path"]: row for row in _rows(workspace)}
+    workspace.close()
+
+    assert rows["orders"]["produces"] == JSON_MEDIA
+    assert (rows["orders-in"]["produces"], rows["orders-in"]["consumes"]) == (None, None)
+    assert (rows["orders-amqp"]["produces"], rows["orders-amqp"]["consumes"]) == (None, None)

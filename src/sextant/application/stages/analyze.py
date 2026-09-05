@@ -92,7 +92,12 @@ def _config_files(
     """
     return tuple(
         file
-        for file in list_files(root, module.root, ignore)
+        # `ignore.repo_root`, never `module.root`: the root a pattern is
+        # matched relative to must be the root the rules were LOADED at, or a
+        # reactor-root pattern is compared against a submodule-relative path
+        # and matches nothing (`A-M16`). The two coincide for a single-module
+        # repository, which is why passing `module.root` looked right.
+        for file in list_files(root, ignore.repo_root, ignore)
         if not (
             any(file.is_relative_to(schema_root) for schema_root in module.schema_roots)
             and any(reader.accepts(file_kind(file)) for reader in schema_readers)
@@ -158,6 +163,13 @@ def analyze(
     # retry `allow_resolve` is for. Defaulted so every existing caller stays
     # offline exactly as before.
     allow_resolve: bool = False,
+    # The root a `.sextantignore` sits at and every pattern in it is written
+    # against (D04 §3, `A-M16`). Defaulted to None so every existing caller —
+    # every test that builds this pipeline by hand — keeps the module-root
+    # behaviour it had; `api.py` passes the analysed root, which is the
+    # reactor's for a submodule and the module's own for a single-module
+    # repository.
+    ignore_root: Path | None = None,
 ) -> AnalyzeResult:
     progress.define("detect", "detect")
     progress.define("scan", "scan")
@@ -277,11 +289,41 @@ def analyze(
     entries = 0
     # `.sextantignore` (2K design §2), loaded once and applied at both walk
     # loops below through `list_files` — a file it excludes is read by
-    # neither loop, config or schema. `module.root` is the repo root a
-    # `.sextantignore` sits at and every pattern in it is written against
-    # (2K Task 2 binding), the same root `.sextant.yml`'s own reader already
-    # keys its lookup on.
-    ignore = IgnoreRules.load(module.root)
+    # neither loop, config or schema.
+    #
+    # **`ignore_root`, not `module.root` (`A-M16`).** D04 §3 is emphatic, and
+    # is itself an amendment: "One file, at the REPOSITORY root, and every
+    # pattern in it is matched against a path made relative to THAT root."
+    # Loading at `module.root` made that false for every multi-module reactor
+    # — `api.py` analyzes each submodule with its own root, so a
+    # `.sextantignore` at the reactor root was never read for any of them, and
+    # a pattern written relative to the reactor root would not have matched if
+    # it had. For a single-module repository the two roots coincide and this
+    # is the same load it always was, which is why `module.root` is still the
+    # fallback: a caller that does not know the analysed root gets the
+    # behaviour it had rather than a silently wider jail.
+    #
+    # `IgnoreRules.matches` relativizes each path against the root it was
+    # loaded at, so a submodule's files match reactor-root patterns exactly as
+    # the document says. The BUILT-IN layer is unaffected either way — it
+    # applies at every depth (`domain/ignorefile.py`), which is why this was a
+    # coverage gap in the repository-authored layer and never a credential
+    # leak.
+    #
+    # **A reactor root is not always an ancestor of its own modules**, and that
+    # is not a corner: `<module>../orders-service</module>` is legal Maven and
+    # `fixtures/orders-reactor` is exactly that shape. A path outside the root
+    # has no root-relative form at all, so a pattern written against that root
+    # could not address it even in principle — this falls back to the module's
+    # own root there, which is the behaviour that shipped. It stops being right
+    # if a repository ever wants one ignore file to govern modules it does not
+    # contain, which is a question about where the file lives rather than about
+    # how it is read.
+    ignore = IgnoreRules.load(
+        ignore_root
+        if ignore_root is not None and module.root.is_relative_to(ignore_root)
+        else module.root
+    )
     # Which loop a reader serves is the reader's own declaration (the
     # `ArtifactReader` port's `reads_schema_sources`), never a guess from the
     # root a file was found under: since 2H one schema root lives inside a
@@ -309,7 +351,7 @@ def analyze(
     schema_sources_not_compiled: list[str] = []
     for root in module.schema_roots:
         for reader, owned in group_files_by_reader(
-            list_files(root, module.root, ignore), schema_readers
+            list_files(root, ignore.repo_root, ignore), schema_readers
         ):
             request = ReadRequest(
                 module_id=module.module_id, version=module.version, files=owned, root=root
