@@ -5712,3 +5712,153 @@ def test_the_jms_arity_two_destination_name_overload_still_derives(tmp_path: Pat
     workspace.close()
 
     assert (endpoint["path"], endpoint["resolution"]) == ("orders.queue", "resolved")
+
+
+# --- Descriptor sweep (2O), R1: the SAME overload collision as Task 7's, still
+# live in `spring-ws-template.yml`. `marshalSendAndReceive` overloads at arity 2
+# as `(String uri, Object payload)` and `(Object payload,
+# WebServiceMessageCallback after)`, and the shipped row read position 0 as the
+# ADDRESS for both. Every descriptor below is `javap -p -s`'s own output,
+# spring-ws-core 4.1.4 — the version `scripts/probes/cp10_catalog_descriptors.md`
+# records reading.
+
+WS_TEMPLATE = "org/springframework/ws/client/core/WebServiceTemplate#"
+WS_CLIENT = "com/acme/orders/soap/BillingSoapClient#"
+WS_PAYLOAD = "com/acme/orders/soap/PlaceOrderRequest#"
+_XML_ROOT_ELEMENT = "jakarta/xml/bind/annotation/XmlRootElement#"
+
+_WS_PAYLOAD_ONLY = "(Ljava/lang/Object;)Ljava/lang/Object;"
+_WS_URI_PAYLOAD = "(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;"
+_WS_PAYLOAD_CALLBACK = (
+    "(Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)"
+    "Ljava/lang/Object;"
+)
+
+# `spring-ws-template.yml` reads an annotation's arguments and a caller's own
+# declared signature — the payload type IS the identity — so it declares two
+# capabilities beyond the pair every other `single_call` catalog needs. Granting
+# less would SKIP the catalog, and a skipped catalog derives nothing for the
+# same reason a correct one does, which would make the near-miss below vacuous.
+_WS_CAPABILITIES = CAPABILITIES | {"annotation_args", "typed_signatures"}
+
+
+def _ws_template_catalog() -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-ws-template")
+
+
+def _resolve_ws(tmp_path: Path, facts: list):
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [_ws_template_catalog()], capabilities=_WS_CAPABILITIES)
+    assert skipped == []
+    return workspace
+
+
+def _marshal_send_and_receive(caller: str, arguments: list, descriptor: str) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(owner=WS_TEMPLATE, name="marshalSendAndReceive", descriptor=descriptor),
+        invoke_kind="virtual",
+        ordinal=0,
+        receiver=3,
+        result=9,
+        arguments=arguments,
+    )
+
+
+def _ws_caller_method(name: str) -> SymbolFact:
+    """The calling method's own declaration — the one place the payload
+    argument's declared type is written down, the call's descriptor being
+    erased."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + WS_CLIENT + f"{name}(sig_a).",
+        construct_kind="method",
+        enclosing=_MODULE + WS_CLIENT,
+        signature=Signature(
+            parameters=[Parameter(name="request", type=TypeRef(symbol=WS_PAYLOAD))],
+            returns=TypeRef(symbol="java/lang/Object#"),
+        ),
+    )
+
+
+def _ws_root_annotation() -> AnnotationFact:
+    return AnnotationFact(
+        document_id="doc_1",
+        target=_MODULE + WS_PAYLOAD,
+        retention="runtime",
+        use=AnnotationUse(
+            annotation=_XML_ROOT_ELEMENT,
+            args={"name": "placeOrderRequest", "namespace": "http://acme.example/orders"},
+        ),
+    )
+
+
+@pytest.mark.declines("spring-ws-template")
+def test_the_ws_arity_two_callback_overload_derives_nothing(tmp_path: Path):
+    """§10 near-miss, and the live fabrication R1 exists to close. Every
+    conjunct of the shipped arity-2 row is satisfied — the owner, the name, the
+    arity, and a compile-time string constant sitting at position 0 — and ONLY
+    the descriptor differs: this is `marshalSendAndReceive(Object payload,
+    WebServiceMessageCallback after)`, whose position 0 is the SOAP request
+    PAYLOAD.
+
+    The call has to pass a LAMBDA for the callback and that is not incidental:
+    javac rejects a typed `WebServiceMessageCallback` variable beside a `String`
+    literal as ambiguous, while a lambda is not compatible with the `(String,
+    Object)` overload's `Object` parameter, so overload resolution picks the
+    callback form unambiguously. This is therefore a shape a real caller
+    writes, not one contrived to break the row.
+
+    Before the descriptor, this derived a row whose `peer` was the string
+    `PAYLOAD-LITERAL` — the message body published as the SOAP service the
+    module calls, at `evidence: compiler`. Delete the `descriptor` from
+    `spring-ws-template.yml`'s arity-2 row and this test fails with exactly
+    that peer; verified by reverting it, not assumed."""
+    caller = _MODULE + WS_CLIENT + "placeWithHeader(sig_a)."
+    facts = [
+        _marshal_send_and_receive(
+            caller,
+            [
+                CallArgument(kind="string", value="PAYLOAD-LITERAL"),
+                CallArgument(kind="lambda"),
+            ],
+            descriptor=_WS_PAYLOAD_CALLBACK,
+        ),
+        _ws_caller_method("placeWithHeader"),
+        _ws_root_annotation(),
+    ]
+    workspace = _resolve_ws(tmp_path, facts)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_the_ws_arity_two_uri_overload_still_derives(tmp_path: Path):
+    """The paired positive that stops the fix above from being a silencer:
+    `marshalSendAndReceive(String uri, Object payload)` is the overload the row
+    means, and it still resolves — the URI to `peer` whole (`peer_of`), the
+    operation to `path` off the payload type's own `@XmlRootElement`."""
+    caller = _MODULE + WS_CLIENT + "place(sig_a)."
+    facts = [
+        _marshal_send_and_receive(
+            caller,
+            [
+                CallArgument(kind="string", value="http://billing.acme.example/ws"),
+                CallArgument(kind="parameter", value=0),
+            ],
+            descriptor=_WS_URI_PAYLOAD,
+        ),
+        _ws_caller_method("place"),
+        _ws_root_annotation(),
+    ]
+    workspace = _resolve_ws(tmp_path, facts)
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["peer"] == "http://billing.acme.example/ws"
+    assert endpoint["path"] == "{http://acme.example/orders}placeOrderRequest"
+    assert endpoint["resolution"] == "resolved"

@@ -87,18 +87,47 @@ matches:
     # declared body capture would fail on exactly the rows whose payload the
     # identity rule DID read (checkpoint ruling I1). The rule supplies both.
     #
-    # ARITY IS NOT A DISCRIMINATOR HERE, and the cost is stated rather than
-    # hidden: `marshalSendAndReceive` also declares `(Object, WebServiceMessage
-    # Callback)` at arity 2 and `(String, Object, WebServiceMessageCallback)`
-    # at arity 3, and the fact stream identifies a call by owner, name and
-    # argument COUNT (`single_call._matching_method`). A callback-form call
-    # therefore reads its address where the payload is and its payload where
-    # the callback is — and both reads then fail, because a payload instance is
-    # not a string address and a callback type carries no `@XmlRootElement`. So
-    # the collision costs RECALL (that call's real identity is missed) and
-    # never publishes a wrong row, which is the direction this file is willing
-    # to fail in.
-    - { name: marshalSendAndReceive, arity: 2, url_arg: 0,
+    # THE OVERLOAD COLLISION, CLOSED (descriptor sweep R1) — and the comment
+    # that stood here was FALSE, which is worse than the bug it described.
+    # It said the collision "costs RECALL … and never publishes a wrong row".
+    # Arity 2 is TWO overloads (javap -p -s, spring-ws-core 4.1.4):
+    #   `(String uri, Object payload)`     — what this row means
+    #   `(Object payload, WebServiceMessageCallback after)`
+    # and a callback-form call is written with a LAMBDA, because javac rejects
+    # a typed callback variable beside a `String` literal as ambiguous while a
+    # lambda is not compatible with the other overload's `Object` parameter. So
+    # `marshalSendAndReceive("PAYLOAD", message -> {...})` resolves to the
+    # second form, and this row read its position 0 — the SOAP request BODY —
+    # as the address. Because the row also declares `path_from_argument_type`,
+    # that address is read by `peer_of` rather than `url_of`
+    # (`single_call.py`'s identity branch), so the message payload was
+    # published WHOLE as `peer`: the remote SOAP service this module calls,
+    # at `evidence: compiler`, which the system tier later resolves against
+    # `participants`. Reproduced end-to-end, not reasoned about.
+    #
+    # So the row states its own erased JVM `descriptor`, which
+    # `_matching_method` compares verbatim against the call site's own
+    # `target.descriptor`.
+    #
+    # THE CONSEQUENCE, which replaces the false claim above: the descriptor
+    # CLAIMS arity 2, so a `(Object, WebServiceMessageCallback)` call now
+    # derives NOTHING where it used to derive a row carrying a fabricated
+    # peer. Under-reporting a stated boundary is honest; publishing a payload
+    # as a peer is not. Recorded in docs/COVERAGE.md, and it stops being right
+    # if a future spring-ws-core release re-types either parameter of
+    # `(String, Object)` — `javap -p -s WebServiceTemplate` is the check, and
+    # `scripts/probes/cp10_catalog_descriptors.md` is where the run that read
+    # it is recorded.
+    #
+    # ARITY 3 IS NOT PART OF THE COLLISION, and the old comment was wrong about
+    # that too: `(String, Object, WebServiceMessageCallback)` is the ONLY
+    # arity-3 overload in this jar, so the next row's `url_arg: 0` /
+    # payload-at-1 positions are exactly right for it and it needs no
+    # discriminator. That stops being true the day spring-ws-core declares a
+    # second three-argument `marshalSendAndReceive`.
+    - { name: marshalSendAndReceive, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;",
+        url_arg: 0,
         path_from_argument_type: { arg: 1,
                                    annotation: jakarta.xml.bind.annotation.XmlRootElement,
                                    name_from: name, qualifier_from: namespace,

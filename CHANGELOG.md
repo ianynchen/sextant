@@ -151,6 +151,20 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A SOAP request PAYLOAD could be published as the SOAP service's address** (descriptor
+  sweep R1, §8). The same overload collision Task 7 closed for AMQP and JMS was still live
+  in `spring-ws-template.yml`: `WebServiceTemplate.marshalSendAndReceive` declares
+  `(String uri, Object payload)` AND `(Object payload, WebServiceMessageCallback after)` at
+  arity 2 (javap -p -s, spring-ws-core 4.1.4), and the shipped row read position 0 as the
+  address for both. `marshalSendAndReceive("PAYLOAD", message -> {...})` binds the callback
+  form — a lambda is not compatible with the other overload's `Object` parameter, so javac
+  picks it unambiguously — and the message body was published whole as `peer`, the remote
+  service the module calls, at `evidence: compiler`. Reproduced end-to-end before it was
+  fixed. The arity-2 row now declares its own erased descriptor. The file's own comment
+  asserted this collision "never publishes a wrong row" and also counted arity 3 into it;
+  both claims were false and are corrected — arity 3 is the only three-argument overload in
+  that jar. The claimed arity's cost, a callback-form call now deriving nothing, is a stated
+  boundary in `docs/COVERAGE.md`.
 - **A message PAYLOAD could be published as a wire destination** (2O Task 7 review,
   §8). `single_call` selected a `methods` row by name and ARITY only, and both
   `RabbitTemplate.convertAndSend` and `JmsTemplate.convertAndSend` overload on argument type

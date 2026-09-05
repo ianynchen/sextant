@@ -1027,10 +1027,24 @@ The boundaries, each verified against the shipped code rather than assumed:
   at all — the request message is written inside the callback — so no declared type carries
   the identity annotation, and a row for one would read its address through the url rule and
   publish a transport address in the column that holds the operation.
-- **`marshalSendAndReceive`'s arity does not discriminate its overloads.** Calls are matched
-  by owner, name and argument count, and the callback forms collide with the payload forms
-  at arities 2 and 3; both reads then fail, so the cost is recall (that call's identity is
-  missed) and never a wrong row.
+- **`marshalSendAndReceive`'s arity-2 collision is CLOSED, and what stood here was false.**
+  The bullet used to say the callback forms collide at arities 2 and 3 and that "both reads
+  then fail, so the cost is recall … and never a wrong row". It was a live fabrication:
+  `marshalSendAndReceive("PAYLOAD", message -> {...})` binds
+  `(Object, WebServiceMessageCallback)` — the lambda is what makes javac pick it
+  unambiguously — and the row read position 0 as the address, publishing the SOAP request
+  BODY whole as `peer`, the remote service the module calls, at `evidence: compiler`.
+  Reproduced end-to-end. The arity-2 row now declares the erased descriptor of
+  `(String, Object)` (javap -p -s, spring-ws-core 4.1.4), and arity 3 is the ONLY
+  three-argument overload in that jar, so it never collided at all.
+- **A `marshalSendAndReceive(payload, callback)` call now derives NOTHING**, where it used
+  to derive a row carrying a fabricated peer. Once any row for a name+arity declares a
+  `descriptor` that arity is claimed and an unmatched sibling falls through to no row — the
+  same stated under-report `RabbitTemplate`/`JmsTemplate` already carry. **Falsified by** a
+  module whose only SOAP calls take a `WebServiceMessageCallback`: its SOAP client surface
+  is absent from the export entirely. Closes by declaring a row per overload — which cannot
+  be done honestly here, because the callback form names its operation nowhere a declared
+  type carries it.
 - **JAXB's own defaults are not synthesised.** An `@XmlRootElement` omitting `name` or
   `namespace` derives an `unresolved` operation: neither default is written into the class
   file, and the namespace default is the schema's, which is not in the class file at all.

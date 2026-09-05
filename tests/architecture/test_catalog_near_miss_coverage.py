@@ -109,7 +109,6 @@ _NO_DECLINING_TEST_YET = frozenset(
         "grpc-schema",
         "grpc-net-devh",
         "spring-ws",
-        "spring-ws-template",
         "jakarta-jws",
         "jakarta-jws-client",
         "wsdl-schema",
