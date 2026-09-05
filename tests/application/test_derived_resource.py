@@ -990,3 +990,82 @@ def test_the_shipped_catalog_declares_a_gate_and_a_framework_default(tmp_path: P
     assert catalog.default_produces == ("application/hal+json",)
     assert catalog.media_formats == {"application/hal+json": "json"}
     derived_resource._validate_matches(catalog)
+
+
+# --- `A-M13` (principles sweep §3.3): an interface's methods are inherited ---
+
+
+def _base_with_query(base: str, query: str) -> list[SymbolFact]:
+    """A `@NoRepositoryBean` base that passes its type parameters through AND
+    declares a query method of its own — the shape every shared-base repository
+    layer in a real codebase has."""
+    return [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + base,
+            construct_kind=ConstructKind.INTERFACE,
+            interfaces=[_MODULE + CRUD],
+            generic_interfaces=[
+                TypeRef(symbol=CRUD, arguments=[TypeRef(symbol="T"), TypeRef(symbol="ID")])
+            ],
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=f"{_MODULE}{base}{query}(sig).",
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + base,
+            signature=Signature(),
+        ),
+        _annotation(base, NO_REPOSITORY_BEAN),
+    ]
+
+
+def test_a_query_method_inherited_from_a_module_local_base_is_still_a_search_route(
+    tmp_path: Path,
+):
+    """`A-M13`, the positive half. The query methods a repository exposes were
+    taken to be the ones it DECLARES (`_methods` keys on `enclosing`), so
+    `interface OrderRepository extends BaseRepo<Order, Long> {}` — declaring
+    nothing of its own — exposed no search routes at all, silently and with no
+    COVERAGE row.
+
+    JLS 9.2/9.4.1: an interface inherits the methods of its superinterfaces.
+    And the FRAMEWORK agrees, measured rather than assumed:
+    `RepositoryInformationSupport.calculateQueryMethods` is
+    `getRepositoryInterface().getMethods()` — `getMethods()`, which returns
+    inherited interface methods, never `getDeclaredMethods()` (`javap -p -c`,
+    spring-data-commons 3.2.5, CP-13).
+
+    The base itself still exposes nothing: its entity is a type variable, which
+    the test below this one already pins."""
+    base = "com/acme/orders/data/BaseRepository#"
+    facts = [*_base_with_query(base, "findByTenant"), *_repository(extends=base)]
+    workspace, _ = _resolve(tmp_path, facts)
+    routes = _routes(workspace)
+    workspace.close()
+
+    assert routes == FULL_ROUTES | {("GET", "/orders/search/findByTenant")}
+
+
+def test_the_inherited_walk_stops_at_the_frameworks_own_contract(tmp_path: Path):
+    """`A-M13`'s near-miss, and the conjunct that keeps a widened walk from
+    turning CRUD into search routes. `save` is one of the framework's own base
+    methods, so an INHERITED `save` on a module-local base is still not a query
+    method — the framework serves it as the collection POST that already has a
+    row, never as `/orders/search/save`.
+
+    Identical to the positive in every other cell; the one difference is the
+    base method's name. It discriminates: dropping `_queries`' `crud_methods`
+    filter makes this fail with exactly that fabricated route, which is what
+    makes the widened walk safe rather than merely wider.
+
+    It does NOT exercise the `contracts` skip in `_exposed_methods`: every
+    contract the catalog names lives in a jar, so the walk ends there anyway.
+    That guard is stated in the engine and inert today."""
+    base = "com/acme/orders/data/BaseRepository#"
+    facts = [*_base_with_query(base, "save"), *_repository(extends=base)]
+    workspace, _ = _resolve(tmp_path, facts)
+    routes = _routes(workspace)
+    workspace.close()
+
+    assert routes == FULL_ROUTES

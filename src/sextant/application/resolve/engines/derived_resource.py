@@ -366,8 +366,7 @@ def _repositories(workspace: Workspace, catalog: Catalog) -> list[_Repository]:
                 collection=collection,
                 operations=operations,
                 queries=_queries(
-                    declaration.symbol,
-                    methods,
+                    _exposed_methods(descriptor, declarations, contracts, methods),
                     annotations,
                     crud_methods,
                     member_annotation,
@@ -471,9 +470,64 @@ def _reach(
     return operations, hops
 
 
-def _queries(
-    symbol: str,
+def _exposed_methods(
+    descriptor: str,
+    declarations: "dict[str, _Declaration]",
+    contracts: dict[str, frozenset[str]],
     methods: dict[str, list[tuple[str, str]]],
+    seen: frozenset[str] = frozenset(),
+) -> list[tuple[str, str]]:
+    """Every method a repository interface EXPOSES — its own, then those it
+    inherits from module-local superinterfaces — own-first, so an override
+    shadows the declaration it overrides in `_queries`' `setdefault`.
+
+    **This used to be `methods.get(symbol, [])`: the ones it DECLARES**
+    (`A-M13`). JLS 9.2/9.4.1 says an interface inherits its superinterfaces'
+    methods, so `interface OrderRepository extends BaseRepo<Order, Long> {}`
+    exposed no search routes at all while the framework served every one of
+    `BaseRepo`'s — silently, with no COVERAGE row and no wrong row to notice.
+
+    The framework half is MEASURED rather than reasoned (CP-13,
+    spring-data-commons 3.2.5): `RepositoryInformationSupport
+    .calculateQueryMethods` is `getRepositoryInterface().getMethods()` mapped
+    through `ClassUtils.getMostSpecificMethod` and filtered — `getMethods()`,
+    which returns inherited interface methods, never `getDeclaredMethods()`.
+
+    **What keeps CRUD from becoming search routes is `_queries`' own
+    `crud_methods` filter**, and that is measured too: `isBaseClassMethod`
+    resolves through `RepositoryComposition.findMethod` into
+    `MethodLookups$RepositoryAwareMethodLookup`, which compares a method's
+    name, parameter count AND parameter types (`javap -p -c`,
+    spring-data-commons 3.2.5, CP-13). Our filter compares the name only,
+    which is `A-M14` and is left open with a COVERAGE row.
+
+    The `contracts` skip below is a second guard on the same fabrication and
+    is INERT today rather than load-bearing: every contract this catalog names
+    lives in a jar, so it has no `_Declaration` here and the walk ends at it
+    regardless. It is stated because it stops being inert the day a module
+    declares an interface whose bare descriptor collides with a contract's, and
+    because an inert guard whose reason is unwritten is one somebody deletes.
+
+    `seen` guards the walk for `_reach`'s own reason: these are FACTS, and a
+    fact stream that disagreed with its language about cycles must not hang.
+    """
+    if descriptor in seen:
+        return []
+    declaration = declarations.get(descriptor)
+    if declaration is None:
+        return []
+    exposed = list(methods.get(declaration.symbol, []))
+    for parent in declaration.interfaces:
+        if parent in contracts:
+            continue
+        exposed.extend(
+            _exposed_methods(parent, declarations, contracts, methods, seen | {descriptor})
+        )
+    return exposed
+
+
+def _queries(
+    exposed_methods: list[tuple[str, str]],
     annotations: dict[str, dict[str, dict[str, Any]]],
     crud_methods: set[str],
     member_annotation: str,
@@ -508,7 +562,7 @@ def _queries(
     for a reader to discover in a manifest.
     """
     exposed: dict[str, str] = {}
-    for name, method_symbol in methods.get(symbol, []):
+    for name, method_symbol in exposed_methods:
         if name in crud_methods:
             continue
         declared = annotations.get(bare_descriptor(method_symbol), {}).get(member_annotation)

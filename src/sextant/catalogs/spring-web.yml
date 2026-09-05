@@ -199,15 +199,28 @@ parse_calls:
     # the generated class's own name would have to know how a code generator
     # spells its output.
     #
-    # `MessageOrBuilder` is the marker that actually joins in the fact
-    # stream, and it is listed first for that reason: a generated message's
-    # `extends GeneratedMessage` is NOT emitted at all (D00 §5a keeps
-    # `supertype` for a GENERIC superclass only, and that one is not generic),
-    # while the message's own `implements ...OrBuilder`, and that interface's
-    # own `extends MessageOrBuilder`, both are. The three `GeneratedMessage*`
-    # spellings ride along for the module where a generic supertype does name
-    # one (a generated builder's does). The lite runtime reaches none of these
-    # and binds nothing — silence, never a wrong payload type.
+    # `MessageOrBuilder` is the marker that joins through the INTERFACE chain
+    # and it is listed first for that reason: a generated message's own
+    # `implements ...OrBuilder`, and that interface's own
+    # `extends MessageOrBuilder`, are both emitted.
+    #
+    # **The sentence that stood here — "a generated message's
+    # `extends GeneratedMessage` is NOT emitted at all" — was false and is
+    # corrected (`A-M12`).** `supertype` really is D00 §5a's
+    # parameterised-type carrier and really does miss a non-generic `extends`,
+    # but capability 9.13 emits a separate `superclass` field for EVERY
+    # non-`Object` superclass, and the ancestry walk in
+    # `shapes/parse_binding.py` now reads it. So the three `GeneratedMessage*`
+    # spellings are reachable by the class chain as well as by a generic
+    # builder's supertype, and a payload whose only route to a marker is a
+    # plain `extends` binds instead of silently keeping its bytes shape.
+    #
+    # Whether the LITE runtime reaches any of these is **unverified** and was
+    # already so before this correction (`A-Mi2`): no `protobuf-javalite` jar
+    # was available to the sweep. `GeneratedMessageLite` is listed, so a
+    # module whose payloads extend it binds either way; the claim this file
+    # used to make about it — that it "reaches none of these and binds
+    # nothing" — is not asserted here any more, because nothing measured it.
     - owner_hierarchy:
         - com.google.protobuf.MessageOrBuilder
         - com.google.protobuf.GeneratedMessage

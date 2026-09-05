@@ -192,6 +192,40 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **CP-13: what three frameworks do with an INHERITED member is now measured**
+  (`scripts/probes/cp13_inherited_members.md`). `A-M13`, `A-M14` and `A-M15` encode the same
+  invented rule — a type's members are the ones it DECLARES — and the sweep graded all three
+  `read`, with the framework half explicitly unverified. The language half was never in doubt
+  (JLS 8.2, 9.2, 9.4.1, 8.4.2); what needed measuring turns out to be answerable from bytecode
+  without deploying anything, because in every case the question reduces to which reflective
+  enumeration the framework calls and what it filters out of the result. Spring Data's
+  `calculateQueryMethods` is `getRepositoryInterface().getMethods()`; its base-method lookup
+  compares name, parameter count AND parameter types; the JAX-WS RI's `RuntimeModeler` walks the
+  implementor's `getMethods()`, drops only `java.lang.Object`'s, and then excludes `static` and
+  `final`. What it does NOT settle is stated in the probe: nothing was deployed, so a live run
+  stays on the backlog and `A-M14` is left open on the strength of this rather than closed by it.
+
+- **`A-M13`: a repository's query methods were the ones it DECLARED** (principles sweep §3.3).
+  `derived_resource._methods` keys on `enclosing`, so
+  `interface OrderRepository extends BaseRepo<Order, Long> {}` — the ordinary shared-base
+  repository layer — exposed no search routes at all while the framework served every one of the
+  base's. Silent, with no COVERAGE row. The walk now crosses module-local superinterfaces,
+  own-first so an override shadows what it overrides, and stops short of a `contracts` entry.
+  Measured, not assumed (CP-13 Q1): the framework enumerates `getMethods()`, which returns
+  inherited interface methods, at both measured spring-data-commons minors.
+
+- **`A-M12`: the payload-binding ancestry walk had `A-C4`'s invented rule too** (principles
+  sweep §3.3). `shapes/parse_binding.py` built its ancestry from `supertypes` +
+  `implementations` and never from `superclasses`, so a payload type whose only route to a
+  protobuf marker is a non-generic `extends GeneratedMessage` reached nothing and bound nothing
+  — an under-report, silent, with the endpoint keeping the bytes shape its signature declared.
+  Two stale sentences went with it, both asserting that "a plain `extends` is NOT in the fact
+  stream at all": the walk's own docstring and `spring-web.yml`'s protobuf comment. That was
+  true when written and capability 9.13 falsified it — `supertype` is D00 §5a's
+  parameterised-type carrier, `superclass` is the inheritance edge, and reading the first as
+  the second is the rule `A-C4` names. `spring-web.yml` also stops asserting that the protobuf
+  LITE runtime "reaches none of these and binds nothing", which nothing measured (`A-Mi2`).
+
 - **`A-M1`: an overloaded receiver's handler was picked by descriptor hash order** (principles
   sweep §3.3). `interface_implementation` resolved a registration's receiver to a handler with a
   prefix scan over `method_symbols` ordered by symbol — a SHA-256 of the descriptor — taking the
