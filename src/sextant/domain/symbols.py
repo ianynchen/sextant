@@ -5,6 +5,13 @@ from dataclasses import dataclass
 
 NOT_APPLICABLE = "."
 
+# D00 §5a's type marker: the character a TYPE descriptor ends at, and the one a
+# member descriptor carries its owner's name up to. Named here because this
+# module is the seam that reads the symbol grammar
+# (`tests/architecture/test_symbol_grammar_confinement.py`), and a literal
+# spelled at a second site is a second copy of the grammar.
+_TYPE_MARKER = "#"
+
 
 @dataclass(frozen=True)
 class Symbol:
@@ -41,6 +48,22 @@ def owner_of(descriptor: str) -> str | None:
     ownerless symbol is an answer here, never an exception (D00 §5a)."""
     index = descriptor.find("#")
     return None if index == -1 else descriptor[: index + 1]
+
+
+def is_type_descriptor(descriptor: str) -> bool:
+    """Whether `descriptor` names a TYPE rather than one of its members (D00
+    §5a): a type descriptor ends at the type marker, a member descriptor
+    carries a name after it.
+
+    Here rather than at the call site because the marker is the symbol
+    grammar, and `tests/architecture/test_symbol_grammar_confinement.py` keeps
+    every reading of that grammar in this module — a second copy of "ends with
+    the marker" elsewhere is exactly the ad hoc parsing the seam replaced. Two
+    callers need the question rather than the split `owner_of` performs: an
+    annotation whose target must be a type before it names a container, and an
+    annotation argument that is a class reference only when it names one.
+    """
+    return descriptor.endswith(_TYPE_MARKER)
 
 
 def outer_type_of(descriptor: str) -> str:

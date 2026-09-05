@@ -160,6 +160,101 @@ CREATE TABLE IF NOT EXISTS open_questions (
     evidence   TEXT
 );
 
+-- The first of the two NON-WIRE tables (2O design §4): work the framework
+-- starts on a clock rather than on a request. It is its own table and not a
+-- row in `endpoints` because `endpoints` is wire-true (user ruling) — a
+-- scheduled method serves no protocol, no address and no direction, and a row
+-- claiming any of the three would be an invented boundary.
+--
+-- Pre-declared empty for the same reason `endpoints`/`shapes`/
+-- `resolved_config`/`open_questions` above are: the "scheduled_work" query
+-- must answer with an empty result, never an error, on a module that
+-- schedules nothing or a scan too weak to see it.
+--
+-- Replaced WHOLE per resolve through reset_scheduled_work.sql +
+-- insert_scheduled_work.sql, and the reset runs once, in the pipeline, ahead
+-- of every writer rather than inside the engine — `derive_endpoints`'s own
+-- reason (`resolve/endpoints.py`): 2O design §4a promises "Quartz: later
+-- catalog, same table", so more than one catalog will write here and a reset
+-- owned by the engine would leave only whichever ran last.
+CREATE TABLE IF NOT EXISTS scheduled_work (
+    -- The scheduled method's own symbol (D00 §5a), module coordinates
+    -- included, exactly as the annotation's target names it.
+    handler    TEXT,
+    -- Which KIND of schedule the declaration names, as the catalog's own
+    -- `triggers` map spells it — `cron`, `fixedRate` or `fixedDelay` today.
+    -- Catalog vocabulary rather than a D00 closed set: the framework owns the
+    -- word, so it lives in the catalog file with every other framework name
+    -- (D02's "there is no `if spring` anywhere in Sextant").
+    trigger    TEXT,
+    -- The trigger's declared expression, VERBATIM (2O design §4a) — the cron
+    -- string, or the delay/rate as it was written. Never normalised, never
+    -- evaluated: a `${...}` placeholder is preserved exactly as declared and
+    -- `resolution` says `unresolved` beside it.
+    expression TEXT,
+    -- D00's resolution set. `resolved` where the expression is the literal the
+    -- framework will schedule on; `unresolved` where it is a property
+    -- placeholder this analysis did not substitute (COVERAGE names the
+    -- boundary). NULL never appears here — a row with no expression at all is
+    -- not derived.
+    resolution TEXT,
+    -- D00's evidence set. Always `compiler`: every column above is read off
+    -- the annotation the compiler wrote into the class file.
+    evidence   TEXT,
+    -- The id of the catalog that derived this row — provenance, exactly as
+    -- `endpoints.catalog_id` is, and for the same reason: rule scoping, never
+    -- identity.
+    catalog_id TEXT
+);
+
+-- The second non-wire table (2O design §4b): which exceptions a module answers
+-- and how. Its own table for the same reason `scheduled_work` is — an error
+-- handler is not a boundary anyone can address, it is what happens INSIDE one
+-- that already exists — and pre-declared empty for the same reason too.
+--
+-- Replaced WHOLE per resolve through reset_error_handlers.sql +
+-- insert_error_handlers.sql, reset from the pipeline, exactly as above.
+CREATE TABLE IF NOT EXISTS error_handlers (
+    -- The handler method's own symbol (D00 §5a).
+    handler       TEXT,
+    -- The type that DECLARES the handler — an advice class, or the controller
+    -- whose own handlers are scoped to itself (Spring's own rule, mirrored in
+    -- `resolve/engines/error_advice.py`).
+    advice        TEXT,
+    -- The class-level annotation that made `advice` a handler container, as
+    -- the facts spell it. It is what tells the two containers apart, and the
+    -- distinction is load-bearing: an advice class declaring NO scope
+    -- attributes applies to every controller in the application, while a
+    -- controller's own handler applies to that controller alone. A single
+    -- NULL `scope` cannot say which of those two a row is.
+    declared_by   TEXT,
+    -- The advice's scope attributes, VERBATIM, as a JSON object holding only
+    -- the keys the declaration actually wrote (`annotations`, `basePackages`,
+    -- `assignableTypes` — whichever the catalog names and the declaration
+    -- carries). NULL where the declaration writes none, which for an advice
+    -- class means "every controller" and for a controller means "this one".
+    scope         JSON,
+    -- One exception type per row, as its own symbol. A handler naming three
+    -- types is three rows: each is a distinct, separately answerable fact, and
+    -- an array in one cell cannot be joined against anything.
+    exception     TEXT,
+    -- The status the declaration names, verbatim as the literal was read — an
+    -- enum reference stays the symbol the facts carry. NULL where no
+    -- `@ResponseStatus` was found on the handler or on the exception class,
+    -- and NULL is an answer: a status computed inside a `ResponseEntity` body
+    -- is a STATED BOUNDARY of this phase (2O design §4b), not a gap this
+    -- column fills in.
+    status        TEXT,
+    -- The symbol of the type the handler returns, where the return type names
+    -- one — NULL for a handler returning nothing, and NULL for one whose
+    -- return type is a framework envelope the catalog declares no wrapper for.
+    response_shape TEXT,
+    -- D00's resolution and evidence sets, as `scheduled_work` above.
+    resolution    TEXT,
+    evidence      TEXT,
+    catalog_id    TEXT
+);
+
 CREATE OR REPLACE VIEW documents AS
 SELECT document_id,
        payload ->> 'relative_path'   AS relative_path,

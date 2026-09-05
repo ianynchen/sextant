@@ -448,26 +448,52 @@ _NAMED_QUERIES = {
         WHERE d.origin IS NOT NULL
         ORDER BY symbol
     """,
+    # The two NON-WIRE tables (2O design §4). Ordered on their whole content
+    # rather than on a key, for the reason `open_questions` above states: these
+    # rows carry no wire identity to order by, and an ordering with ties is one
+    # that can change between runs (NFR-1). Two `@Scheduled` methods sharing a
+    # trigger and an expression are two real rows — nothing but the handler
+    # tells them apart — so the handler leads, and `catalog_id` closes the tie
+    # a second catalog claiming the same annotation would otherwise leave open.
+    "scheduled_work": """
+        SELECT handler, trigger, expression, resolution, evidence, catalog_id
+        FROM scheduled_work
+        ORDER BY handler, trigger, expression, resolution, evidence, catalog_id
+    """,
+    # `scope` is cast to text in the ORDER BY for the reason `open_questions`
+    # casts `candidates`: it is a JSON document, DuckDB has no ordering for
+    # one, and it is the column that differs between two rows agreeing on
+    # everything to its left.
+    "error_handlers": """
+        SELECT handler, advice, declared_by, scope, exception, status,
+               response_shape, resolution, evidence, catalog_id
+        FROM error_handlers
+        ORDER BY advice, handler, exception, status, response_shape,
+                 declared_by, scope::VARCHAR, resolution, evidence, catalog_id
+    """,
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
     "facts": "SELECT count(*) AS facts FROM raw_facts",
 }
 
 # The tables a bundle carries (D06 §5). `documents`, `endpoints`,
-# `resolved_config`, `shapes`, `shape_fields`, `call_sites` and
-# `open_questions` (2G Task 8) export through their named query, so the row
-# order is the one NFR-1 already fixed; `symbols` and `annotations` export
-# through their own ordered SELECT below, for the same reason — `symbols` has
-# no whole-row named query to reuse (`declared_symbols` above projects the one
-# column existence checking needs, not the table). Sorted by name so the
-# manifest's contents list is deterministic too.
+# `resolved_config`, `shapes`, `shape_fields`, `call_sites`,
+# `open_questions` (2G Task 8) and the two non-wire tables (2O design §4)
+# export through their named query, so the row order is the one NFR-1 already
+# fixed; `symbols` and `annotations` export through their own ordered SELECT
+# below, for the same reason — `symbols` has no whole-row named query to reuse
+# (`declared_symbols` above projects the one column existence checking needs,
+# not the table). Sorted by name so the manifest's contents list is
+# deterministic too.
 _EXPORTED_TABLES = (
     "annotations",
     "call_sites",
     "documents",
     "endpoints",
+    "error_handlers",
     "open_questions",
     "resolved_config",
+    "scheduled_work",
     "shape_fields",
     "shapes",
     "symbols",
@@ -534,6 +560,17 @@ _EXPORT_QUERIES = {
     """,
     "shapes": _NAMED_QUERIES["shapes"],
     "shape_fields": _NAMED_QUERIES["shape_fields"],
+    # The two non-wire tables export through their named query verbatim, and
+    # the reason is that NEITHER carries a masked column. `_REDACTED_ADDRESSES`
+    # exists for the columns that can hold a whole URL — `endpoints.path`/
+    # `.peer` and the ledger's `path` — and neither of these tables has one: a
+    # trigger expression is a cron string or a delay, a scope attribute is a
+    # package or a type, and a status is a status. `_REDACTED_CONFIG_VALUES`
+    # keys on `resolved_config`'s own (key, value) pairs, which nothing here
+    # holds either. Stated rather than left to inference, because "this table
+    # is exported unmasked" is the claim a reviewer has to be able to check.
+    "scheduled_work": _NAMED_QUERIES["scheduled_work"],
+    "error_handlers": _NAMED_QUERIES["error_handlers"],
     # `arguments` and `args` carry JSON the analysis read out of code, and a
     # hardcoded `https://user:pass@host` literal lands in one whole. They pass
     # `redact_json` — userinfo stripping over every string leaf — and NOT the
@@ -577,6 +614,13 @@ _NAMED_DERIVATIONS = {
     "reclassify_open_questions": "reclassify_open_questions.sql",
     "open_questions_reset": "reset_open_questions.sql",
     "open_questions_insert": "insert_open_questions.sql",
+    # 2O design §4's two non-wire families. Each is a reset/insert PAIR for the
+    # reason `open_questions` is: the reset runs once per resolve from the
+    # pipeline, the insert once per catalog from the engine.
+    "scheduled_work_reset": "reset_scheduled_work.sql",
+    "scheduled_work_insert": "insert_scheduled_work.sql",
+    "error_handlers_reset": "reset_error_handlers.sql",
+    "error_handlers_insert": "insert_error_handlers.sql",
 }
 
 
