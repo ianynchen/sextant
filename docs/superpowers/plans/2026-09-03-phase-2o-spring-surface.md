@@ -760,345 +760,471 @@ git commit -m "feat: the API nobody wrote a controller for — Spring Data REST 
 
 ---
 
-## Task 7: The annotation catalog batch
+## Task 7: Messaging and annotation catalogs
 
-Four catalogs, one engine extension. Batched because each is a small same-shape change.
+**Rewritten 2026-09-04** after the pre-dispatch audit found three blockers, and
+after §9 was dropped and servlets resized. Servlets are **Task 7b** below —
+they are engine work, not a catalog file.
 
 **Files:**
-- Create: `src/sextant/catalogs/spring-rabbit.yml`, `spring-sqs-legacy.yml`, `spring-actuator.yml`, `jakarta-servlet.yml`
-- Modify: `src/sextant/application/resolve/engines/single_call.py` (secondary address capture)
-- Modify: `src/sextant/ingress/catalogs/yaml_source.py` (`path_prefix`, `address_arg_2`)
+- Create: `src/sextant/catalogs/spring-rabbit.yml` (annotation_driven / amqp / inbound), `spring-pulsar.yml` (annotation_driven / pulsar / inbound), `spring-rabbit-template.yml` (single_call / amqp / outbound), `spring-sqs-legacy.yml`, `spring-actuator.yml`
+- Create: `scripts/probes/cp5_actuator_paths.md` + its harness
+- Modify: `src/sextant/application/resolve/engines/single_call.py` (`address_arg_2`), `engines/annotation_driven.py` (`path_prefix`), `src/sextant/storage/duckdb/derive_endpoints.sql` (the `path_prefix` bind; the unresolved-path gate)
 - Test: `tests/application/test_call_engines.py`, `tests/application/test_endpoints.py`
 
-**Interfaces:**
-- Consumes: `Protocol.AMQP`/`PULSAR` (Task 1), `canonical_http_path` (Task 2).
-- Produces: nothing later tasks depend on.
+**Three corrections the audit forced — do not revert to the old text:**
 
-- [ ] **Step 1: Write the failing tests**
+1. **THREE catalogs, not one.** A `Catalog` holds exactly one `style`, one
+   `protocol`, one `direction` (`application/ports/catalogs.py:18-20`, bound at
+   `ingress/catalogs/yaml_source.py:39-41`), and `derive_endpoints` resolves one
+   engine per catalog (`resolve/endpoints.py:82`). The shipped convention is one
+   file per triple — `spring-kafka.yml` + `spring-kafka-template.yml`.
+2. **`yaml_source.py` is the WRONG file for both new keys.** `address_arg_2`
+   sits under `matches.methods[]` beside `channel_arg`/`url_arg`, validated in
+   `single_call.py` (`_IDENTITY_REQUIRED`, `:57`); `path_prefix` sits under
+   `matches.mapping`, validated in `annotation_driven._validate_naming`
+   (`:383`) and bound into the SQL. `yaml_source.py` passes `matches` through
+   opaquely (`:43`).
+3. **Placeholders are PRESERVED, not resolved.** 2F's ladder is a call-site
+   mechanism (`engines/single_call.py:143,279,705`, `engines/fluent.py:161,489`
+   — `annotation_driven` never calls it), and its product is the expression, not
+   a value. `derive_endpoints.sql:629-631` already leaves a composed path
+   containing `${` untouched.
 
-```python
-def test_a_rabbit_listener_derives_an_amqp_inbound_row(resolved):
-    row = resolved.endpoint(protocol="amqp", direction="inbound")
-    assert row["path"] == "orders.incoming"
+- [ ] **Step 0: CP-5 first (spec §12, R7)**
 
+Run CP-5 against a live Actuator app and commit `scripts/probes/cp5_actuator_paths.md`
+plus its harness. Establish: `@Endpoint(id="x")` serves under `/actuator/x`;
+`@ReadOperation`→GET, `@WriteOperation`→POST, `@DeleteOperation`→DELETE; and
+**state the Boot version probed** (§5.4 — the base-path property name and the
+`/actuator` default are version-scoped). `@Selector` path segments are a stated
+boundary; do not probe them.
 
-def test_a_spel_destination_is_unresolved_and_verbatim(resolved):
-    # No SpEL reader exists and none is built (2O design §3b).
-    row = resolved.endpoint(protocol="amqp", path="#{queueNameBean.name}")
-    assert row["resolution"] == "unresolved"
+If the probe cannot run live, report UNVERIFIED per R5 — never fabricate a table.
 
+- [ ] **Step 1: the unresolved-path gate (do this before any catalog)**
 
-def test_rabbit_template_identity_is_the_exchange_and_routing_key_pair(resolved):
-    row = resolved.endpoint(protocol="amqp", direction="outbound")
-    assert row["path"] == "orders.exchange/order.created"
+`derive_endpoints.sql:648` hardcodes `'resolved' AS resolution` for every
+annotation-derived row, so a SpEL destination would publish a
+confidently-wrong address at full confidence — the failure
+`derive_endpoints.sql:386-390`'s own guards exist to prevent, and a §8
+violation. Add a path-shape gate: a path containing `#{` or `${` publishes
+`unresolved`, carrying the expression verbatim.
 
+Write the failing test first, in `tests/application/test_endpoints.py`.
 
-def test_an_actuator_endpoint_serves_under_the_declared_prefix(resolved):
-    row = resolved.endpoint(protocol="http", path="/actuator/orders-health")
-    assert row["method"] == "GET"      # @ReadOperation
-```
+- [ ] **Step 2: `address_arg_2` in `single_call`**
 
-- [ ] **Step 2: Run to verify they fail**
+AMQP's wire identity is the exchange+routing-key PAIR, which the one-address
+contract refuses (`single_call.py:225`). Add the optional second capture plus a
+catalog-declared join format; identity renders `exchange/routingKey`. An
+overload without an exchange (the default exchange) captures the routing key
+alone — state that in the catalog comment per §9, naming what would falsify it.
 
-Run: `uv run pytest tests/application/test_call_engines.py -v`
-Expected: FAIL — the catalogs do not exist; `single_call` refuses two address positions.
+- [ ] **Step 3: `path_prefix` in `annotation_driven`**
 
-- [ ] **Step 3: Extend `single_call` with a secondary address**
+A catalog-declared constant prefix, validated in `_validate_naming` and bound
+into `derive_endpoints.sql`. Guard it the way every other naming key is guarded.
 
-AMQP's wire identity is the exchange+routing-key **pair**, which the one-address contract refuses (declaring two is a `CatalogError`). Add optional `address_arg_2` plus a catalog-declared join format, rendering `exchange/routingKey`. An overload without an exchange (the default exchange) captures the routing key alone — state that in the catalog comment.
+- [ ] **Step 4: the five catalogs**
 
-- [ ] **Step 4: Write the four catalogs**
+`spring-rabbit.yml` (`@RabbitListener(queues=…)`, amqp/inbound),
+`spring-pulsar.yml` (`@PulsarListener`, pulsar/inbound),
+`spring-rabbit-template.yml` (`RabbitTemplate.convertAndSend`, amqp/outbound,
+using `address_arg_2`), `spring-sqs-legacy.yml` (the two older `@SqsListener`
+spellings — pure data), `spring-actuator.yml` (`@Endpoint` + operation
+annotations, `path_prefix: /actuator`).
 
-- **`spring-rabbit.yml`** — `@RabbitListener(queues=…)` inbound at `amqp`; `@PulsarListener` at `pulsar`; `RabbitTemplate.convertAndSend` outbound. Comment the two boundaries: `bindings=` nested annotations (D00's literal model has no nested annotations) and SpEL.
-- **`spring-sqs-legacy.yml`** — the two older `@SqsListener` spellings. Pure data.
-- **`spring-actuator.yml`** — `@Endpoint(id=…)` + operation annotations per CP-5, with the new guarded `path_prefix: /actuator` key and the `management.endpoints.web.base-path` override read from `resolved_config`. Comment that `@Selector` segments are a stated boundary (the only parameter-annotation read is `request_body`, and `mapping` cannot express append-per-parameter) and that built-in endpoints are dependency+property driven.
-- **`jakarta-servlet.yml`** — `@WebServlet` inbound; `@WebFilter`/`FilterRegistrationBean`/`ServletRegistrationBean` as stated boundaries.
+**Stated boundaries, each with what would falsify it (§9):** `bindings=` nested
+annotations are readable only from capability 9.16 onward and no catalog reads
+them yet; SpEL `#{…}` has no reader and none is built; `@Selector` segments
+cannot be expressed by `mapping`; `management.endpoints.web.base-path` has **no
+reader** — `annotation_driven` never touches `resolved_config` (only
+`config_join.py:528` and `derived_resource.py:578` do), so the override is a
+boundary in this task, not a feature.
 
-- [ ] **Step 5: Run to verify they pass**
+- [ ] **Step 5: near-miss tests (§10) — required, one per matcher**
 
-Run: `uv run pytest tests/application -q`
-Expected: PASS.
+Each asserts **nothing** is produced: a `@RabbitListener`-shaped method on a
+class carrying no such annotation; a `convertAndSend` on an owner that is not a
+`RabbitTemplate`; an `@Endpoint` class with no operation annotation; a
+`@WebFilter` (proving the stated boundary holds).
 
-- [ ] **Step 6: Fixtures, COVERAGE, commit**
+- [ ] **Step 6: COVERAGE, then commit**
 
-Fixture code exercising each row shape. Flip COVERAGE's A-tier rows for `@RabbitListener`, `@PulsarListener`, legacy `@SqsListener`, Actuator and servlets; add every boundary row.
+Flip the A-tier rows this ships and add every boundary row above. Commit with an
+explicit pathspec (R18). Report states `Deviations: none` or the list (§1.1).
 
-```bash
-git add -A
-git commit -m "feat: rabbit, pulsar, legacy sqs, actuator and servlets"
-```
+---
+
+## Task 7b: Servlets — `@WebServlet` is engine work
+
+**New task, 2026-09-04.** §3b assumed a catalog file; the audit proved
+`annotation_driven` cannot derive it, and the plan previously proposed cutting
+servlets entirely. The user ruled: keep them, size them honestly.
+
+**Files:**
+- Create: a new engine style (name it for the evidence shape, not the framework), registered in `resolve/endpoints.py`'s `_ENGINES`
+- Create: `src/sextant/catalogs/jakarta-servlet.yml`
+- Create: `scripts/probes/cp9_servlet_shapes.md` + harness
+- Test: a new `tests/application/test_<style>.py`
+
+**Why not `annotation_driven`:** `@WebServlet` carries the address at TYPE
+level, and that engine's derivation joins only method symbols — it says so
+itself at `derive_endpoints.sql:398-400`. The `members: public_methods` +
+`path_fallback` route (the only alternative) would compose `/legacy/*` + `/` +
+`doGet`, fabricating four URLs per servlet, none served. That is §8.
+
+**The framework's own rule (§8.1 rule 1), to mirror exactly:** address from the
+type annotation; verb from the overridden `doXxx` method name; evidence being
+the class extending `HttpServlet`.
+
+- [ ] **Step 0: CP-9 first — measure before building (§8.1)**
+
+Probe and commit: does `@WebServlet` reach the facts as a type-level annotation
+with its args? Are array-valued `urlPatterns` readable? Is `value` distinguishable
+from `urlPatterns`? Is `protected` visibility recorded? (It is —
+`workspace.py:163-168` projects it — confirm rather than assume.) State the
+container and servlet-API versions probed.
+
+**Also settle by measurement, not assumption:** does `HttpServlet` serve HEAD and
+OPTIONS implicitly from `doGet`? If it does, §8.1 rule 4 says we claim what the
+framework serves — but decide it on evidence and record the ruling.
+
+- [ ] **Step 1: the style, with a member selector that admits `protected`**
+
+`supertype_derived` is the nearest shape but filters `visibility == "public"`
+(`supertype_derived.py:328`), and servlet handlers are `protected`. Either widen
+that selector or write a sibling — your judgement, stated in the report.
+
+- [ ] **Step 2: the four shapes correctness requires**
+
+Multiple `urlPatterns` are multiple endpoints. `value` and `urlPatterns` are
+aliases. A class overriding `service()` bypasses `doXxx` dispatch entirely — the
+verb map does not apply, so derive nothing rather than a wrong verb set. A
+`GenericServlet` subclass has no HTTP verb semantics at all.
+
+- [ ] **Step 3: near-miss tests (§10)**
+
+Nothing produced for: a class extending `HttpServlet` with no `@WebServlet`; a
+`@WebServlet` class overriding `service()` (per Step 2); a `GenericServlet`
+subclass.
+
+- [ ] **Step 4: COVERAGE and commit**
+
+`web.xml` and programmatic `ServletContext.addServlet` are the other two
+registration routes — **stated boundaries**, with the annotation named as one of
+three (§8.1 rule 3).
 
 ---
 
 ## Task 8: The two non-wire families
 
+**File list corrected 2026-09-04** — the original named four documentation
+touches and omitted six code registrations per family.
+
 **Files:**
-- Create: `src/sextant/application/resolve/engines/scheduled_work.py`, `engines/error_advice.py`
-- Create: `src/sextant/catalogs/spring-scheduling.yml`, `spring-advice.yml`
-- Modify: `endpoints.py` (`_ENGINES`), the D01 tables, D06 bundle artifacts, `egress/render/` (two sections), `egress/export/` (two slots)
-- Test: `tests/application/test_scheduled_work.py`, `tests/application/test_error_advice.py`, render/export tests
+- Create: `engines/scheduled_work.py`, `engines/error_advice.py`; `catalogs/spring-scheduling.yml`, `catalogs/spring-advice.yml`
+- Create: two derive SQL + **two reset SQL**
+- Modify: `storage/duckdb/schema.sql` (two tables); `storage/duckdb/workspace.py` (`_NAMED_QUERIES`, `_EXPORT_QUERIES`, `_EXPORTED_TABLES`, the derive map); `resolve/pipeline.py` (`ResolveReport` fields **and the two resets**); `application/stages/analyze.py`; `resolve/endpoints.py` (`_ENGINES`); `egress/render/document.py` (two sections); `docs/components/D01-graph-schema.md`, `D06-bundle-format.md`
+- Test: `tests/application/test_scheduled_work.py`, `test_error_advice.py`, plus render/export tests
 
-**Interfaces:**
-- Consumes: nothing.
-- Produces: `scheduled_work` and `error_handlers` tables.
+- [ ] **Step 1: the resets go in `pipeline.py`, not the engines**
 
-- [ ] **Step 1: Write the failing tests**
+`derive_endpoints` empties `endpoints` ONCE, outside its per-catalog loop, and
+states why (`resolve/endpoints.py:83-88`): a per-catalog rebuild leaves only
+whichever ran last. `reset_open_questions` follows the same pattern at
+`pipeline.py:62-67`. §4a promises "Quartz: later catalog, same table", which is
+exactly the two-catalogs-one-table case that makes this load-bearing.
 
-```python
-def test_a_scheduled_method_lands_in_its_own_table_not_endpoints(resolved):
-    assert not resolved.endpoints(handler="com.example.orders.Sweeper#sweep")
-    row = resolved.scheduled_work()[0]
-    assert row["trigger_kind"] == "cron"
-    assert row["expression"] == "0 0 * * * *"
+- [ ] **Step 2: `scheduled_work`**
 
+`@Scheduled` (and `@Schedules`, now readable via capability 9.16 — verify it
+reads before relying on it, §5.3). Handler symbol, trigger kind
+(`cron | fixedRate | fixedDelay`), expression **verbatim**.
 
-def test_an_advice_records_its_exception_types_and_status(resolved):
-    row = resolved.error_handlers()[0]
-    assert row["advice_class"] == "com.example.orders.ApiExceptionHandler"
-    assert row["exception_type"] == "com.example.orders.OrderNotFound"
-    assert row["status"] == "404"        # from @ResponseStatus
+**The docstring must not cite `root_kind` or `trace_of` as existing.** Both are
+documented and appear NOWHERE in `src/` (register #7, #11). Write instead:
+scheduled handlers are deliberately not endpoints; D00 documents a `root_kind`
+set and D01 a `trace_of` walk, neither of which exists today; **this omission
+becomes wrong the moment a `root_kind` producer ships** (§9).
 
+- [ ] **Step 3: `error_advice`**
 
-def test_a_status_computed_inside_a_response_entity_is_not_guessed(resolved):
-    row = resolved.error_handlers(advice_class="com.example.orders.DynamicHandler")[0]
-    assert row["status"] is None         # stated boundary, never invented
-```
+`@ControllerAdvice`, `@RestControllerAdvice`, `@ExceptionHandler` (including
+handlers inside controllers, scoped to that controller per Spring's own rule).
+Advice class, scope attributes verbatim, exception types (annotation value, else
+the parameter type), status from `@ResponseStatus`, **and the response shape
+symbol where the return type names one** — spec §4b requires it and the original
+plan omitted it.
 
-- [ ] **Step 2: Run to verify they fail**
+**Boundaries:** a status computed inside a `ResponseEntity` body is `fluent`
+territory and out of scope; `@ResponseStatus` on an exception class is readable
+only when that class is in this module's own facts.
 
-Run: `uv run pytest tests/application/test_scheduled_work.py tests/application/test_error_advice.py -v`
-Expected: FAIL — no tables, no engines.
+- [ ] **Step 4: near-miss tests (§10)**
 
-- [ ] **Step 3: Build both families**
+Nothing produced for: a method named `sweep()` with no `@Scheduled`; an
+`@ExceptionHandler` on a class that is neither `@ControllerAdvice` nor a
+controller; a `@ControllerAdvice` class with no handler method. (A `status is
+None` assertion is a boundary-value test, not a near-miss — §10 distinguishes
+them.)
 
-Each gets: the engine, the D01 table, the D06 bundle artifact, the M07 rendered section ("Scheduled work", "Error handling") using 2M's typed machine sections, and the M08 export slot with deterministic total ordering. `@Scheduled`/`@Schedules` carry handler + trigger kind + expression verbatim (placeholders through the shipped ladder; unresolvable → unresolved). `@ControllerAdvice`/`@RestControllerAdvice`/`@ExceptionHandler` (including handler methods inside controllers, scoped to that controller per Spring's rule) carry advice class, scope attributes verbatim, exception types (annotation value, else the parameter type — Spring's own rule), and `@ResponseStatus` where present.
+- [ ] **Step 5: byte-identity, COVERAGE, commit**
 
-State in `scheduled_work.py`'s docstring that D00's `root_kind: scheduled` stays unfed this phase — `trace_of` roots on inbound endpoints, and scheduled roots come alive with 2Q's traversal.
-
-- [ ] **Step 4: Run to verify they pass**
-
-Run: `uv run pytest -q`
-Expected: PASS.
-
-- [ ] **Step 5: Extend byte-identity e2e, COVERAGE, commit**
-
-Extend the byte-identity end-to-end test to both new tables' exports. Flip COVERAGE's `@Scheduled` and `@ControllerAdvice` rows; add the `ResponseEntity`-status and Quartz boundary rows.
-
-```bash
-git add -A
-git commit -m "feat: scheduled work and error contracts, beside the wire-true table"
-```
+Extend the byte-identity e2e to both new tables' exports (NFR-1).
 
 ---
 
-## Task 9: Spring Integration — channels, and honest questions
+## Task 9: Spring Integration — the channel join, on measured evidence
+
+**Rewritten 2026-09-04 from `scripts/probes/spring-integration-destinations.md`.**
+Every earlier version of this task was built on a guess; the probe replaced all
+of them, and capability 9.15 shipped as a result.
 
 **Files:**
-- Modify: `src/sextant/application/resolve/engines/config_join.py` (`from: annotation_value`)
+- Modify: `engines/config_join.py` (a second binding source)
 - Create: `src/sextant/catalogs/spring-integration.yml`
-- Create: a project-catalog fixture proving the wire-half pattern
 - Test: `tests/application/test_config_join.py`
 
-**Interfaces:**
-- Consumes: Task 1's `channel_destination` kind.
-- Produces: nothing later tasks depend on.
+**What the probe established** (cite it, do not re-derive): the channel join is
+REAL in both shapes — `setOutputChannelName("amqpInputChannel")` as a call-site
+string argument and `@ServiceActivator(inputChannel="amqpInputChannel")` as an
+annotation argument, **the same literal on both sides**. The DSL shape
+reconstructs through within-method `result` ↔ `receiver` joins. Destinations for
+varargs APIs were unreadable until 9.15; **verify 9.15's elements now reach this
+join before designing around them** (§5.3).
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: `from: annotation_value` in `config_join`**
 
-```python
-def test_a_bean_wired_channel_files_a_question_and_derives_no_endpoint(resolved):
-    # Spring Integration defines NO standard configuration key for a channel's
-    # destination — real apps wire them in bean definitions. The question IS
-    # the product for those flows.
-    assert not resolved.endpoints(catalog_id="spring-integration")
-    q = resolved.open_questions(question="channel_destination")[0]
-    assert q["candidates"] == '["orders.inbound", "com.example.orders.Activator#handle"]'
+Today the engine refuses anything but `bean_name` (`config_join.py:592-597`,
+`_BEAN_NAME` at `:51`) and reads one input, `resolved_config` (`:528`). Add the
+second binding source; **the single input is unchanged**.
 
+- [ ] **Step 2: questions ride the `gaps()` seam, never a write inside `run`**
 
-def test_a_project_catalog_declaring_its_own_key_template_derives_the_wire_row(resolved_with_project_catalog):
-    row = resolved_with_project_catalog.endpoint(protocol="amqp", direction="inbound")
-    assert row["path"] == "orders.queue"
-```
+`reset_open_questions` runs at `pipeline.py:62-67`, AFTER `derive_endpoints` at
+`:55` — a row written during `run` is **erased**. The three shipped writers
+(`format.py`, `shapes/parse_binding.py`, `service_identity.py`) all run after the
+reset. Register `config_join.gaps` in `_GAP_ENGINES`
+(`resolve/service_identity.py:34-38`).
 
-- [ ] **Step 2: Run to verify they fail**
+- [ ] **Step 3: the built-in ships channel enumeration plus questions**
 
-Run: `uv run pytest tests/application/test_config_join.py -v`
-Expected: FAIL — `binding.from` accepts only `bean_name`.
+Spring Integration defines no standard configuration key for a destination.
+Where 9.15 now makes one readable, derive the wire row; where it is genuinely
+not statically knowable, file a `channel_destination` open question carrying the
+channel name and handler symbol — **the enrichment seat's inbox** (2K §8),
+which is how "we cannot see it" becomes a route to an answer rather than a dead
+end. Never a fabricated wire, never `peer: in-process` (the schema refuses it).
 
-- [ ] **Step 3: Add the second binding source**
+**Watch the candidates shape:** every shipped question kind uses a list of
+dicts, and `cf3f841`'s renderer arms expect that. An earlier draft of this plan
+showed a flat string array — do not follow it.
 
-`config_join` today reads one input (`resolved_config`) and one binding source (`bean_name`); anything else is refused. Add `annotation_value`: the binding key comes from an annotation attribute (`@ServiceActivator`'s `inputChannel`, `@InboundChannelAdapter`'s `channel`, `@Transformer`, `@Router`). **The engine's single input is unchanged** — destinations still come from `resolved_config` alone.
+- [ ] **Step 4: the Task 2 carry**
 
-- [ ] **Step 4: Write the built-in catalog as questions-only**
+`config_join.py:451` writes its `direction` column from a per-suffix value that
+is neither `catalog.direction` nor a literal — the same shape as the
+`single_call` bug Task 2 fixed. Unreachable while its catalogs are kafka-only;
+this task makes the engine reachable from a new direction, so fix it here.
 
-`spring-integration.yml` files a `channel_destination` question per activator/adapter and derives no wire rows, because any destination key template would be a project convention — which D02 places in a repo's own `sextant.yml`, never in a built-in. Document the project-catalog pattern in the catalog's comment and prove it with the fixture project catalog. Never fabricate a wire; never `peer: in-process`.
+- [ ] **Step 5: near-miss (§10), COVERAGE, commit**
 
-- [ ] **Step 5: Run to verify they pass**
-
-Run: `uv run pytest tests/application -q`
-Expected: PASS.
-
-- [ ] **Step 6: COVERAGE and commit**
-
-Flip the Spring Integration row to shipped-with-boundaries and add the DSL boundary row.
-
-```bash
-git add -A
-git commit -m "feat: Integration channels made visible, their destinations honestly unanswered"
-```
+An `@ServiceActivator` whose channel no key template covers produces **no
+endpoint row and no ghost row** — only the question. DSL flows
+(`IntegrationFlow`) and XML config are stated boundaries; XML contributes zero
+facts (probe-confirmed).
 
 ---
 
 ## Task 10: The `@HttpExchange` direction flip
 
+**Rewritten 2026-09-04** — ruling R12 voided its Step 4, and CP-7's original
+question was unanswerable.
+
 **Files:**
-- Modify: `src/sextant/application/resolve/engines/annotation_driven.py` (implement `resolves.direction`)
-- Modify: `src/sextant/catalogs/spring-http-interface.yml`
-- Modify: the routing-ambiguity collision detector
+- Modify: `engines/annotation_driven.py` (`resolves.direction`), `src/sextant/catalogs/spring-http-interface.yml`, `src/sextant/storage/duckdb/derive_endpoints.sql`
+- Create: `scripts/probes/cp7_http_exchange.md` + harness
 - Test: `tests/application/test_endpoints.py`
 
-**Interfaces:**
-- Consumes: CP-7's verdict.
-- Produces: nothing later tasks depend on.
+**The defect today:** a locally-implemented `@HttpExchange` interface derives an
+**outbound** row — the module reported calling a service it actually serves —
+and its inbound routes are missed entirely. Both errors in the same rows.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 0: CP-7, restated — measure before building (§8.1)**
 
-```python
-def test_a_locally_implemented_http_exchange_interface_serves_rather_than_calls(resolved):
-    rows = resolved.endpoints(path="/orders/{id}", catalog_id="spring-http-interface")
-    assert len(rows) == 1
-    assert rows[0]["direction"] == "inbound"
-    assert rows[0]["handler"] == "com.example.orders.OrderApiImpl#get"   # the IMPLEMENTATION
+The original CP-7 asked whether 2E's inheritance walk carries an interface's
+annotations onto the implementing class. **It cannot, by design:** the walk runs
+only for catalogs declaring a type-level gate (`annotation_driven.py:159-161`)
+and `spring-http-interface.yml` declares none, deliberately
+(`spring-http-interface.yml:17-18`) — a shipped test pins that a gateless
+catalog must never synthesize onto an implementer.
 
+Probe instead: **(a)** Spring's actual server-side handler predicate — is it
+`@Controller`, or `@Controller` OR a type-level `@RequestMapping`, and does it
+honour meta-annotations (a custom `@ApiController` meta-annotated `@Controller`
+is valid usage — §8.1 rule 2)? **(b)** are inherited `default` interface methods
+served? **(c)** does an interface's annotation reach us when the interface is in
+a dependency jar extracted via `.sextant.yml`? State the Framework/Boot versions.
 
-def test_an_unimplemented_http_exchange_interface_still_reads_as_a_client(resolved):
-    row = resolved.endpoint(path="/billing/{id}", catalog_id="spring-http-interface")
-    assert row["direction"] == "outbound"
+- [ ] **Step 1: the handler comes from a fact join, not the walk**
 
+`implemented_interfaces` (2E-prep) names the interface a class declares. Join on
+it, matching the method by **name + descriptor** (name alone mis-binds
+overloads). Known gaps to state, not silently miss: an abstract base implementing
+the interface with a concrete controller extending it, and interface
+inheritance — both are direct-only reads (`facts.py:129`, `:140`), so a bounded
+within-module closure is required or the gap is stated.
 
-def test_the_interface_implementor_pair_raises_no_routing_ambiguity(resolved):
-    assert not resolved.findings(kind="routing_ambiguity")
-```
+- [ ] **Step 2: the flip condition is the CONTROLLER check, not `owner_implemented_in_module`**
 
-- [ ] **Step 2: Run to verify they fail**
+Spec §6's original condition is **weaker than Spring's rule** and fabricates: a
+`@Service` implementing an `@HttpExchange` interface is served by nothing. Gate
+on a catalog-declared controller annotation — the FQNs are already catalog data
+(`spring-mvc.yml:13`, `spring-web.yml:13`), so do not hardcode them.
 
-Run: `uv run pytest tests/application/test_endpoints.py -k http_exchange -v`
-Expected: FAIL — the interface derives an outbound row.
+Implement `resolves.direction` alone. **Do NOT also add `declared_on: interface`** —
+it subtracts exactly the rows the flip must flip (`derive_endpoints.sql:699-702`),
+and shipping both yields no inbound rows at all.
 
-- [ ] **Step 3: Implement `resolves.direction`**
+- [ ] **Step 3: merge precedence, not a collision-detector exemption (R12)**
 
-D02 specifies `resolves.direction` with `when: {owner_implemented_in_module: true}` and nothing implements it. Implement it and declare it on `spring-http-interface.yml`. **Do not also add `declared_on: interface`** — that subtracts exactly the rows this flips, and shipping both yields no inbound rows at all. `jakarta-jws-client.yml`'s subtraction stays as it is; its SEI story is different.
+There is **no collision detector and no findings mechanism** in `src/` (register
+#9). When both the interface and the implementing class derive one route, the
+rows share `(protocol, direction, method, path)` and merge through existing
+dedup. Assert the **surviving row's handler is the implementing class's method**.
+Delete the plan's old third test — it asserted `not resolved.findings(...)`
+against a mechanism that does not exist.
 
-- [ ] **Step 4: Rule on double derivation**
+- [ ] **Step 4: near-miss (§10), COVERAGE, commit**
 
-If CP-7 shows 2E's inheritance walk carries the interface's annotations to the implementing class, both derive the same route. The implementing class's row **stands**; the interface's yields. Exempt the interface/implementor pair in the collision detector — a real second implementor must still trip it.
-
-- [ ] **Step 5: Run to verify they pass**
-
-Run: `uv run pytest -q`
-Expected: PASS.
-
-- [ ] **Step 6: COVERAGE and commit**
-
-```bash
-git add -A
-git commit -m "fix: a locally implemented @HttpExchange interface serves, not calls"
-```
+Nothing flipped for: an `@HttpExchange` interface implemented by a non-controller
+bean; an unimplemented `@HttpExchange` interface (must stay outbound).
 
 ---
 
-## Task 11: Module-kind evidence and the loud-failure pin
+## Task 11: The loud-failure pin
 
-**Files:**
-- Modify: M02's module-kind determination (Gradle plugin evidence)
-- Test: `tests/application/test_detector.py` (match the existing name), `tests/agents/test_tradewind.py`
+**Reduced 2026-09-04.** This task was "module-kind evidence and the loud-failure
+pin". §9 was dropped entirely — module `kind` has exactly two consumers
+(`api.py:324`'s skip gate and `metadata.py:70`'s label), only `library` ever
+caused a skip, and nothing returns `library` any more. Adding *service* evidence
+would have changed a manifest string and nothing else, at the cost of a
+build-script change and an architectural conflict. What remains is the pin.
 
-**Interfaces:**
-- Consumes: 2M's harvested Gradle plugin ids.
-- Produces: nothing.
+**Files:** `tests/agents/test_tradewind_loop.py` (or the sibling matching its convention — **not** `tests/agents/test_tradewind.py`, which does not exist)
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: pin the loud failure, both auth paths**
 
-```python
-def test_the_gradle_application_plugin_is_service_evidence(detected):
-    assert detected.module("gradle-app").kind == "service"
+A Tradewind invocation error propagates named and immediate — no retry loop, no
+silent wait. The path is already correct (`agents/tradewind.py:281-287`,
+`:342-349` → `api.py:1042` → `cli/app.py:76`); this pins it. Use the shipped
+test seam `backend_factories` (`tradewind.py:247-250`).
 
+**Scope the claim honestly (§5.4):** Sextant adds no retry and no wait; the
+backend SDK's own behaviour is unmeasured and the docstring says so.
 
-def test_the_boot_gradle_plugin_is_service_evidence(detected):
-    assert detected.module("gradle-boot").kind == "service"
-
-
-def test_an_invocation_failure_surfaces_immediately_and_names_itself(fake_failing_agent):
-    # No retry loop, no silent wait — retrying is the operator's re-run.
-    with pytest.raises(SextantError, match="authentication"):
-        api.enrich(module, agent=fake_failing_agent)
-```
-
-- [ ] **Step 2: Run to verify they fail**
-
-Run: `uv run pytest tests/application/test_detector.py tests/agents -v`
-Expected: FAIL — Gradle modules get the default kind.
-
-- [ ] **Step 3: Join the plugin evidence, pin the failure path**
-
-2M's init script already harvests plugin ids. Join `application` and the Spring Boot plugin as service evidence, symmetric with the Maven boot-plugin evidence; 2M's skip-gate semantics (skip only `library` + packaging-pom) are unchanged. Add one test per auth path proving a Tradewind invocation error propagates unchanged.
-
-- [ ] **Step 4: Run to verify they pass**
-
-Run: `uv run pytest -q`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add -A
-git commit -m "feat: Gradle plugins as service evidence; pin the loud invocation failure"
-```
+`api.enrich`'s real signature takes `agent` as a **string name** resolved through
+the registry (`api.py:1136-1144`) — not an object, whatever the old plan showed.
 
 ---
 
 ## Task 12: The documentation sweep
 
-Every task carried its own COVERAGE rows. This task closes what spans them.
+**Corrected 2026-09-04** — three of its items are already done and one is void.
 
-**Files:**
-- Modify: `docs/components/D00-fact-schema.md`, `D01-graph-schema.md`, `D02-catalog-schema.md`, `M02-detector.md`, `M07-renderer.md`, `M08-exporter.md`
-- Modify: `docs/COVERAGE.md` (headline re-derivation), `README.md`, `docs/superpowers/plans/2026-08-28-phase-2-roadmap.md`
+**Files:** `docs/components/D00`–`D02`, `D06`, `M02`, `M07`, `M08`; `docs/COVERAGE.md`; `docs/documented-not-implemented.md`; `README.md`; the roadmap
 
-- [ ] **Step 1: Write the D02 style sections**
+- [ ] **Step 1: the D02 style sections that remain**
 
-One full section per new style — `supertype_derived`, `injected_client`, `derived_resource`, `scheduled_work`, `error_advice` — matching the depth of the shipped style sections, each stating what it reads, what it derives, what it refuses, and its pipeline position.
+`derived_resource`, `scheduled_work`, `error_advice`, and Task 7b's servlet
+style. **Already written by Task 5: `supertype_derived` (D02:1287) and
+`injected_client` (D02:1384)** — do not redo them.
 
-- [ ] **Step 2: Write the schema amendment notes**
+- [ ] **Step 2: the live schema divergence**
 
-D00: `declared_shape.operation`, protocols `amqp`/`pulsar`, `fact_schema_version` bump with the estate cost. D01: the two new tables, gRPC's **two** identity forms (`package.Service/Method` and the service-level `package.Service`, the SOAP precedent), the three `open_questions` kinds with their candidate shapes, the path-identity migration, and the routing-ambiguity interface/implementor exemption. D02: the `binder_protocols` migration, the leading-slash overturn scoped to `http`, and every new catalog key (`path_prefix`, `address_arg_2`, `identity_marker`, `supertype_marker`, marker coordinates).
+`D00:190`'s protocol list still omits `amqp` and `pulsar` while
+`closed_sets.py:86-87` ships both — a §5.1 violation dating from Task 1. Fix it.
 
-- [ ] **Step 3: Re-derive the COVERAGE headline**
+**Already done, do not redo:** `declared_shape.operation` and the
+`fact_schema_version` bump (D00:505-520); gRPC's two identity forms
+(D01:340-341); the renderer/export arms for the three question kinds (`cf3f841`).
 
-Count the flipped rows and any rows the phase ADDED to the denominator (2H/2I discipline: the count is re-derived, never carried). Run `uv run python scripts/coverage_matrix.py --check` and make it pass.
+**Void — do not write it:** "§6's collision-detector interface/implementor
+exemption". No detector exists (R12). Record merge precedence instead.
 
-- [ ] **Step 4: Update the roadmap and README**
+- [ ] **Step 3: the register**
 
-Mark 2O delivered with what actually shipped and what it deliberately did not. Update README's catalog/dependency sections if any new mechanism is user-visible.
+Add every entry this phase found and did not close, each with its consumer
+`file:line` (§5.3). Entries 10 (project catalogs) and 11 (`trace_of`) came from
+the pre-dispatch audit; 12 (the unread `publishing` boolean) from the user
+ruling.
 
-- [ ] **Step 5: Full suite, lint, commit**
+- [ ] **Step 4: capabilities 9.15 and 9.16, and their consumers**
 
-Run: `uv run pytest -q && ./scripts/check.sh --lint`
-Expected: PASS, all four import contracts kept.
+Document both in the extractor's capability list and D00. **State which
+consumers read them and which do not** — `spring-webflux-router.yml`'s
+`media_values` and `kafka-consumer.yml`'s `all_strings` read positional
+arguments, not `elements`, so their output is unchanged until the wiring task
+lands. A capability whose consumers are unwired must not be documented as
+delivering output.
 
-```bash
-git add -A
-git commit -m "docs: 2O — the Spring surface, its schema amendments and its boundaries"
-```
+- [ ] **Step 5: re-derive the COVERAGE headline, lint, commit**
+
+The count is re-derived from the flips, never carried (2H/2I discipline). Run
+`uv run python scripts/coverage_matrix.py --check` and make it pass.
+
+---
+
+## Task 13: Wire the consumers 9.15 and 9.16 unblocked
+
+**New task, 2026-09-04.** Both capabilities emit facts nothing reads yet. Without
+this, 2O ships two capabilities with no visible output — the outcome the phase
+exists to avoid.
+
+**Files:** `src/sextant/catalogs/spring-webflux-router.yml`, `kafka-consumer.yml`, and whichever engine reads their keys
+
+- [ ] **Step 1: `media_values` and `all_strings` read `elements`**
+
+Both read positional arguments today, so WebFlux media columns are NULL even
+though `MediaType.APPLICATION_JSON` is now in the facts, and Kafka's multi-topic
+arity is readable but unread. Their comments and a COVERAGE row asserted the
+extractor could not read varargs — 9.15 corrected the claim in place; this makes
+the behaviour match it.
+
+- [ ] **Step 2: a nested-annotation consumer, if one is honest**
+
+9.16 makes `@RabbitListener`'s `bindings = @QueueBinding(@Queue(…))` readable.
+If Task 7's rabbit catalog can now read the queue name from the binding, do it
+and retire that boundary. **If it cannot, leave the boundary and say why** —
+do not invent a consumer to justify the capability.
+
+- [ ] **Step 3: golden churn, near-miss, commit**
+
+Expect recorded output to move — WebFlux media columns gain values. Audit every
+changed line; a change that is not explained by one of these two reads is a
+defect. Near-miss: a single-argument call must not gain an `elements` read.
 
 ---
 
 ## Self-review
 
-**Spec coverage.** §0a's eight checkpoints: CP-1/CP-6 in Task 1, CP-2 in Task 6, CP-3/CP-8 in Task 3, CP-4 in Task 4, CP-5 in Task 7, CP-7 in Task 10. §1a→Task 4; §1b/§1c→Task 5; §1d→Task 5's COVERAGE rows. §2→Task 6. §3a→Tasks 1+2; §3b→Task 7. §4→Task 8. §5→Task 9. §6→Task 10. §7→Task 2. §8→Task 2. §9/§10→Task 11. §11 is out-of-scope pointers. §12's verification is distributed, with the docs remainder in Task 12. **No gaps.**
+**Spec coverage.** §3b→Tasks 7+7b; §4→Task 8; §5→Task 9; §6→Task 10; §7 shipped
+in Task 2; §9 dropped by ruling; §10→Task 11; §12→Task 12; capabilities
+9.15/9.16 shipped, their consumers→Task 13.
 
-**Placeholder scan.** The `FILL FROM PROBE` markers in Task 1 are deliberate — they are the probe's output slots, and Step 6 requires filling them before the task completes. No other placeholders.
+**Every mechanism cited carries a consumer `file:line`** (§5.3) — the plan no
+longer asserts that anything is shipped without pointing at the code that reads
+it.
 
-**Type consistency.** `canonical_http_path`/`is_path_shaped` (Task 2) are used by name in Tasks 6 and 7. `generic_interfaces` (Task 3) is read in Task 6. `OperationRecord`'s four fields (Task 4) are asserted in Task 4's tests and merged against in Task 5. The three question kinds (Task 1) are used in Tasks 5, 6 and 9 under those exact names.
+**Every task that matches or classifies has a near-miss step** (§10), asserting
+nothing is produced.
 
-**Ordering risk worth naming for the executor.** Task 2 changes recorded output before most surfaces exist, which is deliberate: the migration's diff stays readable. Tasks 4–11 then ADD rows, which is not churn.
+**Every framework rule is probed before it is built on** (§8.1) — CP-5 in Task 7,
+CP-9 in Task 7b, CP-7 restated in Task 10, and Task 9 built on a probe that has
+already run.
+
+**Known gaps stated rather than assumed away:** Task 7's Actuator base-path has
+no reader; Task 10's abstract-base and interface-inheritance indirection;
+Task 13's Step 2, which may honestly find no consumer.
