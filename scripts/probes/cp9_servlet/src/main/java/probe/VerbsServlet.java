@@ -6,7 +6,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
-/** Rows 4-5: two overridden verbs, and a third the class does not override. */
+/** Rows 4-6 and 23: two overridden verbs, and a third the class does not override. */
 @WebServlet(urlPatterns = "/verbs")
 public class VerbsServlet extends HttpServlet {
 

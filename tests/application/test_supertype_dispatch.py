@@ -2,16 +2,20 @@
 style, 2O design §3b, Task 7b).
 
 Facts are hand-built to mirror CP-9's real, checkpoint-recorded shapes exactly
-(`scripts/probes/cp9_servlet_shapes.md`, measured against Apache Tomcat 10.1.50
-and 11.0.24): `@WebServlet` arrives as a TYPE-level annotation whose `args`
-carry `urlPatterns` or `value` as a LIST even when one string was written
-(rows 20-23); a `protected` handler's recorded `visibility` is `other`, never
-`protected` (row 24); a handler's parameter types are readable off its own
-signature (rows 25-26); and the `extends` edge is present and module-prefixed
-even though `HttpServlet` lives in a container jar the workspace never scanned
-(rows 27-28). Rather than compiling real class files per case — which
-`scripts/probes/cp9_servlet/` already did once, for every one of these shapes,
-and recorded.
+(`scripts/probes/cp9_servlet_shapes.md`, measured against Apache Tomcat
+10.1.50, 11.0.24 and 9.0.121): `@WebServlet` arrives as a TYPE-level
+annotation whose `args` carry `urlPatterns` or `value` as a LIST even when one
+string was written (rows 20-23); a `protected` handler's recorded `visibility`
+is `other`, never `protected` (row 24); a handler's parameter types are
+readable off its own signature (rows 25-26); and the `extends` edge is present
+and module-prefixed even though `HttpServlet` lives in a container jar the
+workspace never scanned (rows 27-28). Rather than compiling real class files
+per case — which `scripts/probes/cp9_servlet/` already did once, for every one
+of these shapes, and recorded.
+
+Two catalogs are exercised, not one: `jakarta-servlet.yml` throughout, and
+`javax-servlet.yml` in section (e), which CP-9's third column (Tomcat 9.0.121,
+Servlet 4.0) measured row for row against the other two.
 
 Every address below is invented (`/orders/*`, never a pattern the probe
 served): the shipped catalog's live answer against real container bytecode
@@ -19,6 +23,7 @@ belongs to the probe, not here (the `test_supertype_derived.py` precedent this
 file otherwise mirrors).
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -75,6 +80,7 @@ _MATCHES: dict[str, object] = {
         {"name": "doDelete", "parameters": _DISPATCH_PARAMETERS, "method": "DELETE"},
         {"name": "doHead", "parameters": _DISPATCH_PARAMETERS, "method": "HEAD"},
         {"name": "doOptions", "parameters": _DISPATCH_PARAMETERS, "method": "OPTIONS"},
+        {"name": "doTrace", "parameters": _DISPATCH_PARAMETERS, "method": "TRACE"},
     ],
     "bypassed_by": [
         {"name": "service", "parameters": _DISPATCH_PARAMETERS},
@@ -283,19 +289,47 @@ def test_an_explicitly_overridden_head_or_options_derives_its_own_row(tmp_path: 
     assert _identities(_rows(tmp_path, facts)) == {("HEAD", "/orders"), ("OPTIONS", "/orders")}
 
 
+def test_an_explicitly_overridden_trace_derives_its_own_row(tmp_path: Path):
+    """CP-9 rows 31 and 13, verdict 7 as fix round 1 restated it.
+
+    `HttpServlet.service` dispatches TRACE to `doTrace` exactly as it
+    dispatches GET to `doGet` — measured, on all three containers, over a
+    connector configured `allowTrace="true"` (row 31: 200). The DEFAULT
+    connector refuses the method before dispatch (row 13: 405), but
+    `allowTrace` is connector configuration, overridable by whoever deploys
+    the module and invisible from its repository, so the default is not proof
+    that the address is unserved. A class overriding `doTrace` has declared a
+    handler, and a declared handler is a code fact; `docs/COVERAGE.md` carries
+    the connector as a STATED DEPENDENCY, on the same terms as Actuator's
+    `exposure.include`. This row disappears the day the dependency stops being
+    overridable at deploy time."""
+    facts = [
+        _class(),
+        _method("doTrace", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _identities(_rows(tmp_path, facts)) == {("TRACE", "/orders")}
+
+
 def test_implicitly_dispatched_verbs_derive_no_row_of_their_own(tmp_path: Path):
-    """CP-9 rows 7-9 and verdict 5 — THE RULING, pinned.
+    """CP-9 rows 7-9 and 32, and verdict 5 — THE RULING, pinned.
 
     `HttpServlet` really does serve HEAD and OPTIONS from a class declaring
-    only `doGet` (200 on both containers, `Allow: GET, HEAD, OPTIONS`). They
-    are nonetheless not derived, because the code serving them is in a
-    container jar this workspace never scanned: a HEAD row would carry either
-    a NULL handler or `doGet`'s symbol, and the second is false — `doGet` is
-    CALLED BY the HEAD path, it does not serve HEAD. It is also the ruling
-    this phase already made for the same two verbs on Spring Data REST
-    (`docs/COVERAGE.md`), and two catalogs answering one question two ways
-    would be the §6 blend. A stated under-report, falsified the day an
-    endpoint row can name a handler outside the module.
+    only `doGet` (200 on all three containers, `Allow: GET, HEAD, OPTIONS`),
+    and TRACE too where the connector permits the method (row 32: 200 off
+    `HttpServlet`'s own `doTrace`). None of the three is derived, because the
+    code serving them is in a container jar this workspace never scanned: a
+    HEAD row would carry either a NULL handler or `doGet`'s symbol, and the
+    second is false — `doGet` is CALLED BY the HEAD path, it does not serve
+    HEAD. It is also the ruling this phase already made for the first two
+    verbs on Spring Data REST (`docs/COVERAGE.md`), and two catalogs answering
+    one question two ways would be the §6 blend. A stated under-report,
+    falsified the day an endpoint row can name a handler outside the module.
+
+    This is the complement of the test above, and the pair is what makes the
+    TRACE ruling principled rather than a per-verb preference: an EXPLICIT
+    override is a declaration, an implicit dispatch is not.
     """
     facts = [
         _class(),
@@ -306,19 +340,26 @@ def test_implicitly_dispatched_verbs_derive_no_row_of_their_own(tmp_path: Path):
     assert _identities(_rows(tmp_path, facts)) == {("GET", "/orders")}
 
 
-def test_a_trace_override_derives_nothing_because_the_container_refuses_trace(tmp_path: Path):
-    """CP-9 rows 10 and 13, verdict 7: TRACE is a 405 on both containers even
-    with `doTrace` EXPLICITLY overridden — the connector refuses the method
-    before dispatch. `doTrace` is therefore absent from the catalog's verb
-    map, and a class declaring only it derives nothing rather than publishing
-    an address the deployment does not serve."""
+def test_a_parameter_symbol_carrying_module_coordinates_still_matches(tmp_path: Path):
+    """D00 §5a: a symbol is module coordinates then a descriptor, and ONLY the
+    descriptor is ever compared. The supertype side has always been normalised
+    with `bare_descriptor`; the member side is normalised the same way, so the
+    two halves of one selector are compared in one coordinate space.
+
+    Not reachable through the shipped catalogs — CP-9 row 25 measured a
+    dispatch signature's parameter symbols BARE, and a dispatch contract's
+    parameter types are dependency types by construction — which is exactly
+    why it needs a test: an asymmetry nothing can reach today fails by
+    deriving NOTHING, silently, the first time a catalog names a
+    module-local parameter type. §10's permanently-quiet shape.
+    """
     facts = [
         _class(),
-        _method("doTrace", REQUEST, RESPONSE),
+        _method("doGet", _MODULE + REQUEST, _MODULE + RESPONSE),
         _annotated({"urlPatterns": ["/orders"]}),
     ]
 
-    assert _rows(tmp_path, facts) == []
+    assert _identities(_rows(tmp_path, facts)) == {("GET", "/orders")}
 
 
 def test_the_payload_columns_stay_null_because_the_parameters_are_the_container_s(
@@ -457,6 +498,30 @@ def test_an_address_annotation_naming_no_pattern_derives_nothing(tmp_path: Path)
 
 
 @pytest.mark.declines("jakarta-servlet")
+def test_an_address_annotation_writing_BOTH_SPELLINGS_derives_nothing(tmp_path: Path):
+    """The two argument spellings are ALIASES of one attribute, and writing
+    both is a declaration the container refuses to deploy — so the module
+    serves nothing at all, and publishing either value would be a fabricated
+    address rather than "the attribute the author named".
+
+    The `args` list is therefore an alias SET, not a precedence list: exactly
+    one of its keys must be present. Order-independent by construction, which
+    is what makes the answer the same whichever spelling the compiler happened
+    to write first.
+
+    Paired positive: `test_the_alias_argument_names_the_same_address`, the
+    same class writing one of them.
+    """
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"], "value": ["/legacy/orders"]}),
+    ]
+
+    assert _rows(tmp_path, facts) == []
+
+
+@pytest.mark.declines("jakarta-servlet")
 def test_a_declared_address_with_no_dispatch_override_derives_nothing(tmp_path: Path):
     """The address alone is not a boundary: a registered class overriding no
     dispatch method answers 405 to every verb (CP-9 row 6 is that default
@@ -504,7 +569,120 @@ def test_two_classes_sharing_one_pattern_and_verb_derive_one_row(tmp_path: Path)
     assert rows[0]["handler"] == f"{_MODULE}{other}doGet(sig_doGet)."
 
 
-# --- (e) the catalog is refused before any class is matched -----------------
+# --- (e) the second spelling: `javax-servlet.yml` ---------------------------
+#
+# CP-9 grew a third column for it (Apache Tomcat 9.0.121, Servlet 4.0) rather
+# than the catalog being shipped on the assumption that the two behave alike,
+# and all 33 rows measured identical to the two `jakarta` columns modulo the
+# package name (`scripts/probes/cp9_servlet_shapes.md`). These tests pin the
+# consequence: one rule, two spellings, and NO leakage between them — which is
+# the whole of what could be wrong here without being invalid, since the two
+# files differ by a string substitution a copy-paste can half-apply.
+
+_JAVAX = {
+    "supertype": "javax/servlet/http/HttpServlet#",
+    "annotation": "javax/servlet/annotation/WebServlet#",
+    "request": "javax/servlet/http/HttpServletRequest#",
+    "response": "javax/servlet/http/HttpServletResponse#",
+}
+
+
+def _javax_catalog() -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "javax-servlet")
+
+
+def _javax_facts(*methods: SymbolFact, args: dict[str, object] | None = None) -> list:
+    """A `javax`-spelled servlet class: the same three pieces of evidence, with
+    every dependency type named in the other package."""
+    return [
+        _class(superclass=_JAVAX["supertype"]),
+        *methods,
+        AnnotationFact(
+            document_id="doc_1",
+            target=_MODULE + SERVLET,
+            use=AnnotationUse(
+                annotation=_JAVAX["annotation"],
+                args=args or {"urlPatterns": ["/orders"]},  # type: ignore[arg-type]
+            ),
+            retention="RUNTIME",
+        ),
+    ]
+
+
+def test_the_two_spellings_declare_one_rule(tmp_path: Path):
+    """The two catalogs' `matches` blocks are the SAME document under a package
+    rename, and that is the claim CP-9's third column licenses: 33 rows
+    identical modulo the spelling.
+
+    Asserted structurally rather than shape by shape because the failure this
+    guards is a substitution half-applied — a `jakarta` parameter type left in
+    one `dispatch` entry, a `bypassed_by` signature not renamed — each of which
+    is wrong without being invalid, matches nothing, and derives nothing
+    silently (§10). A deliberate divergence between the two must therefore
+    start by measuring one, which is the point.
+    """
+    jakarta = _catalog().matches
+    javax = _javax_catalog().matches
+
+    assert json.dumps(javax, sort_keys=True).replace("javax.servlet", "jakarta.servlet") == (
+        json.dumps(jakarta, sort_keys=True)
+    )
+
+
+def test_the_second_spelling_derives_its_own_endpoint(tmp_path: Path):
+    """CP-9 rows 1-6 on Tomcat 9.0.121, the same answers as the other two
+    columns: the annotation registers the class and the overridden `doXxx`
+    names the verb."""
+    facts = _javax_facts(_method("doGet", _JAVAX["request"], _JAVAX["response"]))
+
+    assert _identities(_rows(tmp_path, facts, _javax_catalog())) == {("GET", "/orders")}
+
+
+@pytest.mark.declines("javax-servlet")
+def test_a_jakarta_spelled_servlet_derives_nothing_from_the_javax_catalog(tmp_path: Path):
+    """The near-miss the second catalog introduces, and the only one that is
+    new: a module compiled against the OTHER API. Every conjunct is satisfied
+    except the package, and the two APIs are genuinely different types — a
+    class extending `jakarta.servlet.http.HttpServlet` is not served by
+    anything this catalog describes.
+
+    Paired positive: `test_the_second_spelling_derives_its_own_endpoint`.
+    """
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _rows(tmp_path, facts, _javax_catalog()) == []
+
+
+@pytest.mark.declines("jakarta-servlet")
+def test_a_javax_spelled_servlet_derives_nothing_from_the_jakarta_catalog(tmp_path: Path):
+    """The mirror, and it is not redundant: the leak this guards runs in the
+    other direction — a `jakarta` catalog that had kept a `javax` name would
+    match legacy classes and publish them under a rule measured elsewhere."""
+    facts = _javax_facts(_method("doGet", _JAVAX["request"], _JAVAX["response"]))
+
+    assert _rows(tmp_path, facts) == []
+
+
+@pytest.mark.declines("javax-servlet")
+def test_a_javax_class_overriding_service_derives_nothing(tmp_path: Path):
+    """The bypass under the second spelling, pinned separately from the
+    equivalence test above because `bypassed_by` is the block whose entries can
+    be renamed wrongly and stay silent: a signature left naming the `jakarta`
+    types would match nothing, the bypass would never fire, and this class
+    would publish `GET` while serving every verb alike (CP-9 rows 14-15)."""
+    facts = _javax_facts(
+        _method("doGet", _JAVAX["request"], _JAVAX["response"]),
+        _method("service", _JAVAX["request"], _JAVAX["response"]),
+    )
+
+    assert _rows(tmp_path, facts, _javax_catalog()) == []
+
+
+# --- (f) the catalog is refused before any class is matched -----------------
 
 
 def _without(key: str) -> dict[str, object]:

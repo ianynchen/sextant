@@ -12,26 +12,35 @@ annotation carrying its arguments? Are array-valued patterns readable? Is
 `value` distinguishable from `urlPatterns`? Is a `protected` handler's
 visibility recorded, and as what?
 
-**Version scope (§5.4).** Run against **Apache Tomcat 10.1.50 (Servlet 6.0) and
-11.0.24 (Servlet 6.1)**, two different majors and therefore two independent
-`jakarta.servlet.http.HttpServlet` implementations — which is where implicit
-verb dispatch lives. The verdict below is evidence about those two containers
-and no other: implicit dispatch is implemented by the container's own servlet
-API jar, and the TRACE row in particular is a **connector** default that
-another container may set the other way. Widening the verdict means adding a
-version to `VERSIONS` in `scripts/probes/cp9_servlet/run.sh` and re-running,
-never assuming.
+**Three questions were added by fix round 1**, each because a verdict below had
+been decided on something other than a measurement. **Does `HttpServlet.service`
+dispatch TRACE to `doTrace`** when the connector is not the thing refusing the
+method — that is, is the 405 the first run recorded a fact about the servlet or
+a fact about the deployment? **Does the `javax.servlet` spelling behave the
+same**, on the container the legacy estate actually runs? And **does a
+deployment descriptor declaring `metadata-complete="true"` really suppress
+every annotated servlet**, which is the one shape in which this catalog
+fabricates an entire module's surface?
 
-**No Spring anywhere, deliberately.** The catalog this probe precedes is
-`jakarta-servlet.yml`, and the rule it models belongs to the Servlet
-specification and to `HttpServlet`'s own dispatch. The harness therefore
-deploys a real webapp directory through `Tomcat.addWebapp`, so the CONTAINER's
-own annotation deployment scan is what discovers each `@WebServlet` — the
-spec's own mechanism. Spring Boot's `@ServletComponentScan` is a second
-registration route; measuring through it would have confounded the rule under
-test with Spring's re-implementation of it, and (as it happens) that annotation
-moved package between Boot 3 and Boot 4, which is itself a reason not to make a
-container-level verdict depend on it.
+**Version scope (§5.4).** Run against **Apache Tomcat 10.1.50 (Servlet 6.0),
+11.0.24 (Servlet 6.1) and 9.0.121 (Servlet 4.0)** — three different majors and
+therefore three independent `jakarta`/`javax` `HttpServlet` implementations,
+which is where implicit verb dispatch lives. 9.0.121 is the `javax.servlet`
+spelling and is the reason a second catalog ships rather than a stated
+boundary. The verdict below is evidence about those three containers and no
+other. Widening it means adding an entry to `VERSIONS` in
+`scripts/probes/cp9_servlet/run.sh` and re-running, never assuming.
+
+**No Spring anywhere, deliberately.** The catalogs this probe precedes are
+`jakarta-servlet.yml` and `javax-servlet.yml`, and the rule they model belongs
+to the Servlet specification and to `HttpServlet`'s own dispatch. The harness
+therefore deploys a real webapp directory through `Tomcat.addWebapp`, so the
+CONTAINER's own annotation deployment scan is what discovers each
+`@WebServlet` — the spec's own mechanism. Spring Boot's `@ServletComponentScan`
+is a second registration route; measuring through it would have confounded the
+rule under test with Spring's re-implementation of it, and (as it happens) that
+annotation moved package between Boot 3 and Boot 4, which is itself a reason
+not to make a container-level verdict depend on it.
 
 **How to run.** `bash scripts/probes/cp9_servlet/run.sh`. Per container version
 it compiles the probe webapp (nine servlet classes, listed in the expectation
@@ -42,6 +51,18 @@ same build's `target/classes` and prints — through
 fact-shape row. It ends by printing the observation table itself. Needs a JDK
 21+, Maven, and network on the first run. Not a test: nothing in the suite runs
 it, and NFR-1's no-network rule governs the suite, not evidence gathering.
+
+Three details of the harness are themselves part of the evidence. The
+`javax.servlet` column compiles the SAME committed sources under the other
+package name — one `sed` in `run.sh`, into `target/generated-javax/java` —
+because "identical modulo the spelling" is precisely the claim that column
+measures, and a second hand-maintained copy could stop being identical without
+anyone noticing. The probe opens a SECOND connector differing in exactly one
+setting, `allowTrace="true"`, so a connector default can be told apart from the
+specification's dispatch. And it deploys the same `WEB-INF/classes` a SECOND
+time under `/metadata-complete`, beneath a descriptor declaring
+`metadata-complete="true"`, so the only difference between the two webapps is
+that descriptor.
 
 ## Expectation table
 
@@ -60,50 +81,62 @@ it, and NFR-1's no-network rule governs the suite, not evidence gathering.
 | 24-26 | the handler as it reaches the fact stream | `visibility`, signature parameter symbols | **unknown — `protected` may not survive as such** |
 | 27-28 | the `extends` edge | `superclass` on each probe class | present, though the target is in a container jar |
 | 29 | a class carrying no `@WebServlet` | its `args` | absent, not empty |
+| 30 | the running container's own servlet API package | which spelling that column measured | the one the build asked for, or the run is mislabelled |
+| 31-32 | a connector with `allowTrace="true"` | TRACE `/explicit` (overridden) and `/getonly` (not) | **unknown — whether the 405 is the connector or the dispatch** |
+| 33 | the same classes under `metadata-complete="true"` | GET `/metadata-complete/getonly` | **unknown — whether the annotation scan is suppressed wholesale** |
 
 ## Observations
 
 Verbatim from `run.sh`'s generated table — every column header is the container
 the process under test reported through its own `ServletContext.getServerInfo()`,
 not the version the loop asked for, and the harness aborts rather than
-mislabelling a column when the two disagree. The fact-shape rows are filed
-under the same identity because `facts.py` reads them from the class files that
-build produced.
+mislabelling a column when the two disagree. It aborts on the same terms when
+the servlet API package the process reported loading (row 30) is not the
+spelling that column claims. The fact-shape rows are filed under the same
+identity because `facts.py` reads them from the class files that build
+produced.
 
-| # | probe | 10.1.50 | 11.0.24 |
-|---|---|---|---|
-| 1 | `GET /multi-a` — `urlPatterns = {"/multi-a", "/multi-b"}` | 200 | 200 |
-| 2 | `GET /multi-b` — the same class's second pattern | 200 | 200 |
-| 3 | `GET /aliased` — `@WebServlet("/aliased")`, the `value` spelling | 200 | 200 |
-| 4 | `GET /verbs` — `doGet` overridden | 200 | 200 |
-| 5 | `POST /verbs` — `doPost` overridden | 200 | 200 |
-| 6 | `PUT /verbs` — no `doPut` on the class | 405 | 405 |
-| 7 | `HEAD /getonly` — `doGet` only — implicit | 200 | 200 |
-| 8 | `OPTIONS /getonly` — `doGet` only — implicit | 200 | 200 |
-| 9 | `Allow` header on `OPTIONS /getonly` — `doGet` only | `GET, HEAD, OPTIONS` | `GET, HEAD, OPTIONS` |
-| 10 | `TRACE /getonly` — `doGet` only — implicit | 405 | 405 |
-| 11 | `HEAD /explicit` — `doHead` overridden | 200 | 200 |
-| 12 | `OPTIONS /explicit` — `doOptions` overridden | 200 | 200 |
-| 13 | `TRACE /explicit` — `doTrace` overridden | 405 | 405 |
-| 14 | `GET /service-only` — `service()` overridden, no `doXxx` | 200 | 200 |
-| 15 | `PUT /service-only` — `service()` overridden, no `doXxx` | 200 | 200 |
-| 16 | `GET /generic` — `GenericServlet` subclass | 200 | 200 |
-| 17 | `PUT /generic` — `GenericServlet` subclass | 200 | 200 |
-| 18 | `GET /decoy` — only `doGet(String, HttpServletResponse)` | 405 | 405 |
-| 19 | `GET /unannotated` — extends `HttpServlet`, no `@WebServlet` | 404 | 404 |
-| 20 | `@WebServlet`'s own fact target | `TYPE` | `TYPE` |
-| 21 | `args` of `urlPatterns = {"/multi-a", "/multi-b"}` | `{"urlPatterns": ["/multi-a", "/multi-b"]}` | `{"urlPatterns": ["/multi-a", "/multi-b"]}` |
-| 22 | `args` of `@WebServlet("/aliased")` | `{"value": ["/aliased"]}` | `{"value": ["/aliased"]}` |
-| 23 | `args` of `urlPatterns = "/verbs"` (one element) | `{"urlPatterns": ["/verbs"]}` | `{"urlPatterns": ["/verbs"]}` |
-| 24 | `GetOnlyServlet#doGet`'s recorded `visibility` | `other` | `other` |
-| 25 | `GetOnlyServlet#doGet`'s signature parameter symbols | `jakarta/servlet/http/HttpServletRequest#, jakarta/servlet/http/HttpServletResponse#` | `jakarta/servlet/http/HttpServletRequest#, jakarta/servlet/http/HttpServletResponse#` |
-| 26 | `DecoyOverloadServlet#doGet`'s signature parameter symbols | `java/lang/String#, jakarta/servlet/http/HttpServletResponse#` | `java/lang/String#, jakarta/servlet/http/HttpServletResponse#` |
-| 27 | `GetOnlyServlet`'s own `superclass` | `jakarta/servlet/http/HttpServlet#` | `jakarta/servlet/http/HttpServlet#` |
-| 28 | `GenericProbeServlet`'s own `superclass` | `jakarta/servlet/GenericServlet#` | `jakarta/servlet/GenericServlet#` |
-| 29 | `args` on `UnannotatedServlet` (no annotation written) | `ABSENT` | `ABSENT` |
+| # | probe | 10.1.50 | 11.0.24 | 9.0.121 |
+|---|---|---|---|---|
+| 1 | `GET /multi-a` — `urlPatterns = {"/multi-a", "/multi-b"}` | 200 | 200 | 200 |
+| 2 | `GET /multi-b` — the same class's second pattern | 200 | 200 | 200 |
+| 3 | `GET /aliased` — `@WebServlet("/aliased")`, the `value` spelling | 200 | 200 | 200 |
+| 4 | `GET /verbs` — `doGet` overridden | 200 | 200 | 200 |
+| 5 | `POST /verbs` — `doPost` overridden | 200 | 200 | 200 |
+| 6 | `PUT /verbs` — no `doPut` on the class | 405 | 405 | 405 |
+| 7 | `HEAD /getonly` — `doGet` only — implicit | 200 | 200 | 200 |
+| 8 | `OPTIONS /getonly` — `doGet` only — implicit | 200 | 200 | 200 |
+| 9 | `Allow` header on `OPTIONS /getonly` — `doGet` only | `GET, HEAD, OPTIONS` | `GET, HEAD, OPTIONS` | `GET, HEAD, OPTIONS` |
+| 10 | `TRACE /getonly` — `doGet` only — implicit | 405 | 405 | 405 |
+| 11 | `HEAD /explicit` — `doHead` overridden | 200 | 200 | 200 |
+| 12 | `OPTIONS /explicit` — `doOptions` overridden | 200 | 200 | 200 |
+| 13 | `TRACE /explicit` — `doTrace` overridden | 405 | 405 | 405 |
+| 14 | `GET /service-only` — `service()` overridden, no `doXxx` | 200 | 200 | 200 |
+| 15 | `PUT /service-only` — `service()` overridden, no `doXxx` | 200 | 200 | 200 |
+| 16 | `GET /generic` — `GenericServlet` subclass | 200 | 200 | 200 |
+| 17 | `PUT /generic` — `GenericServlet` subclass | 200 | 200 | 200 |
+| 18 | `GET /decoy` — only `doGet(String, HttpServletResponse)` | 405 | 405 | 405 |
+| 19 | `GET /unannotated` — extends `HttpServlet`, no `@WebServlet` | 404 | 404 | 404 |
+| 20 | `@WebServlet`'s own fact target | `TYPE` | `TYPE` | `TYPE` |
+| 21 | `args` of `urlPatterns = {"/multi-a", "/multi-b"}` | `{"urlPatterns": ["/multi-a", "/multi-b"]}` | `{"urlPatterns": ["/multi-a", "/multi-b"]}` | `{"urlPatterns": ["/multi-a", "/multi-b"]}` |
+| 22 | `args` of `@WebServlet("/aliased")` | `{"value": ["/aliased"]}` | `{"value": ["/aliased"]}` | `{"value": ["/aliased"]}` |
+| 23 | `args` of `urlPatterns = "/verbs"` (one element) | `{"urlPatterns": ["/verbs"]}` | `{"urlPatterns": ["/verbs"]}` | `{"urlPatterns": ["/verbs"]}` |
+| 24 | `GetOnlyServlet#doGet`'s recorded `visibility` | `other` | `other` | `other` |
+| 25 | `GetOnlyServlet#doGet`'s signature parameter symbols | `jakarta/servlet/http/HttpServletRequest#, jakarta/servlet/http/HttpServletResponse#` | `jakarta/servlet/http/HttpServletRequest#, jakarta/servlet/http/HttpServletResponse#` | `javax/servlet/http/HttpServletRequest#, javax/servlet/http/HttpServletResponse#` |
+| 26 | `DecoyOverloadServlet#doGet`'s signature parameter symbols | `java/lang/String#, jakarta/servlet/http/HttpServletResponse#` | `java/lang/String#, jakarta/servlet/http/HttpServletResponse#` | `java/lang/String#, javax/servlet/http/HttpServletResponse#` |
+| 27 | `GetOnlyServlet`'s own `superclass` | `jakarta/servlet/http/HttpServlet#` | `jakarta/servlet/http/HttpServlet#` | `javax/servlet/http/HttpServlet#` |
+| 28 | `GenericProbeServlet`'s own `superclass` | `jakarta/servlet/GenericServlet#` | `jakarta/servlet/GenericServlet#` | `javax/servlet/GenericServlet#` |
+| 29 | `args` on `UnannotatedServlet` (no annotation written) | `ABSENT` | `ABSENT` | `ABSENT` |
+| 30 | the servlet API package the running container reported loading | `jakarta.servlet` | `jakarta.servlet` | `javax.servlet` |
+| 31 | `TRACE /explicit` on a connector with `allowTrace="true"` — `doTrace` overridden | 200 | 200 | 200 |
+| 32 | `TRACE /getonly` on a connector with `allowTrace="true"` — no `doTrace` — `HttpServlet`'s own | 200 | 200 | 200 |
+| 33 | `GET /metadata-complete/getonly` — the same classes under `metadata-complete="true"` | 404 | 404 | 404 |
 
-Every row identical on both containers. Three expectations were open going in
-(rows 7-13 and 24-26) and all three are now answered; nothing was falsified.
+Every row identical on all three containers, and the `javax` column identical
+to the other two modulo the package name (rows 25-28 and 30, which are the only
+rows where a package name is part of the value). Six expectations were open
+going in (rows 7-13, 24-26, 31-33) and all six are now answered; nothing was
+falsified.
 
 ## Verdict
 
@@ -112,17 +145,20 @@ Every row identical on both containers. Three expectations were open going in
 2. **`value` and `urlPatterns` are the same address** (row 3), and they reach
    the facts as DIFFERENT argument keys (rows 21-22), both list-valued even
    when written as a single string (row 23). A reader must accept either key
-   and must not require the array spelling.
+   and must not require the array spelling. They are ALIASES, so a declaration
+   writes exactly one: writing both is a deployment error the container
+   refuses, at which point the module serves nothing and either value would be
+   a fabricated address.
 3. **The verb is the overridden `doXxx`, and nothing else** (rows 4-6). A verb
    the class does not override is a 405, which is `HttpServlet`'s own default
    `doPut` answering — the framework serves no verb it was given no override
    for.
 4. **HEAD and OPTIONS ARE served implicitly from `doGet`** (rows 7-9): 200 on
-   both, with `Allow: GET, HEAD, OPTIONS` naming exactly the implicit set.
+   all three, with `Allow: GET, HEAD, OPTIONS` naming exactly the implicit set.
    This settles the design's open question **in the affirmative as a matter of
    FACT**, and the ruling about what to DERIVE from it is (5) below.
 5. **RULING — this style derives one row per handler the MODULE DECLARES, so
-   implicit HEAD and OPTIONS derive nothing and are a stated boundary.**
+   implicitly dispatched verbs derive nothing and are a stated boundary.**
    Two reasons, and the first is the one that decides it. **There is no
    handler to attribute.** The code serving HEAD on `/getonly` is
    `HttpServlet.doHead`, in a container jar this workspace never scanned; a row
@@ -130,24 +166,34 @@ Every row identical on both containers. Three expectations were open going in
    is false — `doGet` is *called by* the HEAD path, it does not *serve* HEAD.
    OPTIONS is worse: it is served by every `HttpServlet` alive, so an OPTIONS
    row would be a per-class constant carrying no evidence about the class at
-   all. **And it is the ruling this phase already made once**, for the same
-   verbs, on measured-live evidence: 2O Task 6 records Spring Data REST's own
-   HEAD/OPTIONS as "observed live, deliberately not derived"
-   (`docs/COVERAGE.md`). Two catalogs answering one question two ways would be
-   the §6 blend. Under-reporting a STATED boundary is honest (§8.1 rule 3);
-   the boundary is stated in `docs/COVERAGE.md`, and it is falsified the day an
-   endpoint row can name a handler that lives outside the module.
-6. **An EXPLICIT `doHead` or `doOptions` override IS served and IS derived**
-   (rows 11-12). That is not a special case of (5) but its complement: the
-   module declared the handler, so there is a symbol to attribute and a
-   declaration to report.
-7. **`doTrace` is NOT in the verb map** (rows 10 and 13). TRACE is a 405 on
-   both containers *even with `doTrace` explicitly overridden*, because Tomcat's
-   connector refuses the method before dispatch (`allowTrace`, default false).
-   Deriving a TRACE row would publish an address the deployed container does
-   not serve. Bounded by §5.4 to the two containers measured — another
-   container, or a Tomcat with `allowTrace=true`, serves it and we would then
-   under-report, which is the honest direction of the two.
+   all. Row 32 shows implicit TRACE falls in the same category. **And it is the
+   ruling this phase already made once**, for the same verbs, on measured-live
+   evidence: 2O Task 6 records Spring Data REST's own HEAD/OPTIONS as "observed
+   live, deliberately not derived" (`docs/COVERAGE.md`). Two catalogs answering
+   one question two ways would be the §6 blend. Under-reporting a STATED
+   boundary is honest (§8.1 rule 3); the boundary is stated in
+   `docs/COVERAGE.md`, and it is falsified the day an endpoint row can name a
+   handler that lives outside the module.
+6. **An EXPLICIT `doHead`, `doOptions` or `doTrace` override IS served and IS
+   derived** (rows 11-12 and 31). That is not a special case of (5) but its
+   complement: the module declared the handler, so there is a symbol to
+   attribute and a declaration to report.
+7. **`doTrace` IS in the verb map, with the connector recorded as a stated
+   dependency** (rows 13, 31, 32 — and this verdict is the one fix round 1
+   reversed). The first run measured only row 13 — TRACE a 405 on the default
+   connector even with `doTrace` overridden — and concluded that deriving a
+   TRACE row would publish an address the deployment does not serve. That
+   conclusion took a **deployment** fact for a **code** fact. Tomcat's
+   `allowTrace` is connector configuration: any deployment can set it, it lives
+   outside the module, and nothing in a repository can see it, so its default
+   is not proof that the address is unserved — the same argument this phase
+   settled for Actuator's `exposure.include` (`docs/COVERAGE.md`, and §8's
+   "exclude only on proof, never on inference"). Row 31 measures what the
+   specification actually does once the connector is out of the way:
+   `service()` dispatches TRACE to `doTrace`, 200, on all three containers. A
+   class overriding `doTrace` has declared a handler; we derive it and state
+   the dependency. Row 32 keeps the complement honest — implicit TRACE, off
+   `HttpServlet`'s own `doTrace`, is also 200 and is NOT derived, by (5).
 8. **A class overriding `service()` derives NOTHING** (rows 14-15). It serves
    GET and PUT alike, because `HttpServlet.service` — the very method that
    reads `getMethod()` and dispatches to `doXxx` — is what the class replaced.
@@ -190,16 +236,43 @@ Every row identical on both containers. Three expectations were open going in
     (capability 9.13). The match is therefore on the BARE descriptor, and the
     `supertype_derived` precondition that the supertype be a module-local
     symbol cannot apply here.
+15. **The `javax.servlet` spelling behaves identically, and ships as its own
+    catalog** (row 30, and every row above measured a third time on 9.0.121).
+    Rows 1-29 and 31-33 are the same answers; rows 25-28 are the same shapes
+    with `javax/servlet/...` where the others read `jakarta/servlet/...`. So
+    `javax-servlet.yml` is the same document under a package rename — measured,
+    not assumed, which is what §5.4 required before it could ship. Legacy
+    servlets are the population that uses this spelling, so a jakarta-only
+    catalog would have under-served the estate the style exists for.
+16. **A `metadata-complete="true"` descriptor suppresses every annotated
+    servlet, and NOTHING IN THE FACTS CAN SEE IT** (row 33). The same classes,
+    the same container, one deployment descriptor: 404 on all three. This is
+    the one shape in which these catalogs fabricate a whole module's surface
+    rather than under-reporting it — nothing in the pipeline reads
+    `WEB-INF/web.xml`, so every rule applies unconditionally. Stated as a
+    boundary in `docs/COVERAGE.md` and in both catalog files, in the
+    over-report direction; closed by a deployment-descriptor reader, which
+    would also close the `web.xml` registration route we under-report.
 
 ## What this probe deliberately did not measure
 
-- **`web.xml` and `ServletContext.addServlet`.** The other two registration
-  routes the Servlet specification defines. Neither probed and neither
-  catalogued; stated boundaries in `docs/COVERAGE.md`, with the annotation
-  named as one of three (§8.1 rule 3).
+- **`web.xml` `<servlet-mapping>` and `ServletContext.addServlet`.** The other
+  two registration routes the Servlet specification defines. Neither probed and
+  neither catalogued; stated boundaries in `docs/COVERAGE.md`, with the
+  annotation named as one of three (§8.1 rule 3). Row 33 measured a descriptor
+  only for what it SUPPRESSES, never for what it registers.
+- **A `web-app` version below 3.0.** The specification's second route to the
+  same suppression row 33 measured, and it is not separately probed: row 33's
+  descriptor names its own build's current version and switches the scan off
+  through `metadata-complete`. The COVERAGE row states both routes and is
+  measured for one.
 - **Transitive supertypes.** `class Foo extends AbstractBaseServlet extends
   HttpServlet` was not probed and is not derived: `superclasses` carries the
   DIRECT edge only. Stated boundary.
+- **An abstract `@WebServlet` class.** Not probed and not derivable-against:
+  `ACC_ABSTRACT` is not among the modifiers the extractor records, so the
+  facts cannot tell one from a concrete class. Stated boundary in
+  `docs/COVERAGE.md`, in the over-report direction.
 - **Pattern semantics.** `/legacy/*`, `*.do` and `/` are servlet pattern
   grammars with precedence rules; the probe measured only that a declared
   pattern is served at its own literal spelling, and the style publishes the
@@ -209,14 +282,17 @@ Every row identical on both containers. Three expectations were open going in
   Stated boundaries; `@WebFilter` already has a pinned no-derivation test
   against every shipped catalog.
 - **Other containers.** Jetty, Undertow and a standalone (non-embedded) Tomcat
-  were not run. Row 10/13's TRACE answer is the one most likely to differ.
+  were not run. Rows 10 and 13 — a connector's `allowTrace` default — are the
+  answers most likely to differ, which is exactly why the TRACE verdict is now
+  written against rows 31-32 rather than against a default.
 
 ## How the verdict is consumed
 
-`src/sextant/catalogs/jakarta-servlet.yml` declares the supertype
-(`jakarta.servlet.http.HttpServlet`), the address annotation and its two
-argument spellings, the six-entry verb map, and the two `service` signatures
+`src/sextant/catalogs/jakarta-servlet.yml` and
+`src/sextant/catalogs/javax-servlet.yml` declare the supertype
+(`HttpServlet` under each spelling), the address annotation and its two
+argument spellings, the seven-entry verb map, and the two `service` signatures
 that bypass dispatch. `src/sextant/application/resolve/engines/supertype_dispatch.py`
-is the engine; verdicts 1-3, 6 and 8-14 are each pinned by a test in
-`tests/application/test_supertype_dispatch.py`, and verdicts 5 and 7 are the
-two under-reports recorded in `docs/COVERAGE.md`.
+is the engine; verdicts 1-3 and 6-15 are each pinned by a test in
+`tests/application/test_supertype_dispatch.py`, and verdicts 5 and 16 are the
+two boundaries recorded in `docs/COVERAGE.md`.

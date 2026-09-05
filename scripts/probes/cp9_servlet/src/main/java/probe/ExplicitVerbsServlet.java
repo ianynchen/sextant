@@ -7,9 +7,13 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
 /**
- * Rows 16-18: the three verbs `HttpServlet` also dispatches — overridden
- * EXPLICITLY here, so what the container serves for them is a question about
- * a handler the module declares, not about implicit dispatch.
+ * Rows 11-13 and 31: the three verbs `HttpServlet` also dispatches —
+ * overridden EXPLICITLY here, so what the container serves for them is a
+ * question about a handler the module declares, not about implicit dispatch.
+ * `doTrace` is measured twice on purpose: row 13 over the DEFAULT connector,
+ * which refuses TRACE before dispatch, and row 31 over one configured
+ * `allowTrace="true"`, which is what separates the connector's deployment
+ * setting from the specification's own `service()` dispatch.
  */
 @WebServlet(urlPatterns = "/explicit")
 public class ExplicitVerbsServlet extends HttpServlet {

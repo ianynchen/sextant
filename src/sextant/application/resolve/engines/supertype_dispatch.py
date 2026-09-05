@@ -182,20 +182,23 @@ def _addresses(
     `@Inherited`). Reading the composed view would derive rows for a shape the
     contract does not serve, which is §8.1 rule 4 exactly.
 
-    `keys` is a PRECEDENCE list, and the first one present wins rather than
-    the union: the spellings are aliases of one attribute, and a declaration
-    writing both is one the contract itself refuses to deploy — so there is no
-    address to union, and reading past the key the author wrote would answer
-    with a different attribute than the one they named.
+    `keys` is an ALIAS SET, and EXACTLY ONE of them must be written. They are
+    spellings of a single attribute, so there is no union to take; and a
+    declaration writing more than one is one the contract itself refuses to
+    deploy, so such a class is registered at no address at all and every
+    candidate value would be a fabricated one. Order-independent by
+    construction, which is what makes the answer the same whichever key the
+    compiler happened to write first.
     """
     result: dict[str, tuple[str, ...]] = {}
     for row in workspace.query("annotations"):
         if str(row["annotation"]) != annotation:
             continue
         args = json.loads(str(row["args"])) if row["args"] is not None else {}
-        declared = next((key for key in keys if key in args), None)
-        if declared is None:
+        written = [key for key in keys if key in args]
+        if len(written) != 1:
             continue
+        declared = written[0]
         # Non-string entries are dropped rather than published: an address
         # argument is a compile-time constant, so every element the compiler
         # writes is a string, and anything else is a value this read cannot
@@ -230,6 +233,13 @@ def _members(workspace: Workspace) -> dict[str, dict[_Selector, str]]:
     which also makes the map total: two members of one type can share a name,
     and they can never share a selector, so nothing is silently overwritten
     the way a name-keyed map would overwrite it.
+
+    Both halves of the key are BARE descriptors, matching the coordinate space
+    `_matches` compares the supertype in: D00 §5a's symbol is module
+    coordinates then a descriptor, and only the descriptor is ever compared.
+    Normalising one side and not the other would be a rule the language does
+    not have, and its failure mode is a member that matches nothing —
+    silently.
     """
     result: dict[str, dict[_Selector, str]] = {}
     for row in workspace.query("method_declarations"):
@@ -239,7 +249,7 @@ def _members(workspace: Workspace) -> dict[str, dict[_Selector, str]]:
         symbol = str(row["symbol"])
         signature = json.loads(str(row["signature"])) if row["signature"] is not None else {}
         parameters = tuple(
-            str((parameter.get("type") or {}).get("symbol", ""))
+            bare_descriptor(str((parameter.get("type") or {}).get("symbol", "")))
             for parameter in signature.get("parameters") or []
         )
         selector = (method_name(bare_descriptor(symbol)), parameters)
@@ -319,8 +329,8 @@ def _validate_address(catalog: Catalog, declared: Any) -> None:
         raise CatalogError(
             f"loading catalog {catalog.source}: `address` must be "
             f"`{{annotation, args}}` — a dotted annotation name and a non-empty list of "
-            f"the argument spellings that carry the address, most preferred first — got "
-            f"{declared!r} (2O design §3b)"
+            f"the argument spellings that carry the address, of which a declaration "
+            f"writes exactly one — got {declared!r} (2O design §3b)"
         )
 
 

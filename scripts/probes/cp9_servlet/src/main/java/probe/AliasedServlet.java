@@ -6,7 +6,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
-/** Row 3: the `value` spelling, which the spec declares an alias of `urlPatterns`. */
+/** Rows 3 and 22: the `value` spelling, which the spec declares an alias of `urlPatterns`. */
 @WebServlet("/aliased")
 public class AliasedServlet extends HttpServlet {
 

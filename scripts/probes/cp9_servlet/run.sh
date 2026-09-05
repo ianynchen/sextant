@@ -14,17 +14,18 @@
 # fact stream.
 #
 # No Spring: the rule under test is the Servlet specification's and
-# `jakarta.servlet.http.HttpServlet`'s own, which is what `jakarta-servlet.yml`
-# models, and a framework wrapped around the container would add a second
-# registration route confounding the one being measured.
+# `HttpServlet`'s own, which is what the servlet catalogs model, and a
+# framework wrapped around the container would add a second registration route
+# confounding the one being measured.
 #
 # THE TABLE IS GENERATED, AND ITS COLUMN HEADERS COME FROM THE RUNS' OWN
 # OUTPUT (GUIDELINES §5.4, and CP-5's own failure it exists to prevent). The
-# probe asks its OWN ServletContext which container is running it and prints
-# that; the harness parses that line out of each process's log, files every
-# cell under the container the process itself named, and ABORTS when it
-# disagrees with the version this loop asked for. A version read out of the
-# loop variable can be wrong; one read out of the running process cannot.
+# probe asks its OWN ServletContext which container is running it and which
+# servlet API package it loaded, and prints both; the harness parses that line
+# out of each process's log, files every cell under the container the process
+# itself named, and ABORTS when either half disagrees with what this loop asked
+# for. A version read out of the loop variable can be wrong; one read out of
+# the running process cannot.
 #
 # The fact-half cells are filed under the same identity because they are read
 # from the class files THAT build produced: a probe class compiles against the
@@ -42,13 +43,23 @@ cd "$(dirname "$0")"
 REPO="$(cd ../../.. && pwd)"
 EXTRACTOR="$REPO/src/sextant/extractor-jvm/sextant-extractor.jar"
 
-# The two containers this probe's verdict is scoped to (§5.4), chosen because
-# they are different Tomcat MAJORS shipping different Servlet levels (6.0 and
-# 6.1) and therefore two independent `HttpServlet` implementations — which is
-# where the implicit HEAD/OPTIONS/TRACE dispatch actually lives. Widening the
-# verdict means adding a version here and re-running, never assuming.
-VERSIONS=("10.1.50" "11.0.24")
+# The containers this probe's verdict is scoped to (§5.4), as
+# `<version>:<servlet API spelling>`. Two Tomcat MAJORS shipping the `jakarta`
+# spelling at different Servlet levels (6.0 and 6.1) — two independent
+# `HttpServlet` implementations, which is where implicit verb dispatch actually
+# lives — and Tomcat 9, which ships the SAME API under `javax.servlet` and is
+# the container the legacy estate the second catalog exists for actually runs
+# on. Widening the verdict means adding a version here and re-running, never
+# assuming.
+VERSIONS=("10.1.50:jakarta" "11.0.24:jakarta" "9.0.121:javax")
 PORT=18095
+# A SECOND connector on the next port, differing in exactly one setting:
+# `allowTrace`. TRACE is refused by a Tomcat connector before dispatch unless
+# it is set, and that is deployment configuration a repository cannot see — so
+# measuring the specification's own `service()` -> `doTrace` dispatch needs a
+# connector that permits the method. Both connectors serve the same webapp, so
+# the pair isolates the connector setting from everything else.
+TRACE_PORT=$((PORT + 1))
 
 # Filled by `probe`/`record`, read by `emit_table`. Flat `<row>|<field>|<value>`
 # records rather than associative arrays, because macOS ships bash 3.2 and this
@@ -58,25 +69,35 @@ CELLS=()    # "<row>|<observed container>|<value>"
 ROWS=()     # "<row>|<label>", one per row, in first-record order
 OBSERVED=() # the container versions the RUNS reported, in probe order
 
-# The container of the process being probed right now, set by `identify` from
-# that process's own PROBE-IDENTITY line — never from the loop variable.
+# The container of the process being probed right now, and the servlet API
+# package it reported loading — both set by `identify` from that process's own
+# PROBE-IDENTITY line, never from the loop variable.
 RUNNING=""
+RUNNING_API=""
 
-identify() { # <logfile> <version requested>
-  local line container
+identify() { # <logfile> <version requested> <api package requested>
+  local line container api
   line="$(grep -m1 '^PROBE-IDENTITY ' "$1" || true)"
   if [ -z "$line" ]; then
     echo "FATAL: no PROBE-IDENTITY line in $1 — the run cannot identify itself" >&2
     exit 1
   fi
   container="$(printf '%s\n' "$line" | sed -n 's/.*container=[^0-9]*\([0-9][0-9.]*\).*/\1/p')"
+  api="$(printf '%s\n' "$line" | sed -n 's/.*servletApi=\([a-z.]*\).*/\1/p')"
   if [ "$container" != "$2" ]; then
     # CP-5's exact failure, fatal rather than silent: the container that
     # answered is not the one this iteration asked for.
     echo "FATAL: asked for Tomcat $2, the process reported $container (stale build?)" >&2
     exit 1
   fi
+  if [ "$api" != "$3" ]; then
+    # The same failure one level down: the javax column is a claim about a
+    # SPELLING, so a run that loaded the other one must not be filed under it.
+    echo "FATAL: asked for the $3 spelling, the process loaded $api (stale sources?)" >&2
+    exit 1
+  fi
   RUNNING="$container"
+  RUNNING_API="$api"
   echo "identity $line"
 }
 
@@ -103,7 +124,7 @@ probe() { # <row> <verb> <url> [note]
   else
     code="$(curl -s -o /dev/null -m 5 -w '%{http_code}' -X "$verb" "http://localhost:$PORT$url")"
   fi
-  printf '%-3s %-8s %-16s -> %s\n' "$row" "$verb" "$url" "$code"
+  printf '%-3s %-8s %-24s -> %s\n' "$row" "$verb" "$url" "$code"
   record "$row" "\`$verb $url\`${note:+ — $note}" "$code"
 }
 
@@ -111,8 +132,15 @@ probe_allow() { # <row> <url> <note>
   local row=$1 url=$2 note=$3 allow
   allow="$(curl -s -m 5 -D - -o /dev/null -X OPTIONS "http://localhost:$PORT$url" \
     | sed -n 's/^[Aa]llow: *//p' | tr -d '\r')"
-  printf '%-3s %-8s %-16s -> %s\n' "$row" "Allow" "$url" "$allow"
+  printf '%-3s %-8s %-24s -> %s\n' "$row" "Allow" "$url" "$allow"
   record "$row" "\`Allow\` header on \`OPTIONS $url\` — $note" "\`${allow}\`"
+}
+
+probe_trace() { # <row> <url> <note> — the connector that PERMITS the method
+  local row=$1 url=$2 note=$3 code
+  code="$(curl -s -o /dev/null -m 5 -w '%{http_code}' -X TRACE "http://localhost:$TRACE_PORT$url")"
+  printf '%-3s %-8s %-24s -> %s\n' "$row" "TRACE+" "$url" "$code"
+  record "$row" "\`TRACE $url\` on a connector with \`allowTrace=\"true\"\` — $note" "$code"
 }
 
 cell() { # <row> <container> -> the value recorded for that pair, or an em dash
@@ -146,28 +174,73 @@ emit_table() {
   done
 }
 
-for version in "${VERSIONS[@]}"; do
-  echo "=== requested Tomcat $version ==="
+for entry in "${VERSIONS[@]}"; do
+  version="${entry%%:*}"
+  spelling="${entry##*:}"
+  echo "=== requested Tomcat $version, the $spelling.servlet spelling ==="
   # `clean` is not decoration — CP-5's mislabelled column came from its
   # absence: without it a second iteration reuses the FIRST version's classes
   # and every row below silently re-measures container one. `identify`
   # cross-checks the running container anyway rather than trusting this line.
-  mvn -q clean -Dtomcat.version="$version" package
-  mvn -q dependency:build-classpath -Dmdep.outputFile=target/cp.txt -Dtomcat.version="$version"
+  mvn -q clean -Dtomcat.version="$version"
+
+  # The `javax` column compiles the SAME committed sources under the other
+  # package spelling: Tomcat 9 ships this API as `javax.servlet`, and one
+  # rename is the entire difference between the two. Generated rather than
+  # committed twice, so "identical modulo the spelling" stays true by
+  # construction — which is precisely the claim the column measures.
+  sources="src/main/java"
+  if [ "$spelling" = javax ]; then
+    sources="target/generated-javax/java"
+    mkdir -p "$sources/probe"
+    for file in src/main/java/probe/*.java; do
+      sed 's/jakarta\.servlet/javax.servlet/g' "$file" >"$sources/probe/$(basename "$file")"
+    done
+  fi
+  mvn -q -Dtomcat.version="$version" -Dprobe.sources="$sources" package
+  mvn -q dependency:build-classpath -Dmdep.outputFile=target/cp.txt \
+    -Dtomcat.version="$version" -Dprobe.sources="$sources"
 
   # A real webapp layout, because `Tomcat.addWebapp` is what runs the
   # container's own annotation scan and it scans `/WEB-INF/classes`. No
   # `web.xml` is written: its absence is the Servlet 3.0+ shape under test.
-  rm -rf target/docbase target/tomcat-base
+  rm -rf target/docbase target/mcbase target/tomcat-base
   mkdir -p target/docbase/WEB-INF/classes
   cp -R target/classes/probe target/docbase/WEB-INF/classes/
 
+  # THE SAME CLASSES A SECOND TIME, under a descriptor declaring
+  # `metadata-complete="true"` — the shape in which the specification switches
+  # the annotation deployment scan off wholesale, so that every `@WebServlet`
+  # in the module is inert. Deployed beside the first webapp rather than
+  # instead of it, so the only difference between the two is the descriptor.
+  # The schema is the one that build's own servlet level ships; a descriptor
+  # naming a `web-app` version below 3.0 would suppress the scan for a second,
+  # different reason and is not what this row measures.
+  mkdir -p target/mcbase/WEB-INF/classes
+  cp -R target/classes/probe target/mcbase/WEB-INF/classes/
+  if [ "$spelling" = javax ]; then
+    mc_namespace="http://xmlns.jcp.org/xml/ns/javaee"
+    mc_version="4.0"
+  else
+    mc_namespace="https://jakarta.ee/xml/ns/jakartaee"
+    mc_version="6.0"
+  fi
+  cat >target/mcbase/WEB-INF/web.xml <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns="$mc_namespace"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="$mc_namespace $mc_namespace/web-app_${mc_version//./_}.xsd"
+         version="$mc_version"
+         metadata-complete="true">
+</web-app>
+XML
+
   java -cp "target/classes:$(cat target/cp.txt)" probe.ProbeApplication \
-    "$PORT" target/docbase >"target/run-$version.log" 2>&1 &
+    "$PORT" target/docbase target/mcbase >"target/run-$version.log" 2>&1 &
   pid=$!
   trap 'kill $pid 2>/dev/null || true' EXIT
   until curl -s -o /dev/null -m 2 "http://localhost:$PORT/getonly"; do sleep 1; done
-  identify "target/run-$version.log" "$version"
+  identify "target/run-$version.log" "$version" "$spelling.servlet"
   OBSERVED[${#OBSERVED[@]}]="$RUNNING"
 
   # --- the address: which patterns the annotation registers ----------------
@@ -195,6 +268,14 @@ for version in "${VERSIONS[@]}"; do
   # --- the language rule, and the missing annotation ------------------------
   probe 18 GET     /decoy        "only \`doGet(String, HttpServletResponse)\`"
   probe 19 GET     /unannotated  "extends \`HttpServlet\`, no \`@WebServlet\`"
+  # --- what the CONNECTOR refuses versus what the SPECIFICATION dispatches --
+  record 30 "the servlet API package the running container reported loading" \
+    "\`$RUNNING_API\`"
+  probe_trace 31 /explicit "\`doTrace\` overridden"
+  probe_trace 32 /getonly  "no \`doTrace\` — \`HttpServlet\`'s own"
+  # --- the descriptor that switches the annotation scan off -----------------
+  probe 33 GET /metadata-complete/getonly \
+    "the same classes under \`metadata-complete=\"true\"\`"
 
   kill $pid 2>/dev/null || true
   wait $pid 2>/dev/null || true
@@ -221,7 +302,7 @@ for version in "${VERSIONS[@]}"; do
       *)  label="row $row" ;;
     esac
     record "$row" "$label" "\`$value\`"
-  done < <(python3 facts.py target/facts)
+  done < <(python3 facts.py target/facts "$RUNNING_API")
 done
 
 emit_table

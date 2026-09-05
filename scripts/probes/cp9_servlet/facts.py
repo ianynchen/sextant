@@ -5,6 +5,11 @@ prints one `<row>|<value>` record per fact-shape question CP-9 asks. `run.sh`
 files each value under the container version that build's own process
 reported, exactly as it files a status code.
 
+The servlet API package is an argument rather than a constant because CP-9
+claims a column for the `javax.servlet` spelling as well as the `jakarta` one,
+and the annotation this looks for is named in whichever package that build
+compiled against. `run.sh` passes the package the RUNNING container reported.
+
 Nothing here interprets. Every value printed is a literal read out of the
 fact stream — an annotation's own `args` JSON, a symbol's own `visibility`
 string, a signature's own parameter symbols — so a row of the generated table
@@ -18,7 +23,10 @@ import json
 import sys
 from pathlib import Path
 
-WEB_SERVLET = "jakarta/servlet/annotation/WebServlet#"
+
+def web_servlet(api_package: str) -> str:
+    """The address annotation's own symbol under the spelling that build used."""
+    return api_package.replace(".", "/") + "/annotation/WebServlet#"
 
 
 def facts(out: Path, class_name: str) -> list[dict]:
@@ -32,14 +40,14 @@ def bare(symbol: str | None) -> str:
     return "" if symbol is None else symbol.rsplit(" ", 1)[-1]
 
 
-def annotation_args(out: Path, class_name: str) -> str:
+def annotation_args(out: Path, class_name: str, annotation: str) -> str:
     for fact in facts(out, class_name):
-        if fact["kind"] == "annotation" and fact["use"]["annotation"] == WEB_SERVLET:
+        if fact["kind"] == "annotation" and fact["use"]["annotation"] == annotation:
             return json.dumps(fact["use"].get("args", {}), sort_keys=True)
     return "ABSENT"
 
 
-def annotation_target_kind(out: Path, class_name: str) -> str:
+def annotation_target_kind(out: Path, class_name: str, annotation: str) -> str:
     """Whether the `@WebServlet` fact's own target is the TYPE symbol or a
     member of it — the whole of "does the address reach us at type level"."""
     class_symbol = next(
@@ -51,7 +59,7 @@ def annotation_target_kind(out: Path, class_name: str) -> str:
         None,
     )
     for fact in facts(out, class_name):
-        if fact["kind"] == "annotation" and fact["use"]["annotation"] == WEB_SERVLET:
+        if fact["kind"] == "annotation" and fact["use"]["annotation"] == annotation:
             return "TYPE" if fact["target"] == class_symbol else f"MEMBER {bare(fact['target'])}"
     return "ABSENT"
 
@@ -89,17 +97,18 @@ def superclass(out: Path, class_name: str) -> str:
 
 def main() -> None:
     out = Path(sys.argv[1])
+    annotation = web_servlet(sys.argv[2])
     for row, value in (
-        (20, annotation_target_kind(out, "MultiPatternServlet")),
-        (21, annotation_args(out, "MultiPatternServlet")),
-        (22, annotation_args(out, "AliasedServlet")),
-        (23, annotation_args(out, "VerbsServlet")),
+        (20, annotation_target_kind(out, "MultiPatternServlet", annotation)),
+        (21, annotation_args(out, "MultiPatternServlet", annotation)),
+        (22, annotation_args(out, "AliasedServlet", annotation)),
+        (23, annotation_args(out, "VerbsServlet", annotation)),
         (24, visibility(out, "GetOnlyServlet", "doGet")),
         (25, parameter_types(out, "GetOnlyServlet", "doGet")),
         (26, parameter_types(out, "DecoyOverloadServlet", "doGet")),
         (27, superclass(out, "GetOnlyServlet")),
         (28, superclass(out, "GenericProbeServlet")),
-        (29, annotation_args(out, "UnannotatedServlet")),
+        (29, annotation_args(out, "UnannotatedServlet", annotation)),
     ):
         print(f"{row}|{value}")
 

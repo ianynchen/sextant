@@ -446,3 +446,32 @@ to judge — which is a correctness problem before it is a hygiene one.
 
 Isolated worktrees would also solve this and were rejected on cost: several trees
 to merge is worse than one writer at a time.
+
+### A deployment default is not a code fact — and this is the second time
+
+2O Task 7 settled it for Actuator: `management.endpoints.web.exposure.include`
+defaults to `health` alone, so a custom `@Endpoint` is a 404 out of the box —
+and the endpoint still ships, because exposure is configuration any deployment
+overrides and no repository can see. We report code and state the dependency.
+
+Task 7b then measured TRACE as a 405 *even with `doTrace` explicitly
+overridden*, concluded the address was unserved, and dropped `doTrace` from the
+verb map. Same shape, opposite answer: Tomcat's `allowTrace` is connector
+configuration, exactly as overridable and exactly as invisible. The 405 was a
+fact about the probe's connector, not about the servlet. Re-measured over a
+connector with `allowTrace="true"`, `service()` dispatches TRACE to `doTrace`
+like any other verb, on all three containers.
+
+**The tell is a probe that answers the same for the class that declares the
+handler and the class that does not.** Rows 10 and 13 were both 405 — the
+overriding class and the bare one, indistinguishable — which means the thing
+being measured was upstream of the code under test. When a probe cannot tell
+your two cases apart, it is measuring something else; change the configuration
+that might be doing the masking and probe again, rather than recording the
+answer.
+
+The generalisation, since twice is a pattern and §13.8 makes three the trigger:
+before a measured absence becomes an exclusion, ask **who can turn this on, and
+can we see them do it**. If the answer is "the deployment, and no" — derive the
+row and state the dependency. §8's "exclude only on proof, never on inference"
+is the same rule read from the other end.

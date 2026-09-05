@@ -6,7 +6,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
 /**
- * Row 15: extends `HttpServlet`, overrides `doGet`, and carries NO
+ * Rows 19 and 29: extends `HttpServlet`, overrides `doGet`, and carries NO
  * `@WebServlet`. The class is on the classpath and compiles to a class file
  * exactly like every servlet above; nothing registers it.
  */

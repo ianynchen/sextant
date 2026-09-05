@@ -7,9 +7,10 @@ import jakarta.servlet.annotation.WebServlet;
 import java.io.IOException;
 
 /**
- * Rows 13-14: a `GenericServlet` subclass. `GenericServlet` is protocol-
- * agnostic — it declares no HTTP verb dispatch at all — so no verb map applies
- * to it even though it carries the same `@WebServlet` address annotation.
+ * Rows 16-17 and 28: a `GenericServlet` subclass. `GenericServlet` is
+ * protocol-agnostic — it declares no HTTP verb dispatch at all — so no verb
+ * map applies to it even though it carries the same `@WebServlet` address
+ * annotation.
  */
 @WebServlet(urlPatterns = "/generic")
 public class GenericProbeServlet extends GenericServlet {

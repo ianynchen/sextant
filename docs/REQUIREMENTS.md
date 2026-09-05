@@ -103,11 +103,20 @@ annotation for the address, a catalog-named supertype for the dispatch contract,
 members the class overrides — selected by name AND parameter types, which is how the
 language identifies one — for the operations
 ([COVERAGE.md](COVERAGE.md) §5.1, measured live in `scripts/probes/cp9_servlet_shapes.md`
-against two container versions). Its boundaries are stated rather than closed: the
-annotation is one of three registration routes (`web.xml` and `ServletContext.addServlet`
-derive nothing), the `javax.servlet` spelling is unprobed and unshipped, and the HEAD and
-OPTIONS the container serves implicitly are deliberately not derived — the code serving
-them is not in the module, and the same ruling was already made for Data REST above.
+against three container versions). It ships twice, once per package spelling
+(`jakarta-servlet.yml` and `javax-servlet.yml`), because the legacy estate the surface
+exists for is the population using the older one — and as two catalogs only because the
+third container column measured the two behaving identically, never on the assumption that
+they would. Its boundaries are stated rather than closed: the annotation is one of three
+registration routes (`web.xml` and `ServletContext.addServlet` derive nothing); a module
+whose `web.xml` declares `metadata-complete="true"` serves none of its annotated servlets
+and we derive all of them, because nothing here reads a deployment descriptor; and the
+verbs the container serves IMPLICITLY are deliberately not derived — the code serving them
+is not in the module, and the same ruling was already made for Data REST above. An
+explicitly overridden handler is a different case and derives even where a deployment
+would refuse to route to it: `doTrace` is in the verb map with the connector's `allowTrace`
+recorded as a stated dependency, because configuration outside the module is not evidence
+about the module.
 
 ### FR-4 — Shape catalog
 

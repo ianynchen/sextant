@@ -6,7 +6,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
-/** Rows 1-2: an array-valued `urlPatterns`. Two patterns, one class. */
+/** Rows 1-2 and 20-21: an array-valued `urlPatterns`. Two patterns, one class. */
 @WebServlet(urlPatterns = {"/multi-a", "/multi-b"})
 public class MultiPatternServlet extends HttpServlet {
 

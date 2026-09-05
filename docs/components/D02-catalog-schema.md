@@ -1595,11 +1595,12 @@ hop, and its target is module-prefixed even when it lives in a dependency jar
 is neither required nor possible. A class reaching the supertype through an intermediate base
 of its own is a STATED BOUNDARY, never a guess at what the intermediate declares.
 
-**`address` is `{annotation, args}`, and `args` is a PRECEDENCE list of the argument
-spellings that carry the address.** Aliased attributes reach the fact stream as their own
-distinct keys, so both must be named; the first one present wins rather than the union,
-because a declaration writing both is one the framework itself refuses to deploy and reading
-past the key the author wrote would answer with a different attribute. **Each value is its own
+**`address` is `{annotation, args}`, and `args` is an ALIAS SET of the argument
+spellings that carry the address — exactly one of which a declaration writes.** Aliased
+attributes reach the fact stream as their own distinct keys, so both must be named; more than
+one present derives NOTHING rather than a winner, because a declaration writing both is one
+the framework itself refuses to deploy, so the module serves nothing and either value would be
+a fabricated address. Order-independent by construction. **Each value is its own
 endpoint** — one declaration is N addresses, never one — and each is published VERBATIM: an
 address argument may be a pattern grammar with its own precedence rules, and normalising one
 would publish an address no probe covered. The RAW annotation table is read, never the
@@ -1628,11 +1629,24 @@ REQUIRED and may be empty: a supertype with no bypass says so, because an omitte
 indistinguishable from a forgotten one and the forgotten one publishes wrong verbs.
 
 **One row per handler the MODULE DECLARES.** A dispatch supertype may also serve operations
-IMPLICITLY, off a member the module never overrode — measured, it does (CP-9 rows 7-9). Those
-derive nothing: the code serving them is in a dependency this workspace never scanned, so the
-row would carry either no handler at all or the symbol of a DIFFERENT member the implicit path
-merely calls, and the second is false. A stated under-report in `docs/COVERAGE.md`, on the same
-terms as the identical ruling Task 6 made for `derived_resource`'s own HEAD/OPTIONS.
+IMPLICITLY, off a member the module never overrode — measured, it does (CP-9 rows 7-9 and 32).
+Those derive nothing: the code serving them is in a dependency this workspace never scanned, so
+the row would carry either no handler at all or the symbol of a DIFFERENT member the implicit
+path merely calls, and the second is false. A stated under-report in `docs/COVERAGE.md`, on the
+same terms as the identical ruling Task 6 made for `derived_resource`'s own HEAD/OPTIONS.
+
+**The complement of that rule decides the DEPLOYMENT question too**, and it is the sharpest
+thing this style has to get right. An operation the class explicitly overrode is a handler the
+module DECLARED, and a declaration is a code fact — so it derives, even where the deployment
+the probe happened to run refuses to route to it. `doTrace` is the worked case: a Tomcat
+connector rejects TRACE before dispatch unless `allowTrace` is set (CP-9 row 13), but
+`allowTrace` is configuration outside the module that any deployment overrides and no
+repository can see, so its default proves nothing (§8's "exclude only on proof, never on
+inference"). Measured with the connector out of the way, `service()` dispatches TRACE to
+`doTrace` exactly as it dispatches GET to `doGet` (row 31). The row derives and
+`docs/COVERAGE.md` carries the connector as a **stated dependency**, in the shape Task 7 used
+for Actuator's `exposure.include`. The test to apply is whether the thing withholding the
+response is the framework's dispatch or somebody's deployment.
 
 `resolution` is always `resolved` (an address argument is a compile-time constant of the
 declaration itself; the one that cannot be read derives no row rather than an unresolved one);
@@ -2553,15 +2567,43 @@ multi-path call matches no row at all. A catalog under this exception is weaker 
 than one with a fixture, and the sentence above — "without this, a catalog is an
 assertion" — is exactly what it trades
 against, so the exception is for this one shape and does not generalise to an
-annotation or configuration catalog, where the fixture is cheap.
+annotation or configuration catalog **on the strength of the shape alone**, where the fixture
+is usually cheap.
 
-**It is still the only instance, and Phase 2I is the reason that is worth recording.**
-`jakarta-jws-client.yml` — generated client stubs, whose declarations live in a dependency
-by definition — was pinned over synthetic facts for exactly one task, and then got a real
-fixture of a shape this document had not had before: a **sibling module built and consumed
-as a jar**, opted into by the analysed fixture's own `.sextant.yml` (§4a), deriving its one
-endpoint through the real commands in CI. A catalog whose subject matter is compiled
-libraries is fixturable after all; it just needs a library.
+**Phase 2I is worth recording before the second instance, because it narrowed the exception
+rather than widening it.** `jakarta-jws-client.yml` — generated client stubs, whose
+declarations live in a dependency by definition — was pinned over synthetic facts for exactly
+one task, and then got a real fixture of a shape this document had not had before: a **sibling
+module built and consumed as a jar**, opted into by the analysed fixture's own `.sextant.yml`
+(§4a), deriving its one endpoint through the real commands in CI. A catalog whose subject
+matter is compiled libraries is fixturable after all; it just needs a library.
+
+**The second instance: `jakarta-servlet.yml` and `javax-servlet.yml` (Phase 2O Task 7b).**
+They are ANNOTATION catalogs, which the paragraph above says the exception does not cover on
+the strength of the shape — so they take it on a different ground, stated here rather than
+assumed. **The reason is a dependency, not a shape.** A servlet fixture compiles against a
+servlet API, which puts `jakarta.servlet:jakarta.servlet-api` (and, for the second catalog,
+`javax.servlet:javax.servlet-api`) into CI's offline priming — a dependency change §7 puts out
+of an implementation task's scope without instruction. The fixture is cheap to WRITE and not
+cheap to LAND, which is a different sentence from the one 2H was written against.
+
+**What ships instead**, satisfying the exception's three conditions with unusually strong
+compensating evidence: the rows are pinned over synthetic facts against the **real loaded
+catalogs** (`tests/application/test_supertype_dispatch.py` loads the shipped files, never a
+copy); every assumption is written down; the boundary is recorded in
+[COVERAGE](../COVERAGE.md). And the fact shapes those synthetic facts mirror were not
+imagined — CP-9 ran the committed extractor over real compiled servlet class files on three
+containers and recorded what reached the fact stream (`scripts/probes/cp9_servlet_shapes.md`,
+rows 20-30). What is still missing is narrow and real: nothing runs the DERIVATION end to end
+over that bytecode in CI, so a change in the fact stream's shape is caught by re-running the
+probe rather than by the suite.
+
+**The condition that closes it** (§9: an omission states what would make it wrong): a servlet
+API present in CI's offline priming. The day one is primed — for this or any other reason —
+the ground above evaporates, and these two catalogs get the fixture D02 §4 requires of every
+other annotation catalog. **Two instances is the count, and it is not a trend**: each was
+admitted for a reason of its own, written down where the catalog is, and a third needs its own
+ruling rather than a citation of these.
 
 ---
 

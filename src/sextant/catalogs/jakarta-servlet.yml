@@ -42,9 +42,10 @@ matches:
   # `WebServlet` declares `String[] value()` and `String[] urlPatterns()`,
   # `@Target(TYPE)`, no `@Inherited`). Both reach the fact stream as their own
   # argument key (CP-9 rows 21-22), so both are named — a catalog naming one
-  # would derive nothing for half the estate. Most preferred first: writing
-  # BOTH is a deployment error the container refuses, so there is no union to
-  # take, and the first key present is the attribute the author named.
+  # would derive nothing for half the estate. An ALIAS SET, not a precedence
+  # list: writing BOTH is a deployment error the container refuses, so such a
+  # module serves nothing and either value would be a fabricated address.
+  # Exactly one key present, or no row.
   #
   # EACH PATTERN IS ITS OWN ENDPOINT (CP-9 rows 1-2). And each is published
   # VERBATIM: `/legacy/*` and `*.do` are pattern grammars with their own
@@ -68,20 +69,24 @@ matches:
   # nothing, `HttpServlet`'s own `doGet` still applies, and the container
   # answers 405. A name-only selector would publish that address.
   #
-  # Six entries, not seven. `HttpServlet` declares `doTrace` alongside these
-  # (javap, both versions) and it is deliberately absent: CP-9 rows 10 and 13
-  # measured TRACE as a 405 on both containers EVEN WITH `doTrace` explicitly
-  # overridden, because the connector refuses the method before dispatch
-  # (`allowTrace`, default false). Deriving a TRACE row would publish an
-  # address the deployment does not serve. Bounded to the two containers
-  # probed (§5.4) — one configured with `allowTrace=true` serves it and we
-  # then under-report, which is the honest direction; docs/COVERAGE.md states
-  # it. This entry returns the day a probe measures a container that serves it
-  # by default.
+  # Seven entries: every `doXxx` `HttpServlet` declares (javap, all three
+  # versions). `doHead`, `doOptions` and `doTrace` are here and that is not in
+  # tension with the ruling below — an EXPLICIT override is a handler the
+  # module declared, with a symbol to attribute, and CP-9 rows 11-12 and 31
+  # measured all three served.
   #
-  # `doHead` and `doOptions` ARE here, and that is not in tension with the
-  # ruling below: an EXPLICIT override is a handler the module declared, with
-  # a symbol to attribute, and CP-9 rows 11-12 measured both served.
+  # `doTrace` carries ONE STATED DEPENDENCY, recorded in docs/COVERAGE.md
+  # beside Actuator's `exposure.include`, which is the same shape. A Tomcat
+  # connector refuses TRACE before dispatch unless `allowTrace` is set, and
+  # its default is false (CP-9 row 13: 405 even with `doTrace` overridden) —
+  # but `allowTrace` is CONNECTOR CONFIGURATION, set by whoever deploys the
+  # module and invisible from its repository, so the default is a deployment
+  # fact and not proof that the address is unserved. Over a connector that
+  # permits the method, `service()` dispatches TRACE to `doTrace` exactly as
+  # it dispatches GET to `doGet` (CP-9 row 31: 200, all three containers).
+  # We report code facts and state the deployment dependency; this entry
+  # leaves the day the dispatch itself stops happening, not the day a
+  # container ships a different connector default.
   dispatch:
     - name: doGet
       parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
@@ -101,6 +106,9 @@ matches:
     - name: doOptions
       parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
       method: OPTIONS
+    - name: doTrace
+      parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
+      method: TRACE
 
   # OVERRIDING `service()` REPLACES THE DISPATCH ITSELF, so the table above
   # describes nothing about such a class: CP-9 rows 14-15 measured GET and PUT
@@ -120,8 +128,9 @@ matches:
 
 # THE RULING ON IMPLICIT DISPATCH (CP-9 verdict 5), recorded here because a
 # reader of this file will ask why `doGet` alone does not also publish HEAD.
-# It IS served — CP-9 rows 7-9: 200 on both containers, `Allow: GET, HEAD,
-# OPTIONS` — and OPTIONS is served by every `HttpServlet` alive. Neither is
+# It IS served — CP-9 rows 7-9: 200 on all three containers, `Allow: GET,
+# HEAD, OPTIONS` — OPTIONS is served by every `HttpServlet` alive, and TRACE
+# too wherever the connector permits the method (row 32). None of the three is
 # derived: the code serving them lives in the container's own jar, which this
 # workspace never scans, so the row would carry either no handler or the
 # symbol of a DIFFERENT method the implicit path merely calls. This style
@@ -129,6 +138,18 @@ matches:
 # docs/COVERAGE.md, matching the identical ruling 2O Task 6 made for Spring
 # Data REST's own HEAD/OPTIONS; it is falsified the day an endpoint row can
 # name a handler outside the module.
+
+# THE ONE OVER-REPORT THIS FILE CANNOT SEE, stated here as well as in
+# docs/COVERAGE.md. The annotation deployment scan above is switched off
+# WHOLESALE for a module whose `WEB-INF/web.xml` declares
+# `metadata-complete="true"` (or a `web-app` version below 3.0): the container
+# then registers nothing from annotations, and every URL this file would
+# derive for such a module is a 404. CP-9
+# row 33 measured it — the same classes, the same container, one descriptor,
+# 404 on all three. Nothing in the fact stream reads a deployment descriptor,
+# so every rule in this file applies unconditionally and such a module has its
+# whole servlet surface fabricated. Closed by a deployment-descriptor reader,
+# which would also close the `web.xml` registration route we under-report.
 
 # No `wrappers`/`nullability`/`serialization`/`known_types` (grpc-java.yml's
 # identical omission, and a sharper reason): this style's rows carry no

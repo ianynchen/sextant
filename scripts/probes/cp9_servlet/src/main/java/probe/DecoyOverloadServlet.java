@@ -6,7 +6,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
 /**
- * Row 19: the LANGUAGE rule (GUIDELINES §8.1). A method named `doGet` whose
+ * Rows 18 and 26: the LANGUAGE rule (GUIDELINES §8.1). A method named `doGet` whose
  * parameter types are not `(HttpServletRequest, HttpServletResponse)` is not
  * an override of anything — Java identifies a method by name AND parameter
  * types in order — so `HttpServlet`'s own `doGet` still applies and the

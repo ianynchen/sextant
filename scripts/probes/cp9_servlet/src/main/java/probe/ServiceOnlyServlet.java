@@ -7,7 +7,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
 /**
- * Rows 10-12: `service()` overridden, no `doXxx` anywhere. The verb dispatch
+ * Rows 14-15: `service()` overridden, no `doXxx` anywhere. The verb dispatch
  * `HttpServlet.service` performs is exactly what this class replaces, so the
  * verb map cannot describe what it serves.
  */

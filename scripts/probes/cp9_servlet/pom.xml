@@ -12,7 +12,17 @@
 
      `-Dtomcat.version=` selects the container, and the version is a property
      rather than a hard-coded coordinate because a verdict about HttpServlet's
-     implicit dispatch is evidence about the implementations that ran (§5.4). -->
+     implicit dispatch is evidence about the implementations that ran (§5.4).
+
+     `-Dprobe.sources=` selects the source tree, and exists for exactly one
+     configuration: Tomcat 9 ships the SAME API under the `javax.servlet`
+     spelling, so `run.sh` rewrites the committed sources into
+     `target/generated-javax/java` — one `sed` over the package name, nothing
+     else — and points the compiler there. Rewritten rather than duplicated
+     because "identical modulo the package spelling" is the claim the javax
+     column is measuring, and a second hand-maintained copy could drift out of
+     being identical without anyone noticing. -->
+
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -25,6 +35,7 @@
     <maven.compiler.release>21</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <tomcat.version>11.0.24</tomcat.version>
+    <probe.sources>src/main/java</probe.sources>
   </properties>
 
   <dependencies>
@@ -37,5 +48,6 @@
 
   <build>
     <finalName>cp9-servlet-0.0.1</finalName>
+    <sourceDirectory>${probe.sources}</sourceDirectory>
   </build>
 </project>
