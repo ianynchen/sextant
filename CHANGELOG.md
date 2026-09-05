@@ -166,6 +166,17 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Every unique-overload `methods` row now names the overload it means** (descriptor sweep
+  R2). A row matched on name and argument COUNT is matching on a rule Java does not have —
+  the language identifies a method by name and parameter types in order (GUIDELINES §8.1's
+  language rule) — and the rows below happened to be unambiguous only because their jars
+  declare one overload at that arity today. `google-pubsub-client`, `jakarta-jms` (both
+  rows), `kafka-clients`, `spring-rabbit-template`'s arity-1 row and `spring-ws-template`'s
+  arity-1 and arity-3 rows each declare their own erased descriptor. Nothing derived changes:
+  a unique overload's descriptor can only equal what a matching call carries. What changes is
+  the release that adds a sibling — it derives NOTHING instead of having its own argument 0
+  read as a destination or a payload. The comments that said a unique overload needs no
+  descriptor are corrected, each with the condition that falsifies it.
 - **A SOAP request PAYLOAD could be published as the SOAP service's address** (descriptor
   sweep R1, §8). The same overload collision Task 7 closed for AMQP and JMS was still live
   in `spring-ws-template.yml`: `WebServiceTemplate.marshalSendAndReceive` declares

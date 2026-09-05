@@ -5862,3 +5862,226 @@ def test_the_ws_arity_two_uri_overload_still_derives(tmp_path: Path):
     assert endpoint["peer"] == "http://billing.acme.example/ws"
     assert endpoint["path"] == "{http://acme.example/orders}placeOrderRequest"
     assert endpoint["resolution"] == "resolved"
+
+
+# --- Descriptor sweep (2O), R2/R3/R4/R5/R6: every remaining `methods` row is
+# closed against the JLS rather than against arity.
+#
+# Java identifies a method by name and PARAMETER TYPES IN ORDER; argument count
+# is a consequence of that list, never the rule (GUIDELINES §8.1's language
+# rule). A row matched on name+arity is therefore matching on a rule the
+# language does not have, and two overloads sharing a count are indistinguishable
+# to it — which is how a message payload came to be published as a destination
+# twice, and a SOAP payload as a peer once.
+#
+# The pair below is §10's, applied to every row this sweep claimed:
+#
+#   * the NEAR-MISS drives the SHIPPED catalog with a call satisfying every
+#     conjunct of the row — owner, name, argument count, argument kinds — and
+#     differing ONLY in `target.descriptor`, and asserts NOTHING is derived;
+#   * the PAIRED POSITIVE drives the same catalog with the descriptor the row
+#     declares, and asserts the row still FIRES. A claim that silences
+#     everything passes every near-miss ever written.
+#
+# Where a `sibling` below is a real overload of the same jar, the case proves the
+# discrimination between two things a caller can actually write. Where the row's
+# overload is UNIQUE at its arity, the sibling is deliberately hypothetical and
+# said to be so in the case id: the claim those rows make is precisely about the
+# release that adds one, and a test is the only thing that can hold it.
+
+_PUBSUB_MESSAGE = "com/google/pubsub/v1/PubsubMessage#"
+_PRODUCER_RECORD = "org/apache/kafka/clients/producer/ProducerRecord#"
+_SPRING_MESSAGE = "org/springframework/messaging/Message#"
+
+
+def _shipped_catalog(catalog_id: str) -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == catalog_id)
+
+
+def _resolve_shipped(
+    tmp_path: Path, facts: list, catalog_id: str, capabilities: set[str] = CAPABILITIES
+):
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [_shipped_catalog(catalog_id)], capabilities=capabilities)
+    assert skipped == []
+    return workspace
+
+
+def _call_to(owner: str, name: str, descriptor: str, arguments: list) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=_CLAIM_CALLER,
+        target=CallTarget(owner=owner, name=name, descriptor=descriptor),
+        invoke_kind="virtual",
+        ordinal=0,
+        receiver=3,
+        result=9,
+        arguments=arguments,
+    )
+
+
+_CLAIM_CALLER = "com/acme/orders/messaging/Outbound#publish()."
+
+# `(catalog id, owner, method, the descriptor the row declares, a DIFFERENT
+# descriptor at the same argument count, the call's arguments)`.
+_CLAIMED_ARITIES = [
+    pytest.param(
+        "google-pubsub-client",
+        "com/google/cloud/pubsub/v1/Publisher#",
+        "publish",
+        "(Lcom/google/pubsub/v1/PubsubMessage;)Lcom/google/api/core/ApiFuture;",
+        "(Ljava/lang/String;)Lcom/google/api/core/ApiFuture;",
+        [CallArgument(kind="instance", symbol=_PUBSUB_MESSAGE)],
+        id="Publisher.publish — hypothetical arity-1 sibling",
+    ),
+    pytest.param(
+        "jakarta-jms",
+        "jakarta/jms/Session#",
+        "createProducer",
+        "(Ljakarta/jms/Destination;)Ljakarta/jms/MessageProducer;",
+        "(Ljava/lang/String;)Ljakarta/jms/MessageProducer;",
+        [CallArgument(kind="instance", symbol="jakarta/jms/Queue#")],
+        id="Session.createProducer — hypothetical arity-1 sibling",
+    ),
+    pytest.param(
+        "jakarta-jms",
+        "jakarta/jms/Session#",
+        "createConsumer",
+        "(Ljakarta/jms/Destination;)Ljakarta/jms/MessageConsumer;",
+        "(Ljava/lang/String;)Ljakarta/jms/MessageConsumer;",
+        [CallArgument(kind="instance", symbol="jakarta/jms/Queue#")],
+        id="Session.createConsumer — hypothetical arity-1 sibling",
+    ),
+    pytest.param(
+        "kafka-clients",
+        "org/apache/kafka/clients/producer/KafkaProducer#",
+        "send",
+        "(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/Future;",
+        "(Lorg/springframework/messaging/Message;)Ljava/util/concurrent/Future;",
+        [CallArgument(kind="instance", symbol=_PRODUCER_RECORD)],
+        id="KafkaProducer.send — hypothetical arity-1 sibling",
+    ),
+    pytest.param(
+        "spring-rabbit-template",
+        "org/springframework/amqp/rabbit/core/RabbitTemplate#",
+        "convertAndSend",
+        "(Ljava/lang/Object;)V",
+        "(Lorg/springframework/amqp/core/Message;)V",
+        [CallArgument(kind="class", symbol=ORDER_VIEW)],
+        id="RabbitTemplate.convertAndSend/1 — hypothetical arity-1 sibling",
+    ),
+]
+
+
+@pytest.mark.declines("google-pubsub-client")
+@pytest.mark.declines("jakarta-jms")
+@pytest.mark.declines("kafka-clients")
+@pytest.mark.parametrize(
+    ("catalog_id", "owner", "name", "declared", "sibling", "arguments"), _CLAIMED_ARITIES
+)
+def test_an_overload_no_row_declares_derives_nothing_at_a_claimed_arity(
+    tmp_path: Path,
+    catalog_id: str,
+    owner: str,
+    name: str,
+    declared: str,
+    sibling: str,
+    arguments: list,
+):
+    """§10 near-miss, once per row this sweep claimed. Every conjunct of the
+    shipped row holds — the owner, the name, the argument count and the argument
+    kinds — and only `target.descriptor` differs, so this measures the
+    descriptor and nothing else.
+
+    Nothing at all is the required answer, not "something different": falling
+    through to a descriptor-less sibling is the fabrication the key exists to
+    stop, and falling through to the row itself would read this overload's own
+    argument 0 as whatever that row declares it to be."""
+    workspace = _resolve_shipped(tmp_path, [_call_to(owner, name, sibling, arguments)], catalog_id)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == [], f"{catalog_id}: {name} matched a row it does not declare"
+
+
+@pytest.mark.parametrize(
+    ("catalog_id", "owner", "name", "declared", "sibling", "arguments"), _CLAIMED_ARITIES
+)
+def test_the_declared_overload_of_a_claimed_arity_still_derives(
+    tmp_path: Path,
+    catalog_id: str,
+    owner: str,
+    name: str,
+    declared: str,
+    sibling: str,
+    arguments: list,
+):
+    """The paired positive for every near-miss above, and the half that cannot
+    be skipped: a descriptor that is well-formed and WRONG silences its whole
+    overload set, and every near-miss still passes against a row that matches
+    nothing (GUIDELINES §10). Each descriptor here is `javap -p -s`'s own
+    output, recorded with the jar it came from in
+    `scripts/probes/cp10_catalog_descriptors.md`."""
+    workspace = _resolve_shipped(tmp_path, [_call_to(owner, name, declared, arguments)], catalog_id)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert len(rows) == 1, f"{catalog_id}: {name} no longer derives its own declared overload"
+
+
+@pytest.mark.declines("spring-ws-template")
+def test_the_ws_arity_one_and_three_rows_decline_an_overload_they_do_not_declare(
+    tmp_path: Path,
+):
+    """§10 near-miss for `spring-ws-template.yml`'s two unique overloads (R2).
+    Both are the ONLY `marshalSendAndReceive` at their argument count in
+    spring-ws-core 4.1.4, so each sibling below is hypothetical by construction —
+    which is the point: the descriptor's whole value on a unique overload is
+    what it does the day the jar declares a second one, and nothing but a test
+    can hold a claim about a release that has not happened."""
+    caller = _MODULE + WS_CLIENT + "place(sig_a)."
+    for descriptor, arguments in (
+        (
+            "(Lorg/springframework/ws/WebServiceMessage;)Ljava/lang/Object;",
+            [CallArgument(kind="parameter", value=0)],
+        ),
+        (
+            "(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;",
+            [
+                CallArgument(kind="string", value="http://billing.acme.example/ws"),
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="string", value="SOAPACTION"),
+            ],
+        ),
+    ):
+        facts = [
+            _marshal_send_and_receive(caller, arguments, descriptor=descriptor),
+            _ws_caller_method("place"),
+            _ws_root_annotation(),
+        ]
+        workspace = _resolve_ws(tmp_path / descriptor[:12].replace("/", "_"), facts)
+        rows = workspace.query("endpoints")
+        workspace.close()
+
+        assert rows == [], f"an undeclared overload matched: {descriptor}"
+
+
+def test_the_ws_arity_one_row_still_derives_its_own_overload(tmp_path: Path):
+    """The paired positive: `marshalSendAndReceive(Object)` — the template's own
+    configured address, no URI at the call — still resolves its operation off
+    the payload type's `@XmlRootElement`."""
+    caller = _MODULE + WS_CLIENT + "place(sig_a)."
+    facts = [
+        _marshal_send_and_receive(
+            caller, [CallArgument(kind="parameter", value=0)], descriptor=_WS_PAYLOAD_ONLY
+        ),
+        _ws_caller_method("place"),
+        _ws_root_annotation(),
+    ]
+    workspace = _resolve_ws(tmp_path, facts)
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["path"] == "{http://acme.example/orders}placeOrderRequest"

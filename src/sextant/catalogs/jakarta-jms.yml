@@ -26,9 +26,21 @@ matches:
   # side) — the producer/consumer REGISTRATION itself is the evidence a
   # route exists, not the send/receive call, so both rows below carry no
   # `body_arg` at all and their payload is honestly absent.
+  #
+  # Each row states its own erased JVM `descriptor` even though each is the ONLY
+  # overload at its arity (`createConsumer` also declares `(Destination, String)`
+  # and `(Destination, String, boolean)`, which are arities 2 and 3 — javap -p -s,
+  # jakarta.jms-api 3.1.0, recorded in
+  # `scripts/probes/cp10_catalog_descriptors.md`). Java identifies a method by
+  # name and parameter types in order, never by argument count (GUIDELINES
+  # §8.1's language rule), and a unique overload's descriptor can only ever
+  # equal what a matching call carries — so today's answer is unchanged, and a
+  # future one-argument sibling derives NOTHING rather than being read through
+  # `channel_arg: 0`. Re-running the CP-10 harness is the check.
   methods:
     - name: createProducer
       arity: 1
+      descriptor: "(Ljakarta/jms/Destination;)Ljakarta/jms/MessageProducer;"
       direction: outbound
       channel_arg: 0
       channel_via:
@@ -36,6 +48,7 @@ matches:
         - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
     - name: createConsumer
       arity: 1
+      descriptor: "(Ljakarta/jms/Destination;)Ljakarta/jms/MessageConsumer;"
       direction: inbound
       channel_arg: 0
       channel_via:

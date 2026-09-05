@@ -73,11 +73,19 @@ matches:
         channel_arg: 0, address_arg_2: 1, body_arg: 2 }
     - { name: convertAndSend, arity: 2, descriptor: "(Ljava/lang/String;Ljava/lang/Object;)V",
         channel_arg: 0, body_arg: 1 }
-    # Arity 1 is `convertAndSend(Object)` and nothing else — no sibling to
-    # collide with, so no descriptor is declared and the row keeps matching
-    # every arity-1 call. That stops being true if spring-rabbit adds a second
-    # one-argument `convertAndSend`; `javap RabbitTemplate` is the check.
-    - { name: convertAndSend, arity: 1, body_arg: 0 }
+    # Arity 1 is `convertAndSend(Object)` and nothing else, and it declares its
+    # descriptor all the same (descriptor sweep R2). The earlier note here said
+    # a unique overload needs none; true of THIS jar, and it made the file's
+    # correctness depend on a fact no test could see. Java identifies a method
+    # by name and parameter types in order, never by argument count (GUIDELINES
+    # §8.1's language rule), so the rule the row mirrors is the descriptor
+    # either way — and a unique overload's descriptor can only ever equal what
+    # a matching call carries, so nothing derived today changes. What changes is
+    # the day spring-rabbit adds a second one-argument `convertAndSend`: that
+    # overload derives NOTHING rather than having its own argument 0 read as a
+    # payload. Re-running `scripts/probes/cp10_catalog_descriptors/run.sh` is
+    # the check.
+    - { name: convertAndSend, arity: 1, descriptor: "(Ljava/lang/Object;)V", body_arg: 0 }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full

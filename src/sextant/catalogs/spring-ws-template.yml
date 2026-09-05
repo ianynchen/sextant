@@ -75,8 +75,16 @@ matches:
     # it is what a `@XmlRootElement` naming neither attribute derives here
     # (DR-6's refusal-to-default).
     #
-    # `marshalSendAndReceive(Object)` — no URI: the template's own default.
+    # `marshalSendAndReceive(Object)` — no URI: the template's own default. The
+    # only arity-1 overload, and it declares its descriptor all the same
+    # (descriptor sweep R2): the language identifies a method by name and
+    # parameter types in order, a unique overload's descriptor can only ever
+    # equal what a matching call carries — so nothing derived today changes —
+    # and a future one-argument sibling then derives NOTHING rather than having
+    # its own argument 0 read as a payload type. Re-running
+    # `scripts/probes/cp10_catalog_descriptors/run.sh` is the check.
     - { name: marshalSendAndReceive, arity: 1,
+        descriptor: "(Ljava/lang/Object;)Ljava/lang/Object;",
         path_from_argument_type: { arg: 0,
                                    annotation: jakarta.xml.bind.annotation.XmlRootElement,
                                    name_from: name, qualifier_from: namespace,
@@ -132,7 +140,13 @@ matches:
                                    annotation: jakarta.xml.bind.annotation.XmlRootElement,
                                    name_from: name, qualifier_from: namespace,
                                    format: qname } }
-    - { name: marshalSendAndReceive, arity: 3, url_arg: 0,
+    # Arity 3 is `(String, Object, WebServiceMessageCallback)` and nothing else,
+    # and it declares its descriptor for the same R2 reason: the claim costs
+    # nothing while it is unique, and buys silence rather than a misread
+    # position the day a second three-argument overload appears.
+    - { name: marshalSendAndReceive, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;",
+        url_arg: 0,
         path_from_argument_type: { arg: 1,
                                    annotation: jakarta.xml.bind.annotation.XmlRootElement,
                                    name_from: name, qualifier_from: namespace,

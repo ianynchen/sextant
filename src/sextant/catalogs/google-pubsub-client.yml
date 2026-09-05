@@ -37,8 +37,20 @@ matches:
   # `record_arg` row keeps for `KafkaTemplate.send(Message)` — "unresolved
   # is an answer, never an omission" outranks tidiness, and cross-catalog
   # suppression is deliberately not this catalog's concern (spec §4).
+  #
+  # The row states its own erased JVM `descriptor` even though `publish` has
+  # exactly ONE overload at this arity (javap -p -s, google-cloud-pubsub
+  # 1.129.3, recorded in `scripts/probes/cp10_catalog_descriptors.md`). Java
+  # identifies a method by name and parameter types in order, never by argument
+  # count (GUIDELINES §8.1's language rule), and a unique overload's descriptor
+  # can only ever equal what a matching call carries — so today's answer is
+  # unchanged, and the day the library adds a second one-argument `publish` that
+  # new overload derives NOTHING instead of silently reading this row's
+  # `body_arg: 0`. Re-running the CP-10 harness is the check.
   methods:
-    - { name: publish, arity: 1, body_arg: 0 }
+    - { name: publish, arity: 1,
+        descriptor: "(Lcom/google/pubsub/v1/PubsubMessage;)Lcom/google/api/core/ApiFuture;",
+        body_arg: 0 }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full

@@ -77,16 +77,23 @@ by a hand-written owner→artifact map.
 | what the run read | 1.129.3 | 3.1.0 | 3.1.1 | 3.1.4 | 3.6.2 | 4.1.4 | 5.1.2 | 6.1.6 |
 |---|---|---|---|---|---|---|---|---|
 | artifacts reporting this version | google-cloud-pubsub | jakarta.jms-api | spring-cloud-aws-sqs | spring-kafka, spring-rabbit | kafka-clients | spring-ws-core | spring-cloud-gcp-pubsub | spring-jms, spring-web, spring-websocket |
-| owner classes resolved out of them | 0 | 0 | 0 | 1 | 0 | 1 | 0 | 1 |
-| catalog descriptors checked against them | 0 | 0 | 0 | 2 | 0 | 1 | 0 | 1 |
+| owner classes resolved out of them | 1 | 1 | 0 | 1 | 1 | 1 | 0 | 1 |
+| catalog descriptors checked against them | 1 | 2 | 0 | 3 | 1 | 3 | 0 | 1 |
 | of those, NOT declared by the jar | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 | # | catalog | owner | method | arity | descriptor | artifact | version | verdict |
 |---|---|---|---|---|---|---|---|---|
-| 1 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
-| 2 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 3 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
-| 3 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
-| 4 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 1 | `google-pubsub-client` | `com.google.cloud.pubsub.v1.Publisher` | `publish` | 1 | `(Lcom/google/pubsub/v1/PubsubMessage;)Lcom/google/api/core/ApiFuture;` | `google-cloud-pubsub` | 1.129.3 | declared |
+| 2 | `jakarta-jms` | `jakarta.jms.Session` | `createProducer` | 1 | `(Ljakarta/jms/Destination;)Ljakarta/jms/MessageProducer;` | `jakarta.jms-api` | 3.1.0 | declared |
+| 3 | `jakarta-jms` | `jakarta.jms.Session` | `createConsumer` | 1 | `(Ljakarta/jms/Destination;)Ljakarta/jms/MessageConsumer;` | `jakarta.jms-api` | 3.1.0 | declared |
+| 4 | `kafka-clients` | `org.apache.kafka.clients.producer.KafkaProducer` | `send` | 1 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/Future;` | `kafka-clients` | 3.6.2 | declared |
+| 5 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
+| 6 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 3 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
+| 7 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
+| 8 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 1 | `(Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
+| 9 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 1 | `(Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 10 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 11 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
 
 Every row `declared`, and the negative control was exercised rather than
 assumed: mangling one shipped descriptor's return type (`)V` → `)Z`) turns its

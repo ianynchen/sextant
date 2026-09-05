@@ -21,8 +21,20 @@ matches:
   # Callback)` is arity 2 — only arity 1 is exercised by the fixture
   # (`rawProducer.send(new ProducerRecord<>(...))`), so only it is declared
   # (checkpoint ruling: declare only what is verified).
+  #
+  # The row states that overload's own erased JVM `descriptor` even though it is
+  # the only arity-1 `send` (javap -p -s, kafka-clients 3.6.2, recorded in
+  # `scripts/probes/cp10_catalog_descriptors.md`). Java identifies a method by
+  # name and parameter types in order, never by argument count (GUIDELINES
+  # §8.1's language rule), and a unique overload's descriptor can only ever
+  # equal what a matching call carries — so today's answer is unchanged, and a
+  # future one-argument `send` derives NOTHING rather than being read through a
+  # `record_wrappers` rule written for `ProducerRecord`. Re-running the CP-10
+  # harness is the check.
   methods:
-    - { name: send, arity: 1, record_arg: 0 }
+    - { name: send, arity: 1,
+        descriptor: "(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/Future;",
+        record_arg: 0 }
   record_wrappers:
     - { type: org.apache.kafka.clients.producer.ProducerRecord,
         channel_ctor_arg: 0, payload_ctor_arg: last }
