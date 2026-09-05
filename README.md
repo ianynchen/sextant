@@ -25,6 +25,23 @@ uv run sextant module export  <module-path>
 extractor's own build and tests, then the Python suite. `scripts/check.sh --lint` runs
 the lint gates alone, which is what the pre-commit hook in `.githooks/` runs.
 
+### Re-analyse after an upgrade — a workspace is comparable only with its own version
+
+`module analyze` writes facts and a workspace under the module. **They are not comparable
+across Sextant versions.** Every document and every export records the `sextant_version` that
+produced it, so the evidence is there — but nothing compares two of them for you, and a diff
+of two exports will not say that half the difference is the tool. Re-run `analyze` after
+upgrading, rather than rendering or exporting from a workspace an older version wrote.
+
+The concrete instance, and why this is a usage note rather than only a coverage row: until
+`A-M10` the extractor recorded an array's *innermost* element type, so `String[][]` and
+`String[]` produced byte-identical facts. They no longer do — the symbol carries its
+dimensions and the type argument becomes the array it holds — so every content hash over such
+a shape moved, and a contract comparison between an old workspace and a new one reads
+UNEQUAL for a payload nobody changed. Later fixes have the same property in the other
+direction: a route an older version published and a newer one declines, or the reverse, is a
+difference in Sextant and not in the module.
+
 ## Embedding Sextant as a library
 
 `sextant.api` exposes the same four verbs as the CLI's own `module` commands —

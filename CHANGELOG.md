@@ -192,6 +192,23 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Five stale or unstated rationales corrected** (round-1 review, the minors it named).
+  `spring-kafka-template.yml` said `sendDefault`'s arities 2/3/4 "remain undeclared" thirty
+  lines above the rows declaring them, and its counts said "held six" and "the four that were
+  missing" while enumerating five — it held five and five were added. `retrofit.yml` said
+  "MEASURED, at retrofit 2.11.0" where the artifact states no version anywhere in its own
+  bytes and CP-12's identity row prints `assumed` for that column alone: the label is the
+  coordinate that was requested, which §5.4 separates from the observation. CP-12's
+  `_declared` reads a type's DECLARED members and walks no supertype, which bounds every "the
+  framework's whole set" answer in that probe and was disclosed nowhere — the probe and its
+  document now say so, with the condition that falsifies it. `jakarta-jms.yml` justified one
+  `channel_via` pair for all eleven consumer rows with "`Topic` and `Queue` both extend
+  `Destination`", which is false for the eight `Topic`-typed rows: `createQueue` returns a
+  `Queue`, so that half can never link there. And `A-M10`'s old-workspace incomparability was
+  in COVERAGE only, where the person who can act on it — by re-running `analyze` — does not
+  look; `README.md` now carries it, which is what §8.1 rule 3 asks of an escape that is a
+  user action.
+
 - **The call-site insert had no addresses-nothing gate, and `combinator` reached it**
   (round-1 review, MAJOR 6). `derive_endpoints.sql` has carried mechanism 3's gate since
   `A-C1` — a row whose address is empty and whose `peer` is NULL names no endpoint, and

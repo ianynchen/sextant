@@ -49,9 +49,21 @@ matches:
   # ALL ELEVEN TAKE THEIR DESTINATION AT ARGUMENT 0, which is what makes the
   # ten new rows a mirror rather than a guess — the selector, the subscription
   # name, the client-id spelling and the `noLocal` flag are all trailing
-  # arguments this catalog reads nothing from. `Topic` and `Queue` both extend
-  # `Destination`, so the same `createQueue`/`createTopic` `channel_via` pair
-  # resolves every one.
+  # arguments this catalog reads nothing from.
+  #
+  # Every row carries the SAME `createQueue`/`createTopic` `channel_via` pair,
+  # and on the eight rows whose argument 0 is typed `Topic` the `createQueue`
+  # half is INERT: `createQueue` returns a `Queue`, which is not a `Topic`, so
+  # no call site can ever link through it there. The sentence that stood here
+  # said "`Topic` and `Queue` both extend `Destination`, so the same pair
+  # resolves every one", which is true of the two `Destination`-typed rows and
+  # false of the other eight — an inert link presented as a working one. It is
+  # left rather than trimmed to eight one-entry lists because `channel_via` is
+  # a FIRST-MATCH list and an unmatchable entry changes no outcome, and because
+  # one pair spelled once is what keeps a new row from acquiring the wrong
+  # half. That stops being true if `channel_via` ever gains a rule where an
+  # entry that cannot match costs something — an ordering, a count, a
+  # diagnostic — at which point the eight lists want trimming.
   #
   # `createBrowser(Queue[, String])` is the twelfth and thirteenth and is
   # DELIBERATELY ABSENT, stated in COVERAGE §5.9 rather than left silent. A

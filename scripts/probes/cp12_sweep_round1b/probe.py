@@ -124,6 +124,22 @@ def _methods(output: str) -> list[tuple[str, str]]:
 
 
 def _declared(artifact: Artifact, fqn: str) -> list[tuple[str, str]]:
+    """The methods `fqn` DECLARES, and nothing it inherits.
+
+    `javap` on one class prints that class's own members; this walks no
+    supertype and resolves no interface. **That bounds every "the framework's
+    whole set" answer in this file** (§5.4), and it is disclosed here because
+    a reader comparing a catalog against one of those answers is comparing it
+    against a declared set, not against the set the framework exposes.
+
+    It holds for the types asked about today — each is the interface or class
+    that declares its own surface — and it stops holding the day one of them
+    hoists a member into a supertype, at which point the answer silently
+    shrinks and the architecture pin that reads it silently weakens rather
+    than failing. `CP-13 Q5` is the same distinction measured from the other
+    side: `getMethods()` returns inherited members and `getDeclaredMethods()`
+    does not.
+    """
     if fqn not in artifact.classes:
         raise ProbeError(f"{artifact.jar.name} declares no {fqn}")
     return _methods(_javap("-p", "-s", fqn, classpath=artifact.jar))

@@ -43,7 +43,7 @@ matches:
   #
   # MEASURED, at spring-kafka 3.1.4 (CP-12 Q8,
   # `scripts/probes/cp12_sweep_round1b.md`): `KafkaTemplate` declares TEN
-  # `send`/`sendDefault` overloads and this list held six. The four that were
+  # `send`/`sendDefault` overloads and this list held FIVE. The five that were
   # missing are the partition-carrying forms — `send(String, Integer, K, V)`,
   # `send(String, Integer, Long, K, V)` — and three of `sendDefault`'s four,
   # and the note that stood here said of them "the fixture never calls; only
@@ -65,9 +65,11 @@ matches:
   # are each a single overload here, so their claims cost nothing today and buy
   # silence rather than a misread position the day spring-kafka adds a sibling;
   # arity 1 is genuinely two overloads and is two rows. `sendDefault`'s three
-  # further overloads are arities 2, 3 and 4 and remain undeclared, so they
-  # match no row at all — unchanged by this. Re-running
-  # `scripts/probes/cp10_catalog_descriptors/run.sh` is the check on all six.
+  # further overloads are arities 2, 3 and 4 and are declared BELOW, in this
+  # same commit — the sentence that stood here said they "remain undeclared, so
+  # they match no row at all", which the rows underneath it contradicted.
+  # Re-running `scripts/probes/cp10_catalog_descriptors/run.sh` is the check on
+  # all ten.
   methods:
     - { name: send, arity: 2,
         descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",

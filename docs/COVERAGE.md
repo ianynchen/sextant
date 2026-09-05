@@ -662,6 +662,12 @@ catalog vocabulary (`parse_calls`), never engine knowledge. Shipped:
 | **Jackson 3** — `tools.jackson` | `ObjectMapper#readValue`, `JsonMapper#readValue` | the `Class<T>` literal argument | ✅ — the whole relocation between the two generations is a package rename, so it cost **three catalog rows and no code**, and both package families are also listed as `json_default_markers` for the framework-default rung, joined since **2O** by a third marker in the coordinate FORM (`com.fasterxml.jackson.core:jackson-databind`) for the module that carries the jar and names none of its packages. Pinned against real compiled `tools.jackson` bytecode in the fixture, not only against an invented owner in a unit test |
 | Avro | `SpecificDatumReader` construction | the `Class<T>` literal argument | catalogued and **inert** — see below |
 
+**The escape is a USER ACTION, so it is in the usage docs too** (§8.1 rule 3): `README.md`'s
+"Re-analyse after an upgrade" tells the person who can actually change the outcome that a
+workspace an older version wrote is not comparable with one this version writes, and why. A
+COVERAGE row records what we can see; the README is where the reader who can re-run `analyze`
+will look.
+
 **Every dimension of an array reaches the facts** (`A-M10`, principles sweep §3.3). The
 extractor built an array's symbol and its single type argument from ASM's `Type#getElementType`,
 which returns the **innermost** element type rather than the component type — so exactly one

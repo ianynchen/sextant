@@ -100,6 +100,16 @@ beneath the headers says `assumed` for it rather than `yes`.
 | artifacts reporting this version | retrofit | jakarta.jms-api | spring-cloud-aws-sqs | spring-kafka | kafka-clients | spring-web, spring-webflux | spring-web, spring-webflux |
 | identity read from the archive itself | assumed | yes | yes | yes | yes | yes | yes |
 
+**What every row below is bounded by, and it is stated nowhere else.** Each
+answer is read with `javap` on ONE class, so it is that type's DECLARED members
+and nothing it inherits (`probe.py::_declared`, which now says so in its own
+docstring). It holds for the nine types asked about — each declares its own
+surface today — and it stops holding the day a framework hoists a member into a
+supertype, at which point the answer shrinks and
+`tests/architecture/test_sweep_round1b_framework_surfaces.py`'s pin weakens
+silently rather than failing. CP-13 Q5 measures the same distinction from the
+other side.
+
 | # | question | artifact | version | observed |
 |---|---|---|---|---|
 | 1a | `WebClient` request-starting methods | `spring-webflux` | 6.1.6 | `delete(), get(), head(), method(Lorg/springframework/http/HttpMethod;), options(), patch(), post(), put()` |

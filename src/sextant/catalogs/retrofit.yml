@@ -42,8 +42,16 @@ matches:
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS]
     prefix_annotation: null
     prefix_from: []
-    # MEASURED, at retrofit 2.11.0 (CP-12 Q5,
-    # `scripts/probes/cp12_sweep_round1b.md`). `retrofit2.http` holds eight
+    # MEASURED, against the jar Maven resolved for retrofit **2.11.0** — which
+    # is a COORDINATE and not a self-report, and the distinction is §5.4's own
+    # (CP-12 Q5, `scripts/probes/cp12_sweep_round1b.md`). Retrofit's archive
+    # states a version nowhere in its own bytes, so CP-12's identity row prints
+    # `assumed` for that column alone where every other column reads `yes`. The
+    # OBSERVATION is evidence about the jar that ran; the label beside it is
+    # evidence about what was asked for. This comment previously read "MEASURED,
+    # at retrofit 2.11.0" with no such qualification, which is the intention
+    # recorded as the measurement — CP-5's failure in one word.
+    # `retrofit2.http` holds eight
     # annotations that name a request method — read as the intersection of two
     # facts the jar states: `@Target(METHOD)`, and tested for by
     # `RequestFactory$Builder`, the class that turns a method's annotations
