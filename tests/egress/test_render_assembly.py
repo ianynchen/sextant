@@ -351,6 +351,35 @@ GOLDEN_REPORT = ResolveReport(
     shapes=[{"shape_id": "com/example/golden/OrderView#", "content_hash": "md5:0", "open": False}],
     unexpanded_types=("com/example/golden/Opaque#",),
     skipped_catalogs=[SkippedCatalog("a-catalog", ("a-capability",))],
+    # The two non-wire tables (2O design §4), one row each, chosen so the
+    # golden pins both of the answers their columns can carry: a schedule the
+    # analysis READ, and one it could not because a placeholder stands where
+    # the expression will be; a handler whose status and response shape are
+    # both declared, beside the em dash a NULL renders as.
+    scheduled_work=[
+        {
+            "handler": "s maven c 1 com/example/golden/Sweeper#sweep().",
+            "trigger": "cron",
+            "expression": "${orders.sweep.cron}",
+            "resolution": "unresolved",
+            "evidence": "compiler",
+            "catalog_id": "spring-scheduling",
+        }
+    ],
+    error_handlers=[
+        {
+            "handler": "s maven c 1 com/example/golden/Advice#notFound().",
+            "advice": "com/example/golden/Advice#",
+            "declared_by": "org/springframework/web/bind/annotation/ControllerAdvice#",
+            "scope": None,
+            "exception": "com/example/golden/OrderNotFound#",
+            "status": "org/springframework/http/HttpStatus#NOT_FOUND.",
+            "response_shape": "com/example/golden/ErrorBody#",
+            "resolution": "resolved",
+            "evidence": "compiler",
+            "catalog_id": "spring-advice",
+        }
+    ],
 )
 GOLDEN_SHAPE_FIELDS = [
     {

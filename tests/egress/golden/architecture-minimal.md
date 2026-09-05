@@ -38,6 +38,18 @@ Media reads `consumes → produces`; `—` means none recorded.
 |---|---|---|---|---|
 | `POST /billing/invoices` | https://billing.internal | `com/example/golden/BillingClient#charge().` | unresolved | resolved |
 
+## Scheduled work
+
+| Handler | Trigger | Expression | Resolution |
+|---|---|---|---|
+| `com/example/golden/Sweeper#sweep().` | cron | `${orders.sweep.cron}` | unresolved |
+
+## Error handling
+
+| Exception | Status | Handler | Declared by | Scope | Response |
+|---|---|---|---|---|---|
+| `OrderNotFound` | NOT_FOUND | `com/example/golden/Advice#notFound().` | ControllerAdvice | — | ErrorBody |
+
 ## Open questions
 
 - `sqs order-intake` — payload_binding: com/acme/A# in R#r(). via parseFrom at 1 hop(s)

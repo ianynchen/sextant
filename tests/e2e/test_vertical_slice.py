@@ -44,6 +44,26 @@ def test_output_is_byte_identical_when_the_pipeline_runs_twice(tmp_path: Path):
     _run(first)
     _run(second)
     assert _fingerprint(first) == _fingerprint(second)
+    # NFR-1 over the two non-wire tables (2O design §4, Task 8 step 5). The
+    # fingerprint above already globs every `.parquet` in the workspace, so
+    # both files were compared — but "compared" and "present" are different
+    # claims, and a table that stopped being exported would make the first
+    # hold vacuously while the second failed. Named here so the coverage is a
+    # claim rather than a glob's side effect.
+    #
+    # This fixture schedules nothing and declares no advice, so both exports
+    # are EMPTY, and that is what is being pinned: the empty file must be
+    # byte-identical too. A pre-declared table that shipped no parquet at all
+    # would leave a bundle consumer unable to tell "this module runs no
+    # background work" from "this bundle does not carry that answer".
+    exported = {
+        path.name for workspace in (first, second) for path in workspace.rglob("graph/*.parquet")
+    }
+    for table in ("scheduled_work", "error_handlers"):
+        assert f"{table}.parquet" in exported, (
+            f"`{table}` did not reach the bundle, so the byte-identity comparison above "
+            f"held over a file that was never written"
+        )
 
 
 def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):

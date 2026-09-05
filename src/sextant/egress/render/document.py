@@ -21,7 +21,7 @@ byte-identical to what this renderer produced before any of this existed.
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -43,7 +43,13 @@ from sextant.domain.enrichment import (
     open_question_identity,
 )
 from sextant.domain.redaction import Redactor
-from sextant.domain.symbols import bare_descriptor, method_name, owner_of, without_type_marker
+from sextant.domain.symbols import (
+    bare_descriptor,
+    member_name,
+    method_name,
+    owner_of,
+    without_type_marker,
+)
 from sextant.egress.render.diagrams import class_diagram
 from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
 
@@ -960,6 +966,24 @@ def assemble_module_document(
     # as a claim about the inbound ones alone.
     endpoints_end = len(sections)
 
+    # The two NON-WIRE sections (2O design §4), below the endpoint tables and
+    # above the ledger: they are module SURFACE, like the tables, and not a
+    # hand-off inbox like the questions.
+    #
+    # **Both render unconditionally, "None found." included**, which is the
+    # endpoint tables' rule rather than the `Open questions` one below. The
+    # difference is what an absent section would mean. An empty inbox is not a
+    # finding; "this service runs no background work" and "this service
+    # declares no error contract" both ARE — and a section that simply
+    # disappears leaves a reader unable to tell that answer from a Sextant that
+    # never looked, which is the silent under-report FR-17 exists to prevent.
+    # The cost is two short sections in every document, which is the cheap
+    # side of that trade.
+    sections.append(MachineHeading(2, "Scheduled work"))
+    sections.extend(_scheduled_work_sections(report.scheduled_work))
+    sections.append(MachineHeading(2, "Error handling"))
+    sections.extend(_error_handler_sections(report.error_handlers))
+
     # Rendered only when the ledger holds rows (2G design §8): a run with
     # nothing to ask leaves the section absent, the `## Catalogs skipped`
     # precedent below rather than the NFR-7 "looked and found nothing" one —
@@ -1044,6 +1068,73 @@ def assemble_module_document(
         stale,
         redactor,
     )
+
+
+_SCHEDULED_HEADERS = ("Handler", "Trigger", "Expression", "Resolution")
+_ERROR_HEADERS = ("Exception", "Status", "Handler", "Declared by", "Scope", "Response")
+# Never a bare blank cell, the `_MEDIA_NONE_RECORDED` precedent: an empty cell
+# reads as a formatting slip, while an em dash reads as "nothing recorded",
+# which is what a NULL in either table means.
+_NONE_RECORDED = "—"
+
+
+def _scheduled_work_sections(rows: Sequence[dict[str, object]]) -> list[Section]:
+    """The `scheduled_work` table as one machine table, or the "None found."
+    paragraph the endpoint sections use.
+
+    The expression is rendered as CODE and never reformatted: a cron string
+    re-spaced for the page names a different schedule from the one that runs.
+    `resolution` rides along because an `unresolved` expression is a
+    placeholder this analysis did not substitute, and a reader who cannot see
+    that would read `${orders.cron}` as the schedule itself.
+    """
+    if not rows:
+        return [MachineParagraph(_runs("None found."))]
+    table = tuple(
+        (
+            _code(bare_descriptor(str(row["handler"]))),
+            _text(str(row["trigger"])),
+            _code(str(row["expression"])),
+            _text(str(row["resolution"])),
+        )
+        for row in rows
+    )
+    return [MachineTable(_SCHEDULED_HEADERS, table)]
+
+
+def _error_handler_sections(rows: Sequence[dict[str, object]]) -> list[Section]:
+    """The `error_handlers` table, exception first.
+
+    Exception first because that is what a reader looks a row up BY — "what
+    does this service answer when an order is missing" — while the handler is
+    the answer. The status is rendered through `member_name` rather than
+    `simple_name`: the value is an enum REFERENCE, so the constant is the part
+    after the type marker, and `simple_name` would keep the declaring type
+    glued to it. `Declared by` and `Scope` sit together deliberately: they are
+    one claim in two columns, and reading either alone gets a controller's own
+    handler and an application-wide advice the wrong way round.
+    """
+    if not rows:
+        return [MachineParagraph(_runs("None found."))]
+    table = tuple(
+        (
+            _code(simple_name(str(row["exception"]))),
+            _text(_cell(row["status"], member_name)),
+            _code(bare_descriptor(str(row["handler"]))),
+            _text(_cell(row["declared_by"], simple_name)),
+            _text(_cell(row["scope"], str)),
+            _text(_cell(row["response_shape"], simple_name)),
+        )
+        for row in rows
+    )
+    return [MachineTable(_ERROR_HEADERS, table)]
+
+
+def _cell(value: object, render: Callable[[str], str]) -> str:
+    """One optional column, rendered or marked as not recorded. NULL keeps
+    exactly one meaning in both tables — nothing evidenced it — and never
+    becomes a guess at what the framework would have done."""
+    return _NONE_RECORDED if value is None else render(str(value))
 
 
 def _config_coverage_items(
