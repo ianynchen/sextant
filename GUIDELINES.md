@@ -321,3 +321,18 @@ If something might not have worked, say so. Do not claim "migration completed" w
 ### 13.7 New definition-model fields default to `None`  
 
 New definition-model fields default to `None` — non-None defaults change the canonical snapshot dump and cause universal false drift.  
+
+### 13.8 The third occurrence is a signal to look upstream  
+
+When the same class of error happens **twice**, record it — in the working ledger during a task, in [RUNBOOK.md](docs/RUNBOOK.md) across tasks. **The record is the mechanism, not the bookkeeping.** Without it the third occurrence looks like the first, which is how six instances of one defect can each feel novel in the moment.  
+
+On the **third**, stop and raise it with your human partner. Do not fix it and continue. A defect class recurring three times is evidence of a systemic cause — a wrong assumption, a missing rule, a misleading document — and **fixing instances is what prevents you from finding it**. Each individual fix is correct, feels like progress, and leaves the cause untouched.  
+
+**Count by cause, not by symptom.** "Cited a mechanism that does not exist" and "assumed a mechanism's behaviour from its name" look like two bugs and are one cause — treating documentation as evidence about code. Counted separately, both stay below the threshold forever.  
+
+Phase 2O is the worked example, twice over:  
+
+- **Six phantom mechanisms.** `detect.coordinates`, the `constant` fact kind and the routing-ambiguity detector were each corrected individually before anyone asked why they kept appearing. The answer became §5.3 — a rule which, written at the third occurrence rather than the sixth, would have preceded the spec that four of them went on to break.  
+- **Four fabrications, four frameworks.** A gRPC endpoint minted from an ordinary `extends` pair; a module excluded because it published an artifact; an endpoint derived with an empty name; a message payload published as part of a destination. One cause: a rule matches on SHAPE and then publishes a specific MEANING, with nothing checking that the shape entails the meaning. Four separate fixes found it; one upstream question would have.  
+
+---

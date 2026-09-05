@@ -366,3 +366,36 @@ Two supporting gaps found the same phase:
 **The generalisable lesson:** when a review finds something the guidelines do
 not forbid, the guidelines are the defect. Check whether the violated principle
 is written down before concluding the implementer was careless.
+
+### Two error classes that recurred, and what they cost before anyone counted
+
+GUIDELINES §13.8 exists because of these. Both are recorded here so a later
+reader inherits the count rather than starting it again — which is the whole
+mechanism: without a record, the third occurrence looks like the first.
+
+**Class 1 — treating documentation as evidence about code. Six occurrences.**
+`detect.coordinates` (declared by all 41 catalogs, read by nothing), D00's
+`constant` fact kind (no producer), a routing-ambiguity "collision detector"
+(no findings mechanism exists at all), `root_kind`, `trace_of`, and project
+catalogs (whose config key does not merely fail — it aborts the analysis).
+Each was corrected on its own. The rule that would have prevented the rest is
+§5.3, and writing it at the third occurrence instead of the sixth would have
+put it in front of the spec that four of them went on to break.
+
+**Class 2 — a rule matching on SHAPE and publishing a specific MEANING.
+Four occurrences, four unrelated frameworks.** A gRPC endpoint minted from an
+ordinary `extends` pair plus one overridden method. A module excluded from
+analysis entirely because it applied `maven-publish`. An endpoint derived with
+an empty name at `resolved`/`compiler`. A String payload published as part of an
+AMQP destination because overloads collide on arity.
+
+The give-away in every case: **the specific evidence is read AFTER the match, to
+decorate it, rather than being the match.** `supertype_derived` matched any
+subclass and then looked for a gRPC marker; the Gradle detector matched a
+publishing plugin and then asserted "no endpoints"; `single_call` matched a name
+and arity and then published whatever was in the slot. Four separate fixes found
+that; one upstream question would have.
+
+**The lesson is not "be more careful."** Every individual fix was correct, and
+correctness at the instance level is precisely what hides the cause — each fix
+feels like progress and leaves the generator running.
