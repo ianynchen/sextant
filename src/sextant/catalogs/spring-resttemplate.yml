@@ -14,14 +14,99 @@ matches:
   type_carriers: [org.springframework.core.ParameterizedTypeReference]
   call_wrappers:
     - { type: org.springframework.http.HttpEntity, payload_ctor_arg: 0 }
+  # CONVERTED WHOLESALE (descriptor sweep R4), from seven rows carrying NEITHER
+  # `arity` NOR `descriptor` to one row per overload carrying BOTH — twenty-six
+  # rows, which is every `getForObject`, `getForEntity`, `postForObject`,
+  # `postForEntity`, `put`, `delete` and `exchange` overload `RestTemplate`
+  # declares (javap -p -s, spring-web 6.1.6, recorded in
+  # `scripts/probes/cp10_catalog_descriptors.md`).
+  #
+  # THE FILE WAS BENIGN AS IT STOOD, and that is stated plainly rather than
+  # dressed up as a bug fix: position 0 is the URL in every overload that can
+  # carry a string there, so no call could reach a row that read the wrong
+  # position as an address. Two `exchange` overloads put a `RequestEntity` at
+  # position 0, and a `RequestEntity` parameter cannot accept a `String`
+  # constant, so `url_of` read them as unresolved and nothing wrong was
+  # derived. What is closed here is the SHAPE that produced the AMQP, JMS and
+  # SOAP fabrications elsewhere: a row matching on a rule Java does not have.
+  #
+  # WHY IT HAD TO BE ALL OR NOTHING, and the single most dangerous edit anyone
+  # could make to this file: an arity-less row is a candidate at EVERY argument
+  # count (`_matching_method`), and the claim a descriptor makes is computed
+  # over that candidate set. So adding ONE descriptor to ONE arity-less row here
+  # would have claimed every argument count for that name and made every other
+  # overload of it derive NOTHING — silently, since a claimed arity has no error
+  # path. A half-conversion of this file is strictly worse than no conversion.
+  #
+  # THE TWO `RequestEntity` ROWS DECLARE NO CAPTURES AT ALL —
+  # `spring-sqs-template.yml`'s precedent, and the same honest-empty shape the
+  # `Message` rows in the Kafka templates keep. `exchange(RequestEntity, Class)`
+  # carries its url, its verb and its body INSIDE the `RequestEntity`, which no
+  # capture this style has can reach; declaring `url_arg: 0` for them would read
+  # an argument that is not an address, and declaring nothing at all would make
+  # them derive no row where they used to derive an unresolved one. A matching
+  # row with no captures preserves exactly what they derived before.
+  #
+  # `[Ljava/lang/Object;` and `Ljava/util/Map;` are the two uri-variable
+  # spellings of one method, and both are declared: a varargs call site records
+  # ONE trailing `array` argument, so the arity is the same for either, and the
+  # declared positions this row reads are all ahead of it (`_arg_at` answers
+  # None past the end, which is how the `URI` overloads' shorter argument lists
+  # already work). Re-running `scripts/probes/cp10_catalog_descriptors/run.sh`
+  # is the check on all twenty-six.
   methods:
-    - { name: getForObject,  http_method: GET,  url_arg: 0, response_arg: 1 }
-    - { name: postForObject, http_method: POST, url_arg: 0, body_arg: 1, response_arg: 2 }
-    - { name: put,           http_method: PUT,  url_arg: 0, body_arg: 1 }
-    - { name: delete,        http_method: DELETE, url_arg: 0 }
-    - { name: getForEntity,  http_method: GET,  url_arg: 0, response_arg: 1 }
-    - { name: postForEntity, http_method: POST, url_arg: 0, body_arg: 1, response_arg: 2 }
-    - { name: exchange, method_arg: 1, url_arg: 0, body_arg: 2, response_arg: 3 }
+    - { name: getForObject, arity: 3, http_method: GET, url_arg: 0, response_arg: 1,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;" }
+    - { name: getForObject, arity: 3, http_method: GET, url_arg: 0, response_arg: 1,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;" }
+    - { name: getForObject, arity: 2, http_method: GET, url_arg: 0, response_arg: 1,
+        descriptor: "(Ljava/net/URI;Ljava/lang/Class;)Ljava/lang/Object;" }
+    - { name: getForEntity, arity: 3, http_method: GET, url_arg: 0, response_arg: 1,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: getForEntity, arity: 3, http_method: GET, url_arg: 0, response_arg: 1,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: getForEntity, arity: 2, http_method: GET, url_arg: 0, response_arg: 1,
+        descriptor: "(Ljava/net/URI;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: postForObject, arity: 4, http_method: POST, url_arg: 0, body_arg: 1, response_arg: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;" }
+    - { name: postForObject, arity: 4, http_method: POST, url_arg: 0, body_arg: 1, response_arg: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;" }
+    - { name: postForObject, arity: 3, http_method: POST, url_arg: 0, body_arg: 1, response_arg: 2,
+        descriptor: "(Ljava/net/URI;Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;" }
+    - { name: postForEntity, arity: 4, http_method: POST, url_arg: 0, body_arg: 1, response_arg: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: postForEntity, arity: 4, http_method: POST, url_arg: 0, body_arg: 1, response_arg: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: postForEntity, arity: 3, http_method: POST, url_arg: 0, body_arg: 1, response_arg: 2,
+        descriptor: "(Ljava/net/URI;Ljava/lang/Object;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: put, arity: 3, http_method: PUT, url_arg: 0, body_arg: 1,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;[Ljava/lang/Object;)V" }
+    - { name: put, arity: 3, http_method: PUT, url_arg: 0, body_arg: 1,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Ljava/util/Map;)V" }
+    - { name: put, arity: 2, http_method: PUT, url_arg: 0, body_arg: 1,
+        descriptor: "(Ljava/net/URI;Ljava/lang/Object;)V" }
+    - { name: delete, arity: 2, http_method: DELETE, url_arg: 0,
+        descriptor: "(Ljava/lang/String;[Ljava/lang/Object;)V" }
+    - { name: delete, arity: 2, http_method: DELETE, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Ljava/util/Map;)V" }
+    - { name: delete, arity: 1, http_method: DELETE, url_arg: 0,
+        descriptor: "(Ljava/net/URI;)V" }
+    - { name: exchange, arity: 5, method_arg: 1, url_arg: 0, body_arg: 2, response_arg: 3,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: exchange, arity: 5, method_arg: 1, url_arg: 0, body_arg: 2, response_arg: 3,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: exchange, arity: 4, method_arg: 1, url_arg: 0, body_arg: 2, response_arg: 3,
+        descriptor: "(Ljava/net/URI;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: exchange, arity: 5, method_arg: 1, url_arg: 0, body_arg: 2, response_arg: 3,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: exchange, arity: 5, method_arg: 1, url_arg: 0, body_arg: 2, response_arg: 3,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: exchange, arity: 4, method_arg: 1, url_arg: 0, body_arg: 2, response_arg: 3,
+        descriptor: "(Ljava/net/URI;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: exchange, arity: 2,
+        descriptor: "(Lorg/springframework/http/RequestEntity;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;" }
+    - { name: exchange, arity: 2,
+        descriptor: "(Lorg/springframework/http/RequestEntity;Lorg/springframework/core/ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;" }
   # Which annotations carry configuration onto a field, a constructor
   # parameter or a whole properties type — the field ladder's own vocabulary
   # (2F design §4), so no framework name reaches the engine. A `url_arg` that

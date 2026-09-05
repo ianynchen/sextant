@@ -532,7 +532,13 @@ def test_a_variable_url_still_derives_the_row_unresolved(tmp_path: Path):
             ordinal=0,
             receiver=3,
             result=None,
-            arguments=[CallArgument(kind="unresolved")],
+            # TWO arguments, matching the descriptor above: `delete(url)` is a
+            # VARARGS call, so `javac` passes an empty `Object[]` and the call
+            # site records it as its own `array` argument (capability 9.15).
+            # The list used to carry one, which no real call site does — the
+            # arity-less row it was written against matched it anyway
+            # (descriptor sweep R4).
+            arguments=[CallArgument(kind="unresolved"), CallArgument(kind="array", elements=[])],
         ),
     ]
     workspace = _resolve(tmp_path, facts)
@@ -884,6 +890,19 @@ _PAYLOAD_CASES = [
     ),
 ]
 
+# The erased descriptor of the overload each case above actually calls (javap
+# -p -s, spring-web 6.1.6). One descriptor served every case until the sweep
+# (R4), which was wrong for the `postForObject` row — it named `getForObject`'s
+# parameter list beside a four-argument `postForObject` call — and invisible
+# while the rows carried no `arity` and no `descriptor` to check it against.
+_PAYLOAD_DESCRIPTORS = {
+    "getForObject": "(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;",
+    "postForObject": (
+        "(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)"
+        "Ljava/lang/Object;"
+    ),
+}
+
 
 @pytest.mark.parametrize(
     ("case", "name", "arguments", "request_shape", "response_shape"),
@@ -921,7 +940,7 @@ def test_a_bare_call_argument_projects_to_what_a_scanned_field_of_that_type_woul
             target=CallTarget(
                 owner=RESTTEMPLATE,
                 name=name,
-                descriptor="(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;",
+                descriptor=_PAYLOAD_DESCRIPTORS[name],
             ),
             invoke_kind="virtual",
             ordinal=0,
@@ -6225,6 +6244,66 @@ _CLAIMED_ARITIES = [
         [CallArgument(kind="class", symbol=ORDER_VIEW)],
         id="JmsTemplate.convertAndSend/1 — hypothetical arity-1 sibling",
     ),
+    # --- R4: `spring-resttemplate.yml`, converted wholesale. All twenty-six
+    # overloads are declared, so no sibling a caller can write is undeclared and
+    # every case here is hypothetical — which is what the claim is FOR: the
+    # release that adds a twenty-seventh must derive nothing rather than reach a
+    # row written for a different parameter list.
+    pytest.param(
+        "spring-resttemplate",
+        RESTTEMPLATE,
+        "getForObject",
+        "(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;",
+        "(Ljava/lang/String;Ljava/lang/Class;Lorg/springframework/http/HttpHeaders;)"
+        "Ljava/lang/Object;",
+        [
+            CallArgument(kind="string", value="/billing/balances/{id}"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+            CallArgument(kind="array", elements=[]),
+        ],
+        id="RestTemplate.getForObject(String, Class, Object...) — hypothetical arity-3 sibling",
+    ),
+    pytest.param(
+        "spring-resttemplate",
+        RESTTEMPLATE,
+        "getForObject",
+        "(Ljava/net/URI;Ljava/lang/Class;)Ljava/lang/Object;",
+        "(Ljava/net/URL;Ljava/lang/Class;)Ljava/lang/Object;",
+        [
+            CallArgument(kind="instance", symbol="java/net/URI#"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        id="RestTemplate.getForObject(URI, Class) — the overload whose arg 0 is not a template",
+    ),
+    pytest.param(
+        "spring-resttemplate",
+        RESTTEMPLATE,
+        "delete",
+        "(Ljava/net/URI;)V",
+        "(Ljava/net/URL;)V",
+        [CallArgument(kind="instance", symbol="java/net/URI#")],
+        id="RestTemplate.delete(URI) — hypothetical arity-1 sibling",
+    ),
+    pytest.param(
+        "spring-resttemplate",
+        RESTTEMPLATE,
+        "exchange",
+        "(Ljava/lang/String;Lorg/springframework/http/HttpMethod;"
+        "Lorg/springframework/http/HttpEntity;Ljava/lang/Class;[Ljava/lang/Object;)"
+        "Lorg/springframework/http/ResponseEntity;",
+        "(Ljava/lang/String;Lorg/springframework/http/HttpMethod;"
+        "Lorg/springframework/http/HttpEntity;Ljava/lang/Class;"
+        "Lorg/springframework/http/HttpHeaders;)Lorg/springframework/http/ResponseEntity;",
+        [
+            CallArgument(kind="string", value="/billing/invoices"),
+            CallArgument(kind="enum", symbol="org/springframework/http/HttpMethod#", value="POST"),
+            CallArgument(kind="instance", symbol="org/springframework/http/HttpEntity#"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+            CallArgument(kind="array", elements=[]),
+        ],
+        id="RestTemplate.exchange(String, HttpMethod, HttpEntity, Class, Object...) — "
+        "hypothetical arity-5 sibling",
+    ),
 ]
 
 
@@ -6236,6 +6315,7 @@ _CLAIMED_ARITIES = [
 @pytest.mark.declines("spring-sqs-template")
 @pytest.mark.declines("spring-kafka-template")
 @pytest.mark.declines("spring-kafka-replying")
+@pytest.mark.declines("spring-resttemplate")
 @pytest.mark.parametrize(
     ("catalog_id", "owner", "name", "declared", "sibling", "arguments"), _CLAIMED_ARITIES
 )
@@ -6513,3 +6593,110 @@ def test_the_jms_post_processor_overload_at_arity_three_now_resolves_its_queue(
 
     assert (endpoint["path"], endpoint["resolution"]) == ("orders.queue", "resolved")
     assert endpoint["peer"] is None
+
+
+# --- R4: the two `exchange(RequestEntity, …)` rows, which read nothing.
+
+
+@pytest.mark.parametrize(
+    "descriptor",
+    [
+        (
+            "(Lorg/springframework/http/RequestEntity;Ljava/lang/Class;)"
+            "Lorg/springframework/http/ResponseEntity;"
+        ),
+        (
+            "(Lorg/springframework/http/RequestEntity;Lorg/springframework/core/"
+            "ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;"
+        ),
+    ],
+    ids=["Class", "ParameterizedTypeReference"],
+)
+def test_the_request_entity_exchange_rows_derive_an_honest_empty_row(
+    tmp_path: Path, descriptor: str
+):
+    """The paired positive for the two overloads that DISAGREE with the other
+    six about what position 0 is. A `RequestEntity` carries the url, the verb
+    and the body inside itself, where no capture this style has can reach — so
+    these rows declare no `url_arg`, no `method_arg`, no `body_arg` and no
+    `response_arg` at all (`spring-sqs-template.yml`'s precedent).
+
+    What must NOT happen is either failure mode this sweep sits between:
+    reading argument 0 as an address, which would publish a `RequestEntity` in
+    the url column; and deriving no row at all, which would lose "this method
+    calls something over HTTP" — a fact these calls used to carry, since the
+    arity-less rows matched them and `url_of` read them as unresolved. The row
+    below is exactly the row they derived before the conversion."""
+    facts = [
+        _call_to(
+            RESTTEMPLATE,
+            "exchange",
+            descriptor,
+            [
+                CallArgument(kind="instance", symbol="org/springframework/http/RequestEntity#"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+        )
+    ]
+    workspace = _resolve_shipped(tmp_path, facts, "spring-resttemplate")
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert (endpoint["protocol"], endpoint["direction"]) == ("http", "outbound")
+    assert (endpoint["method"], endpoint["path"]) == (None, None)
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_the_map_variable_overload_of_a_name_derives_beside_the_varargs_one(tmp_path: Path):
+    """`getForObject(String, Class, Map)` and `getForObject(String, Class,
+    Object...)` are two overloads at ONE arity that this file declares as two
+    rows. The pair matters because the wholesale conversion is where a
+    same-arity sibling is easiest to lose: declare one descriptor at arity 3 and
+    the other overload goes silent with no error.
+
+    Both are driven here in one run, and both resolve their own url."""
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller="com/acme/http/Client#byMap().",
+            target=CallTarget(
+                owner=RESTTEMPLATE,
+                name="getForObject",
+                descriptor="(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;",
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=9,
+            arguments=[
+                CallArgument(kind="string", value="/billing/by-map/{id}"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller="com/acme/http/Client#byVarargs().",
+            target=CallTarget(
+                owner=RESTTEMPLATE,
+                name="getForObject",
+                descriptor=(
+                    "(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;"
+                ),
+            ),
+            invoke_kind="virtual",
+            ordinal=1,
+            receiver=3,
+            result=10,
+            arguments=[
+                CallArgument(kind="string", value="/billing/by-varargs/{id}"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+                CallArgument(kind="array", elements=[]),
+            ],
+        ),
+    ]
+    workspace = _resolve_shipped(tmp_path, facts, "spring-resttemplate")
+    paths = sorted(str(row["path"]) for row in workspace.query("endpoints"))
+    workspace.close()
+
+    assert paths == ["/billing/by-map/{id}", "/billing/by-varargs/{id}"]

@@ -166,6 +166,18 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`spring-resttemplate.yml` converts wholesale: seven rows become twenty-six** (descriptor
+  sweep R4). Its rows carried neither `arity` nor `descriptor`, which makes each of them a
+  candidate at EVERY argument count — so adding one descriptor to one row would have claimed
+  every argument count for that name and silenced every other overload of it, with no error
+  path. A half-conversion of this file is strictly worse than none, which is why it is all at
+  once. The file was benign as it stood and that is said plainly rather than dressed up: what
+  closes here is the shape that produced the AMQP, JMS and SOAP fabrications, not a live
+  defect. Every `getForObject`, `getForEntity`, `postForObject`, `postForEntity`, `put`,
+  `delete` and `exchange` overload `RestTemplate` declares now has its own row with both
+  `arity` and `descriptor`; the two `exchange(RequestEntity, …)` forms, whose position 0 is
+  not a url, declare no captures at all and keep deriving exactly the honest empty row they
+  derived before. No golden-fixture output moved.
 - **`spring-websocket.yml` said varargs make a three-argument call; they do not** (descriptor
   sweep R6). The catalog, a COVERAGE bullet and three tests all asserted that a multi-path
   `.addHandler(h, "/a", "/b")` "is a THREE-argument call this row's own `arity: 2` does not

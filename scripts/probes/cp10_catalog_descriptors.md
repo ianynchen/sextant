@@ -77,8 +77,8 @@ by a hand-written owner→artifact map.
 | what the run read | 1.129.3 | 3.1.0 | 3.1.1 | 3.1.4 | 3.6.2 | 4.1.4 | 5.1.2 | 6.1.6 |
 |---|---|---|---|---|---|---|---|---|
 | artifacts reporting this version | google-cloud-pubsub | jakarta.jms-api | spring-cloud-aws-sqs | spring-kafka, spring-rabbit | kafka-clients | spring-ws-core | spring-cloud-gcp-pubsub | spring-jms, spring-web, spring-websocket |
-| owner classes resolved out of them | 1 | 1 | 1 | 3 | 2 | 1 | 1 | 2 |
-| catalog descriptors checked against them | 1 | 2 | 4 | 10 | 3 | 3 | 3 | 5 |
+| owner classes resolved out of them | 1 | 1 | 1 | 3 | 2 | 1 | 1 | 3 |
+| catalog descriptors checked against them | 1 | 2 | 4 | 10 | 3 | 3 | 3 | 31 |
 | of those, NOT declared by the jar | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 | # | catalog | owner | method | arity | descriptor | artifact | version | verdict |
@@ -106,14 +106,40 @@ by a hand-written owner→artifact map.
 | 21 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 3 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
 | 22 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
 | 23 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 1 | `(Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
-| 24 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 25 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 2 | `(Ljava/lang/String;Lorg/springframework/messaging/Message;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 26 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 1 | `(Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 27 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 1 | `(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 28 | `spring-websocket` | `org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry` | `addHandler` | 2 | `(Lorg/springframework/web/socket/WebSocketHandler;[Ljava/lang/String;)Lorg/springframework/web/socket/config/annotation/WebSocketHandlerRegistration;` | `spring-websocket` | 6.1.6 | declared |
-| 29 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 1 | `(Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
-| 30 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
-| 31 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 24 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForObject` | 3 | `(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 25 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForObject` | 3 | `(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 26 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForObject` | 2 | `(Ljava/net/URI;Ljava/lang/Class;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 27 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForEntity` | 3 | `(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 28 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForEntity` | 3 | `(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 29 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForEntity` | 2 | `(Ljava/net/URI;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 30 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForObject` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 31 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForObject` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 32 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForObject` | 3 | `(Ljava/net/URI;Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 33 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForEntity` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 34 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForEntity` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 35 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForEntity` | 3 | `(Ljava/net/URI;Ljava/lang/Object;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 36 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `put` | 3 | `(Ljava/lang/String;Ljava/lang/Object;[Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
+| 37 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `put` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/util/Map;)V` | `spring-web` | 6.1.6 | declared |
+| 38 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `put` | 2 | `(Ljava/net/URI;Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
+| 39 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `delete` | 2 | `(Ljava/lang/String;[Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
+| 40 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `delete` | 2 | `(Ljava/lang/String;Ljava/util/Map;)V` | `spring-web` | 6.1.6 | declared |
+| 41 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `delete` | 1 | `(Ljava/net/URI;)V` | `spring-web` | 6.1.6 | declared |
+| 42 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 43 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 44 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 4 | `(Ljava/net/URI;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 45 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 46 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 47 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 4 | `(Ljava/net/URI;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 48 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 2 | `(Lorg/springframework/http/RequestEntity;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 49 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 2 | `(Lorg/springframework/http/RequestEntity;Lorg/springframework/core/ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 50 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
+| 51 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 2 | `(Ljava/lang/String;Lorg/springframework/messaging/Message;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
+| 52 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 1 | `(Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
+| 53 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 1 | `(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
+| 54 | `spring-websocket` | `org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry` | `addHandler` | 2 | `(Lorg/springframework/web/socket/WebSocketHandler;[Ljava/lang/String;)Lorg/springframework/web/socket/config/annotation/WebSocketHandlerRegistration;` | `spring-websocket` | 6.1.6 | declared |
+| 55 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 1 | `(Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 56 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 57 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
 
 Every row `declared`, and the negative control was exercised rather than
 assumed: mangling one shipped descriptor's return type (`)V` → `)Z`) turns its

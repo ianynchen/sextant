@@ -86,7 +86,6 @@ _NO_DECLINING_TEST_YET = frozenset(
         "spring-webflux-router",
         "spring-webclient",
         "spring-restclient",
-        "spring-resttemplate",
         "spring-http-interface",
         "spring-cloud-openfeign",
         "okhttp",
