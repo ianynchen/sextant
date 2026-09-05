@@ -518,3 +518,43 @@ document and then `git commit --amend`ing that commit invalidates every SHA
 written into it. Stamp the identifier after the commit is final, or in a
 separate commit — the same "record identity from the run's own output" rule
 §5.4 states for probes, applied to git.
+
+## A marker declaring coverage is not coverage (principles sweep round 1b)
+
+`@pytest.mark.declines("<catalog>")` made §10's near-miss rule countable, and
+`test_catalog_near_miss_coverage.py` said in its own docstring what it could not
+do: *"the marker is a DECLARATION by the test's author, not a proof."* Nothing
+checked that the marked body discriminates, so a near-miss could pass because
+its synthetic input was broken in some unrelated way — the guard it named
+deletable, the test still green, and the catalog counted as covered.
+
+**It shipped twice, and the second time it was the fix pass that wrote it.**
+Sweep 1 found three non-discriminating markers by hand; the round correcting
+them produced three more, `A-M2`'s servlet `bypassed_by` near-misses, whose
+input declares no `doXxx` at all — the shape the branch *below* the bypass
+already declines, so the bypass changes no outcome. §13.8 step 3 applies
+exactly: a rule we had already written (§10) and still broke twice is a rule
+with no reach, and the answer is enforcement, not another correction.
+
+The enforcement is `scripts/guard_check.py` (`scripts/check.sh --guards`): a
+test names the guard it pins with a second marker, the harness disables that one
+guard in a COPY of the tree and reruns only the tests naming it, and a test that
+still passes is a failure. Its first run measured all 28 declining tests in 41
+seconds and found six that measure nothing — four predicted, two new.
+
+Three things about it generalise beyond this one harness:
+
+- **Disabling a guard is not deleting a line; it is writing the specific mistake
+  the line exists to prevent.** Two of the servlet guards are no-ops when simply
+  deleted (the loop they protect iterates zero times either way), and a run that
+  counted a no-op mutation would have manufactured findings against tests that
+  are fine.
+- **A mutation harness needs a positive control more than the suite it
+  measures.** The first run reported all 28 tests as unmeasurable, because the
+  copied tree was missing one fixture. Without the control it would have printed
+  "28 killed" and been believed — the harness's own version of the defect it
+  exists to find.
+- **Name the guard from the test's docstring, then check the name against the
+  code.** Two guard names in the first registry were false — one pointed at a
+  `declared_on` conjunct the catalog does not declare at all — and both were
+  caught only by the run.
