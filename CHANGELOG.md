@@ -166,6 +166,19 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`spring-websocket.yml` said varargs make a three-argument call; they do not** (descriptor
+  sweep R6). The catalog, a COVERAGE bullet and three tests all asserted that a multi-path
+  `.addHandler(h, "/a", "/b")` "is a THREE-argument call this row's own `arity: 2` does not
+  match at all", and that the two-argument shape was unverified. Measured by compiling both
+  calls against spring-websocket 6.1.6 and running the shipped extractor: varargs collapse
+  into ONE argument, so one path and two paths alike record exactly two arguments with an
+  `array` at position 1. The row has always matched the multi-path call. The real boundary is
+  narrower and worse — `channel_of` resolves only a `kind: "string"` argument, so
+  `channel_arg: 1` can never resolve a path for ANY call, and every registration derives one
+  honest row with `path` NULL. Stated in the catalog and in `docs/COVERAGE.md` with its
+  falsifier, and named as Task 13's to close by wiring capability 9.15's `elements` read. The
+  row also gains the erased descriptor of the interface's one declared method. **Not fixed
+  here**: the capture is engine work, and this is a catalog sweep.
 - **`JmsTemplate` publishes through two more overloads than the catalog admitted** (descriptor
   sweep R5). `convertAndSend(Destination, Object)` is an ordinary destination-carrying call
   whose argument 0 is a `Queue`/`Topic` instance and therefore can never fabricate anything;

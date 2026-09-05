@@ -2322,30 +2322,59 @@ def _spring_websocket_catalog() -> Catalog:
     return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-websocket")
 
 
-def test_addhandler_derives_a_verbless_inbound_row_off_its_literal_path(tmp_path: Path):
+# Measured, not assumed (descriptor sweep R6): `addHandler(WebSocketHandler,
+# String...)` is VARARGS, so a one-path and a two-path call both record exactly
+# TWO arguments and argument 1 is always an `array` carrying its own
+# `elements` — verified by compiling both calls against spring-websocket 6.1.6
+# and running the shipped extractor over the class file. The descriptor is that
+# jar's own, recorded in `scripts/probes/cp10_catalog_descriptors.md`.
+_ADD_HANDLER = (
+    "(Lorg/springframework/web/socket/WebSocketHandler;[Ljava/lang/String;)"
+    "Lorg/springframework/web/socket/config/annotation/WebSocketHandlerRegistration;"
+)
+_WS_PATHS_ONE = CallArgument(kind="array", elements=[CallArgument(kind="string", value="/ws")])
+_WS_PATHS_TWO = CallArgument(
+    kind="array",
+    elements=[
+        CallArgument(kind="string", value="/ws"),
+        CallArgument(kind="string", value="/ws2"),
+    ],
+)
+
+
+def _add_handler(caller: str, tail: list, descriptor: str = _ADD_HANDLER) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=WEBSOCKET_HANDLER_REGISTRY, name="addHandler", descriptor=descriptor
+        ),
+        invoke_kind="interface",
+        ordinal=0,
+        receiver=1,
+        result=None,
+        arguments=[CallArgument(kind="instance", symbol="com/acme/ws/LiveHandler#"), *tail],
+    )
+
+
+def test_addhandler_derives_a_verbless_inbound_row_off_its_registration(tmp_path: Path):
     """`WebSocketConfigurer#registerWebSocketHandlers`'s own
     `registry.addHandler(handler, "/ws")` — a `channel_arg` destination
     identity (D02 §2), never a `url_arg` for CP-2 to split: a dispatch path
     here is a registration target the same way a topic name is, not a
-    peer+path URL (`spring-websocket.yml`'s own catalog comment)."""
+    peer+path URL (`spring-websocket.yml`'s own catalog comment).
+
+    **The path is NULL, and this test used to assert `/ws`** (descriptor sweep
+    R6). It hand-built a bare `string` at position 1, a shape `javac` never
+    emits for this call: `addHandler(WebSocketHandler, String...)` is VARARGS,
+    so argument 1 is always `{kind: "array", elements: [...]}`. Measured by
+    compiling the call against spring-websocket 6.1.6 and running the shipped
+    extractor over it, not reasoned about. `channel_of` resolves only a
+    `kind: "string"` argument, so the row derives honestly and empty for every
+    call anyone can write — the boundary `docs/COVERAGE.md` now states, closed
+    by Task 13's `elements` read rather than here."""
     caller = "com/acme/ws/WebSocketConfig#registerWebSocketHandlers()."
-    facts = [
-        CallSiteFact(
-            document_id="doc_1",
-            caller=caller,
-            target=CallTarget(
-                owner=WEBSOCKET_HANDLER_REGISTRY, name="addHandler", descriptor="()V"
-            ),
-            invoke_kind="interface",
-            ordinal=0,
-            receiver=1,
-            result=None,
-            arguments=[
-                CallArgument(kind="instance", symbol="com/acme/ws/LiveHandler#"),
-                CallArgument(kind="string", value="/ws"),
-            ],
-        )
-    ]
+    facts = [_add_handler(caller, [_WS_PATHS_ONE])]
     workspace = _resolve(tmp_path, facts, _spring_websocket_catalog())
     [endpoint] = [e for e in workspace.query("endpoints") if e["handler"] == caller]
     workspace.close()
@@ -2353,7 +2382,7 @@ def test_addhandler_derives_a_verbless_inbound_row_off_its_literal_path(tmp_path
     assert endpoint["protocol"] == "websocket"
     assert endpoint["direction"] == "inbound"
     assert endpoint["method"] is None
-    assert endpoint["path"] == "/ws"
+    assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")
     # Inbound (D02 §2, D01 §3, amended): the registering method lands in
     # `handler`, not `caller` — the row's own `direction: inbound` (the
     # catalog's declared direction, unoverridden) means the deriving method
@@ -2362,7 +2391,6 @@ def test_addhandler_derives_a_verbless_inbound_row_off_its_literal_path(tmp_path
     # `single_call` catalog derives.
     assert endpoint["handler"] == caller
     assert endpoint["caller"] is None
-    assert endpoint["resolution"] == "resolved"
 
 
 def test_addhandler_with_a_non_literal_path_derives_an_unresolved_row(tmp_path: Path):
@@ -2370,23 +2398,7 @@ def test_addhandler_with_a_non_literal_path_derives_an_unresolved_row(tmp_path: 
     row — I1's "unresolved is an answer" discipline — path NULL,
     `unresolved`, never a guess and never a dropped row."""
     caller = "com/acme/ws/WebSocketConfig#registerDynamicHandler()."
-    facts = [
-        CallSiteFact(
-            document_id="doc_1",
-            caller=caller,
-            target=CallTarget(
-                owner=WEBSOCKET_HANDLER_REGISTRY, name="addHandler", descriptor="()V"
-            ),
-            invoke_kind="interface",
-            ordinal=0,
-            receiver=1,
-            result=None,
-            arguments=[
-                CallArgument(kind="instance", symbol="com/acme/ws/LiveHandler#"),
-                CallArgument(kind="unresolved"),
-            ],
-        )
-    ]
+    facts = [_add_handler(caller, [CallArgument(kind="unresolved")])]
     workspace = _resolve(tmp_path, facts, _spring_websocket_catalog())
     [endpoint] = [e for e in workspace.query("endpoints") if e["handler"] == caller]
     workspace.close()
@@ -2395,41 +2407,57 @@ def test_addhandler_with_a_non_literal_path_derives_an_unresolved_row(tmp_path: 
     assert endpoint["resolution"] == "unresolved"
 
 
-@pytest.mark.declines("spring-websocket")
-def test_addhandler_with_a_second_path_argument_never_matches_the_two_arg_row(tmp_path: Path):
-    """The catalog's own documented known limitation: `arity: 2` matches
-    only the single-path call form. A three-argument call
-    (`.addHandler(handler, "/ws", "/ws2")`) matches no declared row at all,
-    so it derives NOTHING — a known gap, never a wrong row (the same
-    "silence over a confident wrong answer" discipline `spring-kafka.yml`'s
-    own class-level `@KafkaListener` "element 0 only" comment keeps for a
-    different multi-value case)."""
+def test_addhandler_with_a_second_path_is_the_same_two_argument_call(tmp_path: Path):
+    """**This test used to assert the opposite, and the catalog's comment used
+    to promise it** (descriptor sweep R6): a multi-path
+    `.addHandler(handler, "/ws", "/ws2")` was said to be "a THREE-argument call
+    this row's own `arity: 2` does not match at all". Varargs collapse into ONE
+    argument, so it is a TWO-argument call and always was — measured against
+    spring-websocket 6.1.6 with the shipped extractor, where the one-path and
+    two-path forms differ only in how many `elements` the array at position 1
+    carries.
+
+    So the row matches it, and always did. What it derives is the same honest
+    empty row every other call derives, because `channel_of` cannot read an
+    array — never two paths, and never one of them silently. Task 13's
+    `elements` read is what turns this into one row per registered path; until
+    then this is the paired positive that the row still FIRES for the shape the
+    old comment believed it declined."""
     caller = "com/acme/ws/WebSocketConfig#registerMultiPathHandler()."
+    facts = [_add_handler(caller, [_WS_PATHS_TWO])]
+    workspace = _resolve(tmp_path, facts, _spring_websocket_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["handler"] == caller]
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")
+
+
+@pytest.mark.declines("spring-websocket")
+def test_an_addhandler_overload_the_registry_does_not_declare_derives_nothing(tmp_path: Path):
+    """§10 near-miss, replacing one whose premise was false. Every conjunct of
+    the row holds — the owner, the name, two arguments, a handler instance and
+    a path array — and only `target.descriptor` differs.
+
+    `WebSocketHandlerRegistry` declares exactly ONE method today (javap -p -s,
+    spring-websocket 6.1.6), so this sibling is hypothetical by construction,
+    and that is precisely the claim the descriptor makes: the day the interface
+    gains a second two-argument `addHandler`, it derives nothing rather than
+    having its own argument 1 read as a dispatch path."""
+    caller = "com/acme/ws/WebSocketConfig#registerFutureOverload()."
     facts = [
-        CallSiteFact(
-            document_id="doc_1",
-            caller=caller,
-            target=CallTarget(
-                owner=WEBSOCKET_HANDLER_REGISTRY, name="addHandler", descriptor="()V"
-            ),
-            invoke_kind="interface",
-            ordinal=0,
-            receiver=1,
-            result=None,
-            arguments=[
-                CallArgument(kind="instance", symbol="com/acme/ws/LiveHandler#"),
-                CallArgument(kind="string", value="/ws"),
-                CallArgument(kind="string", value="/ws2"),
-            ],
+        _add_handler(
+            caller,
+            [_WS_PATHS_ONE],
+            descriptor="(Lorg/springframework/web/socket/WebSocketHandler;"
+            "Lorg/springframework/web/socket/config/annotation/SockJsServiceRegistration;)"
+            "Lorg/springframework/web/socket/config/annotation/WebSocketHandlerRegistration;",
         )
     ]
     workspace = _resolve(tmp_path, facts, _spring_websocket_catalog())
-    endpoints = [
-        e for e in workspace.query("endpoints") if e["caller"] == caller or e["handler"] == caller
-    ]
+    rows = workspace.query("endpoints")
     workspace.close()
 
-    assert endpoints == []
+    assert rows == []
 
 
 # --- The `fluent` engine (Task 11): chains reassembled from value links ----

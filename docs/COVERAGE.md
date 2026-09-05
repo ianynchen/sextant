@@ -1227,10 +1227,22 @@ Boundaries, each verified against the shipped code:
 - **The programmatic `addHandler` catalog has no live fixture surface.** It is proved over
   synthetic call facts against the real shipped file — the first catalog to ship under
   [D02](components/D02-catalog-schema.md) §4's stated fixture exception for a
-  registration-call-only surface. Its `arity: 2` assumes the single-path call form compiles
-  to exactly two call-site arguments, unverified against real bytecode, and a multi-path
-  `.addHandler(h, "/a", "/b")` is a three-argument call the row does not match at all — no
-  row rather than a wrong one.
+  registration-call-only surface. No pom in this repository depends on `spring-websocket`
+  at all, so the row's descriptor is measured against a jar pinned to the Spring Framework
+  version the fixtures use, which is an assumption rather than a measurement.
+- **`addHandler` NEVER resolves a WebSocket path, and what stood here was wrong about why.**
+  This bullet used to say `arity: 2` was "unverified against real bytecode" and that a
+  multi-path `.addHandler(h, "/a", "/b")` is "a three-argument call the row does not match at
+  all". Both are false, measured (descriptor sweep R6) by compiling those exact calls against
+  spring-websocket 6.1.6 and running the shipped extractor: `addHandler(WebSocketHandler,
+  String...)` is varargs, so ONE path and TWO paths alike record exactly two arguments, with
+  argument 1 an `array` carrying its own `elements`. The row therefore matches every call —
+  and `channel_of` resolves only a `kind: "string"` argument, so `channel_arg: 1` yields
+  `path` NULL, `resolution: unresolved` for every call anyone can write. An honest empty row,
+  never a wrong address. **Falsified by** a WebSocket registration appearing in an export with
+  a path; **closed by Task 13**, whose Step 1 wires the consumers of extractor capability 9.15
+  to read an `array` argument's `elements` — at which point each registered path is its own
+  row, the same way each `urlPatterns` entry is.
 - **`addHandler`'s `handler` is the REGISTERING method, not the registered class.**
   `single_call` has no vocabulary for reading a symbol off an argument, so an inbound row's
   handler is the method whose body made the call (`registerWebSocketHandlers`); the
