@@ -192,6 +192,25 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-M9` closed one of FOUR WebFlux routing surfaces and COVERAGE claimed all four**
+  (round-1 review, MAJOR 3). `docs/COVERAGE.md` listed
+  `RouterFunctions.route().GET(…)` — the BUILDER DSL — as "✅ shipped", and the `A-M9` pass
+  added "Both routing DSLs now read all seven verbs" beside it. `RouterFunctions$Builder`
+  (seven verbs x four overloads) and `RouterFunctionDslKt.router` with `RouterFunctionDsl`
+  (seven x five) are undeclared in `spring-webflux-router.yml`, unmentioned in any probe, and
+  derive **nothing** — verified with `javap`/`unzip` against spring-webflux 6.1.6 and by
+  driving the builder shape through the shipped catalog.
+
+  **Both claims are corrected rather than the surfaces closed**, which is the honest half of
+  the choice: the builder's verb call sits on a receiver returned by an argument-less
+  `route()`, and the `combinator` grammar's entries are argument-rooted or body-linked with no
+  word for that, so closing it is engine work plus a probe of which overload position carries
+  the path. Two boundary rows name each surface with what falsifies it, and a test pins the
+  builder DSL's silence so that closing it shows up as a failure rather than as nothing.
+
+  This is an under-report and not a fabrication: the argument-less `route()` is not a root
+  candidate, so no poisoned row is minted either.
+
 - **Two near-misses declared coverage the guard harness measured as absent** (round-1 review,
   findings 7 and 8 — the harness's own first audit found both).
 

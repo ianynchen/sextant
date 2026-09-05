@@ -1999,6 +1999,59 @@ def test_the_shipped_router_catalog_reads_every_verb_the_framework_declares(tmp_
     assert derived == sorted((verb, f"/orders/{verb.lower()}") for verb in verbs)
 
 
+_BUILDER = "org/springframework/web/reactive/function/server/RouterFunctions$Builder#"
+
+
+def test_the_router_builder_dsl_derives_nothing_and_that_is_a_stated_boundary(tmp_path: Path):
+    """The round-1 review's MAJOR 3, pinned so that closing it is visible.
+
+    `RouterFunctions.route().GET("/orders", handler).build()` is the BUILDER
+    DSL — a third WebFlux routing surface, seven verbs x four overloads on
+    `RouterFunctions$Builder` (`javap`, spring-webflux 6.1.6). It is undeclared
+    in `spring-webflux-router.yml` and derives NOTHING, while `docs/COVERAGE.md`
+    listed this exact call as "✅ shipped" and the `A-M9` pass added a sentence
+    saying both routing DSLs now read all seven verbs. Two of four surfaces do;
+    the COVERAGE rows now say which.
+
+    The catalog's `entries` are argument-rooted (`route(predicate, handler)`) or
+    body-linked (`coRouter`), and a builder is neither: the verb call sits on a
+    RECEIVER returned by an argument-less `route()`, which this grammar has no
+    word for. So this is an under-report and NOT a fabrication — the argument-
+    less `route()` is not a root candidate, so no poisoned row is minted either,
+    which is what the emptiness here asserts.
+
+    **It goes red the moment the surface starts deriving**, which is the point:
+    a boundary nothing pins is a boundary that quietly becomes a lie in either
+    direction. The `@HTTP` exclusion in `retrofit.yml` is the same pattern.
+
+    Its paired positive is
+    `test_the_shipped_router_catalog_reads_every_verb_the_framework_declares`: the
+    predicate form of the same route, on the same catalog, deriving."""
+    facts: list = [
+        _method_symbol(LIST_ORDERS),
+        _site(ROUTES, 0, _ROUTER_FUNCTIONS, "route", result=200, arguments=[]),
+        _site(
+            ROUTES,
+            1,
+            _BUILDER,
+            "GET",
+            receiver=200,
+            result=201,
+            invoke_kind="interface",
+            arguments=[
+                CallArgument(kind="string", value="/orders"),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(ROUTES, 2, _BUILDER, "build", receiver=201, result=202, arguments=[]),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
 def test_a_request_predicate_that_is_not_a_verb_factory_names_no_verb_or_address(
     tmp_path: Path,
 ):

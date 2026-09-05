@@ -816,7 +816,9 @@ is, what it costs.
 | Java | Nested / inner classes | the phase-1 skip lifted in Phase 2C — read as ordinary class files, so `@RestController`/`@Controller` resolve the same nested or not | `annotation` | ✅ shipped |
 | Java | WebFlux `Mono`/`Flux` return types | response shape roots through the declared wrapper ([D02](components/D02-catalog-schema.md) §2a) | — | ✅ shipped |
 | Java | **Vert.x** `router.get("/x").handler(this::h)` | receiver + verb + first arg | `fluent_chain` | **B — the cleanest first exercise for chain reconstruction** |
-| Java | WebFlux functional `RouterFunctions.route().GET(…)`, `coRouter { }` | — | `combinator` | ✅ shipped |
+| Java | WebFlux functional `RouterFunctions.route(RequestPredicates.GET("/x"), h)`, `coRouter { GET("/x") { … } }` | the static predicate factory attached by `RouterFunctions.route`, and the coroutine DSL's own two-argument form | `combinator` | ✅ shipped — all seven verbs on each, since `A-M9` |
+| Java | WebFlux functional — the BUILDER DSL, `RouterFunctions.route().GET("/orders", h)` | `RouterFunctions$Builder` declares seven verbs x four overloads (`javap`, spring-webflux 6.1.6) | `combinator` | **Boundary — derives NOTHING.** Undeclared in `spring-webflux-router.yml`, unmentioned in any probe. **This row used to say "✅ shipped" and name this exact call**; it never was. The catalog's `entries` are argument-rooted (`RouterFunctions.route(predicate, handler)`) or body-linked (`coRouter`), and a builder is neither — the verb call sits on a RECEIVER returned by an argument-less `route()`, which this grammar has no word for. Closing it is engine work plus a probe of which overload position carries the path. **Falsified by** any module using the builder form: its whole functional routing surface is absent |
+| Java | WebFlux functional — the non-coroutine Kotlin DSL, `router { GET("/x") { … } }` | `RouterFunctionDslKt.router` and `RouterFunctionDsl`'s seven verbs x five overloads (`javap`, spring-webflux 6.1.6) | `combinator` | **Boundary — derives NOTHING.** `spring-webflux-router.yml` declares `CoRouterFunctionDslKt.coRouter` and its `CoRouterFunctionDsl` verbs only. The two DSLs are structurally identical, so this is a catalog addition rather than engine work — but no probe has read `RouterFunctionDsl`'s call-site shape, and the coroutine one's was read by 2E checkpoint (1b) rather than assumed. **Falsified by** a Kotlin module using `router { }` rather than `coRouter { }` |
 | Java | **Akka HTTP** `path("users" / IntNumber) { get { complete(…) } }` | nested closures, route is a *value* | `combinator` | **C-ish — the hardest inbound form surveyed** |
 | Java | Ktor `routing { get("/path") { … } }` | Kotlin DSL | `combinator` | B |
 | Java | Javalin `app.get("/path", ctx -> …)` | — | `registration_call` | B |
@@ -940,7 +942,13 @@ DSL handler, bound method reference and lambda alike, to an `instance`-kind argu
 compiler-generated class rather than a method symbol, so the honest answer is no handler
 rather than a fabricated guess through that class's own `invokeSuspend` (checkpoint (1b)).
 
-**Both routing DSLs now read all seven verbs** (`A-M9`, principles sweep §3.3).
+**Both DECLARED routing surfaces now read all seven verbs** (`A-M9`, principles sweep §3.3).
+*They are two of four.* `RouterFunctions$Builder` (seven verbs x four overloads) and
+`RouterFunctionDslKt.router` with `RouterFunctionDsl` (seven x five) are undeclared, unprobed
+and derive nothing — the table above carries a boundary row for each, and this sentence used to
+read "both routing DSLs" as though the catalog's two were the framework's two. `A-M9` closed a
+vocabulary gap inside one surface; it did not close the surface count, and the row above claiming
+`RouterFunctions.route().GET(…)` shipped was wrong before `A-M9` and wrong after it.
 `RequestPredicates` and `CoRouterFunctionDsl` each declare seven per-verb factories at
 spring-webflux 6.1.6 **and** 7.0.2 (CP-12 Q11/Q12, read off the jars as "declared on the type
 and spelled in upper case", which is the framework's own way of marking a verb factory apart
