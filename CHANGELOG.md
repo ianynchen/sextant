@@ -166,6 +166,16 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`JmsTemplate` publishes through two more overloads than the catalog admitted** (descriptor
+  sweep R5). `convertAndSend(Destination, Object)` is an ordinary destination-carrying call
+  whose argument 0 is a `Queue`/`Topic` instance and therefore can never fabricate anything;
+  it derived an honest path-NULL row until the arity-2 descriptor claimed the arity, and that
+  was a regression rather than a boundary. It has its own row again.
+  `convertAndSend(String, Object, MessagePostProcessor)` was never declared at ANY arity, so
+  every such call derived nothing at all — a recall gap nothing recorded — and the destination
+  it carries is genuinely at position 0 and genuinely readable. Both are recall with no
+  fabrication risk. The file now documents its own remaining boundaries, which it did not,
+  though it makes the same claim `spring-rabbit-template.yml` documents in full.
 - **A row that meant several overloads is now several rows** (descriptor sweep R3). Five
   catalogs carried one `methods` row standing for two real overloads, which is the language's
   own rule missing rather than a simplification: `KafkaConsumer.subscribe(Collection)` and

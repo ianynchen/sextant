@@ -6158,6 +6158,45 @@ _CLAIMED_ARITIES = [
         [CallArgument(kind="instance", symbol=_SPRING_MESSAGE)],
         id="ReplyingKafkaTemplate.sendAndReceive(Message) — the capture-free row",
     ),
+    # --- R5: the two `JmsTemplate.convertAndSend` rows the file did not have.
+    # Both siblings below are REAL undeclared overloads of spring-jms 6.1.6, so
+    # these two near-misses measure a shape a caller can actually write.
+    pytest.param(
+        "spring-jms-template",
+        "org/springframework/jms/core/JmsTemplate#",
+        "convertAndSend",
+        "(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/jms/core/MessagePostProcessor;)V",
+        "(Ljakarta/jms/Destination;Ljava/lang/Object;"
+        "Lorg/springframework/jms/core/MessagePostProcessor;)V",
+        [
+            CallArgument(kind="string", value="orders.queue"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+            CallArgument(kind="lambda"),
+        ],
+        id="JmsTemplate.convertAndSend(String, Object, MessagePostProcessor) — arity 3, "
+        "undeclared until R5",
+    ),
+    pytest.param(
+        "spring-jms-template",
+        "org/springframework/jms/core/JmsTemplate#",
+        "convertAndSend",
+        "(Ljakarta/jms/Destination;Ljava/lang/Object;)V",
+        "(Ljava/lang/Object;Lorg/springframework/jms/core/MessagePostProcessor;)V",
+        [
+            CallArgument(kind="instance", symbol="jakarta/jms/Queue#"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        id="JmsTemplate.convertAndSend(Destination, Object) — the row b023f61 claimed away",
+    ),
+    pytest.param(
+        "spring-jms-template",
+        "org/springframework/jms/core/JmsTemplate#",
+        "convertAndSend",
+        "(Ljava/lang/Object;)V",
+        "(Ljakarta/jms/Message;)V",
+        [CallArgument(kind="class", symbol=ORDER_VIEW)],
+        id="JmsTemplate.convertAndSend/1 — hypothetical arity-1 sibling",
+    ),
 ]
 
 
@@ -6382,3 +6421,67 @@ def test_the_pattern_row_does_not_borrow_the_collection_rows_resolvers(tmp_path:
     workspace.close()
 
     assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")
+
+
+# --- R5: `spring-jms-template.yml`'s two missing rows, and what each is worth.
+
+
+def test_the_jms_destination_overload_derives_its_honest_row_again(tmp_path: Path):
+    """`convertAndSend(Destination destination, Object message)` is a
+    legitimate destination-carrying call whose argument 0 is a `Queue`/`Topic`
+    INSTANCE, never a string constant — so `channel_of` reads it as unresolved
+    and it cannot fabricate anything at all. Before `b023f61` it derived an
+    honest path-NULL row; the arity-2 descriptor claimed the arity and it began
+    deriving nothing, which was a pure regression rather than a boundary. Its
+    own row restores exactly the row it used to have.
+
+    The assertion is the ROW, not its path: "this method publishes to JMS" is
+    true and useful with the destination unread (D02 §2's
+    unresolved-is-an-answer), and it is the fact that went missing."""
+    facts = [
+        _call_to(
+            "org/springframework/jms/core/JmsTemplate#",
+            "convertAndSend",
+            "(Ljakarta/jms/Destination;Ljava/lang/Object;)V",
+            [
+                CallArgument(kind="instance", symbol="jakarta/jms/Queue#"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+        )
+    ]
+    workspace = _resolve_shipped(tmp_path, facts, "spring-jms-template")
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert (endpoint["protocol"], endpoint["direction"]) == ("jms", "outbound")
+    assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")
+
+
+def test_the_jms_post_processor_overload_at_arity_three_now_resolves_its_queue(
+    tmp_path: Path,
+):
+    """`convertAndSend(String destinationName, Object message,
+    MessagePostProcessor after)` was never declared at ANY arity, so every such
+    call derived nothing — a recall gap the file did not record. The
+    destination is genuinely at position 0 and genuinely readable, so the row
+    resolves it, and this is pure gain rather than a trade: the positions the
+    row reads are the positions that overload declares."""
+    facts = [
+        _call_to(
+            "org/springframework/jms/core/JmsTemplate#",
+            "convertAndSend",
+            "(Ljava/lang/String;Ljava/lang/Object;"
+            "Lorg/springframework/jms/core/MessagePostProcessor;)V",
+            [
+                CallArgument(kind="string", value="orders.queue"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+                CallArgument(kind="lambda"),
+            ],
+        )
+    ]
+    workspace = _resolve_shipped(tmp_path, facts, "spring-jms-template")
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == ("orders.queue", "resolved")
+    assert endpoint["peer"] is None
