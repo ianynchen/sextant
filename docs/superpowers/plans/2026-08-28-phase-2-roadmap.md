@@ -205,6 +205,48 @@ own merits: they would turn D02's catalog schema into a public API, after which
 every schema change is a breaking change for users.
 
 
+### The documentation-debt checkpoint — immediately after 2O, before 2P
+
+**Ruled 2026-09-05 (user).** Sweep 3 found the component documents describe a
+substantially larger system than the one that exists, and the user's ruling is
+that this is **tech debt to be addressed, not dropped**: *"one feature fully
+done is better than ten half baked"* (now GUIDELINES §2). Retire-and-mark is
+the expected outcome for most of it — but deliberately, recorded, and done.
+
+The size, measured rather than estimated:
+
+| documented | exists |
+|---|---|
+| D01's 12+ base tables, `edges`, `dispatch`, `trace_summary`, `findings`, full-text index | **6 tables** — `endpoints`, `open_questions`, `raw_facts`, `resolved_config`, `shape_fields`, `shapes` |
+| D01 §5's ten named queries (`trace_of`, `impact_of`, …) | zero occurrences in `src/` |
+| M00's 25 CLI verbs across five nouns | 4 |
+| D00 §5's 15 fact kinds | 8 have a producer |
+| the overlay tier — D03 + M01, FR-15/FR-16 | unimplemented; "overlay" in `src/` names something else |
+| D02 §2's thirteen styles | twelve — `filesystem` has a grammar, no engine, and would abort a run |
+
+**Three items are operational, not documentary, and do not wait for this
+checkpoint** — they are Class A defects and go into the sweep fix pass:
+
+1. **`ARCHITECTURE.md:341` claims redaction happens during extraction.** It does
+   not: the ingest path and `stages/analyze.py` both write
+   `redaction_set_hash=NO_REDACTION_HASH`, so the workspace holds verbatim
+   values and redaction runs only at the render and export exits. D04 was
+   amended when that changed; ARCHITECTURE was not. The cache-key guarantee in
+   the following sentence is unbacked too. This is the one finding whose
+   consequence is outside correctness — a reader of ARCHITECTURE would believe a
+   workspace is safe to hand over.
+2. **Neither documented config file is ever opened** (`~/.sextant/config.yml`,
+   repo-root `sextant.yml`), and writing their keys into the file that IS read —
+   `.sextant.yml`, one character apart — aborts every command.
+3. **`.sextantignore` loads at the module root, not the repository root**, so a
+   reactor's ignore file reaches no submodule.
+
+The rest is one question asked ~38 times: **is this claim built, designed, or
+retired?** The deliverable is a status convention applied across D00-D06, M00,
+M01, ARCHITECTURE and REQUIREMENTS, with every retirement recorded in
+`docs/documented-not-implemented.md` — which sweep 3 also found is missing two
+of the six instances RUNBOOK counts, and skips entry numbers 10 and 11.
+
 ## What 2P carries first
 
 

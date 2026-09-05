@@ -32,6 +32,9 @@ Allowed without asking: reading anything; running tests/linters/builds; writing 
 - Minimum code to solve the exact request. Zero speculative features, abstractions, or unrequested config.  
 - No error handling for impossible scenarios.  
 - Rewrite 200 lines if it can be done in 50. (Test: Would a senior engineer call this overcomplicated?)  
+- **One feature fully done beats ten half-baked.** *(User principle, 2026-09-05.)* "Done" means the mechanism exists, a consumer reads it, a test proves it, and the documents describing it are true. A feature that is designed, documented and partly wired is not 40% delivered — it is a **liability**, because every reader downstream treats the document as a description of what runs. Half-baked is not a lesser form of shipped; it is a debt with interest, and the interest is paid by whoever believes the doc.  
+
+  The corollary, which is where this bites in practice: **a document describing an unbuilt mechanism is itself a half-baked feature.** Either finish it or retire the claim — but "retire the claim" is a decision to be taken deliberately and recorded, never a quiet deletion, and never a reason to leave the debt unaddressed. See §5.3, and `docs/documented-not-implemented.md`, which is the register this rule keeps.  
 
 ---  
 
