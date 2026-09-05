@@ -1937,3 +1937,54 @@ visible rather than silently resolved.
   `Request.Builder`; what made it wrong was that the call which overrides it was
   not declared. M1's enforceable form therefore admits the seed and pins its
   CONDITION — every verb-setting method declared — rather than banning the seed.
+
+---
+
+## 11. Fix-pass status — round 1b (the sixteen Class A Majors)
+
+Round 1b's scope is `A-M1`–`A-M16` and the three §7 settlements. The Minors are
+a later dispatch and stay `OPEN`.
+
+`FIXED (<sha>)` means the behaviour changed and a paired near-miss/positive
+proves it, with the near-miss shown to discriminate by mutation. `OPEN —
+<reason>` is a deliberate decision, not a gap that was forgotten.
+
+### The durable artifact
+
+`scripts/probes/cp12_sweep_round1b{,.md}` (`d943eb0`) — a committed harness
+answering twelve framework questions across nine resolved artifacts, every
+answer being the framework's WHOLE set rather than a check of ours. That
+direction is the point: CP-10 asks whether every descriptor a catalog declares
+names a real method and never the converse, and eight of these sixteen findings
+live on the converse side (`A-Mi5`).
+`tests/architecture/test_sweep_round1b_framework_surfaces.py` is the offline
+half and pins the shipped catalogs against the generated table.
+
+### Class A Majors
+
+| id | status |
+|---|---|
+| `A-M1` | OPEN |
+| `A-M2` | OPEN |
+| `A-M3` | FIXED (74684e5) — `head`/`options` roots on both clients; `method(HttpMethod)` derives its address at `unresolved` with `method` NULL, because its verb is an enum constant a string-literal scanner cannot read |
+| `A-M4` | FIXED (74684e5) — `exchangeToMono`/`exchangeToFlux` added, `exchange` kept as dead-at-7.0.2 data, and `spring-restclient`'s own `exchange` family added; both lists version-scoped in the catalog and pinned against CP-12's 7.0.2 column |
+| `A-M5` | FIXED (d9ab742) — `@OPTIONS` ships; `@HTTP` is a stated, test-pinned boundary because the engine's `method_from` read would give it `method: ''` |
+| `A-M6` | OPEN |
+| `A-M7` | OPEN |
+| `A-M8` | FIXED (d9ab742) — `path_from: [value, queueNames]`, measured off the `@AliasFor` pair. §7.7 had already settled the failure mode and round 1a had already corrected `COVERAGE.md` |
+| `A-M9` | OPEN |
+| `A-M10` | OPEN |
+| `A-M11` | OPEN |
+| `A-M12` | OPEN |
+| `A-M13` | OPEN |
+| `A-M14` | OPEN |
+| `A-M15` | OPEN |
+| `A-M16` | OPEN |
+
+### The three §7 settlements
+
+| item | status |
+|---|---|
+| `A-M8` / `COVERAGE.md:1444-1447` (§7.7) | SETTLED before round 1a and corrected there; the catalog half is `A-M8` above |
+| `stamp_media.sql` (§7.4) | OPEN |
+| sweep 2's negative-claim arithmetic (§7.3) | OPEN |
