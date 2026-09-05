@@ -106,6 +106,32 @@ matches:
     # one row per operation, never two — which is also what keeps
     # `@WebMethod(exclude = true)` withdrawn rather than quietly re-derived
     # under its construct name.
+    #
+    # **INHERITED public methods are members too, since `A-M15`.** The SQL
+    # joined the gate on `s.enclosing`, which reads "the public methods of C"
+    # as "the public methods DECLARED in C" — so a `@WebService public class
+    # BillingWebService extends AbstractBilling` published none of the base's
+    # operations, silently, and this file's own argument above made exactly
+    # that mistake one axis over. MEASURED (CP-13 Q3/Q4, jaxws-rt 4.0.2):
+    # `RuntimeModeler.processClass` walks the implementor class's
+    # `Class.getMethods()` — inherited public methods included — drops only
+    # those declared by `java.lang.Object`, and then applies
+    # `isWebMethodBySpec`. `derive_endpoints.sql`'s `gate_ancestry` is that
+    # walk, stopping at the module boundary and at `Object` (which capability
+    # 9.13 never writes a `superclass` for).
+    #
+    # ONE DIVERGENCE FROM THE RI REMAINS AND IS STATED IN COVERAGE:
+    # `isWebMethodBySpec` also excludes a `final` method, and the SQL excludes
+    # `static` and `synthetic` only. A `public final` operation is exposed by us
+    # and not by the RI. It is left rather than added because `modifiers` is
+    # written by `ClassScanner.methodModifiersJson`, which records neither
+    # `ACC_FINAL` nor `ACC_ABSTRACT` — the same missing bit `spring-data-rest`'s
+    # `default`-method boundary waits on.
+    #
+    # AND THE RI IS ONE IMPLEMENTATION. This file used to claim it was
+    # "verified against BOTH reference implementations" while naming neither
+    # (`A-Mi7`); CP-13 names and measures jaxws-rt 4.0.2. **Apache CXF is not
+    # measured**, so every rule here is scoped to the RI until it is.
     members: public_methods
     # Neither annotation declares a `method` attribute; the name is borrowed and
     # never populated (the spring-jms.yml/spring-kafka.yml precedent), which is

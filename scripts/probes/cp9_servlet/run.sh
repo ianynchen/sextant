@@ -284,6 +284,20 @@ XML
   # --- the shapes where the verb map does not apply -------------------------
   probe 14 GET     /service-only "\`service()\` overridden, no \`doXxx\`"
   probe 15 PUT     /service-only "\`service()\` overridden, no \`doXxx\`"
+  # --- the configuration rows 14-15's VERDICT was generalised past (`A-M2`) --
+  # A cross-cutting wrapper: `service()` overridden AND `doGet`/`doPost`
+  # declared, with the override delegating through `super.service(req, resp)`.
+  # Row 37 is the discriminator — a verb with no `doXxx` must be REFUSED, which
+  # is what says `HttpServlet`'s own dispatch still ran.
+  probe 35 GET     /delegating   "\`service()\` delegates to \`super\`, \`doGet\`/\`doPost\` declared"
+  probe 36 POST    /delegating   "\`service()\` delegates to \`super\`, \`doGet\`/\`doPost\` declared"
+  probe 37 PUT     /delegating   "\`service()\` delegates to \`super\`, no \`doPut\` — row 35's discriminator"
+  # The SECOND bypass signature, delegating. Measured rather than reasoned
+  # from rows 35-37: `HttpServlet` has two `service` methods and a verdict read
+  # against one must not be applied to the other (§5.4).
+  probe 38 GET     /delegating-agnostic "the PUBLIC \`service(ServletRequest, ServletResponse)\` delegates to \`super\`, \`doGet\`/\`doPost\` declared"
+  probe 39 POST    /delegating-agnostic "the PUBLIC \`service\` delegates to \`super\`, \`doGet\`/\`doPost\` declared"
+  probe 40 PUT     /delegating-agnostic "the PUBLIC \`service\` delegates to \`super\`, no \`doPut\` — row 38's discriminator"
   probe 16 GET     /generic      "\`GenericServlet\` subclass"
   probe 17 PUT     /generic      "\`GenericServlet\` subclass"
   # --- the language rule, and the missing annotation ------------------------

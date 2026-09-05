@@ -169,7 +169,7 @@ INSERT INTO endpoints (
     protocol, direction, method, path, handler, caller, peer,
     handler_signature, resolution, evidence, catalog_id, consumes, produces
 )
-WITH mapping_catalog AS (
+WITH RECURSIVE mapping_catalog AS (
     SELECT s.fqn AS fqn, s.methods AS methods,
            coalesce(s.requires_qualifier, FALSE) AS requires_qualifier,
            -- 2I design §2, word 4: the attribute whose value withdraws this
@@ -209,6 +209,12 @@ controllers AS (
 declared AS (
     SELECT
         a.target AS target,
+        -- `member_declarations` fills this; an ANNOTATED declaration never
+        -- needs it, because the type that annotated it IS its own enclosing
+        -- type. NULL here rather than `a.target`'s enclosing, so `derived`'s
+        -- `coalesce` reads "no gate type was carried" and falls through to the
+        -- behaviour every catalog written before `A-M15` had.
+        CAST(NULL AS VARCHAR) AS gate_type,
         coalesce(list_extract(list_filter(list_transform(
             $path_from::VARCHAR[],
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
@@ -302,6 +308,46 @@ gate_types AS (
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
 ),
+-- `A-M15`: every type whose members a gated class EXPOSES — the gate type
+-- itself, then its superclass, then its superclass's, within what was scanned.
+--
+-- The member rule below used to join `gate_types` on `s.enclosing` alone,
+-- which reads "the public members of C" as "the public members DECLARED in C".
+-- Every language whose facts this reads says otherwise: a type's members
+-- include those it inherits. So a gated class extending a base published none
+-- of the base's operations, silently, while the catalog that declares
+-- `members` argues at length that an unmarked public member IS an operation —
+-- "a catalog that derived only the annotated methods would report a service
+-- missing one of its own operations".
+--
+-- MEASURED rather than inferred from a specification's wording (CP-13 Q3/Q4,
+-- and the catalog that consumes this names the framework and the version):
+-- the framework enumerates the gated type's inherited public members and drops
+-- only those declared by the language's own root type. That exclusion is not
+-- restated here, and does not need to be: capability 9.13 emits `superclass`
+-- for every superclass EXCEPT the root, so this walk stops there by
+-- construction rather than by naming it — which is what keeps the rule
+-- language-blind (ARCHITECTURE §10) while mirroring the framework exactly.
+--
+-- `UNION`, not `UNION ALL`: it deduplicates, so a fact stream that disagreed
+-- with its own language about cyclic inheritance terminates here instead of
+-- looping. That is `_reach`'s `seen` guard said in SQL, and for the same
+-- reason — these are facts, not a compiler's word.
+--
+-- A superclass in a JAR contributes nothing: it has no `symbol` fact here, so
+-- the walk ends at it. That is the same within-module boundary every other
+-- closure in this codebase keeps.
+gate_ancestry AS (
+    SELECT type_symbol AS gate_symbol, type_symbol AS owner_symbol FROM gate_types
+    UNION
+    SELECT a.gate_symbol AS gate_symbol, sc.superclass AS owner_symbol
+    FROM gate_ancestry a
+    JOIN (
+        SELECT payload ->> 'symbol' AS symbol, payload ->> 'superclass' AS superclass
+        FROM raw_facts
+        WHERE kind = 'symbol' AND (payload ->> 'superclass') IS NOT NULL
+    ) sc ON sc.symbol = a.owner_symbol
+),
 -- THE MEMBER RULE (2I design §2, word 3). Where a catalog declares
 -- `$members`, a gated class exposes members that carry no annotation at all,
 -- and each becomes a declaration with an empty name — which `$path_fallback`
@@ -357,6 +403,14 @@ gate_types AS (
 member_declarations AS (
     SELECT
         s.symbol AS target,
+        -- The type whose ANNOTATION made this member an operation, which is
+        -- not always the type that declares it (`A-M15`). `derived` composes a
+        -- row's scope, prefix and construct gate from this rather than from
+        -- `s.enclosing`, because an inherited member's declaring class carries
+        -- none of them — it is an ordinary base class, and reading its
+        -- `enclosing` would ask the wrong type for the service's namespace and
+        -- then drop the row for having none.
+        g.gate_symbol AS gate_type,
         [''] AS paths,
         $all_methods::VARCHAR[] AS methods,
         CAST(NULL AS VARCHAR[]) AS consumes_list,
@@ -376,7 +430,7 @@ member_declarations AS (
         (SELECT coalesce(bool_or(requires_qualifier), FALSE) FROM mapping_catalog)
             AS requires_qualifier
     FROM symbols s
-    JOIN gate_types g ON g.type_symbol = s.enclosing
+    JOIN gate_ancestry g ON g.owner_symbol = s.enclosing
     WHERE $members = 'public_methods'
       AND s.construct_kind = 'method'
       AND s.visibility = 'public'
@@ -476,6 +530,7 @@ prefixes AS (
 -- their own CTE first, and mapped_methods.paths is unnested from that.
 mapped_methods AS (
     SELECT d.target AS target,
+           d.gate_type AS gate_type,
            UNNEST(CASE WHEN len(d.methods) = 0
                        THEN [CAST(NULL AS VARCHAR)] ELSE d.methods END) AS wire_method,
            d.paths AS paths,
@@ -487,6 +542,7 @@ mapped_methods AS (
 ),
 mappings AS (
     SELECT mm.target AS method_symbol,
+           mm.gate_type AS gate_type,
            mm.wire_method AS wire_method,
            UNNEST(mm.paths) AS path_suffix,
            mm.consumes_list AS consumes_list,
@@ -718,10 +774,16 @@ derived AS (
     -- it. A LEFT join because a free function has no enclosing type at all
     -- (D00 §4) and must keep deriving exactly as it did — which is also why
     -- the gate below tests the KIND rather than the join's success.
-    LEFT JOIN symbols e ON e.symbol = s.enclosing
-    LEFT JOIN controllers c ON s.enclosing = c.type_symbol
-    LEFT JOIN prefixes p ON p.type_symbol = s.enclosing
-    LEFT JOIN qualifier_scopes q ON q.type_symbol = s.enclosing
+    -- `coalesce(m.gate_type, s.enclosing)` on all four, and on the fence
+    -- below (`A-M15`): the type that ANNOTATED a declaration is the one whose
+    -- scope, prefix and construct kind the row composes from, and for an
+    -- INHERITED member that is not the type declaring it. Every catalog
+    -- written before the member rule carries `gate_type` NULL, so the coalesce
+    -- reads `s.enclosing` and nothing about them changes.
+    LEFT JOIN symbols e ON e.symbol = coalesce(m.gate_type, s.enclosing)
+    LEFT JOIN controllers c ON coalesce(m.gate_type, s.enclosing) = c.type_symbol
+    LEFT JOIN prefixes p ON p.type_symbol = coalesce(m.gate_type, s.enclosing)
+    LEFT JOIN qualifier_scopes q ON q.type_symbol = coalesce(m.gate_type, s.enclosing)
     WHERE ($type_annotation IS NULL OR c.type_symbol IS NOT NULL)
       AND ($declared_on IS NULL OR e.construct_kind = $declared_on)
       -- THE IMPLEMENTED-INTERFACE FENCE (2I design §4). An outbound catalog
@@ -750,7 +812,7 @@ derived AS (
       AND NOT (
           $direction = 'outbound' AND $declared_on = 'interface'
           AND list_contains($locally_implemented::VARCHAR[],
-                            regexp_extract(s.enclosing, '[^ ]*$'))
+                            regexp_extract(coalesce(m.gate_type, s.enclosing), '[^ ]*$'))
       )
       -- A declaration whose annotation only means anything INSIDE a scope,
       -- with no scope found at either level, has no address — so it derives

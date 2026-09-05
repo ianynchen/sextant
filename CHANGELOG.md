@@ -192,6 +192,64 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-M15`: a `@WebService` class's INHERITED operations were absent from its SOAP surface**
+  (principles sweep §3.3). `derive_endpoints.sql`'s member rule joined the class gate on
+  `s.enclosing`, which reads "the public methods of C" as "the public methods DECLARED in C" —
+  JLS 8.2 says the members of a class include those inherited from its superclass, and
+  `jakarta-jws.yml`'s own comment argues at length that an unannotated public method IS an
+  operation ("a catalog that derived only the annotated methods would report a service missing
+  one of its own operations") while the join made exactly that mistake one axis over.
+
+  Measured rather than read off the specification's wording (CP-13 Q3/Q4, jaxws-rt 4.0.2):
+  `RuntimeModeler.processClass` walks the implementor class's `Class.getMethods()`, drops only
+  those declared by `java.lang.Object`, then applies `isWebMethodBySpec`. A new `gate_ancestry`
+  CTE is that walk — the transitive superclass closure over capability 9.13's erased edge,
+  `UNION` rather than `UNION ALL` so a fact stream disagreeing with its own language about
+  cycles terminates instead of looping. Rows now carry the type that ANNOTATED them beside the
+  method symbol, because an inherited member's declaring class carries no scope, prefix or
+  construct gate; every catalog written before this carries it NULL and nothing about them
+  changes.
+
+  Two divergences from the RI are stated rather than closed: a `public final` method is exposed
+  by us and not by JAX-WS, because `ClassScanner.methodModifiersJson` records neither
+  `ACC_FINAL` nor `ACC_ABSTRACT`; and Apache CXF is not measured, so `jakarta-jws.yml` stops
+  claiming it was "verified against BOTH reference implementations" without naming either
+  (`A-Mi7`) and is scoped to the one CP-13 opened.
+
+- **`A-M2`: a servlet that wraps `service()` and delegates lost its whole surface** (principles
+  sweep §3.3). CP-9's verdict 8 — "a class overriding `service()` derives NOTHING" — was measured
+  against `ServiceOnlyServlet`, which overrides `service()` and declares no `doXxx` **at all**,
+  and was then applied to every `service()` override. The commonest real form is a cross-cutting
+  wrapper that calls `super.service(req, resp)` and declares `doGet`/`doPost`, and it derived
+  nothing: address, verbs and handlers, all silently absent. §5.4 in one line — a verdict is
+  bounded by the configuration it measured.
+
+  Re-measured rather than reasoned. CP-9 gains a delegating servlet on **both** `service`
+  signatures (rows 35-40), because `HttpServlet` has two and a verdict read against one must not
+  be applied to the other — which is this finding's own mistake. All three containers agree:
+  GET 200, POST 200, **PUT 405**. The 405 is the discriminator: `HttpServlet`'s dispatch still
+  runs, so the verb table describes such a class exactly. The bypass now discards a class only
+  where it declares no member of the dispatch table.
+
+  Three shipped tests asserted the defect — each declared a `doGet` beside the `service`
+  override and expected nothing — and are corrected to the configuration CP-9 actually measured.
+  The residual is stated in COVERAGE and is deliberate: a `service()` override that does NOT
+  delegate and declares `doXxx` anyway now over-reports, because nothing in the fact stream
+  separates it from the delegating form without `call_site` in the catalog's `requires`.
+
+- **`A-M10`: an array had exactly one dimension** (principles sweep §3.3). ASM's
+  `Type#getElementType` returns an array's **innermost** element type rather than its component
+  type, and both `TypeRefs.descriptorName` and `TypeRefs.elementArguments` built their fact from
+  it — so `descriptorName(getElementType()) + "[]"` appended exactly one `[]` however many the
+  descriptor carried. `String[][]` and `String[]` produced **byte-identical** facts, symbol and
+  argument alike, and JVMS 4.3.2 and JLS 10.1 make the number of `[` part of the type's
+  identity: a DR-5 contract comparison of a caller sending `String[][]` against a callee
+  expecting `String[]` read equal, and `shapes/expansion.py` hashed the wrong shape. The two
+  seams also disagreed with each other — `NodeCollector.visitArrayType` recurses one dimension
+  at a time on the signature path and was right, while the descriptor path, which is the one
+  every plain array takes because javac writes no `Signature` attribute for one, was wrong.
+  Both now drop one leading `[` and recurse.
+
 - **`A-M16`: `.sextantignore` was loaded at the module root, so a reactor's never reached a
   submodule** (principles sweep §3.3). D04 §3 is emphatic and is itself an amendment — "One
   file, at the **repository root**, and every pattern in it is matched against a path made

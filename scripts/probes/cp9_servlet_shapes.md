@@ -89,6 +89,12 @@ that failed to start.
 | 31-32 | a connector with `allowTrace="true"` | TRACE `/explicit` (overridden) and `/getonly` (not) | **unknown — whether the 405 is the connector or the dispatch** |
 | 33 | the same classes under `metadata-complete="true"` | GET `/metadata-complete/getonly` | **unknown — whether the annotation scan is suppressed wholesale** |
 | 34 | the same class registered by that descriptor's own `<servlet>` | GET `/metadata-complete/descriptor-registered` | 200 — `metadata-complete` suppresses the ANNOTATION scan, not the descriptor; row 33's positive control |
+| 35 | `service()` overridden AND `doGet`/`doPost` declared, the override DELEGATING through `super.service` | GET `/delegating` | 200 — added 2026-09-05 for `A-M2` |
+| 36 | the same class | POST `/delegating` | 200 |
+| 37 | the same class, a verb it declares no `doXxx` for | PUT `/delegating` | **405** — row 35's discriminator: a refusal is what says `HttpServlet`'s own dispatch still ran |
+| 38 | the SECOND bypass signature: the public `service(ServletRequest, ServletResponse)` overridden and delegating, `doGet`/`doPost` declared | GET `/delegating-agnostic` | 200 |
+| 39 | the same class | POST `/delegating-agnostic` | 200 |
+| 40 | the same class, a verb it declares no `doXxx` for | PUT `/delegating-agnostic` | **405** — row 38's discriminator |
 
 ## Observations
 
@@ -137,6 +143,12 @@ produced.
 | 32 | `TRACE /getonly` on a connector with `allowTrace="true"` — no `doTrace` — `HttpServlet`'s own | 200 | 200 | 200 |
 | 33 | `GET /metadata-complete/getonly` — the same classes under `metadata-complete="true"` | 404 | 404 | 404 |
 | 34 | `GET /metadata-complete/descriptor-registered` — the same class registered by that descriptor's own `<servlet>` — row 33's positive control | 200 | 200 | 200 |
+| 35 | `GET /delegating` — `service()` delegates to `super`, `doGet`/`doPost` declared | 200 | 200 | 200 |
+| 36 | `POST /delegating` — `service()` delegates to `super`, `doGet`/`doPost` declared | 200 | 200 | 200 |
+| 37 | `PUT /delegating` — `service()` delegates to `super`, no `doPut` — row 35's discriminator | 405 | 405 | 405 |
+| 38 | `GET /delegating-agnostic` — the PUBLIC `service(ServletRequest, ServletResponse)` delegates to `super`, `doGet`/`doPost` declared | 200 | 200 | 200 |
+| 39 | `POST /delegating-agnostic` — the PUBLIC `service` delegates to `super`, `doGet`/`doPost` declared | 200 | 200 | 200 |
+| 40 | `PUT /delegating-agnostic` — the PUBLIC `service` delegates to `super`, no `doPut` — row 38's discriminator | 405 | 405 | 405 |
 
 Every row identical on all three containers, and the `javax` column identical
 to the other two modulo the package name (rows 25-28 and 30, which are the only
@@ -200,11 +212,40 @@ falsified.
    class overriding `doTrace` has declared a handler; we derive it and state
    the dependency. Row 32 keeps the complement honest — implicit TRACE, off
    `HttpServlet`'s own `doTrace`, is also 200 and is NOT derived, by (5).
-8. **A class overriding `service()` derives NOTHING** (rows 14-15). It serves
-   GET and PUT alike, because `HttpServlet.service` — the very method that
-   reads `getMethod()` and dispatches to `doXxx` — is what the class replaced.
-   The verb map does not describe this class, and applying it anyway would
-   publish `GET` while withholding `PUT`: a wrong answer, not a partial one.
+8. **A class overriding `service()` AND DECLARING NO `doXxx` derives NOTHING**
+   (rows 14-15). It serves GET and PUT alike, because `HttpServlet.service` —
+   the very method that reads `getMethod()` and dispatches to `doXxx` — is what
+   the class replaced. The verb map does not describe this class, and applying
+   it anyway would publish `GET` while withholding `PUT`: a wrong answer, not a
+   partial one.
+
+   **Amended 2026-09-05 (`A-M2`), and the amendment is the CONFIGURATION rather
+   than the finding.** The verdict above was originally written without the
+   qualifier and applied to every `service()` override. Rows 35-37 measure the
+   commonest real form — a cross-cutting wrapper that overrides `service()`,
+   calls `super.service(req, resp)`, and declares `doGet`/`doPost`. It serves
+   GET (200) and POST (200) and **REFUSES PUT (405)**, identically on all three
+   containers: `HttpServlet`'s dispatch still runs and the verb table describes
+   that class exactly. Deriving nothing for it lost its WHOLE surface — address,
+   verbs and handlers — where the table was right. §5.4 in one line: a verdict
+   is bounded by the configuration it measured, and this one was applied past it
+   for a phase.
+
+   **Both bypass signatures behave identically** (rows 38-40). `HttpServlet` has
+   two `service` methods — the protected verb-dispatching one and the public
+   `service(ServletRequest, ServletResponse)` it implements by casting and
+   calling the first — and a verdict read against one must not be applied to
+   the other, which is the mistake this whole amendment is about. Measured
+   rather than reasoned: the public overload delegating through `super` serves
+   GET and POST and refuses PUT, the same three answers on the same three
+   containers.
+
+   **What is still not measured** is the third configuration: a `service()`
+   override that does NOT delegate and declares `doXxx` anyway. Nothing in the
+   fact stream separates it from rows 35-37 — the distinguishing fact is a
+   `super.service(...)` call, `invoke_kind: special` on an `HttpServlet#service`
+   target, and the catalog would need `call_site` in `requires` to see it.
+   Stated in `docs/COVERAGE.md` as the residual the narrowed rule accepts.
 9. **A `GenericServlet` subclass derives NOTHING** (rows 16-17). It serves
    every verb through one protocol-agnostic `service(ServletRequest,
    ServletResponse)`; `GenericServlet` declares no `doXxx` at all, so there is

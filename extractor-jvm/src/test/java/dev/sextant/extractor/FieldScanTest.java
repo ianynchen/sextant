@@ -126,6 +126,45 @@ class FieldScanTest {
                 + "\"wire_format\":\"\",\"wire_type\":\"object\"}]")));
     }
 
+    /** `A-M10`: the number of `[` is part of an array type's identity (JVMS 4.3.2, JLS
+     *  10.1), and every dimension past the first was being dropped. ASM's
+     *  {@code Type#getElementType} returns an array's INNERMOST element type rather than
+     *  its component type, so `descriptorName(getElementType()) + "[]"` appended exactly
+     *  one `[]` however many the descriptor carried — making {@code FieldSampleItem[][]}
+     *  and {@code FieldSampleItem[]} byte-identical facts, which a DR-5 contract
+     *  comparison of a caller sending one against a callee expecting the other reads as
+     *  equal.
+     *
+     *  <p>Both halves are asserted, because the defect had both: the SYMBOL carries two
+     *  dimensions, and the single ARGUMENT is the one-dimensional array the outer one
+     *  holds — not the innermost element, which is what {@code expansion.py::_described}
+     *  reads and hashes. */
+    @Test
+    void keeps_every_dimension_of_a_multidimensional_array() throws Exception {
+        assertTrue(scanFieldSample().stream().anyMatch(l -> l.contains("FieldSample#alternateGroups.")
+            && l.contains("\"symbol\":\"dev/sextant/extractor/FieldSampleItem#[][]\"")
+            && l.contains("\"wire_type\":\"array\"")
+            && l.contains("\"arguments\":[{\"arguments\":[{\"arguments\":[],\"nullable\":true,"
+                + "\"nullable_resolution\":\"resolved\","
+                + "\"symbol\":\"dev/sextant/extractor/FieldSampleItem#\","
+                + "\"wire_format\":\"\",\"wire_type\":\"object\"}],\"nullable\":true,"
+                + "\"nullable_resolution\":\"resolved\","
+                + "\"symbol\":\"dev/sextant/extractor/FieldSampleItem#[]\","
+                + "\"wire_format\":\"\",\"wire_type\":\"array\"}]")));
+    }
+
+    /** The near-miss for the same fix, and the half that keeps it from being "append a
+     *  `[]` per recursion and hope": a ONE-dimensional array must still be exactly what it
+     *  was. A change that counted dimensions wrongly in the other direction would pass the
+     *  test above and fail this one. */
+    @Test
+    void a_one_dimensional_array_is_unchanged_by_the_dimension_fix() throws Exception {
+        assertTrue(scanFieldSample().stream().anyMatch(l -> l.contains("FieldSample#alternates.")
+            && l.contains("\"symbol\":\"dev/sextant/extractor/FieldSampleItem#[]\"")));
+        assertTrue(scanFieldSample().stream().noneMatch(l -> l.contains("FieldSample#alternates.")
+            && l.contains("[][]")));
+    }
+
     /** The same claim through the other path: an array reached inside a generic argument
      *  is built from the Signature attribute rather than the descriptor, and the two must
      *  not disagree about whether an array says what it holds. */

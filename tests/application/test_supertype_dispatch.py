@@ -404,21 +404,20 @@ def test_a_dispatch_subclass_with_no_address_annotation_derives_nothing(tmp_path
 
 
 @pytest.mark.declines("jakarta-servlet")
-def test_a_class_overriding_service_derives_nothing(tmp_path: Path):
-    """CP-9 rows 14-15, verdict 8. `service(HttpServletRequest,
-    HttpServletResponse)` is the very method that reads the request's verb and
-    dispatches to `doXxx`; a class that overrides it serves GET and PUT alike
-    (200 and 200), so the verb map does not describe it. Applying the map
-    anyway would publish `GET` and withhold `PUT` — a WRONG answer, not a
-    partial one — which is why the bypass discards the class outright rather
-    than merely skipping the `service` member.
+def test_a_class_overriding_service_and_declaring_no_verb_derives_nothing(tmp_path: Path):
+    """CP-9 rows 14-15, verdict 8 as amended for `A-M2`.
+    `service(HttpServletRequest, HttpServletResponse)` is the very method that
+    reads the request's verb and dispatches to `doXxx`; a class that overrides
+    it **and declares no `doXxx` at all** serves GET and PUT alike (200 and
+    200), so the verb map does not describe it. Applying the map anyway would
+    publish `GET` and withhold `PUT` — a WRONG answer, not a partial one.
 
-    Paired positive: `test_one_row_per_declared_dispatch_override`, the same
-    class without the `service` override.
+    NO `doGet` here, and that is the correction: this test used to declare one
+    and assert nothing derived, which is the defect `A-M2` names rather than the
+    rule CP-9 measured. Its paired positive is now the test below.
     """
     facts = [
         _class(),
-        _method("doGet", REQUEST, RESPONSE),
         _method("service", REQUEST, RESPONSE),
         _annotated({"urlPatterns": ["/orders"]}),
     ]
@@ -426,16 +425,49 @@ def test_a_class_overriding_service_derives_nothing(tmp_path: Path):
     assert _rows(tmp_path, facts) == []
 
 
-@pytest.mark.declines("jakarta-servlet")
-def test_a_class_overriding_the_protocol_agnostic_service_derives_nothing(tmp_path: Path):
-    """The second bypass signature, and the reason `bypassed_by` is a LIST of
-    `{name, parameters}` rather than a list of names: `service(ServletRequest,
-    ServletResponse)` is a different method from the one above — same name,
-    different parameter types — and overriding it bypasses dispatch just as
-    completely."""
+@pytest.mark.parametrize(
+    ("request_type", "response_type"),
+    [(REQUEST, RESPONSE), (AGNOSTIC_REQUEST, AGNOSTIC_RESPONSE)],
+    ids=["protected-service", "public-protocol-agnostic-service"],
+)
+def test_a_wrapper_that_overrides_service_still_derives_the_verbs_it_declares(
+    tmp_path: Path, request_type: str, response_type: str
+):
+    """`A-M2`, the positive the bypass used to swallow. A cross-cutting wrapper
+    — `service()` overridden to add a header and then delegate through
+    `super.service(req, resp)`, with `doGet` declared — is the commonest real
+    form of a `service()` override, and it lost its WHOLE surface: address,
+    verbs and handlers.
+
+    Measured on all three CP-9 containers and BOTH `service` signatures (rows
+    35-40): such a class serves GET (200) and POST (200) and REFUSES PUT (405).
+    `HttpServlet`'s own dispatch still runs, so the verb table describes it
+    exactly, and the 405 is what says so — a class serving every verb alike
+    would have answered 200 there.
+
+    Both signatures are parametrized rather than reasoned across, for the
+    reason `A-M2` exists: `HttpServlet` has two `service` methods and a verdict
+    read against one must not be applied to the other."""
     facts = [
         _class(),
         _method("doGet", REQUEST, RESPONSE),
+        _method("service", request_type, response_type),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert [(row["method"], row["path"]) for row in _rows(tmp_path, facts)] == [("GET", "/orders")]
+
+
+@pytest.mark.declines("jakarta-servlet")
+def test_the_protocol_agnostic_service_alone_still_derives_nothing(tmp_path: Path):
+    """The second bypass signature's own near-miss, and the reason
+    `bypassed_by` is a LIST of `{name, parameters}` rather than a list of names:
+    `service(ServletRequest, ServletResponse)` is a different method from the
+    protected one — same name, different parameter types — and a class
+    overriding it with no `doXxx` has replaced the dispatch just as
+    completely."""
+    facts = [
+        _class(),
         _method("service", AGNOSTIC_REQUEST, AGNOSTIC_RESPONSE),
         _annotated({"urlPatterns": ["/orders"]}),
     ]
@@ -677,16 +709,19 @@ def test_a_javax_spelled_servlet_derives_nothing_from_the_jakarta_catalog(tmp_pa
 
 
 @pytest.mark.declines("javax-servlet")
-def test_a_javax_class_overriding_service_derives_nothing(tmp_path: Path):
+def test_a_javax_class_overriding_service_and_declaring_no_verb_derives_nothing(
+    tmp_path: Path,
+):
     """The bypass under the second spelling, pinned separately from the
     equivalence test above because `bypassed_by` is the block whose entries can
     be renamed wrongly and stay silent: a signature left naming the `jakarta`
     types would match nothing, the bypass would never fire, and this class
-    would publish `GET` while serving every verb alike (CP-9 rows 14-15)."""
-    facts = _javax_facts(
-        _method("doGet", _JAVAX["request"], _JAVAX["response"]),
-        _method("service", _JAVAX["request"], _JAVAX["response"]),
-    )
+    would publish nothing-shaped rows for a class serving every verb alike
+    (CP-9 rows 14-15).
+
+    No `doGet`, since `A-M2`: a `javax` wrapper that declares one derives it,
+    exactly as its `jakarta` twin does."""
+    facts = _javax_facts(_method("service", _JAVAX["request"], _JAVAX["response"]))
 
     assert _rows(tmp_path, facts, _javax_catalog()) == []
 

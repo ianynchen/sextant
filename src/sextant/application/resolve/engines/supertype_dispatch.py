@@ -52,12 +52,20 @@ second is false. It is a stated under-report in `docs/COVERAGE.md`, on the
 same terms as the identical ruling 2O Task 6 made for `derived_resource`, and
 it is falsified the day an endpoint row can name a handler outside the module.
 
-**A bypass discards the CLASS, never merely the member** (CP-9 verdict 8). A
-class overriding the supertype's own dispatch entry point has replaced the
-lookup the table describes: measured, it serves every operation alike. Deriving
-the table's entries for it anyway would publish the ones it names and withhold
-the ones it does not — a wrong answer, not a partial one — so the class derives
-nothing and `docs/COVERAGE.md` records the shape.
+**A bypass discards a class that declares NO member of the dispatch table**
+(CP-9 verdict 8, as amended for `A-M2`). A class overriding the supertype's own
+dispatch entry point and declaring nothing else has replaced the lookup the
+table describes: measured, it serves every operation alike, and deriving the
+table's entries for it would publish the ones it names and withhold the ones it
+does not — a wrong answer, not a partial one.
+
+**A class that overrides the entry point AND declares dispatch members derives
+them.** That qualifier was missing, and its absence cost such a class its whole
+surface. CP-9 rows 35-40 measure the shape on both `service` signatures and all
+three containers: a wrapper delegating through `super.service(req, resp)` with
+`doGet`/`doPost` declared serves GET and POST and refuses PUT — the dispatch
+still runs, and the table describes it exactly. §5.4 in one line: a verdict is
+bounded by the configuration it measured.
 """
 
 import json
@@ -151,8 +159,6 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
             # address is what a row asserts.
             continue
         members = members_by_class.get(implementer, {})
-        if bypass & set(members):
-            continue
         handlers = tuple(
             sorted(
                 (dispatch[selector], symbol)
@@ -160,6 +166,44 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
                 if selector in dispatch
             )
         )
+        if bypass & set(members) and not handlers:
+            # `A-M2`: `and not handlers` is the whole fix, and it is the
+            # CONFIGURATION the CP-9 verdict was measured against rather than
+            # the one it was applied to.
+            #
+            # What was measured (rows 14-15): a class overriding `service()`
+            # with NO `doXxx` anywhere serves GET and PUT alike, so the verb
+            # table describes nothing about it. What the verdict then said, and
+            # this branch enforced, was "a bypass discards the CLASS" — applied
+            # to every `service()` override, including the commonest real form.
+            #
+            # What that form actually does, now measured on all three
+            # containers and BOTH `service` signatures (rows 35-40): a
+            # cross-cutting wrapper that calls `super.service(req, resp)` and
+            # declares `doGet`/`doPost` serves GET (200) and POST (200) and
+            # REFUSES PUT (405). `HttpServlet`'s own dispatch still runs and the
+            # table describes that class exactly — so discarding it lost the
+            # class's WHOLE surface, address, verbs and handlers, where the
+            # table was right.
+            #
+            # With the qualifier, this branch reaches only classes the
+            # `not handlers` branch below would reach anyway, so it changes no
+            # outcome on its own. It is kept rather than deleted because the two
+            # say different things: this one records the MEASURED rule about
+            # `service()`, and the one below records "registered, and serving
+            # nothing the table describes" — a class with no bypass member at
+            # all. Deleting either would leave a reader unable to tell which
+            # reason applied.
+            #
+            # STILL UNMEASURED, and the residual this narrowing accepts: a
+            # `service()` override that does NOT delegate and declares `doXxx`
+            # anyway. Its `doXxx` methods may be unreachable, and we now publish
+            # them. Nothing in the fact stream separates it from rows 35-40 —
+            # the distinguishing fact is a `super.service(...)` call,
+            # `invoke_kind: special` on an `HttpServlet#service` target — and
+            # the catalog would need `call_site` in `requires` to see it.
+            # Stated in `docs/COVERAGE.md`.
+            continue
         if not handlers:
             # Registered, and serving nothing the table describes. "The
             # registration is the evidence" needs both conjuncts.

@@ -1270,7 +1270,15 @@ def _member_facts(root: Path, gated: bool = True) -> None:
     )
     owner = "com/acme/rpc/MemberService#"
     facts: list[object] = [
-        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS)
+        SymbolFact(
+            document_id="doc_1",
+            symbol=owner,
+            construct_kind=ConstructKind.CLASS,
+            # Capability 9.13's erased edge, always written — the base's own
+            # facts are what decide whether the walk finds anything, and a
+            # superclass no document declares simply ends it (`A-M15`).
+            superclass="com/acme/rpc/AbstractMemberService#",
+        )
     ]
     if gated:
         facts.append(
@@ -1332,8 +1340,51 @@ def _member_facts(root: Path, gated: bool = True) -> None:
     write_fact_file(root / "MemberService.jsonl", document, facts)
 
 
-def _member_paths(tmp_path: Path, catalog: Catalog, gated: bool = True) -> set[str]:
+def _member_base_facts(root: Path, base_visibility: str = "public") -> None:
+    """`A-M15`: the gated class gains a plain, UNANNOTATED superclass declaring
+    one public method of its own.
+
+    A separate fact file rather than a parameter on `_member_facts`, so every
+    test above sees exactly the facts it always did and the inheritance case
+    differs from them in one addition."""
+    document = Document(
+        document_id="doc_base",
+        relative_path="com/acme/rpc/AbstractMemberService.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:c",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    base = "com/acme/rpc/AbstractMemberService#"
+    write_fact_file(
+        root / "AbstractMemberService.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_base", symbol=base, construct_kind=ConstructKind.CLASS),
+            SymbolFact(
+                document_id="doc_base",
+                symbol=f"{base}refund(sig_b17e0011).",
+                construct_kind=ConstructKind.METHOD,
+                enclosing=base,
+                visibility=base_visibility,
+                modifiers={},
+            ),
+        ],
+    )
+
+
+def _member_paths(
+    tmp_path: Path, catalog: Catalog, gated: bool = True, base: str | None = None
+) -> set[str]:
     _member_facts(tmp_path / "facts", gated)
+    if base is not None:
+        _member_base_facts(tmp_path / "facts", base)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
@@ -1372,6 +1423,50 @@ def test_a_class_gate_derives_every_public_member_that_no_rule_claims(tmp_path: 
     paths = _member_paths(tmp_path, _member_catalog(members="public_methods"))
 
     assert "bare" in paths
+
+
+def test_a_gated_classes_inherited_public_method_is_an_exposed_member(tmp_path: Path):
+    """`A-M15`, the positive half. "The public methods of C" is not "the public
+    methods DECLARED in C" (JLS 8.2), and the member join asked `s.enclosing`
+    — so a gated class extending a plain base published none of the base's
+    operations, silently, with no COVERAGE row.
+
+    The catalog whose comment this contradicts is `jakarta-jws.yml`, which
+    argues at length that an unannotated public method IS an operation — "a
+    catalog that derived only the annotated methods would report a service
+    missing one of its own operations" — and the join then made exactly that
+    mistake one axis over.
+
+    Measured, not read off the specification's wording (CP-13 Q3, jaxws-rt
+    4.0.2): `RuntimeModeler.processClass` walks the implementor's
+    `Class.getMethods()`, which returns inherited public methods, and drops
+    only those declared by `java.lang.Object`.
+
+    `refund` is on the base and carries no annotation; `bare` is on the class
+    itself. Both derive, which is what says the widening ADDED the inherited
+    member rather than replacing the declared one."""
+    paths = _member_paths(tmp_path, _member_catalog(members="public_methods"), base="public")
+
+    assert {"bare", "refund"} <= paths
+
+
+def test_an_inherited_method_that_is_not_public_is_not_an_exposed_member(tmp_path: Path):
+    """`A-M15`'s near-miss, and the conjunct a widened join is most likely to
+    lose: the exclusions apply to an INHERITED member exactly as they do to a
+    declared one. `refund` is the same method in the same place, one cell
+    different — `visibility: other` — and it is not callable from outside the
+    type, so it is not exposed.
+
+    Identical to the positive in every other respect, so it measures the
+    visibility filter and nothing else, and it discriminates: dropping
+    `s.visibility = 'public'` from the member rule makes this fail with a
+    `refund` operation the container does not serve. The class's own `bare` is
+    asserted present in both, which is what stops this passing because the walk
+    found nothing at all."""
+    paths = _member_paths(tmp_path, _member_catalog(members="public_methods"), base="other")
+
+    assert "bare" in paths
+    assert "refund" not in paths
 
 
 def test_a_member_level_rule_overrides_the_member_rule_for_the_member_it_names(

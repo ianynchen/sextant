@@ -29,9 +29,29 @@ public final class TypeRefs {
     static String descriptorName(Type type) {
         return switch (type.getSort()) {
             case Type.OBJECT -> type.getInternalName() + "#";
-            case Type.ARRAY -> descriptorName(type.getElementType()) + "[]";
+            // ONE dimension per step, never `getElementType()` (`A-M10`). ASM's
+            // `Type#getElementType` returns an array's INNERMOST element type, not its
+            // component type, so `descriptorName(getElementType()) + "[]"` appended exactly
+            // one `[]` however many the descriptor carried: `String[][]` and `String[]`
+            // produced byte-identical facts. JVMS 4.3.2 and JLS 10.1 make the number of
+            // `[` part of the type's identity — `[[Ljava/lang/String;` is an array whose
+            // COMPONENT type is `[Ljava/lang/String;` — so a DR-5 contract comparison of a
+            // caller sending `String[][]` against a callee expecting `String[]` read equal.
+            // Dropping the leading `[` and recursing is that sentence: it is what
+            // `NodeCollector.visitArrayType` below already does on the signature path,
+            // which is why the two seams disagreed with each other.
+            case Type.ARRAY -> descriptorName(componentType(type)) + "[]";
             default -> type.getClassName() + "#";
         };
+    }
+
+    /** An array's COMPONENT type — one dimension less, which is what JVMS 4.3.2 means by
+     *  a component — as against ASM's own {@code getElementType()}, which strips every
+     *  dimension at once. Spelled out here rather than inlined at its two call sites
+     *  because getting it wrong is silent in both: the fact is well formed and names a
+     *  different type. */
+    private static Type componentType(Type array) {
+        return Type.getType(array.getDescriptor().substring(1));
     }
 
     /** Generic return type from the Signature attribute, or null when absent. Walked by the
@@ -159,8 +179,12 @@ public final class TypeRefs {
      *  expecting records. A collection expressed as {@code List<E>} has carried its element
      *  since D00 §5a; an array is the same claim in different syntax. */
     private static List<String> elementArguments(Type type) {
+        // `componentType`, not `getElementType()` (`A-M10`): a `String[][]` holds ONE
+        // `String[]`, and reporting it as holding a `String` is the same lost dimension
+        // `descriptorName` had — reached through the argument list instead of the symbol,
+        // and read by `shapes/expansion.py::_described`, which hashes what it finds.
         return type.getSort() == Type.ARRAY
-            ? List.of(toJson(nodeFromType(type.getElementType())))
+            ? List.of(toJson(nodeFromType(componentType(type))))
             : List.of();
     }
 

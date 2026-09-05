@@ -110,11 +110,28 @@ matches:
       parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
       method: TRACE
 
-  # OVERRIDING `service()` REPLACES THE DISPATCH ITSELF, so the table above
-  # describes nothing about such a class: CP-9 rows 14-15 measured GET and PUT
-  # both served by one `service` override, where the table would have claimed
-  # GET and denied PUT. A wrong answer, not a partial one — so the class
-  # derives NOTHING and docs/COVERAGE.md records the shape.
+  # OVERRIDING `service()` AND DECLARING NO `doXxx` REPLACES THE DISPATCH
+  # ITSELF, so the table above describes nothing about such a class: CP-9 rows
+  # 14-15 measured GET and PUT both served by one `service` override, where the
+  # table would have claimed GET and denied PUT. A wrong answer, not a partial
+  # one — so the class derives NOTHING and docs/COVERAGE.md records the shape.
+  #
+  # **The qualifier is the fix for `A-M2`, and it is about the CONFIGURATION
+  # rows 14-15 measured rather than about the rule.** `ServiceOnlyServlet`
+  # declares no `doXxx` at all, and the verdict was then applied to every
+  # `service()` override — including the commonest real form, a cross-cutting
+  # wrapper that calls `super.service(req, resp)` and declares `doGet`/`doPost`.
+  # CP-9 rows 35-40 now measure that form on all three containers and BOTH
+  # `service` signatures: GET 200, POST 200, **PUT 405**. `HttpServlet`'s own
+  # dispatch still runs, the table describes such a class exactly, and
+  # discarding it lost its WHOLE surface — address, verbs and handlers.
+  #
+  # The residual the narrowing accepts, stated in COVERAGE: a `service()`
+  # override that does NOT delegate and declares `doXxx` anyway. Its `doXxx`
+  # methods may be unreachable and we now publish them. The distinguishing fact
+  # is a `super.service(...)` call — `invoke_kind: special` on an
+  # `HttpServlet#service` target — and reading it needs `call_site` in
+  # `requires`, which this catalog does not have.
   #
   # Both overloads, because they are two different methods (`HttpServlet`
   # declares `protected service(HttpServletRequest, HttpServletResponse)` and

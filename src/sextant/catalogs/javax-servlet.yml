@@ -70,7 +70,13 @@ matches:
       method: TRACE
 
   # Both overloads, because they are two different methods and overriding
-  # either replaces the dispatch the table above describes (CP-9 rows 14-15).
+  # either replaces the dispatch the table above describes — WHERE THE CLASS
+  # DECLARES NO `doXxx` (CP-9 rows 14-15, as qualified for `A-M2`). A class
+  # that also declares dispatch members derives them: rows 35-40 measure a
+  # delegating wrapper on both signatures and all three containers serving
+  # GET/POST and refusing PUT. `jakarta-servlet.yml` carries the full reasoning
+  # and the stated residual; it applies here unchanged, under the other
+  # package spelling.
   bypassed_by:
     - name: service
       parameters: [javax.servlet.http.HttpServletRequest, javax.servlet.http.HttpServletResponse]
