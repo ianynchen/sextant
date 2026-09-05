@@ -205,6 +205,52 @@ own merits: they would turn D02's catalog schema into a public API, after which
 every schema change is a breaking change for users.
 
 
+### The order after round 1, ruled 2026-09-05
+
+Agreed with the user after the sweep landed. Recorded because the sweep's
+backlogs are durable (`docs/principles-sweep-2026-09-05.md` §6.2, §6.3) and
+until now the STAGE that consumes them was not.
+
+1. **Round 1b** — the sixteen Class A Majors, then a review of the whole of
+   round 1 (Criticals and Majors together).
+2. **Round 2** — the twenty-three Class A Minors. All addressed; none deferred.
+3. **Finish 2O** — Tasks 8-13.
+4. **The combined per-catalog pass** — see below. Moved AHEAD of the
+   documentation debt on the user's ruling: confidence in the output matters
+   more than honest documents about it.
+5. **The documentation-debt checkpoint** — the section that follows.
+
+### The combined per-catalog pass — stage 4
+
+**Measurement and near-miss coverage are one pass, not two.** §6.2 lists 31 of
+52 catalogs whose rule was never checked against the real framework; §6.3 lists
+33 with no test proving they DECLINE, and 8 of 11 engine styles with no such
+test at all. Both questions need the same jar open, the same framework source
+read, and the same rule understood — so run them per catalog, together. The
+measurement is also what tells you which near-miss is worth writing.
+
+**This is detection, not verification, and must be sized as such.** The
+Spring Cloud Stream fabrication survived every review it ever had and died the
+moment someone asked what the catalog does when it should not match. Scheduled
+as a review pass it would be cut when time is short; it is build work that
+produces defects.
+
+**It is also where round 1a's four deliberate residuals close.** Each already
+carries a COVERAGE row stating what would falsify it and what would close it;
+this is the stage that runs those probes:
+
+| residual | COVERAGE | closes by |
+|---|---|---|
+| A controller whose stereotype is inherited from a `@Controller` superclass or interface | `:802` | measuring whether component scan admits such a subclass (`@Component` is not `@Inherited`), then walking `superclasses`/`implementations` for the gate. Probe rank 1 |
+| Spring Cloud Stream's bean conjunct — a `Function`/`Consumer`/`Supplier` that is not a registered bean | `:1530` | measuring the `@Bean`/programmatic `FunctionRegistry` registration. Probe rank 3 |
+| `@ServerEndpoint` with no `@OnMessage` — a real served endpoint deriving nothing | `:1272-1275` | listing the lifecycle annotations. Probe rank 4 |
+| Spring RSocket published as `websocket`, since `@MessageMapping` is also RSocket's routing annotation and an RSocket controller is a `@Controller` too | `:1278-1282` | verifying what a real RSocket controller derives |
+
+None of the four is a wrong row today: three are silences and the fourth is a
+mislabelled protocol whose behaviour is unverified. All four were left open
+rather than guessed, under §8.1 rule 4 — deriving on half a measured rule adds
+rows on the framework's behalf under conditions nobody checked.
+
 ### The documentation-debt checkpoint — immediately after 2O, before 2P
 
 **Ruled 2026-09-05 (user).** Sweep 3 found the component documents describe a
