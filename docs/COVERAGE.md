@@ -972,6 +972,38 @@ error — the shape it costs is rarer than the concrete-class fabrication it fix
 **falsified by** any module shipping local fallbacks for its Retrofit or `@HttpExchange`
 services. Closes when the fence can be declared separately from the construct gate.
 
+**`RestClient` and `WebClient` now read all eight of their request-starting methods**
+(`A-M3`, principles sweep §3.3). Both catalogs declared five — GET/POST/PUT/DELETE/PATCH,
+which is exactly the verb vocabulary `fixtures/orders-service` happens to use — while both
+clients declare eight at spring-web/spring-webflux 6.1.6 **and** 7.0.2 (CP-12 Q1/Q3,
+`scripts/probes/cp12_sweep_round1b.md`). The cost of a missing root is total rather than
+partial: a chain whose first call matches no root is never rooted, so nothing reaches a
+terminal and `webClient.head().uri("/health").retrieve()` produced no row at all, with no
+boundary stated anywhere. `head()` and `options()` now derive their own verb.
+**`method(HttpMethod)` derives the call without the verb**: its argument is an enum constant
+and `string_constants` reads string literals, so the capture is reached and unreadable and the
+row ships with its address at `resolution: unresolved`, `method: NULL` — the same answer an
+unreadable OkHttp verb argument gets. Withholding it instead would trade nothing for a silent
+drop. **Falsified by** a module whose only outbound call is `.method(...)` and which expects a
+verb; that closes when the fact stream carries an enum constant's own name, with no catalog
+change.
+
+**`WebClient`'s terminal set was wrong in both directions at once, and the file stated no
+version** (`A-M4`). It declared `terminal: [retrieve, exchange]`. Measured (CP-12 Q2):
+`exchangeToMono`/`exchangeToFlux` are the exchange-style terminals at 6.1.6 and the ONLY ones
+at 7.0.2 — recommended since 5.3 — and were in the list at neither version, so a module using
+them had its whole WebClient surface absent; while `exchange()` is declared and was **removed**
+in Spring 7. Both are now declared, and the reasoning for keeping `exchange` is asymmetry: at
+7.0.2 no call site can name a method the jar does not declare, so a dead entry costs no row
+where a missing one costs every 6.1.6 chain. `spring-restclient.yml` said "no `exchange` on
+this synchronous surface" about a type declaring two `exchange` overloads at both minors, plus
+`exchangeForRequiredValue` at 7.0.2; all three are now terminals, and the reactive pair is
+deliberately NOT copied across — that is the difference between the two twins.
+
+The versions each list was read against are recorded in the catalogs themselves and pinned by
+`tests/architecture/test_sweep_round1b_framework_surfaces.py`, which asserts against the
+**7.0.2** column rather than the union so that a dead entry is never made compulsory.
+
 | Language | Library | Shape | Tier |
 |---|---|---|---|
 | Java | Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange` | `annotation` | ✅ shipped |

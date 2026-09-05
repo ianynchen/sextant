@@ -14,6 +14,20 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **CP-12: the framework surfaces the round-1b fix pass mirrors are measured**
+  (`scripts/probes/cp12_sweep_round1b.md`). Eight Class A Majors share one shape — the catalog
+  encodes a SUBSET of the framework's surface and no COVERAGE row names the rest — and CP-10's
+  green table could not have caught any of them, because it asks whether every descriptor a
+  catalog declares names a real method and never whether the framework declares one the catalog
+  does not (`A-Mi5`). CP-12 asks that second question twelve times, and every answer is the
+  framework's WHOLE set: `WebClient`/`RestClient`'s request starters and response-obtaining
+  methods, Retrofit's method-targeted annotations with what each declares, every
+  `KafkaProducer.send`, `KafkaConsumer.subscribe`/`assign` and `KafkaTemplate.send` overload,
+  every `jakarta.jms.Session` receiver factory, `@SqsListener`'s attributes and its `@AliasFor`
+  pair, and both WebFlux router DSLs' per-verb factories. Two Spring minors rather than one,
+  because `A-M4` is a version finding in both directions at once. `tests/architecture/
+  test_sweep_round1b_framework_surfaces.py` is the offline half.
+
 - **CP-11: the four framework rules the principles-sweep fix pass mirrors are measured**
   (`scripts/probes/cp11_sweep_round1.md`). Each of `A-C2`, `A-C7`, `A-C1` and `A-C6` encoded a
   framework rule taken from documentation, a checkpoint note or memory, and each was plausible
@@ -177,6 +191,23 @@ here would restate those documents rather than add anything.
   two halves would otherwise concatenate bare.
 
 ### Fixed
+
+- **`A-M3` / `A-M4`: the two Spring HTTP clients knew five of eight verbs, and a terminal set
+  that was wrong at both measured Spring minors** (principles sweep §3.3). `spring-webclient.yml`
+  and `spring-restclient.yml` each declared five request-starting roots —
+  GET/POST/PUT/DELETE/PATCH, exactly the verb vocabulary the fixture happens to use — while both
+  clients declare eight at 6.1.6 and 7.0.2 (CP-12 Q1/Q3). A chain rooted on an undeclared starter
+  is never rooted at all, so `webClient.head().uri("/health").retrieve()` derived NO row and
+  nothing said so. `head()` and `options()` now derive their own verb; `method(HttpMethod)`
+  derives its address at `unresolved` with `method: NULL`, because its verb is an enum constant
+  a string-literal scanner cannot read and withholding the call entirely would trade nothing for
+  a silent drop. WebClient's `terminal: [retrieve, exchange]` was wrong in both directions at
+  once: `exchangeToMono`/`exchangeToFlux` were in the list at neither version and are the only
+  exchange-style terminals at 7.0.2, while `exchange` was **removed** in Spring 7. And
+  `spring-restclient.yml` stated "no `exchange` on this synchronous surface" about a type
+  declaring two `exchange` overloads at both minors. Every list is now measured, version-scoped
+  in the catalog, and pinned against the **7.0.2** column so a dead entry is never made
+  compulsory.
 
 - **`A-C8`: ARCHITECTURE said redaction happens during extraction; it does not** (principles
   sweep §3.2). Masking runs at the two EXITS — `render` and `export` — and the workspace holds

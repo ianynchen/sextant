@@ -10,13 +10,37 @@ detect:
 requires: [call_site, string_constants, chain_reconstruction]
 
 matches:
+  # MEASURED, at spring-webflux 6.1.6 and 7.0.2 (CP-12 Q1,
+  # `scripts/probes/cp12_sweep_round1b.md`): `WebClient` declares exactly these
+  # EIGHT request-starting methods — the seven named verbs and the generic
+  # `method(HttpMethod)` — and the set is identical at both minors. This list
+  # previously held five, which was the fixture's verb vocabulary rather than
+  # the framework's (`A-M3`), and the cost is total rather than partial: a
+  # chain rooted on an undeclared starter is never rooted, so nothing reaches a
+  # terminal and NO row is derived (`fluent.py`'s own contract). Pinned by
+  # `tests/architecture/test_sweep_round1b_framework_surfaces.py` against the
+  # probe, so a ninth starter fails the suite instead of going quiet.
   roots:
-    - { owner: org.springframework.web.reactive.function.client.WebClient, method: get,    captures: { http_method: GET } }
-    - { owner: org.springframework.web.reactive.function.client.WebClient, method: post,   captures: { http_method: POST } }
-    - { owner: org.springframework.web.reactive.function.client.WebClient, method: put,    captures: { http_method: PUT } }
-    - { owner: org.springframework.web.reactive.function.client.WebClient, method: delete, captures: { http_method: DELETE } }
-    - { owner: org.springframework.web.reactive.function.client.WebClient, method: patch,  captures: { http_method: PATCH } }
-  # `retrieve`/`exchange` mark the chain executable, not the walk's end:
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: get,     captures: { http_method: GET } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: head,    captures: { http_method: HEAD } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: post,    captures: { http_method: POST } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: put,     captures: { http_method: PUT } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: patch,   captures: { http_method: PATCH } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: delete,  captures: { http_method: DELETE } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: options, captures: { http_method: OPTIONS } }
+    # The generic starter, and the one whose verb this scanner cannot read:
+    # `method(HttpMethod)` takes an ENUM CONSTANT, and `string_constants` reads
+    # string literals. `arg0` is still the right spelling — the same grammar
+    # okhttp's `method(String, RequestBody)` uses — because it says the verb
+    # comes from the call site: reached, and unreadable. The row ships with the
+    # address it really does call and `method: NULL` at `unresolved` (ruling
+    # I1), never a verb nothing evidenced. Declaring no root at all was the
+    # alternative and it is worse: the whole call disappeared.
+    #
+    # This becomes a resolved verb, with no change to this file, the day the
+    # fact stream carries an enum constant's own name.
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: method,  captures: { http_method: arg0 } }
+  # `retrieve`/`exchange*` mark the chain executable, not the walk's end:
   # `bodyToMono`/`bodyToFlux` follow `retrieve` in every real chain, so the
   # engine keeps folding step captures past a terminal (D02 §4, Task 11).
   steps:
@@ -35,7 +59,29 @@ matches:
     - { method: body,       captures: { body: arg0 } }
     - { method: bodyToMono, captures: { response: arg0 } }
     - { method: bodyToFlux, captures: { response: arg0, response_is: array } }
-  terminal: [retrieve, exchange]
+  # MEASURED per Spring minor, and it is the one place in this file where the
+  # two minors DISAGREE (CP-12 Q2). `WebClient$RequestHeadersSpec`'s
+  # response-obtaining methods — the ones returning anything other than the
+  # spec itself, which is the framework's own way of saying "this executes the
+  # request" — are:
+  #
+  #   spring-webflux 6.1.6  retrieve, exchangeToMono, exchangeToFlux, exchange
+  #   spring-webflux 7.0.2  retrieve, exchangeToMono, exchangeToFlux
+  #
+  # This list was `[retrieve, exchange]` and stated no version, and it was
+  # wrong in BOTH directions at once (`A-M4`): `exchangeToMono`/`exchangeToFlux`
+  # — the only exchange-style terminals at 7.0.2, and the recommended ones
+  # since 5.3 — were absent at every version, so a module using them had its
+  # whole WebClient surface missing; and `exchange` is declared at a version
+  # that does not have it.
+  #
+  # `exchange` STAYS, and the reason is that a dead entry and a missing one are
+  # not symmetric here: at 7.0.2 no call site can name a method the jar does
+  # not declare, so the entry matches nothing and costs no row, while removing
+  # it would drop every 6.1.6 module's `.exchange()` chain. It is dead data at
+  # 7.0.2, not a wrong row, and it is removable the day 6.1.6 leaves the
+  # measured scope.
+  terminal: [retrieve, exchangeToMono, exchangeToFlux, exchange]
   type_carriers: [org.springframework.core.ParameterizedTypeReference]
   # Which annotations carry configuration onto a field, a constructor
   # parameter or a whole properties type — the field ladder's own vocabulary

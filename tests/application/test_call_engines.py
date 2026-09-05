@@ -3616,6 +3616,209 @@ def test_a_verb_argument_nothing_can_read_derives_no_verb_rather_than_the_roots_
     ]
 
 
+# --- `A-M3`/`A-M4` (principles sweep §3.3): the two Spring HTTP clients ------
+#
+# Both catalogs were built from the five verbs the fixture happened to use.
+# CP-12 Q1/Q3 give the framework's whole request-starting surface at
+# spring-webflux and spring-web 6.1.6 and 7.0.2 — EIGHT methods on each client
+# — and Q2/Q4 give the response-obtaining set, which is where `A-M4` lives:
+# `exchange()` is declared and does not exist at 7.0.2, while
+# `exchangeToMono`/`exchangeToFlux` are in the list at no version at all.
+#
+# The facts use the frameworks' real symbols, unlike the invented catalog
+# above: these run against the SHIPPED files, so the owner a root matches on
+# has to be the one the catalog names.
+
+_WEBCLIENT_FQN = "org/springframework/web/reactive/function/client/WebClient#"
+_WEBCLIENT_SPEC = (
+    "org/springframework/web/reactive/function/client/WebClient$RequestHeadersUriSpec#"
+)
+_RESTCLIENT_FQN = "org/springframework/web/client/RestClient#"
+_RESTCLIENT_SPEC = "org/springframework/web/client/RestClient$RequestHeadersUriSpec#"
+
+
+def _spring_client_chain(
+    caller: str,
+    client: str,
+    spec: str,
+    starter: str,
+    terminal: str,
+    starter_arguments: list | None = None,
+) -> list:
+    """`client.<starter>().uri("/health").<terminal>()` — the shape both Spring
+    HTTP clients share, spelled once so a positive and its near-miss differ in
+    exactly one cell."""
+    return [
+        _call(caller, client, starter, 0, receiver=3, result=4, arguments=starter_arguments),
+        _call(
+            caller,
+            spec,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/health")],
+        ),
+        _call(caller, spec, terminal, 2, receiver=10, result=13),
+    ]
+
+
+def _shipped(catalog_id: str) -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == catalog_id)
+
+
+def test_webclient_head_and_options_start_a_request_the_way_get_does(tmp_path: Path):
+    """`A-M3`, the positive half. `WebClient` declares eight request-starting
+    methods (CP-12 Q1, spring-webflux 6.1.6 and 7.0.2) and the catalog declared
+    five. A chain rooted on one of the missing three is never rooted at all —
+    `fluent.py:21`, no root means no walk — so `webClient.head().uri(…)`
+    derived NO outbound row, and `docs/COVERAGE.md` listed the catalog
+    "✅ shipped" with no boundary beside it."""
+    webclient = _shipped("spring-webclient")
+    derived = {}
+    for starter, verb in (("head", "HEAD"), ("options", "OPTIONS")):
+        caller = f"com/acme/http/Client#{starter}()."
+        workspace = _resolve_fluent(
+            tmp_path / starter,
+            _spring_client_chain(caller, _WEBCLIENT_FQN, _WEBCLIENT_SPEC, starter, "retrieve"),
+            webclient,
+        )
+        rows = workspace.query("endpoints")
+        workspace.close()
+        derived[verb] = [(r["method"], r["path"], r["resolution"], r["evidence"]) for r in rows]
+
+    assert derived == {
+        "HEAD": [("HEAD", "/health", "resolved", "compiler")],
+        "OPTIONS": [("OPTIONS", "/health", "resolved", "compiler")],
+    }
+
+
+@pytest.mark.declines("spring-webclient")
+def test_a_webclient_method_the_framework_does_not_declare_roots_nothing(tmp_path: Path):
+    """`A-M3`, the near-miss. The fix is to mirror the framework's request
+    starters, not to root on any nullary call: `WebClient` declares no `trace()`
+    (CP-12 Q1 lists all eight, and TRACE is not among them), so a chain
+    beginning with one is not a request this client can start and must derive
+    nothing.
+
+    It discriminates: the positive above differs from this only in the root's
+    method name, and rooting on an undeclared name would derive a row here."""
+    caller = "com/acme/http/Client#trace()."
+    workspace = _resolve_fluent(
+        tmp_path,
+        _spring_client_chain(caller, _WEBCLIENT_FQN, _WEBCLIENT_SPEC, "trace", "retrieve"),
+        _shipped("spring-webclient"),
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_webclients_exchange_terminals_are_the_ones_spring_7_still_has(tmp_path: Path):
+    """`A-M4`, the positive half. The catalog declared `terminal: [retrieve,
+    exchange]` and stated no version. Both entries were wrong at once (CP-12
+    Q2): `exchange()` exists at spring-webflux 6.1.6 and is REMOVED at 7.0.2,
+    and `exchangeToMono`/`exchangeToFlux` — the only exchange-style terminals
+    at 7.0.2, and the recommended ones since 5.3 — were in the list at neither
+    version, so a module using them had its whole WebClient surface absent.
+
+    A chain that reaches no terminal derives nothing at all, which is why this
+    asserts a derived row rather than a column value."""
+    webclient = _shipped("spring-webclient")
+    derived = {}
+    for terminal in ("exchangeToMono", "exchangeToFlux"):
+        caller = f"com/acme/http/Client#{terminal}()."
+        workspace = _resolve_fluent(
+            tmp_path / terminal,
+            _spring_client_chain(caller, _WEBCLIENT_FQN, _WEBCLIENT_SPEC, "get", terminal),
+            webclient,
+        )
+        rows = workspace.query("endpoints")
+        workspace.close()
+        derived[terminal] = [(r["method"], r["path"], r["resolution"]) for r in rows]
+
+    assert derived == {
+        "exchangeToMono": [("GET", "/health", "resolved")],
+        "exchangeToFlux": [("GET", "/health", "resolved")],
+    }
+
+
+def test_a_webclient_chain_that_never_executes_derives_nothing(tmp_path: Path):
+    """`A-M4`'s near-miss, and it is the reason the terminal list exists at all:
+    `terminal` is what separates a request that is ISSUED from a spec that was
+    built and dropped. A chain ending at `uri` reaches no terminal and derives
+    nothing — which is also what makes the positive above a real assertion
+    rather than one that would pass on any chain."""
+    caller = "com/acme/http/Client#builtAndDropped()."
+    facts = _spring_client_chain(caller, _WEBCLIENT_FQN, _WEBCLIENT_SPEC, "get", "exchangeToMono")[
+        :2
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("spring-webclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_restclient_head_and_options_start_a_request_the_way_get_does(tmp_path: Path):
+    """`A-M3` on WebClient's synchronous twin: `RestClient` declares the same
+    eight request starters (CP-12 Q3) and `spring-restclient.yml` declared the
+    same five."""
+    restclient = _shipped("spring-restclient")
+    derived = {}
+    for starter, verb in (("head", "HEAD"), ("options", "OPTIONS")):
+        caller = f"com/acme/http/Sync#{starter}()."
+        workspace = _resolve_fluent(
+            tmp_path / starter,
+            _spring_client_chain(caller, _RESTCLIENT_FQN, _RESTCLIENT_SPEC, starter, "retrieve"),
+            restclient,
+        )
+        rows = workspace.query("endpoints")
+        workspace.close()
+        derived[verb] = [(r["method"], r["path"], r["resolution"]) for r in rows]
+
+    assert derived == {
+        "HEAD": [("HEAD", "/health", "resolved")],
+        "OPTIONS": [("OPTIONS", "/health", "resolved")],
+    }
+
+
+def test_a_verb_held_in_an_enum_constant_derives_the_call_without_the_verb(tmp_path: Path):
+    """`A-M3`'s third missing starter, and the one that cannot resolve.
+    `method(HttpMethod)` is a real request starter on both clients (CP-12
+    Q1/Q3), but its verb is an ENUM CONSTANT rather than a string literal, and
+    `string_constants` reads string literals — so the capture is reached and
+    unreadable.
+
+    That is `resolution: unresolved` with `method` NULL and the address intact,
+    which is ruling I1 and exactly what an unreadable OkHttp verb argument
+    already does. The row must SHIP: the module really does call `/health` over
+    HTTP, and withholding it trades nothing for a silent drop. It must NOT be
+    `resolved`: a NULL verb beside `resolved` would claim the call has no verb,
+    which is a different and equally wrong statement.
+
+    This stops being the right answer the day the fact stream carries an enum
+    constant's own name, at which point the verb becomes readable here with no
+    catalog change."""
+    caller = "com/acme/http/Sync#dynamic()."
+    facts = _spring_client_chain(
+        caller,
+        _RESTCLIENT_FQN,
+        _RESTCLIENT_SPEC,
+        "method",
+        "retrieve",
+        starter_arguments=[CallArgument(kind="unresolved")],
+    )
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("spring-restclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["path"], r["resolution"]) for r in rows] == [
+        (None, "/health", "unresolved")
+    ]
+
+
 # --- Task 8 (2E-prep): `when` — the value-guarded step (D02 §2's fluent) ---
 #
 # Checkpoint-confirmed (task-6-report.md javap evidence, reviewer-reproduced):
