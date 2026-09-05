@@ -98,6 +98,35 @@ def marked_tests() -> dict[str, list[str]]:
     return found
 
 
+def pinning_tests() -> dict[str, list[str]]:
+    """`file:line:name` -> the guard ids it names, for every test carrying a
+    `pins` marker — with or without a `declines` marker beside it.
+
+    `marked_tests()`' superset, and the two answer different questions.
+    `declines` names a shipped CATALOG, so a near-miss written against an
+    INVENTED catalog — which is how every engine-vocabulary mechanism in
+    `test_endpoints.py` is tested, deliberately, so that a test pins a
+    mechanism rather than a framework — carries no `declines` marker and is
+    invisible to `marked_tests()`. It still names a guard, and
+    `scripts/guard_check.py::pinned_tests` still runs it.
+
+    Reading the narrower set here is what let a registered guard read as
+    "named by no test" while the harness was measuring it: the two halves of
+    one mechanism disagreed about what naming means. They agree now.
+    """
+    found: dict[str, list[str]] = {}
+    for path in sorted(TESTS.rglob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            pins = _ids(node, "pins")
+            if not pins:
+                continue
+            found[f"{path.relative_to(REPO)}:{node.lineno}:{node.name}"] = pins
+    return found
+
+
 def _ids(node: ast.FunctionDef | ast.AsyncFunctionDef, marker: str) -> list[str]:
     """The string arguments of every `@pytest.mark.<marker>(...)` decorator."""
     ids = []
@@ -135,7 +164,7 @@ def test_every_pins_marker_names_a_guard_that_exists():
     define declares a measurement nobody can run — a name existing where a
     mechanism does not, which is §5.3 exactly."""
     phantom = {
-        where: ids for where, ids in marked_tests().items() if set(ids) - set(guard_check.GUARDS)
+        where: ids for where, ids in pinning_tests().items() if set(ids) - set(guard_check.GUARDS)
     }
     assert phantom == {}, (
         "`pins` markers naming guards scripts/guard_check.py does not define:\n"
@@ -156,7 +185,7 @@ def test_every_registered_guard_is_named_by_some_test():
     backlog, `docs/principles-sweep-2026-09-05.md`'s S1-MAJ-1), not as an entry
     here that looks measured.
     """
-    named = {guard_id for ids in marked_tests().values() for guard_id in ids}
+    named = {guard_id for ids in pinning_tests().values() for guard_id in ids}
     unused = sorted(set(guard_check.GUARDS) - named)
     assert unused == [], (
         "these guards are registered in scripts/guard_check.py and named by no test:\n"

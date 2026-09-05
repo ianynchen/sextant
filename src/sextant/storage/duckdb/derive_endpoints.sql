@@ -329,24 +329,108 @@ gate_types AS (
 -- construction rather than by naming it — which is what keeps the rule
 -- language-blind (ARCHITECTURE §10) while mirroring the framework exactly.
 --
--- `UNION`, not `UNION ALL`: it deduplicates, so a fact stream that disagreed
--- with its own language about cyclic inheritance terminates here instead of
--- looping. That is `_reach`'s `seen` guard said in SQL, and for the same
--- reason — these are facts, not a compiler's word.
+-- `walked` is `_reach`'s `seen` guard said in SQL, and for the same reason —
+-- these are facts, not a compiler's word, and a fact stream that disagreed
+-- with its own language about cyclic inheritance must terminate here rather
+-- than loop. It replaces the plain `UNION`'s deduplication, which stopped
+-- being a cycle guard the moment `depth` joined the row: two visits to one
+-- ancestor at different depths are different rows and dedupe against nothing.
+--
+-- `depth` is how far the declaring class is from the gate, and it exists for
+-- one reason: an OVERRIDE has to win. See `exposed_members` below.
 --
 -- A superclass in a JAR contributes nothing: it has no `symbol` fact here, so
 -- the walk ends at it. That is the same within-module boundary every other
 -- closure in this codebase keeps.
 gate_ancestry AS (
-    SELECT type_symbol AS gate_symbol, type_symbol AS owner_symbol FROM gate_types
-    UNION
-    SELECT a.gate_symbol AS gate_symbol, sc.superclass AS owner_symbol
+    SELECT type_symbol AS gate_symbol, type_symbol AS owner_symbol,
+           0 AS depth, [type_symbol] AS walked
+    FROM gate_types
+    UNION ALL
+    SELECT a.gate_symbol AS gate_symbol, sc.superclass AS owner_symbol,
+           a.depth + 1 AS depth, list_append(a.walked, sc.superclass) AS walked
     FROM gate_ancestry a
     JOIN (
         SELECT payload ->> 'symbol' AS symbol, payload ->> 'superclass' AS superclass
         FROM raw_facts
         WHERE kind = 'symbol' AND (payload ->> 'superclass') IS NOT NULL
     ) sc ON sc.symbol = a.owner_symbol
+    WHERE NOT list_contains(a.walked, sc.superclass)
+),
+-- ONE MEMBER PER SIGNATURE, NEAREST DECLARATION WINS — the half the first
+-- `A-M15` fix left out, and the fabrication it shipped.
+--
+-- The walk above enumerates every ancestor's declared members. The enumeration
+-- it mirrors does not: MEASURED (CP-13 Q5, on the JDK the probe process itself
+-- reported), `Class.getMethods()` over `class BillingWebService extends
+-- AbstractBilling` where both declare `public String refund(String)` returns
+-- `BillingWebService#refund` and NOT the base's — one entry per signature,
+-- declared by the overriding class. JLS 8.4.8.1 is the same sentence, and
+-- `RuntimeModeler.processClass` calls exactly that enumeration (CP-13 Q3).
+--
+-- Joining the ancestry alone therefore published an overridden operation
+-- TWICE, the second attributed to a base class the framework never exposes.
+-- Worse, and this is why the ordering below is not cosmetic: an override
+-- carrying the catalog's own withdrawing annotation was claimed by the
+-- annotated rule and withdrawn there, while the base's identical declaration
+-- walked straight past the member rule's anti-join and published the withdrawn
+-- operation at `resolved`/`compiler`. So the dedup runs BEFORE the exclusions
+-- and before the anti-join, exactly as the framework filters `getMethods()`'
+-- result rather than its input, and an override's own annotation governs the
+-- member it overrides.
+--
+-- THE KEY IS THE LANGUAGE'S OWN (GUIDELINES §8.1): a method is its name AND
+-- its parameter types in order, never its arity and never its descriptor hash
+-- — that hash covers the RETURN type too (`ClassScanner.disambiguatorOf`), so
+-- keying on it would leave a covariant-return override undeduplicated, which
+-- is the fabrication again. `supertype_dispatch._members` builds the same key
+-- in Python, down to reading each parameter's symbol bare.
+--
+-- A member whose fact carries NO signature at all keys as if it took no
+-- parameters, so two same-named overloads in one ancestry would collapse to
+-- one — an under-report. That holds only while every scanner writes one:
+-- `ClassScanner.visitEnd` emits `signatureJson` for every method
+-- unconditionally, and this comment stops being true the day a scanner that
+-- does not reaches these facts.
+--
+-- WHAT IS ENUMERATED HERE and what is filtered after, and the split is the
+-- framework's: `getMethods()` returns PUBLIC methods, so visibility is part of
+-- the enumeration; `isWebMethodBySpec` then tests each result, so `static` is
+-- applied to the winner. A SYNTHETIC method is dropped before the dedup rather
+-- than after, because a covariant-return override ships a bridge in the SAME
+-- class as the real override — at the same depth — and a bridge winning the
+-- tie would drop the operation entirely.
+exposed_members AS (
+    SELECT
+        s.symbol AS symbol,
+        g.gate_symbol AS gate_symbol,
+        row_number() OVER (
+            PARTITION BY
+                g.gate_symbol,
+                split_part(regexp_extract(s.symbol, '[^#]*$'), '(', 1),
+                coalesce(
+                    list_aggregate(
+                        list_transform(
+                            json_extract_string(s.signature, '$.parameters[*].type.symbol'),
+                            parameter -> regexp_extract(parameter, '[^ ]*$')
+                        ),
+                        'string_agg', ','
+                    ),
+                    ''
+                )
+            -- `symbol` breaks a tie no source language this reads can
+            -- produce — two declarations of one signature at one depth
+            -- differ only in their return type, which a compiled artifact
+            -- permits and a declaration does not — so that two runs over the
+            -- same facts answer the same (NFR-1).
+            ORDER BY g.depth, s.symbol
+        ) AS nearest
+    FROM symbols s
+    JOIN gate_ancestry g ON g.owner_symbol = s.enclosing
+    WHERE $members = 'public_methods'
+      AND s.construct_kind = 'method'
+      AND s.visibility = 'public'
+      AND coalesce(s.modifiers ->> 'synthetic', 'false') <> 'true'
 ),
 -- THE MEMBER RULE (2I design §2, word 3). Where a catalog declares
 -- `$members`, a gated class exposes members that carry no annotation at all,
@@ -354,14 +438,14 @@ gate_ancestry AS (
 -- (required beside `$members` by `annotation_driven.py::_validate_naming`)
 -- then answers with the member's own name.
 --
--- WHAT IS NOT A MEMBER, and why each exclusion is a fact rather than a taste:
+-- WHAT IS NOT A MEMBER, and why each exclusion is a fact rather than a taste.
+-- The first three are applied by `exposed_members` above, before the dedup;
+-- the fourth here, after it — see that CTE for why the split is the
+-- framework's own rather than a convenience:
 --   * A CONSTRUCTOR. `construct_kind` tells it apart from a method outright
 --     (D00's closed set), and `derived`'s own join already admits only
---     'method'/'function'; naming it here as well says the member rule
+--     'method'/'function'; naming it there as well says the member rule
 --     intends the exclusion rather than inheriting it by luck.
---   * A STATIC method. It is bound to the type, not to an instance, so it is
---     not a member of the exposed object at all — the same distinction
---     `modifiers.static` already draws for a field that reaches no payload.
 --   * A SYNTHETIC method — a covariant-return bridge, a lambda body, an
 --     accessor minted for a nested class. Nobody wrote it, so there is no
 --     declaration to expose. Unlike fields, synthetic METHODS do reach the
@@ -369,18 +453,27 @@ gate_ancestry AS (
 --     them), which is exactly why this has to say so.
 --   * A NON-PUBLIC method: not callable from outside the type, so not
 --     exposed. This is the one exclusion the word itself names.
+--   * A STATIC method. It is bound to the type, not to an instance, so it is
+--     not a member of the exposed object at all — the same distinction
+--     `modifiers.static` already draws for a field that reaches no payload.
 -- `coalesce(..., 'false')` on both modifiers for the reason D00 §5a states:
 -- a scanner that does not report a modifier is not asserting the modifier is
 -- true, and each reader supplies its own default.
 --
--- AND THE OVERRIDE. A member that carries ANY of this catalog's mapping
--- annotations is left entirely to that rule — one row per member, never two.
--- The anti-join is against `annotations_effective`, NOT against `declared`,
--- and the difference is the whole of the interaction with word 4: a
--- declaration the withdrawal filter removed from `declared` is still an
+-- AND THE ANNOTATED MEMBER. A member that carries ANY of this catalog's
+-- mapping annotations is left entirely to that rule — one row per member,
+-- never two. The anti-join is against `annotations_effective`, NOT against
+-- `declared`, and the difference is the whole of the interaction with word 4:
+-- a declaration the withdrawal filter removed from `declared` is still an
 -- ANNOTATED declaration, so the member rule must not quietly re-derive the
 -- very row the framework withdrew. Joining `declared` instead would have
 -- turned every `unless` into a no-op on a gated class.
+--
+-- It is asked of the member `exposed_members` chose — the OVERRIDE, where one
+-- exists — and never of the declaration the override shadows, which is what
+-- lets an override's own annotation withdraw the inherited member too. Asking
+-- it of every declaration in the ancestry is what shipped an operation
+-- `@WebMethod(exclude = true)` explicitly withdraws.
 --
 -- TWO KNOWN SOFT SPOTS, for whoever writes the second `members` catalog:
 --
@@ -410,7 +503,7 @@ member_declarations AS (
         -- none of them — it is an ordinary base class, and reading its
         -- `enclosing` would ask the wrong type for the service's namespace and
         -- then drop the row for having none.
-        g.gate_symbol AS gate_type,
+        em.gate_symbol AS gate_type,
         [''] AS paths,
         $all_methods::VARCHAR[] AS methods,
         CAST(NULL AS VARCHAR[]) AS consumes_list,
@@ -429,13 +522,10 @@ member_declarations AS (
         -- close, reached by the one route that carries no annotation.
         (SELECT coalesce(bool_or(requires_qualifier), FALSE) FROM mapping_catalog)
             AS requires_qualifier
-    FROM symbols s
-    JOIN gate_ancestry g ON g.owner_symbol = s.enclosing
-    WHERE $members = 'public_methods'
-      AND s.construct_kind = 'method'
-      AND s.visibility = 'public'
+    FROM exposed_members em
+    JOIN symbols s ON s.symbol = em.symbol
+    WHERE em.nearest = 1
       AND coalesce(s.modifiers ->> 'static', 'false') <> 'true'
-      AND coalesce(s.modifiers ->> 'synthetic', 'false') <> 'true'
       AND NOT EXISTS (
           SELECT 1 FROM annotations_effective a
           JOIN mapping_catalog mc ON mc.fqn = a.annotation

@@ -1379,18 +1379,88 @@ def _member_base_facts(root: Path, base_visibility: str = "public") -> None:
     )
 
 
-def _member_paths(
-    tmp_path: Path, catalog: Catalog, gated: bool = True, base: str | None = None
-) -> set[str]:
+def _member_override_facts(root: Path, withdrawn: bool = False) -> None:
+    """The gated class OVERRIDES the base's `refund` — same name, same
+    parameter types, and therefore the same descriptor hash the extractor
+    writes for both (`ClassScanner.disambiguatorOf` hashes the descriptor, so
+    an override and the method it overrides share it by construction).
+
+    `withdrawn=True` puts the member-level rule's own withdrawing attribute on
+    the override, which is the shape the framework refuses to expose at all.
+
+    A third fact file rather than a parameter on `_member_facts`, for
+    `_member_base_facts`' own reason: every test written before this one sees
+    exactly the facts it always did."""
+    document = Document(
+        document_id="doc_override",
+        relative_path="com/acme/rpc/MemberService.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:d",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    owner = "com/acme/rpc/MemberService#"
+    facts: list[object] = [
+        SymbolFact(
+            document_id="doc_override",
+            symbol=f"{owner}refund(sig_b17e0011).",
+            construct_kind=ConstructKind.METHOD,
+            enclosing=owner,
+            visibility="public",
+            modifiers={},
+        )
+    ]
+    if withdrawn:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_override",
+                target=f"{owner}refund(sig_b17e0011).",
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/rpc/annotation/Operation#", args={"skip": True}
+                ),
+            )
+        )
+    write_fact_file(root / "MemberServiceOverride.jsonl", document, facts)
+
+
+def _member_rows(
+    tmp_path: Path,
+    catalog: Catalog,
+    gated: bool = True,
+    base: str | None = None,
+    override: bool | None = None,
+) -> list[tuple[str, str]]:
+    """`(path, handler)` for every derived row, in insertion order — the pair a
+    set of paths cannot answer, since a rule that publishes ONE operation twice
+    collapses into one entry there."""
     _member_facts(tmp_path / "facts", gated)
     if base is not None:
         _member_base_facts(tmp_path / "facts", base)
+    if override is not None:
+        _member_override_facts(tmp_path / "facts", override)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
-    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    rows = [(str(row["path"]), str(row["handler"])) for row in workspace.query("endpoints")]
     workspace.close()
-    return paths
+    return rows
+
+
+def _member_paths(
+    tmp_path: Path,
+    catalog: Catalog,
+    gated: bool = True,
+    base: str | None = None,
+    override: bool | None = None,
+) -> set[str]:
+    return {path for path, _ in _member_rows(tmp_path, catalog, gated, base, override)}
 
 
 def test_a_catalog_declaring_no_member_rule_derives_only_what_is_annotated(
@@ -1464,6 +1534,70 @@ def test_an_inherited_method_that_is_not_public_is_not_an_exposed_member(tmp_pat
     asserted present in both, which is what stops this passing because the walk
     found nothing at all."""
     paths = _member_paths(tmp_path, _member_catalog(members="public_methods"), base="other")
+
+    assert "bare" in paths
+    assert "refund" not in paths
+
+
+def test_an_overridden_inherited_member_is_one_exposed_member_and_not_two(tmp_path: Path):
+    """`A-M15`'s regression, the first half. A type's members are one per
+    SIGNATURE, never one per declaration of that signature — the ancestry walk
+    enumerated both `MemberService#refund` and `AbstractMemberService#refund`
+    and published the same operation twice, the second handled by a base class
+    the framework never exposes.
+
+    JLS 8.4.8.1: an instance method with the same name and parameter types
+    OVERRIDES the one it inherits, and there is then one member. The framework
+    agrees, and it is MEASURED rather than read off that sentence (CP-13 Q5,
+    JDK 26): `Class.getMethods()` — the enumeration `RuntimeModeler.processClass`
+    walks (Q3, jaxws-rt 4.0.2) — returns exactly one `refund`, the override's,
+    for precisely this pair of classes.
+
+    The handler assertion is the load-bearing half: the count alone would still
+    pass if the walk kept the BASE's declaration and dropped the override's,
+    which is the same wrong attribution one row further down."""
+    rows = _member_rows(
+        tmp_path, _member_catalog(members="public_methods"), base="public", override=False
+    )
+
+    assert [handler for path, handler in rows if path == "refund"] == [
+        "com/acme/rpc/MemberService#refund(sig_b17e0011)."
+    ]
+
+
+@pytest.mark.pins("derive_endpoints.one-exposed-member-per-signature")
+def test_an_override_that_withdraws_itself_withdraws_the_member_it_overrides(tmp_path: Path):
+    """`A-M15`'s regression, the second half, and the worse one: the ancestry
+    walk republished an operation the framework EXPLICITLY withdraws.
+
+    `MemberService#refund` overrides `AbstractMemberService#refund` and carries
+    the member-level rule's withdrawing attribute. The override is the one
+    member (Q5 above), the rule claims it, and the rule's answer for it is
+    nothing — so the operation is not exposed at all. Before the dedup the
+    override was claimed by the annotated rule and withdrawn there, while the
+    base's own declaration walked straight past the anti-join and published the
+    withdrawn operation at `resolved`/`compiler`, attributed to the base.
+
+    `bare` is asserted present in the same run, which is what stops this passing
+    because the walk found nothing at all — the near-miss's paired positive is
+    `test_an_overridden_inherited_member_is_one_exposed_member_and_not_two`
+    above, the same input with the withdrawal removed, where the operation DOES
+    derive."""
+    paths = _member_paths(
+        tmp_path,
+        _member_catalog(
+            members="public_methods",
+            annotations=[
+                {"fqn": "com.acme.rpc.annotation.Service"},
+                {
+                    "fqn": "com.acme.rpc.annotation.Operation",
+                    "unless": {"attribute": "skip", "equals": True},
+                },
+            ],
+        ),
+        base="public",
+        override=True,
+    )
 
     assert "bare" in paths
     assert "refund" not in paths

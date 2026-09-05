@@ -42,6 +42,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import tempfile
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
@@ -165,6 +166,13 @@ def _enumeration(body: list[str]) -> str:
         "isBaseClassMethod",
         "isCustomMethod",
         "getMostSpecificMethod",
+        # Q6/Q7 (the round-1 review's CRITICAL 2). `isCustomMethod` is the
+        # clause of `calculateQueryMethods`' filter Q1 recorded by NAME and
+        # never opened, and a rule was built on the half that was opened.
+        "RepositoryComposition.getMethod",
+        "ClassMetadata.getInterfaceNames",
+        "AnnotationMetadata.hasAnnotation",
+        "org/springframework/data/repository/NoRepositoryBean",
     )
     seen: list[str] = []
     for step in body:
@@ -261,11 +269,107 @@ def q4_jaxws_web_method_test(artifacts: list[Artifact]) -> list[tuple[str, str, 
     return [(artifact.name, artifact.observed, _enumeration(_body(output, "isWebMethodBySpec")))]
 
 
+def q5_jdk_override_enumeration(artifacts: list[Artifact]) -> list[tuple[str, str, str]]:
+    """Q5 (the review's CRITICAL 1). What `Class.getMethods()` — the
+    enumeration Q3 measured `RuntimeModeler.processClass` calling — returns for
+    a class that OVERRIDES a public method it inherits.
+
+    The one question in this file that cannot be answered by reading bytecode,
+    because the answer is the JDK's own runtime behaviour rather than an
+    instruction: it compiles the exact pair the fix turns on and runs it. The
+    class under test is the review's own input, `BillingWebService extends
+    AbstractBilling`, both declaring `public String refund(String)`.
+
+    The version column is `java.version` as the RUNNING process reports it
+    (§5.4), never the `javac` on PATH."""
+    source = """
+public class Cp13Overrides {
+    public static abstract class AbstractBilling {
+        public String refund(String id) { return id; }
+        public String reconcile(String id) { return id; }
+    }
+    public static class BillingWebService extends AbstractBilling {
+        @Override public String refund(String id) { return id; }
+    }
+    public static void main(String[] args) {
+        java.util.List<String> found = new java.util.ArrayList<>();
+        for (java.lang.reflect.Method m : BillingWebService.class.getMethods()) {
+            if (m.getDeclaringClass() == Object.class) continue;
+            found.add(m.getDeclaringClass().getSimpleName() + "#" + m.getName());
+        }
+        java.util.Collections.sort(found);
+        System.out.println(System.getProperty("java.version"));
+        System.out.println(String.join(" ; ", found));
+    }
+}
+"""
+    with tempfile.TemporaryDirectory() as directory:
+        work = Path(directory)
+        (work / "Cp13Overrides.java").write_text(source, encoding="utf-8")
+        for command in (
+            ["javac", "-d", str(work), str(work / "Cp13Overrides.java")],
+            ["java", "-cp", str(work), "Cp13Overrides"],
+        ):
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                raise ProbeError(f"{command[0]} failed: {result.stderr.strip()}")
+    version, observed = result.stdout.strip().splitlines()
+    return [("java.lang.Class", version, observed)]
+
+
+def q6_spring_data_custom_method(artifacts: list[Artifact]) -> list[tuple[str, str, str]]:
+    """Q6 (the review's CRITICAL 2). What makes a method CUSTOM — the clause of
+    `calculateQueryMethods`' filter Q1 recorded by name and never opened.
+
+    `DefaultRepositoryInformation.isCustomMethod` is the whole answer: a method
+    the FRAGMENT composition can resolve is a custom method, and a custom
+    method is not a query method and therefore serves no `/search/` route."""
+    rows = []
+    for artifact in [a for a in artifacts if a.name == "spring-data-commons"]:
+        output = _javap(
+            "-p",
+            "-c",
+            "org.springframework.data.repository.core.support.DefaultRepositoryInformation",
+            classpath=artifact.jar,
+        )
+        rows.append(
+            (artifact.name, artifact.observed, _enumeration(_body(output, "isCustomMethod")))
+        )
+    return rows
+
+
+def q7_spring_data_fragment_interfaces(artifacts: list[Artifact]) -> list[tuple[str, str, str]]:
+    """Q7 (the review's CRITICAL 2). WHICH of a repository interface's
+    superinterfaces become fragments — the half Q6 leaves open, and the only
+    half a bytecode scanner can read off a module's own classes.
+
+    `FragmentMetadata` is scanned whole rather than one method at a time,
+    `_class_wide`'s own reason: `getFragmentInterfaces` puts its predicate in
+    `isCandidate`, reached through a lambda."""
+    rows = []
+    for artifact in [a for a in artifacts if a.name == "spring-data-commons"]:
+        output = _javap(
+            "-p",
+            "-c",
+            "org.springframework.data.repository.config.FragmentMetadata",
+            classpath=artifact.jar,
+        )
+        rows.append((artifact.name, artifact.observed, _enumeration(_class_wide(output))))
+    return rows
+
+
 _QUESTIONS: list[tuple[str, str, Callable[[list[Artifact]], list[tuple[str, str, str]]]]] = [
     ("1", "`RepositoryInformationSupport.calculateQueryMethods`", q1_spring_data_query_methods),
     ("2", "`MethodLookups$RepositoryAwareMethodLookup`", q2_spring_data_base_method_lookup),
     ("3", "`RuntimeModeler.processClass`", q3_jaxws_exposed_members),
     ("4", "`RuntimeModeler.isWebMethodBySpec`", q4_jaxws_web_method_test),
+    ("5", "`Class.getMethods()` over an override pair", q5_jdk_override_enumeration),
+    ("6", "`DefaultRepositoryInformation.isCustomMethod`", q6_spring_data_custom_method),
+    (
+        "7",
+        "`FragmentMetadata` (`getFragmentInterfaces`/`isCandidate`)",
+        q7_spring_data_fragment_interfaces,
+    ),
 ]
 
 

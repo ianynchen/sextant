@@ -192,6 +192,31 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-M15`'s own regression: an OVERRIDDEN SOAP operation was published twice, and an
+  `@WebMethod(exclude = true)` override republished the operation it withdraws** (round-1
+  review, CRITICAL 1). The `A-M15` fix below widened the member rule to walk a gated class's
+  superclass closure — correctly — and then enumerated **one row per declaration** where the
+  enumeration it mirrors yields **one per signature**.
+
+  MEASURED rather than reasoned (CP-13 Q5, on the JDK the probe process itself reported):
+  `Class.getMethods()` over `class BillingWebService extends AbstractBilling`, both declaring
+  `public String refund(String)`, returns `BillingWebService#refund` and NOT the base's. So a
+  `@WebService` class overriding a base operation shipped **two** rows for one operation, the
+  second handled by a class the RI never exposes; and where the override carried
+  `@WebMethod(exclude = true)`, the annotated rule withdrew the override's row while the base's
+  identical declaration walked past the member rule's anti-join and published the withdrawn
+  operation at `resolved`/`compiler`, attributed to the base. **Before the `A-M15` fix that
+  input derived nothing at all**, which makes this the one place the sweep's fix pass left the
+  project worse than it found it.
+
+  A new `exposed_members` CTE keeps the nearest declaration of each `(name, parameter types)` —
+  the language's own key (GUIDELINES §8.1), never the descriptor hash, which covers the return
+  type and would leave a covariant-return override undeduplicated — and the exclusions and the
+  annotation anti-join are asked of that one member. `gate_ancestry` gained a `depth` and, with
+  it, an explicit `walked` cycle guard, since the plain `UNION`'s deduplication stopped being
+  one the moment two visits to an ancestor differed in a column. Pinned by
+  `derive_endpoints.one-exposed-member-per-signature` in `scripts/guard_check.py`.
+
 - **`A-M15`: a `@WebService` class's INHERITED operations were absent from its SOAP surface**
   (principles sweep §3.3). `derive_endpoints.sql`'s member rule joined the class gate on
   `s.enclosing`, which reads "the public methods of C" as "the public methods DECLARED in C" —

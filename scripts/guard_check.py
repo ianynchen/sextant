@@ -363,6 +363,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "derive_endpoints.one-exposed-member-per-signature": Guard(
+        what="a gated class exposes ONE member per `(name, parameter types)` — the nearest "
+        "declaration in its ancestry — and the exclusions and the annotation anti-join are "
+        "asked of that one",
+        why="`Class.getMethods()` returns one entry per signature (CP-13 Q5), so a walk that "
+        "keeps every ancestor's declaration publishes an overridden operation TWICE, the "
+        "second handled by a base class the framework never exposes — and republishes one "
+        "an override's own `@WebMethod(exclude = true)` explicitly withdraws",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="    WHERE em.nearest = 1",
+                replace="    WHERE TRUE  -- guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     # --- guards that live in a shipped CATALOG rather than in an engine ----
     #
     # A conjunct a catalog states is a guard exactly as an engine's `if` is:
