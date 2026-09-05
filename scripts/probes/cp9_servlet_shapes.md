@@ -95,6 +95,9 @@ that failed to start.
 | 38 | the SECOND bypass signature: the public `service(ServletRequest, ServletResponse)` overridden and delegating, `doGet`/`doPost` declared | GET `/delegating-agnostic` | 200 |
 | 39 | the same class | POST `/delegating-agnostic` | 200 |
 | 40 | the same class, a verb it declares no `doXxx` for | PUT `/delegating-agnostic` | **405** — row 38's discriminator |
+| 41-42 | the SAME shape as rows 35-36 with the delegation REMOVED: `service()` overridden, `doGet`/`doPost` declared, no `super.service` call anywhere | GET and POST `/non-delegating` | 200 — added 2026-09-05 for the round-1 review's MAJOR 5 |
+| 43 | the same class, a verb it declares no `doXxx` for | PUT `/non-delegating` | **unknown, and it is the whole question** — 405 would mean the two shapes are one and rows 35-40's verdict covers both; 200 would mean the dispatch never ran and the verb table describes nothing about this class |
+| 44-46 | the same three `service` overrides, in the FACT STREAM | the call each makes to `service`, as `<invoke_kind> <owner>.<name>` | **unknown — whether a verdict that distinguishes them is one this repository can act on at all** |
 
 ## Observations
 
@@ -149,12 +152,20 @@ produced.
 | 38 | `GET /delegating-agnostic` — the PUBLIC `service(ServletRequest, ServletResponse)` delegates to `super`, `doGet`/`doPost` declared | 200 | 200 | 200 |
 | 39 | `POST /delegating-agnostic` — the PUBLIC `service` delegates to `super`, `doGet`/`doPost` declared | 200 | 200 | 200 |
 | 40 | `PUT /delegating-agnostic` — the PUBLIC `service` delegates to `super`, no `doPut` — row 38's discriminator | 405 | 405 | 405 |
+| 41 | `GET /non-delegating` — `service()` does NOT delegate, `doGet`/`doPost` declared | 200 | 200 | 200 |
+| 42 | `POST /non-delegating` — `service()` does NOT delegate, `doGet`/`doPost` declared | 200 | 200 | 200 |
+| 43 | `PUT /non-delegating` — `service()` does NOT delegate, no `doPut` — row 41's discriminator, and row 37's mirror | 200 | 200 | 200 |
+| 44 | the call `DelegatingServiceServlet#service` makes to `service` | `special jakarta/servlet/http/HttpServlet#.service` | `special jakarta/servlet/http/HttpServlet#.service` | `special javax/servlet/http/HttpServlet#.service` |
+| 45 | the call `NonDelegatingServiceServlet#service` makes to `service` | `ABSENT` | `ABSENT` | `ABSENT` |
+| 46 | the call `DelegatingAgnosticServiceServlet#service` makes to `service` — the SECOND signature, measured rather than read off row 44 | `special jakarta/servlet/http/HttpServlet#.service` | `special jakarta/servlet/http/HttpServlet#.service` | `special javax/servlet/http/HttpServlet#.service` |
 
 Every row identical on all three containers, and the `javax` column identical
-to the other two modulo the package name (rows 25-28 and 30, which are the only
-rows where a package name is part of the value). Six expectations were open
-going in (rows 7-13, 24-26, 31-33) and all six are now answered; nothing was
-falsified.
+to the other two modulo the package name (rows 25-28, 30 and 44-46, which are
+the only rows where a package name is part of the value). Six expectations were
+open going in (rows 7-13, 24-26, 31-33) and all six are now answered; nothing
+was falsified. **Rows 41-46 were added on 2026-09-05** and both of their open
+expectations are now answered too — row 43 the way the finding feared, and rows
+44-46 the way the fix needed.
 
 ## Verdict
 
@@ -240,12 +251,35 @@ falsified.
    GET and POST and refuses PUT, the same three answers on the same three
    containers.
 
-   **What is still not measured** is the third configuration: a `service()`
-   override that does NOT delegate and declares `doXxx` anyway. Nothing in the
-   fact stream separates it from rows 35-37 — the distinguishing fact is a
-   `super.service(...)` call, `invoke_kind: special` on an `HttpServlet#service`
-   target, and the catalog would need `call_site` in `requires` to see it.
-   Stated in `docs/COVERAGE.md` as the residual the narrowed rule accepts.
+   **Amended again 2026-09-05 (round-1 review, MAJOR 5), and this time the
+   generalisation ran the other way.** Rows 35-40's verdict — "a `service()`
+   override declaring `doXxx` derives those verbs" — was applied to every such
+   override, including the one they did not measure: the same class with the
+   delegation removed. **Rows 41-43 measure it.** `GET /non-delegating` 200,
+   `POST /non-delegating` 200, and `PUT /non-delegating` **200** — on all three
+   containers, where the delegating twin refuses PUT with 405 (row 37). The
+   dispatch never runs, the `doXxx` methods are unreachable, and the verb table
+   describes this class no better than it describes rows 14-15's. Publishing GET
+   and POST while withholding a PUT the container serves is the same wrong
+   answer the original verdict was written against.
+
+   So the rule is **"an override of the entry point bypasses the dispatch unless
+   it delegates"**, and all three configurations are now measured rather than
+   two of them plus an argument.
+
+   **The distinguishing fact is in the stream** (rows 44-46), which is what
+   makes that rule one this repository can act on rather than only state. Each
+   delegating override's `super` call arrives as
+   `special <api>/servlet/http/HttpServlet#.service` — both entry-point
+   signatures, both `jakarta` columns and the `javax` one under its own package
+   name — and the non-delegating override's reads `ABSENT`. `call_site` is now
+   in both servlet catalogs' `requires` for exactly this, and a scan producing
+   no call sites skips the catalog and says so.
+
+   **Row 46 is measured rather than read off row 44** for this verdict's own
+   recurring reason: `HttpServlet` has two `service` methods, and this whole
+   amendment history is what applying one signature's answer to the other
+   costs.
 9. **A `GenericServlet` subclass derives NOTHING** (rows 16-17). It serves
    every verb through one protocol-agnostic `service(ServletRequest,
    ServletResponse)`; `GenericServlet` declares no `doXxx` at all, so there is

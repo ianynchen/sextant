@@ -95,6 +95,30 @@ def superclass(out: Path, class_name: str) -> str:
     return "ABSENT"
 
 
+def super_dispatch_call(out: Path, class_name: str, dispatch: str) -> str:
+    """The call this class's own `service` override makes to `dispatch`, as
+    `<invoke_kind> <owner>.<name>` — or `ABSENT`.
+
+    Rows 41-43 measure that a NON-delegating `service()` override serves every
+    verb alike (PUT 200) where a delegating one refuses (PUT 405), so the two
+    shapes need different answers and one fact separates them. This asks
+    whether that fact reaches the workspace at all, and under which owner: a
+    verdict about a distinguishing fact is worth nothing until the fact stream
+    is shown to carry it (§5.3, at the point of use).
+    """
+    override = method(out, class_name, "service")
+    if override is None:
+        return "ABSENT"
+    for fact in facts(out, class_name):
+        if fact["kind"] != "call_site" or fact.get("caller") != override["symbol"]:
+            continue
+        target = fact.get("target") or {}
+        if target.get("name") != dispatch:
+            continue
+        return f"{fact.get('invoke_kind')} {bare(target.get('owner'))}.{target.get('name')}"
+    return "ABSENT"
+
+
 def main() -> None:
     out = Path(sys.argv[1])
     annotation = web_servlet(sys.argv[2])
@@ -109,6 +133,9 @@ def main() -> None:
         (27, superclass(out, "GetOnlyServlet")),
         (28, superclass(out, "GenericProbeServlet")),
         (29, annotation_args(out, "UnannotatedServlet", annotation)),
+        (44, super_dispatch_call(out, "DelegatingServiceServlet", "service")),
+        (45, super_dispatch_call(out, "NonDelegatingServiceServlet", "service")),
+        (46, super_dispatch_call(out, "DelegatingAgnosticServiceServlet", "service")),
     ):
         print(f"{row}|{value}")
 

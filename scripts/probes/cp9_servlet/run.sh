@@ -298,6 +298,13 @@ XML
   probe 38 GET     /delegating-agnostic "the PUBLIC \`service(ServletRequest, ServletResponse)\` delegates to \`super\`, \`doGet\`/\`doPost\` declared"
   probe 39 POST    /delegating-agnostic "the PUBLIC \`service\` delegates to \`super\`, \`doGet\`/\`doPost\` declared"
   probe 40 PUT     /delegating-agnostic "the PUBLIC \`service\` delegates to \`super\`, no \`doPut\` — row 38's discriminator"
+  # The configuration rows 35-40's own verdict was then generalised past, in
+  # the other direction (round-1 review, MAJOR 5): the same shape with the
+  # override NOT delegating. Row 43 is the mirror of row 37 — a verb with no
+  # `doXxx` must be SERVED here if the dispatch never ran.
+  probe 41 GET     /non-delegating "\`service()\` does NOT delegate, \`doGet\`/\`doPost\` declared"
+  probe 42 POST    /non-delegating "\`service()\` does NOT delegate, \`doGet\`/\`doPost\` declared"
+  probe 43 PUT     /non-delegating "\`service()\` does NOT delegate, no \`doPut\` — row 41's discriminator, and row 37's mirror"
   probe 16 GET     /generic      "\`GenericServlet\` subclass"
   probe 17 PUT     /generic      "\`GenericServlet\` subclass"
   # --- the language rule, and the missing annotation ------------------------
@@ -338,6 +345,9 @@ XML
       27) label="\`GetOnlyServlet\`'s own \`superclass\`" ;;
       28) label="\`GenericProbeServlet\`'s own \`superclass\`" ;;
       29) label="\`args\` on \`UnannotatedServlet\` (no annotation written)" ;;
+      44) label="the call \`DelegatingServiceServlet#service\` makes to \`service\`" ;;
+      45) label="the call \`NonDelegatingServiceServlet#service\` makes to \`service\`" ;;
+      46) label="the call \`DelegatingAgnosticServiceServlet#service\` makes to \`service\` — the SECOND signature, measured rather than read off row 44" ;;
       *)  label="row $row" ;;
     esac
     record "$row" "$label" "\`$value\`"

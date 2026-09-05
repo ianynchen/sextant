@@ -5,11 +5,16 @@ does not discriminate.
 unrelated to the guard it claims to pin, and nothing noticed. A harness with
 that same defect would be worse than none at all: it would report the whole
 declining suite as sound and be believed. So the load-bearing test here is
-`test_the_harness_reports_a_known_non_discriminating_test_as_surviving`, run
-against one of `A-M2`'s three servlet `bypassed_by` near-misses — a case
-independently known to survive its guard, established before this file existed
-(delete the branch, or write `bypassed_by: []` in both shipped servlet
-catalogs, and all thirty-nine tests in `test_supertype_dispatch.py` still pass).
+`test_the_harness_reports_a_test_that_does_not_notice_its_guard_as_surviving`,
+run against a SYNTHETIC guard whose edit rewrites a comment.
+
+It used to be run against one of `A-M2`'s three servlet `bypassed_by`
+near-misses — a case independently known to survive its guard. Those were
+fixed, which is what the harness is for, and a self-test anchored to a live
+defect goes out with the defect. The synthetic case is also the sharper one:
+"the edit changes no behaviour" is a property this file can guarantee, where
+"this test happens not to notice" is a fact about someone else's test that a
+later commit may quietly change.
 
 The rest is plumbing, driven at the unit level: the copy the mutation lands in,
 the anchor that must still match, the report's own arithmetic. The harness is
@@ -39,37 +44,63 @@ _spec.loader.exec_module(guard_check)
 
 
 _BYPASS = "supertype_dispatch.bypassed-by"
-_NON_DISCRIMINATING = (
-    "tests/application/test_supertype_dispatch.py"
-    "::test_a_class_overriding_service_and_declaring_no_verb_derives_nothing"
-)
+_SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py"
 _DISCRIMINATING = (
     "tests/application/test_supertype_dispatch.py"
     "::test_an_address_annotation_writing_BOTH_SPELLINGS_derives_nothing"
 )
+# A guard the named test provably cannot notice: its edit rewrites a COMMENT.
+# Synthetic on purpose — see the test below for why that is the stronger form.
+_UNREACHABLE = "test-only.a-guard-nothing-can-notice"
+_UNREACHABLE_GUARD = guard_check.Guard(
+    what="a comment, which decides nothing",
+    why="nothing — this exists only so the harness has a case whose outcome is known",
+    edits=(
+        guard_check.Edit(
+            path=_SUPERTYPE_DISPATCH,
+            find="# A member as this style selects one: its name and its parameter types, in",
+            replace="# rewritten by the guard-check self-test; this decides nothing",
+        ),
+    ),
+)
 
 
-def test_the_harness_reports_a_known_non_discriminating_test_as_surviving():
-    """The one that matters. `A-M2`'s servlet near-miss declares no `doXxx` at
-    all, which is the shape the `not handlers` branch declines on its own — so
-    disabling the bypass branch changes no outcome and the test stays green.
+def test_the_harness_reports_a_test_that_does_not_notice_its_guard_as_surviving(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The one that matters. A harness that reported every marked test as
+    discriminating would pass every other test in this file and be exactly as
+    useless as no harness at all — it would declare the whole declining suite
+    sound and be believed.
 
-    Its two siblings survive the same mutation and are asserted with it, since
-    the finding is about all three and a harness seeing one of them would be a
-    harness with a filter nobody wrote.
+    **It is driven off a SYNTHETIC guard, and that is the correction rather
+    than a compromise.** This used to run `supertype_dispatch.bypassed-by`
+    against `A-M2`'s three servlet near-misses, which were independently known
+    to survive it. They were fixed — which is the point of the harness — and a
+    self-test anchored to a live defect fails the moment its subject is
+    repaired, or, worse, quietly stops proving anything if a later defect
+    happens to keep it green. The property under test is "a test that passes
+    with its guard's edit applied is reported SURVIVED", and the sharpest way
+    to produce one is an edit that provably changes no behaviour: a comment.
 
-    This runs the real thing end to end — a copied tree, a real mutation, a real
-    pytest subprocess — because every cheaper version of it would be testing the
-    harness's bookkeeping rather than its measurement, and the measurement is
-    the whole mechanism.
+    A no-op edit is forbidden in the REGISTRY (`guard_check.py` §2.2 — it would
+    manufacture a finding about a real test) and is exactly right here, because
+    here the expected outcome is what is being checked rather than measured.
+
+    It runs the real thing end to end — a copied tree, a real edit, a real
+    pytest subprocess — because every cheaper version tests the harness's
+    bookkeeping rather than its measurement, and the measurement is the whole
+    mechanism.
     """
-    [outcome], complaints = guard_check.check([_BYPASS])
+    monkeypatch.setitem(guard_check.GUARDS, _UNREACHABLE, _UNREACHABLE_GUARD)
+    monkeypatch.setattr(guard_check, "pinned_tests", lambda: {_UNREACHABLE: [_DISCRIMINATING]})
+
+    [outcome], complaints = guard_check.check([_UNREACHABLE])
 
     assert complaints == []
-    assert outcome.uncontrolled == [], "these fail before any mutation — nothing was measured"
+    assert outcome.uncontrolled == [], "this fails before any mutation — nothing was measured"
     assert outcome.killed == []
-    assert _NON_DISCRIMINATING in outcome.survived
-    assert len(outcome.survived) == 3
+    assert outcome.survived == [_DISCRIMINATING]
 
 
 def test_a_discriminating_test_is_killed_by_the_guard_it_names():
@@ -153,24 +184,44 @@ def test_a_survivor_outside_the_allowlist_fails_the_run(capsys: pytest.CaptureFi
 
 
 def test_an_allowlisted_entry_that_has_started_discriminating_fails_the_run(
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ):
     """The other direction, and what keeps the allowlist from rotting into a
     record of nothing: an entry whose test now bites must be removed in the same
     commit that made it bite — the near-miss coverage file's
-    `test_the_backlog_only_ever_shrinks`, applied to a measured list."""
-    outcome = guard_check.Outcome(guard_id=_BYPASS, killed=[_NON_DISCRIMINATING])
+    `test_the_backlog_only_ever_shrinks`, applied to a measured list.
+
+    The allowlist it reads is monkeypatched rather than the shipped one, and
+    the reason is this test's own history: the shipped list is now EMPTY, so a
+    version reading it would have nothing to assert and would pass whatever
+    `report` did. A rule's own test must not go quiet the moment the rule has
+    nothing left to catch."""
+    monkeypatch.setattr(
+        guard_check, "_DOES_NOT_DISCRIMINATE_YET", frozenset({(_DISCRIMINATING, _BYPASS)})
+    )
+    outcome = guard_check.Outcome(guard_id=_BYPASS, killed=[_DISCRIMINATING])
 
     assert guard_check.report([outcome], []) == 1
     assert "STALE ALLOWLIST ENTRY" in capsys.readouterr().out
 
 
 def test_a_partial_run_does_not_report_untouched_allowlist_entries_as_fixed(
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ):
     """`guard_check.py <one guard>` measures one guard, and the entries for
     every other one were not measured at all. Reporting them as fixed would
-    make the shortest possible run look like the most productive."""
+    make the shortest possible run look like the most productive.
+
+    Monkeypatched for the reason the test above is: with the shipped allowlist
+    empty there is no entry left for a partial run to mis-report, so reading it
+    would assert nothing at all."""
+    monkeypatch.setattr(
+        guard_check,
+        "_DOES_NOT_DISCRIMINATE_YET",
+        frozenset(
+            {("tests/application/test_endpoints.py::test_elsewhere", "single_call.claimed-arity")}
+        ),
+    )
     outcome = guard_check.Outcome(
         guard_id="supertype_dispatch.address-args-are-an-alias-set", killed=[_DISCRIMINATING]
     )

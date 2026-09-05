@@ -268,15 +268,16 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "supertype_dispatch.bypassed-by": Guard(
-        what="a class whose `service()` override replaces the container's own dispatch, and "
-        "which declares no verb the table describes, derives nothing",
-        why="such a class serves GET and PUT alike, so the verb map does not describe it; "
-        "applying the map anyway publishes GET and withholds PUT — a WRONG answer rather "
-        "than a partial one",
+        what="a class overriding the dispatch entry point derives nothing unless that "
+        "override DELEGATES back into the supertype's own implementation",
+        why="a non-delegating override has replaced the lookup the table describes: measured, "
+        "it serves GET 200, POST 200 and PUT 200 where the delegating twin refuses PUT with "
+        "405 (CP-9 rows 41-43 against 35-40). Publishing the declared verbs and withholding "
+        "one the container serves is a WRONG answer rather than a partial one",
         edits=(
             Edit(
                 path=_SUPERTYPE_DISPATCH,
-                find="        if bypass & set(members) and not handlers:",
+                find="        if not all(symbol in delegating for symbol in overridden):",
                 replace="        if False:  # guard disabled by scripts/guard_check.py",
             ),
         ),
@@ -346,6 +347,21 @@ GUARDS: dict[str, Guard] = {
                 find="    JOIN symbols s ON s.symbol = m.method_symbol AND s.construct_kind "
                 "IN ('method', 'function')",
                 replace="    JOIN symbols s ON s.symbol = m.method_symbol",
+            ),
+        ),
+    ),
+    "derive_endpoints.addresses-nothing": Guard(
+        what="a derived row whose address is empty and whose `peer` is NULL names no endpoint, "
+        "and is not inserted",
+        why="mechanism 3 (`A-C1`). A method-level mapping annotation carrying no address of "
+        "its own, on a class carrying none either, composes to the EMPTY address — and an "
+        "empty address published at `resolved`/`compiler` is a boundary the running system "
+        "does not serve, presented as observed. Three shipped catalogs reached it",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="WHERE NOT (d.path = '' AND d.peer IS NULL)",
+                replace="WHERE TRUE  -- guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -429,26 +445,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
-    "spring-actuator.operations-are-the-mapping-annotations": Guard(
-        what="only the three operation annotations declare an operation; `@Endpoint` itself "
-        "is the SCOPE the operation sits in, read as a prefix and a type gate",
-        why="an `@Endpoint` class whose methods carry no operation annotation serves nothing "
-        "— `GET /actuator/empty` was a 404 on both versions probed and did not appear in "
-        "the discovery document. Making the class-level annotation a mapping of its own "
-        "publishes the scope as an endpoint",
-        edits=(
-            Edit(
-                path="sextant/catalogs/spring-actuator.yml",
-                find="    annotations:\n"
-                "      - { fqn: org.springframework.boot.actuate.endpoint.annotation."
-                "ReadOperation,",
-                replace="    annotations:\n"
-                "      - { fqn: org.springframework.boot.actuate.endpoint.annotation.Endpoint }\n"
-                "      - { fqn: org.springframework.boot.actuate.endpoint.annotation."
-                "ReadOperation,",
-            ),
-        ),
-    ),
+    # `spring-actuator.operations-are-the-mapping-annotations` WAS registered
+    # here and is gone, and its removal is a finding rather than tidying. Its
+    # weakening — declaring `@Endpoint` a mapping annotation of its own — mints
+    # a declaration whose target is a CLASS, and `@Endpoint` is
+    # `@Target(TYPE)`, so it can never sit anywhere else. Every such
+    # declaration is dropped by `derive_endpoints.handler-is-a-method` on its
+    # own account, whatever this catalog says. So the mistake this entry named
+    # cannot produce a row while that join stands: it is a NO-OP mutation, and
+    # §2.2 of the harness's own design forbids counting one — a no-op
+    # manufactures a false finding in whichever direction it is read.
+    #
+    # The conjunct itself is real and stays in the catalog. What is not real is
+    # the claim that a near-miss measures it, and the test that claimed to
+    # (`test_an_endpoint_class_with_no_operation_annotation_derives_nothing`)
+    # now says plainly that its emptiness has two independent causes and pins
+    # neither.
     "spring-sqs.path-from-is-the-destination-aliases": Guard(
         what="`path_from` names the destination attribute under both its spellings, and "
         "nothing else",
@@ -531,75 +543,21 @@ GUARDS: dict[str, Guard] = {
 # conjunct alone; `--check`'s second half refuses an entry that has quietly
 # started to discriminate, so the list cannot rot into a record of nothing.
 #
-# The fix round that follows this one owns these; nothing here is fixed by this
-# commit, deliberately, so the audit records what the mechanism found rather
-# than what one author could reach in an afternoon.
-_DOES_NOT_DISCRIMINATE_YET: frozenset[tuple[str, str]] = frozenset(
-    {
-        # Its emptiness is held up by the ADDRESSES-NOTHING gate, not by the
-        # qualifier gate its docstring names: with the qualifier gate disabled
-        # the row still composes to the empty address and is dropped there.
-        # Measured both ways — disabling the addresses-nothing gate ALONE fails
-        # this test, and disabling the qualifier gate alone does not.
-        (
-            (
-                "tests/application/test_endpoints.py"
-                "::test_a_rabbit_handler_on_a_class_carrying_no_listener_derives_nothing"
-            ),
-            "derive_endpoints.qualifier-scope",
-        ),
-        # Guarded twice over, and pinned by neither half alone. Making
-        # `@Endpoint` a mapping annotation of its own — the "class-level rule"
-        # the docstring names — produces a declaration whose target is a CLASS,
-        # which `derive_endpoints.handler-is-a-method` then drops on its own
-        # account. Both guards would have to go for a row to appear, so this
-        # test measures no single one of them.
-        (
-            (
-                "tests/application/test_endpoints.py"
-                "::test_an_endpoint_class_with_no_operation_annotation_derives_nothing"
-            ),
-            "spring-actuator.operations-are-the-mapping-annotations",
-        ),
-        # `A-M2`'s three, and the second occurrence that produced this file:
-        # the bypass branch reaches only classes the `not handlers` branch
-        # below would reach anyway, so disabling it changes no outcome and all
-        # three near-misses stay green. Their input has NO `doXxx` at all,
-        # which is the shape the OTHER branch already declines.
-        (
-            (
-                "tests/application/test_supertype_dispatch.py"
-                "::test_a_class_overriding_service_and_declaring_no_verb_derives_nothing"
-            ),
-            "supertype_dispatch.bypassed-by",
-        ),
-        (
-            (
-                "tests/application/test_supertype_dispatch.py"
-                "::test_a_javax_class_overriding_service_and_declaring_no_verb_derives_nothing"
-            ),
-            "supertype_dispatch.bypassed-by",
-        ),
-        (
-            (
-                "tests/application/test_supertype_dispatch.py"
-                "::test_the_protocol_agnostic_service_alone_still_derives_nothing"
-            ),
-            "supertype_dispatch.bypassed-by",
-        ),
-        # Sweep 1's S1-MAJ-5, reproduced mechanically. A `GenericServlet`
-        # subclass declares no verb dispatch either, so it is declined by the
-        # bypass and the `not handlers` branches whatever the supertype
-        # comparison says — the conjunct its docstring claims is untested.
-        (
-            (
-                "tests/application/test_supertype_dispatch.py"
-                "::test_a_protocol_agnostic_supertype_derives_nothing"
-            ),
-            "supertype_dispatch.declared-supertype",
-        ),
-    }
-)
+# **It is EMPTY, and that is the shrink-only half having reached zero rather
+# than a list nobody wrote.** The six entries the harness's first audit
+# recorded are all closed: `A-M2`'s three servlet near-misses and sweep 1's
+# `GenericServlet` one now declare a dispatch member, so there is an outcome
+# for the guard's absence to change; the `spring-rabbit` handler near-miss
+# names the addresses-nothing gate that was actually holding it up, which is
+# also one of sweep 1's S1-MAJ-1 unnamed guards closed; and the
+# `spring-actuator` one carries no marker at all, because its emptiness has two
+# independent causes and pins neither (see the registry note above it).
+#
+# An entry that has started to discriminate fails the run, so this cannot rot
+# into a record of nothing — and an addition to it is a deliberate edit a
+# reader sees in a diff, which is the whole point of listing rather than
+# counting.
+_DOES_NOT_DISCRIMINATE_YET: frozenset[tuple[str, str]] = frozenset()
 
 
 @dataclass

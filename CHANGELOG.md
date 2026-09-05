@@ -192,6 +192,61 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Two near-misses declared coverage the guard harness measured as absent** (round-1 review,
+  findings 7 and 8 — the harness's own first audit found both).
+
+  The `spring-rabbit` `@RabbitHandler` near-miss named `derive_endpoints.qualifier-scope`, and
+  `spring-rabbit.yml` declares no `requires_qualifier` at all — so that conjunct is a no-op
+  for the catalog and the guard name was simply false. It names
+  `derive_endpoints.addresses-nothing` now, the gate that really holds it up; that guard is
+  registered for the first time, which closes one of sweep 1's four unnamed
+  fabrication-prevention guards, and the qualifier gate is named by the invented-catalog
+  near-miss that does reach it.
+
+  The `spring-actuator` empty-`@Endpoint` near-miss is guarded twice over and pins neither
+  half: making `@Endpoint` a mapping annotation mints a CLASS-target declaration, and the
+  `construct_kind IN ('method', 'function')` join drops every one of those on its own account.
+  Since `@Endpoint` is `@Target(TYPE)`, that weakening can never produce a row —
+  `spring-actuator.operations-are-the-mapping-annotations` was a **no-op mutation**, which the
+  harness's own design forbids counting, so the registry entry is removed and the test carries
+  no marker and says why.
+
+  `_DOES_NOT_DISCRIMINATE_YET` is now **empty**: `scripts/check.sh --guards` reports **30
+  killed, 0 survived, 0 unmeasurable**. The harness's own self-test no longer depends on a live
+  defect existing — it constructs a guard whose edit rewrites a comment, so that "the edit
+  changes no behaviour" is a property the test guarantees rather than a fact about another
+  test that any commit may change.
+
+- **`A-M2`: a servlet whose `service()` override does NOT delegate published verbs the
+  container does not dispatch, and `bypassed_by` was inert** (round-1 review, MAJOR 5 and
+  MAJOR 4 — one change, because they are one defect seen from two ends).
+
+  CP-9 rows 35-40 measured a DELEGATING `service()` wrapper — `super.service(req, resp)` with
+  `doGet`/`doPost` declared — serving GET 200, POST 200 and refusing PUT with 405, and round
+  1b correctly stopped discarding such a class. It then applied that verdict to every
+  `service()` override declaring `doXxx`, which is §5.4's failure with the arrow reversed, and
+  recorded the residual in COVERAGE as an accepted over-report. **CP-9 rows 41-43 now measure
+  it**: the same class with the delegation removed serves GET 200, POST 200 and **PUT 200** on
+  all three containers. The dispatch never runs, the `doXxx` methods are unreachable, and
+  publishing the declared verbs while withholding one the container serves is a wrong answer
+  rather than a partial one.
+
+  **The distinguishing fact was always in the stream, and CP-9 rows 44-46 measure that too**:
+  a delegating override's `super` call arrives as `invoke_kind: special` on an
+  `HttpServlet#service` target — both entry-point signatures, both package spellings — where
+  the non-delegating one's reads `ABSENT`. So the bypass now asks it, and `call_site` joins
+  both servlet catalogs' `requires`; a scan producing no call sites SKIPS the catalog and says
+  so rather than reading every wrapper as a replacement. No new catalog key: `bypassed_by`
+  names the members, and what delegation means is `supertype_dispatch`'s own semantics.
+
+  **This is also the `bypassed_by` decision (§5.3).** Under round 1b's `and not handlers`
+  qualifier the key reached only classes another branch reached anyway — provably inert, dead
+  catalog vocabulary that looked live, with three near-misses claiming to pin it and the guard
+  harness measuring that none of them did. It is **kept and made load-bearing** rather than
+  retired: the retirement case rested on the narrowing, and the narrowing was itself the
+  defect. All three near-misses are rewritten to declare a `doXxx` — so there is something to
+  lose — and `scripts/check.sh --guards` now kills all three.
+
 - **`A-M13`'s own regression: a Spring Data custom-fragment method was published as a
   `/search/` route** (round-1 review, CRITICAL 2). The `A-M13` fix widened the query-method
   walk to cross every module-local superinterface, so

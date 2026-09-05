@@ -20,7 +20,13 @@ direction: inbound
 detect:
   coordinates: ["jakarta.servlet:jakarta.servlet-api"]
 
-requires: [annotation_args, type_annotations, typed_signatures, superclass]
+# `call_site` is here for `bypassed_by` below and nothing else: whether an
+# override of `service()` DELEGATES through `super.service(req, resp)` is the
+# one fact separating two shapes the container answers differently (CP-9 rows
+# 35-43), and it arrives only as a call site. A scan that produced none skips
+# this catalog and reports the skip, which is the honest degradation — the
+# alternative is reading every delegating wrapper as a replacement.
+requires: [annotation_args, call_site, type_annotations, typed_signatures, superclass]
 
 matches:
   # THE SUPERTYPE IS THE CONTRACT. `HttpServlet.service` is what reads a
@@ -126,12 +132,21 @@ matches:
   # dispatch still runs, the table describes such a class exactly, and
   # discarding it lost its WHOLE surface — address, verbs and handlers.
   #
-  # The residual the narrowing accepts, stated in COVERAGE: a `service()`
-  # override that does NOT delegate and declares `doXxx` anyway. Its `doXxx`
-  # methods may be unreachable and we now publish them. The distinguishing fact
-  # is a `super.service(...)` call — `invoke_kind: special` on an
-  # `HttpServlet#service` target — and reading it needs `call_site` in
-  # `requires`, which this catalog does not have.
+  # **AND THE NON-DELEGATING OVERRIDE IS NOW MEASURED TOO** (round-1 review,
+  # MAJOR 5). Rows 35-40 measured the DELEGATING wrapper, and the verdict was
+  # then applied to every `service()` override declaring `doXxx` — §5.4's
+  # failure with the arrow reversed. Rows 41-43 measure the same class with the
+  # delegation removed: GET 200, POST 200, **PUT 200**, on all three
+  # containers. `HttpServlet`'s dispatch never runs, the `doXxx` methods are
+  # unreachable, and the table would have claimed GET and POST while denying a
+  # PUT the container serves.
+  #
+  # So the bypass now asks the fact that separates them, and the fact stream
+  # carries it: rows 44 and 46 read `invoke_kind: special` on an
+  # `HttpServlet#service` target out of each delegating override, row 45 reads
+  # ABSENT out of the non-delegating one. `call_site` is in `requires` above
+  # for exactly this. No new key — `bypassed_by` names the members, and what
+  # delegation means is `supertype_dispatch`'s own semantics.
   #
   # Both overloads, because they are two different methods (`HttpServlet`
   # declares `protected service(HttpServletRequest, HttpServletResponse)` and

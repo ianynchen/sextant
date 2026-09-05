@@ -141,6 +141,7 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
 
     addresses_by_class = _addresses(workspace, annotation, keys)
     members_by_class = _members(workspace)
+    delegating = _delegating_members(workspace, supertype)
 
     found: list[_ClassMatch] = []
     for row in workspace.query("superclasses"):
@@ -166,43 +167,52 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
                 if selector in dispatch
             )
         )
-        if bypass & set(members) and not handlers:
-            # `A-M2`: `and not handlers` is the whole fix, and it is the
-            # CONFIGURATION the CP-9 verdict was measured against rather than
-            # the one it was applied to.
+        overridden = {symbol for selector, symbol in members.items() if selector in bypass}
+        if not all(symbol in delegating for symbol in overridden):
+            # THE BYPASS, and it is the whole measured rule rather than half of
+            # it. The dispatch the table describes runs only where EVERY
+            # override of its entry point calls back into the supertype's own
+            # implementation; an override that does not has replaced the lookup,
+            # and the table then describes nothing about the class.
             #
-            # What was measured (rows 14-15): a class overriding `service()`
-            # with NO `doXxx` anywhere serves GET and PUT alike, so the verb
-            # table describes nothing about it. What the verdict then said, and
-            # this branch enforced, was "a bypass discards the CLASS" — applied
-            # to every `service()` override, including the commonest real form.
+            # Three configurations, all measured, on all three CP-9 containers
+            # and BOTH entry-point signatures:
             #
-            # What that form actually does, now measured on all three
-            # containers and BOTH `service` signatures (rows 35-40): a
-            # cross-cutting wrapper that calls `super.service(req, resp)` and
-            # declares `doGet`/`doPost` serves GET (200) and POST (200) and
-            # REFUSES PUT (405). `HttpServlet`'s own dispatch still runs and the
-            # table describes that class exactly — so discarding it lost the
-            # class's WHOLE surface, address, verbs and handlers, where the
-            # table was right.
+            #   * rows 14-15 — the entry point overridden, no dispatch member
+            #     anywhere: GET 200 and PUT 200. Every operation alike.
+            #   * rows 35-40 — overridden and DELEGATING through
+            #     `super.service(req, resp)`, `doGet`/`doPost` declared: GET
+            #     200, POST 200, PUT **405**. The dispatch still runs and the
+            #     table describes the class exactly.
+            #   * rows 41-43 — the same class with the delegation removed: GET
+            #     200, POST 200, PUT **200**. The table would claim GET and
+            #     POST and deny PUT, which the container serves.
             #
-            # With the qualifier, this branch reaches only classes the
-            # `not handlers` branch below would reach anyway, so it changes no
-            # outcome on its own. It is kept rather than deleted because the two
-            # say different things: this one records the MEASURED rule about
-            # `service()`, and the one below records "registered, and serving
-            # nothing the table describes" — a class with no bypass member at
-            # all. Deleting either would leave a reader unable to tell which
-            # reason applied.
+            # The verdict was generalised past its measurement twice, in
+            # OPPOSITE directions. First rows 14-15's "a bypass discards the
+            # class" was applied to the delegating wrapper, costing the
+            # commonest real form its whole surface (`A-M2`). Then rows 35-40's
+            # "such a class derives its operations" was applied to the
+            # non-delegating one, publishing operations whose members never run
+            # and denying one the container answers. Rows 41-43 are the
+            # measurement that separates the two, and the fact that separates
+            # them is in the stream: rows 44 and 46 read `invoke_kind: special`
+            # on a `<supertype>#service` target out of each delegating
+            # override, and row 45 reads ABSENT out of the non-delegating one.
             #
-            # STILL UNMEASURED, and the residual this narrowing accepts: a
-            # `service()` override that does NOT delegate and declares `doXxx`
-            # anyway. Its `doXxx` methods may be unreachable, and we now publish
-            # them. Nothing in the fact stream separates it from rows 35-40 —
-            # the distinguishing fact is a `super.service(...)` call,
-            # `invoke_kind: special` on an `HttpServlet#service` target — and
-            # the catalog would need `call_site` in `requires` to see it.
-            # Stated in `docs/COVERAGE.md`.
+            # NO NEW CATALOG KEY. Which members bypass is `bypassed_by`; what
+            # delegation MEANS is this style's own semantics — a call back into
+            # the `supertype` the catalog already declares — so a second
+            # framework of this shape needs no new word. `call_site` is in both
+            # servlet catalogs' `requires`, so a scan that produced no call
+            # sites SKIPS the catalog and says so, rather than reading every
+            # delegating override as a replacement.
+            #
+            # THIS IS ALSO WHAT MAKES `bypassed_by` LOAD-BEARING AGAIN. Under
+            # the `and not handlers` qualifier it reached only classes the
+            # branch below reached anyway — dead catalog vocabulary that looked
+            # live (§5.3), and three near-misses claimed to pin it while the
+            # guard harness measured that none of them did.
             continue
         if not handlers:
             # Registered, and serving nothing the table describes. "The
@@ -268,6 +278,44 @@ def _strings(value: Any) -> list[str]:
     if isinstance(value, list):
         return [entry for entry in value if isinstance(entry, str)]
     return []
+
+
+def _delegating_members(workspace: Workspace, supertype: str) -> frozenset[str]:
+    """Every method symbol that calls the SUPERTYPE's own implementation of the
+    method it is — the override that lets the supertype's dispatch keep running.
+
+    `invoke_kind: special` and nothing else, which is the exact mirror rather
+    than a convenience: a virtual call on a supertype-typed value is a call to
+    somebody ELSE's object, and a virtual self-call would not reach the
+    supertype's implementation at all. Measured in the stream (CP-9 rows 44 and
+    46, all three containers and both entry-point signatures): a delegating
+    override's `super`-call arrives as `special`, with the SUPERTYPE as the
+    target's owner and the member's own name.
+
+    The name is compared and the parameter types are not, and that is the one
+    place this is deliberately looser than §8.1's language rule. What is being
+    asked is "does control return to the supertype's dispatch", and the two
+    entry points delegate into each other — the public one's `super` call lands
+    on the other signature. Comparing parameter types would read that as no
+    delegation at all. The looseness costs an over-report only where an
+    override calls a DIFFERENT overload of its own name on the supertype and
+    then declines to dispatch, which no measured configuration does.
+
+    An owner outside the module is normal here and is why the comparison is on
+    bare descriptors: the supertype ships in a dependency this workspace never
+    scans, so only the call site is ours.
+    """
+    delegating: set[str] = set()
+    for row in workspace.query("call_sites"):
+        if str(row["invoke_kind"]) != "special":
+            continue
+        caller = str(row["caller"])
+        if bare_descriptor(str(row["owner"] or "")) != supertype:
+            continue
+        if str(row["name"]) != method_name(bare_descriptor(caller)):
+            continue
+        delegating.add(caller)
+    return frozenset(delegating)
 
 
 def _members(workspace: Workspace) -> dict[str, dict[_Selector, str]]:

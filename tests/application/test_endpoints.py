@@ -761,11 +761,20 @@ def test_a_scope_stated_on_the_enclosing_type_reaches_a_declaration_that_names_n
     }
 
 
+@pytest.mark.pins("derive_endpoints.qualifier-scope")
 def test_a_scoped_annotation_with_no_scope_anywhere_derives_no_row_at_all(
     tmp_path: Path,
 ):
     """`requires_qualifier` — the rule that keeps a missing scope silent
     instead of wrong.
+
+    It names the qualifier-scope guard, which the `spring-rabbit` near-miss
+    used to name and does not reach — `spring-rabbit.yml` declares no
+    `requires_qualifier` at all, so the conjunct is a no-op for that catalog.
+    This input reaches it: `named` and `defaulted` would each publish a bare
+    member name the moment the conjunct is relaxed, and `Parent.member` in the
+    same assertion is the paired positive that stops this passing because the
+    rule matched nothing.
 
     An annotation that names a member OF something has no address until the
     something is known. Emitting the bare member name would publish a
@@ -4311,7 +4320,7 @@ def test_a_class_level_rabbit_listener_gives_its_queue_to_every_rabbit_handler(t
 
 
 @pytest.mark.declines("spring-rabbit")
-@pytest.mark.pins("derive_endpoints.qualifier-scope")
+@pytest.mark.pins("derive_endpoints.addresses-nothing")
 def test_a_rabbit_handler_on_a_class_carrying_no_listener_derives_nothing(tmp_path: Path):
     """§10 near-miss for the polymorphic matcher, negating its second
     conjunct: the method is annotated exactly as a real handler is, and the
@@ -4319,10 +4328,21 @@ def test_a_rabbit_handler_on_a_class_carrying_no_listener_derives_nothing(tmp_pa
 
     `@RabbitHandler` states no destination of its own, so the only thing such
     a row could carry is the EMPTY address — a resolved endpoint addressing
-    nothing, which is the confidently-wrong-address failure `path_fallback`
-    and the qualifier gate both already close from other directions. Spring
-    itself derives nothing here: `@RabbitHandler` outside a class-level
+    nothing, which is mechanism 3's addresses-nothing gate. Spring itself
+    derives nothing here: `@RabbitHandler` outside a class-level
     `@RabbitListener` is never registered with any container.
+
+    **It names the addresses-nothing gate, and it used to name the qualifier
+    scope.** `spring-rabbit.yml` declares no `requires_qualifier` at all, so
+    that conjunct is a no-op for this catalog and the guard name was simply
+    false — the same correction the harness forced on two of its own names.
+    Measured both ways by `scripts/guard_check.py`: disabling the
+    addresses-nothing gate ALONE fails this test; disabling the qualifier gate
+    alone does not.
+
+    Paired positive:
+    `test_a_class_level_rabbit_listener_gives_its_queue_to_every_rabbit_handler`
+    — the same `@RabbitHandler`, under a class that names the queue.
     """
     rows = _rows_from(
         tmp_path,
@@ -4453,14 +4473,26 @@ def test_an_actuator_operation_is_served_under_the_constant_prefix_with_its_own_
     ]
 
 
-@pytest.mark.declines("spring-actuator")
-@pytest.mark.pins("spring-actuator.operations-are-the-mapping-annotations")
 def test_an_endpoint_class_with_no_operation_annotation_derives_nothing(tmp_path: Path):
-    """§10 near-miss, and CP-5 row 6 measured rather than assumed: an
-    `@Endpoint` class whose methods carry no operation annotation serves
-    nothing — `GET /actuator/empty` was a 404 on both versions probed, and the
-    endpoint did not appear in the discovery document at all. A class-level
-    rule would have published `/actuator/empty` at `resolved`/`compiler`."""
+    """CP-5 row 6 measured rather than assumed: an `@Endpoint` class whose
+    methods carry no operation annotation serves nothing — `GET
+    /actuator/empty` was a 404 on both versions probed, and the endpoint did
+    not appear in the discovery document at all.
+
+    **It carries NO `declines` or `pins` marker, and that is a finding rather
+    than an omission.** Its emptiness has two independent causes and pins
+    neither. Making `@Endpoint` a mapping annotation of its own — the
+    "class-level rule" this used to say it negated — mints a declaration whose
+    target is a CLASS, and `@Endpoint` is `@Target(TYPE)` so it can sit nowhere
+    else; every such declaration is dropped by the
+    `construct_kind IN ('method', 'function')` join regardless of what the
+    catalog says. So no single guard's absence makes a row appear here, and a
+    marker would have declared coverage nothing verifies — which the guard
+    harness measured and this docstring now records.
+
+    `spring-actuator`'s declining coverage is
+    `test_an_actuator_operation_outside_an_endpoint_class_derives_nothing`,
+    which negates the other conjunct and does discriminate."""
     rows = _rows_from(
         tmp_path,
         [_shipped("spring-actuator")],

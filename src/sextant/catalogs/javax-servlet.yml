@@ -27,7 +27,10 @@ direction: inbound
 detect:
   coordinates: ["javax.servlet:javax.servlet-api"]
 
-requires: [annotation_args, type_annotations, typed_signatures, superclass]
+# `call_site` for `bypassed_by`, exactly as the jakarta twin declares it and
+# for the same reason: a delegating `service()` override is told from a
+# replacing one by a call, and by nothing else.
+requires: [annotation_args, call_site, type_annotations, typed_signatures, superclass]
 
 matches:
   supertype: javax.servlet.http.HttpServlet
@@ -70,13 +73,15 @@ matches:
       method: TRACE
 
   # Both overloads, because they are two different methods and overriding
-  # either replaces the dispatch the table above describes — WHERE THE CLASS
-  # DECLARES NO `doXxx` (CP-9 rows 14-15, as qualified for `A-M2`). A class
-  # that also declares dispatch members derives them: rows 35-40 measure a
-  # delegating wrapper on both signatures and all three containers serving
-  # GET/POST and refusing PUT. `jakarta-servlet.yml` carries the full reasoning
-  # and the stated residual; it applies here unchanged, under the other
-  # package spelling.
+  # either replaces the dispatch the table above describes — UNLESS THE
+  # OVERRIDE DELEGATES back through `super.service(...)` (CP-9 rows 14-15,
+  # 35-40 and 41-43, all three containers and both signatures: no `doXxx` at
+  # all serves every verb alike; delegating serves GET/POST and refuses PUT;
+  # NOT delegating serves PUT too). `jakarta-servlet.yml` carries the full
+  # reasoning; it applies here unchanged, under the other package spelling,
+  # and CP-9's `javax` column measures this spelling rather than inheriting
+  # the other's answer — including row 44's `special javax/servlet/http/
+  # HttpServlet#.service`.
   bypassed_by:
     - name: service
       parameters: [javax.servlet.http.HttpServletRequest, javax.servlet.http.HttpServletResponse]

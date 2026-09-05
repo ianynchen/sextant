@@ -35,6 +35,8 @@ from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
     AnnotationFact,
     AnnotationUse,
+    CallSiteFact,
+    CallTarget,
     Document,
     Parameter,
     Signature,
@@ -47,7 +49,15 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CATALOGS = catalogs_dir()
 
-CAPABILITIES = {"annotation_args", "type_annotations", "typed_signatures", "superclass"}
+CAPABILITIES = {
+    "annotation_args",
+    # `bypassed_by` reads whether an override DELEGATES, which arrives only as
+    # a call site (CP-9 rows 44-46).
+    "call_site",
+    "type_annotations",
+    "typed_signatures",
+    "superclass",
+}
 
 # The module-coordinates prefix a real symbol fact's own `symbol` carries
 # (D00 §5a) — `test_supertype_derived.py`'s own `_MODULE` precedent.
@@ -147,6 +157,25 @@ def _method(
     )
 
 
+def _delegates(name: str = "service", *, owner: str = SERVLET, base: str = DISPATCH_BASE):
+    """The `super.<name>(...)` call a DELEGATING override makes — the one fact
+    that tells a cross-cutting wrapper from a class that has replaced the
+    supertype's dispatch outright.
+
+    Its shape is measured rather than invented (CP-9 rows 44 and 46, all three
+    containers and both entry-point signatures): `invoke_kind: special`, the
+    SUPERTYPE as the target's owner, the member's own name. Row 45 reads
+    `ABSENT` for the non-delegating class, which is why the absence of this
+    fact is an answer and not a gap."""
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=f"{_MODULE}{owner}{name}(sig_{name}).",
+        target=CallTarget(owner=base, name=name, descriptor="(...)V"),
+        invoke_kind="special",
+        ordinal=0,
+    )
+
+
 def _annotated(args: dict[str, object], *, owner: str = SERVLET) -> AnnotationFact:
     return AnnotationFact(
         document_id="doc_1",
@@ -173,7 +202,13 @@ def _catalog(matches: dict[str, object] | None = None) -> Catalog:
         style="supertype_dispatch",
         protocol="http",
         direction="inbound",
-        requires=("annotation_args", "type_annotations", "typed_signatures", "superclass"),
+        requires=(
+            "annotation_args",
+            "call_site",
+            "type_annotations",
+            "typed_signatures",
+            "superclass",
+        ),
         matches=matches,
         source=Path("test-jakarta-servlet.yml"),
     )
@@ -404,19 +439,29 @@ def test_a_dispatch_subclass_with_no_address_annotation_derives_nothing(tmp_path
     assert _rows(tmp_path, facts) == []
 
 
-@pytest.mark.declines("jakarta-servlet")
-@pytest.mark.pins("supertype_dispatch.bypassed-by")
 def test_a_class_overriding_service_and_declaring_no_verb_derives_nothing(tmp_path: Path):
-    """CP-9 rows 14-15, verdict 8 as amended for `A-M2`.
-    `service(HttpServletRequest, HttpServletResponse)` is the very method that
-    reads the request's verb and dispatches to `doXxx`; a class that overrides
-    it **and declares no `doXxx` at all** serves GET and PUT alike (200 and
-    200), so the verb map does not describe it. Applying the map anyway would
-    publish `GET` and withhold `PUT` — a WRONG answer, not a partial one.
+    """CP-9 rows 14-15, verdict 8. `service(HttpServletRequest,
+    HttpServletResponse)` is the very method that reads the request's verb and
+    dispatches to `doXxx`; a class that overrides it **and declares no `doXxx`
+    at all** serves GET and PUT alike (200 and 200), so the verb map does not
+    describe it.
 
-    NO `doGet` here, and that is the correction: this test used to declare one
-    and assert nothing derived, which is the defect `A-M2` names rather than the
-    rule CP-9 measured. Its paired positive is now the test below.
+    **It carries NO `declines` or `pins` marker, deliberately, and that is a
+    finding rather than an omission.** This input is guarded TWICE over — the
+    bypass discards it because the override does not delegate, and the
+    "registered, and serving nothing the table describes" branch discards it
+    because there is no `doXxx` to publish — so removing either guard changes
+    no outcome and the test measures neither. Measured, not argued: the guard
+    harness reported it surviving both ways round. A marker here would declare
+    coverage nothing verifies, which is the exact defect
+    `scripts/guard_check.py` exists to find.
+
+    It stays because it pins a MEASURED configuration (rows 14-15) that no
+    other test states, and because losing it would lose the record that the
+    two branches agree here. The near-misses that do discriminate are
+    `test_a_non_delegating_service_override_derives_nothing` (the bypass) and
+    `test_a_declared_address_with_no_dispatch_override_derives_nothing` (the
+    other branch).
     """
     facts = [
         _class(),
@@ -449,11 +494,17 @@ def test_a_wrapper_that_overrides_service_still_derives_the_verbs_it_declares(
 
     Both signatures are parametrized rather than reasoned across, for the
     reason `A-M2` exists: `HttpServlet` has two `service` methods and a verdict
-    read against one must not be applied to the other."""
+    read against one must not be applied to the other.
+
+    **The `super.service(...)` call site is part of the input now**, because it
+    is what makes this the class rows 35-40 measured rather than the one rows
+    41-43 do. Its own shape is measured too (rows 44 and 46), and both
+    signatures' delegating overrides read the same way."""
     facts = [
         _class(),
         _method("doGet", REQUEST, RESPONSE),
         _method("service", request_type, response_type),
+        _delegates(),
         _annotated({"urlPatterns": ["/orders"]}),
     ]
 
@@ -462,15 +513,55 @@ def test_a_wrapper_that_overrides_service_still_derives_the_verbs_it_declares(
 
 @pytest.mark.declines("jakarta-servlet")
 @pytest.mark.pins("supertype_dispatch.bypassed-by")
-def test_the_protocol_agnostic_service_alone_still_derives_nothing(tmp_path: Path):
+def test_a_non_delegating_service_override_derives_nothing(tmp_path: Path):
+    """`bypassed_by`'s own near-miss, and the round-1 review's MAJOR 5.
+
+    Identical to the delegating positive above in every cell but one — the
+    `super.service(...)` call site is gone — and that one cell is what the
+    container answers differently. MEASURED (CP-9 rows 41-43, all three
+    containers): a `service()` override that does NOT delegate, with
+    `doGet`/`doPost` declared, serves GET 200, POST 200 and **PUT 200**, where
+    the delegating twin refuses PUT with 405 (row 37). `HttpServlet`'s dispatch
+    never runs, the `doXxx` methods are unreachable, and publishing GET while
+    withholding PUT is a wrong answer rather than a partial one.
+
+    Round 1b derived this shape anyway and stated it in COVERAGE as an accepted
+    over-report, on the strength of rows 35-40 — a verdict applied past the
+    configuration it measured (§5.4, §8.1 rule 4). Rows 41-43 measure the
+    configuration, and rows 44-46 measure that the distinguishing fact reaches
+    the workspace at all.
+
+    Its paired positive is the test above."""
+    facts = [
+        _class(),
+        _method("doGet", REQUEST, RESPONSE),
+        _method("service", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _rows(tmp_path, facts) == []
+
+
+@pytest.mark.declines("jakarta-servlet")
+@pytest.mark.pins("supertype_dispatch.bypassed-by")
+def test_the_protocol_agnostic_service_overridden_without_delegating_derives_nothing(
+    tmp_path: Path,
+):
     """The second bypass signature's own near-miss, and the reason
     `bypassed_by` is a LIST of `{name, parameters}` rather than a list of names:
     `service(ServletRequest, ServletResponse)` is a different method from the
     protected one — same name, different parameter types — and a class
-    overriding it with no `doXxx` has replaced the dispatch just as
-    completely."""
+    overriding it without delegating has replaced the dispatch just as
+    completely (CP-9 row 40 for the delegating half, rows 41-43 for this one).
+
+    `doGet` is declared here, which it was not before: without it neither
+    branch had anything to publish, so the input could not notice the bypass
+    going away and the marker claimed coverage the harness measured as absent.
+    The entry-point signature is the one cell that differs from
+    `test_a_non_delegating_service_override_derives_nothing`."""
     facts = [
         _class(),
+        _method("doGet", REQUEST, RESPONSE),
         _method("service", AGNOSTIC_REQUEST, AGNOSTIC_RESPONSE),
         _annotated({"urlPatterns": ["/orders"]}),
     ]
@@ -483,12 +574,28 @@ def test_the_protocol_agnostic_service_alone_still_derives_nothing(tmp_path: Pat
 def test_a_protocol_agnostic_supertype_derives_nothing(tmp_path: Path):
     """CP-9 rows 16-17 and 28, verdict 9. A `GenericServlet` subclass carries
     the SAME address annotation and serves GET and PUT alike through one
-    protocol-agnostic `service` — it declares no verb dispatch at all. It is
-    excluded structurally, by its own `superclass` not being the one the
-    catalog names, rather than by a special case."""
+    protocol-agnostic `service` — `GenericServlet` performs no verb dispatch at
+    all, so a `doGet` on such a class is a method nothing calls. It is excluded
+    structurally, by its own `superclass` not being the one the catalog names,
+    rather than by a special case.
+
+    **`doGet` is declared and `service` is NOT, and both are what make this a
+    measurement rather than a marker.** Without a `doGet` the class had no verb
+    to publish however the supertype comparison answered, so the near-miss
+    passed whatever that comparison did — sweep 1's S1-MAJ-5, reproduced
+    mechanically by the guard harness. And WITH a `service` declaration it
+    would be discarded by the bypass as well, which is a second guard covering
+    the same input: §10 asks for an input satisfying every conjunct but the one
+    under test, so the entry-point override is left out and the class is the
+    abstract intermediate that shape is legal as. With both corrections,
+    weakening the supertype comparison publishes `GET /orders` for a class that
+    performs no verb dispatch at all, and the test says so.
+
+    Its paired positive is `test_each_url_pattern_is_its_own_endpoint`: the
+    same address and the same `doGet`, under the supertype the catalog names."""
     facts = [
         _class(superclass=AGNOSTIC_BASE),
-        _method("service", AGNOSTIC_REQUEST, AGNOSTIC_RESPONSE, visibility="public"),
+        _method("doGet", REQUEST, RESPONSE),
         _annotated({"urlPatterns": ["/orders"]}),
     ]
 
@@ -720,19 +827,27 @@ def test_a_javax_spelled_servlet_derives_nothing_from_the_jakarta_catalog(tmp_pa
 
 @pytest.mark.declines("javax-servlet")
 @pytest.mark.pins("supertype_dispatch.bypassed-by")
-def test_a_javax_class_overriding_service_and_declaring_no_verb_derives_nothing(
+def test_a_javax_class_overriding_service_without_delegating_derives_nothing(
     tmp_path: Path,
 ):
     """The bypass under the second spelling, pinned separately from the
     equivalence test above because `bypassed_by` is the block whose entries can
     be renamed wrongly and stay silent: a signature left naming the `jakarta`
     types would match nothing, the bypass would never fire, and this class
-    would publish nothing-shaped rows for a class serving every verb alike
-    (CP-9 rows 14-15).
+    would publish GET while withholding a PUT the container serves (CP-9 rows
+    41-43, measured on Tomcat 9.0.121 under this very spelling).
 
-    No `doGet`, since `A-M2`: a `javax` wrapper that declares one derives it,
-    exactly as its `jakarta` twin does."""
-    facts = _javax_facts(_method("service", _JAVAX["request"], _JAVAX["response"]))
+    `doGet` IS declared, which it was not before. Without it the class had no
+    verb to publish either way, so the input could not notice the bypass going
+    away — the marker declared coverage the guard harness measured as absent.
+    Its paired positive is `test_the_second_spelling_derives_its_own_endpoint`,
+    and the delegating half is the `jakarta` twin's parametrized positive; CP-9
+    row 44 reads `special javax/servlet/http/HttpServlet#.service` for this
+    spelling, so the fact the engine asks for is measured here too."""
+    facts = _javax_facts(
+        _method("doGet", _JAVAX["request"], _JAVAX["response"]),
+        _method("service", _JAVAX["request"], _JAVAX["response"]),
+    )
 
     assert _rows(tmp_path, facts, _javax_catalog()) == []
 
