@@ -191,7 +191,14 @@ def test_a_real_2b_annotation_fact_keeps_its_type_path_without_loss():
     fact = AnnotationFact.model_validate(REAL_2B_ANNOTATION_FACT)
 
     assert fact.type_path == ""
-    assert fact.model_dump(mode="json") == REAL_2B_ANNOTATION_FACT
+    # Capability 9.16 puts `unresolved` on every annotation use, null included:
+    # the extractor writes it only on a NESTED use it stopped short of, so a
+    # use it read in full — which is every outermost one, this one among them —
+    # dumps it as None. Pinned exactly rather than by subset, the same way the
+    # `call_sites` view pins `elements`.
+    assert fact.model_dump(mode="json") == REAL_2B_ANNOTATION_FACT | {
+        "use": {"annotation": "org/jspecify/annotations/Nullable#", "args": {}, "unresolved": None}
+    }
 
 
 def test_an_older_hand_built_symbol_fact_still_validates_without_the_2b_fields():
@@ -446,6 +453,60 @@ def test_a_zero_length_array_argument_keeps_an_empty_element_list():
 
     assert TypeAdapter(CallArgument).validate_python(empty.model_dump(mode="json")).elements == []
     assert unreadable.elements is None
+
+
+def test_annotation_fact_accepts_an_annotation_valued_argument_recursively():
+    # Capability 9.16. A nested annotation is an `AnnotationUse`, not a second
+    # vocabulary beside it, so `@RabbitListener(bindings = @QueueBinding(value
+    # = @Queue("orders")))` nests the same shape at every level and the queue
+    # name — two levels down — survives the round trip typed rather than as a
+    # dict nobody validated.
+    fact = AnnotationFact(
+        document_id="doc_1",
+        target="sextant-jvm maven com.acme/orders 1.0 com/acme/OrdersListener#onOrder().",
+        retention="runtime",
+        use=AnnotationUse(
+            annotation="org/springframework/amqp/rabbit/annotation/RabbitListener#",
+            args={
+                "bindings": [
+                    AnnotationUse(
+                        annotation="org/springframework/amqp/rabbit/annotation/QueueBinding#",
+                        args={
+                            "value": AnnotationUse(
+                                annotation="org/springframework/amqp/rabbit/annotation/Queue#",
+                                args={"name": "orders.queue"},
+                            )
+                        },
+                    )
+                ]
+            },
+        ),
+    )
+
+    reloaded = TypeAdapter(Fact).validate_python(fact.model_dump(mode="json"))
+
+    assert reloaded == fact
+    assert isinstance(reloaded, AnnotationFact)
+    binding = reloaded.use.args["bindings"][0]  # type: ignore[index]
+    queue = binding.args["value"]  # type: ignore[union-attr]
+    assert isinstance(queue, AnnotationUse)
+    assert queue.args["name"] == "orders.queue"
+    # Read in full, so nothing is marked unread at any level.
+    assert reloaded.use.unresolved is None and queue.unresolved is None
+
+
+def test_a_nested_annotation_past_the_depth_bound_is_unresolved_not_truncated():
+    # GUIDELINES §8 at the recursion bound the extractor states. The type is
+    # real evidence read off the descriptor and is kept; the arguments were
+    # never read, and `unresolved` is what says so — an empty `args` alone is
+    # indistinguishable from an annotation genuinely written with none.
+    deep = AnnotationUse(annotation="com/acme/Deep#", unresolved="depth_limit")
+
+    reloaded = TypeAdapter(AnnotationUse).validate_python(deep.model_dump(mode="json"))
+
+    assert reloaded == deep
+    assert reloaded.args == {}
+    assert reloaded.unresolved == "depth_limit"
 
 
 def test_field_write_fact_survives_a_fact_file_round_trip(tmp_path: Path):

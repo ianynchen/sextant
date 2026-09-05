@@ -728,3 +728,15 @@ def test_scanner_declares_the_array_arguments_capability():
     wrote it says it produces them — the same gate `generic_interfaces` and
     `superclass` pass through."""
     assert "array_arguments" in AsmScanner(JAR).capabilities()
+
+
+def test_scanner_declares_the_nested_annotation_args_capability():
+    """Capability 9.16 passes the same gate. A catalog reading `@Poller` inside
+    `@InboundChannelAdapter`, or a `@Scheduled` folded into a `@Schedules`
+    array, is reading a key that simply did not exist in an older extractor's
+    output — absent, not wrong — so the declaration is what tells the two
+    apart. The extractor-side evidence is
+    `extractor-jvm/src/test/java/dev/sextant/extractor/NestedAnnotationScanTest.java`
+    against `NestedAnnotated`, and the real-bytecode arm is
+    `fixtures/spring-integration-probe/…/NestedAnnotationShapes.java`."""
+    assert "nested_annotation_args" in AsmScanner(JAR).capabilities()

@@ -442,8 +442,10 @@ alongside §8's, one audited golden update, one release-notes callout.
   setting `unresolved` for a path carrying `#{` or `${`. Publishing a SpEL
   expression as a resolved address is a confidently-wrong address, which is
   the failure `derive_endpoints.sql:386-390`'s own guards exist to prevent.
-  `bindings=` nested annotations are a STATED BOUNDARY — D00's literal model
-  has no nested annotations. Outbound
+  `bindings=` nested annotations **were** a stated boundary here; capability
+  9.16 (below) removed it, so `@QueueBinding(value = @Queue("orders"))` now
+  carries the queue name in the fact stream and the boundary that remains is
+  only that no catalog reads a nested use yet. Outbound
   `RabbitTemplate.convertAndSend(exchange, routingKey, …)`:
   AMQP's wire identity is the exchange+routing-key PAIR, which `single_call`'s
   one-address contract refuses — `single_call` gains an optional

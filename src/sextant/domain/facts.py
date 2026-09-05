@@ -6,7 +6,14 @@ from pydantic import BaseModel, Field
 
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 
-type LiteralValue = str | int | float | bool | list["LiteralValue"]
+# D00 §5a's literal model: string, number, boolean, enum reference, class
+# reference (both spelled as symbol references) and arrays of these — plus,
+# from capability 9.16, an ANNOTATION. An annotation-valued argument is not a
+# new vocabulary: it is an `AnnotationUse`, exactly the shape the enclosing use
+# already has, so `@RabbitListener(bindings = @QueueBinding(value = @Queue(…)))`
+# nests the same way at every level. Recursive, and resolved lazily because
+# `AnnotationUse` is defined below in terms of this alias.
+type LiteralValue = str | int | float | bool | AnnotationUse | list["LiteralValue"]
 
 
 class TypeRef(BaseModel):
@@ -31,6 +38,15 @@ class AnnotationUse(BaseModel):
     model_config = {"frozen": True}
     annotation: str
     args: dict[str, LiteralValue] = Field(default_factory=dict)
+    # Capability 9.16's own key, and set only on a NESTED use the scanner
+    # declined to read to the bottom — the extractor bounds its recursion, and
+    # names why here (`depth_limit`) rather than truncating. The annotation's
+    # TYPE is real evidence read off the descriptor and is kept; its `args`
+    # stay empty because they were never read, which is why this flag has to
+    # exist: an empty `args` alone is indistinguishable from an annotation
+    # genuinely written with no arguments (GUIDELINES §8). `None` on every use
+    # the scanner read in full, which is every outermost one.
+    unresolved: str | None = None
 
 
 class Parameter(BaseModel):

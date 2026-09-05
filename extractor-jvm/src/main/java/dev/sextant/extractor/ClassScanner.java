@@ -401,6 +401,38 @@ public final class ClassScanner {
          *  {@code {"annotation":...,"args":{...}}} JSON to {@code onUse}. */
         private org.objectweb.asm.AnnotationVisitor useCollectingVisitor(
                 String descriptor, java.util.function.Consumer<String> onUse) {
+            return useCollectingVisitor(descriptor, 0, onUse);
+        }
+
+        /** How many levels of annotation may nest BELOW the outermost one before
+         *  the collector stops descending. The outermost annotation is depth 0,
+         *  so {@code @RabbitListener(bindings = @QueueBinding(value = @Queue(…)))}
+         *  reaches depth 2 and the deepest shape in the estate
+         *  ({@code …@Queue(arguments = @Argument(…))}) reaches depth 3.
+         *
+         *  <p>The Java language bounds this on its own — javac rejects a cyclic
+         *  annotation element type, so a chain cannot revisit a type and is
+         *  bounded by the number of distinct annotation types written — but the
+         *  extractor reads CLASS FILES, which need not have come from javac. A
+         *  hand-built or corrupt one can nest to any depth, and an unbounded
+         *  recursion here is a StackOverflowError in the middle of a scan rather
+         *  than a fact. Five is comfortably past the deepest real shape and far
+         *  short of any stack limit. */
+        private static final int MAX_NESTED_ANNOTATION_DEPTH = 5;
+
+        /** {@code depth} is this annotation's own nesting level, 0 for the
+         *  outermost. Below {@link #MAX_NESTED_ANNOTATION_DEPTH} a nested
+         *  annotation is collected recursively into the SAME
+         *  {@code {"annotation":…,"args":{…}}} shape the outer one uses (D00 §5a's
+         *  literal model, extended by capability 9.16 rather than duplicated);
+         *  at the bound it becomes
+         *  {@code {"annotation":…,"unresolved":"depth_limit"}} — the type is real
+         *  evidence read off the descriptor and is kept, the arguments were never
+         *  read and so no {@code args} key is written at all. An EMPTY
+         *  {@code args} would be a silent truncation: indistinguishable from an
+         *  annotation genuinely written with no arguments (GUIDELINES §8). */
+        private org.objectweb.asm.AnnotationVisitor useCollectingVisitor(
+                String descriptor, int depth, java.util.function.Consumer<String> onUse) {
             String annotation = Type.getType(descriptor).getInternalName() + "#";
             TreeMap<String, String> args = new TreeMap<>();
             return new org.objectweb.asm.AnnotationVisitor(Opcodes.ASM9) {
@@ -409,6 +441,11 @@ public final class ClassScanner {
                 }
                 @Override public void visitEnum(String name, String descriptor, String constant) {
                     args.put(name == null ? "value" : name, enumReference(descriptor, constant));
+                }
+                @Override public org.objectweb.asm.AnnotationVisitor visitAnnotation(
+                        String name, String descriptor) {
+                    String key = name == null ? "value" : name;
+                    return nestedUseVisitor(descriptor, depth, use -> args.put(key, use));
                 }
                 @Override public org.objectweb.asm.AnnotationVisitor visitArray(String name) {
                     List<String> items = new ArrayList<>();
@@ -419,6 +456,15 @@ public final class ClassScanner {
                         @Override public void visitEnum(
                                 String ignored, String descriptor, String constant) {
                             items.add(enumReference(descriptor, constant));
+                        }
+                        // An ARRAY of annotations, which is what javac folds two or
+                        // more of a @Repeatable annotation into: `@Scheduled` twice
+                        // on one method compiles to a single `@Schedules({…,…})`, so
+                        // without this override a method with two schedules carries
+                        // no trigger at all while a method with one carries its own.
+                        @Override public org.objectweb.asm.AnnotationVisitor visitAnnotation(
+                                String ignored, String descriptor) {
+                            return nestedUseVisitor(descriptor, depth, items::add);
                         }
                         @Override public void visitEnd() {
                             args.put(name == null ? "value" : name, JsonOut.array(items));
@@ -432,6 +478,23 @@ public final class ClassScanner {
                     onUse.accept(JsonOut.object(use));
                 }
             };
+        }
+
+        /** One nested annotation value, at {@code parentDepth + 1}. Returning
+         *  {@code null} at the bound is ASM's own "skip this sub-tree" contract —
+         *  the value is already recorded as unresolved by then, so nothing is lost
+         *  silently. */
+        private org.objectweb.asm.AnnotationVisitor nestedUseVisitor(
+                String descriptor, int parentDepth, java.util.function.Consumer<String> onUse) {
+            if (parentDepth + 1 > MAX_NESTED_ANNOTATION_DEPTH) {
+                TreeMap<String, String> use = new TreeMap<>();
+                use.put("annotation",
+                    JsonOut.string(Type.getType(descriptor).getInternalName() + "#"));
+                use.put("unresolved", JsonOut.string("depth_limit"));
+                onUse.accept(JsonOut.object(use));
+                return null;
+            }
+            return useCollectingVisitor(descriptor, parentDepth + 1, onUse);
         }
 
         /** ASM reports an enum-valued argument through {@code visitEnum}, never

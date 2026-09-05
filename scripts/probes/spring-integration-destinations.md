@@ -532,3 +532,129 @@ shape the JVM specification requires any compiler to emit for a varargs call sit
 only javac 21 was measured. A compiler that spilled the array through a local, populated it
 across a branch, or reordered the stores would fall to the near-miss rules and read
 `unresolved`, which is the honest degradation rather than a wrong answer.
+
+---
+
+## Re-run after extractor capability 9.16 — 2026-09-04
+
+Q2's caveat above — *"nested annotation arguments are silently dropped"* — is the thing
+this section closes. It was reported, not fixed, when the probe was written, and the
+9.15 re-run listed it under "what did NOT change" because 9.15 is a `MethodFlow` change
+and the gap was in `ClassScanner.useCollectingVisitor`. Both earlier measurements are
+left unedited.
+
+**One missing override, three separate losses.** `useCollectingVisitor` overrode `visit`,
+`visitEnum` and `visitArray` but not `visitAnnotation`, so ASM's nested-annotation
+callback returned `null` and the value vanished **with no key at all** — not even an
+`unresolved` to chase. Capability 9.16 adds the override, at both levels (a scalar
+argument and an element inside an array), recursively.
+
+One fixture class added, `NestedAnnotationShapes.java`, carrying the two shapes the
+harness did not already have; the polled adapter Q2 measured is unchanged on
+`Shape3PolledAndOtherBrokers#tick`.
+
+```
+Report: {"documents":10,"facts":302,"scanner_id":"asm","scanner_version":"9.16","uncovered":[]}
+        — 146 call_site, 100 symbol, 54 annotation, 10 document, 2 field_write
+```
+
+Nothing gained a **fact** — a dropped nested value never removed the annotation fact that
+should have carried it, only its key. Scanning this same fixture with a 9.15 jar and a
+9.16 jar and sorting each stream, `call_site`, `symbol` and `field_write` are
+**byte-identical** (md5-equal, all three), and exactly **three** `annotation` facts differ:
+the three below.
+
+### Loss 1 — `@Poller` inside `@InboundChannelAdapter`, the one Q2 measured
+
+```json
+{"kind":"annotation","retention":"runtime",
+ "target":"…/Shape3PolledAndOtherBrokers#tick(sig_0e30dfc9).",
+ "use":{"annotation":"org/springframework/integration/annotation/InboundChannelAdapter#",
+        "args":{"channel":"tickChannel",
+                "poller":{"annotation":"org/springframework/integration/annotation/Poller#",
+                          "args":{"fixedDelay":"5000"}}}}}
+```
+
+The nested value carries **its own fqn and its own args**, in the same
+`{"annotation":…,"args":{…}}` shape the outer use has. Q2's `channel` is byte-identical to
+what it was; `poller` is the added key.
+
+### Loss 2 — the queue name inside `@RabbitListener`, three levels down
+
+`@RabbitListener(bindings = @QueueBinding(value = @Queue(name = …, arguments = @Argument(…))))`
+is the deepest nesting the estate produces, and for this listener it is the **only** place
+an AMQP queue name is written — there is no `setQueueNames` call site to fall back to, so
+before 9.16 the name was unreachable by any route at all:
+
+```json
+{"use":{"annotation":"org/springframework/amqp/rabbit/annotation/RabbitListener#","args":{"bindings":[
+  {"annotation":"…/QueueBinding#","args":{
+    "exchange":{"annotation":"…/Exchange#","args":{"name":"nested.orders.exchange","type":"topic"}},
+    "key":["nested.orders.rk"],
+    "value":{"annotation":"…/Queue#","args":{
+      "arguments":[{"annotation":"…/Argument#","args":{"name":"x-dead-letter-exchange",
+                                                        "value":"nested.orders.dlx"}}],
+      "durable":"true","name":"nested.orders.queue"}}}}]}}}
+```
+
+Note `bindings` and `arguments`: **arrays of annotations**, so 9.15's array handling and
+9.16 compose — and `key` is an array of plain strings beside them, unchanged.
+
+### Loss 3 — every trigger on a method with two `@Scheduled`, the sharpest case
+
+`@Scheduled` is `@Repeatable`, so **javac folds two or more onto one method into a single
+`@Schedules`** holding an array of them (JLS 9.7.5). Verified against this fixture's own
+bytecode with `javap -v` before it was pinned. A method with one schedule was readable
+before 9.16; a method with two carried **no trigger at all**:
+
+```json
+{"target":"…/NestedAnnotationShapes#twoTriggers(sig_da8c82d5).",
+ "use":{"annotation":"org/springframework/scheduling/annotation/Schedules#","args":{"value":[
+   {"annotation":"…/Scheduled#","args":{"cron":"0 0 * * * *"}},
+   {"annotation":"…/Scheduled#","args":{"fixedRate":5000}}]}}}
+```
+
+Both triggers, both expressions. The control arm beside it — `singleTrigger`, one
+`@Scheduled` — is still an unwrapped `{"annotation":"…/Scheduled#","args":{"cron":"0 15 * * * *"}}`,
+which is what makes the loss a defect rather than a uniform limitation. Note that only
+**explicitly written** elements are stored: `@Scheduled(fixedRate = 5000L)` carries
+`fixedRate` and no `cron`, because annotation defaults never reach the class file.
+
+A falsifier in the same one-line style as Q1's:
+
+```bash
+grep -r "nested.orders.queue\|0 0 \* \* \* \*" /tmp/si_probe_out | wc -l   # -> 2   (was 0)
+```
+
+### The bound, and what is emitted at it
+
+The recursion is capped at **five levels of nesting below the outermost annotation** —
+past the deepest shape here (`@RabbitListener` → `@QueueBinding` → `@Queue` → `@Argument`,
+depth 3). The language bounds nesting on its own, because javac rejects a cyclic
+annotation element type, but a class file need not have come from javac and an unbounded
+descent is a stack overflow mid-scan rather than a fact. At the bound the value is
+`{"annotation":"<fqn>","unresolved":"depth_limit"}`: the type was read off the descriptor
+and is kept, the arguments were never read and get **no `args` key** — an empty `args`
+would be indistinguishable from an annotation genuinely written with none (§8). Nothing
+in this fixture reaches it; the extractor's own `NestedAnnotated` fixture carries a
+seven-deep chain that does.
+
+### What did NOT change
+
+- **The XML arm** still contributes zero facts. Unrelated to annotations.
+- **Q1 and Q5 are untouched.** 9.16 is a `ClassScanner` change; every `call_site`,
+  `symbol` and `field_write` fact in the harness is byte-identical to its 9.15 form,
+  checked by scanning the fixture with both jars rather than reasoned from the diff.
+- **The consumers have not moved.** No catalog reads a nested use yet, so no derived
+  output changed. The facts are there; reading them is engine work.
+
+### Bounds (§5.4)
+
+Same fixture, same BOM (Spring Boot 3.2.5, Spring Integration 6.2.4, spring-amqp 3.1.4,
+spring-kafka 3.1.4, Spring Framework 6.1.6), **javac release 21** — compiled here by
+javac 26.0.2.1 with `--release 21`, which is what the `@Repeatable` folding above was
+confirmed against — extractor scanner_version 9.16. The folding is required of every
+conforming compiler by JLS 9.7.5 rather than being a javac choice, but only this compiler
+was measured. The nested-annotation encoding itself is JVMS 4.7.16.1's `element_value`
+with tag `@`, which ASM surfaces as `visitAnnotation` for every class file regardless of
+producer.

@@ -34,17 +34,25 @@ _CAPABILITIES = {
     # estate depends on it — the measured defect is
     # `scripts/probes/spring-integration-destinations.md`.
     "array_arguments",
+    # Capability 9.16: an annotation-valued annotation argument reads as a
+    # nested `{annotation, args}` use of its own, recursively, rather than
+    # being dropped with no key at all. `@Poller` inside `@InboundChannelAdapter`,
+    # `@Queue` inside `@QueueBinding` inside `@RabbitListener`, and — the
+    # sharpest case — every `@Scheduled` on a method carrying two of them,
+    # which javac folds into one `@Schedules` array.
+    "nested_annotation_args",
 }
 
 
 class AsmScanner:
-    """One backend covering every JVM language, declaring eleven capabilities:
+    """One backend covering every JVM language, declaring twelve capabilities:
     the four Phase 1 read from declarations, the three Phase 2C's per-method
     dataflow pass added — the call sites themselves, the literals they carry,
     and the within-method value ids a chain is rebuilt from — plus a class
     symbol's own declared interfaces, its generic superinterface references,
-    its erased superclass, and the elements of an array-valued argument (2O
-    capabilities 9.14, 9.13 and 9.15)."""
+    its erased superclass, the elements of an array-valued argument, and the
+    arguments of an annotation nested inside another (2O capabilities 9.14,
+    9.13, 9.15 and 9.16)."""
 
     def __init__(self, jar: Path) -> None:
         self._jar = jar

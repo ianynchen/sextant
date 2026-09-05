@@ -149,7 +149,8 @@ def test_the_scanner_reports_the_version_that_harvests_descriptors(tmp_path: Pat
             out_dir=tmp_path,
         )
     )
-    # 9.14 -> 9.15 with varargs argument modelling: a `String...` slot now
-    # carries its element arguments, and a loader reading `array` against a
-    # jar that predates it would find the key missing rather than wrong.
-    assert report.scanner_version == "9.15"
+    # 9.15 -> 9.16 with nested annotation arguments: an annotation-valued
+    # annotation argument now carries its own fqn and args, and a loader
+    # reading a nested use against a jar that predates it would find no key at
+    # all rather than a wrong one.
+    assert report.scanner_version == "9.16"

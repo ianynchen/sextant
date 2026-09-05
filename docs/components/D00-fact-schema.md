@@ -381,6 +381,31 @@ reference — captured as a symbol reference, not a string** — and arrays of t
 what lets a catalog's `response_arg: 2` on `postForObject(url, req, OrderResponse.class)`
 resolve to a real shape root.
 
+**An annotation is a literal value too** (capability 9.16). An annotation-valued argument
+carries **its own `annotation` and its own `args`, recursively** — the same
+`{annotation, args}` shape the enclosing use has, rather than a second vocabulary beside
+it — so `@InboundChannelAdapter(poller = @Poller(fixedDelay = "1000"))` keeps the poller,
+and `@RabbitListener(bindings = @QueueBinding(value = @Queue("orders")))` keeps the queue
+name two levels down. It composes with arrays in both directions: an array of annotations
+is how a `@Repeatable` annotation arrives at all, because **two or more of one repeatable
+annotation on the same declaration are folded by the compiler into a single container
+annotation holding an array of them** (JLS 9.7.5). `@Scheduled` twice on a method is one
+`@Schedules({…, …})`, so before 9.16 a method with one schedule was readable and a method
+with two carried no trigger at all.
+
+The recursion is **bounded**, and says so where it stops. The language bounds it already —
+javac rejects a cyclic annotation element type, so a chain cannot revisit a type — but a
+class file need not have come from javac, and an unbounded descent is a stack overflow
+mid-scan rather than a fact. The JVM mapping (capability 9.16) allows **five levels of
+nesting below the outermost annotation**, comfortably past the deepest shape in the estate
+(`@RabbitListener` → `@QueueBinding` → `@Queue` → `@Argument`, depth 3). Past it the value
+is `{annotation: <fqn>, unresolved: "depth_limit"}`: the type was read off the descriptor
+and is real, the arguments were never read and get **no `args` key** — an empty `args`
+would be indistinguishable from an annotation genuinely written with none, which is the
+silent truncation §8 forbids. Strictly additive: an engine that does not consult a nested
+use sees exactly the keys it saw before, since a nested value previously produced no key
+at all.
+
 ### 5b. The wire-type vocabulary
 
 Shapes from code and shapes from contracts must be comparable field by field, so both
