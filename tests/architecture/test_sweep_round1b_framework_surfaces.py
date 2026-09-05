@@ -345,3 +345,31 @@ def test_jakarta_jms_declares_every_factory_that_opens_a_consumer():
         "`createBrowser` is declared: a `QueueBrowser` enumerates a queue without consuming from "
         "it, so the row would claim a delivery the broker does not make"
     )
+
+
+def test_the_webflux_router_catalog_reads_every_verb_both_dsls_declare():
+    """`A-M9`. `RequestPredicates` and `CoRouterFunctionDsl` each declare seven
+    per-verb factories at both measured minors (CP-12 Q11, Q12) and the catalog
+    encoded GET/POST/HEAD for Java and GET/POST for Kotlin — which is exactly
+    the verb vocabulary `fixtures/orders-service`'s own two route files use.
+
+    That is §8.1 rule 1's failure shape said in the catalog's own words: it
+    states the standard it was built to ("exactly what 2E's checkpoint froze
+    against a real scan… nothing here is invented past that"), and applying
+    that standard to a FIXTURE rather than to the framework encodes the
+    examples in front of the author.
+
+    The probe's own upper-case filter is what separates a verb factory from
+    `all`, `path`, `accept` and the two generic `method`/`methods` forms, so
+    the demanded set below is read off the jar rather than typed here."""
+    declared: dict[str, set[str]] = {}
+    for entry in catalog("spring-webflux-router")["matches"]["vocabulary"]["verbs"]:
+        declared.setdefault(str(entry["owner"]).rpartition(".")[2], set()).add(str(entry["method"]))
+    for question, owner in (("11", "RequestPredicates"), ("12", "CoRouterFunctionDsl")):
+        for version, verbs in sorted(measured(question).items()):
+            missing = sorted(verbs - declared.get(owner, set()))
+            assert missing == [], (
+                f"spring-webflux-router.yml declares no verb row for `{owner}` factories the "
+                f"framework has at {version}: {missing}. A route declared with one derives "
+                "neither a verb nor an address."
+            )

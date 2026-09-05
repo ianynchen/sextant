@@ -1923,3 +1923,160 @@ def test_a_continuation_entry_of_neither_declared_form_is_refused(tmp_path: Path
     matches["continuations"] = [{"owner": "com.example.web.Router"}]
     with pytest.raises(CatalogError, match="every `continuations` item"):
         _resolve(tmp_path, [], _catalog(matches))
+
+
+# --- `A-M9` (principles sweep §3.3): the shipped catalog's verb vocabulary ---
+#
+# Everything above drives an INVENTED catalog, deliberately — an engine that
+# only works for one library's fqns is what spec §1d forbids. These two drive
+# the SHIPPED `spring-webflux-router.yml`, because the finding is not about the
+# engine at all: the encoded verb list was a projection of the fixture's own
+# routes, which is §8.1 rule 1's failure shape said in the catalog's own words
+# ("exactly what 2E's checkpoint froze against a real scan").
+
+_ROUTER_FUNCTIONS = "org/springframework/web/reactive/function/server/RouterFunctions#"
+_REQUEST_PREDICATES = "org/springframework/web/reactive/function/server/RequestPredicates#"
+_CO_ROUTER_DSL = "org/springframework/web/reactive/function/server/CoRouterFunctionDsl#"
+_CO_ROUTER_FACADE = "org/springframework/web/reactive/function/server/CoRouterFunctionDslKt#"
+
+
+def _shipped_router_catalog() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(
+        c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-webflux-router"
+    )
+
+
+def _java_route(ordinal: int, verb: str, path: str, handler: str) -> list[CallSiteFact]:
+    """`RouterFunctions.route(RequestPredicates.<VERB>(path), handler)` — the
+    shape `fixtures/orders-service/.../routes/OrderRoutes.java` writes, spelled
+    once so each verb below differs from its siblings in one cell."""
+    predicate = 100 + ordinal * 10
+    return [
+        _site(
+            ROUTES,
+            ordinal * 2,
+            _REQUEST_PREDICATES,
+            verb,
+            result=predicate,
+            arguments=[CallArgument(kind="string", value=path)],
+        ),
+        _site(
+            ROUTES,
+            ordinal * 2 + 1,
+            _ROUTER_FUNCTIONS,
+            "route",
+            result=predicate + 5,
+            arguments=[
+                CallArgument(kind="unresolved", source=predicate),
+                CallArgument(kind="lambda", symbol=handler),
+            ],
+        ),
+    ]
+
+
+def test_the_shipped_router_catalog_reads_every_verb_the_framework_declares(tmp_path: Path):
+    """`A-M9`, the positive half. `RequestPredicates` declares seven per-verb
+    factories at spring-webflux 6.1.6 and 7.0.2 (CP-12 Q11) and the catalog
+    encoded GET, POST and HEAD — which is exactly the verb vocabulary
+    `OrderRoutes.java` uses. `RouterFunctions.route(RequestPredicates.PUT(…),
+    …)`, an entirely ordinary WebFlux route, derived nothing, and
+    `docs/COVERAGE.md` stated two WebFlux boundaries and named no verb gap.
+
+    All seven asserted in one tree rather than one test per verb: the finding
+    is about the SET, and a per-verb test would pass while the set was still
+    short."""
+    verbs = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    facts: list = [_method_symbol(LIST_ORDERS)]
+    for index, verb in enumerate(verbs):
+        facts += _java_route(index, verb, f"/orders/{verb.lower()}", LIST_ORDERS)
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    derived = sorted((str(row["method"]), str(row["path"])) for row in _rows(workspace))
+    workspace.close()
+
+    assert derived == sorted((verb, f"/orders/{verb.lower()}") for verb in verbs)
+
+
+def test_a_request_predicate_that_is_not_a_verb_factory_names_no_verb_or_address(
+    tmp_path: Path,
+):
+    """`A-M9`'s near-miss, and it is what keeps "add the missing verbs" from
+    becoming "treat every `RequestPredicates` factory as a verb". `accept` is a
+    real `RequestPredicates` factory (`javap -p` lists it beside `all`, `path`,
+    `headers`, `contentType`, `method` and `methods`) and it constrains a media
+    type rather than naming a verb — CP-12 Q11 excludes it because it is not
+    spelled in upper case, which is the framework's own way of marking the verb
+    factories, and `"application/json"` is a string argument in exactly the
+    position a path would occupy.
+
+    Identical to a route in the positive above in every other cell — same
+    `route` call, same handler, same string argument shape — so it measures the
+    predicate factory and nothing else.
+
+    A row IS derived here, and asserting that rather than emptiness is the
+    honest form: `RouterFunctions.route` really was called, so a route exists,
+    and the engine's own answer for a tree whose constraints it cannot read is
+    a row with no identity at all. What must be absent is the VERB and the
+    ADDRESS — which is what a vocabulary that swallowed every factory would
+    have fabricated. It discriminates: adding an `accept` row to `verbs` makes
+    this fail with `("ACCEPT", "application/json")`.
+
+    The row carries `resolution: resolved` and that is this engine's own
+    pre-existing rule rather than anything this finding changed: no capture was
+    reached and failed, so nothing narrows it. Asserted verbatim rather than
+    softened, so a later change to that rule shows up here as a diff."""
+    facts: list = [_method_symbol(LIST_ORDERS)]
+    facts += _java_route(0, "accept", "application/json", LIST_ORDERS)
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [(None, None, _MODULE + LIST_ORDERS, "resolved")]
+
+
+def _kotlin_route(ordinal: int, verb: str, path: str, handler: str) -> CallSiteFact:
+    """`coRouter { <VERB>("/x") { … } }` — the DSL's own two-argument form,
+    which declares a whole route in one call (2E checkpoint (1b))."""
+    return _site(
+        INLINE_BODY,
+        ordinal,
+        _CO_ROUTER_DSL,
+        verb,
+        receiver=None,
+        arguments=[
+            CallArgument(kind="string", value=path),
+            CallArgument(kind="lambda", symbol=handler),
+        ],
+        invoke_kind="virtual",
+    )
+
+
+def test_the_kotlin_router_dsl_reads_every_verb_the_framework_declares(tmp_path: Path):
+    """`A-M9` on the Kotlin half, where the catalog encoded GET and POST alone
+    — again exactly what `KotlinOrderRoutes.kt` writes. `CoRouterFunctionDsl`
+    declares the same seven verbs at both measured minors (CP-12 Q12), each in
+    four overloads; the two-argument `(String, handler)` form is the one this
+    vocabulary reads."""
+    verbs = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    facts: list = [
+        _method_symbol(LIST_ORDERS),
+        _site(
+            DSL_ROUTES,
+            0,
+            _CO_ROUTER_FACADE,
+            "coRouter",
+            result=9,
+            arguments=[CallArgument(kind="lambda", symbol=INLINE_BODY)],
+        ),
+    ]
+    facts += [
+        _kotlin_route(index, verb, f"/kt/{verb.lower()}", LIST_ORDERS)
+        for index, verb in enumerate(verbs)
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    derived = sorted((str(row["method"]), str(row["path"])) for row in _rows(workspace))
+    workspace.close()
+
+    assert derived == sorted((verb, f"/kt/{verb.lower()}") for verb in verbs)

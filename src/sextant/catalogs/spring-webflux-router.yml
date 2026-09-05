@@ -48,8 +48,31 @@ matches:
       body_arg: 0
 
   vocabulary:
+    # MEASURED, at spring-webflux 6.1.6 and 7.0.2 (CP-12 Q11/Q12,
+    # `scripts/probes/cp12_sweep_round1b.md`): `RequestPredicates` and
+    # `CoRouterFunctionDsl` EACH declare seven per-verb factories, identical at
+    # both minors — read off the jars as "declared on the type and spelled in
+    # upper case", which is the framework's own way of marking a verb factory
+    # apart from `all`, `path`, `accept`, `headers`, `contentType` and the two
+    # generic `method`/`methods` forms.
+    #
+    # This list held GET/POST/HEAD for Java and GET/POST for Kotlin, and those
+    # are EXACTLY the verbs `fixtures/orders-service/.../routes/OrderRoutes.java`
+    # and `KotlinOrderRoutes.kt` declare (`A-M9`). The comment above says the
+    # standard this file was built to — "exactly what 2E's checkpoint froze
+    # against a real scan… nothing here is invented past that" — and that
+    # standard, applied to a fixture rather than to the framework, produces
+    # §8.1 rule 1's failure in as many words: the encoded rule was a projection
+    # of the examples in front of the author.
+    # `RouterFunctions.route(RequestPredicates.PUT("/orders/{id}"), h::update)`
+    # is an entirely ordinary WebFlux route and derived no verb and no address.
+    #
+    # `method(HttpMethod)`/`methods(HttpMethod...)` stay OUT and are a stated
+    # COVERAGE boundary: their verb is an enum constant argument rather than the
+    # method's own name, and this grammar reads a verb only as a literal
+    # declared beside the owner.
     verbs:
-      # Java: `RequestPredicates.GET/POST/HEAD("/x")` are one-argument
+      # Java: `RequestPredicates.GET/HEAD/POST/…("/x")` are one-argument
       # predicates with no handler of their own — a route only once some
       # `RouterFunctions.route` attaches a handler to the predicate they
       # produce (checkpoint (1a)'s full call sequence).
@@ -58,28 +81,77 @@ matches:
         verb: GET
         path_arg: 0
       - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: HEAD
+        verb: HEAD
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
         method: POST
         verb: POST
         path_arg: 0
       - owner: org.springframework.web.reactive.function.server.RequestPredicates
-        method: HEAD
-        verb: HEAD
+        method: PUT
+        verb: PUT
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: PATCH
+        verb: PATCH
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: DELETE
+        verb: DELETE
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: OPTIONS
+        verb: OPTIONS
         path_arg: 0
       # Kotlin: the builder's own two-argument form — `GET("/x") { handler
       # }`/`POST("/x") { handler }` declare a whole route in one call
       # (checkpoint (1b), the `…$1$1$1#`/`…$1$1$2#` call sites). One
-      # vocabulary, two arities: the Java rows above and these two rows are
+      # vocabulary, two arities: the Java rows above and these rows are
       # the same verbs, read off two different owners because the DSL
       # receiver (`ALOAD 0`) carries no chain to fold a bare predicate
       # through (checkpoint (1b) ruling 3).
+      #
+      # Each Kotlin verb has FOUR overloads (CP-12 Q12) and this grammar
+      # matches on owner and name alone, with no `descriptor` key to declare —
+      # the same engine gap the `entries` comment above already states for
+      # `route`/`nest`. So one row per verb covers all four, and the
+      # `path_arg: 0`/`handler_arg: 1` positions are the two-argument
+      # `(String, handler)` form's. That is unchanged by this edit and is why
+      # widening the verb list does not widen the exposure.
       - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
         method: GET
         verb: GET
         path_arg: 0
         handler_arg: 1
       - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
         method: POST
         verb: POST
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: PUT
+        verb: PUT
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
         path_arg: 0
         handler_arg: 1
 

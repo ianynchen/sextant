@@ -192,6 +192,20 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-M9`: the WebFlux router catalog's verb vocabulary was the fixture's verb vocabulary**
+  (principles sweep §3.3). `RequestPredicates` and `CoRouterFunctionDsl` each declare seven
+  per-verb factories at spring-webflux 6.1.6 and 7.0.2 (CP-12 Q11/Q12), and
+  `spring-webflux-router.yml` encoded GET/POST/HEAD in Java and GET/POST in Kotlin — exactly
+  what `fixtures/orders-service`'s own two route files declare. An ordinary
+  `RouterFunctions.route(RequestPredicates.PUT(…), …)` derived a row with neither verb nor
+  address, and COVERAGE stated two WebFlux boundaries and named no verb gap. The catalog's own
+  comment states the standard it was built to — "exactly what 2E's checkpoint froze against a
+  real scan… nothing here is invented past that" — which, applied to a fixture rather than to
+  the framework, is §8.1 rule 1's failure in the catalog's own words. Pure catalog data: nine
+  new vocabulary rows, no engine change. `method(HttpMethod)`/`methods(HttpMethod...)` stay a
+  stated boundary, because their verb is an enum constant argument and this grammar reads a verb
+  only as a literal declared beside its owner.
+
 - **`A-M6` / `A-M7`: four broker catalogs declared the arity their fixture happened to call**
   (principles sweep §3.3). `_matching_method` filters candidates on
   `row.get("arity") in (None, len(arguments))` **before** it consults a descriptor, so a call at

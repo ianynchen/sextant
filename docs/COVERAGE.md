@@ -920,6 +920,24 @@ DSL handler, bound method reference and lambda alike, to an `instance`-kind argu
 compiler-generated class rather than a method symbol, so the honest answer is no handler
 rather than a fabricated guess through that class's own `invokeSuspend` (checkpoint (1b)).
 
+**Both routing DSLs now read all seven verbs** (`A-M9`, principles sweep §3.3).
+`RequestPredicates` and `CoRouterFunctionDsl` each declare seven per-verb factories at
+spring-webflux 6.1.6 **and** 7.0.2 (CP-12 Q11/Q12, read off the jars as "declared on the type
+and spelled in upper case", which is the framework's own way of marking a verb factory apart
+from `all`, `path`, `accept`, `headers`, `contentType`, `method` and `methods`).
+`spring-webflux-router.yml` encoded GET/POST/HEAD in Java and GET/POST in Kotlin — **exactly**
+the verbs `OrderRoutes.java` and `KotlinOrderRoutes.kt` declare. So
+`RouterFunctions.route(RequestPredicates.PUT("/orders/{id}"), h::update)` derived a row with
+neither verb nor address, and no boundary here named the gap. The catalog states the standard
+it was built to, "exactly what 2E's checkpoint froze against a real scan… nothing here is
+invented past that" — applied to a fixture rather than to the framework, which is §8.1 rule 1's
+failure said in the catalog's own words.
+
+**`method(HttpMethod)` / `methods(HttpMethod...)` stay a boundary** and derive no verb: this
+grammar reads a verb as a literal declared beside the owner, and theirs is an enum constant
+argument. **Falsified by** a module routing through the generic predicate forms; closes when
+the `combinator` vocabulary can read a verb off an argument the way `fluent` now can.
+
 ### 5.2 REST outbound
 
 **Phase 2B shipped the first three; Phase 2C shipped the next four.** Feign, Retrofit and
