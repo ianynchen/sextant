@@ -135,7 +135,7 @@ def composed_mapping_rows(
 def inherited_rows(
     annotation_rows: list[dict[str, Any]],
     implementation_rows: list[dict[str, Any]],
-    supertype_rows: list[dict[str, Any]],
+    superclass_rows: list[dict[str, Any]],
     method_rows: list[dict[str, Any]],
     mapping_fqns: set[str],
     prefix_fqn: str | None,
@@ -152,20 +152,32 @@ def inherited_rows(
     own worst case (`OrdersApi#composed`'s `@ApiGet`) must resolve through
     both passes at once: §2 composes it to a real `@RequestMapping` on the
     interface method first, and only then does this pass have anything to
-    inherit. `implementation_rows`/`supertype_rows`/`method_rows` are each
+    inherit. `implementation_rows`/`superclass_rows`/`method_rows` are each
     the plain-Python form of the same-named workspace query (`implementations`,
-    `supertypes`, a new `method_declarations`) — JSON columns already
+    `superclasses`, a new `method_declarations`) — JSON columns already
     decoded, the same convention `composed_mapping_rows` takes for `args`.
 
+    **The class-inheritance edge is `superclasses`, not `supertypes`
+    (`A-C4`).** `supertypes` carries D00 §5a's parameterized-type reference,
+    emitted ONLY where the superclass carries type ARGUMENTS — so reading it
+    as the superclass edge gave `class Child extends Base` no edge at all,
+    and `derive_endpoints.sql`'s `LEFT JOIN prefixes` then composed the
+    absent prefix as the empty string and published the child's methods at an
+    address the framework does not serve. JLS 8.1.4/8.2 is that a class has
+    exactly one direct superclass and inherits its members, generic or not,
+    and capability 9.13's erased `superclass` field is that sentence in the
+    fact stream: written for every non-`Object` superclass, off the class
+    file's own `super_class` entry.
+
     Every symbol here — `implementations.symbol`, its `interfaces` entries,
-    `method_rows.enclosing`, and every `annotations` `target` — shares one
-    coordinate space: module-prefixed exactly as the fact wrote it (D00
-    §5a), which is why none of them is stripped to a bare descriptor before
-    a lookup. The one exception is a class's own generic supertype
-    reference (`supertypes`, D00 §5a's PTR carrier): like every type
-    reference inside a `signature`, its embedded `symbol` is bare even for a
-    module-local ancestor (2E checkpoint item (4)), so `_prefixed_types`
-    below is the one bare-to-prefixed lookback this module needs.
+    `method_rows.enclosing`, `superclass_rows`' own two columns, and every
+    `annotations` `target` — shares one coordinate space: module-prefixed
+    exactly as the fact wrote it (D00 §5a), which is why none of them is
+    stripped to a bare descriptor before a lookup. The `supertypes` edge was
+    the one exception and needed a bare-to-prefixed lookback, which could
+    only recover an ancestor this module had seen SOMEWHERE ELSE — so an
+    abstract base declaring nothing but a type-level prefix was unreachable
+    (`A-M11`). Both go away with the edge.
 
     Resolution order (spec §3, exact), applied per candidate method
     (`_resolve_method`) and, separately, per implementing class's own
@@ -217,7 +229,7 @@ def inherited_rows(
         for row in implementation_rows
     }
 
-    supertype_of = _supertype_of(supertype_rows, interfaces_of, methods_by_type)
+    supertype_of = _superclass_of(superclass_rows)
 
     annotations_by_target: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for row in annotation_rows:
@@ -470,52 +482,19 @@ def _return_type(signature: dict[str, Any] | None) -> Any:
     return (signature.get("returns") or {}).get("symbol")
 
 
-def _supertype_of(
-    supertype_rows: list[dict[str, Any]],
-    interfaces_of: dict[str, list[str]],
-    methods_by_type: dict[str, dict[str, str]],
-) -> dict[str, str]:
-    """Each class's own generic superclass reference, module-prefixed on
-    BOTH sides (unlike the raw `supertypes` query, whose inner `symbol` is
-    bare — see `inherited_rows`'s docstring). `_prefixed_types` recovers the
-    prefixed form from every module-local type symbol this module has
-    otherwise seen; an ancestor this module never saw any other evidence for
-    (not itself an implementer, an interface, or a method's own enclosing
-    type) resolves to nothing here, honestly — 2E checkpoint Falsification
-    F3: a generic supertype edge is only ever emitted for a scanned
-    ancestor, and a scanned ancestor always encloses at least its own
-    inherited `Object` methods... in practice, its own declared ones."""
-    prefixed_types = _prefixed_types(interfaces_of, methods_by_type, supertype_rows)
-    supertype_of: dict[str, str] = {}
-    for row in supertype_rows:
-        supertype = row.get("supertype")
-        if not supertype:
-            continue
-        target = prefixed_types.get(bare_descriptor(str(supertype.get("symbol"))))
-        if target is not None:
-            supertype_of[str(row["symbol"])] = target
-    return supertype_of
+def _superclass_of(superclass_rows: list[dict[str, Any]]) -> dict[str, str]:
+    """Each class's own direct superclass, module-prefixed on both sides
+    (capability 9.13, `ClassScanner.erasedSuperclassJson` writing through
+    `symbolOf`).
 
-
-def _prefixed_types(
-    interfaces_of: dict[str, list[str]],
-    methods_by_type: dict[str, dict[str, str]],
-    supertype_rows: list[dict[str, Any]],
-) -> dict[str, str]:
-    """Every module-prefixed type symbol this module has independent
-    evidence for, keyed by its own bare descriptor — the lookback
-    `_supertype_of` needs to cross from a supertype reference's bare
-    `symbol` (D00 §5a) back into the module-prefixed space every other
-    lookup here works in."""
-    prefixed: dict[str, str] = {}
-    known = (
-        *interfaces_of.keys(),
-        *methods_by_type.keys(),
-        *(str(row["symbol"]) for row in supertype_rows),
-    )
-    for symbol in known:
-        prefixed.setdefault(bare_descriptor(symbol), symbol)
-    for interfaces in interfaces_of.values():
-        for symbol in interfaces:
-            prefixed.setdefault(bare_descriptor(symbol), symbol)
-    return prefixed
+    A plain comprehension because there is nothing to resolve: the fact
+    already names both ends in the coordinate space every other lookup here
+    works in. A superclass the module never scanned — a framework base class
+    living in a jar — matches no annotation target and contributes nothing,
+    which is the honest answer rather than a case to defend against.
+    """
+    return {
+        str(row["symbol"]): str(row["superclass"])
+        for row in superclass_rows
+        if row.get("superclass")
+    }

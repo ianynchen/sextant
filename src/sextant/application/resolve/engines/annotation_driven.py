@@ -690,7 +690,7 @@ def _synthetic_annotations(
         inherited_rows(
             [*annotation_rows, *composed],
             _implementation_rows(workspace),
-            _supertype_rows(workspace),
+            _superclass_rows(workspace),
             _method_declaration_rows(workspace),
             mapping_fqns,
             prefix_fqn,
@@ -713,13 +713,21 @@ def _implementation_rows(workspace: Workspace) -> list[dict[str, object]]:
     ]
 
 
-def _supertype_rows(workspace: Workspace) -> list[dict[str, object]]:
-    """`supertypes`'s rows, `supertype` decoded — Task 7's own read of D00
-    §5a's PTR carrier, distinct from `shapes/arguments.py`'s `supertypes_of`
-    (which strips the outer key to bare on purpose, for a different join)."""
+def _superclass_rows(workspace: Workspace) -> list[dict[str, object]]:
+    """`superclasses`'s rows — capability 9.13's erased `superclass` field,
+    two plain string columns, module-prefixed on both sides.
+
+    This replaced a read of `supertypes` (`A-C4`). That query carries D00
+    §5a's parameterized-type reference, which the extractor emits only where
+    the superclass declares type ARGUMENTS, so an ordinary `class Child
+    extends Base` produced no inheritance edge at all and the child published
+    its methods without the base's prefix. `supertypes` is still the right
+    read for what it IS — `shapes/arguments.py`'s `supertypes_of` keeps it —
+    just never for "does this class have a superclass".
+    """
     return [
-        {"symbol": row["symbol"], "supertype": json.loads(str(row["supertype"]))}
-        for row in workspace.query("supertypes")
+        {"symbol": row["symbol"], "superclass": row["superclass"]}
+        for row in workspace.query("superclasses")
     ]
 
 

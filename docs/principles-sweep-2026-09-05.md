@@ -1891,7 +1891,7 @@ forgotten.
 | `A-C1` | OPEN |
 | `A-C2` | FIXED (330835b) |
 | `A-C3` | OPEN |
-| `A-C4` | OPEN |
+| `A-C4` | FIXED (584676b) — and `A-M11` with it, as §3.3 predicted |
 | `A-C5` | FIXED (2cbaa4b) — the fabrication is closed by M2; the residual (`@Bean` conjunct, unmeasured) is stated in COVERAGE §5.8 |
 | `A-C6` | OPEN |
 | `A-C7` | OPEN |

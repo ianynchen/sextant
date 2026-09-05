@@ -15,7 +15,6 @@ from sextant.application.resolve.effective_annotations import composed_mapping_r
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
-from sextant.domain.symbols import bare_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
@@ -301,11 +300,13 @@ def _implements(symbol: str, interfaces: list[str]) -> dict:
     return {"symbol": symbol, "interfaces": interfaces}
 
 
-def _extends(symbol: str, supertype_symbol: str) -> dict:
-    # The `supertypes` fact's own inner `symbol` is bare even for a
-    # module-local ancestor (2E checkpoint item (4)) — see
-    # `inherited_rows`'s docstring.
-    return {"symbol": symbol, "supertype": {"symbol": bare_descriptor(supertype_symbol)}}
+def _extends(symbol: str, superclass_symbol: str) -> dict:
+    # Capability 9.13's `superclass` field, module-prefixed on BOTH sides
+    # (`ClassScanner.erasedSuperclassJson` writes it through `symbolOf`), and
+    # emitted for every non-`Object` superclass whether or not it is generic
+    # — see `inherited_rows`'s docstring, and `A-C4` for the `supertypes`
+    # edge this replaced.
+    return {"symbol": symbol, "superclass": superclass_symbol}
 
 
 def test_an_interface_methods_mapping_lands_on_the_unannotated_implementing_method():
@@ -460,6 +461,109 @@ def test_superclass_resolution_loses_to_interfaces_and_reaches_transitively():
         {"target": c_get, "annotation": _GET_MAPPING, "args": {"value": ["/from-interface"]}},
         {"target": c_list, "annotation": _GET_MAPPING, "args": {"value": ["/from-grandparent"]}},
     ]
+
+
+# --- `A-C4` (principles sweep §3.2): a plain `extends` is an edge -----------
+
+
+def test_a_type_level_prefix_is_inherited_across_a_plain_extends(tmp_path: Path):
+    """`A-C4`. A class had a superclass edge only where a `supertype` fact
+    existed, and that fact is emitted only when the superclass carries type
+    ARGUMENTS — so `class Child extends Base` produced no inheritance edge at
+    all, and the walk reached for the field that happened to be in the row
+    rather than for JLS 8.1.4/8.2, which gives every class exactly one direct
+    superclass whose members it inherits.
+
+    The consequence is a confidently wrong ADDRESS, not a missing row:
+    `derive_endpoints.sql`'s `LEFT JOIN prefixes` composes an absent prefix as
+    `''`, so `OrderController#get` published `/{id}` where the framework serves
+    `/api/orders/{id}`.
+
+    The edge the fact stream has carried since capability 9.13 is the erased
+    `superclass` field, written for every non-`Object` superclass whether or
+    not it is generic, and module-prefixed on both sides — which is why it
+    needs no bare-to-prefixed lookback and why taking it also retires the "a
+    scanned ancestor always declares a method" assumption (`A-M11`).
+    """
+    del tmp_path
+    annotation_rows = [
+        {"target": _B, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api/orders"]}}
+    ]
+    method_rows = [_method(_C + "get().", _C), _method(_B + "helper().", _B)]
+
+    result = inherited_rows(
+        annotation_rows, [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == [
+        {"target": _C, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api/orders"]}}
+    ]
+
+
+def test_a_mapping_on_a_plain_extends_base_reaches_the_overriding_method(tmp_path: Path):
+    """`A-C4`'s other direction, and the one that drops a whole row rather
+    than mis-addressing one: a non-generic base declaring `@GetMapping("/ping")`
+    on a method the child overrides synthesized nothing, so `GET /base/ping`
+    was absent from the export entirely. The identical GENERIC pair
+    synthesized both, which is what made the defect look like a hierarchy
+    subtlety rather than a missing edge."""
+    del tmp_path
+    base_ping = _B + "ping()."
+    child_ping = _C + "ping()."
+    annotation_rows = [
+        {"target": base_ping, "annotation": _GET_MAPPING, "args": {"value": ["/ping"]}}
+    ]
+    method_rows = [_method(base_ping, _B), _method(child_ping, _C)]
+
+    result = inherited_rows(
+        annotation_rows, [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == [
+        {"target": child_ping, "annotation": _GET_MAPPING, "args": {"value": ["/ping"]}}
+    ]
+
+
+def test_an_ancestor_that_declares_no_method_at_all_still_carries_its_prefix(tmp_path: Path):
+    """`A-M11`, closed by `A-C4`'s edge rather than separately. The bare-to-
+    prefixed lookback the `supertypes` edge needed could only recover an
+    ancestor's symbol from somewhere ELSE it appeared — as an interface, an
+    implementer, or some method's `enclosing` — so an abstract base whose only
+    purpose is to carry a type-level `@RequestMapping` was unreachable. JLS
+    8.1.6: a class body may declare no methods at all, and the default
+    constructor (8.8.9) is not one.
+
+    The `superclass` edge carries the ancestor's full symbol on both sides, so
+    there is nothing to look back through and nothing to be missing."""
+    del tmp_path
+    annotation_rows = [
+        {"target": _B, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api/items"]}}
+    ]
+    method_rows = [_method(_C + "get().", _C)]
+
+    result = inherited_rows(
+        annotation_rows, [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == [
+        {"target": _C, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api/items"]}}
+    ]
+
+
+def test_a_plain_extends_of_a_base_that_maps_nothing_synthesizes_nothing(tmp_path: Path):
+    """The near-miss for `A-C4`'s new edge. Widening an inheritance walk is
+    exactly the change that can start synthesizing rows nobody declared, so
+    the edge must carry a mapping across and nothing else: the same plain
+    `extends` pair as above with the base's annotations removed derives no row
+    at all — not a prefix, not an empty one, nothing."""
+    del tmp_path
+    method_rows = [_method(_C + "get().", _C), _method(_B + "helper().", _B)]
+
+    result = inherited_rows(
+        [], [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+    )
+
+    assert result == []
 
 
 def test_a_type_level_prefix_is_inherited_from_the_interface_when_the_class_has_none():

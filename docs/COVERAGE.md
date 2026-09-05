@@ -342,7 +342,6 @@ than silently absent:
 | The HTTP address a GraphQL or STOMP service listens on | the `path` column carries the OPERATION, because that is what the identity is; no engine derives `/graphql` or the STOMP endpoint registration ([D01](components/D01-graph-schema.md) §3) | undecided |
 | Cross-service links or a system document | linking is a system-scope pass over bundles; no `participants`/`links` exist yet | linking phase |
 | `consumes`/`produces` on a predicate-derived WebFlux functional route | `accept(...)`/`contentType(...)`'s `MediaType` vararg constants compile through an `ANEWARRAY` the extractor cannot read | a later extractor candidate |
-| `@RequestMapping` inherited from a non-generic superclass | the `supertype` edge exists only for a generic superclass — the extractor reads it from the Signature attribute alone | undecided |
 | A handler symbol for a Kotlin WebFlux functional route | Kotlin compiles every DSL handler to an `instance`-kind argument naming a generated class, never a method | undecided |
 | Trustworthy analysis of a POM using parents/profiles/interpolation | the detector reads `pom.xml` raw (`maven_parent_and_profile_resolution_not_implemented`) | undecided |
 | A payload bound from a parse more than one delegation hop from its handler | a flow followed further than it was observed is an assumption; the parse is found at hop two and ledgered as an open question instead, and past hop two it is not found at all (`payload_parsed_beyond_horizon`, §4.2) | the enrichment tier |
@@ -857,6 +856,18 @@ is, what it costs.
 | Rust | **`warp`** `warp::path("u").and(warp::get()).and_then(h)` | route is a composed value, type-encoded | `combinator` | **C** |
 | Swift | Vapor `app.get("users", ":id") { … }` | **path segments are variadic args** | `registration_call` | A |
 | Swift | iOS apps | apps are not servers | — | — |
+
+**`A-C4` (principles sweep §3.2) closed the superclass half of that**, which shipped broken
+from 2E Task 7 to the sweep. The inheritance walk read the `supertype` fact, and the extractor
+emits that ONLY where the superclass carries type arguments — so `class OrderController extends
+PrefixBase` had no superclass edge at all, and because `derive_endpoints.sql` composes an absent
+prefix as the empty string, the child published `/{id}` where the framework serves
+`/api/orders/{id}`: a confidently wrong address, not a missing row. The walk now reads
+capability 9.13's erased `superclass` field, written for every non-`Object` superclass. **Output
+changes for real modules**: a controller extending a non-generic base that carries a type-level
+prefix, or that maps a method the child overrides, now derives what the framework serves. The
+same edge retires the "a scanned ancestor always declares a method" assumption, so an abstract
+base whose only content is a type-level mapping is reachable too.
 
 **Phase 2E Task 7** ships the interface/superclass row above (`@RequestMapping` inherited
 mapping resolution, `annotation` + `hierarchy`), gated to catalogs that declare their own

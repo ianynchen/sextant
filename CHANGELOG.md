@@ -178,6 +178,19 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **`A-C4`: a class inherited from its superclass only when the superclass was generic**
+  (principles sweep §3.2). The annotation-inheritance walk read the `supertype` fact, which the
+  extractor emits only where the superclass carries type ARGUMENTS, so `class OrderController
+  extends PrefixBase` had no superclass edge at all — and since an absent prefix composes as the
+  empty string, the child published `/{id}` where the framework serves `/api/orders/{id}`. A
+  confidently wrong address at `resolved`/`compiler`, reached by a route neither `path_fallback`
+  nor `canonical_path` guards. The walk now reads capability 9.13's erased `superclass` field,
+  written for every non-`Object` superclass. **Output changes for real modules**: controllers
+  extending a non-generic base gain the prefix and the inherited mappings the framework serves.
+  The same edge retires the bare-to-prefixed lookback the old one needed, so an abstract base
+  that declares no method at all — one whose only purpose is to carry a type-level
+  `@RequestMapping` — is reachable too (`A-M11`).
+
 - **Mechanism 3: the empty-address guard was keyed on a formatting property** (principles sweep
   §4, §7.7). `derive_endpoints.sql` dropped a row with an empty address only when the catalog
   declared no `path_separator` — a property about how two halves of an address are JOINED, which
