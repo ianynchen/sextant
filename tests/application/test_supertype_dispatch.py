@@ -620,10 +620,19 @@ def test_the_two_spellings_declare_one_rule(tmp_path: Path):
     is wrong without being invalid, matches nothing, and derives nothing
     silently (§10). A deliberate divergence between the two must therefore
     start by measuring one, which is the point.
+
+    The equality below substitutes on the `javax` side only, so on its own it
+    is blind to exactly the leftovers it names: an unreplaced `jakarta.servlet`
+    string inside `javax-servlet.yml` passes through `.replace()` untouched and
+    then matches the jakarta document. The first assertion is what closes that
+    — this catalog describes an API whose every type is spelled `javax`, so a
+    `jakarta` name anywhere in its `matches` block falsifies the claim
+    directly, whether or not the two documents still compare equal.
     """
     jakarta = _catalog().matches
     javax = _javax_catalog().matches
 
+    assert "jakarta" not in json.dumps(javax, sort_keys=True)
     assert json.dumps(javax, sort_keys=True).replace("javax.servlet", "jakarta.servlet") == (
         json.dumps(jakarta, sort_keys=True)
     )
