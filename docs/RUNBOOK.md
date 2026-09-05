@@ -558,3 +558,52 @@ Three things about it generalise beyond this one harness:
   code.** Two guard names in the first registry were false — one pointed at a
   `declared_on` conjunct the catalog does not declare at all — and both were
   caught only by the run.
+
+
+## Half a measured rule is a prediction (principles sweep, round-1 review)
+
+**Twice in one fix pass, a probe measured half a framework rule and the
+implementer reasoned about the other half. Both halves published a fabrication
+where the code had previously derived nothing** — the only two places in the
+whole sweep where the fix pass left the project worse than it found it.
+
+- **`A-M15`.** CP-13 Q3 measured that the JAX-WS RI walks the implementor's
+  `Class.getMethods()`. The fix widened the member rule to the superclass
+  closure — correct — and enumerated one row per DECLARATION, where the
+  enumeration it was mirroring returns one per SIGNATURE. An overridden SOAP
+  operation shipped twice, the second attributed to a base the RI never
+  exposes; and an override carrying `@WebMethod(exclude = true)` withdrew only
+  its own row while the base's identical declaration published the withdrawn
+  operation at `resolved`/`compiler`.
+- **`A-M13`.** CP-13 Q1 recorded `calculateQueryMethods`' filter and named
+  `isCustomMethod` inside it. The fix read the enumeration beside that name and
+  stopped. The walk crossed every module-local superinterface, so a
+  custom-fragment method — whose body lives in a hand-written `…Impl` — was
+  published as `GET /orders/search/searchByFullText`, a route Spring Data REST
+  does not serve.
+
+**The cause is one, and no new principle is missing.** §5.4 says a verdict is
+bounded by the configuration it measured. §8.1 rule 4 says never add behaviour
+the framework does not have under the exact circumstances. Both were written,
+both were agreed, and both were broken twice in one round — which §13.8 step 3
+calls a rule with no reach, whose answer is a mechanism rather than another
+correction. **That mechanism has not been built, and it is the thing to settle
+before the next probe-backed fix**, not something this round closed.
+
+Three things that generalise while it is unsettled:
+
+- **A probe row that names a predicate has not opened it.** Q1's cell contained
+  the literal string `isCustomMethod` and the fix pass read past it. A recorded
+  instruction sequence is a list of questions as much as a list of answers, and
+  the ones it names by symbol are exactly the ones nobody has looked at.
+- **Extending the probe is cheaper than the argument about whether to.** Q5, Q6
+  and Q7 took under an hour between them, jars already cached, and CP-9's rows
+  41-46 needed one new probe servlet and one new fact reader. Both rounds that
+  got this wrong had budget for the measurement and spent it on reasoning
+  instead.
+- **A generalisation can run in either direction, and the second is harder to
+  see.** `A-M2` was found deriving nothing for a configuration a probe had not
+  covered; the fix then derived SOMETHING for a different configuration the
+  same probe had not covered. Reviewers looked for the first shape and found
+  it. Ask of every verdict: which configurations does it now decide, and which
+  of those did the run touch?
