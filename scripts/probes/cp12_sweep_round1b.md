@@ -1,0 +1,122 @@
+# CP-12 — the framework surfaces the round-1b sweep fix pass mirrors
+
+**Question.** `docs/principles-sweep-2026-09-05.md` records eight Class A
+Majors that share one shape: the catalog encodes a **subset** of the
+framework's surface, and nothing anywhere says which part it left out.
+GUIDELINES §8.1 rule 3 forbids exactly that ("state the boundary"), rule 1
+names the cause ("the encoded rule is a projection of the examples in front of
+the author"), and DR-6 says mirror what the framework actually does. So, for
+each: **what is the framework's WHOLE set?**
+
+| finding | the subset that was encoded | what this probe asks |
+|---|---|---|
+| `A-M3` | `spring-webclient`/`spring-restclient` declare five request-starting roots | which methods of `WebClient`/`RestClient` start a request |
+| `A-M4` | `spring-webclient` declares `terminal: [retrieve, exchange]`, with no version anywhere in the file | which methods of `WebClient$RequestHeadersSpec` obtain a response, per Spring minor |
+| `A-M5` | `retrofit.yml` declares six request-method annotations | which `retrofit2.http` annotations name a request method, and what each declares |
+| `A-M6` | `kafka-clients`, `kafka-consumer` and `spring-kafka-template` declare the arity-1 forms | every `KafkaProducer.send`, `KafkaConsumer.subscribe`/`assign` and `KafkaTemplate.send`/`sendDefault` overload |
+| `A-M7` | `jakarta-jms` models `createConsumer(Destination)` | every `jakarta.jms.Session` factory that opens a receiver on a destination |
+| `A-M8` | `spring-sqs` declares `path_from: [value]` | `@SqsListener`'s attributes, and which of them are one attribute under two spellings |
+| `A-M9` | `spring-webflux-router` encodes GET/POST/HEAD in Java and GET/POST in Kotlin | every per-verb factory `RequestPredicates` and `CoRouterFunctionDsl` declare |
+
+The questions are worth a probe because of the failure mode. Each is a
+**silent** drop: a WebClient chain rooted on `head()` is never rooted at all
+and derives no row, a `@SqsListener(queueNames = …)` composes an empty address
+and the addresses-nothing gate withholds it, an `@OPTIONS` Retrofit method
+matches nothing. An omission leaves no wrong row to notice — Sextant's second
+sin, and the harder of the two to find by reading output.
+
+**And the converse is why CP-10's green table did not catch any of them.**
+`scripts/probes/cp10_catalog_descriptors/` asks *"does every descriptor a
+shipped catalog declares name a method the framework's own bytecode actually
+declares?"* — never *"does the framework declare a method that serves this
+purpose and the catalog does not name?"* (`A-Mi5`). Every question below is
+the second question, and every answer is the framework's whole set rather
+than a check of ours.
+
+**Version scope (§5.4).** Read against **spring-web 6.1.6 and 7.0.2,
+spring-webflux 6.1.6 and 7.0.2, retrofit 2.11.0, kafka-clients 3.6.2,
+spring-kafka 3.1.4, jakarta.jms-api 3.1.0 and spring-cloud-aws-sqs 3.1.1**.
+Two Spring minors rather than one because `A-M4` is a version finding in both
+directions at once: `exchange()` exists at 6.1.6 and is **gone** at 7.0.2,
+while `exchangeToMono`/`exchangeToFlux` — the recommended forms since 5.3 —
+are in the catalog's list at neither. A single minor could not have said that.
+6.1.6 is the version `fixtures/orders-service/pom.xml` pins and the only one
+anywhere near those two catalogs today. The four broker coordinates are the
+versions CP-10 already pinned for the same catalogs, so the two probes are
+readable against each other. Widening the scope means adding a coordinate to
+`ARTIFACTS` in `scripts/probes/cp12_sweep_round1b/run.sh` and re-running,
+never assuming.
+
+**Retrofit is the one stated assumption**, for CP-11's reason: the jar writes
+no version into its manifest, ships no `pom.properties` and declares no
+version constant, so there is nothing in the archive to read. Its column is
+labelled `assumed` by the run itself and is the resolved coordinate. Every
+other column is the artifact's own answer, and a jar whose self-report
+disagrees with the coordinate that resolved it aborts the whole run.
+
+**How to run.** `bash scripts/probes/cp12_sweep_round1b/run.sh`. It resolves
+each artifact above through Maven (network on the first run only, cached in
+`~/.m2` afterwards) and asks `javap` the twelve questions. Needs a JDK and
+Maven. Not a test: nothing in the suite runs it, and NFR-1's no-network rule
+governs the suite rather than evidence gathering.
+
+`tests/architecture/test_sweep_round1b_framework_surfaces.py` is the offline
+half. It pins the shipped catalogs against the table below, so a rule edited
+without re-running this harness fails the suite rather than going quiet.
+
+## Expectation table
+
+| # | Under test | Expected |
+|---|---|---|
+| 1 | `WebClient`'s request-starting methods | eight, one per HTTP verb plus the generic `method(HttpMethod)` — three more than the catalog declares |
+| 2 | `WebClient$RequestHeadersSpec`'s response-obtaining methods | `retrieve`, `exchangeToMono`, `exchangeToFlux` at both minors; `exchange` at 6.1.6 **only** |
+| 3 | `RestClient`'s request-starting methods | the same eight as row 1 |
+| 4 | `RestClient$RequestHeadersSpec`'s response-obtaining methods | `retrieve` and an `exchange` family — and NOT the reactive `exchangeToMono`, which is why the two catalogs cannot share one terminal list |
+| 5 | `retrofit2.http`'s method-targeted annotations | eight name a request method (seven verbs declaring a scalar `String value()`, plus `HTTP` declaring `method()`/`path()`/`hasBody()`); `Headers`, `Multipart` and `FormUrlEncoded` are method-targeted and are NOT request methods |
+| 6 | `KafkaProducer.send` | two overloads — the arity-2 callback form is the idiomatic async producer call |
+| 7 | `KafkaConsumer.subscribe`/`assign` | five — the two rebalance-listener overloads are the idiomatic consumer-group call, and `assign` carries its topic inside a `TopicPartition` |
+| 8 | `KafkaTemplate.send`/`sendDefault` | ten, of which the two partition-carrying `send` forms take their topic at argument 0 like the rest |
+| 9 | `jakarta.jms.Session`'s receiver factories | thirteen, every one taking its destination at argument 0 |
+| 10 | `@SqsListener`'s attributes | `value` and `queueNames` are ONE attribute under two spellings, declared so by `queueNames`' own `@AliasFor(value="value")` |
+| 11 | `RequestPredicates`' verb factories | seven, against the three the catalog encodes |
+| 12 | `CoRouterFunctionDsl`'s verb functions | seven verbs × four overloads, against the two verbs the catalog encodes |
+
+## Observations
+
+Verbatim from `run.sh`'s generated tables (`probe.py` prints them; nothing here
+is typed by hand). **Every column header of the first table is a version the
+JAR itself reported, and not the version the coordinate list asked for** — out
+of its manifest's `Implementation-Version`, except kafka-clients, which writes
+none there and states one in `kafka/kafka-version.properties`. `probe.py` reads
+the value out of the archive it opened and ABORTS the whole run when it
+disagrees with the coordinate that resolved the jar, rather than filling a
+mislabelled column; that is CP-5's failure, which printed a version it believed
+beside output from a version it had not run. The one column the run could not
+read that way is retrofit's, which states a version nowhere at all, and the row
+beneath the headers says `assumed` for it rather than `yes`.
+
+| what the run read | 2.11.0 | 3.1.0 | 3.1.1 | 3.1.4 | 3.6.2 | 6.1.6 | 7.0.2 |
+|---|---|---|---|---|---|---|---|
+| artifacts reporting this version | retrofit | jakarta.jms-api | spring-cloud-aws-sqs | spring-kafka | kafka-clients | spring-web, spring-webflux | spring-web, spring-webflux |
+| identity read from the archive itself | assumed | yes | yes | yes | yes | yes | yes |
+
+| # | question | artifact | version | observed |
+|---|---|---|---|---|
+| 1a | `WebClient` request-starting methods | `spring-webflux` | 6.1.6 | `delete(), get(), head(), method(Lorg/springframework/http/HttpMethod;), options(), patch(), post(), put()` |
+| 1b | `WebClient` request-starting methods | `spring-webflux` | 7.0.2 | `delete(), get(), head(), method(Lorg/springframework/http/HttpMethod;), options(), patch(), post(), put()` |
+| 2a | `WebClient$RequestHeadersSpec` response-obtaining methods | `spring-webflux` | 6.1.6 | `exchange(), exchangeToFlux(Ljava/util/function/Function;), exchangeToMono(Ljava/util/function/Function;), retrieve()` |
+| 2b | `WebClient$RequestHeadersSpec` response-obtaining methods | `spring-webflux` | 7.0.2 | `exchangeToFlux(Ljava/util/function/Function;), exchangeToMono(Ljava/util/function/Function;), retrieve()` |
+| 3a | `RestClient` request-starting methods | `spring-web` | 6.1.6 | `delete(), get(), head(), method(Lorg/springframework/http/HttpMethod;), options(), patch(), post(), put()` |
+| 3b | `RestClient` request-starting methods | `spring-web` | 7.0.2 | `delete(), get(), head(), method(Lorg/springframework/http/HttpMethod;), options(), patch(), post(), put()` |
+| 4a | `RestClient$RequestHeadersSpec` response-obtaining methods | `spring-web` | 6.1.6 | `exchange(Lorg/springframework/web/client/RestClient$RequestHeadersSpec$ExchangeFunction;), exchange(Lorg/springframework/web/client/RestClient$RequestHeadersSpec$ExchangeFunction;Z), retrieve()` |
+| 4b | `RestClient$RequestHeadersSpec` response-obtaining methods | `spring-web` | 7.0.2 | `exchange(Lorg/springframework/web/client/RestClient$RequestHeadersSpec$ExchangeFunction;), exchange(Lorg/springframework/web/client/RestClient$RequestHeadersSpec$ExchangeFunction;Z), exchangeForRequiredValue(Lorg/springframework/web/client/RestClient$RequestHeadersSpec$RequiredValueExchangeFunction;), exchangeForRequiredValue(Lorg/springframework/web/client/RestClient$RequestHeadersSpec$RequiredValueExchangeFunction;Z), retrieve()` |
+| 5 | Retrofit request-method annotations | `retrofit` | 2.11.0 | `DELETE[value():Ljava/lang/String;], FormUrlEncoded[no attributes], GET[value():Ljava/lang/String;], HEAD[value():Ljava/lang/String;], HTTP[hasBody():Z,method():Ljava/lang/String;,path():Ljava/lang/String;], Headers[allowUnsafeNonAsciiValues():Z,value():[Ljava/lang/String;], Multipart[no attributes], OPTIONS[value():Ljava/lang/String;], PATCH[value():Ljava/lang/String;], POST[value():Ljava/lang/String;], PUT[value():Ljava/lang/String;]` |
+| 6 | `KafkaProducer.send` overloads | `kafka-clients` | 3.6.2 | `send(Lorg/apache/kafka/clients/producer/ProducerRecord;), send(Lorg/apache/kafka/clients/producer/ProducerRecord;Lorg/apache/kafka/clients/producer/Callback;)` |
+| 7 | `KafkaConsumer.subscribe`/`assign` overloads | `kafka-clients` | 3.6.2 | `assign(Ljava/util/Collection;), subscribe(Ljava/util/Collection;), subscribe(Ljava/util/Collection;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;), subscribe(Ljava/util/regex/Pattern;), subscribe(Ljava/util/regex/Pattern;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)` |
+| 8 | `KafkaTemplate.send`/`sendDefault` overloads | `spring-kafka` | 3.1.4 | `send(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;), send(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;), send(Ljava/lang/String;Ljava/lang/Object;), send(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;), send(Lorg/apache/kafka/clients/producer/ProducerRecord;), send(Lorg/springframework/messaging/Message;), sendDefault(Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;), sendDefault(Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;), sendDefault(Ljava/lang/Object;), sendDefault(Ljava/lang/Object;Ljava/lang/Object;)` |
+| 9 | `jakarta.jms.Session` receiver factories | `jakarta.jms-api` | 3.1.0 | `createBrowser(Ljakarta/jms/Queue;), createBrowser(Ljakarta/jms/Queue;Ljava/lang/String;), createConsumer(Ljakarta/jms/Destination;), createConsumer(Ljakarta/jms/Destination;Ljava/lang/String;), createConsumer(Ljakarta/jms/Destination;Ljava/lang/String;Z), createDurableConsumer(Ljakarta/jms/Topic;Ljava/lang/String;), createDurableConsumer(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;Z), createDurableSubscriber(Ljakarta/jms/Topic;Ljava/lang/String;), createDurableSubscriber(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;Z), createSharedConsumer(Ljakarta/jms/Topic;Ljava/lang/String;), createSharedConsumer(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;), createSharedDurableConsumer(Ljakarta/jms/Topic;Ljava/lang/String;), createSharedDurableConsumer(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;)` |
+| 10 | `@SqsListener` attributes and their aliases | `spring-cloud-aws-sqs` | 3.1.1 | `acknowledgementMode:Ljava/lang/String;, factory:Ljava/lang/String;, id:Ljava/lang/String;, maxConcurrentMessages:Ljava/lang/String;, maxMessagesPerPoll:Ljava/lang/String;, messageVisibilitySeconds:Ljava/lang/String;, pollTimeoutSeconds:Ljava/lang/String;, queueNames:[Ljava/lang/String;=AliasFor(value), value:[Ljava/lang/String;` |
+| 11a | `RequestPredicates` verb factories | `spring-webflux` | 6.1.6 | `DELETE(Ljava/lang/String;), GET(Ljava/lang/String;), HEAD(Ljava/lang/String;), OPTIONS(Ljava/lang/String;), PATCH(Ljava/lang/String;), POST(Ljava/lang/String;), PUT(Ljava/lang/String;)` |
+| 11b | `RequestPredicates` verb factories | `spring-webflux` | 7.0.2 | `DELETE(Ljava/lang/String;), GET(Ljava/lang/String;), HEAD(Ljava/lang/String;), OPTIONS(Ljava/lang/String;), PATCH(Ljava/lang/String;), POST(Ljava/lang/String;), PUT(Ljava/lang/String;)` |
+| 12a | `CoRouterFunctionDsl` verb functions | `spring-webflux` | 6.1.6 | `DELETE(Ljava/lang/String;), DELETE(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), DELETE(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), DELETE(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), GET(Ljava/lang/String;), GET(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), GET(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), GET(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), HEAD(Ljava/lang/String;), HEAD(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), HEAD(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), HEAD(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), OPTIONS(Ljava/lang/String;), OPTIONS(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), OPTIONS(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), OPTIONS(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), PATCH(Ljava/lang/String;), PATCH(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), PATCH(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), PATCH(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), POST(Ljava/lang/String;), POST(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), POST(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), POST(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), PUT(Ljava/lang/String;), PUT(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), PUT(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), PUT(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;)` |
+| 12b | `CoRouterFunctionDsl` verb functions | `spring-webflux` | 7.0.2 | `DELETE(Ljava/lang/String;), DELETE(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), DELETE(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), DELETE(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), GET(Ljava/lang/String;), GET(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), GET(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), GET(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), HEAD(Ljava/lang/String;), HEAD(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), HEAD(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), HEAD(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), OPTIONS(Ljava/lang/String;), OPTIONS(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), OPTIONS(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), OPTIONS(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), PATCH(Ljava/lang/String;), PATCH(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), PATCH(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), PATCH(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), POST(Ljava/lang/String;), POST(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), POST(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), POST(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), PUT(Ljava/lang/String;), PUT(Ljava/lang/String;Lkotlin/jvm/functions/Function2;), PUT(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;), PUT(Lorg/springframework/web/reactive/function/server/RequestPredicate;Lkotlin/jvm/functions/Function2;)` |
