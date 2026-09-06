@@ -14,6 +14,24 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A document a reader can open** (2Q close, defect 2). Drawing all 160 of `mall-admin`'s
+  traces produced a **697 KB** `architecture.md` and a **4.5 MB** `architecture.html` with
+  **161 eagerly-rendered diagrams** — one module. `## Traces` now draws whole traces, in
+  the table's own order, while a stated **500-step budget** lasts: the same module renders
+  **230 KB** and **38 diagrams**, and `sextant module render --all-traces` still draws
+  every one. **Nothing is dropped and nothing is filtered.** Every trace keeps its summary
+  row — addresses, kind, depth, step count, terminals — with a new `Detail` column saying
+  whether its steps are drawn below; a trace is drawn whole or not at all, because half a
+  trace is an under-report; and a sentence under the table says how many were drawn and
+  which command draws the rest. The statement is a sentence rather than a diagram caption
+  for a structural reason: what is withheld is whole blocks, and an undrawn trace has no
+  diagram to carry an `Elides:` line. Selection is by ORDER — drawing the small traces
+  first would answer "which traces matter" with a judgement this renderer cannot make.
+  A module the budget never reaches renders byte-identically with and without the flag.
+  Records `OI-30` (the cost, on the reader whose trace is one of the 123) and `OI-29`
+  (`analyze` over a workspace whose graph schema moved raises a DuckDB binder error instead
+  of rebuilding — found by this change's acceptance run, introduced by defect 1's column).
+
 - **A trace can be found by the URL a reader knows** (2Q close, defect 1). `## Traces`
   named every trace by its handler descriptor and its kind, so `GET /order/list` appeared
   nowhere in `mall-admin`'s section: finding the trace for an endpoint required already

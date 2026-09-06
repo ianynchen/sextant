@@ -58,11 +58,14 @@ Media reads `consumes → produces`; `—` means none recorded.
 - `Stop` says why a step was not expanded. `boundary` means this workspace read no body for the callee: a third-party library, the JDK, a MyBatis mapper and a SIBLING BUILD MODULE all read alike there, because each is a body that is not here. Nothing below classifies which — `terminal_kind` has no producer, and the `Call` column carries the full descriptor the compiler wrote so the distinction is the reader's to make.
 - `revisited` means the callee was expanded ELSEWHERE in this same trace and its own calls are shown at that first appearance: a method is expanded once per trace, not once per route to it, so a path through one of these tables is not always followable to a terminal. `cycle` means the callee is already on the path from the root. `depth_limit` means the walk's safety bound stopped it, and the `Complete` column answers that without a reader scanning for it.
 - `Value` is the value id the call site produced and `Returns` what the callee hands back — both LOCAL to the method on that row, so an id in a step's `Returns` is a value inside the callee and matches its own rows, never the caller's. `Response` is what the root method itself returns.
+- `Detail` says whether this trace's steps and diagram are drawn below or whether the row IS the answer here. Every trace is listed either way, with its depth and its step count; the sentence under the table says how many are drawn and how to get a document that draws them all. A trace is never drawn in part — half a trace is the under-report this section exists not to be.
 
-| Reached by | Root | Starts as | Depth | Steps | Terminals | Complete |
-|---|---|---|---|---|---|---|
-| `GET /orders; GET /v1/orders` | `com/example/golden/Api#list().` | inbound_endpoint | 3 | 5 | 2 | yes |
-| no wire address | `com/example/golden/Sweeper#sweep().` | scheduled | 0 | 0 | 0 | yes |
+| Reached by | Root | Starts as | Depth | Steps | Terminals | Complete | Detail |
+|---|---|---|---|---|---|---|---|
+| `GET /orders; GET /v1/orders` | `com/example/golden/Api#list().` | inbound_endpoint | 3 | 5 | 2 | yes | below |
+| no wire address | `com/example/golden/Sweeper#sweep().` | scheduled | 0 | 0 | 0 | yes | below |
+
+Every trace is rendered in full below: 2 of 2, 5 steps.
 
 - `com/example/golden/Api#list().` — inbound_endpoint, reached by `GET /orders; GET /v1/orders`
   - Steps:

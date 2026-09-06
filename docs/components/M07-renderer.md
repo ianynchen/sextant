@@ -115,6 +115,20 @@ that follow describe machinery it does not use.
   from a call that does not exist, and this is the first document in which anyone reads a
   trace. A `view` overlay choosing what to hide is a decision a person makes about their
   own module; the machine half does not make it for them.
+- **A step budget over the DOCUMENT, and never over a trace** (2Q close, defect 2). Drawing
+  all 160 of `mall-admin`'s traces produced a 697 KB `architecture.md` and a 4.5 MB
+  `architecture.html` with 161 eagerly-rendered diagrams — one module, and a document a
+  reader cannot open. So the section draws whole traces, in the table's own order, while a
+  stated budget lasts (`DEFAULT_TRACE_STEP_BUDGET`, 500 steps), and `render --all-traces`
+  draws every one. **Three properties make this a reduction rather than a loss**: every
+  trace keeps its summary row, with its addresses, depth, step count and terminals, so
+  nothing is dropped; a trace is drawn whole or not at all, because half a trace is the
+  under-report the section exists not to be; and the section says in words how many it drew
+  and which command draws the rest. **The statement is a sentence rather than an `elides`
+  caption** because what is withheld is whole BLOCKS: an undrawn trace has no diagram to
+  carry a caption, and the boundary a reader meets is under the summary table. Selection is
+  by ORDER, never by size or by any measure of interest — drawing the cheap traces first
+  would answer "which traces matter" with a judgement this renderer has no basis for.
 - **No `alt`/`opt`/`loop` blocks** (the section after it). The structure is not in the
   facts: [D00](D00-fact-schema.md) §5 states that `call_site.ordinal` is *the v1 of the
   control-flow position* and *"not the richer context a sequence diagram needs to show a
@@ -196,6 +210,13 @@ scope there is no choice: the system's declared environment is used, and named.
 
 A simplified diagram says how many steps were hidden. A truncated list says how many were
 omitted. A diagram derived from a partial analysis says so.
+
+**The trace section is the live instance** (2Q close, defect 2). It draws whole traces
+while its step budget lasts and then says, under the summary table: how many of how many it
+drew, that the rest keep their rows, that nothing was filtered out of a trace it did draw,
+and that `render --all-traces` draws every one. The rule that makes the sentence necessary
+is the same one that makes an `Elides:` caption necessary — a reduced output that does not
+say it was reduced is indistinguishable from a complete one.
 
 ### The renderer adds nothing
 

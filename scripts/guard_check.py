@@ -947,6 +947,42 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "render_trace.every-trace-is-listed-even-when-it-is-not-drawn": Guard(
+        what="every trace gets a summary row — its addresses, depth, step count and "
+        "terminals — whether or not the step budget also draws it in full",
+        why="the budget decides how much of the document a trace gets, never whether the "
+        "reader is told it exists. Drop the row and 123 of `mall-admin`'s 160 roots vanish "
+        "from a document that still says `## Traces`: a walk that ran, found terminals and "
+        "is reported nowhere, which is under-reporting dressed as a tidy document — and "
+        "the reader has no way to know the section is not the whole set",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="        for trace, in_full in zip(traces, drawn, strict=True)\n    )\n"
+                "    sections.append(MachineTable(_TRACE_HEADERS, summary))\n",
+                replace="        for trace, in_full in zip(traces, drawn, strict=True)\n"
+                "        if in_full  # guard disabled\n    )\n"
+                "    sections.append(MachineTable(_TRACE_HEADERS, summary))\n",
+            ),
+        ),
+    ),
+    "render_trace.a-budgeted-section-says-what-it-did-not-draw": Guard(
+        what="a `## Traces` section that did not draw every trace says so under the "
+        "summary table — how many it drew, and the command that draws them all",
+        why="M07's *every reduced output states that it was reduced*, and the case it was "
+        "written for. The reduction is whole BLOCKS, so it cannot ride on a diagram's "
+        "`elides` — an undrawn trace has no diagram to caption. Without the sentence a "
+        "reader sees 37 traces where 160 were walked and nothing anywhere says the "
+        "difference exists, which is the same document a renderer that silently filtered "
+        "would produce",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="    sections.append(MachineParagraph(_runs(_budget_sentence(traces, drawn))))\n",
+                replace="",
+            ),
+        ),
+    ),
     "render_trace.two-types-one-simple-name-are-two-lifelines": Guard(
         what="two distinct owning types whose SIMPLE names collide both fall back to their "
         "full descriptors as lifeline labels",

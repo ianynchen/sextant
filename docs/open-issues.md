@@ -536,6 +536,67 @@ an implementer settles in a docstring.
 terminals. **Falsified by** a real module deeper than 64 edges, which would make
 the depth bound a live under-report rather than a latent one.
 
+**Checked against 2Q's close (defect 2) and UNAFFECTED — deliberately.** The
+trace step budget looks like a fifth stop and is not one: it bounds the
+DOCUMENT, never the walk. Every trace is walked in full, every trace keeps its
+summary row with the depth and step count that walk found, and a trace the
+budget did not reach is not drawn rather than cut short — a trace is drawn whole
+or not at all. So FR-6's subject, where a trace stops, is untouched, and the two
+claims stay separate columns: `Complete` is the WALK's answer (its only "no" is
+still the depth bound) and `Detail` is this document's. A budget that had
+truncated a trace's steps would have been a fifth stop reason and a change to
+this row; it was rejected for exactly that reason.
+
+### OI-29 — `analyze` over a workspace whose graph schema moved crashes instead of rebuilding
+**Major · introduced 2026-09-06 by 2Q's close, defect 1; found the same day by
+defect 2's acceptance run · `src/sextant/api.py::_run_analyze`,
+`src/sextant/storage/duckdb/schema.sql`**
+
+`schema.sql` is `CREATE TABLE IF NOT EXISTS` throughout, and `analyze` reuses
+the `workspace.duckdb` it finds. That is exactly right for a NEW table — 2Q
+added two and every existing workspace grew them — and wrong for a new COLUMN,
+which is what defect 1 added to `roots`. Re-analysing `mall-admin` in place
+raised `_duckdb.BinderException: Table "roots" does not have a column with name
+"protocol"` from inside the resolve, on the first real workspace tried.
+
+**The rule is already written; only the mechanism is missing.** D01 §7: *"A
+mismatch never produces a mixed-vintage graph. It forces the affected
+rebuild"* — and `GRAPH_SCHEMA_VERSION` moved to 1.2.0 in the same change to say
+so. `api._stale_stamps` enforces it at the READ gate, so `render`, `enrich` and
+`export` refuse such a workspace with a message; `analyze`, which is the verb
+that would fix it, has no such gate and meets the schema instead.
+
+**Cost:** every existing workspace, on the first analyze after this change. It
+is loud rather than silent and the workaround is one line — delete
+`.sextant/workspace.duckdb`, or analyze into a fresh `--workspace` — but it is a
+stack trace where the project's own rule promises a rebuild, and the next column
+added to any table reproduces it exactly.
+**Closes by** `analyze` comparing the stamps it already writes and starting from
+a fresh database file when they disagree (the `_run_analyze` render-directory
+precedent, which already deletes derived output it is about to replace).
+**Falsified by** a column added to a derived table with no user hitting this.
+
+### OI-30 — the default document draws the steps of a minority of a large module's traces
+**Minor · introduced 2026-09-06 by 2Q's close, defect 2 ·
+`src/sextant/egress/render/document.py::DEFAULT_TRACE_STEP_BUDGET`**
+
+`mall-admin` renders 37 of 160 traces in full; the other 123 are a summary row
+each. That is the deliberate answer to a 697 KB document with 161 eagerly
+rendered diagrams, which was ruled not acceptable, and it is stated three ways
+(a `Detail` column per row, a sentence naming the counts and the command, and
+M07). It is recorded anyway, because the cost is real and lands on a reader:
+**the trace you came for may be one of the 123**, and seeing its steps means
+re-running `render --all-traces` and reading the larger document.
+
+The register is where that cost lives rather than a `Known gaps` line, because
+it is a property of one default and not of the analysis: nothing is unknown,
+nothing is filtered out of a trace that IS drawn, and no walk was shortened
+(see OI-27's own note).
+**Closes by** a rendering that needs no budget — a collapsed block in HTML, a
+per-trace document, or an on-demand surface — rather than by raising the number,
+which only moves the boundary. **Falsified by** a reader who could not find what
+they needed in the summary row and did not know the flag existed.
+
 ### OI-26 — `SEXTANT_VERSION` is declared three times
 **Minor · found 2026-09-06 by 2Q `G4` while verifying OI-24 ·
 `src/sextant/domain/version.py:1`, `src/sextant/ingress/read/__init__.py:16`,

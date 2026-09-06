@@ -207,6 +207,104 @@ def test_a_roots_path_passes_the_redactor_exactly_as_an_endpoints_does():
     assert "s3cret" not in "".join(content for _kind, content in tables[0].rows[0][0])
 
 
+# --- the document at scale (2Q close, defect 2) ---------------------------
+
+
+def _many(count: int, steps_each: int = 10) -> list[Trace]:
+    """`count` traces of `steps_each` steps, each rooted at its own address —
+    the shape `mall-admin` has 160 of, in miniature."""
+    return [
+        Trace(
+            root=Root(
+                handler=f"s maven c 1 a/Api{index}#list().",
+                kind=RootKind.INBOUND_ENDPOINT,
+                identities=(_address(path=f"/order/{index}"),),
+            ),
+            steps=tuple(_step(ordinal=ordinal) for ordinal in range(steps_each)),
+        )
+        for index in range(count)
+    ]
+
+
+def _paragraphs(sections: list[object]) -> list[str]:
+    return [
+        "".join(content for _kind, content in section.runs)
+        for section in sections
+        if type(section).__name__ == "MachineParagraph"
+    ]
+
+
+@pytest.mark.pins("render_trace.every-trace-is-listed-even-when-it-is-not-drawn")
+def test_a_trace_the_budget_did_not_reach_is_still_a_row_with_its_own_counts():
+    """**Never drop a trace silently.** The budget decides how much of the
+    document a trace gets, never whether the reader is told it exists: every
+    root keeps its summary row, its addresses, its depth and its step count,
+    so a reader can see that a trace was walked and how big it is even where
+    its steps are not drawn. A root that vanished from this table would be a
+    walk the document denies, which is the second cardinal sin."""
+    traces = _many(20)
+    sections = _trace_sections(traces, REDACTOR, budget=50)
+    table = next(s for s in sections if isinstance(s, MachineTable))
+    assert len(table.rows) == 20
+    assert [row[-1] for row in table.rows].count((("text", "summary only"),)) > 0
+    assert (("code", "GET /order/19"),) in [row[0] for row in table.rows]
+
+
+@pytest.mark.pins("render_trace.a-budgeted-section-says-what-it-did-not-draw")
+def test_the_section_says_how_much_of_itself_it_drew_and_how_to_get_the_rest():
+    """M07: *"every reduced output states that it was reduced"*. The reduction
+    here is whole BLOCKS rather than steps inside a diagram, so it cannot ride
+    on `MachineDiagram.elides` — a block that is not drawn has no diagram to
+    carry a caption — and it is a sentence under the summary table instead,
+    where a reader meets the boundary. It names the count and the command,
+    because "what was left out" without "how to get it" is half an answer."""
+    sentence = " ".join(_paragraphs(_trace_sections(_many(20), REDACTOR, budget=50)))
+    assert "5 of 20 traces" in sentence
+    assert "--all-traces" in sentence
+
+
+def test_a_trace_that_is_drawn_is_drawn_whole():
+    """Half a trace is the under-report this section exists not to be, so the
+    budget is spent per TRACE and never per step: the last trace drawn takes
+    the total past the bound rather than stopping mid-walk."""
+    sections = _trace_sections(_many(20), REDACTOR, budget=50)
+    tables = [
+        entry.table
+        for section in sections
+        if hasattr(section, "entries")
+        for entry in section.entries
+        if entry.table is not None
+    ]
+    assert [len(table.rows) for table in tables] == [10] * 5
+
+
+def test_only_the_traces_drawn_in_full_carry_a_diagram():
+    """The 161 eagerly-rendered diagrams are half of why the shipped document
+    was unusable, and a diagram belongs to a block: a trace with no block has
+    no diagram, rather than a diagram floating free of the steps it draws."""
+    sections = _trace_sections(_many(20), REDACTOR, budget=50)
+    assert len([s for s in sections if isinstance(s, MachineDiagram)]) == 5
+
+
+def test_no_budget_draws_every_trace_and_says_that_is_what_it_did():
+    """`--all-traces`. The document states which of the two it is showing —
+    M07's rule for `--env`, and for the same reason: a reader cannot tell a
+    complete document from a reduced one by looking at it."""
+    sections = _trace_sections(_many(20), REDACTOR, budget=None)
+    assert len([s for s in sections if isinstance(s, MachineDiagram)]) == 20
+    assert "Every trace is rendered in full" in " ".join(_paragraphs(sections))
+
+
+def test_the_budgeted_section_is_byte_identical_across_two_renders():
+    """NFR-1 over the selection itself: which traces are drawn is a function
+    of their order and their step counts, both fixed by `roots`, so two runs
+    over one workspace choose the same ones."""
+    traces = _many(20)
+    assert _trace_sections(traces, REDACTOR, budget=50) == _trace_sections(
+        traces, REDACTOR, budget=50
+    )
+
+
 # --- the arrow lands where the walk went ----------------------------------
 
 

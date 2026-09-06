@@ -65,6 +65,16 @@ side effect out of a module.
 Pipeline stages are internal. `--from-stage` and `--to-stage` exist for debugging and are
 not part of the surface.
 
+### `module render --all-traces` (2Q close, defect 2)
+
+The one DISPLAY flag on `render`, and [M07](M07-renderer.md)'s `--env` rule applied to a
+second choice: `## Traces` draws whole traces while a stated step budget lasts, and this
+draws every one instead. It re-reads the same workspace and derives nothing — the walk, the
+roots and the steps are identical either way; only how much of the answer this document
+spends its bytes on changes. **Both documents say which of the two they are**, because a
+reader cannot tell a complete document from a reduced one by looking at it, and every trace
+keeps its summary row in both.
+
 ### `module enrich` (2K design §3/§8)
 
 Requires a rendered workspace — refused, loudly, naming `render`, before composing anything,

@@ -96,12 +96,24 @@ def module_analyze(path: Path, workspace_dir: Path | None, allow_resolve: bool) 
 @module.command("render")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("--workspace", "workspace_dir", type=click.Path(path_type=Path), default=None)
-def module_render(path: Path, workspace_dir: Path | None) -> None:
+@click.option(
+    "--all-traces",
+    "all_traces",
+    is_flag=True,
+    default=False,
+    help=(
+        "Draw every trace in `## Traces` in full. Without it the section draws "
+        "what its step budget allows and says how many it did not draw — a "
+        "module with 160 endpoints otherwise renders a 697 KB document with "
+        "161 diagrams. Every trace is listed either way."
+    ),
+)
+def module_render(path: Path, workspace_dir: Path | None, all_traces: bool) -> None:
     """Reads the workspace `analyze` left behind — it never re-detects,
     re-scans, or re-resolves (M00 "no analysis"; the workspace persists
     precisely so render is a cheap read)."""
     try:
-        result = api._render(path, workspace_dir=workspace_dir)
+        result = api._render(path, workspace_dir=workspace_dir, all_traces=all_traces)
     except api.SextantError as refused:
         raise click.ClickException(str(refused)) from refused
     click.echo(str(result.markdown))
