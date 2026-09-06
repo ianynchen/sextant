@@ -39,18 +39,27 @@ requires: [call_site, string_constants]
 # this row; the comment's reassurance that it "derives no row rather than a
 # wrong one" was describing a mechanism that does not exist.
 #
-# THE REAL BOUNDARY, which is narrower and worse: `channel_of` resolves only a
-# `kind: "string"` argument (`shapes/arguments.py`), and argument 1 is ALWAYS an
-# `array` — for one path as much as for two. So `channel_arg: 1` can never
-# resolve a WebSocket path at all: every call, single- or multi-path, derives
-# one honest row with `path` NULL and `resolution: unresolved`. That is an
-# under-report and never a wrong address, which is the direction this file is
-# willing to fail in, and it is recorded in `docs/COVERAGE.md`. **It closes in
-# Task 13**, whose Step 1 wires the consumers extractor capability 9.15
-# unblocked by teaching them to read an `array` argument's own `elements`;
-# reading them here is what turns this row's NULL into one row per registered
-# path. Not done here, deliberately: it is engine work, and this sweep is a
-# catalog sweep.
+# THE BOUNDARY THAT STOOD HERE IS CLOSED (2O Task 13). It read: "`channel_of`
+# resolves only a `kind: "string"` argument (`shapes/arguments.py`), and
+# argument 1 is ALWAYS an `array` — for one path as much as for two. So
+# `channel_arg: 1` can never resolve a WebSocket path at all: every call,
+# single- or multi-path, derives one honest row with `path` NULL and
+# `resolution: unresolved`." Every word of that was true of the reader, and
+# the reader is what changed: `single_call` now reads a `channel_arg` slot
+# through `channels_of`, which reads an `array`'s own `elements` (extractor
+# capability 9.15) and answers one destination per element.
+#
+# So `.addHandler(h, "/ws")` derives `/ws` resolved, and
+# `.addHandler(h, "/ws", "/ws2")` derives BOTH — one row per registered path,
+# the way each `urlPatterns` entry is already its own row, because Spring
+# registers the one handler at every path named. A path element javac could
+# not fold to a constant keeps the ONE trailing unresolved row `all_strings`
+# gives, never a guess: the row count still says how many registrations there
+# are, and the unread one says so.
+#
+# Nothing about this file changed to close it; the catalog was already correct
+# for the shape the extractor emits, which is why the boundary was worth
+# stating precisely rather than working around.
 #
 # `arity: 2` is therefore right, and it now carries the erased JVM `descriptor`
 # of the one overload `WebSocketHandlerRegistry` declares — the interface has

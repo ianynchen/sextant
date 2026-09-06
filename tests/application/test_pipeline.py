@@ -956,12 +956,25 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("GET", "/kt/rich"),
     }
     assert all(row["handler"] is None for row in kt_rows)
-    # F1: every predicate-derived media column on every combinator row is
+    # F1, and the boundary it named is CLOSED (2O Task 13). This assertion
+    # read "every predicate-derived media column on every combinator row is
     # NULL — the vararg `accept`/`contentType` constants are unreadable
-    # (checkpoint (3)), and that unreadability never touches `resolution`.
-    assert all(
-        (row["consumes"], row["produces"]) == (None, None) for row in combinator_rows.values()
-    )
+    # (checkpoint (3))". They are readable since extractor capability 9.15 put
+    # the constants in the array slot's own `elements`, and the engine reads
+    # them now. What F1 ruled is untouched and still pinned below: an
+    # unreadable media constant never moves `resolution`.
+    media = {(m, p): (row["consumes"], row["produces"]) for (m, p), row in combinator_rows.items()}
+    assert media[("GET", "/fn/orders")] == (None, '["application/json"]')
+    assert media[("POST", "/fn/orders")] == ('["application/json"]', None)
+    assert media[("GET", "/kt/rich")] == (None, '["application/json"]')
+    # Every OTHER combinator row declares no media predicate at all, so its
+    # columns stay NULL — the read fires where a declaration exists and
+    # nowhere else.
+    assert {
+        columns
+        for (m, p), columns in media.items()
+        if (m, p) not in {("GET", "/fn/orders"), ("POST", "/fn/orders"), ("GET", "/kt/rich")}
+    } == {(None, None)}
 
 
 # --- 2H Task 2: the GraphQL surface, live on real bytecode ---------------
@@ -2794,6 +2807,17 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
         ("http", "/v1/orders/detailed", json_media, json_media),
         ("http", "/v1/orders/proto-orders", None, json_media),
         ("sse", "/events/stream", None, '["text/event-stream"]'),
+        # 2O Task 13, and NOT a stamp: these three are the functional-routing
+        # rows' own `accept`/`contentType` predicates, read off the vararg
+        # array's `elements` by the combinator engine. They belong in this set
+        # for the same reason the mapping-annotation rows do — the media is
+        # DECLARED at the route — and their presence here is what keeps the
+        # kafka stamp's own claim below honest: the stamp fires on kafka rows
+        # and nowhere else, which is only checkable if every non-kafka
+        # declaration is enumerated.
+        ("http", "/fn/orders", None, json_media),
+        ("http", "/fn/orders", json_media, None),
+        ("http", "/kt/rich", None, json_media),
     }
 
 
@@ -2881,15 +2905,35 @@ def test_the_format_ladder_answers_every_live_row(
     # instead in `tests/e2e/test_vertical_slice.py`.
     assert len([e for e in report.endpoints if e["protocol"] == "soap"]) == 5
 
-    # Rung 2 — the only three HTTP routes whose mapping annotations declare a
-    # media type at all.
+    # Rung 2 — every HTTP route that declares a media type at all, in either
+    # of the two ways a route can. THREE declare it on a mapping ANNOTATION;
+    # three more declare it on a functional-routing PREDICATE
+    # (`accept(...)`/`contentType(...)`), and those three arrived here in 2O
+    # Task 13, when the combinator engine learned to read a vararg array's own
+    # `elements`. Nothing about the rung changed — the media column those rows
+    # were always entitled to simply stopped being NULL, which is exactly what
+    # a ladder rung reading that column is supposed to notice.
     assert {
         key for key, answer in answers.items() if key[0] == "http" and answer[1] == "resolved"
     } == {
         ("http", "inbound", "GET", "/v1/orders/{id}"),
         ("http", "inbound", "POST", "/v1/orders/detailed"),
         ("http", "inbound", "POST", "/v1/orders/proto-orders"),
+        ("http", "inbound", "GET", "/fn/orders"),
+        ("http", "inbound", "POST", "/fn/orders"),
+        ("http", "inbound", "GET", "/kt/rich"),
     }
+    # The three predicate-derived rows answer `json`, off `application/json`
+    # and nothing else — the same table, the same rung, a different place the
+    # declaration was written.
+    assert {
+        answers[key]
+        for key in (
+            ("http", "inbound", "GET", "/fn/orders"),
+            ("http", "inbound", "POST", "/fn/orders"),
+            ("http", "inbound", "GET", "/kt/rich"),
+        )
+    } == {("json", "resolved")}
     # **Rung 2 beats rung 4**, live: `proto-orders` takes a generated
     # protobuf type in and returns one out — Task 5 pinned both shapes
     # expanding from their descriptors — and is still `json`, because its
@@ -2965,7 +3009,13 @@ def test_the_format_ladder_answers_every_live_row(
     # definition (`jakarta-websocket.yml` declares no `request_body` block at
     # all, and `onFrame` returns `void`), so this row carries no payload
     # shape for rung 5 to read either, and falls all the way to rung 6.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 31
+    # - 3 with 2O Task 13: `GET`/`POST /fn/orders` and `GET /kt/rich` had no
+    # media to read and no payload type behind a Kotlin-generated or
+    # method-ref handler, so all three fell to rung 6 with nothing described.
+    # Their `accept`/`contentType` predicates are readable now, so rung 2
+    # answers them — a row leaving rung 6 for a DECLARATION is the ladder
+    # working, and the only three rows in the fixture that could move.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 28
 
     # No rung saw two answers for one row anywhere in this fixture, so the
     # ledger holds no `format_conflict` at all — every row in it is the

@@ -147,9 +147,29 @@ _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
 _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
+_ARGUMENTS = "sextant/application/resolve/shapes/arguments.py"
 
 
 GUARDS: dict[str, Guard] = {
+    # --- shared argument readers ------------------------------------------
+    "arguments.elements-are-an-array-kinds-own": Guard(
+        what="an `elements` list is read off an `array`-kind argument and nothing else — "
+        "every other argument is read as the value it is",
+        why="the `array` kind is the extractor's own claim that it read the whole array end "
+        "to end (capability 9.15's five rejection rules); an array it could not read stays "
+        "`unresolved` and carries no `elements` at all. Reading an element list off any "
+        "other slot asserts a completeness nobody measured — and, since a slot that is not "
+        "an array has no elements to find, it turns every destination a compiler wrote down "
+        "into an empty expansion: `unresolved`, silently, on every shipped messaging catalog "
+        "and every media predicate at once",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find='    if argument is None or argument.get("kind") != "array":',
+                replace="    if argument is None:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     # --- `single_call` -----------------------------------------------------
     "single_call.claimed-arity": Guard(
         what="once any candidate row declares a `descriptor`, that arity is CLAIMED and "

@@ -76,7 +76,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.shapes.arguments import _arg_at
+from sextant.application.resolve.shapes.arguments import _arg_at, _expanded_arguments
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
@@ -641,11 +641,20 @@ def _media_constraints(site: dict[str, Any], rule: dict[str, Any], context: _Tre
     untouched. The route's identity is its verb and path, both fully known;
     calling the row unresolved because a `produces` list could not be read
     would misreport a known endpoint as an unknown one (2E checkpoint F1's
-    ruling). Vararg constants in particular reach the facts with no symbol at
-    all, which is exactly this case.
+    ruling).
+
+    Every media predicate a framework declares is VARARGS
+    (`accept(MediaType...)`), so the constants arrive as one `array` slot
+    rather than as one argument each, and `_expanded_arguments` reads that
+    slot's own `elements` (2O Task 13, on extractor capability 9.15). *The
+    sentence that stood here — "vararg constants in particular reach the
+    facts with no symbol at all, which is exactly this case" — described the
+    pre-9.15 fact and was why every predicate-derived media column came back
+    NULL.* It still describes a vararg array the extractor cannot read end to
+    end, which stays an unreadable slot and still contributes nothing.
     """
     values: list[str] = []
-    for argument in site["arguments"]:
+    for argument in _expanded_arguments(site["arguments"]):
         value = _media_value(argument, context)
         if value is not None and value not in values:
             values.append(value)

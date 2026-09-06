@@ -342,7 +342,6 @@ than silently absent:
 | A link between a Java class and the SDL type of the same name | two shape universes now describe one GraphQL service, and matching them by simple name is a guess; both are recorded and the cross-link is comparison work with its own evidence (§5.4) | the phase that earns it |
 | The HTTP address a GraphQL or STOMP service listens on | the `path` column carries the OPERATION, because that is what the identity is; no engine derives `/graphql` or the STOMP endpoint registration ([D01](components/D01-graph-schema.md) §3) | undecided |
 | Cross-service links or a system document | linking is a system-scope pass over bundles; no `participants`/`links` exist yet | linking phase |
-| `consumes`/`produces` on a predicate-derived WebFlux functional route | `accept(...)`/`contentType(...)`'s `MediaType` vararg constants compile through an `ANEWARRAY`. **The extractor has read it since capability 9.15** — the slot now carries `{"kind":"array","elements":[…]}` — and `combinator._media_value` still answers for `string` and `enum` kinds only, so the fact is present and unread | engine work, not an extractor candidate |
 | A handler symbol for a Kotlin WebFlux functional route | Kotlin compiles every DSL handler to an `instance`-kind argument naming a generated class, never a method | undecided |
 | Trustworthy analysis of a POM using parents/profiles/interpolation | the detector reads `pom.xml` raw (`maven_parent_and_profile_resolution_not_implemented`) | undecided |
 | A payload bound from a parse more than one delegation hop from its handler | a flow followed further than it was observed is an assumption; the parse is found at hop two and ledgered as an open question instead, and past hop two it is not found at all (`payload_parsed_beyond_horizon`, §4.2) | the enrichment tier |
@@ -953,15 +952,18 @@ that scans dependency jars to replace it remains open (D02 §7).
 .GET(…)`/`.andRoute(…)`/`.nest(…)`, Kotlin's `coRouter { "/p".nest { GET(…) } }`) through the
 new `combinator` engine, walking the routing tree from its declared entry call rather than by
 owner alone. Two more boundaries ride with it, beside the superclass one above: **predicate-
-declared media is invisible** — `accept(...)`/`contentType(...)`'s `MediaType` vararg constants
-compile through an `ANEWARRAY`, so every predicate-derived row's `consumes`/`produces` reads
-NULL even though a declaration demonstrably exists on the call site (checkpoint F1). *This
-sentence read "an `ANEWARRAY` the extractor's argument reader has no case for ... a later
-extractor candidate, not a gap in the engine", and that stopped being true at extractor
-capability 9.15, which teaches `MethodFlow.argumentJson` exactly that construction. The slot
-now carries `{"kind":"array","elements":[…]}`; `combinator._media_value` answers for `string`
-and `enum` kinds and has no case for `array`, so the facts are there and the engine does not
-read them. The row is unchanged in what it reports and changed in what would close it.* And **Kotlin functional handlers resolve to NULL** — Kotlin 2.2 compiles every
+declared media is READ, and was invisible for two phases** — `accept(...)`/`contentType(...)`'s
+`MediaType` vararg constants compile through an `ANEWARRAY`, and every predicate-derived row's
+`consumes`/`produces` read NULL even though a declaration demonstrably existed on the call site
+(checkpoint F1). *This sentence read "an `ANEWARRAY` the extractor's argument reader has no case
+for ... a later extractor candidate, not a gap in the engine". It was corrected once at extractor
+capability 9.15, which teaches `MethodFlow.argumentJson` that construction and puts the constants
+in the slot's own `elements`, and it is closed by 2O Task 13, which teaches
+`combinator._media_constraints` to read them.* Live: `GET /fn/orders` and `GET /kt/rich` carry
+`produces`, `POST /fn/orders` carries `consumes`, all `application/json`. **What remains is
+narrower and stated where it lives** — `media_values` translates only the members a catalog
+declares, and `spring-webflux-router.yml` declares `APPLICATION_JSON` alone, so a route declaring
+any other constant still reads NULL rather than leaking that constant's own member name. And **Kotlin functional handlers resolve to NULL** — Kotlin 2.2 compiles every
 DSL handler, bound method reference and lambda alike, to an `instance`-kind argument naming a
 compiler-generated class rather than a method symbol, so the honest answer is no handler
 rather than a fabricated guess through that class's own `invokeSuspend` (checkpoint (1b)).
@@ -1440,19 +1442,23 @@ Boundaries, each verified against the shipped code:
   registration-call-only surface. No pom in this repository depends on `spring-websocket`
   at all, so the row's descriptor is measured against a jar pinned to the Spring Framework
   version the fixtures use, which is an assumption rather than a measurement.
-- **`addHandler` NEVER resolves a WebSocket path, and what stood here was wrong about why.**
+- **`addHandler` resolves every registered path, and it took two corrections to get there.**
   This bullet used to say `arity: 2` was "unverified against real bytecode" and that a
   multi-path `.addHandler(h, "/a", "/b")` is "a three-argument call the row does not match at
   all". Both are false, measured (descriptor sweep R6) by compiling those exact calls against
   spring-websocket 6.1.6 and running the shipped extractor: `addHandler(WebSocketHandler,
   String...)` is varargs, so ONE path and TWO paths alike record exactly two arguments, with
-  argument 1 an `array` carrying its own `elements`. The row therefore matches every call —
-  and `channel_of` resolves only a `kind: "string"` argument, so `channel_arg: 1` yields
-  `path` NULL, `resolution: unresolved` for every call anyone can write. An honest empty row,
-  never a wrong address. **Falsified by** a WebSocket registration appearing in an export with
-  a path; **closed by Task 13**, whose Step 1 wires the consumers of extractor capability 9.15
-  to read an `array` argument's `elements` — at which point each registered path is its own
-  row, the same way each `urlPatterns` entry is.
+  argument 1 an `array` carrying its own `elements`. The row therefore matches every call. It
+  then derived `path` NULL for all of them, because `channel_of` resolved only a
+  `kind: "string"` argument — an honest empty row, never a wrong address, and the boundary
+  this bullet stated. **Closed by 2O Task 13**: `single_call` reads a `channel_arg` slot
+  through `channels_of`, which reads the array's `elements`, so each registered path is its
+  own row the same way each `urlPatterns` entry is. A path element javac could not fold to a
+  constant contributes the one trailing unresolved row `all_strings` gives — the registration
+  count stays right and the unread element says so. **Falsified by** a WebSocket registration
+  whose exported path is not one the source names, or by a multi-path registration exporting
+  fewer rows than it names paths. Still proved over synthetic call facts only: no pom in this
+  repository depends on `spring-websocket`, so nothing here is measured against a live scan.
 - **`addHandler`'s `handler` is the REGISTERING method, not the registered class.**
   `single_call` has no vocabulary for reading a symbol off an argument, so an inbound row's
   handler is the method whose body made the call (`registerWebSocketHandlers`); the
@@ -1619,7 +1625,7 @@ Task 5):**
 | Java | Micronaut `@KafkaListener`/`@KafkaClient` + `@Topic` | — | `annotation` | A |
 | Java | `ReplyingKafkaTemplate.sendAndReceive(ProducerRecord)`, and a `@KafkaListener` method returning a value annotated `@SendTo` | the reply derives as its own outbound row | `registration_call` + `annotation` | ✅ shipped |
 | Java | `KafkaTemplate.send(topic, …)`, `.sendDefault(…)` | **all ten overloads** since `A-M6` — the partition- and timestamp-carrying `send` forms take the topic at argument 0 and the payload last, and every `sendDefault` form derives `path: NULL` at `unresolved` because its destination is config-borne | `registration_call` | ✅ shipped |
-| Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)`, **with or without a `ConsumerRebalanceListener`** | `List.of` (≤10 elements) resolves per topic; `Collections.singletonList`/`Pattern.compile` resolve their one argument; `Arrays.asList` is genuine varargs and degrades to one unresolved row — the elements are IN the facts since capability 9.15 (`{kind: array, elements: […]}`), but `all_strings` reads positional arguments and has not been taught to look inside `elements` | `registration_call` | ✅ shipped |
+| Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)`, **with or without a `ConsumerRebalanceListener`** | `List.of` (≤10 elements) resolves per topic; `Collections.singletonList`/`Pattern.compile` resolve their one argument; `Arrays.asList` is genuine varargs and resolves per topic too since **2O Task 13**, which taught `all_strings` to read the array slot's own `elements` (capability 9.15's `{kind: array, elements: […]}`) — it degraded to one unresolved row before that. An array the extractor cannot read end to end never reaches the `array` kind and still degrades that way | `registration_call` | ✅ shipped |
 | Java | **`KafkaProducer.send(ProducerRecord[, Callback])`** | **topic is a constructor argument of `ProducerRecord`**, not of `send`; the callback overload is a trailing argument and reads the same position (`A-M6`) | `fluent_chain` | ✅ shipped |
 | Java | `KafkaTemplate.send(Message)` with topic in a header | topic read from a `setHeader(KafkaHeaders.TOPIC, …)` value-guarded step | `fluent_chain` | ✅ shipped |
 | Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination`; gated on the build declaring `org.springframework.cloud:spring-cloud-stream`, and **any** method returning one of the three function interfaces is a candidate — see the boundary note below | `config_join` | ✅ shipped |

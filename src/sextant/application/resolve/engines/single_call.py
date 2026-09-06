@@ -30,6 +30,7 @@ from sextant.application.resolve.shapes.arguments import (
     address_argument,
     argument_descriptor,
     channel_of,
+    channels_of,
     field_facts,
     linked_channels,
     parameter_index,
@@ -349,7 +350,24 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             else:
                 destinations = [literal]
         else:
-            destinations = [read_destination(url_argument)]
+            # A `channel_arg` slot may hold a whole ARRAY of destinations —
+            # `addHandler(handler, String... paths)` registers one handler at
+            # several dispatch paths in one call — and since extractor
+            # capability 9.15 that array carries its own `elements` (2O Task
+            # 13). `channels_of` reads them, one destination tuple per
+            # registered path, and answers `channel_of`'s single verbatim
+            # tuple for every slot that is not an array; the loop below
+            # already mints one row per tuple.
+            #
+            # `url_arg` deliberately does NOT get the same treatment: an
+            # address is one URL per call in every catalog shipped, no
+            # `url_arg` position is varargs, and CP-2's peer/path split has no
+            # meaning applied element-wise to an array nobody has measured.
+            destinations = (
+                channels_of(url_argument)
+                if "channel_arg" in method
+                else [read_destination(url_argument)]
+            )
         response_argument = _arg_at(arguments, method.get("response_arg"))
         # `direction` on a row overrides the catalog's own declared
         # direction (D02 §2) — Pub/Sub's `subscribe` is inbound even inside

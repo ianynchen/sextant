@@ -216,15 +216,22 @@ matches:
     # stable enum and this is the table the extractor's own varargs case
     # reads against the day it exists.
     #
-    # **That day is half here: extractor capability 9.15** now emits
+    # **That day is here.** Extractor capability 9.15 emits
     # `{"kind":"array","elements":[{"kind":"enum","symbol":"…/MediaType#APPLICATION_JSON."}]}`
-    # for exactly these calls, verified against the compiled fixture. The
-    # combinator engine still reads positional arguments and has not been
-    # taught to look inside `elements`, so this block stays
-    # specified-but-unused — proven by a synthetic-facts unit test
-    # (`test_combinator_engine.py`) rather than by anything the live fixture
-    # exercises — and the media columns still come back NULL. The missing
-    # half is engine work, ledgered rather than done.
+    # for exactly these calls, and 2O Task 13 taught the combinator engine to
+    # read that slot's own `elements` (`_media_constraints`). This block is
+    # LIVE against the fixture: `GET /fn/orders` and `GET /kt/rich` carry
+    # `produces` and `POST /fn/orders` carries `consumes`, all
+    # `application/json`, pinned in `tests/application/test_pipeline.py`.
+    #
+    # Only the one member is declared, and that is still deliberate: the
+    # checkpoint confirms only `APPLICATION_JSON` in the fixture, and a member
+    # nobody declared contributes nothing rather than leaking its own symbol
+    # fragment into a media column (pinned by the near-miss beside the
+    # positive in `test_combinator_engine.py`). A route declaring
+    # `MediaType.APPLICATION_XML` here therefore reads NULL — an under-report
+    # this table closes one measured member at a time, never by guessing that
+    # a constant's name is its wire value.
     media_values:
       owner: org.springframework.http.MediaType
       values:

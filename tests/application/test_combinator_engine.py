@@ -22,10 +22,14 @@ CHECKPOINT FACT, pinned by (1b): a DSL body lands in a synthetic method of its
 own, its calls carry `receiver: null` and (mostly) `result: null`, and the
 entry-to-body and nest-to-body edges are both `lambda`-kind arguments naming
 that method's symbol exactly.
-CHECKPOINT FACT, pinned by (3)/F1: a vararg media constant reaches the facts as
-a bare `{"kind":"unresolved"}` with no symbol at all. The `enum`-kind read path
-below is therefore exercised with synthetic facts, and the unreadable case is
-pinned beside it.
+CHECKPOINT FACT, pinned by (3)/F1 and CORRECTED by extractor capability 9.15: a
+vararg media constant reaches the facts as ONE `{"kind":"array"}` slot carrying
+its own `elements`, each the `enum` it would have been as a single argument.
+*That sentence read "as a bare `{"kind":"unresolved"}` with no symbol at all",
+which was the pre-9.15 fact and the reason every predicate-derived media column
+came back NULL.* A bare `unresolved` is now what an array the extractor could
+not read END TO END degrades to (9.15's five rejection rules), and that case is
+pinned beside the readable one.
 """
 
 from pathlib import Path
@@ -733,6 +737,146 @@ def test_a_string_kind_media_argument_reads_as_its_literal_value(tmp_path: Path)
     assert row["resolution"] == "resolved"
 
 
+def test_a_vararg_media_arrays_elements_fill_the_media_column(tmp_path: Path):
+    """The shape a REAL media predicate compiles to, and the one this engine
+    could not read until 2O Task 13: `accept(MediaType...)` is varargs, so
+    every constant the author wrote arrives inside ONE `array` slot rather
+    than as one argument each.
+
+    Two elements, deliberately: a one-element array would pass even for a
+    reader that mistook the array slot itself for a single value, and the
+    column is a distinct sorted UNION, so both spellings have to survive the
+    read to reach it. `_media_value` translates each element through the
+    catalog's own `media_values` table exactly as it already does for a
+    non-vararg constant — the array changes where the constants live, not what
+    they mean.
+    """
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            PREDICATES,
+            "accept",
+            result=5,
+            arguments=[
+                CallArgument(
+                    kind="array",
+                    elements=[
+                        CallArgument(kind="enum", symbol=MEDIA_TYPE + "APPLICATION_JSON."),
+                        CallArgument(kind="enum", symbol=MEDIA_TYPE + "APPLICATION_XML."),
+                    ],
+                )
+            ],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATE_TYPE,
+            "and",
+            receiver=3,
+            result=7,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=7),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["method"], row["path"]) == ("GET", "/orders")
+    assert row["produces"] == f'["{JSON}","{XML}"]'
+    assert row["consumes"] is None
+    assert row["resolution"] == "resolved"
+
+
+def test_a_vararg_media_array_holding_an_undeclared_constant_contributes_nothing(
+    tmp_path: Path,
+):
+    """The near-miss beside the positive above, one level down: reading an
+    array's `elements` widens WHERE constants are found, never WHICH ones
+    count. An element whose member the catalog's `media_values` table does not
+    declare contributes nothing at all — the media column stays NULL rather
+    than gaining the constant's own member name, a symbol fragment no wire
+    ever carried.
+
+    This is `_media_value`'s pre-existing rule, and it is pinned here because
+    the array read is what first lets a real `enum` element reach it: before
+    9.15 the enum never arrived, so the rule declined by accident rather than
+    by design."""
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            PREDICATES,
+            "accept",
+            result=5,
+            arguments=[
+                CallArgument(
+                    kind="array",
+                    elements=[CallArgument(kind="enum", symbol=MEDIA_TYPE + "TEXT_HTML.")],
+                )
+            ],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATE_TYPE,
+            "and",
+            receiver=3,
+            result=7,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=7),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["method"], row["path"]) == ("GET", "/orders")
+    assert row["produces"] is None
+    assert row["resolution"] == "resolved"
+
+
 def test_a_second_verb_inside_one_and_chain_poisons_only_the_verb(tmp_path: Path):
     """A request carries exactly one verb, so two of them merged by a single
     `and` is a constraint no route satisfies. Picking either would be a guess;
@@ -837,8 +981,12 @@ def test_an_unreadable_path_poisons_the_path_while_an_unreadable_media_constant_
             result=3,
             arguments=[CallArgument(kind="string", value="/x")],
         ),
-        # The frozen shape of a real vararg media call: one bare `unresolved`
-        # argument, no `source` and no `symbol` to follow (checkpoint (3)).
+        # A vararg media call whose array the extractor could NOT read end to
+        # end: one bare `unresolved` argument, no `source` and no `symbol` to
+        # follow. This was the frozen shape of every such call at checkpoint
+        # (3); since 9.15 it is the shape only of the five rejection rules'
+        # own output, and the readable case is pinned by
+        # `test_a_vararg_media_arrays_elements_fill_the_media_column` below.
         _site(
             unread, 1, PREDICATES, "accept", result=5, arguments=[CallArgument(kind="unresolved")]
         ),

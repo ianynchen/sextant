@@ -1762,6 +1762,7 @@ def test_a_malformed_record_wrappers_entry_is_refused_at_run_start(tmp_path: Pat
 
 SESSION = "jakarta/jms/Session#"
 JAVA_LIST = "java/util/List#"
+JAVA_ARRAYS = "java/util/Arrays#"
 KAFKA_CONSUMER = "org/apache/kafka/clients/consumer/KafkaConsumer#"
 
 
@@ -1775,6 +1776,10 @@ def _create_queue_form(arg: int | str = 0) -> dict:
 
 def _list_of_form(arg: int | str = "all_strings") -> dict:
     return {"owner": "java.util.List", "method": "of", "arg": arg}
+
+
+def _as_list_form(arg: int | str = "all_strings") -> dict:
+    return {"owner": "java.util.Arrays", "method": "asList", "arg": arg}
 
 
 def _create_queue_call(caller: str, ordinal: int, result: int, topic: str) -> CallSiteFact:
@@ -1826,6 +1831,27 @@ def _list_of_call(caller: str, ordinal: int, result: int, values: list) -> CallS
     )
 
 
+def _as_list_call(caller: str, ordinal: int, result: int, elements: list) -> CallSiteFact:
+    """`Arrays.asList("a", "b")` — a GENUINE varargs call, and the shape that
+    tells it apart from `List.of` above: javac builds ONE array and hands it
+    over in ONE slot, so the erased descriptor takes `Object[]` and the topics
+    live in that slot's own `elements` (extractor capability 9.15)."""
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=JAVA_ARRAYS,
+            name="asList",
+            descriptor="([Ljava/lang/Object;)Ljava/util/List;",
+        ),
+        invoke_kind="static",
+        ordinal=ordinal,
+        receiver=None,
+        result=result,
+        arguments=[CallArgument(kind="array", elements=elements)],
+    )
+
+
 def _subscribe_call(caller: str, ordinal: int, source: int | None) -> CallSiteFact:
     return CallSiteFact(
         document_id="doc_1",
@@ -1852,6 +1878,13 @@ _SUBSCRIBE_LIST_MATCHES = {
     "owner": "org.apache.kafka.clients.consumer.KafkaConsumer",
     "methods": [
         {"name": "subscribe", "channel_arg": 0, "channel_via": _list_of_form()},
+    ],
+}
+
+_SUBSCRIBE_ASLIST_MATCHES = {
+    "owner": "org.apache.kafka.clients.consumer.KafkaConsumer",
+    "methods": [
+        {"name": "subscribe", "channel_arg": 0, "channel_via": _as_list_form()},
     ],
 }
 
@@ -1952,6 +1985,43 @@ def test_all_strings_derives_one_row_per_element_of_a_linked_list_of_call(tmp_pa
     assert sorted(e["path"] for e in endpoints) == ["raw-t1", "raw-t2"]
     assert all(e["resolution"] == "resolved" for e in endpoints)
     assert all(e["peer"] is None for e in endpoints)
+
+
+def test_all_strings_reads_a_genuine_varargs_factorys_array_elements(tmp_path: Path):
+    """`subscribe(instance -> Arrays.asList("raw-t1", "raw-t2"))` — the OTHER
+    spelling of the same topic list, and the one `all_strings` could not read.
+
+    `List.of` with <=10 elements binds a FIXED-ARITY overload, so its elements
+    are positional literals; `Arrays.asList` is genuinely varargs — ONE
+    `anewarray` argument in bytecode, disassembled from a real probe in Task
+    7's own review round — so before this it contributed a single unreadable
+    slot and the whole call degraded to one trailing unresolved row. Extractor
+    capability 9.15 put the array's contents in `elements`; 2O Task 13 reads
+    them. The two spellings of one subscription now answer alike, which is the
+    point: a topic list is not more or less knowable for how the author spelt
+    it (`kafka-consumer.yml` declares both forms against the same row)."""
+    caller = "com/acme/orders/messaging/raw/RawKafkaConsumers#subscribeToVarargs()."
+    facts = [
+        _as_list_call(
+            caller,
+            0,
+            6,
+            [
+                CallArgument(kind="string", value="raw-t1"),
+                CallArgument(kind="string", value="raw-t2"),
+            ],
+        ),
+        _subscribe_call(caller, 1, 6),
+    ]
+    catalog = _channel_via_catalog(
+        _SUBSCRIBE_ASLIST_MATCHES, "invented-channel-via-as-list", "kafka"
+    )
+    workspace = _resolve(tmp_path, facts, catalog)
+    endpoints = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert sorted(e["path"] for e in endpoints) == ["raw-t1", "raw-t2"]
+    assert all(e["resolution"] == "resolved" for e in endpoints)
 
 
 def test_a_partially_resolved_list_derives_its_resolved_elements_plus_one_unresolved_row(
@@ -2383,15 +2453,18 @@ def test_addhandler_derives_a_verbless_inbound_row_off_its_registration(tmp_path
     here is a registration target the same way a topic name is, not a
     peer+path URL (`spring-websocket.yml`'s own catalog comment).
 
-    **The path is NULL, and this test used to assert `/ws`** (descriptor sweep
-    R6). It hand-built a bare `string` at position 1, a shape `javac` never
-    emits for this call: `addHandler(WebSocketHandler, String...)` is VARARGS,
-    so argument 1 is always `{kind: "array", elements: [...]}`. Measured by
-    compiling the call against spring-websocket 6.1.6 and running the shipped
-    extractor over it, not reasoned about. `channel_of` resolves only a
-    `kind: "string"` argument, so the row derives honestly and empty for every
-    call anyone can write — the boundary `docs/COVERAGE.md` now states, closed
-    by Task 13's `elements` read rather than here."""
+    **The path travelled NULL -> `/ws` -> NULL -> `/ws` across three tasks,
+    and only the last two moves were about this row's own correctness.** The
+    original assertion was `/ws` over a hand-built bare `string` at position
+    1 — a shape `javac` never emits for this call, since
+    `addHandler(WebSocketHandler, String...)` is VARARGS and argument 1 is
+    always `{kind: "array", elements: [...]}` (measured, descriptor sweep R6,
+    by compiling the call against spring-websocket 6.1.6 and running the
+    shipped extractor over it). Fixing the FACT made the row honestly empty,
+    because `channel_of` resolves only a `kind: "string"` argument. 2O Task 13
+    fixes the READER: `channels_of` reads the array's own `elements`, and the
+    dispatch path is resolved again — this time off the shape the extractor
+    actually emits."""
     caller = "com/acme/ws/WebSocketConfig#registerWebSocketHandlers()."
     facts = [_add_handler(caller, [_WS_PATHS_ONE])]
     workspace = _resolve(tmp_path, facts, _spring_websocket_catalog())
@@ -2401,7 +2474,11 @@ def test_addhandler_derives_a_verbless_inbound_row_off_its_registration(tmp_path
     assert endpoint["protocol"] == "websocket"
     assert endpoint["direction"] == "inbound"
     assert endpoint["method"] is None
-    assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")
+    assert (endpoint["path"], endpoint["resolution"]) == ("/ws", "resolved")
+    # `peer` stays NULL: a dispatch path is a destination identity, and
+    # `channels_of` keeps `channel_of`'s own rule that a destination is never
+    # split into an authority and a path (D02 §3).
+    assert endpoint["peer"] is None
     # Inbound (D02 §2, D01 §3, amended): the registering method lands in
     # `handler`, not `caller` — the row's own `direction: inbound` (the
     # catalog's declared direction, unoverridden) means the deriving method
@@ -2426,7 +2503,7 @@ def test_addhandler_with_a_non_literal_path_derives_an_unresolved_row(tmp_path: 
     assert endpoint["resolution"] == "unresolved"
 
 
-def test_addhandler_with_a_second_path_is_the_same_two_argument_call(tmp_path: Path):
+def test_addhandler_with_a_second_path_derives_one_row_per_registered_path(tmp_path: Path):
     """**This test used to assert the opposite, and the catalog's comment used
     to promise it** (descriptor sweep R6): a multi-path
     `.addHandler(handler, "/ws", "/ws2")` was said to be "a THREE-argument call
@@ -2436,19 +2513,88 @@ def test_addhandler_with_a_second_path_is_the_same_two_argument_call(tmp_path: P
     two-path forms differ only in how many `elements` the array at position 1
     carries.
 
-    So the row matches it, and always did. What it derives is the same honest
-    empty row every other call derives, because `channel_of` cannot read an
-    array — never two paths, and never one of them silently. Task 13's
-    `elements` read is what turns this into one row per registered path; until
-    then this is the paired positive that the row still FIRES for the shape the
-    old comment believed it declined."""
+    Spring registers the ONE handler at BOTH paths, so both are served and
+    both are rows (2O Task 13) — the multi-destination precedent
+    `annotation_driven` already keeps for a listener's declared reply
+    destinations, and the same rule that makes each `urlPatterns` entry its
+    own row. Reporting one of the two, or one row for both, would under-report
+    a live dispatch path; the whole reason the intermediate state derived
+    NEITHER is that `channel_of` could not tell one path from two."""
     caller = "com/acme/ws/WebSocketConfig#registerMultiPathHandler()."
     facts = [_add_handler(caller, [_WS_PATHS_TWO])]
     workspace = _resolve(tmp_path, facts, _spring_websocket_catalog())
-    [endpoint] = [e for e in workspace.query("endpoints") if e["handler"] == caller]
+    endpoints = [e for e in workspace.query("endpoints") if e["handler"] == caller]
     workspace.close()
 
-    assert (endpoint["path"], endpoint["resolution"]) == (None, "unresolved")
+    assert sorted((e["path"], e["resolution"]) for e in endpoints) == [
+        ("/ws", "resolved"),
+        ("/ws2", "resolved"),
+    ]
+
+
+def test_addhandler_with_one_unreadable_path_keeps_the_readable_one(tmp_path: Path):
+    """The partially-readable array, and the one place `channels_of` has to
+    choose how to degrade: it keeps `all_strings`' rule rather than inventing
+    a second one — a row per readable element, plus ONE trailing unresolved
+    row standing for whatever could not be read, never one per failure.
+
+    Both halves matter. Dropping the readable path would under-report a
+    dispatch path that is plainly declared; dropping the unresolved row would
+    claim the registration serves exactly one path when the bytecode says it
+    serves two."""
+    caller = "com/acme/ws/WebSocketConfig#registerPartlyDynamicHandler()."
+    paths = CallArgument(
+        kind="array",
+        elements=[
+            CallArgument(kind="string", value="/ws"),
+            # An element javac could not fold to a constant — a field read,
+            # exactly as 9.15 emits it inside an array it DID read end to end.
+            CallArgument(kind="field", symbol="com/acme/ws/Paths#DYNAMIC."),
+        ],
+    )
+    facts = [_add_handler(caller, [paths])]
+    workspace = _resolve(tmp_path, facts, _spring_websocket_catalog())
+    endpoints = [e for e in workspace.query("endpoints") if e["handler"] == caller]
+    workspace.close()
+
+    assert sorted((e["path"] or "", e["resolution"]) for e in endpoints) == [
+        ("", "unresolved"),
+        ("/ws", "resolved"),
+    ]
+
+
+@pytest.mark.pins("arguments.elements-are-an-array-kinds-own")
+def test_a_string_kind_channel_argument_is_read_as_itself_never_as_an_array(tmp_path: Path):
+    """§10 near-miss for Task 13's `elements` read, and the assertion is that
+    the expansion produces NOTHING: a destination that is a plain string
+    literal — every shipped `channel_arg` row but the WebSocket one — is read
+    as itself, one row, verbatim. No element list exists to read, and none is
+    invented from a slot that never claimed to be an array.
+
+    The conjunct measured is `_array_elements`' `kind == "array"` test, which
+    is what an `elements` read is ALLOWED by: 9.15 emits that kind only for an
+    array it read end to end, so `elements` is always the complete contents.
+    Read off anything else, the expansion would be asserting a completeness
+    the extractor never claimed — and here specifically it would turn a
+    destination the compiler wrote down into `unresolved`, silently, on every
+    messaging catalog that ships.
+
+    The near-miss is written against an invented catalog rather than
+    `spring-websocket.yml`, deliberately: that row's argument 1 is `String...`
+    and can only ever BE an array, so a bare string there is a shape javac
+    never emits — the false premise descriptor sweep R6 deleted."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [{"name": "send", "channel_arg": 0}],
+    }
+    caller = "com/acme/messaging/Producer#publishLiteral()."
+    facts = [_send_call(caller, 0, [CallArgument(kind="string", value="orders.created")])]
+    catalog = _single_call_catalog(matches, "invented-non-array-channel")
+    workspace = _resolve(tmp_path, facts, catalog)
+    endpoints = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert [(e["path"], e["resolution"]) for e in endpoints] == [("orders.created", "resolved")]
 
 
 @pytest.mark.declines("spring-websocket")

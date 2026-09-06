@@ -170,6 +170,76 @@ def channel_of(argument: dict[str, Any] | None) -> tuple[None, str | None, str]:
     return None, None, "unresolved"
 
 
+def _array_elements(argument: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    """The element arguments an `array`-kind slot carries (extractor
+    capability 9.15's `elements`), or None for every other argument — the
+    signal "this slot is not an array, read it as itself".
+
+    ONE argument that happens to be an array, never N positional ones: the
+    extractor deliberately does not unpack a varargs array, because unpacking
+    would renumber every slot after it and make the call's own arity
+    unreadable (`domain/facts.py`'s `array` kind). So the reading has to
+    happen here, at the consumer, and this is the one place that decides a
+    slot is one.
+
+    **The `array` kind is the whole conjunct, and it is load-bearing.** An
+    array the extractor could not read end to end never reaches this kind at
+    all — it stays a bare `unresolved` (9.15's five rejection rules), so an
+    `elements` list is always the array's COMPLETE contents and never a
+    partial one. Reading `elements` off anything else would be reading a
+    completeness claim the extractor did not make; an argument that is not an
+    `array` therefore reads as itself, which is exactly what it is. The empty
+    list is a real answer here rather than a missing one — a zero-length
+    varargs call is a call — and stays distinct from the None above.
+    """
+    if argument is None or argument.get("kind") != "array":
+        return None
+    elements = argument.get("elements")
+    return elements if isinstance(elements, list) else []
+
+
+def _expanded_arguments(arguments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`arguments` with every `array` slot replaced, in place, by its own
+    elements — the shape a reader that wants VALUES rather than SLOTS needs.
+
+    One level only, and that is the extractor's own bound rather than a
+    choice made here: 9.15 never expands a nested array's elements, so an
+    element that is itself an `array` carries no `elements` of its own and
+    reads as the unreadable value it is.
+    """
+    expanded: list[dict[str, Any]] = []
+    for argument in arguments:
+        elements = _array_elements(argument)
+        expanded.extend([argument] if elements is None else elements)
+    return expanded
+
+
+def channels_of(argument: dict[str, Any] | None) -> list[tuple[None, str | None, str]]:
+    """`channel_of` over a slot that may hold a whole ARRAY of destinations
+    (2O Task 13) — a varargs registration call, where one argument names
+    several destinations at once.
+
+    `WebSocketHandlerRegistry.addHandler(handler, String... paths)` is the
+    shipped case: the paths collapse into ONE `array` argument for a
+    single-path call as much as for a multi-path one (measured, descriptor
+    sweep R6, spring-websocket 6.1.6), so `channel_of` alone — which resolves
+    a `string` kind and nothing else — answered `unresolved` for every call
+    anyone could write. Each registered path is its own destination and so
+    its own row, the way each `urlPatterns` entry already is.
+
+    A slot that is NOT an array reads exactly as it did before: one tuple,
+    `channel_of`'s own verbatim answer. An array reads through
+    `_all_string_channels`, so the partially-readable case degrades the same
+    way `all_strings`' does — one tuple per readable element, plus one
+    trailing unresolved tuple where any element could not be read, never one
+    per failure.
+    """
+    elements = _array_elements(argument)
+    if elements is None:
+        return [channel_of(argument)]
+    return _all_string_channels(elements)
+
+
 def peer_of(argument: dict[str, Any] | None) -> tuple[str | None, str]:
     """`url_of`'s counterpart for an address that is NOT the wire identity.
 
@@ -684,11 +754,16 @@ def linked_channels(
     FIXED-ARITY overloads (checkpoint ruling), so each element is its own
     literal argument, never an array to enumerate — one resolved tuple per
     string-kind element, plus one trailing `(None, None, "unresolved")`
-    tuple if any element failed to resolve as a string. That is also what a
-    genuinely varargs call collapses to: the scanner never unpacks an array
-    argument into its elements, so a varargs factory's own single
-    unresolved argument reads as zero resolved elements plus this one
-    trailing tuple — never a guess at how many elements it held.
+    tuple if any element failed to resolve as a string. A genuinely varargs
+    factory (`Arrays.asList`) hands over ONE array slot instead, and since
+    extractor capability 9.15 that slot carries its own `elements`, which
+    `_all_string_channels` reads as those positional arguments — so the two
+    spellings answer alike. *This paragraph used to end "the scanner never
+    unpacks an array argument into its elements, so a varargs factory's own
+    single unresolved argument reads as zero resolved elements plus this one
+    trailing tuple". That was true until 9.15 and is what 2O Task 13
+    changed; an array the extractor still cannot read end to end never
+    reaches the `array` kind, and degrades exactly as that sentence said.*
 
     An unlinked argument (no `source` at all), one whose source names no
     real call site, or a linked call none of the declared forms' owner+name
@@ -723,13 +798,24 @@ def _all_string_channels(
     tuple per failed element (D02 §2's unresolved-is-an-answer stays one
     honest fact, not a guess at how many elements were behind it) — and
     never zero rows for a call with no arguments at all, the same
-    never-silently-drop-the-row discipline every other capture here keeps."""
+    never-silently-drop-the-row discipline every other capture here keeps.
+
+    A VARARGS call reads its one array slot's elements as those positional
+    arguments (2O Task 13, `_expanded_arguments`). `Arrays.asList("t1",
+    "t2")` is a genuine varargs call — one `anewarray` argument in bytecode,
+    disassembled from a real probe, never several positional ones — so
+    before extractor capability 9.15 it contributed a single unreadable slot
+    and this reader answered one trailing unresolved tuple for the whole
+    call. `List.of` with <=10 elements binds a FIXED-ARITY overload and has
+    always arrived as positional literals, so it is untouched by the
+    expansion: the two spellings of one topic list now answer alike."""
+    entries = _expanded_arguments(arguments)
     resolved: list[tuple[None, str | None, str]] = [
         (None, str(entry["value"]), "resolved")
-        for entry in arguments
+        for entry in entries
         if entry.get("kind") == "string" and isinstance(entry.get("value"), str)
     ]
-    if resolved and len(resolved) == len(arguments):
+    if resolved and len(resolved) == len(entries):
         return resolved
     return [*resolved, (None, None, "unresolved")]
 

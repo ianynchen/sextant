@@ -257,6 +257,30 @@ here would restate those documents rather than add anything.
   prefix under the same deduping seam. Refused at load without a `path_separator`, since the
   two halves would otherwise concatenate bare.
 
+- **A varargs argument's own elements are read, by all three consumers that wanted them**
+  (2O Task 13). Extractor capability 9.15 models the array a varargs call site builds
+  (`{"kind":"array","elements":[…]}`); nothing read it, so three declarations sitting in the
+  facts derived nothing. All three now read it, through one conjunct
+  (`resolve/shapes/arguments.py`'s `_array_elements`, guarded by the `array` kind and only
+  that kind — an array the extractor could not read END TO END never reaches it and still
+  degrades to `unresolved`):
+  - `combinator`'s **media predicates** — `accept(MediaType...)`/`contentType(...)` fill
+    `produces`/`consumes` where they always declared them.
+  - `channel_via`'s **`all_strings`** — `Arrays.asList("t1","t2")` is genuine varargs and now
+    resolves per topic, as `List.of` already did. The two spellings of one subscription answer
+    alike.
+  - `single_call`'s **`channel_arg`** — a destination slot holding an array derives ONE ROW PER
+    ELEMENT, via the new `channels_of`. `WebSocketHandlerRegistry.addHandler(handler,
+    String... paths)` registers one handler at every path named, so every path is a row.
+  **Behaviour change for real modules**, all in the direction of columns that were NULL
+  carrying values, none of it a new or changed endpoint identity: a WebFlux functional route
+  declaring `accept`/`contentType` gains `produces`/`consumes` (and, with them, a rung-2
+  answer from the format ladder where it previously fell to `unresolved`); a Kafka consumer
+  subscribing through `Arrays.asList` gains one row per topic where it had one unresolved row;
+  a Spring WebSocket registration gains its dispatch path, and a multi-path registration gains
+  one row per path. `url_arg` is deliberately untouched — no shipped address capture is
+  varargs, and CP-2's peer/path split has no measured meaning applied element-wise.
+
 ### Fixed
 
 - **`config_join` asked the canonical-path seam nothing, on rows whose protocol and direction
