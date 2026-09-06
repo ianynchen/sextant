@@ -26,28 +26,6 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
-### OI-1 — every Spring Integration channel question is filed under `amqp`
-**Major · introduced 2026-09-06 by 2O Task 9 (`bd61663`) · COVERAGE.md:1933**
-
-`spring-integration.yml` keys on `address_from_config` (configuration files) and
-gates on `spring-integration-core`, both protocol-agnostic. A wire style must
-declare a protocol and D00's closed set has no "unknown", so the catalog declares
-`amqp` — and **every** `channel_destination` question it files carries it,
-including channels fed by Kafka or JMS adapters. The file says so itself.
-
-Reaches no endpoint row (this catalog mints none), so it stops at the enrichment
-inbox rather than an export.
-
-**Closes by** either (a) the near-term fix: a catalog that derives no endpoint
-rows does not need a wire protocol — re-key `resolve/endpoints.py`'s check on
-"derives endpoint rows" rather than "is nominally a wire style", which is the
-rule Task 8 already agreed rather than a new exception; or (b) the proper fix,
-Stage 4: key on the ADAPTER (`Amqp.inboundAdapter`,
-`Kafka.messageDrivenChannelAdapter`, `Jms.inboundAdapter`), one catalog per
-protocol, each declaring what its own adapter proves.
-**Falsified by** a module whose channels are Kafka- or JMS-fed: every question
-reads `amqp` and is wrong.
-
 ### OI-2 — a DISABLED scheduled job is reported as live work
 **Major · introduced 2026-09-06 by 2O Task 8 (`35fa4d5..4e51317`) · COVERAGE.md:1922**
 
@@ -118,5 +96,31 @@ contract column, waiting on the serializer question). **None is a fabrication.**
 
 ## CLOSED
 
-*(none yet — this register was created after 2O completed; the sweep's closures
-are recorded in `docs/principles-sweep-2026-09-05.md` §10-§13)*
+### OI-1 — every Spring Integration channel question was filed under `amqp`
+**Major · introduced 2026-09-06 by 2O Task 9 (`bd61663`) · CLOSED 2026-09-06 by
+`947102f` · COVERAGE.md:1933**
+
+`spring-integration.yml` declared `protocol: amqp` and stamped it on **every**
+`channel_destination` question it filed, a Kafka- or JMS-fed channel's included.
+Closed by option (a), the rule Task 8 already agreed read one level finer:
+`resolve/endpoints.py`'s check is keyed on whether the CATALOG derives endpoint
+rows rather than on whether its style is nominally a wire one, so a catalog that
+mints none declares neither `protocol` nor `direction`, and the question's column
+is empty instead of guessed.
+
+**A second defect fell out of it, fixed in the same commit.**
+`config_join.derives_rows` answered "derives" for any catalog with an
+`address_from_config` block, which is wrong by its own docstring: with no `key`
+the engine asks configuration nothing and answers no channel. That wrong answer
+is exactly what demanded a protocol of a file that mints nothing. Its other
+reader is the engine ordering, where a catalog writing no rows may sort anywhere
+— so the ordering half was harmless and the wire-identity half was not.
+
+**Two shipped catalogs are governed** (§8.3's audit list, checked by
+`test_call_engines`'s whole-estate run): `spring-integration.yml` and
+`spring-kafka-media.yml`, whose top-level `direction: inbound` sat beside one
+inbound and one outbound stamping rule.
+
+**Not closed by this, and it is not a defect:** which broker feeds a channel is
+still unread. That is the Stage 4 adapter split, and it stays in `COVERAGE.md`
+as an ABSENCE — the honest state — rather than here as a wrong value.
