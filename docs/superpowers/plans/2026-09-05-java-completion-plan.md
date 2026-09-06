@@ -137,6 +137,65 @@ Scope and evidence in the roadmap (`6668ee0`). Five pieces:
 | G4 | `call_edges` table plus bounded, cycle-refusing traversal | M |
 | G5 | Interface dispatch: sole in-module implementer resolves, several list as a branch. **The branch rule has never run on real code** | M |
 
+### I. Roots as first-class — ruled 2026-09-05, user
+
+**The user's point, and it corrected my scoping.** A `@Scheduled` method contains
+business logic, starts work, and deserves a trace and a sequence diagram exactly
+as an HTTP endpoint does. I had scoped 2Q's traces from ENDPOINTS only — 159 of
+160 — and that is wrong.
+
+`CONTEXT.md` already settles the modelling, and it is why a `timer` protocol is
+the wrong mechanism:
+
+> **Root**: the kind of thing a trace starts from — an inbound endpoint, **a
+> scheduled job**, or a program entry point.
+> **Endpoint**: a place where something enters or leaves a process… **Protocol is
+> a property of an endpoint.**
+
+A scheduled job is a **Root but not an Endpoint**. Adding `timer` to the protocol
+closed set would put a non-endpoint into the endpoint model: `endpoints`'
+identity is `(protocol, direction, method, path)` and a cron job has no method
+and no path; it is neither `inbound` nor `outbound`; and `Link` is defined as a
+matched pair of one module's outbound endpoint and another's inbound — **a timer
+can never link, so it would be a protocol that cannot do the one thing protocols
+exist for.**
+
+Four pieces, and only the first is paperwork today:
+
+**I1. A `root_kind` producer. (M — promoted OUT of Class B.)**
+D00 §4 documents `root_kind` with a `scheduled` member and **nothing produces
+it** (sweep 3; `engines/scheduled_work.py:12-18` says so in its own docstring).
+Building it is what makes a scheduled method a first-class root rather than a
+table nobody traces from. Members: inbound endpoint, scheduled job, program
+entry point.
+
+**I2. Quartz. (M — new catalog, currently ZERO support.)**
+`grep -rl quartz src/ docs/` returns nothing. Spring's `@Scheduled` is not the
+only scheduler in real estates; Quartz `Job`/`JobDetail`/`Trigger` and
+`@DisallowConcurrentExecution` are a separate surface with its own root shape.
+Measured like any other catalog in the per-catalog pass — **`@Scheduled` support
+without Quartz is a stated boundary until then, not silence.**
+
+**I3. 2Q traces from every root kind, not just endpoints. (folds into G.)**
+G4's traversal takes a root; today every root it has been given is an endpoint
+handler. Scheduled jobs and entry points are roots by the same definition and
+must produce the same traces and sequence diagrams. **This widens 2Q and was
+missing from its scope.**
+
+**I4. A root section the LLM can fill. (S, needs I1.)**
+`domain/closed_sets.Anchor` is a **closed set of four** —
+`after-component-overview`, `after-endpoint-table`, `beside-open-question`,
+`end-of-document` — with nowhere to attach a claim about a root. Needs a fifth
+member (NFR-5 amendment, versioned with its estate cost), the brief's
+`_ANCHOR_LINES`, INSTRUCTIONS.md and the overlay validation.
+
+**The hard line on I4, stated so it is not softened later:** the LLM describes
+what a *derived* scheduled job does — an Overlay at `evidence: llm`, which
+"never produces facts and never overrides evidence silently". It does **not**
+fill an EMPTY section. If we found no scheduled work, `None found.` is the
+content; asking a model to write something there is exactly how fabrication
+enters.
+
 ### H. Quality and infrastructure debt
 
 - **mall is scratch.** If it is the acceptance corpus it needs a committed
@@ -186,7 +245,9 @@ what `CONTEXT.md` promises. Feasibility is proven on real code, not argued:
 180 interface calls resolve to a sole implementer.
 
 Order within the stage: G1 and G2 first (small, and G1 recovers business logic
-that is invisible today), then G3, then G4/G5.
+that is invisible today), then G3, then G4/G5. **I1 and I3 land here too** —
+a traversal that only accepts endpoint roots would have to be reopened, and
+`root_kind` is what tells it what else to start from.
 
 **Acceptance is `mall`, so output is judged against source rather than against a
 report.** Requires H's clone-and-build script and `mall-portal` built.
@@ -195,14 +256,20 @@ report.** Requires H's clone-and-build script and `mall-portal` built.
 
 One pass per catalog: measure the framework rule at a pinned version, record it
 in the `measured:` block F5 added, write the declining test, and run the residual
-probes B lists. F3's javax gaps and F4's multi-valued vocabulary land here
-because they are the same reading.
+probes B lists. F3's javax gaps, F4's multi-valued vocabulary and **I2's Quartz catalog** land
+here because they are the same reading.
 
 **Sized as build work that produces defects, not as a review pass.** The Spring
 Cloud Stream fabrication survived every review it had and died the moment
 somebody asked what the catalog does when it should NOT match.
 
-### Stage 5 — the documentation debt (D)
+### Stage 5 — the documentation debt (D), and I4
+
+**I4** (the root anchor and the enrichment prompt) lands here rather than in
+Stage 3: it needs I1's roots to exist and it is a rendering/enrichment change,
+which is what this stage already touches.
+
+### Stage 5 continued — the documentation debt (D)
 
 Built / designed / retired, for ~34 rows. Cheap, deliberate, recorded. It moves
 after Stage 4 on the user's ruling of 2026-09-05: confidence in the output
