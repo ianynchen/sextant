@@ -834,6 +834,24 @@ derivation behaviour changes — not a weaker default.
 what keeps per-row stamping unnecessary: the guard is complete, so a workspace can only
 contain one vintage.
 
+### Where the comparison happens
+
+**`api._stale_stamps`, at the read gate `render`, `enrich` and `export` all share**
+(`_refuse_if_unanalyzed`). Three stamps are compared against the build now running —
+`schema_version` (the graph stamp, written at `metadata.json`'s top level),
+`provenance.sextant_version` and `provenance.fact_schema_version` — and any disagreement is
+a refusal naming the stamp that moved, not a silent re-analysis: a `render` that quietly
+re-ran the pipeline would be the one verb that promises to read what `analyze` left behind
+([M00](M00-cli.md)'s "no analysis" rule) doing the opposite. An **absent** stamp counts as a
+mismatch; `egress/render/metadata.py` has always written all three.
+
+*Recorded because it was documentation for four phases.* Until 2Q gave the walk a reader,
+every one of these versions was written and compared by nothing (`OI-24`) — harmless only
+while no rendered output read a derived table that a stale workspace would answer EMPTY.
+`roots` and `call_edges` are exactly that shape: an empty table and a table that did not
+exist yet are the same bytes, so `## Traces` on a 1.0.0 workspace would have said
+`None found.` about a module with 160 endpoints.
+
 The same stamp travels in the bundle ([D06](D06-bundle-format.md)) so that
 [M05](M05-sync.md) can refuse to assemble a system from incompatible parts.
 

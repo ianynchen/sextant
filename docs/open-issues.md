@@ -486,36 +486,6 @@ nothing wrong is derived.
 functional-route row. **Falsified by** a functional route whose real work is
 invisible in every trace — which is today's state, stated.
 
-### OI-24 — D01 §7's conservative re-derivation rule is not enforced anywhere
-**Major · found 2026-09-06 by 2Q `G4`, verifying G3's concern (3) ·
-`src/sextant/api.py::_refuse_if_unanalyzed`, `docs/components/D01-graph-schema.md` §7**
-
-D01 §7 states the rule plainly: *"Any Sextant version change re-derives, because
-derivation logic may have changed and there is no cheap way to know"*, and
-`graph_schema_version` invalidates derived tables. **Neither is enforced in
-code.** `SEXTANT_VERSION`, `GRAPH_SCHEMA_VERSION` and `FACT_SCHEMA_VERSION` are
-WRITTEN — into `metadata.json` (`egress/render/metadata.py`) and a bundle
-manifest (`egress/export/manifest.py`) — and read back for comparison by
-nothing; a grep finds no site that compares a recorded version against the
-running one. `render`, `enrich` and `export` all gate on
-`_refuse_if_unanalyzed`, which checks only that `metadata.json` and
-`workspace.duckdb` **exist**.
-
-G3's report raised this as its concern (3) and asked `G4` to verify it, because
-`G4` is where it becomes live: a workspace derived before this phase answers the
-`call_edges`, `roots` and `return_flows` queries with **empty tables**, and an
-empty table here is indistinguishable from a module whose roots call nothing.
-Verified, and the answer is that the rule is documentation.
-
-**What limits the cost today, and what will not limit it tomorrow.** No rendered
-output reads these three tables yet (OI-25), so no document can currently be
-wrong because of it, and every analysis path re-derives from scratch. The moment
-anything renders a trace, a stale workspace renders an empty one.
-**Closes by** a version comparison at the read gate — refuse, or re-derive —
-against the stamp `metadata.json` already carries. **Falsified by** a workspace
-analysed by one version and rendered by another producing a document that is
-wrong rather than refused.
-
 ### OI-25 — the traversal has no reader outside its own tests
 **Minor · introduced 2026-09-06 by 2Q `G4`/`I3` ·
 `src/sextant/application/query/trace.py`**
@@ -559,6 +529,36 @@ first bump is when they can diverge — silently, in a stamp nothing reads.
 
 
 ## CLOSED
+
+### OI-24 — D01 §7's conservative re-derivation rule was not enforced anywhere
+**Major · found 2026-09-06 by 2Q `G4` · CLOSED 2026-09-06 by 2Q's rendered trace ·
+`src/sextant/api.py::_stale_stamps`**
+
+`_refuse_if_unanalyzed` checked that `metadata.json` and `workspace.duckdb`
+**exist**, and nothing anywhere compared a recorded version against the running
+one. `api._stale_stamps` now compares all three — `schema_version`,
+`provenance.sextant_version`, `provenance.fact_schema_version` — inside that same
+gate, so `render`, `enrich` and `export` refuse a workspace a different build
+wrote, naming the stamp that moved. An ABSENT stamp counts as a mismatch.
+
+**It closed here because this is the change that made it live**, exactly as the
+row predicted: `## Traces` reads `roots` and `call_edges`, and a 1.0.0 workspace
+answers both with no rows — which renders `None found.` for a module with 160
+endpoints. `GRAPH_SCHEMA_VERSION` moved to `1.1.0` in the same change, so an
+existing workspace is refused rather than silently rendered short.
+
+**The falsification condition is recorded as NOT met and now unreachable by
+construction**: "a workspace analysed by one version and rendered by another
+producing a document that is wrong rather than refused" is what the gate now
+forbids, and four tests pin it (`api.workspace-stamp-matches-the-running-build`,
+measured killed) against one near-miss proving a workspace this build wrote is
+still rendered.
+
+**What it does NOT close.** `OI-26` stays open: `SEXTANT_VERSION` is still
+declared three times, and the two other literals stamp `document` FACTS rather
+than `metadata.json`. The comparison above reads the one constant
+`egress/render/metadata.py` writes with, so the gate is sound today and the
+divergence `OI-26` describes would show up in a fact stamp instead.
 
 ### OI-14 — capability 9.17 produced a fact nothing read
 **Minor · introduced 2026-09-06 by 2Q G1 · CLOSED 2026-09-06 by 2Q `G4` ·

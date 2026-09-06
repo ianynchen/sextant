@@ -14,6 +14,21 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A stale workspace is refused instead of rendered short** (2Q, closing `OI-24`).
+  [D01](docs/components/D01-graph-schema.md) §7 has said since Phase 1 that *"any Sextant
+  version change re-derives, because derivation logic may have changed and there is no cheap
+  way to know"* — and nothing compared a stamp. `api._stale_stamps` now does, inside the read
+  gate `render`, `enrich` and `export` already share: `schema_version`,
+  `provenance.sextant_version` and `provenance.fact_schema_version` are checked against the
+  running build, an absent stamp counts as a mismatch, and a disagreement is a refusal naming
+  the stamp that moved rather than a silent re-analysis.
+  **It closes here because this is the change that made it live.** A workspace derived before
+  `roots` and `call_edges` existed answers both queries with no rows, and an empty table is
+  byte-identical to a module that has none — so `## Traces` would have rendered `None found.`
+  for a service with 160 endpoints. `GRAPH_SCHEMA_VERSION` moves to **1.1.0** for the same
+  reason: the two new derived tables are purely additive, and additive is exactly the shape a
+  stamp has to catch, because nothing in the output looks wrong.
+
 - **A trace, from a root to every terminal** (2Q, `G4` + `I3`). The thing this project has
   been asked for since day one, and the missing half of what `CONTEXT.md` promises. New
   derived table **`call_edges`** ([D01](docs/components/D01-graph-schema.md) §3) — one row

@@ -13,6 +13,7 @@ from sextant.application.stages.analyze import analyze
 from sextant.cli.app import cli
 from sextant.domain.factfile import read_fact_tree
 from sextant.domain.symbols import bare_descriptor, owner_of
+from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
@@ -633,7 +634,12 @@ def test_a_malformed_overlay_is_reported_as_a_message_not_a_stack_trace(tmp_path
     The workspace here is a stand-in — the overlay is read BEFORE the database
     is opened, so a render that refuses one never touches it. That ordering is
     the point: an overlay that cannot be validated is not a document to render
-    half of."""
+    half of.
+
+    The stand-in carries the three version stamps a real `metadata.json` does
+    (OI-24, D01 §7): the read gate compares them before the overlay is read at
+    all, so a stand-in without them is refused as a workspace from another
+    build and this test would pin that refusal instead of the overlay one."""
     module = tmp_path / "module"
     module.mkdir()
     (module / ".sextant-enrichment.json").write_text(
@@ -642,7 +648,16 @@ def test_a_malformed_overlay_is_reported_as_a_message_not_a_stack_trace(tmp_path
     workspace = tmp_path / "ws"
     workspace.mkdir()
     (workspace / "metadata.json").write_text(
-        json.dumps({"module": {"id": "a:module", "kind": "service", "languages": ["java"]}}),
+        json.dumps(
+            {
+                "module": {"id": "a:module", "kind": "service", "languages": ["java"]},
+                "schema_version": GRAPH_SCHEMA_VERSION,
+                "provenance": {
+                    "sextant_version": SEXTANT_VERSION,
+                    "fact_schema_version": FACT_SCHEMA_VERSION,
+                },
+            }
+        ),
         encoding="utf-8",
     )
     (workspace / "workspace.duckdb").write_bytes(b"")

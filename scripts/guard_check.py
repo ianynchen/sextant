@@ -152,6 +152,7 @@ _DISPATCH = "sextant/application/resolve/dispatch.py"
 _ROOTS = "sextant/application/resolve/roots.py"
 _CALL_EDGES = "sextant/application/resolve/call_edges.py"
 _TRACE = "sextant/application/query/trace.py"
+_API = "sextant/api.py"
 
 
 GUARDS: dict[str, Guard] = {
@@ -870,6 +871,25 @@ GUARDS: dict[str, Guard] = {
                 path=_DISPATCH,
                 find='        if site["invoke_kind"] not in VIRTUAL_DISPATCH:\n            return found\n',
                 replace="",
+            ),
+        ),
+    ),
+    # --- the read gate ------------------------------------------------------
+    "api.workspace-stamp-matches-the-running-build": Guard(
+        what="`render`/`enrich`/`export` compare the three stamps `metadata.json` records "
+        "against the build now running, and refuse a workspace that disagrees",
+        why="D01 §7's re-derivation rule, which was documentation until 2Q gave the walk a "
+        "reader (OI-24). A workspace derived before a table existed answers that table's "
+        "query with NO ROWS, and an empty table is byte-identical to a module that genuinely "
+        "has none — so a stale `.sextant` renders `## Traces` as `None found.` for a service "
+        "with 160 endpoints, and the document says nothing about why. Every other member of "
+        "the family is worse: the same facts through changed derivation logic publish rows "
+        "that are wrong rather than missing",
+        edits=(
+            Edit(
+                path=_API,
+                find="        if found != running\n",
+                replace="        if found != running and False  # guard disabled\n",
             ),
         ),
     ),

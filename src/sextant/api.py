@@ -81,8 +81,9 @@ subclass per refusal site:
   root was asked for a single `--workspace`, or one module inside a reactor
   walk failed (named, the walk stopped).
 - `NotAnalyzedError` — `render`/`enrich`/`export`, pointed at a workspace
-  `analyze` never wrote to, or at a multi-module root instead of one of its
-  modules.
+  `analyze` never wrote to, at a multi-module root instead of one of its
+  modules, or at one whose recorded stamps say a different Sextant build
+  derived it (D01 §7's re-derivation rule, enforced at the read gate).
 - `ConfigurationError` — Sextant's own on-disk artifacts written wrong: a
   malformed `.sextant.yml` (`redact:`, `enrich:`), a malformed
   `.sextant-enrichment.json` overlay, or a `redact:` rule that breaks a
@@ -133,6 +134,7 @@ from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_o
 from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import RedactionError, Redactor
+from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
 from sextant.egress.export.manifest import write_manifest
 from sextant.egress.render.document import (
     AssembledDocument,
@@ -177,7 +179,10 @@ class DetectionError(SextantError):
 
 class NotAnalyzedError(SextantError):
     """`render`/`enrich`/`export` were pointed at a workspace `analyze`
-    never wrote, or at a multi-module root instead of one of its modules."""
+    never wrote, at a multi-module root instead of one of its modules, or at
+    one a DIFFERENT Sextant build wrote (OI-24, D01 §7) — all three are the
+    same answer to the caller: there is no analysis here this build can
+    read, run `analyze`."""
 
 
 class ConfigurationError(SextantError):
@@ -431,16 +436,73 @@ def _workspace_dir_of(path: Path, workspace_dir: Path | None) -> Path:
     return workspace_dir or (path / ".sextant")
 
 
+def _stale_stamps(metadata: dict[str, Any]) -> tuple[str, ...]:
+    """Which of the three stamps `metadata.json` carries disagree with the
+    build now running — empty for a workspace this build could have written
+    (OI-24, D01 §7).
+
+    **The rule was documentation until here.** D01 §7 says every result
+    records what produced it and *"any Sextant version change re-derives,
+    because derivation logic may have changed and there is no cheap way to
+    know"*, and its table gives `graph_schema_version` (derived tables) and
+    `fact_schema_version` (facts, and everything after) their own
+    invalidation costs. All three were WRITTEN — by `egress/render/metadata.py`
+    — and read back for comparison by nothing, so the gate below checked only
+    that two files exist.
+
+    **Compared, never repaired.** A mismatch is answered by a refusal naming
+    the stamp, not by a silent re-analysis: re-deriving inside a `render`
+    would make the verb that promises to read what `analyze` left behind
+    (M00's "no analysis" rule) the one that quietly re-runs the pipeline. The
+    reader is told which stamp moved and what to run.
+
+    An ABSENT stamp is a mismatch, not an exemption. `write_metadata` has
+    always written all three, so a document missing one was written by
+    something else — and treating `None` as "close enough" is exactly the
+    silent acceptance this exists to stop.
+    """
+    provenance = metadata.get("provenance", {})
+    recorded = (
+        # `schema_version` at the top level, not under `provenance`:
+        # `write_metadata` puts the graph stamp there, and D01 §7's table
+        # calls it the workspace's own rather than a document's.
+        ("graph_schema_version", metadata.get("schema_version"), GRAPH_SCHEMA_VERSION),
+        ("sextant_version", provenance.get("sextant_version"), SEXTANT_VERSION),
+        ("fact_schema_version", provenance.get("fact_schema_version"), FACT_SCHEMA_VERSION),
+    )
+    return tuple(
+        f"{name} is {found!r}, this build is {running!r}"
+        for name, found, running in recorded
+        if found != running
+    )
+
+
 def _refuse_if_unanalyzed(path: Path, workspace_dir: Path) -> None:
     """The `no analysis found` refusal `render`/`enrich`/`export` share
     (M00's "no analysis" rule). Widened for a multi-module root (2M design
     §2): `modules.json`'s presence with no per-module workspace at
     `workspace_dir` means the caller pointed at the reactor root rather than
     at one of the modules it names, so the refusal reads out that list
-    instead of the generic message."""
+    instead of the generic message.
+
+    **And widened again for a STALE one** (OI-24). A workspace whose stamps
+    do not match this build is refused here rather than read: its derived
+    tables were built by different derivation logic, and a table this build
+    added is simply absent from it — which reads as a module that has none,
+    not as a workspace that predates the table. `## Traces` is the first
+    section where that becomes a wrong answer a reader would act on rather
+    than a silence nobody could see.
+    """
     metadata_path = workspace_dir / "metadata.json"
     db_path = workspace_dir / "workspace.duckdb"
     if metadata_path.is_file() and db_path.is_file():
+        stale = _stale_stamps(json.loads(metadata_path.read_text(encoding="utf-8")))
+        if stale:
+            raise NotAnalyzedError(
+                f"the analysis at {workspace_dir} was produced by a different Sextant "
+                f"build ({'; '.join(stale)}), so its derived tables are a different "
+                f"vintage from this one — re-run `sextant module analyze {path}`."
+            )
         return
     modules_path = _modules_json_path(path)
     if modules_path.is_file():

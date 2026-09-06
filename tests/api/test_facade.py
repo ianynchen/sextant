@@ -22,6 +22,7 @@ import subprocess
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 import pytest
 from click.testing import CliRunner
@@ -32,6 +33,7 @@ from sextant.application.enrich.tools import ToolExecutor
 from sextant.application.ports.enrichment import EnrichmentAnswers, EnrichmentBrief
 from sextant.cli.app import cli
 from sextant.domain.enrichment import ENRICHMENT_FILE
+from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
 
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
@@ -199,6 +201,116 @@ def test_render_writes_both_documents_after_analyze(module_root: Path):
 def test_render_before_analyze_raises_notanalyzederror(tmp_path: Path):
     with pytest.raises(api.NotAnalyzedError):
         api.render(tmp_path)
+
+
+def _stamped_workspace(root: Path, **overrides: object) -> Path:
+    """A workspace directory carrying nothing but the two files the read gate
+    checks for and the three stamps it compares — `overrides` replaces or (with
+    a `None` value) DELETES one of them.
+
+    Deliberately synthetic rather than a real `analyze` run: the stamp
+    comparison happens before anything opens `workspace.duckdb`, so a workspace
+    with the shape of a real one is all these tests need, and building it this
+    way keeps them independent of a compiled fixture — which is what lets
+    `scripts/guard_check.py` run them against a mutated copy of `src/` alone."""
+    stamps: dict[str, object] = {
+        "schema_version": GRAPH_SCHEMA_VERSION,
+        "sextant_version": SEXTANT_VERSION,
+        "fact_schema_version": FACT_SCHEMA_VERSION,
+        **overrides,
+    }
+    workspace_dir = root / ".sextant"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    (workspace_dir / "workspace.duckdb").write_bytes(b"")
+    document: dict[str, object] = {"provenance": {}}
+    for name, value in stamps.items():
+        if value is None:
+            continue
+        if name == "schema_version":
+            document["schema_version"] = value
+        else:
+            cast(dict[str, object], document["provenance"])[name] = value
+    (workspace_dir / "metadata.json").write_text(json.dumps(document, indent=2), encoding="utf-8")
+    return workspace_dir
+
+
+@pytest.mark.pins("api.workspace-stamp-matches-the-running-build")
+def test_a_workspace_derived_by_another_graph_schema_version_is_refused(tmp_path: Path):
+    """OI-24, and the reason it had to close in the change that gave the walk
+    a reader. `graph_schema_version` is D01 §7's stamp for the DERIVED tables,
+    and a workspace one version behind answers `roots` and `call_edges` with
+    empty tables rather than with an error — so `## Traces` would render
+    `None found.` for a module with 160 endpoints and say nothing at all about
+    why. An empty table and an absent table are the same bytes; only the stamp
+    tells them apart, and until here nothing compared it."""
+    _stamped_workspace(tmp_path, schema_version="0.9.0")
+
+    with pytest.raises(api.NotAnalyzedError) as refused:
+        api.render(tmp_path)
+
+    assert "graph_schema_version" in str(refused.value)
+    assert "0.9.0" in str(refused.value)
+
+
+@pytest.mark.pins("api.workspace-stamp-matches-the-running-build")
+def test_a_workspace_derived_by_another_sextant_version_is_refused(tmp_path: Path):
+    """D01 §7's blunt last row: *"any Sextant version change re-derives,
+    because derivation logic may have changed and there is no cheap way to
+    know"*. A fixed dispatch bug produces a different graph from identical
+    facts, and nothing about the graph schema moves when it does — so the
+    version stamp is the only thing that can notice."""
+    _stamped_workspace(tmp_path, sextant_version="0.0.1")
+
+    with pytest.raises(api.NotAnalyzedError) as refused:
+        api.render(tmp_path)
+
+    assert "sextant_version" in str(refused.value)
+
+
+@pytest.mark.pins("api.workspace-stamp-matches-the-running-build")
+def test_a_workspace_missing_a_stamp_entirely_is_refused(tmp_path: Path):
+    """An absent stamp is a mismatch, not an exemption. `write_metadata` has
+    always written all three, so a document missing one was written by
+    something that is not this program — and reading it as "close enough"
+    is the silent acceptance the comparison exists to stop."""
+    _stamped_workspace(tmp_path, fact_schema_version=None)
+
+    with pytest.raises(api.NotAnalyzedError) as refused:
+        api.render(tmp_path)
+
+    assert "fact_schema_version" in str(refused.value)
+
+
+@pytest.mark.pins("api.workspace-stamp-matches-the-running-build")
+def test_export_refuses_a_stale_workspace_the_same_way_render_does(tmp_path: Path):
+    """One gate, three verbs. `export` publishes a bundle other systems read
+    (D06), so a stale workspace reaching it does not stop at one wrong
+    document — it ships. The refusal lives in `_refuse_if_unanalyzed`, which
+    all three call, precisely so this cannot be true of one verb and not
+    another."""
+    _stamped_workspace(tmp_path, schema_version="0.9.0")
+
+    with pytest.raises(api.NotAnalyzedError):
+        api.export(tmp_path)
+
+
+def test_a_workspace_this_build_wrote_is_not_refused_as_stale(module_root: Path):
+    """The near-miss §10 requires beside the four positives above, and the one
+    that matters most: a gate that refused everything would pass every "is it
+    refused?" test in this file while making `render` useless. The stamps
+    `analyze` just wrote are the ones this build compares against, so the
+    ordinary path must be untouched.
+
+    Against a REAL analysed module, not a synthetic stamp file: the point of
+    the pair is that the workspace this program actually writes is the one it
+    accepts, which a hand-built `metadata.json` could agree with while
+    `write_metadata` had drifted."""
+    api.analyze(module_root)
+
+    result = api.render(module_root)
+
+    assert result.markdown.is_file()
+    assert result.html.is_file()
 
 
 def test_a_malformed_overlay_raises_configurationerror(module_root: Path):
