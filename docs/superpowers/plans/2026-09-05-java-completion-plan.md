@@ -84,7 +84,7 @@ none of them is Spring. `classpath` is empty for Maven. Consequences, all live:
 **F2. Extract the JSON shape model into its own catalog. (M, prerequisite for
 F7.)**
 `@JsonProperty`, the wire-type table and the nullability rules are **duplicated
-across 42 catalogs**. Sweep 2's `A-C2` is the consequence: the `Void` mapping
+across 42 catalogs**. Sweep 2's `A-C3` is the consequence: the `Void` mapping
 replicated in 28 with **9 missing the repairing entry**, so `ResponseEntity<Void>`
 publishes a bogus object shape in nine frameworks. A Jackson 2/3 split on the
 current shape would mean 84 copies.
@@ -351,7 +351,7 @@ Small, and each fixes a live defect as well as unblocking later work:
 - F1 stops the dependency gate skipping modules that inherit their starters.
 - F5 makes a catalog say which version it was measured against — the condition
   under which every rule in the estate is true.
-- F2 removes 42 duplications and makes `A-C2`'s nine-catalog defect structurally
+- F2 removes 42 duplications and makes `A-C3`'s nine-catalog defect structurally
   impossible.
 
 **These are prerequisites for anything version-aware. Doing them after Boot 4
