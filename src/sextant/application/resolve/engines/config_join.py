@@ -120,8 +120,24 @@ def derives_rows(catalog: Catalog) -> bool:
 
     Lives here, not in the registry: which `matches` block means "derives"
     is this style's own vocabulary, and `endpoints.py` names no catalog
-    vocabulary of its own."""
-    return _ADDRESS in catalog.matches
+    vocabulary of its own.
+
+    **An address block is not enough, and the missing conjunct was a defect**
+    (OI-1). `key` is what asks configuration where a name's destination is,
+    and a catalog with no `key` can only ever answer NO channel: `run` reaches
+    `_derive_channels`, which `continue`s on every name (`key` is optional for
+    `annotation_value` alone, and its absence is that vocabulary's honest
+    statement that the framework standardises no such key). Reading only the
+    block said such a file DERIVES, which is what made `endpoints.py` demand a
+    `protocol` of `spring-integration.yml` and put `amqp` on every question it
+    files. The ordering half was harmless — a catalog writing no rows may sort
+    anywhere — and the wire-identity half was not.
+
+    Read defensively rather than after `_validate_matches`, because
+    `endpoints.py` asks this BEFORE any engine runs: a malformed block is
+    refused by `run`'s own validation, with the message that names the field."""
+    address = catalog.matches.get(_ADDRESS)
+    return isinstance(address, dict) and "key" in address
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:

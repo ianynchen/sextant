@@ -477,9 +477,20 @@ def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
     and a repo value pattern masks whatever else it names. A `${...}`
     expression passes through whole — it is a reference to a value, not the
     value."""
-    protocol = str(endpoint["protocol"])
+    protocol = "" if endpoint["protocol"] is None else str(endpoint["protocol"])
     path = endpoint["path"]
     rendered_path = "(unresolved)" if path is None else redactor.redact_text(str(path))
+    # NO protocol at all — the address alone, with no verb and no prefix
+    # (OI-1). Only an `open_questions` row reaches this: an `endpoints` row
+    # always carries one (`resolve/endpoints.py` refuses a catalog that mints
+    # rows and declares none), while a question filed by a catalog with no
+    # wire identity of its own carries the empty string its catalog declared.
+    # Without this arm such a row falls through to the verbed branch and
+    # renders `(unresolved) ordersIn` — a verb reported as unread, which is
+    # the exact failure `_VERBLESS_PROTOCOLS`'s own comment above names, about
+    # a row whose protocol was never going to have one either.
+    if not protocol:
+        return rendered_path
     if protocol in _VERBLESS_PROTOCOLS:
         return f"{protocol} {rendered_path}"
     method = endpoint["method"]

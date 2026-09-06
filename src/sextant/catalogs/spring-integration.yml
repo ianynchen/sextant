@@ -9,23 +9,20 @@ style: config_join
 # in-repo configuration can say here, and the reason is measured rather than
 # assumed — see the block above `channels` below.
 #
-# `protocol` and `direction` are required of every WIRE style
-# (`resolve/endpoints.py`), and this style is one. Neither reaches an endpoint
-# row from this file, because this file mints none; `protocol` reaches exactly
-# one place, the `protocol` column of the questions this catalog files, which
-# is a hand-off inbox key rather than a published boundary.
+# **THEREFORE IT DECLARES NO `protocol` AND NO `direction`, and the absence is
+# a claim (OI-1).** A Spring Integration channel is an in-process pipe; which
+# broker it reaches, if any, is precisely what the question below asks, so this
+# file has no wire identity to state. `resolve/endpoints.py` requires the pair
+# of a catalog that MINTS ENDPOINT ROWS and refuses it on one that mints none —
+# keyed on what the catalog derives rather than on what its style is nominally
+# called, which is the rule Task 8 agreed read one level finer.
 #
-# **The bound on that word, stated where the value is written (§5.4).** A
-# Spring Integration channel is an in-process pipe; which broker it reaches, if
-# any, is precisely what the question asks. `amqp` is what the probe measured
-# the channel join against end to end — `@ServiceActivator` fed by an
-# `AmqpInboundChannelAdapter`, the same literal on both sides
-# (`scripts/probes/spring-integration-destinations.md`, Q3) — and a channel fed
-# by a Kafka or JMS adapter files its question under `amqp` too. That is
-# recorded in `docs/COVERAGE.md` as an over-statement of one column on a ledger
-# row, and it is the cost of a closed set with no "unknown" member (NFR-5).
-protocol: amqp
-direction: inbound
+# *This file declared `protocol: amqp` from Task 9 until that re-keying. It was
+# the one value the probe measured a channel join against end to end
+# (`scripts/probes/spring-integration-destinations.md`, Q3 — `@ServiceActivator`
+# fed by an `AmqpInboundChannelAdapter`), and a Kafka- or JMS-fed channel filed
+# its question under `amqp` too. The questions now carry no protocol at all,
+# which is the true answer: nobody has read one.*
 
 # `spring-integration-core` declares the annotations below; the Boot starter is
 # how a real module usually reaches it, and Maven records DIRECT declarations

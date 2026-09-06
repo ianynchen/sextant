@@ -187,11 +187,18 @@ def _address(**overrides: object) -> dict:
     return address
 
 
-def _catalog(matches: dict | None = None, *, direction: str = "inbound") -> Catalog:
+def _catalog(
+    matches: dict | None = None, *, direction: str = "inbound", protocol: str = "kafka"
+) -> Catalog:
+    """`protocol` is a parameter for one reason (OI-1): a catalog declaring no
+    `key` mints no endpoint row, and `resolve/endpoints.py` refuses a wire
+    identity on a catalog that mints none. Every catalog here that derives
+    rows keeps the default pair; the key-less ones declare neither, exactly as
+    the shipped `spring-integration.yml` does."""
     return Catalog(
         id="invented-bindings",
         style="config_join",
-        protocol="kafka",
+        protocol=protocol,
         direction=direction,
         requires=("resolved_config",),
         matches=matches if matches is not None else {"address_from_config": _address()},
@@ -1274,15 +1281,23 @@ def test_a_stamping_catalog_runs_after_every_deriving_one_whatever_its_filename(
 
     The filenames are deliberately adverse, the same pattern the runs-last
     test above uses: `invented-a-stamper.yml` sorts BEFORE
-    `invented-z-bindings.yml`, both declare `direction: inbound`, and both are
+    `invented-z-bindings.yml`, neither is `direction: inbound`, and both are
     the same style — so the filename tiebreak alone would run the stamper
-    first and leave the binding row's `consumes` NULL. The rank is what makes
-    it land."""
+    first and leave the binding row's `produces` NULL. The rank is what makes
+    it land.
+
+    **The binding side is OUTBOUND for the sake of that adversity (OI-1).** A
+    stamping catalog now declares no wire identity at all — it mints no
+    endpoint row, so `resolve/endpoints.py` refuses the pair on it — and an
+    absent `direction` sorts on the wrong side of the `direction != "inbound"`
+    tiebreak. Against an INBOUND binding catalog the tiebreak alone would
+    order these two correctly and the rank under test would never be
+    consulted."""
     workspace = _workspace(
         tmp_path,
-        [_bean("handle", SINK, EVENT)],
-        _selection("handle")
-        + _destination("handle-in-0", "events")
+        [_bean("emit", SOURCE, EVENT)],
+        _selection("emit")
+        + _destination("emit-out-0", "events")
         + [(MEDIA_KEY, "default", WRITER), (MEDIA_KEY, "prod", WRITER)],
         coordinates=(INVENTED_COORDINATE,),
     )
@@ -1290,7 +1305,7 @@ def test_a_stamping_catalog_runs_after_every_deriving_one_whatever_its_filename(
         id="invented-z-bindings",
         style="config_join",
         protocol="kafka",
-        direction="inbound",
+        direction="outbound",
         requires=("resolved_config",),
         matches={"address_from_config": _address()},
         source=Path("tests/invented-z-bindings.yml"),
@@ -1299,16 +1314,16 @@ def test_a_stamping_catalog_runs_after_every_deriving_one_whatever_its_filename(
     stamping_catalog = Catalog(
         id="invented-a-stamper",
         style="config_join",
-        protocol="kafka",
-        direction="inbound",
+        protocol="",
+        direction="",
         requires=("resolved_config",),
         matches={
             "media_from_config": {
                 "rules": [
                     {
                         "key": MEDIA_KEY,
-                        "fills": "consumes",
-                        "on": {"protocol": "kafka", "direction": "inbound"},
+                        "fills": "produces",
+                        "on": {"protocol": "kafka", "direction": "outbound"},
                     }
                 ],
                 "values": {WRITER: "application/json"},
@@ -1325,7 +1340,7 @@ def test_a_stamping_catalog_runs_after_every_deriving_one_whatever_its_filename(
 
     assert skipped == []
     assert row["path"] == "events"
-    assert row["consumes"] == JSON_MEDIA
+    assert row["produces"] == JSON_MEDIA
 
 
 def test_a_catalog_requiring_the_config_capability_is_skipped_without_it(
@@ -1754,10 +1769,13 @@ def _channel_address(**overrides: object) -> dict:
     return address
 
 
-def _channel_catalog(address: dict | None = None, *, direction: str = "inbound") -> Catalog:
+def _channel_catalog(
+    address: dict | None = None, *, direction: str = "inbound", protocol: str = "kafka"
+) -> Catalog:
     return _catalog(
         {"address_from_config": address if address is not None else _channel_address()},
         direction=direction,
+        protocol=protocol,
     )
 
 
@@ -2199,7 +2217,9 @@ def test_the_questions_ride_the_gaps_seam_and_survive_the_ledger_reset(tmp_path:
     )
     address = _channel_address()
     del address["key"]
-    catalog = _channel_catalog(address)
+    # No `key`, so no endpoint row, so no wire identity to declare (OI-1) —
+    # `derive_endpoints` refuses the pair on a catalog that mints none.
+    catalog = _channel_catalog(address, direction="", protocol="")
     derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
     reset_open_questions(workspace)
     record_service_identity_gaps(workspace, [catalog])
@@ -2357,7 +2377,14 @@ def test_the_shipped_catalog_files_a_question_for_every_channel_and_derives_no_w
     The two shapes measured by the probe are both here: the service
     activator's `inputChannel`/`outputChannel` (Q2, Q3 — the same literal the
     adapter's own `setOutputChannelName` writes) and the polled adapter's
-    `channel` (Q2). Never a fabricated wire, never `peer: in-process`."""
+    `channel` (Q2). Never a fabricated wire, never `peer: in-process`.
+
+    **And no protocol on the questions either (OI-1).** Every one of these read
+    `amqp` from Task 9 until the wire-identity rule was re-keyed on what a
+    catalog derives: this file mints no endpoint row, so it declares no wire
+    identity, so the column the questions carry is empty rather than guessed.
+    Which broker a channel reaches — if any — is the question, not the answer
+    to it."""
     workspace = _workspace(
         tmp_path,
         [
@@ -2381,9 +2408,9 @@ def test_the_shipped_catalog_files_a_question_for_every_channel_and_derives_no_w
 
     assert rows == []
     assert [(q["protocol"], q["path"], q["question"]) for q in questions] == [
-        ("amqp", "amqpAuditChannel", "channel_destination"),
-        ("amqp", "amqpInputChannel", "channel_destination"),
-        ("amqp", "tickChannel", "channel_destination"),
+        ("", "amqpAuditChannel", "channel_destination"),
+        ("", "amqpInputChannel", "channel_destination"),
+        ("", "tickChannel", "channel_destination"),
     ]
     assert json.loads(questions[1]["candidates"]) == [
         {
@@ -2467,3 +2494,74 @@ def test_the_shipped_catalog_is_skipped_where_the_build_declares_no_integration(
 
     assert [entry.catalog_id for entry in skipped] == ["spring-integration"]
     assert "spring-integration-core" in skipped[0].missing_capabilities[0]
+
+
+# --- OI-1: the wire-identity rule, re-keyed on what a catalog DERIVES -------
+#
+# Task 8 keyed it on the STYLE, and `config_join` is a style whose catalogs
+# may or may not mint endpoint rows. Under that reading `spring-integration.yml`
+# had to declare a protocol to load, so it declared `amqp` and stamped it on
+# every `channel_destination` question it filed — a Kafka- or JMS-fed
+# channel's included. These four tests are the rule and its audit list
+# (§8.3); `test_call_engines` runs every shipped catalog through
+# `derive_endpoints`, which is what keeps the list honest as catalogs are
+# added.
+
+
+def test_a_catalog_with_no_destination_key_may_not_declare_a_wire_identity(tmp_path: Path):
+    """The arm OI-1 opened. No `key` means `_derive_channels` answers no
+    channel at all, so nothing this file writes has a protocol — and the one
+    place the declaration would still reach is the `protocol` column of the
+    questions it files, where it is a guess a reader believes."""
+    address = _channel_address()
+    del address["key"]
+    workspace = _workspace(tmp_path, [], coordinates=(INVENTED_COORDINATE,))
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [_channel_catalog(address)], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "derives no endpoint rows" in str(raised.value)
+    assert "invented-bindings.yml" in str(raised.value)
+
+
+def test_a_catalog_that_does_derive_rows_still_must_declare_both(tmp_path: Path):
+    """The other arm, unchanged in effect and now asked of the catalog rather
+    than the style: a `key` is an address this file will publish, and a row
+    with no protocol is a boundary nobody can address."""
+    workspace = _workspace(tmp_path, [], coordinates=(INVENTED_COORDINATE,))
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(
+            workspace, [_channel_catalog(protocol="", direction="")], capabilities=CAPABILITIES
+        )
+    workspace.close()
+
+    assert "derives endpoint rows" in str(raised.value)
+    assert "invented-bindings.yml" in str(raised.value)
+
+
+def test_the_shipped_channel_catalog_declares_no_wire_identity():
+    """`spring-integration.yml`, pinned. It mints no endpoint row, so it has
+    no wire identity to state, and a later editor restoring `protocol: amqp`
+    to make the file look like its neighbours would be restoring OI-1 —
+    `amqp` on every question a Kafka- or JMS-fed channel files."""
+    catalog = _spring_integration()
+    assert (catalog.protocol, catalog.direction) == ("", "")
+    assert config_join.derives_rows(catalog) is False
+
+
+def test_the_shipped_media_catalog_declares_no_wire_identity():
+    """`spring-kafka-media.yml`, the other half of the audit list. It only
+    STAMPS columns onto rows other engines minted, and each of its own rules
+    carries the `(protocol, direction)` pair of the rows it applies to — the
+    top-level pair named nothing this file writes, and its `direction:
+    inbound` was flatly at odds with the outbound rule sitting beside the
+    inbound one."""
+    catalog = next(
+        entry
+        for entry in YamlCatalogSource(CATALOGS_DIR).load()
+        if entry.id == "spring-kafka-media"
+    )
+    assert (catalog.protocol, catalog.direction) == ("", "")
+    assert config_join.derives_rows(catalog) is False

@@ -5,9 +5,11 @@ style: scheduled_work
 # NO `protocol` AND NO `direction`, and their absence is a claim rather than an
 # omission (2O design §4). This catalog derives into `scheduled_work`, a table
 # with no protocol, no address and no direction: work started on a clock speaks
-# no wire. `resolve/endpoints.py` refuses a non-wire style that declares either
-# key, and refuses a wire style that declares neither — so the absence here is
-# checked rather than merely written.
+# no wire. `resolve/endpoints.py` refuses either key on a catalog that MINTS NO
+# ENDPOINT ROWS, and refuses their absence on one that mints them — so the
+# absence here is checked rather than merely written. *That check asked about
+# the STYLE until OI-1 re-keyed it on what the catalog derives; this file
+# answers identically under both readings.*
 
 detect:
   coordinates: ["org.springframework:spring-context"]

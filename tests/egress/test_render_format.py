@@ -457,13 +457,19 @@ def test_a_service_identity_question_renders_the_flagged_class_and_reason():
 
 
 def test_a_channel_destination_question_renders_the_channel_and_handler():
-    """2O §5 (Task 9, not yet shipped): pinned ahead of the writer so the
-    renderer does not crash the day `spring-integration.yml` starts filing
-    this kind."""
+    """2O §5: the shape `spring-integration.yml` files, with the protocol
+    column EMPTY — which is what it carries since OI-1 re-keyed the
+    wire-identity rule on what a catalog derives. A channel is an in-process
+    pipe and which broker it reaches is the question, so the catalog declares
+    no protocol and the ledger row carries none.
+
+    The identity is then the channel name alone. Without `_wire_identity`'s
+    no-protocol arm this line reads `(unresolved) orders.inbound` — a verb
+    reported as unread on a row that was never going to have one."""
     report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
     open_questions = [
         {
-            "protocol": "amqp",
+            "protocol": "",
             "method": None,
             "path": "orders.inbound",
             "question": "channel_destination",
@@ -476,9 +482,10 @@ def test_a_channel_destination_question_renders_the_channel_and_handler():
     text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
     assert "## Open questions" in text
     assert (
-        "- `amqp orders.inbound` — channel_destination: "
+        "- `orders.inbound` — channel_destination: "
         "orders.inbound → com/acme/Activator#handle(byte[])."
     ) in text
+    assert "(unresolved)" not in text
 
 
 def test_an_environment_divergence_question_renders_the_key_and_per_environment_values():

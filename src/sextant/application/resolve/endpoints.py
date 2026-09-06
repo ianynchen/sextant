@@ -144,49 +144,88 @@ def derive_endpoints(
 def _derives_rows(catalog: Catalog) -> int:
     """The within-group sort rank: 0 for a catalog that derives rows, 1 for
     one that only enriches them. `False < True` sorts a deriving catalog
-    first, which is the whole point; a style with no declared split ranks 0,
-    so nothing outside `_DERIVES_ROWS` is reordered by this key at all."""
-    declared = _DERIVES_ROWS.get(catalog.style)
-    return 0 if declared is None or declared(catalog) else 1
+    first, which is the whole point.
+
+    A NON-WIRE style is not part of this question and keeps rank 0: it writes
+    into its own table and enriches nothing, so reordering it by a predicate
+    about `endpoints` would move it for a reason that does not apply to it.
+    Everything else reads the same predicate `_wire_identity_checked` does —
+    one answer to "does this catalog mint endpoint rows", so the ordering and
+    the wire-identity rule can never disagree about a catalog."""
+    if catalog.style in _NON_WIRE:
+        return 0
+    return 0 if _derives_endpoint_rows(catalog) else 1
 
 
 # The styles that derive into a table of their own rather than into
-# `endpoints` (2O design §4). They are the only styles whose catalogs may
-# declare no `protocol`/`direction`, and the only ones that must not — see
-# `_wire_identity_checked`.
+# `endpoints` (2O design §4).
 _NON_WIRE = frozenset({"scheduled_work", "error_advice"})
 
 
+def _derives_endpoint_rows(catalog: Catalog) -> bool:
+    """Whether THIS CATALOG mints rows into `endpoints` — the question the
+    wire-identity rule is actually about (OI-1).
+
+    Task 8 first asked it of the STYLE, which was the right rule read one
+    level too coarsely: `config_join` is a style whose catalogs may or may
+    not mint rows, and `spring-integration.yml` is one that does not. Keyed on
+    the style alone, that file had to declare a `protocol` to load — so it
+    declared `amqp`, and stamped it on every `channel_destination` question it
+    filed, a Kafka- or JMS-fed channel's included. A catalog that derives no
+    endpoint row has no wire identity to declare, whatever its style is
+    nominally called.
+
+    A style absent from `_DERIVES_ROWS` has no such split and every one of its
+    catalogs mints rows; a NON-WIRE style mints none, by definition of the
+    split 2O design §4 drew."""
+    if catalog.style in _NON_WIRE:
+        return False
+    declared = _DERIVES_ROWS.get(catalog.style)
+    return declared is None or declared(catalog)
+
+
 def _wire_identity_checked(catalog: Catalog) -> Catalog:
-    """Refuses a catalog whose declared wire identity does not match what its
-    style derives, and returns it otherwise.
+    """Refuses a catalog whose declared wire identity does not match what it
+    derives, and returns it otherwise.
 
     Here rather than in the loader for the reason `_engine_for` below is here:
-    which styles derive wire rows is knowledge of this layer, and `ingress`
+    which catalogs derive wire rows is knowledge of this layer, and `ingress`
     may not import it. Both directions are refused, and both are real:
 
-    * a WIRE style declaring no protocol would bind SQL NULL into
-      `endpoints.protocol` — a row with no protocol is a boundary nobody can
-      address, and D01's wire identity is protocol-scoped, so it would also
-      never merge or link. Every catalog written before 2O declares one, so
-      this refuses a mistake rather than a shape that used to work.
-    * a NON-WIRE style declaring one is the failure this whole split exists to
-      prevent: a `protocol` on a `scheduled_work` catalog is read by nothing —
-      neither table has the column — so it can only ever be a claim a reader
-      believes and no derivation honours. §5.3's "a name existing is not a
-      mechanism existing", written the moment it would be introduced rather
-      than found in an audit later.
+    * a catalog that MINTS endpoint rows and declares no protocol would bind
+      SQL NULL into `endpoints.protocol` — a row with no protocol is a
+      boundary nobody can address, and D01's wire identity is protocol-scoped,
+      so it would also never merge or link. Every catalog written before 2O
+      declares one, so this refuses a mistake rather than a shape that used to
+      work.
+    * a catalog that mints NONE and declares one is the failure this whole
+      split exists to prevent: a `protocol` on a `scheduled_work` catalog is
+      read by nothing — neither table has the column — and a `protocol` on a
+      `config_join` catalog that mints no row reaches one place only, the
+      `protocol` column of the open questions it files, where it is a guess a
+      reader believes and no derivation honours. §5.3's "a name existing is
+      not a mechanism existing".
+
+    **The audit list this rule governs** (§8.3), which is why the message
+    names the catalog rather than the style: the two NON-WIRE styles
+    (`spring-scheduling.yml`, `spring-error-advice.yml`) and the two
+    `config_join` catalogs that mint nothing — `spring-integration.yml`, which
+    only files questions, and `spring-kafka-media.yml`, which only stamps
+    columns other engines' rows already carry. Every other shipped catalog
+    mints rows and declares both. `test_call_engines` runs every shipped
+    catalog through `derive_endpoints`, so the list is checked rather than
+    written down.
     """
     declared = catalog.protocol or catalog.direction
-    if catalog.style in _NON_WIRE and declared:
+    if not _derives_endpoint_rows(catalog) and declared:
         raise CatalogError(
-            f"loading catalog {catalog.source}: `style: {catalog.style}` derives no wire "
-            f"identity, so it must declare neither `protocol` nor `direction` — got "
+            f"loading catalog {catalog.source}: this catalog derives no endpoint rows, "
+            f"so it must declare neither `protocol` nor `direction` — got "
             f"protocol={catalog.protocol!r}, direction={catalog.direction!r} (2O design §4)"
         )
-    if catalog.style not in _NON_WIRE and not (catalog.protocol and catalog.direction):
+    if _derives_endpoint_rows(catalog) and not (catalog.protocol and catalog.direction):
         raise CatalogError(
-            f"loading catalog {catalog.source}: `style: {catalog.style}` derives endpoint rows, "
+            f"loading catalog {catalog.source}: this catalog derives endpoint rows, "
             f"so it must declare both `protocol` and `direction` — got "
             f"protocol={catalog.protocol!r}, direction={catalog.direction!r} (D02 §1)"
         )

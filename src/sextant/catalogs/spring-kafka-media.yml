@@ -1,13 +1,17 @@
 id: spring-kafka-media
 displayName: Spring Kafka (serializer-configured media)
 style: config_join
-# Top-level defaults only. This catalog derives no rows of its own — it
-# stamps rows other engines minted — and each rule below carries the
-# `(protocol, direction)` pair of rows it applies to, so neither of these two
-# fields ever reaches an endpoint. They are declared because D02 §1 makes
-# them mandatory on every catalog, and they name what this file is about.
-protocol: kafka
-direction: inbound
+# NO `protocol` AND NO `direction`, and the absence is a claim (OI-1). This
+# catalog derives no rows of its own — it stamps rows other engines minted —
+# and each rule below carries the `(protocol, direction)` pair of rows it
+# applies to, so neither field could ever reach an endpoint from here.
+#
+# *The pair read `kafka`/`inbound` until OI-1's fix, declared only because the
+# wire-identity rule was keyed on the STYLE and `config_join` is nominally a
+# wire one. `resolve/endpoints.py` now asks what the CATALOG derives, so a
+# top-level default that names nothing this file writes is refused rather than
+# required — and `direction: inbound` on a file whose two rules stamp one
+# inbound and one outbound column was the clearest sign it was decorative.*
 
 detect:
   coordinates: ["org.springframework.kafka:spring-kafka"]

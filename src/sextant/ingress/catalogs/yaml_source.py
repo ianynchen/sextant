@@ -131,12 +131,12 @@ def _closed_or_absent(raw: dict[str, Any], key: str, values: type[StrEnum], path
 
     Absence is a CLAIM — "this catalog derives nothing with a wire identity" —
     and it is checked where the claim can be judged, not here. This layer knows
-    which values are legal; it does not know which styles need one, because
+    which values are legal; it does not know which catalogs need one, because
     that is knowledge of `application/resolve`, which this layer must not
-    import. `resolve/endpoints.py` refuses a wire style declaring no protocol
-    and a non-wire style declaring one, carrying `Catalog.source` so either
-    error still names the file — exactly the split the module docstring above
-    states for `style` itself.
+    import. `resolve/endpoints.py` refuses a catalog that MINTS ENDPOINT ROWS
+    and declares no protocol, and one that mints none and declares one,
+    carrying `Catalog.source` so either error still names the file — exactly
+    the split the module docstring above states for `style` itself.
 
     A key written with a value outside the set is still refused right here: a
     typo is not an absence, and `protocol: htp` must never be read as "no wire
