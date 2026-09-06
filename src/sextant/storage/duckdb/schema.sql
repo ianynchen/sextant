@@ -352,6 +352,19 @@ SELECT document_id,
        payload ->  'arguments'                 AS arguments
 FROM raw_facts WHERE kind = 'call_site';
 
+CREATE OR REPLACE VIEW method_returns AS
+-- D00 §5's method_return (capability 9.18): what a method hands back, one row
+-- per return instruction. `value` stays JSON rather than being flattened to a
+-- value id, because it is an entry of the argument grammar and the whole point
+-- of that shape is that a void return's SQL NULL (`->` on an explicit JSON
+-- null, which DuckDB gives as the JSON scalar 'null', is distinguished by the
+-- reader) says something a `{"kind":"unresolved"}` does not.
+SELECT document_id,
+       payload ->> 'method'                    AS method,
+       (payload ->> 'ordinal')::INTEGER        AS ordinal,
+       payload ->  'value'                     AS value
+FROM raw_facts WHERE kind = 'method_return';
+
 CREATE OR REPLACE VIEW field_writes AS
 -- D00 §5's field_write: a constructor assigning parameter N straight to
 -- field F, constructors only, direct traces only. The field resolution

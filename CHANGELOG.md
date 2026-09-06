@@ -14,6 +14,24 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **What a method hands back is a fact — extractor capability 9.18** (2Q, `G2`). `ARETURN`
+  appeared in the extractor only inside a comment, so the last link of a round trip was
+  missing: an argument already carries the `source` id of the call that produced it, and
+  nothing said which of a method's call results the METHOD returns. New fact kind
+  **`method_return`** ([D00](docs/components/D00-fact-schema.md) §5), one per return
+  instruction, carrying `method`, `ordinal` and `value`.
+  **`value` is an entry of the argument grammar, not a bare id**, and that is what keeps two
+  real answers apart: `null` means a `void` return pops nothing, `{"kind": "unresolved"}`
+  means it pops something the pass could not name, and `{"kind": "unresolved", "source": N}`
+  is the join. A returned literal, field, parameter or lambda reads exactly as it would in
+  an argument slot in the same position, against the method's own declared return type.
+  **Every return form, and nothing collapsed.** All six return opcodes; a method with two
+  `return` statements yields two facts, told apart by `ordinal`, because a branch gives two
+  possible answers and no single one. `ATHROW` is deliberately not one of them.
+  807 facts on the orders-service fixture, 176 of them void returns and 62 methods carrying
+  more than one. `scanner_version` moves `9.17` → `9.18`.
+  **No consumer yet** — the reader is 2Q's `G3`, recorded as `OI-15`.
+
 - **A lambda's body is named by the site that creates it — extractor capability 9.17**
   (2Q, `G1`). An `invokedynamic` call site recorded the BOOTSTRAP method and discarded the
   implementation, so the synthetic method javac lifts a lambda body into was extracted with

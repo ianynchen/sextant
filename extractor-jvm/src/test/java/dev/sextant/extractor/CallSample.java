@@ -421,6 +421,47 @@ public final class CallSample {
         return BASE;
     }
 
+    /** The link capability 9.18 exists for, in its smallest honest form: the
+     *  value handed back is another call's result, so the return names the site
+     *  that produced it and a caller can be joined to it one hop later. */
+    String returnsCallResult() {
+        return source();
+    }
+
+    /** A primitive return, and the reason the declared RETURN type is read
+     *  alongside the value: {@code true} and {@code 1} are the same
+     *  {@code ICONST_1}, and only the method descriptor tells them apart —
+     *  exactly as an argument slot's own declared type does. */
+    boolean returnsPrimitive() {
+        return true;
+    }
+
+    /** Two {@code return} statements are two facts, not one. A method with a
+     *  branch has two possible answers and no single one; collapsing them
+     *  would assert whichever the pass happened to read last as the value the
+     *  method returns. */
+    String returnsOnTwoBranches(boolean flag) {
+        if (flag) {
+            return "first";
+        }
+        return "second";
+    }
+
+    /** The other half of the void/unreadable pair: a value that reaches the
+     *  return from two branches has two producers and therefore no single
+     *  answer, so it reads {@code unresolved} — a real value this pass cannot
+     *  name, which a void return's "no value at all" must stay distinct from. */
+    String returnsAMergedValue(boolean flag) {
+        return flag ? "first" : source();
+    }
+
+    /** The value handed back is the caller's own parameter — knowable only
+     *  where THIS method was called, which is precisely what the cross-method
+     *  propagation this fact feeds will resolve. */
+    String returnsParameter(String supplied) {
+        return supplied;
+    }
+
     void hold(Holder held) {
         record(held.note());
     }

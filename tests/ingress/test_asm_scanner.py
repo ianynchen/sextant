@@ -788,6 +788,82 @@ def test_a_lambda_body_is_bare_where_the_method_it_names_is_module_prefixed(tmp_
     assert bodies <= {symbol.split(" ")[-1] for symbol in methods}
 
 
+def test_a_returned_call_result_names_the_site_that_produced_it(tmp_path: Path):
+    """Capability 9.18 against real compiled bytecode, and the link it exists
+    to close. `BillingRestTemplate#getBalance` returns what `RestTemplate
+    #getForObject` produced; every other hop of that round trip was already a
+    fact, and nothing said which of this method's call results the method
+    hands back. The join is one number — the return's `source` against the
+    site's own `result` — and it is asserted as a join here rather than as two
+    separate values, because a fact that named a value id joining to nothing
+    is the failure this is meant to be checked against."""
+    out = _scan(tmp_path)
+    path = out / "com" / "acme" / "orders" / "clients" / "BillingRestTemplate.jsonl"
+    facts = [json.loads(line) for line in path.read_text().splitlines()]
+    method = next(
+        fact["method"]
+        for fact in facts
+        if fact.get("kind") == "method_return" and "#getBalance(" in fact["method"]
+    )
+    returns = [fact for fact in facts if fact.get("kind") == "method_return"]
+    balance = [fact for fact in returns if fact["method"] == method]
+    assert len(balance) == 1, "one return statement, one fact"
+    produced = balance[0]["value"]["source"]
+    producer = next(
+        fact
+        for fact in facts
+        if fact.get("kind") == "call_site"
+        and fact["caller"] == method
+        and fact.get("result") == produced
+    )
+    assert producer["target"]["name"] == "getForObject"
+    # `updateSettlement` returns nothing, and that is an answer: a `void`
+    # return pops nothing, so its `value` is null rather than an `unresolved`
+    # standing in for a value that was never there.
+    void = [fact for fact in returns if "#updateSettlement(" in fact["method"]]
+    assert void and all(fact["value"] is None for fact in void)
+
+
+def test_a_method_return_names_its_method_the_way_a_call_site_names_its_caller(
+    tmp_path: Path,
+):
+    """OI-4 again, on the other new symbol. `method_return.method` is a
+    DECLARATION this module made, so it carries the module-prefixed spelling —
+    the same one `call_site.caller` uses, and the same one the method's own
+    `symbol` fact uses. Asserted as an equality against the caller spelling
+    rather than as a prefix check alone: the failure mode OI-4 records is two
+    spellings of one identity that never meet, and the way to pin it is to
+    show the join succeeds."""
+    out = _scan(tmp_path)
+    path = out / "com" / "acme" / "orders" / "clients" / "BillingRestTemplate.jsonl"
+    facts = [json.loads(line) for line in path.read_text().splitlines()]
+    callers = {fact["caller"] for fact in facts if fact.get("kind") == "call_site"}
+    # `constructor` alongside `method`: a `<init>` body ends in a void RETURN
+    # like any other, so it has a `method_return` too, and its own symbol fact
+    # carries the other construct kind. Narrowing this to `method` made the
+    # assertion fail on the constructor, which is how the pair got noticed.
+    methods = {
+        fact["symbol"]
+        for fact in facts
+        if fact.get("kind") == "symbol" and fact.get("construct_kind") in {"method", "constructor"}
+    }
+    returned_by = {fact["method"] for fact in facts if fact.get("kind") == "method_return"}
+    assert returned_by
+    assert all(
+        symbol.startswith("sextant-jvm maven com.acme/orders 1.0.0 ") for symbol in returned_by
+    )
+    assert returned_by <= methods
+    assert returned_by & callers
+
+
+def test_scanner_declares_the_method_returns_capability():
+    """Capability 9.18 passes the same gate. `method_return` is a fact KIND an
+    older jar does not write at all, so a consumer reading none of them from a
+    stale scan would conclude the module's methods return nothing — the
+    silent degradation capability gating exists to make visible."""
+    assert "method_returns" in AsmScanner(JAR).capabilities()
+
+
 def test_scanner_declares_the_lambda_body_capability():
     """Capability 9.17 passes the same gate as 9.15 and 9.16. A traversal that
     followed `implementation` against an older extractor would find the key

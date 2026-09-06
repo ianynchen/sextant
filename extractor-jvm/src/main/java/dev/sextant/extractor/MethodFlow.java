@@ -49,16 +49,11 @@ public final class MethodFlow {
         // D00 §5's numbering.
         int[] parameterSlots = parameterSlotsOf(
             method.desc, (method.access & Opcodes.ACC_STATIC) != 0 ? 0 : 1);
-        Frame<SourceValue>[] frames;
-        try {
-            frames = new Analyzer<>(new CopyTransparentSourceInterpreter())
-                .analyze(ownerOf(callerSymbol), method);
-        } catch (AnalyzerException unanalysable) {
-            // A body the analyser cannot walk yields no call facts. The method's
-            // own symbol was already emitted, so the loss is bounded and visible
-            // as "a method with no call sites", never as a missing method.
-            return List.of();
-        }
+        // A body the analyser cannot walk yields no call facts. The method's
+        // own symbol was already emitted, so the loss is bounded and visible
+        // as "a method with no call sites", never as a missing method.
+        Frame<SourceValue>[] frames = analyze(callerSymbol, method);
+        if (frames == null) return List.of();
         InsnList instructions = method.instructions;
         AbstractInsnNode[] insns = instructions.toArray();
         List<String> lines = new ArrayList<>();
@@ -92,6 +87,108 @@ public final class MethodFlow {
                                    implementationOf(insns[i]), arguments));
         }
         return lines;
+    }
+
+    /** The per-method dataflow pass both fact kinds read, or **null** where the
+     *  analyser could not walk the body. Shared rather than duplicated, so
+     *  {@link #callSites} and {@link #methodReturns} can never disagree about
+     *  which value a given instruction popped. */
+    private static Frame<SourceValue>[] analyze(String callerSymbol, MethodNode method) {
+        try {
+            return new Analyzer<>(new CopyTransparentSourceInterpreter())
+                .analyze(ownerOf(callerSymbol), method);
+        } catch (AnalyzerException unanalysable) {
+            return null;
+        }
+    }
+
+    /** D00 §5's {@code method_return} (capability 9.18): one line per return
+     *  instruction, naming the value the method hands back.
+     *
+     *  <p>The value chain that makes a round trip readable is already extracted
+     *  — an argument carries the {@code source} id of the call that produced it,
+     *  and 993 of `mall-admin`'s 1,817 argument slots carry one — so
+     *  {@code CommonPage#restPage}'s result flowing into {@code
+     *  CommonResult#success} is a fact today. What was missing is the last link:
+     *  nothing said that {@code success}'s result is what the METHOD returns.
+     *  This is that link, and it is the same machinery one instruction further.
+     *
+     *  <p>**Every return form, not only {@code ARETURN}**, and the bytecode is
+     *  modelled rather than collapsed:
+     *
+     *  <ul>
+     *  <li>A primitive return reads through the same argument grammar an
+     *  argument slot does, against the method's own declared return type — which
+     *  is load-bearing for exactly the reason it is at a call site: a boolean
+     *  and an int both arrive as {@code ICONST_*}.</li>
+     *  <li>A {@code void} return pops nothing, and that is an ANSWER rather than
+     *  a failure to read one: {@code value} is written as {@code null}, which no
+     *  value-returning form can produce, so "returns nothing" is distinguishable
+     *  from "returns something this pass could not name" ({@code
+     *  {"kind":"unresolved"}}). The distinction is the whole reason the value is
+     *  an argument entry and not a bare id.</li>
+     *  <li>Several returns in one method are several facts, each with its own
+     *  {@code ordinal}. A method with two {@code return} statements has two
+     *  possible answers and no single one; picking either would be a fact about
+     *  code that may never run, which is the same rule {@link #singleSource}
+     *  applies to a merged value.</li>
+     *  </ul>
+     *
+     *  <p>{@code ATHROW} is deliberately not a return. It leaves the method
+     *  without handing a value back, and D00 §5 already reserves a separate
+     *  {@code throw} observation for it; recording one here would put an
+     *  exception in the position a caller reads as a returned value.
+     *
+     *  <p>An unreachable return keeps its ordinal and emits nothing, exactly as
+     *  an unreachable invoke does in {@link #callSites}: the position is a
+     *  property of the instruction list, not of what the analyser reached. */
+    public static List<String> methodReturns(String documentId, String methodSymbol,
+                                             MethodNode method) {
+        Frame<SourceValue>[] frames = analyze(methodSymbol, method);
+        if (frames == null) return List.of();
+        Type returnType = Type.getReturnType(method.desc);
+        int[] parameterSlots = parameterSlotsOf(
+            method.desc, (method.access & Opcodes.ACC_STATIC) != 0 ? 0 : 1);
+        InsnList instructions = method.instructions;
+        AbstractInsnNode[] insns = instructions.toArray();
+        List<String> lines = new ArrayList<>();
+        int ordinal = 0;
+        for (int i = 0; i < insns.length; i++) {
+            if (!isReturn(insns[i].getOpcode())) continue;
+            Frame<SourceValue> frame = frames[i];
+            if (frame == null) {
+                ordinal++;
+                continue;
+            }
+            String value = insns[i].getOpcode() == Opcodes.RETURN
+                ? null
+                : argumentJson(frame.getStack(frame.getStackSize() - 1), returnType, instructions,
+                               parameterSlots, frames, i);
+            lines.add(methodReturnJson(documentId, methodSymbol, ordinal++, value));
+        }
+        return lines;
+    }
+
+    /** The six return opcodes, contiguous in the JVM's own numbering from
+     *  {@code IRETURN} to {@code RETURN} — the five typed ones plus the void
+     *  one, which is the last of them. */
+    private static boolean isReturn(int opcode) {
+        return opcode >= Opcodes.IRETURN && opcode <= Opcodes.RETURN;
+    }
+
+    private static String methodReturnJson(String documentId, String methodSymbol, int ordinal,
+                                           String value) {
+        TreeMap<String, String> fact = new TreeMap<>();
+        fact.put("kind", JsonOut.string("method_return"));
+        fact.put("document_id", JsonOut.string(documentId));
+        fact.put("method", JsonOut.string(methodSymbol));
+        fact.put("ordinal", String.valueOf(ordinal));
+        // Written even when null, unlike an argument's own optional keys: here
+        // the null IS the fact — a void return hands nothing back — and an
+        // absent key would be indistinguishable from an extractor that does
+        // not produce this at all.
+        fact.put("value", value == null ? "null" : value);
+        return JsonOut.object(fact);
     }
 
     /** D00 §5's {@code field_write}: constructors only, direct traces only. A

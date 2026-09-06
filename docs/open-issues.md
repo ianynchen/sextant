@@ -283,6 +283,30 @@ while nothing in the pipeline acts on it.
 trace that reaches a terminal only reachable through a lambda. **Falsified by**
 nothing today; it becomes falsifiable the moment a consumer exists.
 
+### OI-15 — capability 9.18 produces a fact kind nothing reads
+**Minor · introduced 2026-09-06 by 2Q G2 · `docs/components/D00-fact-schema.md` §5,
+`src/sextant/storage/duckdb/schema.sql`'s `method_returns` view**
+
+`method_return` records what a method hands back. **Nothing consumes it.** Its
+reader is 2Q's `G3` — cross-method propagation, which joins a returned value to
+the caller's own `result` id — and G3 was explicitly out of this task's scope;
+G2 exists to produce the fact G3 will consume.
+
+This is OI-14 one step further, and worse in one respect and better in another.
+Worse: it is a whole fact KIND, so it also has a projection (`method_returns`)
+that no named query reaches — the view is exercised by a test and by nothing
+else. Better: the fact is inert, adding rows to `raw_facts` and moving no
+derived output, and it is the input a designed consumer needs rather than a
+speculative field.
+
+**Two things it deliberately does NOT do**, so a later reader does not mistake
+absence for oversight: nothing joins a `method_return` to a caller (that is G3),
+and no named query is registered, because registering one with no consumer would
+add a surface nothing asks for and make this row harder to close honestly.
+**Closes by** G3 reading it — a callee's returned value linked to the caller's
+`result` id, with a trace that crosses a method boundary. **Falsified by**
+nothing today; it becomes falsifiable the moment a consumer exists.
+
 ---
 
 ## CLOSED

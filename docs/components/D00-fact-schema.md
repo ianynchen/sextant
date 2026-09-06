@@ -766,6 +766,49 @@ identically**, deliberately: javac erases the sugar at the call site and the cal
 does not consult `array` treats it exactly as it always treated `unresolved`, which is
 what every varargs slot read as before 9.15.
 
+**`method_return` is a fact of its own, one per return instruction** (capability 9.18) —
+what a method hands back:
+
+```json
+{"kind": "method_return", "document_id": "…", "method": "<method symbol>",
+ "ordinal": 0, "value": {"kind": "unresolved", "source": 13}}
+```
+
+It is the last link in a round trip whose every other hop was already extracted. An
+argument carries the `source` id of the call that produced it, so
+`OmsOrderService#list` → `CommonPage#restPage` → `CommonResult#success` is a chain of
+facts today; nothing said that `success`'s result is the value the METHOD returns.
+`method` is the returning method's own symbol, spelled exactly as `call_site.caller` is —
+**module-prefixed**, because it names a declaration this module made, where the bare
+spelling is reserved for references that must be identical across modules.
+
+**`value` is an entry of §5's argument grammar**, not a bare value id, and the two answers
+that shape keeps apart are the reason:
+
+| What the bytecode does | `value` |
+|---|---|
+| returns nothing (a `void` return pops nothing) | `null` — an ANSWER, not a failure |
+| returns something this pass cannot name | `{"kind": "unresolved"}` |
+| returns another call's result | `{"kind": "unresolved", "source": N}` — the join |
+| returns a literal, a field, a parameter, a lambda, a constructed value | that kind, exactly as it would read in an argument slot in the same position |
+
+A bare id would have collapsed the first two into one absence. The declared return type is
+read alongside the value for the same reason a call site reads its argument types: a
+boolean and an int both arrive as `ICONST_*`, and only the descriptor tells them apart.
+
+**Several returns are several facts, and are not collapsed.** A method with two `return`
+statements has two possible answers and no single one, distinguished by `ordinal` — the
+return's index among this method's returns, in instruction order. Picking one would be a
+fact about code that may never run, the same refusal §5 makes for a value merged on a
+branch. The JVM mapping covers all six return opcodes; `ATHROW` is deliberately **not** one
+of them — it leaves the method without handing a value back, and putting an exception where
+a caller reads a returned value would be a wrong answer rather than a missing one.
+
+**Its consumer does not exist yet.** The reader is 2Q's cross-method propagation, which
+joins a `method_return` to the caller's own `result` id; the fact ships ahead of it because
+that is what it will consume. Recorded plainly here rather than implied: `docs/open-issues.md`
+carries it as `OI-15`.
+
 **`field_write` is a fact of its own, constructors only, direct traces only** — a
 constructor assigns parameter N directly to field F. The JVM mapping: a PUTFIELD inside
 `<init>` whose value traces straight to a parameter produces `{kind: field_write, field:

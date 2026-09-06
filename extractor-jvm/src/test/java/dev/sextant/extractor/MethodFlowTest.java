@@ -21,19 +21,31 @@ class MethodFlowTest {
 
     private static final String OWNER = "dev/sextant/extractor/CallSample";
 
-    private static List<String> callSites(String methodName) throws Exception {
+    private static MethodNode methodNode(String methodName) throws Exception {
         ClassNode classNode = new ClassNode();
         try (InputStream in =
                 MethodFlowTest.class.getResourceAsStream("/dev/sextant/extractor/CallSample.class")) {
             new ClassReader(in.readAllBytes()).accept(classNode, ClassReader.SKIP_FRAMES);
         }
-        MethodNode method = classNode.methods.stream()
+        return classNode.methods.stream()
             .filter(candidate -> candidate.name.equals(methodName))
             .findFirst()
             .orElseThrow(() -> new AssertionError("no method named " + methodName + " on CallSample"));
-        String caller = new ClassScanner("com.acme/orders", "1.0.0")
-            .symbolOf(OWNER + "#" + methodName + "(" + ClassScanner.disambiguatorOf(method.desc) + ").");
-        return MethodFlow.callSites("doc-call-sample", caller, method);
+    }
+
+    private static String symbolOf(MethodNode method) {
+        return new ClassScanner("com.acme/orders", "1.0.0")
+            .symbolOf(OWNER + "#" + method.name + "(" + ClassScanner.disambiguatorOf(method.desc) + ").");
+    }
+
+    private static List<String> callSites(String methodName) throws Exception {
+        MethodNode method = methodNode(methodName);
+        return MethodFlow.callSites("doc-call-sample", symbolOf(method), method);
+    }
+
+    private static List<String> methodReturns(String methodName) throws Exception {
+        MethodNode method = methodNode(methodName);
+        return MethodFlow.methodReturns("doc-call-sample", symbolOf(method), method);
     }
 
     private static String last(List<String> lines) {
@@ -765,5 +777,98 @@ class MethodFlowTest {
             "missing", "()V", null, null);
         assertEquals(List.of(), MethodFlow.callSites("doc", "sextant-jvm maven c v o/P#missing().",
             abstractMethod));
+        assertEquals(List.of(), MethodFlow.methodReturns("doc",
+            "sextant-jvm maven c v o/P#missing().", abstractMethod));
+    }
+
+    /** Capability 9.18, and the whole point of it: the value a method hands
+     *  back is another call's result, so the return NAMES that site. The chain
+     *  a round trip needs was already extracted one hop short of this — an
+     *  argument carries the `source` of the call that produced it — and this is
+     *  the link that says which of those the method returns.
+     *
+     *  <p>The producing call's own `result` is read back rather than
+     *  hardcoded: a value id is an instruction index, and pinning one would
+     *  make the assertion about javac's label placement instead of about the
+     *  join. */
+    @Test
+    void states_the_whole_fact_for_a_returned_call_result() throws Exception {
+        String producer = callSites("returnsCallResult").get(0);
+        List<String> returns = methodReturns("returnsCallResult");
+        assertEquals(1, returns.size());
+        String line = returns.get(0);
+        assertTrue(line.contains("\"kind\":\"method_return\""), line);
+        assertTrue(line.contains("\"document_id\":\"doc-call-sample\""), line);
+        assertTrue(line.contains("\"method\":\"sextant-jvm maven com.acme/orders 1.0.0 "
+            + OWNER + "#returnsCallResult("), line);
+        assertTrue(line.contains("\"ordinal\":0"), line);
+        assertTrue(line.contains("\"value\":{\"kind\":\"unresolved\",\"source\":"
+            + field(producer, "result") + "}"), line);
+    }
+
+    /** A void return pops nothing, and that is an ANSWER rather than a failure
+     *  to read one — which is why `value` is an argument entry and not a bare
+     *  id. `null` here is a shape no value-returning form can produce, so
+     *  "returns nothing" stays distinguishable from "returns something this
+     *  pass could not name", which is `{"kind":"unresolved"}`.
+     *
+     *  <p>Paired deliberately: the same assertion pins BOTH spellings against
+     *  each other, because a reading that collapsed them would still satisfy
+     *  either one alone. */
+    @Test
+    void distinguishes_a_void_return_from_a_value_it_could_not_read() throws Exception {
+        String empty = methodReturns("stringLiteral").get(0);
+        assertTrue(empty.contains("\"value\":null"), empty);
+        assertFalse(empty.contains("\"unresolved\""), empty);
+
+        String unread = methodReturns("returnsAMergedValue").get(0);
+        assertTrue(unread.contains("\"value\":{\"kind\":\"unresolved\""), unread);
+        assertFalse(unread.contains("\"value\":null"), unread);
+    }
+
+    /** The declared RETURN type is load-bearing for the same reason an
+     *  argument's declared type is: {@code true} and {@code 1} are one
+     *  {@code ICONST_1}, and reporting a flag as an int loses the distinction
+     *  the flag exists for. */
+    @Test
+    void reads_a_primitive_return_against_the_methods_own_declared_type() throws Exception {
+        String line = methodReturns("returnsPrimitive").get(0);
+        assertTrue(line.contains("\"value\":{\"kind\":\"boolean\",\"value\":true}"), line);
+    }
+
+    /** Two `return` statements are two facts, told apart by `ordinal`. Modelled
+     *  rather than collapsed: a branch gives two possible answers and no single
+     *  one, and asserting either as "the" returned value would be a fact about
+     *  code that may never run — the same refusal a merged value gets. */
+    @Test
+    void records_each_return_of_a_branching_method_rather_than_one_of_them() throws Exception {
+        List<String> returns = methodReturns("returnsOnTwoBranches");
+        assertEquals(2, returns.size());
+        assertTrue(returns.get(0).contains("\"ordinal\":0"), returns.get(0));
+        assertTrue(returns.get(0).contains("\"value\":{\"kind\":\"string\",\"value\":\"first\"}"),
+                   returns.get(0));
+        assertTrue(returns.get(1).contains("\"ordinal\":1"), returns.get(1));
+        assertTrue(returns.get(1).contains("\"value\":{\"kind\":\"string\",\"value\":\"second\"}"),
+                   returns.get(1));
+    }
+
+    /** A returned parameter reads through the same grammar an argument slot
+     *  does — the value is knowable only where THIS method was called, which is
+     *  exactly what the cross-method propagation this fact feeds resolves. */
+    @Test
+    void reads_a_returned_parameter_as_the_parameter_it_is() throws Exception {
+        String line = methodReturns("returnsParameter").get(0);
+        assertTrue(line.contains("\"value\":{\"kind\":\"parameter\",\"value\":0}"), line);
+    }
+
+    /** A returned lambda, which is where 9.17 and 9.18 meet: the returned value
+     *  reads as the `lambda` kind naming the body, and the site that created it
+     *  carries the same symbol in `implementation`. One object, one answer from
+     *  two directions. */
+    @Test
+    void reads_a_returned_lambda_as_the_body_it_names() throws Exception {
+        String line = methodReturns("returnedLambda").get(0);
+        assertTrue(line.contains("\"value\":{\"kind\":\"lambda\",\"source\":"), line);
+        assertTrue(line.contains("\"symbol\":\"" + OWNER + "#lambda$returnedLambda$0(sig_"), line);
     }
 }

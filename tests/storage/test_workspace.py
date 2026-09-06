@@ -14,6 +14,7 @@ from sextant.domain.facts import (
     CallTarget,
     ConfigEntryFact,
     Document,
+    MethodReturnFact,
     ModuleFact,
     SymbolFact,
 )
@@ -702,6 +703,11 @@ def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tm
     # as SQL NULL, not the string "null" or an error.
     assert row["receiver"] is None
     assert row["result"] is None
+    # Capability 9.17's column, on the site that must NOT carry it: an ordinary
+    # invoke's `target` already names its callee, so the extractor writes no
+    # key and `->>` on the absent key must project SQL NULL rather than the
+    # string "null".
+    assert row["implementation"] is None
     # Every optional key of the argument grammar is dumped, null included —
     # `elements` (capability 9.15) among them, which is None on every kind but
     # `array`. Pinned exactly rather than by subset: this view is what a
@@ -717,6 +723,66 @@ def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tm
         },
         {"kind": "unresolved", "value": None, "symbol": None, "source": 7, "elements": None},
     ]
+
+
+def test_the_method_returns_view_keeps_a_void_return_distinct_from_an_unread_one(
+    tmp_path: Path,
+):
+    """D00 §5's `method_return` (capability 9.18) at the projection. The two
+    answers this fact exists to keep apart must survive the round trip through
+    DuckDB, because a view that flattened them would put the whole point of the
+    grammar back where it was: `value` SQL-NULL is "this return hands nothing
+    back", and a `{"kind": "unresolved"}` object is "it hands back something
+    the pass could not name".
+
+    Read by reopening the database rather than through `Workspace.query`
+    deliberately: there is no consumer yet (`OI-15`), and registering a named
+    query for one would add a surface nothing asks for. The VIEW is what §5.1
+    requires to move with the schema, and this is what proves it moved
+    correctly."""
+    _call_site_facts(tmp_path / "facts")
+    method = "sextant-jvm maven com.acme/orders 1.0 com/acme/OrderController#create()."
+    document = Document(
+        document_id="doc_2",
+        relative_path="com/acme/orders/OrderService.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.18",
+        content_hash="sha256:c",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    write_fact_file(
+        tmp_path / "facts" / "OrderService.jsonl",
+        document,
+        [
+            MethodReturnFact(
+                document_id="doc_2",
+                method=method,
+                ordinal=0,
+                value=CallArgument(kind="unresolved", source=13),
+            ),
+            MethodReturnFact(document_id="doc_2", method=method, ordinal=1, value=None),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    workspace.close()
+    reopened = duckdb.connect(str(tmp_path / "ws.duckdb"))
+    rows = reopened.execute("SELECT * FROM method_returns ORDER BY ordinal").fetchall()
+    reopened.close()
+    assert len(rows) == 2
+    document_id, returned_by, ordinal, value = rows[0]
+    assert (document_id, returned_by, ordinal) == ("doc_2", method, 0)
+    assert json.loads(value)["source"] == 13
+    # The void return. `-> 'value'` over an explicit JSON null gives DuckDB's
+    # JSON scalar `null`, not SQL NULL — so a reader tells the two apart by the
+    # JSON value, and the assertion is written the way a reader would have to.
+    assert json.loads(rows[1][3]) is None
 
 
 def test_exported_tables_include_call_sites(tmp_path: Path):

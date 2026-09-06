@@ -257,6 +257,40 @@ class CallSiteFact(BaseModel):
     arguments: list[CallArgument] = Field(default_factory=list)
 
 
+class MethodReturnFact(BaseModel):
+    """What a method hands back, one fact per return instruction (D00 §5,
+    capability 9.18).
+
+    The value chain a round trip needs is already extracted — an argument
+    carries the `source` id of the call that produced it — and this is the
+    last link: that the value a given call produced is the one the METHOD
+    returns. Its consumer is 2Q's cross-method propagation, which joins this
+    to the caller's own `result` id.
+
+    `value` is an entry of §5's argument grammar rather than a bare id, and
+    that is what keeps two different answers apart: `None` means the return
+    pops nothing (a void return — an answer, not a failure), while
+    `CallArgument(kind="unresolved")` means it pops something this pass could
+    not name. A returned literal, field, parameter or lambda reads exactly as
+    it would in an argument slot in the same position.
+
+    A method with several `return` statements has several of these facts, each
+    with its own `ordinal`. That is deliberate: two returns are two possible
+    answers and no single one, and picking either would be a fact about code
+    that may never run.
+    """
+
+    model_config = {"frozen": True}
+    kind: Literal["method_return"] = "method_return"
+    document_id: str
+    method: str
+    # The return instruction's index among this method's returns, in
+    # instruction order — deterministic by construction (NFR-1), and the same
+    # role `call_site.ordinal` plays.
+    ordinal: int
+    value: CallArgument | None = None
+
+
 class FieldWriteFact(BaseModel):
     """A constructor assigns parameter N directly to field F (D00 §5):
     constructors only, direct traces only. A computed assignment —
@@ -410,6 +444,7 @@ Fact = Annotated[
     | SymbolFact
     | AnnotationFact
     | CallSiteFact
+    | MethodReturnFact
     | FieldWriteFact
     | ConfigEntryFact
     | EmbeddedDescriptorFact

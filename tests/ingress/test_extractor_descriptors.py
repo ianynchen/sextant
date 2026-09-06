@@ -149,8 +149,8 @@ def test_the_scanner_reports_the_version_that_harvests_descriptors(tmp_path: Pat
             out_dir=tmp_path,
         )
     )
-    # 9.16 -> 9.17 with the lambda body a `dynamic` call site dispatches into:
-    # the key is absent on every site an older jar wrote, so a traversal that
-    # followed it would conclude the module contains no lambdas rather than
-    # find a wrong body. Same reason the 9.15 -> 9.16 step moved the version.
-    assert report.scanner_version == "9.17"
+    # 9.17 -> 9.18 with `method_return`, a whole fact KIND an older jar never
+    # wrote — the exact case this test's own docstring names, and a stronger
+    # one than 9.17's absent key: a consumer reading no returns from a stale
+    # scan would conclude the module's methods return nothing.
+    assert report.scanner_version == "9.18"

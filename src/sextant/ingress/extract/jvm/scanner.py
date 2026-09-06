@@ -47,19 +47,26 @@ _CAPABILITIES = {
     # sites were already facts and which nothing could reach — a
     # `list.forEach(x -> mapper.insert(x))` was extracted and orphaned.
     "lambda_body",
+    # Capability 9.18: a `method_return` fact per return instruction, naming
+    # the value the method hands back. The last link in a round trip whose
+    # every other hop was already extracted — an argument carries the `source`
+    # id of the call that produced it, and nothing said which of those a
+    # method returns.
+    "method_returns",
 }
 
 
 class AsmScanner:
-    """One backend covering every JVM language, declaring thirteen
+    """One backend covering every JVM language, declaring fourteen
     capabilities: the four Phase 1 read from declarations, the three Phase 2C's
     per-method dataflow pass added — the call sites themselves, the literals
     they carry, and the within-method value ids a chain is rebuilt from — plus
     a class symbol's own declared interfaces, its generic superinterface
     references, its erased superclass, the elements of an array-valued
     argument, and the arguments of an annotation nested inside another (2O
-    capabilities 9.14, 9.13, 9.15 and 9.16), and the lambda body a `dynamic`
-    call site dispatches into (2Q capability 9.17)."""
+    capabilities 9.14, 9.13, 9.15 and 9.16), the lambda body a `dynamic`
+    call site dispatches into (2Q capability 9.17), and the value each return
+    instruction hands back (2Q capability 9.18)."""
 
     def __init__(self, jar: Path) -> None:
         self._jar = jar

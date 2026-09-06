@@ -261,6 +261,11 @@ public final class ClassScanner {
                     // After the method's own symbol, never before: a call site
                     // names its caller, and a fact file reads top-down.
                     lines.addAll(MethodFlow.callSites(documentId, methodSymbol, this));
+                    // D00 §5's method_return: what this method hands back, one
+                    // fact per return instruction. After the call sites, not
+                    // before, because a returned value's `source` names one of
+                    // them and a fact file reads top-down.
+                    lines.addAll(MethodFlow.methodReturns(documentId, methodSymbol, this));
                     // D00 §5's field_write: constructors only. MethodFlow does
                     // its own "<init>" gate, the same way it does its own
                     // per-instruction scan for call sites, so this call is

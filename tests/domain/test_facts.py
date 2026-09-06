@@ -15,6 +15,7 @@ from sextant.domain.facts import (
     Document,
     Fact,
     FieldWriteFact,
+    MethodReturnFact,
     Parameter,
     Signature,
     SymbolFact,
@@ -526,6 +527,50 @@ def test_field_write_fact_survives_a_fact_file_round_trip(tmp_path: Path):
     assert isinstance(read_write, FieldWriteFact)
     assert read_write.field == "com/acme/OrdersRestClient#url."
     assert read_write.from_parameter == 0
+
+
+def test_method_return_facts_survive_a_round_trip_keeping_void_apart_from_unread(
+    tmp_path: Path,
+):
+    """Capability 9.18's whole distinction, at the model boundary. `value` is
+    an entry of the argument grammar rather than a bare id precisely so that a
+    void return (`None` — the method hands nothing back) cannot be confused
+    with a value the pass could not name (`unresolved`). A model that dropped
+    the difference would put both back where they were, and both are real
+    answers.
+
+    Two facts for one method, because a method with two `return` statements has
+    two possible answers and no single one — `ordinal` is what tells them
+    apart."""
+    method = "sextant-jvm maven com.acme/orders 1.0.0 com/acme/OrderController#list()."
+    returned = MethodReturnFact(
+        document_id="doc_1",
+        method=method,
+        ordinal=0,
+        value=CallArgument(kind="unresolved", source=13),
+    )
+    empty = MethodReturnFact(document_id="doc_1", method=method, ordinal=1, value=None)
+    path = tmp_path / "OrderController.jsonl"
+
+    write_fact_file(path, DOCUMENT, [returned, empty])
+    document, facts = read_fact_file(path)
+
+    assert document == DOCUMENT
+    assert facts == [returned, empty]
+    read_returned, read_empty = facts
+    assert isinstance(read_returned, MethodReturnFact)
+    assert read_returned.value is not None and read_returned.value.source == 13
+    assert read_empty.value is None
+    # The method's own symbol is MODULE-PREFIXED, exactly as `call_site.caller`
+    # is: it names a declaration this module made, where the bare spelling is
+    # reserved for references that must be identical across modules (D00 §1,
+    # OI-4). A fact carrying the wrong one of the two joins to nothing.
+    assert read_returned.method.startswith("sextant-jvm maven com.acme/orders 1.0.0 ")
+
+
+def test_method_return_fact_kind_literal_serialises_as_method_return():
+    returned = MethodReturnFact(document_id="doc_1", method="com/acme/A#b().", ordinal=0)
+    assert json.loads(returned.model_dump_json())["kind"] == "method_return"
 
 
 def test_field_write_fact_kind_literal_serialises_as_field_write():
