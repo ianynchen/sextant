@@ -274,12 +274,32 @@ resolution is not `resolved`, or its evidence is not `human`, an overlay is
 invited.** That is a much larger surface than four anchors and needs the brief to
 carry the unsure rows, not just the endpoint table.
 
-**K2. An LLM claim carries its own resolution, not only `evidence: llm`. (S.)**
-`Resolution` and `Evidence` are independent axes by design — CONTEXT.md calls them
-"three independent properties, deliberately never collapsed". Today an enrichment
-claim carries evidence and no resolution, so "this IS the payment flow" and "this
-MIGHT be" render identically. The claim schema gains a resolution the model must
-state.
+**K2. Derive a claim's GROUNDING; never score it. (M — replaces the first
+draft, ruled 2026-09-05.)** The first draft had the model state its own
+confidence. The user rejected that and asked whether Sextant could write it
+instead. Better than either: **render what the claim rests on, not a score** — a
+computed number is still a number nobody can check.
+
+> *Model's reading of 4 endpoint rows — 3 `resolved`/`compiler`, 1 `unresolved`.*
+
+Factual, computable, and a reader can follow the citation. It falls out of the
+existing model: resolution flows from evidence, so **a claim is never presented
+as more certain than the rows it rests on.**
+
+- **Before enrichment — a hint, not enforcement.** The brief already carries
+  `_DOUBTFUL_RESOLUTIONS`; tell the model which rows are unresolved so it writes
+  accordingly. Shapes the language; never trustworthy alone.
+- **After enrichment — the enforcement.** Validation computes each claim's
+  grounding from the rows it cites, and **refuses a claim citing something that
+  does not exist.** A hard check, not a judgement.
+- **At render — provenance, not a score.**
+
+**The concrete blocker, measured:** `SectionClaim.cites` exists and IS validated,
+but it names **files** — `validate.py:306` refuses "a citation that names nothing"
+against *"a file in this module"*. To compute grounding a claim must cite
+**derived rows** (endpoint ids, shape symbols, question ids). Extending the claim
+schema from file citations to row citations is the actual work; the tier is then
+derived rather than declared.
 
 **K3. Render all three axes together** so a reader sees, per claim: what produced
 it (`compiler` / `llm` / `human`), how certain the source is
