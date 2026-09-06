@@ -21,8 +21,16 @@ that runs a full turn passes `session_store=Path(":memory:")` explicitly —
 the store-path DEFAULTING logic (module-local for api-key, ephemeral for
 subscription) is pinned separately, so the other tests stay hermetic and
 never touch `tmp_path`'s filesystem for anything but the jail's own roots.
+
+One test goes through the same seam a level up, with a whole fake `Backend`
+rather than a fake chat model (`_FailingBackend`): the SUBSCRIPTION path's
+real backend drives the machine's own Claude Code engine and has no
+in-process model to script, so a fake backend is the only instrument that
+reaches both auth paths — and the only one that can COUNT how many times
+Sextant asks a backend to run.
 """
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -37,6 +45,10 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 # "injected through LangchainBackend(profile, native,
 # chat_model_factory=...)").
 from tradewind.adapters.langchain_backend import LangchainBackend
+from tradewind.application.ports import Backend, TurnContext
+from tradewind.domain.errors import TurnExecutionFailed, Unsupported
+from tradewind.domain.events import Event, TurnFailed, TurnStarted
+from tradewind.domain.models import Capabilities, NormalizedMessage, SessionRow
 
 from sextant.agents.tradewind import TradewindAgent, _NudgeGuard, _tool
 from sextant.application.enrich.tools import MAX_RESULT_BYTES, ToolDefinition, ToolExecutor
@@ -57,6 +69,73 @@ def _dummy_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 class _ToolFake(FakeMessagesListChatModel):
     def bind_tools(self, tools: object, **kwargs: object) -> "_ToolFake":
         return self
+
+
+# The exact text the failing backend reports, asserted verbatim in the message
+# the caller finally sees: a loud failure that does not carry WHAT failed is
+# a different promise from the one Task 11 pins.
+_BACKEND_ERROR = "upstream refused the request (probe)"
+
+
+class _FailingBackend(Backend):
+    """A Tradewind `Backend` whose one turn ends in `TurnFailed`, recording
+    every invocation it receives.
+
+    The subscription (claude) path has no in-process fake MODEL to script —
+    its real backend drives the machine's own Claude Code engine — so the
+    seam that reaches both auth paths symmetrically is Tradewind's own
+    `backend_factories`, one fake registered under whichever `BackendName`
+    the auth selects (`tradewind._AUTH_BACKEND`). Registering it under
+    `"langchain"` too is deliberate rather than redundant with
+    `test_a_tradewind_failure_surfaces_as_a_loud_typed_failure_and_writes_nothing`
+    above, which drives the REAL langchain backend: what is measured here is
+    how many times SEXTANT asks a backend to run before it raises, and only a
+    backend that counts its own invocations can answer that.
+    """
+
+    def __init__(self, profile: object, native_config: object, invocations: list[str]) -> None:
+        super().__init__(profile, native_config)  # type: ignore[arg-type]
+        # `Backend.name` is a `ClassVar` a concrete backend fixes; this one
+        # stands in for two, so it takes the name from the profile it was
+        # built for rather than claiming either at class scope.
+        self.name = profile.backend  # type: ignore[attr-defined]
+        self.invocations = invocations
+
+    def capabilities(self) -> Capabilities:
+        # Exactly what this adapter's own request asks for — a system prompt,
+        # in-process tools and `max_tool_rounds` — and False everywhere else:
+        # a native-resume or transcript-read claim would send the turn runner
+        # looking for a native transcript this fake does not have.
+        return Capabilities(
+            supports_system_prompt=True,
+            supports_structured_output=False,
+            supports_interactive_permissions=True,
+            supports_in_process_tools=True,
+            supports_native_resume=False,
+            supports_fork=False,
+            supports_transcript_read=False,
+            supports_tool_round_cap=True,
+        )
+
+    async def run(self, ctx: TurnContext) -> AsyncIterator[Event]:
+        self.invocations.append(ctx.turn_id)
+        yield TurnStarted(turn_id=ctx.turn_id)
+        yield TurnFailed(turn_id=ctx.turn_id, error=_BACKEND_ERROR)
+
+    async def probe_native(self, session: SessionRow) -> bool:
+        return False
+
+    async def read_native_transcript(
+        self, session: SessionRow, after_native_id: str | None
+    ) -> list[NormalizedMessage]:
+        raise Unsupported("this fake keeps no native transcript")
+
+    async def interrupt(self, session_id: str) -> None:
+        return None
+
+
+def _failing_backend_factories(backend_name: str, invocations: list[str]) -> dict[str, object]:
+    return {backend_name: lambda profile, native: _FailingBackend(profile, native, invocations)}
 
 
 def _executor(tmp_path: Path) -> ToolExecutor:
@@ -384,6 +463,62 @@ def test_a_tradewind_failure_surfaces_as_a_loud_typed_failure_and_writes_nothing
 
     # Nothing was ever executed through the jail — a caller that catches
     # this and reports has a transcript of exactly nothing to persist.
+    assert executor.transcript == []
+
+
+@pytest.mark.parametrize(
+    ("auth", "backend_name"), [("api-key", "langchain"), ("subscription", "claude")]
+)
+def test_a_backend_failure_propagates_named_and_immediately_on_both_auth_paths(
+    tmp_path: Path, auth: str, backend_name: str
+):
+    """2O Task 11's pin, and the invariant is the CLI's own: an enrichment
+    run that fails must fail LOUDLY and at once, so a person watching a
+    long-running model turn learns the run is dead instead of waiting on a
+    silent retry that is not happening.
+
+    Three things are asserted together because each alone is satisfiable
+    without the others: the failure arrives TYPED (`EnrichmentAgentError`,
+    which `api.enrich` turns into an `EnrichmentError` and `cli/app.py` into
+    a `ClickException`), it NAMES what failed (the backend's own error text,
+    not just "run failed"), and the backend was asked to run EXACTLY ONCE —
+    the pin against a retry loop or a wait quietly appearing between the
+    caller's call and the raise. `max_turns=20` makes that count meaningful:
+    an adapter that retried, or that let the turn loop grind on past a failed
+    turn, would show more than one invocation here.
+
+    **Both auth paths**, because they run different backends and only the
+    wrapper between them is Sextant's: `auth="api-key"` selects Tradewind's
+    langchain backend and `auth="subscription"` its claude backend
+    (`tradewind._AUTH_BACKEND`), and nothing above this adapter re-checks
+    either.
+
+    **Scoped (§5.4):** what is measured is SEXTANT's own layer — this
+    adapter adds no retry and no wait of its own. Whether the backend SDK
+    retried internally inside that single invocation is NOT measured here and
+    is not claimed anywhere: the fake backend fails on its first request, so
+    a real provider SDK's own backoff never runs.
+    """
+    executor = _executor(tmp_path)
+    invocations: list[str] = []
+    agent = TradewindAgent(
+        auth=auth,  # type: ignore[arg-type]
+        model="fake-model",
+        max_turns=20,
+        session_store=Path(":memory:"),
+        backend_factories=_failing_backend_factories(backend_name, invocations),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(EnrichmentAgentError) as raised:
+        agent.run(_brief(executor), executor)
+
+    assert "tradewind run failed" in str(raised.value)
+    assert _BACKEND_ERROR in str(raised.value)
+    assert isinstance(raised.value.__cause__, TurnExecutionFailed)
+    assert len(invocations) == 1
+    # Nothing reached the jail, so a caller that catches this has a
+    # transcript of exactly nothing to persist — the same promise the
+    # real-backend failure above keeps.
     assert executor.transcript == []
 
 
