@@ -90,16 +90,6 @@ def resolve(
     # this order is the order they were written and nothing depends on it.
     record_call_edges(workspace)
     skipped = derive_endpoints(workspace, declared, capabilities)
-    # 2Q `I1`, and its position is a dependency rather than a preference: it
-    # reads `endpoints.handler`/`direction` and `scheduled_work.handler`, and
-    # BOTH are written by the call above — the scheduled engine runs as one of
-    # its styles, and the inbound/outbound merge that can turn two rows into
-    # one `both` row is its last statement. Nothing below this line writes
-    # either column (`reclassify_protocol` and `stamp_format` both MATCH on
-    # `handler` and set neither it nor `direction`), so this is the earliest
-    # point at which the root set is final, and the latest at which it could
-    # be read without depending on a pass that has nothing to do with it.
-    record_roots(workspace)
     # After the endpoints, never beside them: an endpoint's payload types come
     # off its handler's signature, which is a column on the row derive_endpoints
     # just wrote.
@@ -138,6 +128,22 @@ def resolve(
     # row answered before it was reclassified would carry the format of a
     # protocol it no longer has.
     apply_protocol_hints(workspace, declared)
+    # 2Q `I1`, and its position is a dependency rather than a preference: it
+    # reads `endpoints.handler`/`direction`, `endpoints`' three WIRE columns
+    # and `scheduled_work.handler`, and every one of those is final only here.
+    # `derive_endpoints` writes the handler, the direction and the
+    # inbound/outbound merge that can turn two rows into one `both` row; the
+    # scheduled engine runs as one of its styles; and `apply_protocol_hints`
+    # RECLASSIFIES `protocol` on rows those engines already minted.
+    #
+    # **It sat above the three passes between them until the address columns
+    # landed, and that was measurable rather than theoretical** (2Q close,
+    # defect 1): the orders-service fixture reclassifies two SSE rows out of
+    # `http`, so a root recorded before this line carried `http` while the
+    # `endpoints` row it was copied from carried `sse` — one address, two
+    # spellings, in one workspace. Nothing below writes any of the five
+    # columns: `resolve_format` stamps format columns and MATCHES on the rest.
+    record_roots(workspace)
     # LAST, and the ordering is a property of the pass, not a preference (the
     # `_RUNS_LAST` precedent in `resolve/endpoints.py`): every rung of the
     # format ladder reads something an earlier pass wrote — the media columns

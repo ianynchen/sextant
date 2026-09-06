@@ -21,7 +21,7 @@ from sextant.application.ports.detector import ModuleModel
 from sextant.application.query.trace import Step, Trace
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport
-from sextant.application.resolve.roots import Root
+from sextant.application.resolve.roots import Root, RootIdentity
 from sextant.domain.closed_sets import Resolution, RootKind, TraceStop
 from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_overlay
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
@@ -410,7 +410,15 @@ GOLDEN_SHAPE_FIELDS = [
 GOLDEN_TRACES = [
     Trace(
         root=Root(
-            handler="s maven c 1 com/example/golden/Api#list().", kind=RootKind.INBOUND_ENDPOINT
+            handler="s maven c 1 com/example/golden/Api#list().",
+            kind=RootKind.INBOUND_ENDPOINT,
+            # Two addresses on ONE root, so the golden pins the collapse as
+            # well as the naming: a handler mapped twice is one walk, one
+            # block and one diagram, listing both ways in (2Q close, defect 1).
+            identities=(
+                RootIdentity(protocol="http", method="GET", path="/orders"),
+                RootIdentity(protocol="http", method="GET", path="/v1/orders"),
+            ),
         ),
         steps=(
             Step(
@@ -474,7 +482,10 @@ GOLDEN_TRACES = [
     ),
     Trace(
         root=Root(
-            handler="s maven c 1 com/example/golden/Sweeper#sweep().", kind=RootKind.SCHEDULED
+            # No address, and the golden is where that renders as words rather
+            # than as the em dash "nothing recorded" means everywhere else.
+            handler="s maven c 1 com/example/golden/Sweeper#sweep().",
+            kind=RootKind.SCHEDULED,
         ),
         steps=(),
         response=((0, "null"),),

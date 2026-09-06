@@ -2006,7 +2006,7 @@ producer; the third does not, and this is where a reader meets that.
 
 | Root kind | Produced from | State |
 |---|---|---|
-| `inbound_endpoint` | every `endpoints` row the module exposes and names a handler for — `direction <> outbound`, so a merged `both` row keeps its trace | ✅ shipped. 77 handler-bearing rows collapse to 66 roots on the orders-service fixture: a root is a place a walk starts, not an address |
+| `inbound_endpoint` | every `endpoints` row the module exposes and names a handler for — `direction <> outbound`, so a merged `both` row keeps its trace | ✅ shipped. 77 handler-bearing rows are 77 root rows and 66 roots on the orders-service fixture: a root is a place a walk starts, not an address, and the row carries the address so a reader can find the walk by the URL they know |
 | `scheduled` | every `scheduled_work` handler | ✅ shipped. The user's own ruling — a scheduled job still contains business logic — and the reason `I1` was promoted out of paperwork |
 | `entry_point` | nothing | **Boundary — the member exists and no producer writes it.** Which signature starts a program is a rule of a LANGUAGE, and ARCHITECTURE §10 keeps language knowledge out of the language-blind half: the descriptor a runtime looks for belongs in a catalog exactly as a framework's annotation does, and no catalog declares one. Matching on a method's NAME alone would derive a root for any method that happens to be called that. **Falsified by** a module whose only starting point is a `main` producing no trace at all. **Closes with** a catalog declaring the entry-point signature — `docs/open-issues.md` OI-22 |
 
@@ -2014,6 +2014,13 @@ producer; the third does not, and this is where a reader meets that.
 started, so a trace beginning at one would report an exception path as though a request or
 a clock had begun it. `error_handlers` therefore feeds nothing here, while `scheduled_work`
 does.
+
+**A root carries the wire address that reaches it** (2Q close). `roots` holds one row per
+(handler, kind, address) and `roots_of` collapses them into one root per (handler, kind), so
+a handler serving three paths is still one walk and one trace — and `## Traces` names that
+trace by `GET /order/list` as well as by the handler descriptor. A root nothing addresses —
+a scheduled job — carries three NULLs and renders `no wire address`: an absence, not an
+unread value.
 
 **An exposed row that names no handler produces no root, and that is an under-report worth
 naming.** A functional-route row — `RouterFunctions.route(GET("/kt/orders"), handler)` — is

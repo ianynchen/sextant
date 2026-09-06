@@ -26,8 +26,8 @@ from fixture_module import write_fixture_module_fact
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.pipeline import ResolveReport
-from sextant.application.resolve.roots import Root, record_roots, roots_of
-from sextant.domain.closed_sets import ConstructKind, OriginTier, RootKind
+from sextant.application.resolve.roots import Root, RootIdentity, record_roots, roots_of
+from sextant.domain.closed_sets import ConstructKind, OriginTier, Protocol, RootKind
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
     AnnotationFact,
@@ -59,6 +59,19 @@ def _handlers(rows: list[dict[str, object]], kind: RootKind) -> set[str]:
     return {str(row["handler"]) for row in rows if str(row["root_kind"]) == str(kind)}
 
 
+def _scheduled_row() -> dict[str, object]:
+    """The one row the hand-built half expects: the sweeper, scheduled, and NO
+    address — all three wire columns NULL, because a clock reaches this method
+    and there is nothing on the wire that does (2Q close, defect 1)."""
+    return {
+        "handler": _MODULE + _SWEEP,
+        "root_kind": str(RootKind.SCHEDULED),
+        "protocol": None,
+        "method": None,
+        "path": None,
+    }
+
+
 def test_every_inbound_endpoint_handler_is_a_root(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
     roots: list[dict[str, object]],
@@ -83,8 +96,10 @@ def test_a_handler_serving_several_addresses_is_one_root_not_several(
 ):
     """A root is a place a walk STARTS, not an address. The trace from a
     handler is the same walk whichever path invoked it, so a method mapped to
-    three paths is one row and not three copies of one answer — and the
-    fixture really does have such handlers, which is what makes the collapse
+    three paths is ONE root and not three copies of one answer — while the
+    table carries one row per address, because the address is the only name a
+    reader has for the trace they came to find (2Q close, defect 1). The
+    fixture really does have such handlers, which is what makes both halves
     observable rather than vacuous."""
     workspace, _ = resolved_fixture
     exposing = [
@@ -95,7 +110,84 @@ def test_a_handler_serving_several_addresses_is_one_root_not_several(
     assert len(exposing) > len(set(exposing)), (
         "no handler serves two rows: the collapse is untested"
     )
-    assert len(roots) == len(set(exposing))
+    assert len(roots) > len(set(exposing)), "the table dropped an address"
+    assert len({(root.handler, root.kind) for root in roots_of(workspace)}) == len(set(exposing))
+
+
+def test_a_root_carries_the_wire_address_of_the_row_that_named_it(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """**Defect 1's whole point, against a real scan.** A trace named by a
+    handler descriptor alone cannot be found by a reader who knows only their
+    URL, so every address that reaches a root travels with it — and it is the
+    address the `endpoints` row itself carries, column for column, rather than
+    anything this pass composed or re-spelled.
+
+    Set equality on the (handler, address) pairs, not a count: a root set that
+    is the right SIZE with one address swapped for another would publish a
+    trace under an address that does not reach it, which is the fabrication
+    this whole table exists to avoid."""
+    workspace, _ = resolved_fixture
+    exposed = {
+        (str(row["handler"]), row["protocol"], row["method"], row["path"])
+        for row in workspace.query("endpoints")
+        if row["handler"] is not None and row["direction"] != "outbound"
+    }
+    assert exposed
+    assert {
+        (str(row["handler"]), row["protocol"], row["method"], row["path"])
+        for row in workspace.query("roots")
+        if str(row["root_kind"]) == str(RootKind.INBOUND_ENDPOINT)
+    } == exposed
+
+
+def test_a_reclassified_protocol_reaches_the_root_and_not_the_one_it_replaced(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """**The near-miss for the pass's POSITION in the pipeline**, which became
+    load-bearing the day a root started carrying an address (2Q close, defect
+    1). `apply_protocol_hints` reclassifies rows other engines minted — the
+    fixture moves its two SSE routes out of `http` — so a root recorded before
+    that pass carries `http` while the `endpoints` row it was copied from
+    carries `sse`: one address, two spellings, in one workspace, which is the
+    drift D01 §6 forbids a copied fact.
+
+    The positive control is the reclassification itself: the assertion first
+    proves the fixture really does reclassify a row that names a handler, so a
+    fixture that stopped doing so fails here rather than passing vacuously."""
+    workspace, _ = resolved_fixture
+    reclassified = {
+        (str(row["handler"]), str(row["protocol"]))
+        for row in workspace.query("endpoints")
+        if row["handler"] is not None and str(row["protocol"]) == str(Protocol.SSE)
+    }
+    assert reclassified, "positive control: the fixture reclassifies no handler-bearing row"
+    assert reclassified <= {
+        (str(row["handler"]), str(row["protocol"])) for row in workspace.query("roots")
+    }
+
+
+@pytest.mark.pins("roots.the-address-is-the-one-the-endpoint-row-ends-with")
+def test_the_root_pass_runs_below_the_reclassification_it_copies_from():
+    """The same rule as the test above, asserted where the guard harness can
+    MEASURE it. `resolved_fixture` needs the compiled fixture, which
+    `scripts/guard_check.py` does not copy (`_staged`'s docstring, below,
+    states the whole reason), so the behavioural test above is unmeasurable
+    as a near-miss and this one carries the marker.
+
+    A source-order assertion rather than a behavioural one because the rule
+    IS an order: `record_roots` copies three columns off `endpoints`, and
+    `apply_protocol_hints` rewrites one of them on rows that already exist. A
+    copy taken above that line is a copy taken mid-write — the drift D01 §6
+    forbids — and no property of either pass in isolation can catch it."""
+    source = (Path(__file__).parents[2] / "src/sextant/application/resolve/pipeline.py").read_text(
+        encoding="utf-8"
+    )
+    assert source.count("record_roots(workspace)") == 1
+    assert source.count("apply_protocol_hints(workspace, declared)") == 1
+    assert source.index("record_roots(workspace)") > source.index(
+        "apply_protocol_hints(workspace, declared)"
+    )
 
 
 def test_an_outbound_row_contributes_no_root(
@@ -173,9 +265,27 @@ def test_roots_of_reads_the_table_as_typed_pairs(
     workspace, _ = resolved_fixture
     read = roots_of(workspace)
     assert read == [
-        Root(handler=str(row["handler"]), kind=RootKind(str(row["root_kind"]))) for row in roots
+        Root(
+            handler=handler,
+            kind=RootKind(kind),
+            identities=tuple(
+                RootIdentity(
+                    protocol=str(row["protocol"]),
+                    method=None if row["method"] is None else str(row["method"]),
+                    path=None if row["path"] is None else str(row["path"]),
+                )
+                for row in roots
+                if (str(row["handler"]), str(row["root_kind"])) == (handler, kind)
+            ),
+        )
+        for handler, kind in dict.fromkeys(
+            (str(row["handler"]), str(row["root_kind"])) for row in roots
+        )
     ]
     assert all(isinstance(root.kind, RootKind) for root in read)
+    assert any(len(root.identities) > 1 for root in read), (
+        "positive control: no root in this fixture carries two addresses"
+    )
 
 
 # --- hand-built facts: the scheduled kind -----------------------------------
@@ -302,7 +412,7 @@ def test_a_scheduled_method_is_a_root_of_its_own_kind(tmp_path: Path):
     workspace = _scheduled_workspace(tmp_path)
     rows = workspace.query("roots")
     workspace.close()
-    assert rows == [{"handler": _MODULE + _SWEEP, "root_kind": str(RootKind.SCHEDULED)}]
+    assert rows == [_scheduled_row()]
 
 
 def test_a_method_that_is_both_scheduled_and_exposed_is_two_roots(tmp_path: Path):
@@ -384,7 +494,7 @@ def test_an_exposed_row_that_names_no_handler_derives_no_root(tmp_path: Path):
     _staged(workspace)
     rows = workspace.query("roots")
     workspace.close()
-    assert rows == [{"handler": _MODULE + _SWEEP, "root_kind": str(RootKind.SCHEDULED)}]
+    assert rows == [_scheduled_row()]
 
 
 @pytest.mark.pins("roots.only-a-row-the-module-exposes-is-a-root")
@@ -408,7 +518,7 @@ def test_a_row_the_module_calls_is_no_root_even_when_it_names_a_handler(tmp_path
     _staged(workspace, direction="outbound", handler=_MODULE + _SWEEP, caller=_MODULE + _SWEEP)
     rows = workspace.query("roots")
     workspace.close()
-    assert rows == [{"handler": _MODULE + _SWEEP, "root_kind": str(RootKind.SCHEDULED)}]
+    assert rows == [_scheduled_row()]
 
 
 def test_a_module_with_nothing_to_start_from_answers_with_an_empty_table(tmp_path: Path):

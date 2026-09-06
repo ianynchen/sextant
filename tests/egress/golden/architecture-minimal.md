@@ -52,18 +52,19 @@ Media reads `consumes → produces`; `—` means none recorded.
 
 ## Traces
 
+- `Reached by` is the wire address a request arrives at, spelled exactly as the inbound endpoint table above spells it, so a trace can be found by the URL a reader knows. A handler serving several addresses is ONE trace listing all of them — the walk is the same walk whichever address invoked it — and `no wire address` is a root nothing on the wire reaches, a scheduled job above all. That is an absence, not an unread value; `(unresolved)` is how this document says a half of an address was not read.
 - A trace is REACHABILITY, never execution: every step is a call the compiler recorded, branches are not distinguished, and two `return` statements are two possible answers rather than the one that runs. No path below is asserted to have happened.
 - Steps are in the walk's own depth-first order, and `Depth` counts edges from the root — so a step's caller is named on its own row rather than left to be inferred from indentation.
 - `Stop` says why a step was not expanded. `boundary` means this workspace read no body for the callee: a third-party library, the JDK, a MyBatis mapper and a SIBLING BUILD MODULE all read alike there, because each is a body that is not here. Nothing below classifies which — `terminal_kind` has no producer, and the `Call` column carries the full descriptor the compiler wrote so the distinction is the reader's to make.
 - `revisited` means the callee was expanded ELSEWHERE in this same trace and its own calls are shown at that first appearance: a method is expanded once per trace, not once per route to it, so a path through one of these tables is not always followable to a terminal. `cycle` means the callee is already on the path from the root. `depth_limit` means the walk's safety bound stopped it, and the `Complete` column answers that without a reader scanning for it.
 - `Value` is the value id the call site produced and `Returns` what the callee hands back — both LOCAL to the method on that row, so an id in a step's `Returns` is a value inside the callee and matches its own rows, never the caller's. `Response` is what the root method itself returns.
 
-| Root | Starts as | Depth | Steps | Terminals | Complete |
-|---|---|---|---|---|---|
-| `com/example/golden/Api#list().` | inbound_endpoint | 3 | 5 | 2 | yes |
-| `com/example/golden/Sweeper#sweep().` | scheduled | 0 | 0 | 0 | yes |
+| Reached by | Root | Starts as | Depth | Steps | Terminals | Complete |
+|---|---|---|---|---|---|---|
+| `GET /orders; GET /v1/orders` | `com/example/golden/Api#list().` | inbound_endpoint | 3 | 5 | 2 | yes |
+| no wire address | `com/example/golden/Sweeper#sweep().` | scheduled | 0 | 0 | 0 | yes |
 
-- `com/example/golden/Api#list().` — inbound_endpoint
+- `com/example/golden/Api#list().` — inbound_endpoint, reached by `GET /orders; GET /v1/orders`
   - Steps:
 
     | Depth | Caller | Call | Dispatch | Resolution | Value | Returns | Stop |
@@ -90,7 +91,7 @@ sequenceDiagram
 
 Elides: Reachability, not execution: an arrow is a call the compiler recorded, not one observed to run, and branches are not distinguished — no order here is claimed to have happened. All 5 steps of this trace are drawn; nothing is filtered. Arrows ending at a lifeline this workspace read no body for — a library, the JDK, a mapper or a sibling build module alike — which the walk did not enter: 2. Arrows naming a method already expanded earlier in this trace, whose own calls are drawn at that first arrow and not repeated here: 1.
 
-- `com/example/golden/Sweeper#sweep().` — scheduled
+- `com/example/golden/Sweeper#sweep().` — scheduled, reached by no wire address
   - Steps: None — this root calls nothing.
   - Response: void
 

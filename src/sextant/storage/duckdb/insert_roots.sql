@@ -6,14 +6,22 @@
 -- expression here spelling `inbound_endpoint` would be a second definition of
 -- a closed set, which NFR-5 forbids.
 --
--- NO insert-if-absent guard. A row is (handler, kind) and the pass emits each
--- pair once by construction — it deduplicates the several endpoint rows one
--- handler serves before they reach here, because that collapse is the answer
--- rather than housekeeping. A duplicate surviving to this table would be a
--- defect in the pass, and a silent dedup here would hide it.
+-- NO insert-if-absent guard. A row is (handler, kind, address) and the pass
+-- emits each such tuple once by construction — it deduplicates the several
+-- endpoint rows one handler serves at ONE address before they reach here,
+-- because that collapse is the answer rather than housekeeping. A duplicate
+-- surviving to this table would be a defect in the pass, and a silent dedup
+-- here would hide it.
 --
 -- Parameters:
---   $rows -- {handler, root_kind} rows, one per method a trace can start at.
-INSERT INTO roots (handler, root_kind)
-SELECT r.handler, r.root_kind
-FROM (SELECT UNNEST($rows::STRUCT(handler VARCHAR, root_kind VARCHAR)[]) AS r);
+--   $rows -- {handler, root_kind, protocol, method, path} rows, one per
+--            address a trace can start at, and one all-NULL address for a
+--            root nothing addresses.
+INSERT INTO roots (handler, root_kind, protocol, method, path)
+SELECT r.handler, r.root_kind, r.protocol, r.method, r.path
+FROM (
+    SELECT UNNEST($rows::STRUCT(
+        handler VARCHAR, root_kind VARCHAR,
+        protocol VARCHAR, method VARCHAR, path VARCHAR
+    )[]) AS r
+);

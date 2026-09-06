@@ -150,6 +150,7 @@ _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 _ARGUMENTS = "sextant/application/resolve/shapes/arguments.py"
 _DISPATCH = "sextant/application/resolve/dispatch.py"
 _ROOTS = "sextant/application/resolve/roots.py"
+_PIPELINE = "sextant/application/resolve/pipeline.py"
 _CALL_EDGES = "sextant/application/resolve/call_edges.py"
 _TRACE = "sextant/application/query/trace.py"
 _API = "sextant/api.py"
@@ -756,6 +757,25 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "roots.the-address-is-the-one-the-endpoint-row-ends-with": Guard(
+        what="`record_roots` runs BELOW `apply_protocol_hints`, so the address it copies "
+        "onto a root is the one the `endpoints` row finishes the resolve carrying",
+        why="a root carries a wire address as of 2Q's close, and a copied fact that can "
+        "drift from its source is exactly what D01 §6 forbids. Run above the "
+        "reclassification and the copy is taken mid-write: the orders-service fixture "
+        "moves its SSE routes out of `http`, so `roots` says `http /events/emitter` while "
+        "`endpoints` says `sse /events/emitter` — one address spelled two ways in one "
+        "workspace, with the document's own trace section quoting the stale half",
+        edits=(
+            Edit(path=_PIPELINE, find="    record_roots(workspace)\n", replace=""),
+            Edit(
+                path=_PIPELINE,
+                find="    apply_protocol_hints(workspace, declared)\n",
+                replace="    record_roots(workspace)  # guard disabled\n"
+                "    apply_protocol_hints(workspace, declared)\n",
+            ),
+        ),
+    ),
     # --- 2Q `G4`, the call graph and the walk over it ----------------------
     "call_edges.a-lambda-site-names-the-body-not-the-bootstrap": Guard(
         what="an `invokedynamic` edge names the body the site CREATES "
@@ -908,6 +928,22 @@ GUARDS: dict[str, Guard] = {
                 path=_DOCUMENT,
                 find="    return step.target if step.callee is None else bare_descriptor(step.callee)",
                 replace="    return step.target  # guard disabled",
+            ),
+        ),
+    ),
+    "render_trace.a-trace-is-named-by-the-address-that-reaches-it": Guard(
+        what="a trace's summary row and its block header carry every wire address that "
+        "reaches its root, where the root has one",
+        why="this is the defect 2Q shipped with. A trace named by a handler descriptor and "
+        "a kind puts `GET /order/list` NOWHERE in the section, so finding the trace for an "
+        "endpoint requires already knowing the descriptor — the one thing a reader who "
+        "knows a URL does not have. On `mall-admin` that is 160 traces a reader cannot "
+        "navigate to, which is a section that is present and undeliverable",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="    if not root.identities:\n        return _text(_NO_WIRE_ADDRESS)\n",
+                replace="    if True:  # guard disabled\n        return _text(_NO_WIRE_ADDRESS)\n",
             ),
         ),
     ),

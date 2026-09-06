@@ -14,6 +14,23 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A trace can be found by the URL a reader knows** (2Q close, defect 1). `## Traces`
+  named every trace by its handler descriptor and its kind, so `GET /order/list` appeared
+  nowhere in `mall-admin`'s section: finding the trace for an endpoint required already
+  knowing the descriptor. **`roots` now carries the wire address** — `protocol`, `method`
+  and `path`, one ROW per address and still one ROOT per (handler, kind), collapsed by
+  `roots_of` so a handler serving three paths is one walk listing three ways in. The
+  summary table gains a `Reached by` column and every block header names its addresses;
+  both are composed by the same `_wire_address` the inbound endpoint table uses, so one
+  address is never spelled two ways, and a `path` still passes the render exit's redactor.
+  **A root nothing addresses says `no wire address`** rather than the em dash that means
+  "nothing recorded" everywhere else: a scheduled job is started by a clock, and inventing
+  a label for it would be fabrication. `OI-23` — an exposed address whose handler no chain
+  reader named, and which therefore has no root at all — is unchanged and stays open.
+  The join is made in `resolve/`, never in `egress`: a renderer that joins is deriving.
+  `GRAPH_SCHEMA_VERSION` moves to **1.2.0**, because a 1.1.0 workspace's `roots` has no
+  address columns at all and the read gate must refuse it rather than fail reading it.
+
 - **A trace, in front of a reader** (2Q, closing `OI-25`). Everything before this produced
   tables; `sextant module render` now writes a **`## Traces`** section into
   `architecture.md` and `architecture.html` alike — one rendered trace and one Mermaid

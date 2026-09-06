@@ -703,7 +703,7 @@ table nobody walked.
 
 | Table | Holds |
 |---|---|
-| `roots` | One row per (`handler`, `root_kind`): the method a trace starts at, and what starts it |
+| `roots` | One row per (`handler`, `root_kind`, wire address): the method a trace starts at, what starts it, and the address that reaches it |
 
 **Written by `application/resolve/roots.py`** from two tables the catalog-driven half has
 already finished with: every `endpoints` row the module EXPOSES and names a handler for
@@ -714,16 +714,39 @@ signature starts a program is a LANGUAGE rule and [ARCHITECTURE](../ARCHITECTURE
 keeps those out of the resolver, so its producer is a catalog nobody has written
 (`docs/open-issues.md`, OI-22).
 
-**One row per handler and kind, never per address.** A method serving three paths is ONE
-root: the walk that runs from it is the same walk whichever address invoked it, and three
-rows would be three copies of one answer. A method that is both exposed and scheduled is
-two rows, because those are two different answers to "what starts this". On the
-orders-service fixture, 77 handler-bearing endpoint rows collapse to 66 roots.
+**One ROOT per handler and kind; one ROW per address that reaches it.** A method serving
+three paths is ONE root: the walk that runs from it is the same walk whichever address
+invoked it, and three traces would be three copies of one answer — `roots_of` collapses the
+rows into one `Root` carrying all of them, and the traversal never sees more than one. A
+method that is both exposed and scheduled is two roots, because those are two different
+answers to "what starts this". On the orders-service fixture, 77 handler-bearing endpoint
+rows are 77 root rows and 66 roots.
 
-**It carries no `resolution` or `evidence`, deliberately.** A row says one thing — this
-method is where a trace of this kind begins — and every claim underneath it lives on the
-row that named the handler, with its own trust columns. Copying them here would be §6's
-"no fact that was merely copied", with nothing keeping the two copies equal.
+**The row grain moved from (handler, kind) to (handler, kind, address) at 2Q's close, and
+the reason is a reader.** A trace named by a handler descriptor and a kind puts
+`GET /order/list` nowhere in the rendered document: the section is searchable only by the
+one thing a reader looking up a URL does not have. The join back to `endpoints` is the
+answer, and it cannot be made in `egress` — a renderer that joins is deriving, which the
+"Egress is read-only" contract exists to forbid — so it is made here, once, by the pass
+that already reads both tables.
+
+**A root nothing addresses carries three NULLs, and that is an answer.** A scheduled job is
+started by a clock. `roots_of` reads such a row as an EMPTY identity set rather than as an
+address whose every half went unread, and the renderer prints `no wire address` rather than
+the em dash it uses for "nothing recorded". The third shape — an exposed address whose
+handler no chain reader named — has no root at all and is `docs/open-issues.md` OI-23,
+unchanged by any of this.
+
+**It carries the WIRE columns and not the trust ones, and the distinction is not
+arbitrary.** `protocol`/`method`/`path` are this row's own identity — which address starts
+this walk — while `resolution` and `evidence` are judgements about a different row, and
+every one of them already lives on the `endpoints` row with nothing keeping two copies
+equal (§6's "no fact that was merely copied"). The addresses cannot drift from their source
+for a structural reason rather than a hopeful one: one pass writes them, from one read of
+`endpoints`, replacing the table whole — and that pass runs BELOW `apply_protocol_hints`,
+because a copy taken above the reclassification is a copy taken mid-write
+(`roots.the-address-is-the-one-the-endpoint-row-ends-with`, measured on the fixture's two
+SSE routes).
 
 **Not exported** ([D06](D06-bundle-format.md) §5's table list is unchanged), for
 `return_flows`' reason: the bundle is a published surface, and a root is trivially

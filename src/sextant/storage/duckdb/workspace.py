@@ -501,12 +501,18 @@ _NAMED_QUERIES = {
                  declared_by, scope::VARCHAR, resolution, evidence, catalog_id
     """,
     # 2Q `I1`'s root set — the methods a trace starts at, with the kind of
-    # thing that starts it. Ordered on the whole row because that is all there
-    # is: `handler` alone is not total (one method can be both the target of a
-    # request and the target of a clock, which is two rows and two different
-    # answers), and an ordering with ties is one that can change between runs
+    # thing that starts it and the wire address that reaches it. Ordered on the
+    # whole row because that is all there is: `handler` alone is not total (one
+    # method can be both the target of a request and the target of a clock,
+    # which is two rows and two different answers, and one handler can serve
+    # three addresses, which is three rows `roots_of` collapses back into one
+    # root), and an ordering with ties is one that can change between runs
     # (NFR-1) — the `scheduled_work` reasoning, one table on.
-    "roots": "SELECT handler, root_kind FROM roots ORDER BY handler, root_kind",
+    "roots": """
+        SELECT handler, root_kind, protocol, method, path
+        FROM roots
+        ORDER BY handler, root_kind, protocol, method, path
+    """,
     # 2Q `G4`'s call graph. `caller, ordinal` alone is not total — a site whose
     # dispatch narrowed to two bodies is two rows — so `target` and `callee`
     # close it; `callee` is last because it is the column those two rows differ

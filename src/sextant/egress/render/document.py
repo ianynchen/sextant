@@ -36,6 +36,12 @@ from sextant.application.ports.detector import ModuleModel
 # contract "Egress is read-only" in one line.
 from sextant.application.query.trace import Step, Trace
 from sextant.application.resolve.pipeline import ResolveReport
+
+# The root a trace ran from, for the addresses it carries (2Q close, defect 1).
+# Imported for its TYPE and read field by field: the join from a root to the
+# addresses that reach it was made in `resolve/roots.py`, and re-making it here
+# is the derivation "Egress is read-only" exists to forbid.
+from sextant.application.resolve.roots import Root
 from sextant.domain.closed_sets import Anchor, Protocol, TraceStop
 from sextant.domain.enrichment import (
     UNANSWERED,
@@ -516,7 +522,22 @@ type AssembledDocument = tuple[Section, ...]
 
 
 def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
-    """A row's wire identity as one string. A protocol in `_VERBLESS_PROTOCOLS`
+    """One `endpoints`-shaped row's wire identity, through `_wire_address`.
+
+    Kept as the row-shaped entry point every caller in this file has always
+    used, so the three columns are named once here rather than at each call
+    site; `## Traces` reads the same three off a `RootIdentity` instead and
+    calls `_wire_address` directly (2Q close, defect 1). Both spellings of one
+    address therefore come out of one function — two would be two answers to
+    "what is this endpoint called" in one document.
+    """
+    return _wire_address(endpoint["protocol"], endpoint["method"], endpoint["path"], redactor)
+
+
+def _wire_address(
+    protocol_value: object, method_value: object, path_value: object, redactor: Redactor
+) -> str:
+    """A wire identity as one string. A protocol in `_VERBLESS_PROTOCOLS`
     defines no verb, so it renders `protocol path` with no method at all;
     every other protocol renders `method path`, prefixed by the protocol where
     its verb does not imply one. Any half of any shape may be NULL, and
@@ -529,9 +550,8 @@ def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
     and a repo value pattern masks whatever else it names. A `${...}`
     expression passes through whole — it is a reference to a value, not the
     value."""
-    protocol = "" if endpoint["protocol"] is None else str(endpoint["protocol"])
-    path = endpoint["path"]
-    rendered_path = "(unresolved)" if path is None else redactor.redact_text(str(path))
+    protocol = "" if protocol_value is None else str(protocol_value)
+    rendered_path = "(unresolved)" if path_value is None else redactor.redact_text(str(path_value))
     # NO protocol at all — the address alone, with no verb and no prefix
     # (OI-1). Only an `open_questions` row reaches this: an `endpoints` row
     # always carries one (`resolve/endpoints.py` refuses a catalog that mints
@@ -545,7 +565,7 @@ def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
         return rendered_path
     if protocol in _VERBLESS_PROTOCOLS:
         return f"{protocol} {rendered_path}"
-    method = endpoint["method"]
+    method = method_value
     # A verbed protocol whose row carries no verb *by design*
     # (`_VERB_OPTIONAL_PROTOCOLS`, above): rendering `(unresolved)` there
     # would report a gap that does not exist. Every other verbed protocol —
@@ -1264,7 +1284,15 @@ def _cell(value: object, render: Callable[[str], str]) -> str:
 #   under-report of what exists. Stated where the reader meets it.
 # --------------------------------------------------------------------------
 
-_TRACE_HEADERS = ("Root", "Starts as", "Depth", "Steps", "Terminals", "Complete")
+_TRACE_HEADERS = (
+    "Reached by",
+    "Root",
+    "Starts as",
+    "Depth",
+    "Steps",
+    "Terminals",
+    "Complete",
+)
 _TRACE_STEP_HEADERS = (
     "Depth",
     "Caller",
@@ -1282,6 +1310,15 @@ _TRACE_STEP_HEADERS = (
 # the wording matches `application/query/trace.py`'s own docstring rather than
 # paraphrasing it.
 _TRACE_PREAMBLE = (
+    (
+        "`Reached by` is the wire address a request arrives at, spelled exactly as the "
+        "inbound endpoint table above spells it, so a trace can be found by the URL a "
+        "reader knows. A handler serving several addresses is ONE trace listing all of "
+        "them — the walk is the same walk whichever address invoked it — and `no wire "
+        "address` is a root nothing on the wire reaches, a scheduled job above all. "
+        "That is an absence, not an unread value; `(unresolved)` is how this document "
+        "says a half of an address was not read."
+    ),
     (
         "A trace is REACHABILITY, never execution: every step is a call the compiler "
         "recorded, branches are not distinguished, and two `return` statements are two "
@@ -1332,6 +1369,7 @@ def _trace_sections(traces: Sequence[Trace], redactor: Redactor) -> list[Section
     sections: list[Section] = [MachineList(tuple(_runs(line) for line in _TRACE_PREAMBLE))]
     summary = tuple(
         (
+            _root_addresses(trace.root, redactor),
             _code(bare_descriptor(trace.root.handler)),
             _text(str(trace.root.kind)),
             _text(str(trace.depth)),
@@ -1354,18 +1392,48 @@ def _trace_sections(traces: Sequence[Trace], redactor: Redactor) -> list[Section
     return sections
 
 
+_NO_WIRE_ADDRESS = "no wire address"
+
+
+def _root_addresses(root: Root, redactor: Redactor) -> tuple[Run, ...]:
+    """Every wire address that reaches `root`, as one cell — joined, because
+    several addresses are several ways to the SAME walk and printing the first
+    would publish a coin toss (`_returns_cell`'s rule, one table on).
+
+    **Read off the root, never joined here.** `roots` carries the address on
+    its own row (2Q close, defect 1) precisely so this file does not have to
+    re-make a join against `endpoints`: `egress` reads and renders, and a join
+    performed in presentation is a derivation hiding in it, which the
+    "Egress is read-only" contract exists to forbid.
+
+    A root with no address renders the absence in words rather than an em
+    dash. The dash means "nothing recorded" everywhere else in this document,
+    and a scheduled job's missing address is not a value that went unread.
+    """
+    if not root.identities:
+        return _text(_NO_WIRE_ADDRESS)
+    return _code(
+        "; ".join(
+            _wire_address(identity.protocol, identity.method, identity.path, redactor)
+            for identity in root.identities
+        )
+    )
+
+
 def _trace_detail(trace: Trace, redactor: Redactor) -> MachineDetail:
     """One root's block: its own header, the step table, and what the root
     method returns.
 
-    The header names the root by its HANDLER and its kind, never by a wire
-    identity. A root is a method — one row per (handler, kind), so a handler
-    serving three paths is one root and one walk — and joining it back to the
-    endpoints that reach it is a join `roots` already made and did not keep.
-    Re-making it here would be this renderer deriving.
+    The header names the root by its HANDLER, its kind and every address that
+    reaches it — the last so that a reader who knows only a URL can find the
+    block, which is the whole reason `roots` carries the address. A root is
+    still a METHOD: a handler serving three paths is one root, one walk and one
+    block listing three addresses, never three copies of one answer.
     """
     header = DetailEntry(
-        _code(bare_descriptor(trace.root.handler)) + _text(f" — {trace.root.kind}"),
+        _code(bare_descriptor(trace.root.handler))
+        + _text(f" — {trace.root.kind}, reached by ")
+        + _root_addresses(trace.root, redactor),
         None,
         None,
     )

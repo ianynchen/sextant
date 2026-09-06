@@ -99,12 +99,16 @@ Recorded here rather than left for a reader to infer from the absence of code (�
 2Q rendering is deliberately the plainest thing the walk supports, and the two sections
 that follow describe machinery it does not use.
 
-- **Per ROOT, not per endpoint.** A root is one row of `roots` — an inbound endpoint handler
-  or a scheduled one — so a scheduled job gets a trace and a diagram on the user's own
-  ruling, and a handler serving three paths is one trace rather than three copies of it.
-  The section names a trace by its handler and its kind, never by a wire identity: joining
-  a root back to the endpoints that reach it is a join `roots` already made and did not
-  keep, and re-making it in `egress` would be the renderer deriving.
+- **Per ROOT, not per endpoint — and NAMED by the addresses that reach it.** A root is a
+  method: an inbound endpoint handler or a scheduled one, so a scheduled job gets a trace
+  and a diagram on the user's own ruling, and a handler serving three paths is one trace
+  rather than three copies of it. Every address that reaches it is on the summary row and
+  in the block header, because the address is the only name a reader has for the trace they
+  came to find — a section searchable only by handler descriptor is one a reader cannot
+  navigate. **The address arrives as data**: `roots` carries it ([D01](D01-graph-schema.md)
+  §3, as of 2Q's close), and re-making that join here would be the renderer deriving. A
+  root nothing addresses says `no wire address`, never the em dash this document uses for
+  "nothing recorded".
 - **No noise filtering at all** (the table below). Every step of the walk is a row and an
   arrow — accessors, `toString`, third-party calls included. The filters are designed and
   cheap, and the reason they are not applied is that a hidden call is indistinguishable

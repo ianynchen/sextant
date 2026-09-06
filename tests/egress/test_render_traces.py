@@ -19,12 +19,13 @@ trace, and a compiled fixture would make that answer depend on having one.
 import pytest
 
 from sextant.application.query.trace import Step, Trace
-from sextant.application.resolve.roots import Root
+from sextant.application.resolve.roots import Root, RootIdentity
 from sextant.domain.closed_sets import Resolution, RootKind, TraceStop
 from sextant.domain.redaction import RedactionRules, Redactor
 from sextant.egress.render.document import (
     MachineDiagram,
     MachineTable,
+    Run,
     _returned_value,
     _sequence_view,
     _trace_sections,
@@ -59,9 +60,18 @@ def _step(
     )
 
 
-def _trace(*steps: Step, response: tuple[tuple[int, str], ...] = ()) -> Trace:
+def _address(method: str = "GET", path: str = "/order/list") -> RootIdentity:
+    return RootIdentity(protocol="http", method=method, path=path)
+
+
+def _trace(
+    *steps: Step,
+    response: tuple[tuple[int, str], ...] = (),
+    kind: RootKind = RootKind.INBOUND_ENDPOINT,
+    identities: tuple[RootIdentity, ...] = (),
+) -> Trace:
     return Trace(
-        root=Root(handler="s maven c 1 a/Api#list().", kind=RootKind.INBOUND_ENDPOINT),
+        root=Root(handler="s maven c 1 a/Api#list().", kind=kind, identities=identities),
         steps=steps,
         response=response,
     )
@@ -130,6 +140,71 @@ def test_a_module_with_no_roots_says_so_rather_than_dropping_the_section():
     sections = _trace_sections([], REDACTOR)
     assert len(sections) == 1
     assert sections[0].runs == (("text", "None found."),)
+
+
+# --- a reader can find their endpoint (2Q close, defect 1) ----------------
+
+
+def _summary_row(trace: Trace) -> tuple[tuple[Run, ...], ...]:
+    tables = [s for s in _trace_sections([trace], REDACTOR) if isinstance(s, MachineTable)]
+    assert len(tables) == 1, tables
+    assert len(tables[0].rows) == 1
+    return tables[0].rows[0]
+
+
+def _header_text(trace: Trace) -> str:
+    detail = next(s for s in _trace_sections([trace], REDACTOR) if hasattr(s, "entries"))
+    return "".join(content for _kind, content in detail.entries[0].title)
+
+
+@pytest.mark.pins("render_trace.a-trace-is-named-by-the-address-that-reaches-it")
+def test_a_trace_carries_the_address_a_reader_searches_for():
+    """**The defect this pins shipped, and an hour later was the reason 2Q was
+    not usable.** A trace named by its handler descriptor and its kind alone
+    puts `GET /order/list` nowhere in the section: to find the trace for an
+    endpoint you had to already know the handler descriptor, which is the one
+    thing a reader looking up a URL does not have.
+
+    Both places a reader lands are asserted — the summary row they scan and
+    the block header they land on — because either alone leaves half the
+    section unsearchable."""
+    trace = _trace(_step(), identities=(_address(),))
+    assert (("code", "GET /order/list"),) in _summary_row(trace)
+    assert "GET /order/list" in _header_text(trace)
+
+
+def test_a_root_no_address_reaches_says_so_in_words_not_with_a_dash():
+    """A scheduled job is started by a clock: it HAS no wire address, which is
+    an absence rather than a value that went unread. The em dash means
+    "nothing recorded" everywhere else in this document, so using it here
+    would report a gap that does not exist — and inventing a label for the
+    clock would be the fabrication `roots` refuses to make upstream."""
+    trace = _trace(_step(), kind=RootKind.SCHEDULED)
+    assert (("text", "no wire address"),) in _summary_row(trace)
+    assert "—" not in _header_text(trace).replace(" — scheduled", "")
+
+
+def test_a_handler_serving_several_addresses_is_one_trace_naming_all_of_them():
+    """One root, one walk, one block — and every address that reaches it, in
+    the roots table's own order. Printing the first would publish a coin toss;
+    printing three blocks would publish one answer three times."""
+    trace = _trace(_step(), identities=(_address(), _address(method="POST", path="/order/add")))
+    assert (("code", "GET /order/list; POST /order/add"),) in _summary_row(trace)
+    assert (
+        len([s for s in _trace_sections([trace], REDACTOR) if isinstance(s, MachineDiagram)]) == 1
+    )
+
+
+def test_a_roots_path_passes_the_redactor_exactly_as_an_endpoints_does():
+    """`path` is one of the two columns that can carry a whole address, so a
+    credential in one is an exposure at the render exit (2K design §1). The
+    trace section reaches the same `_wire_address` the endpoint table does, so
+    it inherits that masking rather than re-implementing it — and this is the
+    test that fails if it ever stops doing so."""
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=("s3cret",)))
+    trace = _trace(_step(), identities=(RootIdentity("http", "GET", "/x?token=s3cret"),))
+    tables = [s for s in _trace_sections([trace], redactor) if isinstance(s, MachineTable)]
+    assert "s3cret" not in "".join(content for _kind, content in tables[0].rows[0][0])
 
 
 # --- the arrow lands where the walk went ----------------------------------

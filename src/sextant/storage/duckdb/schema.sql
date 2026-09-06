@@ -325,7 +325,8 @@ CREATE TABLE IF NOT EXISTS return_flows (
     evidence       TEXT
 );
 
--- 2Q `I1`: the set a trace starts FROM (D01 §3). One row per (method, kind).
+-- 2Q `I1`: the set a trace starts FROM (D01 §3). One row per (method, kind,
+-- wire address).
 --
 -- D00 §4 has documented a `root_kind` set since the fact schema was written
 -- and nothing produced it, which is why the two non-wire tables above carry
@@ -344,11 +345,27 @@ CREATE TABLE IF NOT EXISTS return_flows (
 -- nothing keeping the two equal, which is the rule D01 §6 states as "no fact
 -- that was merely copied".
 --
--- **One row per (handler, kind), never per address.** A method serving three
--- paths is one root: the trace that runs from it is the same walk whichever
--- path invoked it, and three rows would be three copies of one answer. A
--- reader that wants the addresses joins `endpoints` on `handler`, which is
--- also where their wire identity and trust columns are.
+-- **One ROOT per (handler, kind); one ROW per address that reaches it**
+-- (2Q close, defect 1). A method serving three paths is still one root — the
+-- walk that runs from it is the same walk whichever address invoked it, and
+-- `roots_of` collapses these rows back to one `Root` carrying all of them, so
+-- the traversal sees one root and produces one trace. The rows are per address
+-- because the address is the only name a READER has for a trace: a document
+-- naming a trace by its handler descriptor alone can be searched for
+-- `GET /order/list` and answer nothing, which is what shipped and what this
+-- column set closes. A root nothing addresses — a scheduled job — is one row
+-- with all three NULL, which is an honest absence rather than an invented
+-- label.
+--
+-- **The wire columns are carried, not the trust columns.** `protocol`,
+-- `method` and `path` say WHICH address reaches this root; `resolution` and
+-- `evidence` would say how well the row that named it resolved, and every such
+-- claim already lives on the `endpoints` row, with nothing keeping two copies
+-- equal (D01 §6's "no fact that was merely copied"). The distinction is that
+-- an address is this row's own identity while a trust column is a judgement
+-- about a different row — and both halves are written by ONE pass from ONE
+-- read of `endpoints`, replaced whole, so the addresses cannot drift from the
+-- rows they came from within a workspace.
 --
 -- Replaced WHOLE per resolve through reset_roots.sql + insert_roots.sql, and
 -- BOTH run from the one pass that writes here — the return_flows discipline
@@ -366,7 +383,20 @@ CREATE TABLE IF NOT EXISTS roots (
     -- starts a program is knowledge about a language, and ARCHITECTURE §10
     -- keeps that out of the language-blind half, so its producer is a catalog
     -- nobody has written (`docs/open-issues.md`, OI-22).
-    root_kind TEXT
+    root_kind TEXT,
+    -- The wire address that reaches this root, carried from the `endpoints`
+    -- row that named the handler, column for column and unformatted: the
+    -- renderer composes `GET /order/list` from these three with the SAME
+    -- function it composes the `## Inbound endpoints` table with, so the two
+    -- sections cannot spell one address two ways, and a `path` still passes
+    -- the render exit's redactor rather than arriving pre-composed past it.
+    --
+    -- **All three NULL is the answer for a root nothing addresses** — a
+    -- scheduled job is started by a clock, and inventing `(unresolved)` or a
+    -- label for it would report a gap where there is none.
+    protocol  TEXT,
+    method    TEXT,
+    path      TEXT
 );
 
 -- 2Q `G4`: the call graph a trace walks (D01 §3's Edges). One row per (call

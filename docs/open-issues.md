@@ -41,6 +41,19 @@ overturned rather than forgotten:
 - **F2's merge changed behaviour for 38 catalogs and moved zero tests** (OI-12).
   Brushes §10. Judged a coverage gap rather than a violation because the widening
   is a union of declarations already shipped elsewhere, and it is registered.
+- **`roots` copies three wire columns off `endpoints`** (2Q close, defect 1).
+  Brushes D01 §6's "no fact that was merely copied", which the table's own
+  schema comment cites as its reason for carrying no trust columns. Judged NOT a
+  violation on three grounds, recorded so the judgement can be overturned rather
+  than forgotten: (1) §6's rule is about a claim that can DIVERGE, and these
+  cannot — one pass writes both halves, from one read of `endpoints`, replacing
+  the table whole, below every pass that writes any of the three; (2) an address
+  is the row's own identity, while `resolution`/`evidence` are judgements about a
+  different row, which is the distinction the schema comment draws; (3) the
+  alternative — the renderer joining `roots` to `endpoints` — violates the
+  ENFORCED "Egress is read-only" contract, so the choice was between a brush and
+  a breach. The drift the rule warns about was real and is now measured:
+  `roots.the-address-is-the-one-the-endpoint-row-ends-with`.
 
 Severity: **Critical** = publishes a wrong row a reader would act on ·
 **Major** = wrong under a realistic input, or a silent drop · **Minor** = stale
@@ -486,6 +499,13 @@ nothing wrong is derived.
 functional-route row. **Falsified by** a functional route whose real work is
 invisible in every trace — which is today's state, stated.
 
+**NOT closed by 2Q's close (defect 1), and the reason is worth stating.** That
+change put a wire address ON a root, which is the opposite direction: it names
+the roots that exist by the addresses that reach them. This row is about an
+address that reaches NO root, because the row naming it names no handler — so
+there is nothing for an address to be carried on. The close condition is
+unchanged and remains upstream, in the chain reader.
+
 ### OI-27 — FR-6 says a trace is unbounded and stops only at a terminal; three things stop it earlier
 **Minor · found 2026-09-06 by 2Q's rendered trace, verifying the walk against
 its requirement · `docs/REQUIREMENTS.md` FR-6,
@@ -536,6 +556,28 @@ first bump is when they can diverge — silently, in a stamp nothing reads.
 
 
 ## CLOSED
+
+### OI-28 — a root's copied wire address could be taken before the row finished being written
+**Major · found AND closed 2026-09-06 by 2Q's close, defect 1 (same commit
+group) · `src/sextant/application/resolve/pipeline.py`**
+
+Recorded even though it never shipped, because the register is where a
+near-miss is remembered and because it is the live instance of the rule the
+header's third judged-not-violation argues from. `record_roots` ran directly
+below `derive_endpoints`, on the stated grounds that "nothing below this line
+writes either column" — true of `handler` and `direction`, and false the moment
+the pass began copying `protocol`: `apply_protocol_hints` reclassifies rows
+other engines minted, six passes further down. The first run of the changed pass
+against the orders-service fixture put `http /events/emitter` in `roots` while
+`endpoints` said `sse /events/emitter` — one address, two spellings, one
+workspace, and the rendered trace would have quoted the stale half.
+
+**Caught by an existing test rather than by review**
+(`test_the_table_is_replaced_whole_rather_than_appended_to`, which re-runs the
+pass and compares: the re-run read the final column and the pipeline's run had
+not). The pass moved below `apply_protocol_hints`, and the position is now a
+measured guard — `roots.the-address-is-the-one-the-endpoint-row-ends-with` —
+because no property of either pass in isolation can catch an ordering.
 
 ### OI-25 — the traversal had no reader outside its own tests
 **Minor · introduced 2026-09-06 by 2Q `G4`/`I3` · CLOSED 2026-09-06 by 2Q's
