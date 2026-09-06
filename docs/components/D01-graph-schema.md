@@ -90,6 +90,44 @@ own identifier already names its class).
 The tier lives on the **site**, not the candidate. It describes how much is known about the
 call, and does not rank candidates against one another.
 
+**Neither table exists yet** (`documented-not-implemented` #11's neighbourhood: the whole
+`edges`/`dispatch`/`trace_of` layer is designed and unbuilt). 2Q's `G3` needed the dispatch
+QUESTION answered — which method a call can run — before either table existed, so
+`return_flows` below carries the answer per row and applies the JVM's own rule directly,
+without [M04](M04-resolver.md) §4's RTA narrowing. That is a duplicate rule the day
+`dispatch` ships, and it is recorded as such (`docs/open-issues.md`, OI-16) rather than
+left for a reader to discover from two tables that disagree.
+
+### Return flows
+
+2Q's `G3`. One table, and one sentence per row: **the value this call produced in the
+caller is what that method hands back.**
+
+| Table | Holds |
+|---|---|
+| `return_flows` | Call site (`caller`, `ordinal`), the caller's `result` value id, the `callee`, which of its returns (`return_ordinal`), what that return hands back (`value`, D00 §5's argument grammar), and the site's `resolution`/`evidence` |
+
+**It is the only thing licensed to cross a method boundary.** [D00](D00-fact-schema.md) §5's
+value ids are per-method and meaningless outside it, deliberately — a chain that crossed a
+boundary by proximity would be a guess. This table crosses it by naming both sides, so a
+`source` inside `value` is a value id in the CALLEE and joins to that callee's own
+`call_sites`, never to the caller's.
+
+**Derived, never a fact**, and it is a table rather than a view because the join is
+arithmetic — the callee's descriptor is `owner` + `name` + the first four bytes of the
+SHA-256 of the call target's descriptor ([D00](D00-fact-schema.md) §5a's `sig_`
+disambiguator) — plus a bounded hierarchy walk. Neither belongs in SQL.
+
+**Absence is the third-party boundary and is the common case.** A call whose callee this
+workspace never scanned contributes no row: a mapper, a repository, a driver, anything in
+the JDK — the call IS the terminal, and a row would claim a body nobody read. Measured on
+`macrozheng/mall`'s `mall-admin`: 1,411 of 2,065 value-producing call sites.
+
+**Not exported** ([D06](D06-bundle-format.md) §5's table list is unchanged). The bundle is a
+published surface, and freezing this shape into one before `G4` reads it would make every
+later change to it breaking. It moves into the bundle when something outside the workspace
+needs it.
+
 ### Contracts
 
 | Table | Holds |

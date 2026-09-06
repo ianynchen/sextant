@@ -259,6 +259,72 @@ CREATE TABLE IF NOT EXISTS error_handlers (
     catalog_id    TEXT
 );
 
+-- 2Q `G3`: the one link a value chain was missing, and the only one that
+-- crosses a method boundary (D01 §3).
+--
+-- Within a method the chain is already complete — a `call_site` carries the
+-- value id its call produced (`result`) and every argument carries the
+-- `source` id of the call that produced it — so
+-- `OmsOrderService#list -> CommonPage#restPage -> CommonResult#success` is
+-- three facts today. What nothing said is where the FIRST of those values came
+-- from: the caller knows `OmsOrderService#list` produced value 7, and not that
+-- 7 is whatever `OmsOrderServiceImpl#list` hands back. One row here is exactly
+-- that sentence.
+--
+-- **Derived, never a fact.** Every column is read off `call_sites`,
+-- `method_returns` and the type hierarchy the symbol facts carry; nothing is
+-- inferred from a name and nothing is evaluated. It is a table rather than a
+-- view because the join is arithmetic (a SHA-256 of the callee's JVM
+-- descriptor) and a bounded hierarchy walk, neither of which belongs in SQL.
+--
+-- **Absence is the third-party boundary, and it is the common case.** A call
+-- whose callee this workspace never scanned — a MyBatis mapper, a Spring Data
+-- repository, a JDBC driver, anything in the JDK — contributes NO row, because
+-- the trace stops there by ruling and a row would claim a body we cannot read.
+-- Measured on `macrozheng/mall`'s `mall-admin`: 1,411 of 2,065 value-producing
+-- call sites are exactly that.
+CREATE TABLE IF NOT EXISTS return_flows (
+    -- The method containing the call site, module-prefixed exactly as
+    -- `call_sites.caller` spells it (D00 §5a).
+    caller         TEXT,
+    -- The call site's own control-flow position within `caller` — `caller`
+    -- plus `ordinal` is the site's identity, the same pair `call_sites` uses.
+    ordinal        INTEGER,
+    -- The value id, IN THE CALLER, that this call produced: `call_sites.result`
+    -- verbatim. It is what an argument of a later call in the same method
+    -- carries as its `source`, which is what makes the chain continue.
+    result         INTEGER,
+    -- The method whose return this row carries, module-prefixed like `caller`
+    -- and like `method_returns.method`. It is the DECLARED callee for a call
+    -- the JVM dispatches exactly, and an implementation of it where the JVM
+    -- dispatches virtually.
+    callee         TEXT,
+    -- Which of `callee`'s return instructions this row is —
+    -- `method_returns.ordinal` verbatim. A method with two `return` statements
+    -- contributes two rows: two possible answers and no single one, exactly as
+    -- the fact kind models it. Collapsing them would state a fact about code
+    -- that may never run.
+    return_ordinal INTEGER,
+    -- What `callee` hands back at that return, as D00 §5's argument grammar
+    -- wrote it — verbatim JSON, carried rather than flattened. A `source` in
+    -- here is a value id in the CALLEE, so a reader that wants the next hop
+    -- joins it against that callee's own `call_sites`, never against the
+    -- caller's: D00 §5's value ids are meaningless across methods, and this
+    -- table is the only thing licensed to cross that line.
+    value          JSON,
+    -- D00 §4's resolution set, describing the SITE rather than this candidate
+    -- (D01 §3's dispatch rule: the tier lives on the site and does not rank
+    -- candidates against one another). `resolved` where exactly one method can
+    -- run — a static or special call, or a virtual one with a single
+    -- candidate; `narrowed` where several can, every one of them listed and
+    -- none picked.
+    resolution     TEXT,
+    -- D00 §4's evidence set. Always `compiler`: the call site, the return, the
+    -- descriptors and the hierarchy are all what the compiler wrote into the
+    -- class files.
+    evidence       TEXT
+);
+
 CREATE OR REPLACE VIEW documents AS
 SELECT document_id,
        payload ->> 'relative_path'   AS relative_path,

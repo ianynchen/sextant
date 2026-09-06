@@ -148,6 +148,7 @@ _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 _ARGUMENTS = "sextant/application/resolve/shapes/arguments.py"
+_RETURN_FLOW = "sextant/application/resolve/return_flow.py"
 
 
 GUARDS: dict[str, Guard] = {
@@ -713,6 +714,43 @@ GUARDS: dict[str, Guard] = {
                 find="jakarta.servlet",
                 replace="javax.servlet",
                 occurrences=23,
+            ),
+        ),
+    ),
+    # --- 2Q `G3`, cross-method return propagation --------------------------
+    "return_flow.callee-descriptor-is-stripped-to-bare": Guard(
+        what="the method a return flow joins TO is keyed by its BARE descriptor, because "
+        "the call-site side composes a bare one and a callee may live in a library",
+        why="OI-4 on its third appearance, and the first two each shipped: one identity, two "
+        "string spellings, a join across them matching nothing on a real module while every "
+        "fixture that spells symbols bare stays green — round 1's `F6`, then 2O Task 10 with "
+        "six green tests and zero rows. G1 and G2 discharged it in OPPOSITE directions on "
+        "purpose (`call_site.implementation` bare, `method_return.method` module-prefixed), "
+        "so this join strips exactly one side and getting it wrong is not a partial answer: "
+        "it is an EMPTY table on every real module, and a trace that reports every service "
+        "call as a terminal",
+        edits=(
+            Edit(
+                path=_RETURN_FLOW,
+                find="        bodies[bare_descriptor(symbol)].append(symbol)",
+                replace="        bodies[symbol].append(symbol)  # guard disabled",
+            ),
+        ),
+    ),
+    "return_flow.exact-dispatch-admits-no-override": Guard(
+        what="only `invokevirtual` and `invokeinterface` admit an implementation as a "
+        "candidate — a static, special or constructor call names the method that runs",
+        why="the JVM's own rule, mirrored rather than approximated (DR-6). A static method "
+        "is HIDDEN by a subclass's, never overridden, and a private or `super.` call is not "
+        "dispatched at all. Without the conjunct every such call narrows to a set that "
+        "includes a body the JVM will never reach there — a candidate for code that cannot "
+        "run, published beside the one that does, with the site's own tier downgraded from "
+        "`resolved` to `narrowed` to say so",
+        edits=(
+            Edit(
+                path=_RETURN_FLOW,
+                find='    if site["invoke_kind"] not in _VIRTUAL_DISPATCH:\n        return candidates\n',
+                replace="",
             ),
         ),
     ),

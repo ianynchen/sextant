@@ -1314,7 +1314,12 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # conclusions travelling as facts; it carries no `origin`, like every other
     # document this module produced itself. + 2: the same task's Data REST
     # repositories (`CatalogRepository`, `SecretRepository`).
-    assert (None, 110) in origins
+    # + 7: 2Q `G3`'s dispatch fixture (`com/acme/orders/trace/`) — `Refiner`,
+    # `SoleRefiner`, `StrictRefiner`, `Splitter`, `FirstSplitter`,
+    # `SecondSplitter`, `TraceProbe`, one class file and one document each.
+    # Annotated by nothing and referenced by nothing, so they move this count
+    # and no other row in this test.
+    assert (None, 117) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"

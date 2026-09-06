@@ -75,6 +75,24 @@ comparison, or by fixture builders emitting module-prefixed symbols so tests
 exercise the real space. §13.8 says diagnose at the second occurrence rather than
 fix the instance twice — this row IS that diagnosis.
 
+**Third crossing, 2026-09-06, 2Q G3 — no defect, and the row stays open.** G3's
+whole subject is a join between a call target (bare, composed) and a
+`method_return` (module-prefixed), and G1/G2 had deliberately pointed the two
+new symbols in OPPOSITE directions, so "strip both sides" is not available as a
+rule. It was discharged by doing both things this row's close condition asks
+for: the strip happens in exactly one function (`return_flow._bodies_by_
+descriptor`), guarded by `return_flow.callee-descriptor-is-stripped-to-bare` —
+which is measured to KILL its near-miss, so deleting the strip fails a test
+rather than emptying a table — and the near-miss runs on hand-built facts that
+are MODULE-PREFIXED, which is this row's own prescribed fixture remedy. A second
+test proves the composed descriptor agrees with what the EXTRACTOR wrote, on a
+real scan, because hand-built facts compute the `sig_` hash with the same
+function under test and would agree with themselves either way.
+
+**What that does NOT do is close this row.** Nothing stops the fourth crossing:
+mypy still sees two `str`s, and the next join is as free to compare them as the
+first two were.
+
 ### OI-5 — MicroProfile GraphQL publishes a wrong address
 **Major · pre-existing (`A-Mi9`) · stated, not closed**
 
@@ -283,33 +301,119 @@ while nothing in the pipeline acts on it.
 trace that reaches a terminal only reachable through a lambda. **Falsified by**
 nothing today; it becomes falsifiable the moment a consumer exists.
 
-### OI-15 — capability 9.18 produces a fact kind nothing reads
-**Minor · introduced 2026-09-06 by 2Q G2 · `docs/components/D00-fact-schema.md` §5,
-`src/sextant/storage/duckdb/schema.sql`'s `method_returns` view**
+**Amended 2026-09-06 by 2Q G3, and NOT closed by it.** The row named G3 and G4
+jointly as its readers; G3 has now shipped and deliberately does not read this
+key, so the remaining reader is G4 alone. An `invokedynamic`'s `result` is the
+functional-interface INSTANCE the bootstrap builds, not anything the lambda body
+hands back — the body runs later, elsewhere, if at all — so linking the body's
+returns to that site's `result` would state that a `Supplier` call site produced
+the supplier's value. `return_flow.py` excludes `dynamic` sites for exactly that
+reason and says so. Following `implementation` INTO the body is a traversal
+step, which is what this row's close condition already asked for.
 
-`method_return` records what a method hands back. **Nothing consumes it.** Its
-reader is 2Q's `G3` — cross-method propagation, which joins a returned value to
-the caller's own `result` id — and G3 was explicitly out of this task's scope;
-G2 exists to produce the fact G3 will consume.
 
-This is OI-14 one step further, and worse in one respect and better in another.
-Worse: it is a whole fact KIND, so it also has a projection (`method_returns`)
-that no named query reaches — the view is exercised by a test and by nothing
-else. Better: the fact is inert, adding rows to `raw_facts` and moving no
-derived output, and it is the input a designed consumer needs rather than a
-speculative field.
+### OI-16 — two dispatch rules will exist, and only one is designed
+**Minor · introduced 2026-09-06 by 2Q G3 · `docs/components/M04-resolver.md` §4,
+`docs/components/D01-graph-schema.md` §3, `src/sextant/application/resolve/return_flow.py`**
 
-**Two things it deliberately does NOT do**, so a later reader does not mistake
-absence for oversight: nothing joins a `method_return` to a caller (that is G3),
-and no named query is registered, because registering one with no consumer would
-add a surface nothing asks for and make this row harder to close honestly.
-**Closes by** G3 reading it — a callee's returned value linked to the caller's
-`result` id, with a trace that crosses a method boundary. **Falsified by**
-nothing today; it becomes falsifiable the moment a consumer exists.
+M04 §4 designs dispatch resolution in full — a `dispatch` table of candidates, a
+`dispatch_site` table carrying the tier, rapid type analysis narrowing candidates
+to types the program actually constructs, and a tier that follows M02's indexed
+boundary. **None of it is built**, and neither is the `edges` layer beside it.
+
+G3 needed the same question answered — which method could have produced this
+returned value — and answered it inline: the opcode table M04 §4 already states
+(exact for static/special, the declared body plus in-module overrides for
+virtual/interface), the two tiers D00's closed set already has, and **no RTA**.
+So `return_flows.resolution` is a dispatch tier computed by a pass that is not
+the dispatch pass, and its `narrowed` sets are WIDER than the designed pass's
+would be — a candidate that no `new` in the module ever creates still appears.
+
+This is over-report rather than a wrong value, which is why it is Minor: every
+candidate listed is a method the JVM could reach at that site given the declared
+type. It becomes wrong the day `dispatch` ships and the two disagree about one
+call, and a reader has no way to know which table to believe.
+**Closes by** the designed pass landing and `return_flows` reading its
+candidates instead of re-deriving them. **Falsified by** a call site where the
+two tables list different candidates.
+
+### OI-17 — an in-module override of a library-declared method is not linked
+**Minor · introduced 2026-09-06 by 2Q G3 · `docs/COVERAGE.md` §7 ·
+`src/sextant/application/resolve/return_flow.py`, `_callees`**
+
+A return flow considers candidates only where the DECLARED callee is a method
+this workspace scanned. So a virtual call through a library-declared type is a
+terminal even when the module itself overrides it: `mall-admin`'s
+`AdminUserDetails` implements Spring Security's `UserDetails`, and the three
+calls to `getPassword`, `isEnabled` and `getAuthorities` link to nothing though
+the body that runs is in the module. **Measured: 3 of 2,065 value-producing call
+sites, and all three are genuine.**
+
+**It is the conservative side of a rule with one corpus behind it, chosen under
+§8.1's "never derive on half a measured rule".** Dropping the conjunct is one
+line, and on `mall-admin` it adds exactly those 3 correct rows. What is NOT
+measured is its cost on a codebase that calls `java/lang/Object#toString()` on a
+receiver of declared type `Object` — every `toString` the module declares
+becomes a candidate for it, honestly reachable and useless, and a `narrowed` set
+of a hundred is noise that hides the sets worth reading. One corpus cannot size
+that.
+**Closes by** a second acceptance corpus measuring the candidate-count
+distribution with the conjunct removed — `mall-portal` is the natural one, and
+2Q's own acceptance already asks for it. **Falsified by** a trace that stops at
+an in-module body a reader can see.
+
+### OI-18 — the several-implementations rule still has no real-code exercise
+**Minor · restated 2026-09-06 by 2Q G3 · `docs/COVERAGE.md` §7,
+`fixtures/orders-service/.../trace/Splitter.java`**
+
+2Q's roadmap recorded "several implementers → narrowed branch: 0 — the rule is
+UNTESTED on real code", and told the phase it "must not ship unexercised". G3
+ships it: a call whose dispatch reaches more than one in-module body lists all of
+them at `narrowed` and picks none. **Measured again at G3, and the count has not
+moved: 0 of `mall-admin`'s 166 dispatched calls have more than one
+implementation.** Every one of the module's service interfaces has exactly one
+`*Impl`.
+
+So the rule is exercised by a FIXTURE — `Splitter` with `FirstSplitter` and
+`SecondSplitter`, a shape written for this test — and by nothing that anybody
+wrote for its own reasons. That is more than the roadmap's "unexercised" and
+less than what it asked for, and the honest record is a row saying which.
+Graded Minor because the failure mode is over-report and it is labelled: a
+`narrowed` row states its own uncertainty, so a reader is never told a candidate
+is THE answer.
+**Closes by** the rule firing on a real module — `mall-portal`, or any estate
+with two implementations of one service interface — with the candidate list
+checked against source. **Falsified by** a real `narrowed` row whose candidate
+set is wrong.
 
 ---
 
 ## CLOSED
+
+### OI-15 — capability 9.18 produced a fact kind nothing read
+**Minor · introduced 2026-09-06 by 2Q G2 · CLOSED 2026-09-06 by 2Q G3 ·
+`src/sextant/application/resolve/return_flow.py`**
+
+`method_return` recorded what a method hands back and nothing consumed it. The
+row named its own closer exactly — "G3 reading it: a callee's returned value
+linked to the caller's `result` id, with a trace that crosses a method
+boundary" — and that is what closed it, not a re-reading of the condition.
+
+`resolve/return_flow.py` reads the fact through a new `method_returns` named
+query (the projection the row noted no query reached) and joins it to
+`call_sites`, once per resolve, from the pipeline. On `macrozheng/mall`'s
+`mall-admin` it links **552 call sites and 566 returns**, `OmsOrderController
+#list`'s value 7 among them: value 7 is now stated to be what
+`OmsOrderServiceImpl#list` hands back, which is in turn the result of
+`OmsOrderDao#getList` — the MyBatis terminal — read against the source.
+
+The row's "two things it deliberately does NOT do" are both now done: the join
+to a caller exists, and a named query is registered because there is finally a
+consumer to register it for. **What did not close is OI-14**, which is the
+sibling row and names a different reader: `call_site.implementation` is
+deliberately NOT read here, because an `invokedynamic`'s `result` is the lambda
+INSTANCE and not anything the body returns — following the body is a traversal
+step, which is G4's.
 
 ### OI-13 — the plan cites `A-C2` for a defect the sweep files under `A-C3`
 **Minor · found 2026-09-06 during F2 · CLOSED 2026-09-06 by `3b3ba58` ·

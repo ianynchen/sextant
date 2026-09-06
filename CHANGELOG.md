@@ -14,6 +14,34 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A value chain now crosses a method boundary** (2Q, `G3`). Within a method the chain was
+  already complete — a `call_site` carries the value id its call produced, and every
+  argument carries the `source` id of the call that produced it — so
+  `OmsOrderService#list` → `CommonPage#restPage` → `CommonResult#success` was three facts.
+  What nothing said is where the FIRST of those values came from. New derived table
+  **`return_flows`** ([D01](docs/components/D01-graph-schema.md) §3): one row per (call
+  site, candidate callee, callee return), carrying the caller's `result` id, the callee, its
+  `return_ordinal`, what it hands back in D00 §5's argument grammar, and the site's
+  `resolution`/`evidence`. It is the only thing licensed to cross a method boundary, and it
+  does so by naming both sides — a `source` inside `value` is a value id in the CALLEE.
+  **Caller to callee is arithmetic, not a lookup.** `domain/symbols.method_descriptor`
+  composes the callee's descriptor from the call target's triple with the same first-four-
+  bytes-of-SHA-256 disambiguator the extractor writes, so a callee outside the workspace
+  matches nothing instead of raising.
+  **The JVM's dispatch rule is mirrored, not approximated** (DR-6). `invokestatic` and
+  `invokespecial` name the method that runs; `invokevirtual` and `invokeinterface` take the
+  declared body plus every in-module override — one candidate is `resolved`, several are
+  `narrowed` with all of them listed and none picked. `invokedynamic` contributes nothing:
+  its `result` is the lambda INSTANCE, never anything the body returns.
+  **Measured on `macrozheng/mall`'s `mall-admin`** (160 endpoints, Boot 3.x, JDK 21): 566
+  rows over 552 call sites, of which 386 are direct and 166 resolve through a sole
+  implementation. `OmsOrderController#list`'s value 7 is now stated to be what
+  `OmsOrderServiceImpl#list` hands back, which is the result of `OmsOrderDao#getList` — the
+  MyBatis terminal, checked against source. 1,411 of 2,065 value-producing call sites
+  contribute no row, which is the ruled third-party boundary and the common case.
+  Closes `OI-15`; `OI-14` is amended and stays open. `OI-16`, `OI-17` and `OI-18` recorded.
+  **No consumer yet** — the reader is 2Q's `G4`.
+
 - **What a method hands back is a fact — extractor capability 9.18** (2Q, `G2`). `ARETURN`
   appeared in the extractor only inside a comment, so the last link of a round trip was
   missing: an argument already carries the `source` id of the call that produced it, and

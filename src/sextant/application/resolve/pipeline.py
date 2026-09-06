@@ -9,6 +9,7 @@ from sextant.application.resolve.environment_divergence import record_environmen
 from sextant.application.resolve.format import resolve_format
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
+from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.service_identity import record_service_identity_gaps
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.parse_binding import bind_parse_calls
@@ -72,6 +73,14 @@ def resolve(
     # leaves empty tables rather than the previous run's rows.
     workspace.derive("scheduled_work_reset")
     workspace.derive("error_handlers_reset")
+    # 2Q `G3`, and its position says what it depends on: NOTHING any engine
+    # writes. It reads `call_sites`, `method_returns` and the type hierarchy —
+    # compiler facts, all loaded — and writes a table of its own, so it could
+    # sit anywhere below `load_facts`. It sits here, above the catalog-driven
+    # half, because it takes no catalog and gates on no capability: there is no
+    # framework knowledge in a return, and a pass that cannot be skipped should
+    # not read as though it might be.
+    record_return_flows(workspace)
     skipped = derive_endpoints(workspace, declared, capabilities)
     # After the endpoints, never beside them: an endpoint's payload types come
     # off its handler's signature, which is a column on the row derive_endpoints

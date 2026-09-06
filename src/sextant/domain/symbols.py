@@ -103,6 +103,61 @@ def method_name(descriptor: str) -> str:
     return head if paren else name
 
 
+# D00 §5a's member-descriptor punctuation, spelled once. A member descriptor is
+# `owner#name(<disambiguator>).` — the owner already carries its own trailing
+# type marker, so composing one needs only these three characters and never a
+# second `#` literal.
+_ARGUMENTS_OPEN = "("
+_ARGUMENTS_CLOSE = ")."
+# The `sig_` prefix and the four bytes of digest behind it, exactly as
+# `ClassScanner.disambiguatorOf` writes them. Four bytes is eight hex
+# characters; both halves are pinned against a real scan
+# (`tests/domain/test_symbols.py`, `tests/application/test_return_flow.py`)
+# rather than trusted, because a disagreement here is a join that matches
+# nothing while every fixture that spells the hash by hand still passes.
+_DISAMBIGUATOR_PREFIX = "sig_"
+_DISAMBIGUATOR_BYTES = 4
+
+
+def method_descriptor(owner: str, name: str, descriptor: str) -> str:
+    """The bare member descriptor of the method a `call_site` target names —
+    the one spelling that joins a call to the callee's own symbol fact (D00
+    §5a).
+
+    A `call_site` carries its callee in the JVM's spelling (owner, name, and a
+    JVM type descriptor); a method's own symbol fact carries it in SCIP's
+    (`com/x/Y#m(sig_1a2b3c4d).`). The bridge between them is
+    `ClassScanner.disambiguatorOf` — the first four bytes of the SHA-256 of the
+    JVM descriptor — so **caller to callee is arithmetic, not a lookup**: no
+    index of every scanned method is needed to ask what one call site calls,
+    and a callee outside the workspace produces a descriptor that simply
+    matches nothing rather than an exception.
+
+    Here rather than at the call site for the reason `type_descriptor` is: this
+    is the symbol grammar, and a second place that composes one is a second
+    place for it to disagree with the extractor that wrote the first. The
+    result is BARE — coordinates are the writing module's to add, and the
+    caller compares descriptors (`bare_descriptor`) exactly as every other
+    join in this codebase does.
+    """
+    return owner + name + _ARGUMENTS_OPEN + disambiguator_of(descriptor) + _ARGUMENTS_CLOSE
+
+
+def disambiguator_of(descriptor: str) -> str:
+    """The overload disambiguator D00 §5a's method descriptors carry, as
+    `ClassScanner.disambiguatorOf` computes it: `sig_` and the first four
+    bytes of the SHA-256 of the JVM descriptor, lower-case hex.
+
+    It exists because a name alone does not identify a method — two overloads
+    of `find` share one — and because the full JVM descriptor is unreadable in
+    a rendered document. Truncation is deliberate and its collision risk is
+    scoped: the pair must collide *within one type* to matter, and the
+    extractor owns the same arithmetic on the writing side.
+    """
+    digest = hashlib.sha256(descriptor.encode("utf-8")).hexdigest()
+    return _DISAMBIGUATOR_PREFIX + digest[: _DISAMBIGUATOR_BYTES * 2]
+
+
 # D00 §5a: an array's symbol is its ELEMENT's descriptor with this suffix
 # appended — `byte#[]`, never `byte[]#`. Written here because this is the seam
 # that converts the catalogs' notation, and a catalog naming an array type

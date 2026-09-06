@@ -1,0 +1,16 @@
+-- Clears 2Q `G3`'s cross-method return links for one resolve.
+--
+-- Unlike reset_scheduled_work.sql / reset_error_handlers.sql, this runs from
+-- the PASS rather than from the pipeline, and the difference is a property of
+-- how many writers the table has. Those two are written by catalogs — more
+-- than one catalog contributes rows to each — so a reset owned by the writer
+-- would empty the table once per catalog and leave only whichever ran last.
+-- `return_flows` has exactly one writer, `resolve/return_flow.py`, which reads
+-- facts and no catalog at all; reset and insert belong together there, the
+-- reset_resolved_config.sql precedent.
+--
+-- The table itself is never dropped: schema.sql pre-declares it so the
+-- "return_flows" query still succeeds on a module whose every call leaves for
+-- a third party. Unconditional, so a resolve that links nothing still leaves
+-- an empty table rather than the previous run's rows.
+DELETE FROM return_flows;

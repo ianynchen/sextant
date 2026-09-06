@@ -138,7 +138,14 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # is for.
     # + 2: the same task's Data REST fixture — `CatalogRepository` and
     # `SecretRepository`, one class file each.
-    assert metadata["coverage"]["documents"] == 111
+    # + 7: 2Q `G3`'s dispatch fixture (`com/acme/orders/trace/`) — one caller
+    # and one call per dispatch form the JVM has, which needs an interface with
+    # ONE implementation, an interface with TWO, and a subclass that hides a
+    # static rather than overriding it: `Refiner`, `SoleRefiner`,
+    # `StrictRefiner`, `Splitter`, `FirstSplitter`, `SecondSplitter`,
+    # `TraceProbe`. Unannotated and unreferenced, so they move this count and
+    # nothing else.
+    assert metadata["coverage"]["documents"] == 118
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

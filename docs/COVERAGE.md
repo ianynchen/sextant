@@ -1997,6 +1997,30 @@ is catalogs and an `AndroidManifest.xml` reader, not a scanner.
 
 ## 7. Cross-cutting findings
 
+### Where a value chain stops, now that it crosses method boundaries
+
+2Q's `G3` links a callee's returned value to the caller's own `result` id
+(`return_flows`, [D01](components/D01-graph-schema.md) §3), so a chain no longer ends at the
+first call. It still ends, and these are the places — each measured on `macrozheng/mall`'s
+`mall-admin` (160 endpoints, Boot 3.x, JDK 21) rather than reasoned about.
+
+| Where it stops | Measured on `mall-admin` | Why, and what closes it |
+|---|---|---|
+| **The third party.** A mapper, a repository, a driver, the JDK: the call IS the terminal | **1,411 of 2,065** value-producing call sites | Ruled, not a gap. We do not trace into a dependency and we do not read MyBatis XML, so a terminal is `OmsOrderMapper#selectByExample` and never a table name |
+| **A declaration this workspace never scanned**, even where the module overrides it — `AdminUserDetails#getPassword` against Spring Security's `UserDetails` | **3 of 2,065**, every one a genuine in-module override | Deliberate, and the conservative side of a rule with one corpus behind it. Widening it would let a call on `java/lang/Object#toString()` list every `toString` the module declares — reachable, honest, and useless. **Closes by** a second corpus measuring that blast radius. **OI-17** |
+| **Values through library code.** `stream().map(f).collect()` leaves for the JDK and comes back | not counted | The `collect` result is visible; per-element provenance is not |
+| **Values parked in a field** between calls | not counted | `field_write` is constructors-only by design |
+| **Several returns, several implementations** — a set, never a pick | 62 fixture methods with more than one return; **0** calls on `mall-admin` with more than one implementation | Not a stop at all: the set is carried and the site says `narrowed`. But the several-implementations rule has still **never run on real code** — the roadmap recorded zero and `G3` measured zero again — so it ships exercised by a fixture only |
+
+**Responses built by mutation are attributable and get no row of their own.** Where a method
+writes `result.setFilename(x); return result;`, the returned value entry carries the id of
+the value that was mutated, and every setter that wrote into it is a `call_site` in the SAME
+method whose `receiver` is that id. That is a within-method join over facts that already
+exist — 17 of `mall-admin`'s 1,014 returns are built this way, all reachable by it — and
+`return_flows` exists for the step BETWEEN methods. Adding a second, redundant spelling of a
+within-method fact would put one claim in two places. **This was the one boundary the
+roadmap left open; the decision is recorded here rather than in a commit message.**
+
 ### Boundaries are leaving the code
 
 The clearest pattern in the research, and the thing most likely to limit Sextant's value

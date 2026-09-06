@@ -80,6 +80,28 @@ _NAMED_QUERIES = {
     # so a field written by more than one constructor overload reads its
     # candidates together, `from_parameter` breaking the tie (NFR-1).
     "field_writes": "SELECT field, from_parameter FROM field_writes ORDER BY field, from_parameter",
+    # D00 §5's `method_return` (capability 9.18): what each method hands back,
+    # one row per return instruction. 2Q's `G3` — cross-method return
+    # propagation — is its consumer, and the first one: OI-15 recorded the
+    # gap between the fact shipping and a reader existing, and this query is
+    # half of closing it.
+    #
+    # `value` stays JSON and is parsed by the caller, exactly as
+    # `call_sites.arguments` is: it is an entry of D00 §5's argument grammar,
+    # and a void return's explicit JSON `null` says something a
+    # `{"kind":"unresolved"}` does not. Ordered by `method, ordinal` so a
+    # method with two `return` statements reads its two answers in
+    # instruction order, twice (NFR-1) — the same total ordering
+    # `call_sites` takes for the same reason.
+    "method_returns": "SELECT method, ordinal, value FROM method_returns ORDER BY method, ordinal",
+    # 2Q `G3`'s own derived table. Ordered so a site's candidate callees and
+    # each callee's several returns read in one fixed order (NFR-1); `caller,
+    # ordinal` alone is not total, since a site whose dispatch narrowed to
+    # two implementations contributes a row per implementation.
+    "return_flows": """
+        SELECT caller, ordinal, result, callee, return_ordinal, value, resolution, evidence
+        FROM return_flows ORDER BY caller, ordinal, callee, return_ordinal
+    """,
     # D00 §5a's PTR carrier: every declared type's own generic supertype
     # reference, keyed by the type's own (module-prefixed) symbol — the
     # `single_call` engine strips the prefix itself, the same way
@@ -628,6 +650,12 @@ _NAMED_DERIVATIONS = {
     "scheduled_work_insert": "insert_scheduled_work.sql",
     "error_handlers_reset": "reset_error_handlers.sql",
     "error_handlers_insert": "insert_error_handlers.sql",
+    # 2Q `G3`. A reset/insert pair like the two above, but reset and insert
+    # BOTH run from the one pass that writes here — there is exactly one
+    # writer, and the pipeline-owned reset those two need exists only because
+    # more than one catalog writes to them.
+    "return_flows_reset": "reset_return_flows.sql",
+    "return_flows_insert": "insert_return_flows.sql",
 }
 
 

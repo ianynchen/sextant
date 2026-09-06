@@ -123,6 +123,17 @@ Java's own resolution rules have to be respected: the superclass chain before in
 default methods, bridge methods so a generic override is not missed, package-private
 methods overridden only within a package.
 
+**None of the above is built.** The pass as designed — `dispatch`, `dispatch_site`, RTA
+narrowing, the indexed-boundary tier — does not exist in `src/`, and neither does the
+`edges` layer it would sit beside. What DOES exist is 2Q `G3`'s subset
+(`resolve/return_flow.py`): the same opcode table above, applied per call site to answer
+which method a returned value came from, with the two tiers this repository's closed set
+already has (`resolved` for one candidate, `narrowed` for several) and **no rapid type
+analysis** — a candidate is not filtered by whether the program constructs its type
+anywhere. So its `narrowed` sets are wider than this pass's would be, never narrower, and
+the difference is over-report rather than a wrong answer. It is a duplicate of this rule
+the day the designed pass lands, and is recorded as one (`docs/open-issues.md`, OI-16).
+
 ### 5. Endpoints, in two halves
 
 **The halves exist because shapes and endpoints depend on each other**, and the naive
