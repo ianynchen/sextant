@@ -158,10 +158,12 @@ def analyze(
     # rather than the interpreter's own `GeneratedNaming` parameter).
     interpret: DescriptorInterpreter | None = None,
     # Threaded to the detector and nowhere else (2M design §1 network-posture
-    # bullet): today's port parameter exists on every detector and nothing
-    # passed it, so an offline-only build could never opt into the one online
-    # retry `allow_resolve` is for. Defaulted so every existing caller stays
-    # offline exactly as before.
+    # bullet): the port parameter exists on every detector, and the CLI's
+    # `--allow-resolve` passes it (`cli/app.py:61` → `api.py:696` → here), so an
+    # offline-only build opts into the one online retry `allow_resolve` is for
+    # by asking. Defaulted so every existing caller stays offline exactly as
+    # before. *This read "nothing passed it" until the 2O documentation sweep
+    # (`A-Mi16`); the flag arrived in the same commit that wrote the sentence.*
     allow_resolve: bool = False,
     # The root a `.sextantignore` sits at and every pattern in it is written
     # against (D04 §3, `A-M16`). Defaulted to None so every existing caller —

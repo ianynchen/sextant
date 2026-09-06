@@ -389,12 +389,12 @@ The size, measured rather than estimated:
 
 | documented | exists |
 |---|---|
-| D01's 12+ base tables, `edges`, `dispatch`, `trace_summary`, `findings`, full-text index | **6 tables** — `endpoints`, `open_questions`, `raw_facts`, `resolved_config`, `shape_fields`, `shapes` |
-| D01 §5's ten named queries (`trace_of`, `impact_of`, …) | zero occurrences in `src/` |
+| D01's 12+ base tables, `edges`, `dispatch`, `trace_summary`, `findings`, full-text index | **8 tables** — `endpoints`, `open_questions`, `raw_facts`, `resolved_config`, `shape_fields`, `shapes`, and 2O Task 8's `scheduled_work` and `error_handlers`. Six when this table was written |
+| D01 §5's ten named queries (`trace_of`, `impact_of`, …) | zero implementations in `src/`; the only occurrence of any of the ten names is a docstring citing `trace_of` as absent. Register entry #11 since the 2O documentation sweep |
 | M00's 25 CLI verbs across five nouns | 4 |
 | D00 §5's 15 fact kinds | 8 have a producer |
 | the overlay tier — D03 + M01, FR-15/FR-16 | unimplemented; "overlay" in `src/` names something else |
-| D02 §2's thirteen styles | twelve — `filesystem` has a grammar, no engine, and would abort a run |
+| D02 §2's style sections | **fifteen sections, thirteen engines** — `protocol_hint` is a resolve pass and `filesystem` has a grammar, no engine, and would abort a run. Thirteen sections and twelve engines when this table was written; 2O Task 8's two non-wire styles gained sections in the documentation sweep, which also made §2 state which sections are not engines. Register entry #14 |
 
 **Three items are operational, not documentary, and do not wait for this
 checkpoint** — they are Class A defects and go into the sweep fix pass:

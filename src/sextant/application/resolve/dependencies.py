@@ -44,19 +44,22 @@ from sextant.application.ports.workspace import Workspace
 # and for the same reason: a catalog that could opt out of its own gate is not
 # gated.
 #
-# **The test for membership**, applied to all eleven styles and stated here
-# because the answer decides real output (`A-C5`, principles sweep §3.2): can
-# this style's match be satisfied by code that names the framework NOWHERE?
+# **The test for membership**, applied to all thirteen engine styles and stated
+# here because the answer decides real output (`A-C5`, principles sweep §3.2):
+# can this style's match be satisfied by code that names the framework NOWHERE?
 #
 #   * `annotation_driven`, `single_call`, `fluent`, `injected_client`,
-#     `interface_implementation`, `supertype_dispatch`, `supertype_derived`
-#     and `combinator` all key on a framework-owned fully-qualified name — an
-#     annotation only that framework defines, a call on a type only it ships,
-#     a supertype or an interface only it declares. The dependency is implied
-#     by the match itself, and gating on the coordinate as well would only
-#     subtract rows the evidence already earned. Worse, under Maven — where
-#     only DIRECT declarations are recorded — it would subtract them from every
-#     module inheriting the framework through a parent or a starter.
+#     `interface_implementation`, `supertype_dispatch`, `supertype_derived`,
+#     `combinator`, `scheduled_work` and `error_advice` all key on a
+#     framework-owned fully-qualified name — an annotation only that framework
+#     defines, a call on a type only it ships, a supertype or an interface only
+#     it declares. The dependency is implied by the match itself, and gating on
+#     the coordinate as well would only subtract rows the evidence already
+#     earned. Worse, under Maven — where only DIRECT declarations are recorded
+#     — it would subtract them from every module inheriting the framework
+#     through a parent or a starter. (The last two are the NON-WIRE styles 2O
+#     Task 8 added; they were absent from this enumeration when it counted
+#     eleven, and the answer for both is the same as for the eight above.)
 #   * `schema_operations` reads a `.proto`, `.graphql` or WSDL file in the
 #     repository. The schema is the evidence, and it is first-party; a build
 #     coordinate is not what makes its operations real.

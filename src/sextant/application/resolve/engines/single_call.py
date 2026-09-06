@@ -487,9 +487,17 @@ def _matching_method(
     """The one `methods` row matching a call site's own name, argument count
     (D02 §2's `arity`) and, where any candidate row declares one, the target's
     own JVM `descriptor` — first match wins. A row without `arity` matches
-    every overload, so the shipped 2C catalogs (none of which declare it)
-    parse unchanged; a catalog that needs to tell `send(topic, payload)` from
-    `send(topic, key, payload)` apart writes one row per arity instead, and
+    every overload, which is what kept the 2C catalogs parsing unchanged when
+    the key arrived. *No shipped catalog relies on that any more: all 75
+    `matches.methods` rows across the 55 shipped catalogs declare both `arity`
+    and `descriptor` — counted 2026-09-05, and
+    `tests/architecture/test_catalog_descriptor_coverage.py` is the ratchet that
+    keeps it so. This sentence claimed the opposite until the 2O documentation
+    sweep (`A-Mi13`). The ratchet reaches this grammar only; the other
+    call-matching grammars are `A-Mi19`.* The permissive branch stays because a
+    hand-built catalog in a test may still omit the key; a catalog that needs to
+    tell `send(topic, payload)` from `send(topic, key, payload)` apart writes
+    one row per arity instead, and
     this is the scan that replaces the old dict-by-name (`:40` before Task 6),
     which could only ever keep one row per name.
 

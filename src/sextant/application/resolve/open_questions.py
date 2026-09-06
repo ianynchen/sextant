@@ -21,8 +21,12 @@ from typing import Any
 from sextant.application.ports.workspace import Workspace
 
 # 2G design §6's closed question set, extended by 2O design §0. Adding a kind
-# is a schema change (both the renderer and the export switch on it), which is
-# why all three of this phase's arrive together.
+# is a schema change — `egress/render/document.py`'s `_candidate_sentence`
+# switches on it and raises for a kind it does not know — which is why all three
+# of this phase's arrive together. *This read "both the renderer and the export
+# switch on it" until the 2O documentation sweep (`A-Mi12`): only the renderer
+# does. The export carries the rows through unread (`api.py:768`), so the cost
+# of a new kind is one arm, not two.*
 QUESTIONS = (
     "payload_binding",
     "format_conflict",

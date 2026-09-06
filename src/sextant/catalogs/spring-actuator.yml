@@ -32,10 +32,16 @@ matches:
     # It is a DEFAULT rather than a constant: CP-5 rows 7-8 confirm that
     # `management.endpoints.web.base-path` moves the whole surface, on both
     # Boot 3.5.10 and 4.1.1. Nothing reads it here, and nothing can —
-    # `annotation_driven` never touches `resolved_config` (only
-    # `resolve/engines/config_join.py:528` and
-    # `resolve/engines/derived_resource.py:578` read it) — so a module that
+    # `annotation_driven` never touches `resolved_config` — so a module that
     # overrides the base path is published under `/actuator` regardless.
+    # *This named "only" two readers of `resolved_config` until the 2O
+    # documentation sweep (`A-Mi11`). It was wrong when written: the table is
+    # queried at SEVEN call sites across FIVE files — `engines/config_join.py`,
+    # `engines/derived_resource.py`, `api.py` twice (feeding render and the
+    # metadata document), `enrich/brief.py` twice and `enrich/validate.py` for
+    # the unresolved rows. The count was never the point, and not one of them
+    # is `annotation_driven`; the operative claim is that THIS engine cannot
+    # see a configuration value, and that one holds.*
     # That over-claim is a stated boundary in docs/COVERAGE.md, and it stops
     # being one the day an annotation-derived row can read a configuration
     # key.

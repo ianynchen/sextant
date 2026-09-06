@@ -188,20 +188,31 @@ an observation, never a trust judgement.
 splitting it later is a rendering choice rather than a re-index.
 
 **`protocol`** — `http`, `soap`, `grpc`, `kafka`, `jms`, `sqs`, `pubsub`, `graphql`,
-`websocket`, `sse`. `message` is
+`websocket`, `sse`, `amqp`, `pulsar`. `message` is
 retired: it was reserved and never declared by any shipped catalog, so nothing migrates.
 The broker family is the protocol because linking gates on protocol equality (DR-5), and
 a Kafka topic can never be answered by an SQS queue.
 
-**The last three are HTTP-ADJACENT and are still their own protocols, not flavours of
-`http`** (Phase 2H). [D01](D01-graph-schema.md) §3's wire identity is protocol-scoped,
-and none of the three *is* an HTTP route: a GraphQL schema is N boundaries behind one
+**`graphql`, `websocket` and `sse` are HTTP-ADJACENT and are still their own protocols,
+not flavours of `http`** (Phase 2H). [D01](D01-graph-schema.md) §3's wire identity is
+protocol-scoped, and none of the three *is* an HTTP route: a GraphQL schema is N boundaries behind one
 POST path, a WebSocket connection fans into N destinations, and an SSE stream is a route
 whose return type turned it into something a request/response comparison cannot match
 against. They were declared in one edit because the set is closed (NFR-5) and all three
 are live today: `graphql` from the annotation and schema catalogs, `websocket` from the
 WebSocket/STOMP catalogs, `sse` only ever by RECLASSIFICATION — no catalog derives an
 `sse` row, `protocol_hint` moves one there ([D02](D02-catalog-schema.md) §2).
+
+**`amqp` and `pulsar` were added in one edit** (Phase 2O Task 1, `domain/closed_sets.py`),
+for the reason the three HTTP-adjacent members above were: the set is closed (NFR-5), so a
+member a later task needs costs one line now and a schema change if it arrives alone. Each
+is its own protocol on the same DR-5 argument — an AMQP exchange can never be answered by a
+Pulsar topic, and neither is a JMS queue, which is why Spring Cloud Stream's `rabbit: jms`
+stopgap migrated to `rabbit: amqp` in the same phase. Both are live: `amqp` from
+`@RabbitListener` and `RabbitTemplate`, `pulsar` from `@PulsarListener`. *This list omitted
+both from Task 1 until the 2O documentation sweep — a §5.1 violation, recorded rather than
+quietly corrected, because the code shipped the members and the schema document did not say
+so.*
 
 **`control_flow_kind`** — `sequential`, `conditional`, `alternative`, `loop`, `handler`
 

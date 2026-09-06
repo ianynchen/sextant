@@ -82,16 +82,29 @@ matches:
     # — the same bracketed token `spring-ws.yml`'s `@PayloadRoot` composes, and
     # the reason it is engine vocabulary rather than either catalog's own trick.
     qualifier_format: qname
-    # CHECKPOINT FACT (item 2, verified against BOTH reference implementations —
-    # `com.sun.xml.ws.model.RuntimeModeler#getNamespace` and Apache CXF's
-    # independent `PackageUtils#getNamespace`, which agree character for
-    # character): a `@WebService` naming no `targetNamespace` gets `"http://"` +
-    # its package reversed and dot-joined + a trailing `"/"`. This is the
-    # framework's OWN default, defined by its spec and implemented identically
-    # twice, so deriving it is reading JAX-WS rather than guessing (DR-6) —
+    # CHECKPOINT FACT (item 2): a `@WebService` naming no `targetNamespace` gets
+    # `"http://"` + its package reversed and dot-joined + a trailing `"/"`. This
+    # is the framework's OWN default, defined by the JAX-WS specification, so
+    # deriving it is reading JAX-WS rather than guessing (DR-6) —
     # `LegacyBillingWebService` in `com.example.orders.soap` is served at
     # `http://soap.orders.example.com/`, and a row without it would carry a
     # namespace-less QName that matches no caller.
+    #
+    # **EVIDENCE TIER, stated because it was overstated (§5.4, `A-Mi7`).** This
+    # line read "verified against BOTH reference implementations —
+    # `com.sun.xml.ws.model.RuntimeModeler#getNamespace` and Apache CXF's
+    # independent `PackageUtils#getNamespace`, which agree character for
+    # character". Those two classes ARE the right places to look and the reading
+    # stands, but it was a READ of the implementations, not a RUN of either:
+    # **no version is recorded for either, and no probe is committed** — CXF in
+    # particular has never been executed by this repository. So the claim's real
+    # tier is "framework rule read, not measured", which §8.1 calls a prediction
+    # until something runs it. It stays because the spec defines the default and
+    # both implementations were read agreeing on it, and because the alternative
+    # is a namespace-less QName that matches no caller. **Falsified by** either
+    # implementation deriving a different default at a version this catalog is
+    # pointed at; the probe backlog carries "JAX-WS's exposed-member rule per
+    # RI" and this belongs beside it.
     namespace_default: reversed_package
     # DR-6, the rule that made this file wait on a vocabulary addition: a public
     # method with no `@WebMethod` at all IS exposed by JAX-WS — the annotation

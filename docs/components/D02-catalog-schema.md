@@ -103,12 +103,35 @@ scanner capability above.
 
 ---
 
-## 2. The thirteen styles
+## 2. The styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
 genuinely new shape needs a new engine. (Nine as of Phase 2H; `supertype_derived` and
 `injected_client`, Phase 2O Task 5, are the tenth and eleventh; `derived_resource`, Task 6,
-is the twelfth; `supertype_dispatch`, Task 7b, is the thirteenth.)
+is the twelfth; `supertype_dispatch`, Task 7b, is the thirteenth; `scheduled_work` and
+`error_advice`, Task 8, are the fourteenth and fifteenth.)
+
+**Fifteen sections follow, and they are NOT fifteen engines** — §5.3 requires this document
+to say which is which rather than let a reader count headings. **Thirteen have an engine**,
+each registered in `application/resolve/endpoints.py`'s `_ENGINES`, which is the list a
+catalog's `style:` is resolved against and the only place the answer lives. The other two
+are:
+
+- **`protocol_hint` is a resolve PASS, not an engine** — no catalog declares it, and one
+  that did would be refused by name. Its own section states this and gives its position in
+  the pipeline.
+- **`filesystem` is SPECIFIED HERE AND NOT IMPLEMENTED.** No engine exists, no shipped
+  catalog declares it, and a catalog that did would abort the resolve by name
+  (`_engine_for`, called for every catalog before `endpoints_reset` runs, so nothing is
+  half-emptied behind it). It is the design
+  for the first non-JVM route shape and is written down so a later phase inherits the
+  reasoning; nothing in it describes behaviour that runs today. Its section says so again
+  at the top, in the `default_produces` model §5.3 names.
+
+The count above therefore reads: thirteen shipped engine styles, one resolve pass, one
+design. *This heading read "The thirteen styles" and the two non-wire engines had no section
+at all until the 2O documentation sweep; the number counted headings, which is exactly the
+substitution §5.3 forbids.*
 
 ### `annotation_driven`
 
@@ -1743,6 +1766,139 @@ publish the dependency's API as the module's contract.
 **Ordering (§3): NOT in the runs-last group.** Every one of its three evidence pieces is a fact
 of the class itself, so it observes rather than predicts.
 
+### `scheduled_work`
+
+The fourteenth style, and the **first NON-WIRE one** (Phase 2O Task 8). It derives into
+`scheduled_work` — a table of its own with no protocol, no address and no direction — and
+never into `endpoints`: `endpoints` is wire-true, and a method the framework calls on a
+clock serves no protocol anyone can address. A row claiming one would be a boundary nothing
+serves.
+
+```yaml
+# spring-scheduling.yml
+style: scheduled_work
+# NO `protocol` AND NO `direction`. Their absence is a CLAIM, not an omission —
+# see §1: `resolve/endpoints.py` refuses a non-wire style that declares either.
+detect:
+  coordinates: ["org.springframework:spring-context"]
+requires: [annotation_args, nested_annotation_args]
+matches:
+  annotation: org.springframework.scheduling.annotation.Scheduled
+  container: org.springframework.scheduling.annotation.Schedules
+  triggers:                       # attribute -> the framework's own word for the schedule kind
+    cron: cron
+    fixedDelay: fixedDelay
+    fixedDelayString: fixedDelay
+    fixedRate: fixedRate
+    fixedRateString: fixedRate
+```
+
+**`container` is where extractor capability 9.16 is load-bearing, and the catalog REQUIRES
+it rather than degrading.** Two or more `@Scheduled` on one method are folded by javac into
+a single `@Schedules` whose `value` is an ARRAY OF ANNOTATIONS (JLS 9.7.5), so on a scanner
+that cannot read a nested annotation such a method carries no readable trigger at all while
+its single-schedule neighbour carries its own. Requiring the capability makes that scanner
+skip the catalog VISIBLY (M04, FR-17) instead of reporting part of a module's scheduled
+surface and staying silent about the rest.
+
+**`triggers` is an ALIAS SET, not the annotation's attribute list.** `@Scheduled` also
+carries `initialDelay`, `initialDelayString`, `zone`, `timeUnit` and `scheduler`, and not
+one of them is a schedule. `initialDelay` is the sharpest: it is a duration, it sits beside
+a rate, and reading it would publish the delay before the FIRST run as the interval between
+every run. A declaration naming no trigger attribute therefore derives NOTHING — an
+absence, not a refusal.
+
+**Every expression is carried VERBATIM and nothing is evaluated.** A `${...}` placeholder
+is preserved exactly as written with `resolution: unresolved` beside it, because a
+placeholder's value comes from configuration a deployment can overwrite (GUIDELINES §8.2)
+and substituting one here would publish a schedule this repository cannot know. `evidence`
+is always `compiler`.
+
+**Ordering (§3): NOT in the runs-last group.** A scheduled declaration is a fact of the
+declaring class, not an enrichment of a row another engine minted — and its table is
+untouched by `endpoints_reset` and by the merge, so it could not participate in either.
+
+**These rows are deliberately not roots, and the omission is SCOPED rather than permanent.**
+[D00](D00-fact-schema.md) §4 documents a `root_kind` set whose members include `scheduled`,
+and [D01](D01-graph-schema.md) §5 documents a `trace_of` walk. Neither exists anywhere in
+`src/` (entries #7 and #11 of `docs/documented-not-implemented.md`), so nothing here is one
+half of a live mechanism. **The omission becomes wrong the moment a `root_kind` producer
+ships**: a scheduled method IS a root at that point, and these rows have to be re-examined
+as roots rather than left as a table nobody traverses.
+
+### `error_advice`
+
+The fifteenth style and the **second non-wire one** (Phase 2O Task 8). It derives into
+`error_handlers` for the reason `scheduled_work` has its own table: an exception handler is
+not a boundary anyone can address, it is what happens INSIDE one that already exists.
+
+```yaml
+# spring-advice.yml
+style: error_advice
+# NO `protocol` AND NO `direction`, on the same terms as `scheduled_work` above.
+detect:
+  coordinates: ["org.springframework:spring-web"]
+requires: [annotation_args, typed_signatures]
+matches:
+  handler_annotation: org.springframework.web.bind.annotation.ExceptionHandler
+  advice_annotations:             # applies to controllers OTHER than itself
+    - org.springframework.web.bind.annotation.ControllerAdvice
+    - org.springframework.web.bind.annotation.RestControllerAdvice
+  controller_annotations:         # its own handlers answer for that controller alone
+    - org.springframework.stereotype.Controller
+    - org.springframework.web.bind.annotation.RestController
+  scope_from: [annotations, basePackages, basePackageClasses, assignableTypes]
+  status_annotation: org.springframework.web.bind.annotation.ResponseStatus
+  status_from: [code, value]      # an ALIAS ORDER, not a set
+  exception_roots: [java.lang.Throwable, java.lang.Exception,
+                    java.lang.RuntimeException, java.lang.Error]
+```
+
+**TWO container kinds, and they are different claims** — which is why `error_handlers`
+carries `declared_by`. An advice class applies to controllers other than itself, to every
+controller in the application when it narrows nothing; a controller's own handler methods
+answer for that controller alone. A single NULL `scope` cannot tell those apart, and
+reporting the second as the first would widen a handler's reach across the whole
+application.
+
+**Meta-annotations are followed the way the framework follows them**, for module-local
+types: the composition pre-pass (`resolve/effective_annotations.py`) widens both the advice
+set and the controller set to every annotation type THIS MODULE declares that is
+transitively meta-annotated with one of them — the same mechanism `annotation_driven`'s
+type-level gate uses, and for the same reason (§8.1 rule 1: a check for a literal
+annotation name rejects a valid custom stereotype). A composed annotation whose type lives
+in an unscanned jar is a stated boundary of the pre-pass.
+
+**Exception types: the annotation's value, else the parameter type — and the second half is
+deliberately narrower than the framework's own test.** The framework asks whether a
+parameter is assignable to the language's throwable root; this workspace can answer that
+only where the chain is READABLE, so `exception_roots` names the roots and the engine walks
+each scanned class's own `superclass` edges up to one of them. All four are listed rather
+than `Throwable` alone because the JDK's own hierarchy is never scanned: a module exception
+extending `RuntimeException` reaches its root in one hop and would reach nothing if only the
+top were named. A handler whose exception parameter comes from an unscanned jar derives no
+row from that parameter, and COVERAGE says so. **The under-report is the only honest
+direction**: nothing but a throwable reaches a throwable root, so this can never publish an
+ordinary argument as a handled exception.
+
+**One exception type per ROW.** A handler naming three types is three rows: each is a
+distinct, separately answerable fact, and an array in one cell joins against nothing.
+
+**`scope_from` deliberately omits `value`**, which is `@ControllerAdvice`'s own alias for
+`basePackages`. Reading it verbatim under its own name would record the same scope twice
+under two keys and make two identical declarations compare unequal. The consequence is
+stated rather than hidden: an advice narrowed only by the bare `value` form records no
+scope, which reads as "every controller" — the WIDER claim, so it can never under-report a
+handler's reach.
+
+**`status` is NULL where the declaration writes none, and NULL is an answer.** A status
+computed inside a `ResponseEntity` body is `fluent` territory — body analysis that derives
+no endpoint — and a `@ResponseStatus` on the EXCEPTION CLASS is readable only where that
+class is in this module's own facts. Both are stated boundaries of this phase, not gaps
+this column fills in.
+
+**Ordering (§3): NOT in the runs-last group**, on the same terms as `scheduled_work`.
+
 ### `protocol_hint`
 
 **Reclassifies endpoints other engines already produced** — a streaming response, a
@@ -1830,6 +1986,16 @@ the other moves too. Moving is still the right side to err on; a future ledger c
 handler could tighten it.
 
 ### `filesystem`
+
+> **SPECIFIED HERE, NOT YET USED.** There is no `filesystem` engine in
+> `application/resolve/endpoints.py`'s `_ENGINES`, no shipped catalog declares this style,
+> and a catalog that declared it would raise `CatalogError` from `_engine_for` at the top of
+> `derive_endpoints` — before any table is touched, so the run aborts rather than degrading.
+> Everything
+> below is design for a phase that has not run — the shape of the evidence, the source
+> precedence, and the vocabulary a catalog would use — and none of it describes behaviour
+> that exists. Stated in the document rather than left to a grep, per §5.3's second
+> corollary.
 
 The declaration is the file's own location. Next.js, SvelteKit, Remix and Nuxt derive the
 path from the directory structure and the HTTP verb from an exported symbol's name —

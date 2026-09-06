@@ -76,9 +76,14 @@ _GAPS = [
         "profile is misread."
     ),
     (
-        "Catalogs are not matched to modules: every catalog's `detect.coordinates` "
-        "is declared and read by nobody, so every catalog runs against every "
-        "module whether or not the module depends on that framework."
+        "Catalogs are matched to modules only where the framework rule is "
+        "conditional on the library being present: `detect.coordinates` is read, "
+        "and such a catalog is skipped with a reason where the module's build "
+        "declares none of them. Every other catalog still runs against every "
+        "module whether or not the module depends on that framework — and on "
+        "Maven, where only DIRECT build declarations are recorded, a framework "
+        "inherited through a parent or a starter cannot be told apart from an "
+        "absent one."
     ),
     (
         "Module classification reads only a container file and a declared main "
@@ -696,17 +701,21 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         # trusting `open_questions.py`'s comment (2O design §1b).
         return f"{candidate['class']}: {candidate['reason']}"
     if question == "channel_destination":
-        # 2O §5 (Task 9, not yet shipped): the channel name and the handler
-        # symbol `spring-integration.yml` will flag. No writer exists yet to
-        # verify the exact keys against, so this arm exists to keep the
-        # renderer honest the day that writer lands rather than to describe
-        # a shipped mechanism (GUIDELINES §5.3).
+        # 2O §5: the channel name and the handler symbol
+        # `spring-integration.yml` flags, verified against the writer's own
+        # `candidates` line (`resolve/engines/config_join.py`). *This comment
+        # said "Task 9, not yet shipped" until the 2O documentation sweep
+        # (`A-Mi23`); Task 9 shipped the writer and left the arm's comment
+        # describing the day before.*
         return f"{candidate['channel']} → {candidate['handler']}"
     if question == "environment_divergence":
-        # 2O §2b (Task 6, not yet shipped): the config key and its
-        # per-environment values. Sorted so two runs compose the identical
-        # sentence (NFR-1), the same discipline `supertype_derived._reason`
-        # already keeps for its own composed text.
+        # 2O §2b: the config key and its per-environment values, filed by
+        # `resolve/engines/derived_resource.py:224` where
+        # `spring.data.rest.base-path` differs between environments — shipped
+        # in Task 6, which this comment said it was waiting for until the 2O
+        # documentation sweep (`A-Mi23`). Sorted so two runs compose the
+        # identical sentence (NFR-1), the same discipline
+        # `supertype_derived._reason` already keeps for its own composed text.
         per_environment = ", ".join(
             f"{env}={value}"
             for env, value in sorted(cast(dict[str, object], candidate["values"]).items())

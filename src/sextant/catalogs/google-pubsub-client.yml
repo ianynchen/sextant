@@ -28,10 +28,14 @@ matches:
   # EXPECTED DUPLICATE (spec §4's duplicate-row ruling — asserted
   # deliberately at freeze time, not a bug found later): the SAME
   # co-located `Publisher.newBuilder(...).build().publish(message)` call
-  # `google-pubsub-publisher.yml` resolves ALSO matches this row by
-  # name+arity alone — a `single_call` catalog has no chain-reconstruction
-  # capability and cannot know which specific call produced its own
-  # receiver. One resolved fluent row plus one unresolved single_call row
+  # `google-pubsub-publisher.yml` resolves ALSO matches this row — a
+  # `single_call` catalog has no chain-reconstruction capability and cannot
+  # know which specific call produced its own receiver. *This said "by
+  # name+arity alone" until the 2O documentation sweep (`A-Mi14`); the row
+  # carries a `descriptor` too, and the duplicate is unaffected by that,
+  # because the descriptor pins WHICH overload matches and says nothing about
+  # which receiver produced the call.* One resolved fluent row plus one
+  # unresolved single_call row
   # stand side by side for that one call, exactly the pairing
   # `spring-kafka-message.yml`/`spring-kafka-template.yml`'s own
   # `record_arg` row keeps for `KafkaTemplate.send(Message)` — "unresolved

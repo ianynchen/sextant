@@ -961,6 +961,31 @@ here would restate those documents rather than add anything.
   converter from the jar's mere presence, so a module carrying it answers
   `json` at `narrowed` even with no annotation anywhere.
 
+- **Every rendered `architecture.md` now states the catalog-matching gap
+  truthfully** (2O Task 12). `egress/render/document.py`'s `_GAPS` said *"every
+  catalog's `detect.coordinates` is declared and read by nobody, so every
+  catalog runs against every module"*. That has been false since 2O Task 6:
+  the key IS read, by `application/resolve/dependencies.py`, and it skips —
+  visibly, with a reason — the catalogs whose framework rule is conditional on
+  the library being declared (`derived_resource` and `config_join` styles, four
+  of the 55 shipped catalogs). **This changes the "what this cannot see" list of
+  every document Sextant renders**, which is why it is here and not only in the
+  sweep report; the `gaps` KEY in `metadata.json` is unchanged, because
+  module-wide catalog activation is still unimplemented and that is what the key
+  names. No endpoint row, count or identity moves.
+- **`docs/components/D00-fact-schema.md`'s `protocol` list now names `amqp` and
+  `pulsar`** (2O Task 12). Both have been in `domain/closed_sets.py` since Task 1
+  and both are live; the schema document omitted them, which is a §5.1 violation
+  rather than a schema change. `D06`'s verbless-render row gains them too. No
+  code changes: the closed set is unchanged.
+- **`docs/components/D02-catalog-schema.md` §2 no longer counts engines by
+  counting headings** (2O Task 12). The two non-wire styles Task 8 shipped —
+  `scheduled_work` and `error_advice` — have sections; the heading says "The
+  styles" rather than "The thirteen styles"; and the preamble names the two
+  sections that are NOT engines, `protocol_hint` (a resolve pass) and
+  `filesystem` (specified, never implemented, and now carrying the
+  "specified here, not yet used" box §5.3 asks for).
+
 ### Consequences of the identity migration — please read before upgrading
 
 These four are the whole blast radius 2O design §8 names, and each is a

@@ -63,8 +63,13 @@ class Catalog:
     detect_coordinates: tuple[str, ...] = ()
     # D02 §2a, §2e, §2f, §2g. Default to empty so a catalog that declares none
     # of them — every catalog before Task 8, and the invented catalogs tests
-    # construct by hand — still loads; only Task 9's wrapper unwrapping reads
-    # `wrappers` today, the rest wait on Tasks 10 and 11.
+    # construct by hand — still loads. **All four are read today**:
+    # `wrappers` by `resolve/shapes/expansion.py:125` and
+    # `engines/error_advice.py:230`, `nullability` by `expansion.py:122`,
+    # `serialization` by `:121`, and `known_types` by `:126`. *This comment read
+    # "only Task 9's wrapper unwrapping reads `wrappers` today, the rest wait on
+    # Tasks 10 and 11" until the 2O documentation sweep (`A-Mi10`); the wait
+    # ended when those tasks landed and the sentence did not.*
     wrappers: list[dict[str, Any]] = field(default_factory=list)
     nullability: dict[str, Any] = field(default_factory=dict)
     serialization: dict[str, Any] = field(default_factory=dict)

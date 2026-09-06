@@ -406,9 +406,19 @@ def _collection(
         # type and the marker between them. What the framework serves for one
         # was not probed, and composing a path segment from a name no probe
         # covered would publish a URL that may not exist — so this derives
-        # nothing and COVERAGE carries the boundary. (Ordinary names always
-        # pass: an identifier in any language whose facts reach here is one
-        # here too.)
+        # nothing and COVERAGE carries the boundary.
+        #
+        # **The test is `str.isidentifier()`, and it is NARROWER than "nested"
+        # (`A-Mi3`).** A language whose identifiers admit `$` — the marker this
+        # check reads as nesting — can declare a TOP-LEVEL type named
+        # `Order$Item`, which fails the check and derives nothing though it is
+        # not nested at all. That is the under-report direction and is why it
+        # stands: the alternative — splitting on the marker and guessing which
+        # half is the entity — publishes a URL for a type the framework may name
+        # differently. It becomes WRONG the day a caller needs a route for such
+        # a type, and the fix is the one `A-Mi20`/`A-Mi21` need too: the
+        # extractor recording nesting as a FACT rather than leaving it to be
+        # inferred from a name.
         return None
     return pluralize(name[:1].lower() + name[1:])
 

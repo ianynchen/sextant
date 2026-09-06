@@ -168,7 +168,13 @@ row into `NOT DECLARED` and its version column's failure count from 0 to 1.
 1. **Every descriptor a shipped catalog declares is real** — named by `javap -p
    -s` on the owner class or on a superclass reachable from the same jar set, at
    the versions above. Nothing in the sweep was mistyped, and nothing was
-   transcribed from a source-level signature.
+   transcribed from a source-level signature. **This is one direction only, and
+   the zero failures are not a completeness result** (`A-Mi5`): the probe asks
+   "is every declared descriptor real" and never "is every real overload
+   declared". The second question is answered nowhere in this file — see "what
+   this probe deliberately did not measure" — so a `0 NOT DECLARED` column
+   means no row is wrong, not that no overload is missing. `A-M3`–`A-M7` are
+   findings of exactly the second kind.
 2. **An inherited method is still the owner's**, and the check has to know it.
    `SqsTemplate` declares only `send(Consumer)` itself; the arity-1 and arity-2
    forms come from `AbstractMessagingTemplate`. A call on a variable typed

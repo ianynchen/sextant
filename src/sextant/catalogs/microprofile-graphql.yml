@@ -22,6 +22,21 @@ matches:
     # identical shape, which is why the form is engine vocabulary rather than
     # three catalog workarounds. Rides `spring-graphql.yml`'s form with no
     # engine change of its own (2H design §1's amended acceptance test).
+    #
+    # **WHAT IS MEASURED HERE IS THE FACT ABOVE, NOT THE NAME BELOW (§5.4).**
+    # That the default never reaches the class file was checked. What
+    # MicroProfile serves for a method whose `@Query` names nothing was NOT:
+    # the fallback publishes the method's own name because that is Spring's
+    # rule, and MicroProfile is a different implementation. If SmallRye strips
+    # a `get`/`is` prefix — which its own naming section suggests and no run in
+    # this repository has confirmed — then `@Query List<Order> getOrders()` is
+    # served as `orders` while this catalog publishes `getOrders`, which is a
+    # WRONG address rather than a missing one (§8.1 rule 1: mirror the
+    # framework's rule, never an approximation that fits the examples in
+    # front of you). Carried anyway rather than dropped, because dropping it
+    # loses every un-annotated operation and the annotated case — `@Query("orders")`,
+    # reading its own value — is unaffected either way. `docs/COVERAGE.md`
+    # states the boundary and names the probe that closes it (`A-Mi9`).
     path_fallback: construct_name
     # No qualifier: MicroProfile's non-root resolver is `@Source` on a
     # PARAMETER, which names the parent type through the parameter's own type

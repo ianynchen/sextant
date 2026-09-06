@@ -303,13 +303,17 @@ exactly the kind of unrequested deviation §1.1 rules against. The warning is ha
 ### A document naming a mechanism is not evidence the mechanism exists
 
 Phase 2O's spec called `detect.coordinates` "the SHIPPED jar-presence mechanism"
-and had a task read a `constant` fact kind's value. Neither exists: `detect:` is
-declared by every one of the 41 shipped catalogs and read by nothing, and D00's
-`constant` kind has no producer at all. Nine such mechanisms are now registered
+and had a task read a `constant` fact kind's value. Neither existed when the spec
+was written: `detect:` was declared by every one of the 41 catalogs shipping then
+and read by nothing, and D00's `constant` kind has no producer at all. Fourteen
+such mechanisms are now registered
 in [documented-not-implemented.md](documented-not-implemented.md), one of which
 (a routing-ambiguity "collision detector" that D01 describes as a *property* of
 identity, not a component) reached an implementation task's dispatch before a
-grep caught it.
+grep caught it. *(Both counts are of that moment and are left there deliberately:
+2O Task 6 made `detect.coordinates` real for two styles, and 55 catalogs ship
+today. The lesson is about the spec, not about the current numbers — register
+entry #1 carries those.)*
 
 **What did not work:** four rounds of adversarial spec review. The reviewer read
 the same documents the author did and cited the same lines back — a premise both
@@ -395,11 +399,14 @@ reader inherits the count rather than starting it again — which is the whole
 mechanism: without a record, the third occurrence looks like the first.
 
 **Class 1 — treating documentation as evidence about code. Six occurrences.**
-`detect.coordinates` (declared by all 41 catalogs, read by nothing), D00's
-`constant` fact kind (no producer), a routing-ambiguity "collision detector"
-(no findings mechanism exists at all), `root_kind`, `trace_of`, and project
-catalogs (whose config key does not merely fail — it aborts the analysis).
-Each was corrected on its own. The rule that would have prevented the rest is
+`detect.coordinates` (declared by all 41 catalogs then shipping, read by
+nothing), D00's `constant` fact kind (no producer), a routing-ambiguity
+"collision detector" (no findings mechanism exists at all), `root_kind`,
+`trace_of`, and project catalogs (whose config key does not merely fail — it
+aborts the analysis). Each was corrected on its own, and **all six now have a row
+in the register** — `trace_of` and project catalogs were the two this count named
+and the file did not carry, added as entries #11 and #10 by the 2O documentation
+sweep. The rule that would have prevented the rest is
 §5.3, and writing it at the third occurrence instead of the sixth would have
 put it in front of the spec that four of them went on to break.
 

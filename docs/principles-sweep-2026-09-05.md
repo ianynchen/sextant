@@ -2114,3 +2114,82 @@ neither is a disagreement about the finding:
    not say each pins the right one**, which is the harness's own stated limit,
    and it says nothing about the three `derive_endpoints.sql` guards no
    near-miss names at all.
+
+
+---
+
+## 13. Fix-pass status — round 2 (the twenty-three Class A Minors)
+
+Round 2 is the 2O documentation sweep (Task 12), which took the Minors as a
+group because §9's order of work puts them there and because they are
+**overwhelmingly stale rationale** — the correction lands in a comment, a
+catalog block or a probe verdict, not in a derivation. Sweep 5 said so of its own
+seven and it generalises: **fifteen of the twenty-three are closed by correcting
+text, and none of the fifteen changes a derived row.** The exceptions are named
+below and each is left open with a reason, never forgotten.
+
+`FIXED (<sha>)` means the text is now true of the code, verified against the code
+rather than against the finding. `CLOSED — no defect` means the finding was
+checked and the site was already correct or already said what the finding asked
+for. `OPEN — <reason>` is a deliberate decision.
+
+**One behaviour change rode with this round and is not a Minor**: the
+`catalog_module_matching_not_implemented` gap sentence in
+`egress/render/document.py`'s `_GAPS` asserted that `detect.coordinates` "is
+declared and read by nobody". That has been false since 2O Task 6, and it is in
+the golden and in every `architecture.md` Sextant renders. Corrected here; the
+golden moves by one line.
+
+| id | status |
+|---|---|
+| `A-Mi1` | **CLOSED — already fixed** by 2O Task 13, which corrected the sentence in `shapes/arguments.py` in place and made the reader match it. Re-read: the paragraph now ends with the correction and names 9.15 |
+| `A-Mi2` | **CLOSED — no defect.** `spring-web.yml` no longer asserts the protobuf-lite premise: it states in place that the LITE runtime's reach is **unverified** and that `GeneratedMessageLite` is listed so a module extending it binds either way. Nothing is claimed that was not measured. The residual is a probe backlog item (no `protobuf-javalite` jar available), not a text defect |
+| `A-Mi3` | **FIXED.** The comment claimed "ordinary names always pass". It does not: the test is `str.isidentifier()` and JLS 3.8 admits `$` in an identifier, so a legally-named top-level `Order$Item` derives nothing though it is not nested. The comment now states the real test and the real bound, and points at the fix `A-Mi17`/`A-Mi20`/`A-Mi21` share: the extractor recording nesting as a FACT rather than leaving it inferred from a name. It is written without naming a language, because `tests/architecture/test_language_confinement.py` refuses one in `application/` — the first draft said "a Java identifier" and the guard caught it. Under-report direction, unchanged behaviour |
+| `A-Mi4` | **OPEN — structural, needs approval.** Giving D02 a field for the version a rule was measured against is a catalog SCHEMA change (GUIDELINES §1.1: a table/schema shape differing from the spec needs approval before it is taken), and it lands with a loader, a validation and a ratchet or it lands as another unread key. It is not a documentation edit and was not taken here |
+| `A-Mi5` | **FIXED.** CP-10's "what this probe deliberately did not measure" section already disclaimed the converse; what read as completeness was the VERDICT, which said "every descriptor is real" and stopped. Verdict item 1 now carries the bound in the same sentence — one direction only, `0 NOT DECLARED` means no row is wrong rather than no overload is missing — and points at `A-M3`–`A-M7` as findings of the second kind |
+| `A-Mi6` | **CLOSED — no defect.** The finding says so itself: the four sibling registration annotations deriving nothing is correctly stated at `COVERAGE:799`, and the row was noted for its shape. `@WebEndpoint`'s meta-annotation status stays unverified and is a probe backlog item |
+| `A-Mi7` | **FIXED, and the finding is half wrong.** `jakarta-jws.yml` DID name both implementations by class and method; what it lacked is a version for either and a committed probe, and Apache CXF has never been executed by this repository (§12.2 item 2 says so). The claim is now stated at its real tier — the framework rule was READ, not run — with the falsifying condition beside it. The rule stands: the spec defines the default and the alternative is a QName that matches no caller |
+| `A-Mi8` | **OPEN — cannot be closed without measuring.** `spring-sqs.yml` names no version for the modern `@SqsListener`. Writing one would record an intention, which is exactly what §5.4's own worked example (CP-5) forbids: evidence is what the run said, not what the writer believed. It closes with a `javap` against the artifact, in the probe backlog |
+| `A-Mi9` | **FIXED as a statement, OPEN as a rule.** The prediction is now stated where both readers look: `microprofile-graphql.yml` at the `path_fallback` line, and `COVERAGE.md`'s row, which drops from ✅ to ◐ and names the wrong-address consequence and the probe that closes it. What is NOT done is measuring SmallRye's naming rule — no network in this repository's tests, and the finding calls it the highest-value item in the probe backlog |
+| `A-Mi10` | **FIXED.** All four blocks are read: `wrappers` (`shapes/expansion.py:125`, `engines/error_advice.py:230`), `nullability` (`:122`), `serialization` (`:121`), `known_types` (`:126`). The comment named only the first and said the rest "wait on Tasks 10 and 11"; the wait ended when those tasks landed and the sentence did not |
+| `A-Mi11` | **FIXED.** `resolved_config` is queried at seven call sites across five files — `engines/config_join.py`, `engines/derived_resource.py`, `api.py` twice, `enrich/brief.py` twice, `enrich/validate.py` — not two. The count is removed rather than corrected to six, because the count was never the operative claim: what matters is that `annotation_driven` is not among them, and that survives |
+| `A-Mi12` | **FIXED.** Only the renderer switches on the question kind (`egress/render/document.py::_candidate_sentence`); the export carries the rows through unread (`api.py:768`). The cost of a new kind is one arm, not two, and the comment now says which |
+| `A-Mi13` | **FIXED, with the number re-measured rather than carried.** All **75** `matches.methods` rows across the 55 shipped catalogs declare both `arity` and `descriptor` — counted 2026-09-05; the finding said 57, which was the count when it was written. The permissive branch stays, for hand-built test catalogs, and the comment now says that is why |
+| `A-Mi14` | **FIXED.** `google-pubsub-client.yml`'s expected-duplicate note said the row matches "by name+arity alone" in a row that carries a `descriptor`. The duplicate is real and unaffected — a descriptor pins WHICH overload matches and says nothing about which receiver produced the call — and the note now says that instead |
+| `A-Mi15` | **FIXED, in three places rather than one.** `yaml_source.py` said "all 41 shipped catalogs"; 55 ship, and 51 of them have coordinates no gate reads. The docstring now also states that this function is a SHAPE check and **not** the gate, so citing it as the consumer would satisfy GUIDELINES §5.3 falsely. GUIDELINES §5.3 itself carried the 41 and the flat "nothing reads it": both corrected, with the update marked as the rule's own second form (a mechanism that IS read, but narrower than assumed) |
+| `A-Mi16` | **FIXED.** `--allow-resolve` reaches the parameter (`cli/app.py:61` → `api.py:696` → `stages/analyze.py`). "Nothing passed it" was wrong in the commit that wrote it |
+| `A-Mi17` | **OPEN — extractor code, not documentation.** Reading the `InnerClasses` attribute so a `protected` nested type is not recorded `public` is a change to `ClassScanner.java` with a fixture and a re-measured probe. It is a fabrication-direction defect on a rare shape and belongs in a code pass, not in a sweep whose remit is text (§3: touch only what you must) |
+| `A-Mi18` | **OPEN — engine code.** `callee_of` matching by argument count is the arity defect in a module the catalog fix did not reach. It under-reports rather than choosing wrongly (returns `None` on a collision), so it fabricates nothing; closing it means teaching the match a descriptor, which is engine work |
+| `A-Mi19` | **OPEN — ratchet scope.** Widening `test_catalog_descriptor_coverage.py` past `matches.methods` to the other call-matching grammars is a test-and-catalog change of real size (93 entries), and each grammar needs its own descriptor support in its engine first. Now cross-referenced from `single_call.py`'s own docstring so the ratchet's reach is stated where a reader would otherwise assume it total |
+| `A-Mi20` | **OPEN — latent, and the same root as `A-Mi3`/`A-Mi21`.** `outer_type_of` splitting on the first `$` is wrong per JLS 3.8, and every shipped consumer is fenced to protoc-generated names. The authority is `InnerClasses` (JVMS 4.7.6), which the extractor does not read — one fix closes `A-Mi17`, `A-Mi20` and this |
+| `A-Mi21` | **OPEN — latent.** `type_descriptor` treating every `.` as a package separator yields a symbol the extractor never emits, and every shipped catalog already writes `$`. Closing it well means an architecture test that REFUSES the dotted spelling, which is the §8.3 form; that is a test to write, not a sentence to fix |
+| `A-Mi22` | **OPEN — a serialization question, noted and not asserted.** `char` → `wire_type: integer` is right as JLS 4.2.1 and wrong for every JSON serializer in the estate. Changing it changes a published contract column for real modules, which needs the serializer question settled first |
+| `A-Mi23` | **FIXED, and it was two comments rather than one.** The finding names `environment_divergence` at `document.py:699-700`; the arm directly above it said the same thing about `channel_destination` ("Task 9, not yet shipped"). Both shipped — `channel_destination` from `engines/config_join.py`, `environment_divergence` from `engines/derived_resource.py:224` — and both comments now cite their writer |
+
+**Twelve fixed, three closed with no defect or already fixed, and eight left
+open** (`A-Mi4`, `A-Mi8`, `A-Mi17`, `A-Mi18`, `A-Mi19`, `A-Mi20`, `A-Mi21`,
+`A-Mi22`) — every one of the eight is either code, a schema change needing
+approval under §1.1, or a measurement this repository cannot make without a
+network. **None of the eight is a fabrication**: five under-report, two are
+latent with every shipped consumer fenced, and one (`A-Mi22`) is a published
+contract column whose change waits on a serializer question. The fifteen closed
+here are closed by TEXT alone and **not one of them changes a derived row** —
+the single rendered-output change in this round is the `_GAPS` sentence above,
+which is not a Minor.
+
+### 13.1 Where round 2 disputes this document
+
+- **`A-Mi7` overstates its own finding.** "Names neither" is false —
+  `jakarta-jws.yml:85` named `RuntimeModeler#getNamespace` and CXF's
+  `PackageUtils#getNamespace` by class and method. The real defect is the
+  missing version and the missing probe, which §12.2 item 2 states correctly.
+  Corrected at the site rather than by weakening the finding.
+- **`A-Mi13`'s count was 57 and is 75.** Counted from the shipped catalogs on
+  2026-09-05, not carried. The finding's claim — that no shipped `methods:` row
+  now lacks the keys — held.
+- **§12's "31 killed" is a round-1 figure.** `scripts/check.sh --guards` reports
+  **41 killed, 0 survived** at this round, with the allowlist still empty. §12's
+  sentence is left as the record of that round rather than rewritten.
+- **`A-Mi5`'s "never asks the converse" was already stated** in CP-10's own
+  "deliberately did not measure" list. What was missing is the bound on the
+  VERDICT, which is where a reader stops. Fixed there.

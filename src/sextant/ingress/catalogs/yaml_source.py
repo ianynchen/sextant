@@ -97,10 +97,15 @@ def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
 
     Optional, and an absent block is an empty tuple — every catalog that
     declares `detect: {coordinates: []}` says the same thing explicitly: the
-    evidence for this framework is not a dependency. Only the style that gates
-    on it reads the value (`Catalog.detect_coordinates`), so a catalog
-    declaring coordinates it never uses is not an error; it was the state of
-    all 41 shipped catalogs until this key was read at all.
+    evidence for this framework is not a dependency. Only the two styles in
+    `resolve/dependencies.py`'s `DEPENDENCY_GATED` read the value
+    (`Catalog.detect_coordinates`), so a catalog declaring coordinates it never
+    uses is not an error; it was the state of every one of the 41 catalogs
+    shipping when this was written, and it is the state of the 51 of today's 55
+    that no gate reads. **This function is a SHAPE check, not the gate**: it refuses a
+    coordinate written in the wrong form for all 55 and compares none of them,
+    so citing it as the consumer of `detect.coordinates` would satisfy
+    GUIDELINES §5.3 falsely. The consumer is `dependencies.py:108-137`.
     """
     detect = raw.get("detect", {})
     if not isinstance(detect, dict):

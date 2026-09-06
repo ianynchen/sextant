@@ -58,12 +58,36 @@ finding fewer endpoints.
 | `kotlin_metadata` | Nullability and data-class shapes |
 | `call_site` | Every call-site-driven engine — [D02](D02-catalog-schema.md)'s `single_call` and `fluent` both |
 | `implemented_interfaces` | The `interface_implementation` style — matching a registered receiver's own type against an interface a catalog names |
+| `generic_interfaces` | Capability 9.14 — the parameterized superinterface references `implemented_interfaces` erases. `derived_resource` reads it for a repository's entity type |
+| `superclass` | Capability 9.13 — a class symbol fact's erased direct superclass, read regardless of whether its signature is generic. [D00](D00-fact-schema.md) §4's `relationship_kind: extends`, made real |
+| `array_arguments` | Capability 9.15 — a call-site argument produced by an array construction reads as `{kind: array, elements: […]}` rather than one opaque `unresolved`. Every `String...` API in the estate depends on it |
+| `nested_annotation_args` | Capability 9.16 — an annotation-valued annotation argument reads as a nested `{annotation, args}` use of its own, recursively, rather than being dropped with no key at all ([D00](D00-fact-schema.md) §5) |
 
-**Eight of the scanner's now-eleven designed capabilities are shipped.** `annotation_args`,
-`typed_signatures`, `type_annotations` and `kotlin_metadata` since Phase 2A/2B; `call_site`,
-`string_constants` and `chain_reconstruction` from Phase 2C's dataflow pass (below);
-`implemented_interfaces` from a class symbol fact's own `interfaces` list, in declaration
-order ([D00](D00-fact-schema.md) §5a).
+**Twelve of the scanner's now-fifteen designed capabilities are shipped**, and the shipped
+set is `ingress/extract/jvm/scanner.py`'s `_CAPABILITIES`, which is what a catalog's
+`requires:` is actually checked against. `annotation_args`, `typed_signatures`,
+`type_annotations` and `kotlin_metadata` since Phase 2A/2B; `call_site`, `string_constants`
+and `chain_reconstruction` from Phase 2C's dataflow pass (below); `implemented_interfaces`
+from a class symbol fact's own `interfaces` list, in declaration order
+([D00](D00-fact-schema.md) §5a); and `superclass`, `generic_interfaces`, `array_arguments`
+and `nested_annotation_args` — capabilities 9.13, 9.14, 9.15 and 9.16 — from Phase 2O.
+*The four 2O capabilities were absent from this table until the 2O documentation sweep,
+which is the §5.1 failure of documenting a schema in one file and shipping it in another.*
+
+**A capability with no consumer is a half-shipped feature (GUIDELINES §2), so name the
+consumers.** 9.13's `superclass` is read by `resolve/shapes/parse_binding.py`'s ancestry
+walk and by `error_advice`'s throwable-root walk; 9.14's `generic_interfaces` by
+`engines/derived_resource.py`. **9.15's `elements` has three consumers, all wired in 2O
+Task 13** — `engines/combinator.py`'s `media_values` predicate (through
+`shapes/arguments.py::_expanded_arguments`), `all_strings`
+(`shapes/arguments.py::_all_string_channels`), and `shapes/arguments.py::channels_of`, the
+array-aware sibling of `channel_of`. **9.16 has exactly one**: `engines/scheduled_work.py`'s
+`_folded`, which reads a repeatable container's array of annotations so that a method
+carrying two `@Scheduled` yields both schedules. **No consumer reads a nested annotation's
+own ATTRIBUTE as an address**, and that is a refusal rather than an omission: giving
+`@RabbitListener` a `path_from: [bindings]` would publish a `@QueueBinding`'s JSON text as
+a queue name. `docs/COVERAGE.md` carries that boundary and the condition that closes it.
+
 **`chain_reconstruction` means exactly this: receiver and result value ids are present on
 `call_site` facts** ([D00](D00-fact-schema.md) §5) — a `fluent` catalog's steps are a join
 over those links, nothing more. `invokedynamic` stays undeclared: an indy call site is
@@ -88,7 +112,7 @@ Facts as JSONL, one file per **source file**, plus the uncovered-source list.
 ### The JVM scanner
 
 ASM over class files. See [ARCHITECTURE.md](../ARCHITECTURE.md) DR-1 for why this rather
-than a source indexer. Two of its eleven capabilities are hard, and the rest are
+than a source indexer. Two of its fifteen capabilities are hard, and the rest are
 straightforward.
 
 **Two forms of class input, one answer.** The scan is pointed either at a directory tree of
