@@ -64,10 +64,13 @@ matches:
       # `MergedAnnotations` view, which is the container-aware read.
       - { fqn: org.springframework.amqp.rabbit.annotation.RabbitListener,
           container: org.springframework.amqp.rabbit.annotation.RabbitListeners }
-      # `@RabbitHandler` declares NO container, and the absence is a claim:
-      # CP-16 row 2 measured `@Repeatable` on the listener annotation only, and
-      # row 3 read `@RabbitHandler`'s whole declaration without asking whether
-      # it is repeatable (§8.1 rule 4).
+      # `@RabbitHandler` declares NO container, and that is now MEASURED rather
+      # than an unmeasured silence. CP-16 row 2 asked `@Repeatable` of the
+      # LISTENER annotation only (§8.1 rule 4, so this entry claimed nothing);
+      # CP-17 rows 2k/2l read `@Target({METHOD, ANNOTATION_TYPE})` with NO
+      # `@Repeatable` at 3.1.4 and 4.1.1 alike, and rows 3k/3l found no
+      # `org.springframework.amqp.rabbit.annotation.RabbitHandlers` in either
+      # jar.
       #
       # `@RabbitHandler` carries no queue attribute of its own (path suffix
       # ''), and reaches a destination only through the class-level prefix
@@ -117,3 +120,8 @@ shape_model: json
 measured:
   - { artifact: org.springframework.amqp:spring-rabbit, versions: ["3.1.4", "4.1.1"],
       identity: reported, by: scripts/probes/cp16_listener_destinations.md }
+  # A SECOND row rather than a widened first one, `spring-kafka.yml`'s reason
+  # exactly: CP-16 measured the LISTENER annotation, CP-17 the HANDLER, and a
+  # reader of a `by:` needs the probe that asked the question.
+  - { artifact: org.springframework.amqp:spring-rabbit, versions: ["3.1.4", "4.1.1"],
+      identity: reported, by: scripts/probes/cp17_containers_and_class_level.md }

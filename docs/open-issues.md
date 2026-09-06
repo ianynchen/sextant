@@ -111,6 +111,18 @@ vocabulary that takes all three at once**, with the three measurements above as 
 `scheduled_work`'s `container` and `disabled` keys are the shape it would follow. Until then
 the three rows stay open and none of them is fixed in isolation.
 
+**The audit table the pass left behind is now CLOSED too, 2026-09-06, by CP-17.** That
+report named four annotations whose repeatability *nothing had measured* — `@PulsarListener`,
+`@SqsListener`, `@KafkaHandler`, `@RabbitHandler` — and called them measurement gaps rather
+than grammar ones. All four are measured: **none of them is `@Repeatable`**, at any of the ten
+versions read. Three of the four answers say the catalogs' silence was right and it is now a
+claim rather than an absence of evidence; the fourth, `@PulsarListener`, turned out to have a
+container the framework reads and the language never writes (`OI-38`), which is why the
+prediction that it would be "the Kafka case" was worth refusing to encode. Two further defects
+came out of the same reading and neither was on any backlog: `OI-39` (a whole inbound
+annotation named nowhere) and `OI-40` (a class-level shape that did not exist when the comment
+denying it was written).
+
 **THE PASS RAN, 2026-09-06, and all three rows are CLOSED below.** Three words, designed
 together and each naming the measurement that forces it —
 `mapping.annotations[].container` (`OI-36`, CP-16), `mapping.path_from_siblings` (`OI-35`,

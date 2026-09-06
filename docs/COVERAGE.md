@@ -1730,11 +1730,17 @@ already had one style over — and `requires` extractor capability 9.16, so a sc
 cannot read a nested annotation skips the catalog visibly rather than reporting half a
 module's listener surface.
 
-**What is still a boundary here, and it is an absence claimed rather than overlooked.**
-`@KafkaHandler` and `@RabbitHandler` declare no container: CP-16 row 2 measured `@Repeatable`
-on the listener annotations only, and row 3 read the handler annotations' whole declaration
-without asking whether they are repeatable. A method carrying two of THOSE would still derive
-nothing, and closing it is one `javap` question rather than an engine change.
+**What used to be a boundary here is now a MEASURED absence, and the difference matters.**
+`@KafkaHandler` and `@RabbitHandler` declare no container, and CP-16 could not say whether
+that was right: row 2 asked `@Repeatable` of the listener annotations only, and row 3 read the
+handler annotations' declaration without asking. **CP-17 asked** — rows 2i–2l read
+`@Target({METHOD, ANNOTATION_TYPE})` with no `@Repeatable` on either, at spring-kafka 3.1.4 and
+4.1.1 and spring-rabbit 3.1.4 and 4.1.1, and rows 3i–3l found no `KafkaHandlers` or
+`RabbitHandlers` in any of the four jars. `@SqsHandler` is the same answer at
+spring-cloud-aws-sqs 4.1.1 (rows 2n, 3n). So all three handler entries' silence about a
+container is a claim about the framework rather than an absence of evidence, and **there is no
+repeated-handler shape left to miss** — the row that stood here asked for one `javap`
+question, and this is it.
 
 **A `@RabbitListener` declared on a superclass or interface method registers a listener on the
 implementing bean, and we see it only where it is written** (`OI-37`). CP-16 row 4e:

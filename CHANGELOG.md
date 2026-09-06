@@ -14,6 +14,20 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **The vocabulary pass's own audit table is closed: none of the four annotations it left
+  unmeasured is `@Repeatable`.** `spring-kafka.yml` and `spring-rabbit.yml` each gain a
+  **CP-17** `measured:` row beside their CP-16 one — same artifact, same two versions,
+  different question — and their handler entries stop saying "not measured at all".
+  `@KafkaHandler` and `@RabbitHandler` are `@Target({METHOD, ANNOTATION_TYPE})` with no
+  `@Repeatable` at spring-kafka 3.1.4/4.1.1 and spring-rabbit 3.1.4/4.1.1, and no
+  `KafkaHandlers`/`RabbitHandlers` exists in any of the four jars. So the two catalogs'
+  silence about a container is a **claim about the framework**, and `docs/COVERAGE.md`'s row
+  asking for exactly this `javap` question is retired rather than restated.
+
+  Of the four the audit named, three answers say the catalog was already right; the fourth
+  (`@PulsarListener`) turned out to have a container the framework reads and the language
+  never writes, which is why refusing to encode the predicted answer was worth the round.
+
 - **Both legacy `@SqsListener` spellings are measured, and were already right** —
   `spring-sqs-legacy.yml` gains a `measured:` row per artifact (**CP-17**,
   `org.springframework.cloud:spring-cloud-aws-messaging` 2.2.6.RELEASE and

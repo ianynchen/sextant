@@ -60,12 +60,16 @@ matches:
       # normally.
       - { fqn: org.springframework.kafka.annotation.KafkaListener,
           container: org.springframework.kafka.annotation.KafkaListeners }
-      # `@KafkaHandler` declares NO container, and the absence is a claim rather
-      # than an omission: CP-16 row 2 measured `@Repeatable` on the listener
-      # annotation only, and row 3 read `@KafkaHandler`'s whole declaration
-      # (`isDefault(): boolean`, nothing else) without asking whether it is
-      # repeatable. An unmeasured container is not one this file names (§8.1
-      # rule 4); `docs/COVERAGE.md` carries the boundary.
+      # `@KafkaHandler` declares NO container, and that is now MEASURED rather
+      # than an unmeasured silence. CP-16 row 2 asked `@Repeatable` of the
+      # LISTENER annotation only and row 3 read `@KafkaHandler`'s declaration
+      # without asking, so this entry deliberately claimed nothing (§8.1
+      # rule 4); CP-17 rows 2i/2j then asked it directly and read
+      # `@Target({METHOD, ANNOTATION_TYPE})` with NO `@Repeatable` at 3.1.4 and
+      # 4.1.1 alike, and rows 3i/3j looked for an
+      # `org.springframework.kafka.annotation.KafkaHandlers` in each jar and
+      # found none. The absence below is a claim about the framework, and it is
+      # the framework's own answer.
       #
       # `@KafkaHandler` carries no path attribute of its own (path suffix
       # ''), and reaches a path only through the class-level prefix above —
@@ -130,3 +134,9 @@ shape_model: json
 measured:
   - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4", "4.1.1"],
       identity: reported, by: scripts/probes/cp16_listener_destinations.md }
+  # A SECOND row rather than a widened first one: CP-16 measured the LISTENER
+  # annotation and CP-17 measured the HANDLER, and a reader of a `by:` needs to
+  # reach the probe that asked the question rather than the one that asked
+  # another. Same artifact, same two versions, different question.
+  - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4", "4.1.1"],
+      identity: reported, by: scripts/probes/cp17_containers_and_class_level.md }
