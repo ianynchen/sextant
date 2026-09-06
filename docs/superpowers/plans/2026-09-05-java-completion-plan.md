@@ -189,12 +189,45 @@ missing from its scope.**
 member (NFR-5 amendment, versioned with its estate cost), the brief's
 `_ANCHOR_LINES`, INSTRUCTIONS.md and the overlay validation.
 
-**The hard line on I4, stated so it is not softened later:** the LLM describes
-what a *derived* scheduled job does — an Overlay at `evidence: llm`, which
-"never produces facts and never overrides evidence silently". It does **not**
-fill an EMPTY section. If we found no scheduled work, `None found.` is the
-content; asking a model to write something there is exactly how fabrication
-enters.
+**I5. A protocol a question cannot yet know. (S, ruled 2026-09-05, user.)**
+`spring-integration.yml` declares `protocol: amqp` and files EVERY Spring
+Integration channel question under it — including Kafka and JMS flows. The file
+says so itself. This is **not** the scheduler case: Spring Integration IS a
+messaging endpoint, so a protocol genuinely applies; we simply cannot tell WHICH
+one from what this catalog reads.
+
+It keys on `address_from_config` — `resolved_config`, i.e. configuration files —
+and gates on `spring-integration-core`, the protocol-agnostic framework
+artifact. A channel named `orders.inbound` in YAML does not say AMQP.
+
+- **Now (S):** the question carries no guessed protocol. "Which destination does
+  this channel bind to" and "over which protocol" are the SAME unknown, and
+  `unresolved` is this project's own answer for an unknown. Filing it under a
+  measured-elsewhere default is the defaulted-value defect one column over.
+- **Per-catalog pass (M):** key on the ADAPTER instead — `Amqp.inboundAdapter`,
+  `Kafka.messageDrivenChannelAdapter`, `Jms.inboundAdapter` — one catalog per
+  protocol, each declaring the protocol its own adapter proves. That turns the
+  protocol from an unknown into a measured code fact, and it is where this
+  should end up. Requires measuring each adapter family; the committed probe
+  measured AMQP only.
+
+**The hard line on I4, refined 2026-09-05 after the user asked for exactly what
+the first draft forbade.** The distinction is between **explaining an absence**
+and **populating one**, and only the second is forbidden.
+
+- **Allowed, and now required:** an overlay saying what the absence MEANS,
+  anchored to facts we did derive — *"this module declares no scheduled work;
+  background processing is triggered by the message listeners in §4"*, or *"no
+  error handlers are declared, so exceptions reach the container's default."*
+  That is interpretation of derived evidence, which is what an Overlay is for.
+- **Forbidden:** inventing a scheduled job, a handler, or any row no fact
+  supports. `None found.` stays the DERIVED content of the section; the overlay
+  sits beside it at `evidence: llm`, never replacing it.
+
+The first draft said the LLM must not touch an empty section at all. That was
+too absolute — it conflated inventing a fact with explaining that there is none,
+and the user asked for the second. An overlay may say what silence means; it may
+never break it.
 
 ### H. Quality and infrastructure debt
 
