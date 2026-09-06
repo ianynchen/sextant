@@ -259,28 +259,29 @@ outbound HTTP one, asserting the shape both ways. **Falsified by** a shipped
 `LocalDate` shape that a reader says is wrong under the module's serialiser
 configuration.
 
-### OI-13 — the plan cites `A-C2` for a defect the sweep files under `A-C3`
-**Minor · found 2026-09-06 during F2 ·
-`docs/superpowers/plans/2026-09-05-java-completion-plan.md:84-90`**
+---
 
-F2's own entry says "Sweep 2's `A-C2` is the consequence: the `Void` mapping
-replicated in 28 with 9 missing". `A-C2` in
+## CLOSED
+
+### OI-13 — the plan cites `A-C2` for a defect the sweep files under `A-C3`
+**Minor · found 2026-09-06 during F2 · CLOSED 2026-09-06 by `3b3ba58` ·
+`docs/superpowers/plans/2026-09-05-java-completion-plan.md:87`, `:354`**
+
+F2's own entry said "Sweep 2's `A-C2` is the consequence: the `Void` mapping
+replicated in 28 with 9 missing", and the stage-2 summary said the same of
+"`A-C2`'s nine-catalog defect". `A-C2` in
 `docs/principles-sweep-2026-09-05.md:122` is the OkHttp
 `.method("DELETE", …)` → `GET` fabrication; the `Void` finding is `A-C3` at
 `:123` and `:352`. The collision is a sweep-2-local numbering (`A-C2` is
 labelled "Sweep 2, C-1" and `A-C3` "Sweep 2, C-2") leaking into a document that
 uses the global ids everywhere else.
 
-Cost is a reader's, not a run's: following the citation lands on a different
+Cost was a reader's, not a run's: following the citation landed on a different
 Critical in the same table, and both are about a wrong value in a catalog, so
-the mistake does not announce itself. The plan is a record of a decision and is
-not edited here for the reason the sweep document is not.
-**Closes by** correcting the two references when the plan is next revised.
-**Falsified by** nothing — it is a citation, checked against both files.
-
----
-
-## CLOSED
+the mistake did not announce itself. Closed as this row said it would be — by
+correcting **both** references, the plan being revised for Stage 3. The sweep
+document itself is untouched: it stays frozen as that audit's record, and its
+own numbering was never wrong.
 
 ### OI-1 — every Spring Integration channel question was filed under `amqp`
 **Major · introduced 2026-09-06 by 2O Task 9 (`bd61663`) · CLOSED 2026-09-06 by
