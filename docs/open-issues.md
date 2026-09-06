@@ -216,6 +216,68 @@ therefore cannot bound anything on their own.
 **Falsified by** a module resolving a version outside every `measured:` row of a
 catalog that ran on it, with nothing in `metadata.json` saying so.
 
+### OI-12 — F2 unified three divergent shape tables, and no test exercises the widening
+**Major · introduced 2026-09-06 by F2 · `src/sextant/catalogs/shape-models/json.yml`**
+
+Extracting the payload-type blocks meant merging what forty-two catalogs
+actually held, and they did not all hold the same thing. Measured before the
+edit: `serialization` had **one** variant across all 42; `nullability` had one
+across 37 with **five declaring none** (`okhttp`, `retrofit`,
+`spring-restclient`, `spring-resttemplate`, `spring-webclient`); `known_types`
+had **three** — 33 catalogs with the boxes and `Void`, 8 with `LocalDate` and
+`UUID` instead, and `retrofit` with two entries. The shipped model is the UNION,
+so three widenings landed:
+
+1. the 33 messaging/outbound catalogs gained `java.time.LocalDate` → `string`/
+   `date` and `java.util.UUID` → `string`/`uuid`;
+2. the 8 HTTP/GraphQL catalogs gained `String`, the boxes and `Void` — these
+   mirror `WireTypes.objectLike`'s projection exactly
+   (`test_known_types_mirror_the_projection.py`), so they change nothing for a
+   scanned field and answer for a bare `class`-literal symbol, which is why the
+   33 carried them;
+3. the five outbound HTTP catalogs gained `nullability`. The test this replaces
+   said in its own docstring that giving them one "is a behaviour change owed
+   its own change — every field nullability answer on a type they reach first
+   would move". F2 is that change, and it was not measured before being made.
+
+**The whole suite passed unchanged across the edit, which is the defect.** Not
+one derived row moved, so no fixture reaches a `LocalDate` or a `UUID` through a
+messaging catalog, and none reaches a `@Nullable` field first through one of
+those five. The widening is therefore live and untested in both directions: a
+`LocalDate` in a Kafka payload now publishes `string`/`date` where it published
+an expanded object, and nobody has seen either answer.
+
+**Not merging was the worse option**, and it is worth saying why: expansion is
+global and insert-if-absent, so before F2 a payload type shared between an HTTP
+endpoint and a Kafka listener was described by whichever catalog sorted first —
+the answer for one `LocalDate` field depended on a filename. That is a second
+`A-C3` with a different symbol, and it is now impossible rather than merely
+unobserved.
+**Closes by** a fixture carrying a `LocalDate`, a `UUID` and an annotated
+nullable field on a payload reached through a messaging catalog and through an
+outbound HTTP one, asserting the shape both ways. **Falsified by** a shipped
+`LocalDate` shape that a reader says is wrong under the module's serialiser
+configuration.
+
+### OI-13 — the plan cites `A-C2` for a defect the sweep files under `A-C3`
+**Minor · found 2026-09-06 during F2 ·
+`docs/superpowers/plans/2026-09-05-java-completion-plan.md:84-90`**
+
+F2's own entry says "Sweep 2's `A-C2` is the consequence: the `Void` mapping
+replicated in 28 with 9 missing". `A-C2` in
+`docs/principles-sweep-2026-09-05.md:122` is the OkHttp
+`.method("DELETE", …)` → `GET` fabrication; the `Void` finding is `A-C3` at
+`:123` and `:352`. The collision is a sweep-2-local numbering (`A-C2` is
+labelled "Sweep 2, C-1" and `A-C3` "Sweep 2, C-2") leaking into a document that
+uses the global ids everywhere else.
+
+Cost is a reader's, not a run's: following the citation lands on a different
+Critical in the same table, and both are about a wrong value in a catalog, so
+the mistake does not announce itself. The plan is a record of a decision and is
+not edited here for the reason the sweep document is not.
+**Closes by** correcting the two references when the plan is next revised.
+**Falsified by** nothing — it is a citation, checked against both files.
+
 ---
 
 ## CLOSED

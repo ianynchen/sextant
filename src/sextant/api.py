@@ -409,9 +409,20 @@ def _module_commit_of(path: Path) -> str:
 
 
 def _catalog_hash(catalogs: Path) -> str:
+    """The identity of the framework knowledge a run was produced with.
+
+    `shape-models/` is walked as well as the catalogs themselves (D02 §1b).
+    Since F2, `serialization`, `nullability` and `known_types` live there and
+    in no catalog at all — so a hash over `catalogs/*.yml` alone would say two
+    runs used the same knowledge while one of them read a different wire-type
+    table, which is precisely the drift the hash exists to make visible. The
+    path is included, not just the filename, so a model and a catalog of the
+    same name cannot collide.
+    """
     digest = hashlib.sha256()
-    for catalog in sorted(catalogs.glob("*.yml")):
-        digest.update(catalog.name.encode("utf-8"))
+    files = sorted(catalogs.glob("*.yml")) + sorted((catalogs / "shape-models").glob("*.yml"))
+    for catalog in files:
+        digest.update(str(catalog.relative_to(catalogs)).encode("utf-8"))
         digest.update(catalog.read_bytes())
     return "sha256:" + digest.hexdigest()
 

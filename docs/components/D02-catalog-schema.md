@@ -153,6 +153,65 @@ refuses a version absent from the version-scope paragraph of the probe the row c
 
 ---
 
+## 1b. `shape_model` — the payload-type blocks, declared once
+
+Three of the blocks below describe a **payload type** rather than a framework boundary:
+§2e's `nullability`, §2f's `serialization` and §2g's `known_types`. They are not framework
+knowledge in the way `matches` is — which annotation renames a field is the serialiser's
+answer, and the same answer for every framework using that serialiser — and they were
+duplicated across **forty-two catalogs**.
+
+The duplication was not cosmetic. Shape expansion (`derive_shapes`) is a GLOBAL,
+insert-if-absent pass keyed on the type symbol alone, outside any catalog scoping: a
+payload type an HTTP endpoint and a Kafka listener both reach is described once, by
+whichever catalog reached it first, and catalogs are read in filename order. **Two copies
+that disagree do not produce two answers; they produce one answer chosen by a filename.**
+`A-C3` is that live — `{type: java.lang.Void, wire: ""}` in thirty-three catalogs and
+absent from nine, so `ResponseEntity<Void>` published an `object` response shape.
+
+So a catalog names a model instead of carrying a copy:
+
+```yaml
+shape_model: json
+```
+
+and the model is a file in `catalogs/shape-models/`, holding exactly those three blocks
+plus an `id`:
+
+```yaml
+id: json
+serialization: { … }
+nullability: { … }
+known_types: [ … ]
+```
+
+**A shape model is not a catalog.** It declares no `style`, no `matches`, no `protocol`
+and no boundary; no engine runs it, and it derives no rows. It lives in a subdirectory for
+that reason — thirteen places glob `catalogs/*.yml` expecting every hit to be a catalog,
+and none of them has to learn an exception. The two places that DO read the subdirectory
+say so where they read it: `api._catalog_hash`, so an edit to the model changes the
+analysis identity exactly as an edit to a catalog does, and
+`tests/architecture/test_known_types_mirror_the_projection.py`, so the wire-type table is
+still checked against the extractor's own projection.
+
+**A catalog takes the model or declares its own, never both.** The loader refuses a file
+that names a model and declares one of the three beside it, and
+`tests/architecture/test_shape_model_is_declared_once.py` refuses a shipped catalog that
+declares one with no model named — its allowlist is EMPTY. Between them the two close both
+routes back to a private copy. A catalog whose payload-type knowledge genuinely differs
+adds a SECOND model and names that; a private copy is `A-C3` waiting for a different
+symbol.
+
+**This is what makes a Jackson 2 / Jackson 3 split tractable** (Stage 6). `@JsonProperty`
+kept its exact FQN across the split, so the two cannot be told apart by annotation
+spelling — but `tools.jackson.core:jackson-databind` and
+`com.fasterxml.jackson.core:jackson-databind` are different coordinates. On the catalog
+estate that is one new file in `shape-models/` rather than eighty-four edited blocks.
+**It is not by itself a two-file change**: choosing between two models per module is a
+selection rule that does not exist, and nothing here pretends otherwise.
+
+---
+
 ## 2. The styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
@@ -2594,6 +2653,10 @@ configuration value. Endpoint rows are untouched, in every environment.
 
 ## 2e. Nullability declarations
 
+**Declared in the shape model, not in a catalog (§1b).** The block below is the
+grammar; the one shipped copy of it lives in `catalogs/shape-models/json.yml`, and a
+catalog reaches it with `shape_model:`. A catalog declaring one of its own is refused.
+
 Which annotation means "may be null" is framework knowledge, so catalogs declare it and
 [D00](D00-fact-schema.md) §5a's `nullable` flag is populated from it. Note the question: this
 is about the **value**, not about whether the field must appear — those are separate flags in
@@ -2640,6 +2703,10 @@ instead. Neither table can be skipped — the scanner reads both.
 
 ## 2f. Serialisation naming
 
+**Declared in the shape model, not in a catalog (§1b).** The block below is the
+grammar; the one shipped copy of it lives in `catalogs/shape-models/json.yml`, and a
+catalog reaches it with `shape_model:`. A catalog declaring one of its own is refused.
+
 `shape_fields.wire_name` is the identity ([D01](D01-graph-schema.md) §5), and a source field
 name is not it: `customerId` reaches the wire as `customer_id` under a snake-case strategy, or
 as whatever `@JsonProperty` says. Which annotation carries the name, and what happens when
@@ -2668,6 +2735,10 @@ correctly omits it.
 ---
 
 ## 2g. Types with a known wire form
+
+**Declared in the shape model, not in a catalog (§1b).** The block below is the
+grammar; the one shipped copy of it lives in `catalogs/shape-models/json.yml`, and a
+catalog reaches it with `shape_model:`. A catalog declaring one of its own is refused.
 
 Some types are objects in code and something else entirely on the wire. `java.time.Instant`
 is an ISO-8601 string; `java.math.BigDecimal` is a number; `google.protobuf.Timestamp` has
@@ -3022,6 +3093,11 @@ together and neither is privileged.~~
 > project catalogs are deliberately unscheduled (2O roadmap `:201-205`), because they would
 > make this schema a public API after which every change here is breaking. Recorded in
 > [documented-not-implemented.md](../documented-not-implemented.md).
+
+**Shape models (§1b) live in a `shape-models/` subdirectory of the same set.** They are
+resolved within the set that declares them, so a catalog naming a model its own directory
+does not hold fails at load naming both the file and the model. That the built-in set is
+the only set today is the amendment above, not a property of the reference.
 
 The active set for a module is decided by `detect.coordinates` against the dependencies
 [M02](M02-detector.md) resolved. `module status` lists which catalogs were active, which

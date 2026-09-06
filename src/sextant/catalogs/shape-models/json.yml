@@ -1,0 +1,100 @@
+id: json
+displayName: The JSON shape model (Jackson 2 annotations, JSpecify and friends)
+
+# WHAT THIS FILE IS, and why it is not a catalog.
+#
+# D02 §1b. Three of D02's blocks — §2e's `nullability`, §2f's `serialization`
+# and §2g's `known_types` — answer questions about a PAYLOAD TYPE rather than
+# about a framework's boundaries: which annotation renames a field, which one
+# means "may be null", which types the serialiser turns into a scalar. They
+# were duplicated across forty-two catalogs, and the duplication was not
+# harmless.
+#
+# `derive_shapes` is a GLOBAL, insert-if-absent pass keyed on the type symbol
+# alone (`resolve/shapes/expansion.py`), entirely outside `_owns`'s
+# catalog scoping. A payload type an HTTP endpoint and a Kafka listener both
+# reach is described ONCE, by whichever catalog got there first — so a rule
+# that differs between two copies does not produce two answers, it produces one
+# arbitrary answer decided by catalog filename order.
+#
+# That is exactly how `A-C3` shipped: thirty-three catalogs carried
+# `{type: java.lang.Void, wire: ""}` and **nine did not**, so
+# `ResponseEntity<Void>` published an `object` response shape and filed
+# `java/lang/Void#` as an unexpanded type — a gap report pointing at a type with
+# nothing to expand. Forty-two copies cannot be kept consistent; one
+# declaration cannot be inconsistent. A catalog now says `shape_model: json`
+# and can no longer hold a copy at all: the loader refuses a catalog that names
+# a model AND declares any of the three itself.
+#
+# This file is NOT a catalog and lives outside the `*.yml` glob that loads
+# them: it declares no `style`, no `matches` and no boundary, and no engine
+# runs it. `_catalog_hash` covers this directory too, so an edit here changes
+# the analysis identity exactly as an edit to a catalog does.
+
+# D02 §2f. Which annotation carries the wire name, which one removes the field
+# from the wire, and what happens when neither is present.
+#
+# `default_strategy` is a DECLARATION, not an observation: a module may
+# configure a strategy globally, so a `wire_name` derived from this default
+# carries `evidence: declared` while one from an explicit annotation carries
+# the evidence of the code that declared it.
+serialization:
+  name_from:
+    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
+  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
+  default_strategy: as_declared
+
+# D02 §2e. Several of these coexist in one codebase — a module compiled over a
+# decade carries the JetBrains annotations in old code, Spring's in
+# middle-aged code and JSpecify in new code, all reaching the same shape — so
+# the list is a union rather than a choice.
+#
+# **Bean Validation's `@NotNull` is deliberately absent.** It constrains a
+# value at validation time and says nothing about whether the field may be
+# omitted; listing it would make every validated field look non-nullable in its
+# TYPE. `@NullMarked` is a scope, not a field marker: JSpecify's default-non-
+# null applies to a package or class, so a field with no annotation inside one
+# is `not_null`, and only a declared scope rule recovers that absence.
+nullability:
+  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
+             javax.annotation.Nullable, jakarta.annotation.Nullable,
+             org.jetbrains.annotations.Nullable]
+  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
+             org.jetbrains.annotations.NotNull]
+  scope:
+    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+
+# D02 §2g. Types that are objects in code and something else on the wire.
+# Which they are is SERIALISER knowledge, not language knowledge — `Instant` is
+# an ISO string under Jackson's `JavaTimeModule`, epoch millis without it — so
+# it is declared rather than derived.
+#
+# The four serialiser mappings first, then the boxes. A `class` literal or a
+# constructed `instance` reaches payload rooting as a BARE SYMBOL: the
+# extractor's wire projection travels on a type reference (D00 §5a) and a call
+# argument carries none. So the types that projection already flattens are
+# declared here too, with exactly the `wire`/`format` it emits for each, and a
+# captured `String.class` can never disagree with a scanned `String` field.
+# `tests/architecture/test_known_types_mirror_the_projection.py` is the ratchet
+# that keeps them agreeing; it reads this file.
+#
+# `java.lang.Void` reaches no wire type at all: the empty `wire` a `void`
+# return already carries reads as "no payload", never as a shape nobody can
+# expand. `WireTypes.objectLike` maps it to `""` at the source since `A-C3`, so
+# this entry mirrors the projection rather than repairing it — and the reason
+# it is here at all is the bare-symbol case above.
+known_types:
+  - { type: java.time.Instant,    wire: string, format: date-time }
+  - { type: java.time.LocalDate,  wire: string, format: date }
+  - { type: java.math.BigDecimal, wire: number }
+  - { type: java.util.UUID,       wire: string, format: uuid }
+  - { type: java.lang.String,     wire: string }
+  - { type: java.lang.Boolean,    wire: boolean }
+  - { type: java.lang.Byte,       wire: integer, format: int32 }
+  - { type: java.lang.Short,      wire: integer, format: int32 }
+  - { type: java.lang.Integer,    wire: integer, format: int32 }
+  - { type: java.lang.Long,       wire: integer, format: int64 }
+  - { type: java.lang.Character,  wire: integer }
+  - { type: java.lang.Float,      wire: number,  format: float }
+  - { type: java.lang.Double,     wire: number,  format: double }
+  - { type: java.lang.Void,       wire: "" }

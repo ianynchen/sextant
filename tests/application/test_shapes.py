@@ -1762,150 +1762,27 @@ def test_an_unrelated_outbound_catalogs_wrapper_list_still_unwraps_another_catal
     assert descriptor["shape_id"] == ORDER_VIEW_SHAPE
 
 
-# --- Task 10: the three messaging catalogs' harvested blocks pin against
-# `spring-resttemplate.yml`'s (the checkpoint's own "harvest compatibility"
-# instruction: copy `wrappers`/`serialization`/`known_types` VERBATIM, then
-# add broker-specific entries on top) — extending this module's own
-# cross-catalog compatibility pinning discipline (Task 12 fix round 1, above)
-# to the three new files. This compatibility is no longer load-bearing for
-# `_owns` (2E-prep's `catalog_id` collapse means ownership never crosses
-# catalogs at all, regardless of protocol) — it remains load-bearing for
-# *shape expansion* (`derive_shapes`, below), which stays global and
-# first-reached-wins (`shape_rules_unscoped_to_the_producing_catalog`, the
-# still-open half of that gap). `root_type` reads `rules.wrappers` there too
-# (`expansion.py`), so a field type expanded under a different catalog's
-# rules than the one whose endpoint reaches it needs the same wrapper
-# vocabulary or it opens differently depending on which catalog got there
-# first — which is exactly what verbatim harvesting keeps safe.
+# --- Tasks 10-12 pinned the three payload-type blocks across catalogs, because
+# `derive_shapes` is a GLOBAL, insert-if-absent pass keyed on the type symbol
+# alone: a payload type an HTTP endpoint and a Kafka listener both reach is
+# described once, by whichever catalog sorts first, so a fork in one copy
+# silently redescribed that type for every other catalog. Three tests did that
+# — `known_types` against `spring-resttemplate.yml`'s, `serialization` against
+# the same, `nullability` against `spring-mvc.yml`'s.
 #
-# `nullability` pins separately, against `spring-mvc.yml` rather than
-# `spring-resttemplate.yml` (Task 10 fix round 1, finding 1): shape (type)
-# expansion — unlike endpoint/contract description — is a *global*,
-# insert-if-absent pass keyed on the type symbol alone (`derive_shapes`),
-# entirely outside `_owns`'s `catalog_id` scoping, so a payload type an HTTP
-# catalog and a messaging catalog both happen to reference gets whichever
-# catalog's nullability rules reach it first, regardless of protocol. The
-# reviewer's repro: `spring-jms.yml` sorts first among ALL inbound catalogs
-# (not just same-protocol ones), and — before this fix — declared no
-# `nullability` block at all, so a `@NonNull` HTTP field shared with a JMS
-# listener's payload type silently read as nullable once JMS's
-# own (empty) rules answered for it first.
-
-
-# Task 11: the six producer catalogs join the same harvest-compatibility
-# pinning — `spring-kafka-template`, `spring-kafka-replying`,
-# `kafka-clients`, `spring-jms-template`, `spring-sqs-template` and
-# `spring-pubsub` all copy the FULL compatible block set verbatim
-# (`wrappers`/`serialization`/`known_types` from `spring-resttemplate.yml`,
-# `nullability` from `spring-mvc.yml`), not only the three Task 10 listener
-# catalogs. Only `known_types` still reads this list: `serialization` and
-# `nullability` generalised to every loaded catalog (final review), and
-# `wrappers` has its own producers-only list below.
-_MESSAGING_CATALOG_IDS = (
-    "spring-kafka",
-    "spring-jms",
-    "spring-sqs",
-    "spring-kafka-template",
-    "spring-kafka-replying",
-    "kafka-clients",
-    "spring-jms-template",
-    "spring-sqs-template",
-    "spring-pubsub",
-    # 2E-prep Task 11 (driver catalogs A): the three raw-client catalogs
-    # copy the same harvested `known_types` baseline. `aws-sqs-sdk.yml`
-    # matters most here — it sorts FIRST among every shipped catalog file
-    # (its own comment states why: it cannot rely on any other catalog
-    # loading before it), so a fork here would go undetected by every other
-    # pin in this file.
-    "aws-sqs-sdk",
-    "jakarta-jms",
-    "kafka-consumer",
-    # 2E-prep Task 12 (driver catalogs B): the pubsub trio +
-    # spring-kafka-message copy the same harvested `known_types` baseline.
-    "google-pubsub-publisher",
-    "google-pubsub-client",
-    "google-pubsub-subscriber",
-    "spring-kafka-message",
-    # 2F Task 7 (the `config_join` engine): `spring-cloud-stream.yml` copies
-    # the same baseline, and it matters as much as `aws-sqs-sdk.yml` does
-    # above — it sorts ahead of every `spring-*` catalog, so it is now the
-    # first to reach the messaging payload types this fixture shares, and a
-    # fork here would silently redescribe them for every catalog behind it.
-    # (`spring-kafka-media.yml` declares none of these blocks at all: it
-    # derives no rows, so it expands no shapes.)
-    "spring-cloud-stream",
-)
-
-
-def test_the_messaging_catalogs_known_types_are_harvested_verbatim():
-    """`known_types` on every messaging catalog must be byte-for-byte
-    `spring-resttemplate.yml`'s own block — the harvest the checkpoint calls
-    for, mechanically pinned rather than eyeballed.
-
-    This one keeps its explicit list where `serialization` below does not:
-    `known_types` genuinely DIFFERS across the shipped catalogs (`retrofit`,
-    `spring-mvc`, `spring-web`, `spring-cloud-openfeign` and
-    `spring-http-interface` each carry their own), so "every catalog that
-    declares one declares the same one" is simply not true of it — the
-    harvest baseline is what these nine were told to copy, not a repo-wide
-    invariant."""
-    catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
-    resttemplate = catalogs["spring-resttemplate"]
-
-    for catalog_id in _MESSAGING_CATALOG_IDS:
-        assert catalogs[catalog_id].known_types == resttemplate.known_types, catalog_id
-
-
-def test_every_catalog_declaring_serialization_declares_the_harvested_block_verbatim():
-    """`serialization` is the one harvested block every shipped catalog
-    agrees on, so it is pinned across ALL of them rather than a hand-listed
-    subset — the same generalisation the `nullability` pin below makes, and
-    for the same reason: field-name and enum-value reading, like nullability,
-    feeds `derive_shapes`' global, symbol-keyed expansion, so a catalog that
-    quietly forks its own rules changes how a SHARED payload type reads for
-    every other catalog. A hand-maintained id list cannot notice a catalog
-    added later; iterating what the loader actually returns can."""
-    catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
-    baseline = catalogs["spring-resttemplate"].serialization
-    assert baseline != {}
-
-    declaring = [c for c in catalogs.values() if c.serialization]
-    # Not vacuous, and not one lonely catalog agreeing with itself.
-    assert len(declaring) > 1
-    for catalog in declaring:
-        assert catalog.serialization == baseline, catalog.id
-
-
-def test_every_catalog_declaring_nullability_declares_spring_mvcs_verbatim():
-    """Task 10 fix round 1, finding 1: a catalog's `nullability` block must
-    be byte-for-byte `spring-mvc.yml`'s own — `derive_shapes`' expansion is
-    global and insert-if-absent, keyed on the type symbol alone and entirely
-    outside `_owns`'s direction/protocol scoping, so ANY catalog reaching a
-    shared payload type first with rules of its own degrades that type's
-    fields for every other catalog, whichever side of the wire it describes.
-
-    Generalised from the hand-listed messaging ids (final review): the
-    invariant is not "the nine messaging catalogs agree", it is "nobody
-    forks these rules", and an id list can only pin catalogs that already
-    existed when it was written. Iterating the loader's own output means a
-    catalog added tomorrow is covered the day it lands.
-
-    Catalogs declaring NO block at all are tolerated, not asserted about:
-    five outbound HTTP catalogs (`okhttp`, `retrofit`, `spring-restclient`,
-    `spring-resttemplate`, `spring-webclient`) still carry none, and giving
-    them one is a behaviour change owed its own change — every field
-    nullability answer on a type they reach first would move. `mvc` being
-    non-empty is asserted first so a future edit that quietly empties
-    spring-mvc's own block fails loud here rather than passing by making
-    every comparison an empty-dict tautology."""
-    catalogs = {c.id: c for c in YamlCatalogSource(catalogs_dir()).load()}
-    mvc = catalogs["spring-mvc"]
-    assert mvc.nullability != {}
-
-    declaring = [c for c in catalogs.values() if c.nullability]
-    assert len(declaring) > 1
-    for catalog in declaring:
-        assert catalog.nullability == mvc.nullability, catalog.id
+# **F2 retired all three, and it is not a loss of coverage.** The blocks live in
+# `catalogs/shape-models/json.yml` now (D02 §1b) and a catalog names it rather
+# than copying it, so those three assertions compare one object with itself:
+# a tautology cannot fail, and a test that cannot fail measures nothing. The
+# property that CAN still fail is a catalog holding a copy at all, and it is
+# asserted where it can be asserted about every catalog at once —
+# `tests/architecture/test_shape_model_is_declared_once.py`, with an EMPTY
+# allowlist, plus the loader's own refusal of a catalog that names a model and
+# declares a block beside it.
+#
+# What the three were guarding is exactly what makes the retirement safe: they
+# existed because forty-two copies could drift, and `A-C3` proved they had.
+# One declaration has nothing to drift from.
 
 
 def test_the_producer_catalogs_wrappers_are_the_harvested_baseline_verbatim():

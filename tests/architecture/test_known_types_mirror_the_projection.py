@@ -46,6 +46,7 @@ import yaml
 
 REPO = Path(__file__).parents[2]
 CATALOGS = REPO / "src" / "sextant" / "catalogs"
+SHAPE_MODELS = CATALOGS / "shape-models"
 WIRE_TYPES = (
     REPO
     / "extractor-jvm"
@@ -84,9 +85,19 @@ def projected_wire_types() -> dict[str, str]:
 
 
 def declared_known_types() -> list[tuple[str, str, str]]:
-    """`(catalog, type, wire)` for every `known_types` entry that ships."""
+    """`(file, type, wire)` for every `known_types` entry that ships.
+
+    **The shape-model subdirectory is walked too, and since F2 it is where all
+    of them live** (D02 §1b). Nothing else in this repository reads
+    `catalogs/shape-models/`, because a shape model is not a catalog — but this
+    rule must, or it is a projection ratchet with nothing left to ratchet:
+    forty-two catalogs stopped declaring the table on the day it moved, and a
+    walk that only globbed `catalogs/*.yml` would have gone silently vacuous in
+    the same commit. `test_the_scan_finds_the_table_that_ships` is the pin that
+    would have caught it.
+    """
     declared = []
-    for path in sorted(CATALOGS.glob("*.yml")):
+    for path in sorted(CATALOGS.glob("*.yml")) + sorted(SHAPE_MODELS.glob("*.yml")):
         document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for entry in document.get("known_types") or []:
             declared.append((path.stem, str(entry["type"]), str(entry.get("wire", ""))))
@@ -130,4 +141,24 @@ def test_no_catalog_contradicts_the_projection():
         )
         + "\n\nThe `shapes` table is global and insert-if-absent, so whichever catalog reaches "
         "the type first describes it for all of them. Fix the projection, or the catalog."
+    )
+
+
+def test_the_scan_finds_the_table_that_ships():
+    """A rule that discovers nothing agrees with everything, and this one came
+    one glob away from exactly that: F2 moved every `known_types` entry out of
+    the forty-two catalogs into `catalogs/shape-models/json.yml`, and a walk
+    still globbing `catalogs/*.yml` alone would have found zero entries, found
+    zero disagreements, and passed.
+
+    Two pins, one per side of the move: the boxes, which mirror the projection
+    and are the reason a bare `String.class` symbol resolves at all, and
+    `java.lang.Void`, which is `A-C3` itself.
+    """
+    declared = declared_known_types()
+    assert declared, "the `known_types` scan found no entry anywhere — the table has moved again"
+    types = {name for _, name, _ in declared}
+    assert {"java.lang.String", "java.lang.Void", "java.time.Instant"} <= types, (
+        f"the scan no longer reaches the shipped wire-type table (found {sorted(types)}) — "
+        "check that it still walks `catalogs/shape-models/`"
     )

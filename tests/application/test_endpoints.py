@@ -95,14 +95,93 @@ def test_a_catalog_whose_detect_block_is_malformed_is_refused_by_file(tmp_path: 
     assert "invented-detect.yml" in str(raised.value)
 
 
+def _catalog_naming(model: str, extra: str = "") -> str:
+    return (
+        "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: inbound\n"
+        f"shape_model: {model}\nmatches: {{}}\n{extra}"
+    )
+
+
+def test_a_catalog_takes_the_shape_models_three_blocks(tmp_path: Path):
+    """D02 §1b. The blocks reach `Catalog` exactly as they used to when the file
+    declared them itself — the whole point of resolving the reference at the
+    loader is that nothing downstream of this port learns the model exists."""
+    (tmp_path / "shape-models").mkdir()
+    (tmp_path / "shape-models" / "tiny.yml").write_text(
+        "id: tiny\nserialization: {default_strategy: snake_case}\n"
+        "nullability: {nullable: [com.acme.Nullable]}\n"
+        "known_types:\n  - { type: com.acme.Money, wire: number }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "invented-model-user.yml").write_text(_catalog_naming("tiny"), encoding="utf-8")
+
+    [catalog] = YamlCatalogSource(tmp_path).load()
+
+    assert catalog.serialization == {"default_strategy": "snake_case"}
+    assert catalog.nullability == {"nullable": ["com.acme.Nullable"]}
+    assert catalog.known_types == [{"type": "com.acme.Money", "wire": "number"}]
+
+
+def test_a_catalog_naming_a_shape_model_that_does_not_ship_is_refused_by_file(tmp_path: Path):
+    """A typo would silently strip the catalog of the serialisation,
+    nullability and wire-type knowledge it believes it has — which is `A-C3`
+    arriving through a misspelling instead of an omission."""
+    (tmp_path / "invented-typo.yml").write_text(_catalog_naming("jsn"), encoding="utf-8")
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert "shape_model" in str(raised.value)
+    assert "invented-typo.yml" in str(raised.value)
+
+
+def test_a_catalog_naming_a_model_and_declaring_a_block_beside_it_is_refused(tmp_path: Path):
+    """The cheapest route back to forty-two copies is adding a block to a file
+    that already references the model, and the two would then disagree with
+    nothing to say which won. Refused at the edge, naming the file and the
+    block."""
+    (tmp_path / "shape-models").mkdir()
+    (tmp_path / "shape-models" / "tiny.yml").write_text("id: tiny\n", encoding="utf-8")
+    (tmp_path / "invented-both.yml").write_text(
+        _catalog_naming("tiny", extra="known_types:\n  - { type: com.acme.Money, wire: string }\n"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert "known_types" in str(raised.value)
+    assert "invented-both.yml" in str(raised.value)
+
+
+def test_a_catalog_declaring_no_model_and_no_block_still_loads(tmp_path: Path):
+    """A repository's own catalog set (D02 §6) may ship no model at all, and
+    thirteen shipped catalogs expand no shape and declare none of the three.
+    Absence stays absence rather than becoming an error."""
+    (tmp_path / "invented-bare.yml").write_text(
+        "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: inbound\nmatches: {}\n",
+        encoding="utf-8",
+    )
+
+    [catalog] = YamlCatalogSource(tmp_path).load()
+
+    assert (catalog.serialization, catalog.nullability, catalog.known_types) == ({}, {}, [])
+
+
 def test_catalog_declares_wrappers_nullability_serialization_and_known_types():
     """D02 §2a, §2e, §2f, §2g: `spring-web` and `spring-mvc` both need these
     four blocks before payload shapes can be derived (Tasks 9-11 read them).
-    The loader does not parse them into `Catalog` — they ride along in the
-    raw file — so this reads the file directly, the same way the catalog
-    itself is the source of truth for `matches`."""
+
+    `wrappers` is still read off the raw file — it is the catalog's own, an
+    envelope type belonging to the framework that defines it. The other three
+    are read through the LOADER since F2 (D02 §1b): they come from
+    `shape-models/json.yml` now, and reading the file for them would assert
+    that a catalog holds a copy, which is exactly what F2 made impossible.
+    """
+    catalogs = {catalog.id: catalog for catalog in YamlCatalogSource(CATALOGS).load()}
     for name in ("spring-web", "spring-mvc"):
         raw = yaml.safe_load((CATALOGS / f"{name}.yml").read_text(encoding="utf-8"))
+        catalog = catalogs[name]
 
         wrapper_types = {w["type"] for w in raw["wrappers"]}
         assert wrapper_types == {
@@ -122,24 +201,40 @@ def test_catalog_declares_wrappers_nullability_serialization_and_known_types():
         # Kotlin compiler emits them directly onto fields as CLASS-retention
         # annotations, so they are what makes Kotlin nullability work through
         # the ordinary annotation path.
-        assert "org.jetbrains.annotations.Nullable" in raw["nullability"]["nullable"]
-        assert "org.jetbrains.annotations.NotNull" in raw["nullability"]["not_null"]
-        assert raw["nullability"]["scope"] == [
+        assert "org.jetbrains.annotations.Nullable" in catalog.nullability["nullable"]
+        assert "org.jetbrains.annotations.NotNull" in catalog.nullability["not_null"]
+        assert catalog.nullability["scope"] == [
             {"annotation": "org.jspecify.annotations.NullMarked", "means": "not_null_by_default"}
         ]
 
-        assert raw["serialization"]["name_from"] == [
+        assert catalog.serialization["name_from"] == [
             {"annotation": "com.fasterxml.jackson.annotation.JsonProperty", "arg": "value"}
         ]
-        assert raw["serialization"]["ignore"] == ["com.fasterxml.jackson.annotation.JsonIgnore"]
-        assert raw["serialization"]["default_strategy"] == "as_declared"
+        assert catalog.serialization["ignore"] == ["com.fasterxml.jackson.annotation.JsonIgnore"]
+        assert catalog.serialization["default_strategy"] == "as_declared"
 
-        known_types = {t["type"] for t in raw["known_types"]}
+        # The four serialiser mappings these two catalogs used to declare, plus
+        # the boxes the shared model also carries — which reached these two for
+        # the first time with F2, and are the union rather than a new claim:
+        # every one of them mirrors `WireTypes.objectLike`'s own projection
+        # (`test_known_types_mirror_the_projection.py`), so they answer for a
+        # bare `String.class` symbol and change no scanned field's reading.
+        known_types = {t["type"] for t in catalog.known_types}
         assert known_types == {
             "java.time.Instant",
             "java.time.LocalDate",
             "java.math.BigDecimal",
             "java.util.UUID",
+            "java.lang.String",
+            "java.lang.Boolean",
+            "java.lang.Byte",
+            "java.lang.Short",
+            "java.lang.Integer",
+            "java.lang.Long",
+            "java.lang.Character",
+            "java.lang.Float",
+            "java.lang.Double",
+            "java.lang.Void",
         }
 
 

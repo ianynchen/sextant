@@ -22,6 +22,31 @@ class YamlCatalogSource:
     def __init__(self, directory: Path) -> None:
         self._directory = directory
 
+    def _shape_models(self) -> dict[str, dict[str, Any]]:
+        """The shape models this source holds, by id (D02 §1b).
+
+        A SUBDIRECTORY rather than more files beside the catalogs, because a
+        shape model is not a catalog: it declares no `style`, no `matches` and
+        no boundary, and thirteen places in this repository glob
+        `catalogs/*.yml` expecting every hit to be one. Keeping it out of that
+        glob means none of them has to learn an exception, and the two that DO
+        need it — `api._catalog_hash`, so an edit here changes the analysis
+        identity, and the projection ratchet, so the wire-type table is still
+        checked against the extractor — say so where they read it.
+
+        Absent directory is an empty mapping, not an error: a repository's own
+        catalog set (D02 §6) may hold no model, and a catalog naming one it
+        cannot see fails in `_shape_model_of` with the file's name attached.
+        """
+        directory = self._directory / "shape-models"
+        models: dict[str, dict[str, Any]] = {}
+        for path in sorted(directory.glob("*.yml")):
+            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise CatalogError(f"loading shape model {path}: not a YAML mapping")
+            models[str(_required(raw, "id", path))] = raw
+        return models
+
     def load(self) -> list[Catalog]:
         """Reads every catalog in the directory, sorted by filename.
 
@@ -29,11 +54,13 @@ class YamlCatalogSource:
         catalog omits a required field or declares a `protocol` or `direction`
         outside D00's closed sets.
         """
+        models = self._shape_models()
         catalogs = []
         for path in sorted(self._directory.glob("*.yml")):
             raw = yaml.safe_load(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise CatalogError(f"loading catalog {path}: not a YAML mapping")
+            shape = _shape_model_of(raw, models, path)
             catalogs.append(
                 Catalog(
                     id=_required(raw, "id", path),
@@ -44,12 +71,19 @@ class YamlCatalogSource:
                     matches=_required(raw, "matches", path),
                     source=path,
                     detect_coordinates=_coordinates(raw, path),
-                    # D02 §2a, §2e, §2f, §2g — optional blocks. A catalog that
-                    # declares none of them still loads.
+                    # D02 §2a — optional, and framework-specific: an envelope
+                    # type a payload sits inside belongs to the framework that
+                    # defines it, so `wrappers` stays on the catalog while the
+                    # three payload-TYPE blocks below come from the shared
+                    # model (D02 §1b).
                     wrappers=raw.get("wrappers", []),
-                    nullability=raw.get("nullability", {}),
-                    serialization=raw.get("serialization", {}),
-                    known_types=raw.get("known_types", []),
+                    # D02 §2e, §2f, §2g — the shape model's, resolved above. A
+                    # catalog naming no `shape_model` and declaring none of the
+                    # three still loads and contributes none, which is the
+                    # state of every catalog that expands no shape.
+                    nullability=shape.get("nullability", {}),
+                    serialization=shape.get("serialization", {}),
+                    known_types=shape.get("known_types", []),
                     # D02 §2i — optional, one per framework family.
                     config_model=raw.get("config_model", {}),
                     # 2G design §7 — optional format vocabulary, carried
@@ -79,6 +113,50 @@ class YamlCatalogSource:
                 )
             )
         return catalogs
+
+
+# D02 §1b. The payload-TYPE blocks, which a catalog takes from the shared shape
+# model instead of declaring itself. Named here rather than inline because the
+# same tuple answers two questions — which keys the model supplies, and which
+# keys a catalog naming a model may not also declare — and the two must not
+# drift apart.
+_SHAPE_MODEL_BLOCKS = ("serialization", "nullability", "known_types")
+
+
+def _shape_model_of(
+    raw: dict[str, Any], models: dict[str, dict[str, Any]], path: Path
+) -> dict[str, Any]:
+    """The three payload-type blocks this catalog uses (D02 §1b).
+
+    A catalog names a model and takes all three, or names none and declares
+    what it declares. **It may not do both**, and that refusal is the whole
+    mechanism: `A-C3` was one `known_types` entry present in thirty-three
+    copies and absent from nine, and a catalog that cannot hold a copy cannot
+    hold a copy that has drifted.
+
+    A `shape_model` naming no file in `shape-models/` is refused here for the
+    reason every other value in this file is: it reaches the derivation as a
+    bound parameter, and a typo would silently strip a catalog of the
+    serialisation, nullability and wire-type knowledge it believes it has —
+    which is `A-C3` again, arriving through a misspelling instead of an
+    omission.
+    """
+    named = raw.get("shape_model")
+    if named is None:
+        return raw
+    if not isinstance(named, str) or named not in models:
+        raise CatalogError(
+            f"loading catalog {path}: `shape_model: {named!r}` names no file in "
+            f"`shape-models/` — known models: {sorted(models) or 'none'} (D02 §1b)"
+        )
+    declared = [block for block in _SHAPE_MODEL_BLOCKS if block in raw]
+    if declared:
+        raise CatalogError(
+            f"loading catalog {path}: names `shape_model: {named}` and also declares "
+            f"{', '.join(declared)} — a catalog takes the shared model or declares its own, "
+            f"never both. Forty-two copies of these blocks is how `A-C3` shipped (D02 §1b)"
+        )
+    return models[named]
 
 
 def _required(raw: dict[str, Any], key: str, path: Path) -> Any:
