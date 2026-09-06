@@ -259,9 +259,10 @@ test suite or `scripts/check.sh`. Anything Boot-4-specific the field run finds m
 becomes a catalog row in Phase 2O, never a special case bolted onto this phase.
 
 **Everything else in both matrices remains a gap** — including, inside the cells Phase 2D and
-2E-prep touched, Spring Integration's channel adapters and spring-cloud-aws's own
-channel-adapter bindings (`config_join`'s shape, not yet catalogued — Spring Cloud Stream's
-own functional bindings are the one row this phase ships), and every messaging peer address
+2E-prep touched, spring-cloud-aws's own channel-adapter bindings (`config_join`'s shape,
+not yet catalogued — Spring Cloud Stream's own functional bindings are the one row this
+phase ships; Spring Integration's channels are enumerated as open questions since 2O
+Task 9, §5.12), and every messaging peer address
 except SQS's queue URL. In particular, per Q1 a tier in a row whose
 **Scanner** reads `none` is a *marginal* cost — what the cell would take once a scanner for
 that language exists. It is not a cost you can pay today. Only ✅ and ◐ mean working code.
@@ -331,7 +332,7 @@ than silently absent:
 
 | You do not get | Because | Arrives with |
 |---|---|---|
-| Spring Integration's channel adapters, spring-cloud-aws's own channel-adapter bindings | each names a destination through a channel indirection, not a bean's own functional shape — `config_join`'s shape fits, but neither has a catalog yet (D02 §2d) | undecided |
+| A WIRE row for a Spring Integration channel, and spring-cloud-aws's own channel-adapter bindings | each names a destination through a channel indirection, not a bean's own functional shape. Since 2O Task 9 Spring Integration's channels are ENUMERATED — one `channel_destination` open question each, carrying the channel and the handler — because the framework defines no standard configuration key a built-in could read; spring-cloud-aws has no catalog at all (D02 §2d) | the enrichment seat, for the first; undecided for the second |
 | A base address built by computation — concatenation, setter injection, a method's return value | only a directly-read field, a constructor-injected value, or an `@ConfigurationProperties` class climbs the field ladder to configuration; a computed base derives `path` NULL, `unresolved` (`computed_base_addresses_not_traced`) | undecided |
 | Configuration constructed in code — a settings module, a config factory | only configuration FILES reach resolution; a `resolved_config` row exists only where a reader parsed a file from disk (`config_as_code_not_read`) | undecided |
 | Every messaging peer except SQS's queue URL | a broker address is connection configuration, never the destination expression `config_join`/the field ladder resolve — `peer` stays NULL there even where the destination itself now resolves | undecided |
@@ -341,7 +342,7 @@ than silently absent:
 | A link between a Java class and the SDL type of the same name | two shape universes now describe one GraphQL service, and matching them by simple name is a guess; both are recorded and the cross-link is comparison work with its own evidence (§5.4) | the phase that earns it |
 | The HTTP address a GraphQL or STOMP service listens on | the `path` column carries the OPERATION, because that is what the identity is; no engine derives `/graphql` or the STOMP endpoint registration ([D01](components/D01-graph-schema.md) §3) | undecided |
 | Cross-service links or a system document | linking is a system-scope pass over bundles; no `participants`/`links` exist yet | linking phase |
-| `consumes`/`produces` on a predicate-derived WebFlux functional route | `accept(...)`/`contentType(...)`'s `MediaType` vararg constants compile through an `ANEWARRAY` the extractor cannot read | a later extractor candidate |
+| `consumes`/`produces` on a predicate-derived WebFlux functional route | `accept(...)`/`contentType(...)`'s `MediaType` vararg constants compile through an `ANEWARRAY`. **The extractor has read it since capability 9.15** — the slot now carries `{"kind":"array","elements":[…]}` — and `combinator._media_value` still answers for `string` and `enum` kinds only, so the fact is present and unread | engine work, not an extractor candidate |
 | A handler symbol for a Kotlin WebFlux functional route | Kotlin compiles every DSL handler to an `instance`-kind argument naming a generated class, never a method | undecided |
 | Trustworthy analysis of a POM using parents/profiles/interpolation | the detector reads `pom.xml` raw (`maven_parent_and_profile_resolution_not_implemented`) | undecided |
 | A payload bound from a parse more than one delegation hop from its handler | a flow followed further than it was observed is an assumption; the parse is found at hop two and ledgered as an open question instead, and past hop two it is not found at all (`payload_parsed_beyond_horizon`, §4.2) | the enrichment tier |
@@ -419,7 +420,7 @@ SNS and Redis are **out of scope by decision**, not oversight — each would be 
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ 1A | ◐ 1A 2B | ◐ 1A | ◐ 1B | ◐ 1A 1B | ◐ 2A 2B 1C |
+| **Java / Kotlin** | ◐ 1A | ◐ 1A 2B | ◐ 1A | ◐ 1B | ◐ 1A 1B | ◐ 2A 1B 1C |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -948,10 +949,14 @@ that scans dependency jars to replace it remains open (D02 §7).
 new `combinator` engine, walking the routing tree from its declared entry call rather than by
 owner alone. Two more boundaries ride with it, beside the superclass one above: **predicate-
 declared media is invisible** — `accept(...)`/`contentType(...)`'s `MediaType` vararg constants
-compile through an `ANEWARRAY` the extractor's argument reader has no case for, so every
-predicate-derived row's `consumes`/`produces` reads NULL even though a declaration
-demonstrably exists on the call site (checkpoint F1) — a later extractor candidate, not a gap
-in the engine; and **Kotlin functional handlers resolve to NULL** — Kotlin 2.2 compiles every
+compile through an `ANEWARRAY`, so every predicate-derived row's `consumes`/`produces` reads
+NULL even though a declaration demonstrably exists on the call site (checkpoint F1). *This
+sentence read "an `ANEWARRAY` the extractor's argument reader has no case for ... a later
+extractor candidate, not a gap in the engine", and that stopped being true at extractor
+capability 9.15, which teaches `MethodFlow.argumentJson` exactly that construction. The slot
+now carries `{"kind":"array","elements":[…]}`; `combinator._media_value` answers for `string`
+and `enum` kinds and has no case for `array`, so the facts are there and the engine does not
+read them. The row is unchanged in what it reports and changed in what would close it.* And **Kotlin functional handlers resolve to NULL** — Kotlin 2.2 compiles every
 DSL handler, bound method reference and lambda alike, to an `instance`-kind argument naming a
 compiler-generated class rather than a method symbol, so the honest answer is no handler
 rather than a fabricated guess through that class's own `invokeSuspend` (checkpoint (1b)).
@@ -1897,7 +1902,12 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 | Java | Quartz `@DisallowConcurrentExecution` / `Job` implementations / `JobDetail` builders | a second scheduler, writing to the same `scheduled_work` table | `annotation` + `fluent_chain` | A for the annotation half, B for the builder half — neither catalogued |
 | Java | Temporal / Cadence `@WorkflowInterface`, `@ActivityInterface` | `annotation` | A |
 | Java | **Vert.x event bus** `vertx.eventBus().send("addr", m)` / `.consumer("addr", h)` | in-process pub/sub with **string addresses**, matchable like topics | `registration_call` | B |
-| Java | Spring Integration `@ServiceActivator`, `@InboundChannelAdapter` | channels, not destinations | `config_join` | B — rides 2F's `config_join` once catalogued |
+| Java | Spring Integration `@ServiceActivator` (`inputChannel`, `outputChannel`) and `@InboundChannelAdapter` (`channel`) | the annotation names a CHANNEL, and configuration — where a project has any — says what the channel means | `config_join` | ✅ **shipped as a hand-off** (2O Task 9), through `config_join`'s new `binding.from: annotation_value`. Spring Integration defines no standard configuration key for a channel's destination — real apps wire them in bean definitions, and any key template would be a PROJECT convention — so the built-in declares no `key`, derives **no endpoint row and no ghost row**, and files one `channel_destination` open question per channel carrying the channel name and the handler symbol. Never a fabricated wire, never `peer: in-process` |
+| Java | The DESTINATION behind a channel — `Amqp.inboundAdapter(cf, String…)`, `setQueueNames(String…)`, `Kafka.messageDrivenChannelAdapter(cf, String…)` | the queue or topic the adapter feeding that channel actually reads | `registration_call` | **Boundary — readable and unread, which is a different gap from an unreadable one.** Since extractor capability 9.15 these arrive as `{"kind":"array","elements":[…]}` with the same producer discrimination a single-`String` parameter gives and the arity beside them (`scripts/probes/spring-integration-destinations.md`, the 9.15 re-run — its original 9.14 headline says the opposite and is corrected in place). They are CALL-SITE arguments; `config_join`'s address input is `resolved_config` alone, which is built from configuration FILES (`application/resolve/config.py:107`), so no element can reach that join. **Falsified by** a module whose Spring Integration destinations are hard-coded at the adapter: every one is an open question rather than an endpoint row, and the string is sitting in the facts. Closes with a style that reads the elements and joins an adapter to its channel |
+| Java | `@Transformer`, `@Router`, `@Filter`, `@Splitter`, `@Aggregator`, `@BridgeFrom`/`@BridgeTo` — the rest of the endpoint-annotation family | each also carries `inputChannel`/`outputChannel` | `config_join` | **Boundary — asks nothing.** Only the two annotations the probe measured are declared; §8.1 requires a framework's rule to be measured before it is built on, and the probe's harness carries neither. Each is one `channels` row once measured, with no engine change |
+| Java | `@InboundChannelAdapter("orders")` — the `value` spelling of `channel` | the attribute written positionally | `config_join` | **Boundary — asks nothing.** The probe measured the `channel` spelling only, and that the two are `@AliasFor` each other is a fact of a jar this analysis does not scan. Closes with one measured `channels` row |
+| Java | Spring Integration Java DSL flows (`IntegrationFlow`, `IntegrationFlows.from(…)`) and XML-configured flows | the flow's topology, and the anonymous channels inside it | `fluent_chain` / `filesystem` | **Boundary — derives nothing.** The DSL chain is FULLY reconstructable from within-method `result` ↔ `receiver` joins, with handler bodies named through `{"kind":"lambda","symbol":…}` (probe Q4), and no engine walks it. An XML-configured flow contributes **zero** facts — the extractor reads `target/classes/**/*.class` and the XML is a resource sitting beside them — so it needs a resource reader of its own, the same category as the `.avsc` reader |
+| Java | The `protocol` column on a `channel_destination` question | which broker, if any, a channel actually reaches | `config_join` | **Boundary — OVER-states one column on a ledger row.** A wire style must declare a protocol (`resolve/endpoints.py`) and D00's closed set has no "unknown" member (NFR-5), so every question this catalog files is filed under `amqp` — what the probe measured the channel join against end to end (Q3). A Kafka- or JMS-fed channel files under `amqp` too. No ENDPOINT row carries it, because this catalog mints none |
 | Java | **Akka / Pekko actor messaging** `ref ! msg`, `ref.tell(msg)` | receiver comes from an `ActorRef` created elsewhere | — | **C, possibly permanent — see §7** |
 | Python | **Celery** `@app.task`, `task.delay(…)`, `.apply_async(queue=…)` | a real async boundary, easy to miss | `annotation` | A |
 | TS | `bullmq` `new Queue("n")`, `new Worker("n", fn)` | string names, matchable like topics | `registration_call` | A |

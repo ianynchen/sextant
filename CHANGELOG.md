@@ -14,6 +14,24 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Spring Integration's channels, enumerated and handed off** (2O design §5, Task 9).
+  `config_join` gains a second binding-name source, **`binding.from: annotation_value`** — the
+  name is the value of a declared argument on a declared annotation instead of a bean's own
+  method name — and the destination side is unchanged, still `resolved_config` alone. The
+  measured basis is `scripts/probes/spring-integration-destinations.md`: the channel join is
+  real in both shapes, with the SAME literal on the annotation side and the call-site side.
+  The new built-in `spring-integration.yml` declares **no `key`**, because Spring Integration
+  defines no standard configuration key for a channel's destination and any template would be a
+  project convention. It therefore derives **no endpoint row and no ghost row** and files one
+  **`channel_destination` open question** per channel, carrying the channel name and the handler
+  symbol — the enrichment seat's inbox, which is how "we cannot see it" becomes a route to an
+  answer rather than a dead end. Never a fabricated wire, never `peer: in-process`. Three rules
+  separate this source from the bean one and each is stated in [D02](docs/components/D02-catalog-schema.md):
+  the annotation's target must be a METHOD, the value must be a non-empty string taken verbatim,
+  and an unanswered name derives nothing at all. The questions ride the existing `gaps` seam
+  (`resolve/service_identity.py`), which is the only place a pass may write to a ledger the
+  pipeline resets after the engine loop.
+
 - **The two NON-WIRE families: `scheduled_work` and `error_handlers`** (2O design §4). Work a
   framework starts on a clock, and the exceptions a module answers, each in a table of its own
   with the full derive → render → export chain: two engine styles (`scheduled_work`,
@@ -213,6 +231,33 @@ here would restate those documents rather than add anything.
   two halves would otherwise concatenate bare.
 
 ### Fixed
+
+- **`config_join` asked the canonical-path seam nothing, on rows whose protocol and direction
+  are both per-row** (2O Task 9 step 4; the Task 2 carry). `single_call` had the identical
+  shape and the identical bug — its rows carried a per-row `direction` override while its seam
+  read `catalog.direction`, so the gate answered about a different row from the one being
+  minted — and `config_join` writes `path` from a destination whose protocol comes from the
+  binder configuration and whose direction comes from a suffix or channel rule, with no seam at
+  all. `_addressed` now asks `serves_urls` of the ROW's own two values. **No shipped catalog
+  reaches the canonicalizing branch and no real module's output moves**: the branch is inbound
+  HTTP alone and both shipped `config_join` catalogs speak broker protocols. It is pinned by
+  two synthetic catalogs, one per binding source, each failing under either half of the wrong
+  gate.
+
+- **Two schema-describing documents said `open_questions.question` was a two-value set** while
+  `resolve/open_questions.py` had enforced five since the start of Phase 2O
+  (`docs/principles-sweep-2026-09-05.md`, `B-M1`). Corrected in
+  [D01](docs/components/D01-graph-schema.md) and `storage/duckdb/schema.sql`, in the commit that
+  shipped the writer the last of the three 2O kinds was waiting for — D01 now also names each
+  kind's own `candidates` keys, which is what a reader of that table needs and what the
+  renderer switches on.
+
+- **`docs/COVERAGE.md` gave a stale reason for the WebFlux predicate-media boundary.** It said
+  the `MediaType` vararg constants "compile through an `ANEWARRAY` the extractor cannot read",
+  which stopped being true at extractor capability 9.15: the slot now carries
+  `{"kind":"array","elements":[…]}`, and `combinator._media_value` answers for `string` and
+  `enum` kinds with no case for `array`. What the row reports is unchanged; what would close it
+  is engine work rather than an extractor candidate.
 
 - **Five stale or unstated rationales corrected** (round-1 review, the minors it named).
   `spring-kafka-template.yml` said `sendDefault`'s arities 2/3/4 "remain undeclared" thirty

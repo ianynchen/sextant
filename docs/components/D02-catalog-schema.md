@@ -1162,8 +1162,70 @@ matches:
 no binding is refused: it would resolve the same address for every bean. `binder_key`
 takes the same check, being as per-binding as `key` is; `default_binder_key` does not,
 since naming no binding is exactly what makes it the module-wide fallback.
-**`binding.from` is `bean_name`** — the only source implemented, and anything else is
-refused rather than read as this one.
+
+**`binding.from` is `bean_name` or `annotation_value`** — the two sources implemented, and
+anything else is refused rather than read as one of them. The DESTINATION half is identical
+for both and is `resolved_config` alone; what differs is where the name being asked about
+comes from, and what happens to a name configuration never answers.
+
+#### `binding.from: annotation_value`
+
+The name is the value of a named ARGUMENT on a named annotation — a channel name written on
+the method the framework wires to that channel — rather than a declared method's own name.
+
+```yaml
+matches:
+  address_from_config:
+    binding:
+      from: annotation_value
+      channels:
+        - { annotation: org.springframework.integration.annotation.ServiceActivator,
+            arg: inputChannel, direction: inbound }
+        - { annotation: org.springframework.integration.annotation.ServiceActivator,
+            arg: outputChannel, direction: outbound }
+```
+
+**`channels` is a non-empty list of `{annotation, arg, direction}`**, one entry per
+`(annotation, attribute)` pair the framework spells a name with; `direction` defaults to the
+catalog's own and is checked against [D00](D00-fact-schema.md)'s closed set. It is an
+attribute SET and not an annotation's attribute list — most attributes of a channel-bearing
+annotation are not channels, and one of them is usually a plain `String` too, so reading
+whatever is written files a question about a name nobody wrote.
+
+Three rules this source has and `bean_name` does not, each because a channel name is not a
+bean:
+
+- **The annotation's target must be a METHOD.** The same annotation is `@Target`-legal on an
+  ANNOTATION TYPE, which is how a module composes its own stereotype; nothing subscribes
+  there. (`scheduled_work`'s own conjunct, and `derive_endpoints.sql`'s
+  `handler-is-a-method` join on the wire side.)
+- **The value must be a non-empty STRING**, taken verbatim. An array, a nested annotation or
+  a number is not a channel name; an expression still carrying a `${…}` placeholder is asked
+  about exactly as written, resolved by nothing on the way in.
+- **A name whose destination configuration never answered derives NOTHING** — no row, and no
+  ghost row. A bean is a declaration whose address is merely unread; a channel names an
+  in-process pipe, and whether it reaches a broker at all is the thing nobody answered, so a
+  `path` NULL row would assert a boundary no declaration in the module makes. It is not
+  silence either: `gaps` files it (below).
+
+**`key` is therefore OPTIONAL for this source and required for the other.** A framework whose
+channels have no standard configuration key declares none: the catalog then asks
+configuration nothing, derives nothing, and files every channel it finds as a question.
+Requiring a key there would force a template to be invented, which is a convention no
+framework states — and D02 places a project's own convention in that repository's catalog,
+never in a built-in.
+
+**`gaps`: the `channel_destination` hand-off.** One question per `(channel, handler)` whose
+destination configuration did not give, carrying `candidates: [{channel, handler}]` and a
+trail naming the reason — no key template was declared, or a key was built and
+`resolved_config` holds no value every environment agrees on. It is a `gaps` function rather
+than a write inside `run` because the ledger is emptied once per resolve, from the pipeline,
+AFTER the engine loop ([M04](M04-resolver.md)); it rides the same seam
+`supertype_derived`/`injected_client`/`annotation_driven` use. Inert for a `bean_name`
+catalog — whose unresolved bindings already answer for themselves with a row — and for a
+`media_from_config`-only one.
+
+#### `binding.from: bean_name`
 
 **A candidate is a declared method whose RETURN type matches a suffix rule**, tried two
 ways in that order: equality against the declared interface's own descriptor, then the

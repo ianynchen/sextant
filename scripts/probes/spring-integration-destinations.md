@@ -5,12 +5,33 @@ messages, and is that readable from compiled bytecode alone? The design kept bei
 against a prediction; GUIDELINES §8.1 says a framework rule is measured before it is built
 on, so this measures it.
 
-**One-line verdict.** The channel names survive perfectly. **The destination names mostly do
-not** — every AMQP and Kafka *inbound* destination in Spring Integration is passed through a
-**varargs `String...` parameter**, and a varargs array is `unresolved` in the fact stream. The
-literal is not merely unresolved at the call site; the string is **absent from the fact stream
-entirely**, and all seven ways of spelling the destination collapse to one indistinguishable
-shape.
+**One-line verdict — CURRENT, at extractor scanner_version 9.16.** The channel names survive
+perfectly, and **so do the destination names**: every AMQP and Kafka *inbound* destination
+reaches the fact stream as the elements of an array argument,
+`{"kind":"array","elements":[{"kind":"string","value":"dsl.orders.queue"}]}`, with the same
+producer discrimination a single-`String` parameter gives and the arity readable beside it.
+The one-line falsifier below returns **3**, not 0. Nested annotation arguments — a
+`@Poller`, a `@RabbitListener`'s `@QueueBinding`, a folded `@Schedules` — are readable too.
+Two boundaries stand unchanged and are unrelated to either: an XML-configured flow
+contributes **zero** facts, and no shipped consumer reads an array's `elements` yet, so
+having the facts is not the same as any derivation using them.
+
+> **Superseded, kept as history — the verdict this probe shipped with, measured at 9.14.**
+> *"The channel names survive perfectly. **The destination names mostly do not** — every AMQP
+> and Kafka inbound destination in Spring Integration is passed through a **varargs
+> `String...` parameter**, and a varargs array is `unresolved` in the fact stream. The literal
+> is not merely unresolved at the call site; the string is **absent from the fact stream
+> entirely**, and all seven ways of spelling the destination collapse to one indistinguishable
+> shape."*
+>
+> That was true of 9.14 and is false of 9.15 onward. **Capability 9.15 shipped BECAUSE of
+> it** — it teaches `MethodFlow.argumentJson` the `ANEWARRAY`/`AASTORE` construction the "Why"
+> paragraph in Q1 identified as the cause — and the re-run recording the flip is a section of
+> this same file, near the end. Everything between here and that section is left exactly as it
+> was measured: it is a measurement, not a design, and the 9.14 reading is what the 9.15
+> reading is a comparison against. **Read Q1 and Q5 as history and the re-run sections as the
+> answer.** A reader who stops at a headline gets the opposite of the truth, which is the §9
+> defect this correction closes.
 
 ---
 

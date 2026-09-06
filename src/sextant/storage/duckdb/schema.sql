@@ -143,9 +143,13 @@ CREATE TABLE IF NOT EXISTS open_questions (
     protocol   TEXT,
     method     TEXT,
     path       TEXT,
-    -- One of the closed two-value set `payload_binding`, `format_conflict`
-    -- (2G design §6) — checked in `resolve/open_questions.py`, which is the
-    -- only writer.
+    -- One of the closed set `payload_binding`, `format_conflict`,
+    -- `channel_destination`, `service_identity`, `environment_divergence`
+    -- (2G design §6, extended by 2O design §0) — checked in
+    -- `resolve/open_questions.py`, which owns the set and refuses anything
+    -- outside it. This comment named the original TWO until 2O Task 9, which
+    -- shipped the writer `channel_destination` had been waiting for; the
+    -- other two gained theirs earlier in the same phase.
     question   TEXT,
     -- The answers that were on the table, as a JSON array — each carrying
     -- what it would have made the format or payload type, where it was seen,
