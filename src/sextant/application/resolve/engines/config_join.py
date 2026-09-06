@@ -10,6 +10,15 @@ input — the `resolved_config` table M04's pass 2 wrote (`resolve/config.py`)
 — which is why this style is the first to name a PIPELINE-declared
 capability in `requires` (D02 §1).
 
+**The name has two sources** (D02 §2d, 2O design §5a). `bean_name` is the
+original: a declared method's own name. `annotation_value` is the second: the
+value of a named ARGUMENT on a named annotation — a channel name written on
+the method the framework wires to that channel. The DESTINATION side is
+identical for both and is still `resolved_config` alone; what differs is only
+where the name being asked about comes from, and a name whose destination
+configuration never answers is handled differently by each (`_derive_channels`
+states why).
+
 Three jobs, two of them here:
 
 * `address_from_config` derives endpoint rows — one per selected binding —
@@ -22,6 +31,11 @@ Three jobs, two of them here:
 * The third — peer resolution — is a named query (`resolved_peers`), never
   a write: endpoint rows keep their expressions, `resolved_config` keeps the
   values, and nothing here rewrites a row per environment.
+
+`gaps` is not a fourth job and derives nothing: it is the `channel_destination`
+hand-off an `annotation_value` catalog files for a name configuration never
+answered, and it rides the `service_identity` seam rather than `run` because
+the ledger is reset AFTER the engine loop (`resolve/pipeline.py`).
 
 Framework knowledge — which key template names a destination, which
 functional interface means which binding suffix and direction, which
@@ -38,6 +52,7 @@ from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.domain.closed_sets import Direction, Protocol
+from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import bare_descriptor, method_name
 
 _ADDRESS = "address_from_config"
@@ -45,10 +60,25 @@ _MEDIA = "media_from_config"
 # The one placeholder a key template carries. A template names the binding
 # it is asking about; everything else in the key is literal.
 _BINDING = "{binding}"
-# The only `binding.from` this engine implements (D02 §2d: "its bean name is
-# the method's own name"). A catalog naming anything else is refused rather
-# than silently read as this.
+# The two `binding.from` sources this engine implements. A catalog naming
+# anything else is refused rather than silently read as one of them.
+#
+# `bean_name` (D02 §2d: "its bean name is the method's own name") was the
+# only one until Task 9. `annotation_value` is the second: the name is the
+# value of the argument `channels` declares, on the annotation `channels`
+# declares. Measured before it was built on (§8.1) — the probe found those
+# arguments reaching the fact stream verbatim, keyed by attribute name, on
+# both the consuming and the producing side of one flow
+# (`scripts/probes/spring-integration-destinations.md`, Q2/Q3).
 _BEAN_NAME = "bean_name"
+_ANNOTATION_VALUE = "annotation_value"
+_BINDING_SOURCES = (_ANNOTATION_VALUE, _BEAN_NAME)
+# `annotation_value`'s own rule list: one entry per `(annotation, argument)`
+# pair the framework spells a name with, each carrying the direction that
+# argument means. A framework uses more than one annotation and more than one
+# attribute for this, and which attribute means which direction is exactly
+# the knowledge that must stay in the catalog.
+_CHANNELS = "channels"
 # D01 §3's two media columns — the closed set `fills` may name.
 _FILLABLE = ("consumes", "produces")
 # The vocabulary's own default separators (D02 §2d): `selected_by` names a
@@ -59,6 +89,20 @@ _FILLABLE = ("consumes", "produces")
 # spelling even before a second framework family declares its own.
 _SELECTION_SEPARATOR = ";"
 _COMPOSITION_SEPARATOR = "|"
+# The 2K hand-off this style files (2G design §6's closed set, extended by 2O
+# design §0 — `resolve/open_questions.py` is where the set lives and where a
+# value outside it is refused).
+_CHANNEL_DESTINATION = "channel_destination"
+# The two REASONS a channel's destination went unanswered, kept apart because
+# they are different facts and the trail is what a reader acts on: nobody was
+# asked, versus somebody was asked and configuration did not answer with one
+# value. Neither names a framework — the trail names the tables and the key
+# this pass actually read, which is what the column is for.
+_NO_KEY_TEMPLATE = (
+    "this catalog declares no destination key template, so no configuration "
+    "key names this channel's destination"
+)
+_NO_AGREED_VALUE = "resolved_config carries no value every environment agrees on for `{key}`"
 
 
 def derives_rows(catalog: Catalog) -> bool:
@@ -91,9 +135,21 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     """
     _validate_matches(catalog)
     if _ADDRESS in catalog.matches:
-        _derive_bindings(workspace, catalog)
+        if _binding_source(catalog) == _ANNOTATION_VALUE:
+            _derive_channels(workspace, catalog)
+        else:
+            _derive_bindings(workspace, catalog)
     if _MEDIA in catalog.matches:
         _stamp_media(workspace, catalog)
+
+
+def _binding_source(catalog: Catalog) -> str:
+    """Which of `_BINDING_SOURCES` this catalog's address block names.
+
+    Read through one accessor rather than indexed at each site: `run` and
+    `gaps` both branch on it, and `_validate_matches` has already refused
+    anything outside the pair, so neither caller repeats that check."""
+    return str(catalog.matches[_ADDRESS]["binding"]["from"])
 
 
 # --- job 1: addresses that live in configuration (D02 §2d) ----------------
@@ -177,8 +233,9 @@ def _derive_bindings(workspace: Workspace, catalog: Catalog) -> None:
             continue
         for suffix, direction, payload_arg in _rule_bindings(candidate.rule, catalog):
             name = entry + suffix
-            destination = _agreed(config, key_template.replace(_BINDING, name))
             protocol = _protocol_of(config, address, name, catalog)
+            resolved = _agreed(config, key_template.replace(_BINDING, name))
+            destination = None if resolved is None else _addressed(resolved, protocol, direction)
             if destination is not None:
                 identity = (protocol, direction, destination)
                 if identity in seen:
@@ -423,6 +480,30 @@ def _protocol_of(
     return str(protocols.get(configured, catalog.protocol))
 
 
+def _addressed(raw: str, protocol: str, direction: str) -> str:
+    """A resolved destination as the identity the row publishes — the §8 path
+    seam, asked of THIS ROW's own protocol and direction.
+
+    The Task 2 carry (2O plan, Task 9 step 4). `single_call` had the same
+    shape and the same bug: its rows carry a per-row `direction` override
+    while its seam asked `catalog.direction`, so the gate answered about a
+    different row from the one being minted. Both halves of this style's
+    identity are per-row too — `direction` comes from the suffix rule or the
+    channel rule (`_rule_bindings`, `_channels`), `protocol` from the
+    binder configuration (`_protocol_of`) — so `catalog.protocol` and
+    `catalog.direction` are each merely the DEFAULT one of them may fall back
+    to, and neither is what this gate is about.
+
+    No shipped catalog reaches the canonicalizing branch today: `serves_urls`
+    is inbound HTTP alone, and this style's shipped protocols are broker
+    protocols. It is written against the ROW rather than left unwritten
+    because the seam is a property of the address, and a style with two
+    binding sources is now reachable from a catalog neither of the shipped
+    two resembles.
+    """
+    return canonical_http_path(raw) if serves_urls(protocol, direction) else raw
+
+
 def _row(
     catalog: Catalog,
     protocol: str,
@@ -463,6 +544,192 @@ def _row(
         "consumes": None,
         "produces": None,
     }
+
+
+# --- job 1, the second binding source: `from: annotation_value` -----------
+
+
+class _Channel:
+    """One name a declared annotation argument carried: the name itself, the
+    METHOD the annotation sits on, and the direction the catalog says that
+    argument means."""
+
+    __slots__ = ("direction", "handler", "name")
+
+    def __init__(self, name: str, handler: str, direction: str) -> None:
+        self.name = name
+        self.handler = handler
+        self.direction = direction
+
+
+def _derive_channels(workspace: Workspace, catalog: Catalog) -> None:
+    """One row per named channel whose destination configuration ANSWERED,
+    and nothing at all for the rest.
+
+    **The asymmetry against `_derive_bindings` is the point, not an
+    inconsistency.** A bean-name binding whose key nobody answered still
+    derives a row, because the BEAN is the declaration: it exists, the
+    binding was declared, and only the address is unread (D02 §2d, "an
+    unresolved address is not an absent endpoint"). A channel name is not a
+    declaration of a wire — it names an in-process pipe, and whether that
+    pipe reaches a broker at all is exactly what nobody answered. A row with
+    `path` NULL would therefore assert a boundary no declaration in the
+    module makes, which is §8's cardinal sin with the address column left
+    honest. The channel is not dropped either: `gaps` files it as a
+    `channel_destination` question, which is a hand-off with the channel name
+    and the handler in it rather than a fabricated wire.
+
+    Rows carry no `request_shape`. A channel annotation names a channel and
+    nothing else — there is no functional type argument to root a payload
+    from, and the annotated method's own signature is not one either (what a
+    framework passes a channel handler is its own convention, and no probe
+    has measured one), so both shape columns and `handler_signature` stay
+    NULL rather than claiming a contract nobody read.
+    """
+    address = catalog.matches[_ADDRESS]
+    template = address.get("key")
+    config = _config_values(workspace)
+    rows: list[dict[str, Any]] = []
+    # Every row here has a known identity — a channel with no answered
+    # destination derives nothing at all — so unlike `_derive_bindings` this
+    # set can never hold the NULL-path rows that must not collapse.
+    seen: set[tuple[str, str, str]] = set()
+    for channel in _channels(workspace, catalog):
+        if template is None:
+            continue
+        protocol = _protocol_of(config, address, channel.name, catalog)
+        resolved = _agreed(config, str(template).replace(_BINDING, channel.name))
+        if resolved is None:
+            continue
+        destination = _addressed(resolved, protocol, channel.direction)
+        identity = (protocol, channel.direction, destination)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        rows.append(_row(catalog, protocol, channel.direction, destination, channel.handler, None))
+    workspace.derive("call_endpoints", rows=rows)
+
+
+def _channels(workspace: Workspace, catalog: Catalog) -> list[_Channel]:
+    """Every name a declared `channels` rule found, deterministically ordered.
+
+    **The target must be a METHOD**, and that is a conjunct rather than
+    housekeeping — the `scheduled_work._declarations` rule, one table over. An
+    annotation that names a channel is `@Target`-legal on an ANNOTATION TYPE
+    too, which is how a module composes its own stereotype; that declaration
+    wires nothing to any channel, so publishing it would name a boundary
+    against a type the framework never invokes and a handler nobody calls.
+
+    **The value must be a non-empty STRING.** An argument the extractor
+    recorded as an array, a nested annotation or a number is not a channel
+    name, and spelling one as text would ask configuration about a name
+    nobody wrote; an argument written empty is not a name either, and the key
+    template built from it would carry an answer belonging to nothing.
+
+    Nothing is resolved on the way in: a name still carrying a placeholder
+    expression is asked about exactly as written, which is the phase-wide
+    rule (rows keep expressions, `resolved_config` keeps values).
+    """
+    rules = catalog.matches[_ADDRESS]["binding"][_CHANNELS]
+    by_annotation: dict[str, list[dict[str, Any]]] = {}
+    for rule in rules:
+        by_annotation.setdefault(_catalog_symbol(str(rule["annotation"])), []).append(rule)
+    methods = {str(row["symbol"]) for row in workspace.query("method_symbols")}
+    found: list[_Channel] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in workspace.query("annotations"):
+        target = str(row["target"])
+        if target not in methods:
+            continue
+        args = _annotation_arguments(row["args"])
+        for rule in by_annotation.get(str(row["annotation"]), []):
+            value = args.get(str(rule["arg"]))
+            if not isinstance(value, str) or not value:
+                continue
+            direction = str(rule.get("direction", catalog.direction))
+            if (value, direction, target) in seen:
+                continue
+            seen.add((value, direction, target))
+            found.append(_Channel(value, target, direction))
+    # Sorted here rather than relying on the `annotations` query's own order:
+    # the order rows reach `call_endpoints` and the ledger is a property of
+    # this pass (NFR-1), and two rules of one catalog may answer for the same
+    # annotation fact.
+    return sorted(found, key=lambda channel: (channel.name, channel.direction, channel.handler))
+
+
+def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
+    """The `channel_destination` open questions this catalog's unanswered
+    channels earn — one per `(channel, handler)` whose destination
+    configuration did not give.
+
+    **Why this is a `gaps` function and not a write inside `run`.** The ledger
+    is emptied ONCE per resolve, from the pipeline, and that reset runs AFTER
+    the engine loop (`resolve/pipeline.py`, `resolve/open_questions.py`'s own
+    module docstring): a row written during `run` would be erased before
+    anything read it, silently. Every shipped writer sits after the reset, and
+    this one rides the same seam (`resolve/service_identity.py`).
+
+    Inert for both other shapes, by construction rather than by an id list: a
+    `media_from_config`-only catalog has no address block, and a `bean_name`
+    catalog already answers its own unresolved bindings with a row (D02 §2d)
+    — a question there would be a second record of a fact the endpoint table
+    already carries.
+
+    Called for every catalog of this style whatever the two gates said — the
+    `service_identity` seam re-checks neither `requires` nor the dependency
+    gate — and that costs nothing: this walk reads the same annotation facts
+    `run` did, so a module that declares none of the catalog's annotations
+    finds nothing here either.
+    """
+    _validate_matches(catalog)
+    if _ADDRESS not in catalog.matches or _binding_source(catalog) != _ANNOTATION_VALUE:
+        return []
+    address = catalog.matches[_ADDRESS]
+    template = address.get("key")
+    config = _config_values(workspace)
+    rows: list[dict[str, Any]] = []
+    # One question per channel-and-handler pair, not per direction: the
+    # question is "what destination does this channel carry", and a method
+    # that both consumes from and publishes to one channel is still asking it
+    # once.
+    seen: set[tuple[str, str]] = set()
+    for channel in _channels(workspace, catalog):
+        key = None if template is None else str(template).replace(_BINDING, channel.name)
+        if key is not None and _agreed(config, key) is not None:
+            continue
+        if (channel.name, channel.handler) in seen:
+            continue
+        seen.add((channel.name, channel.handler))
+        rows.append(
+            {
+                "protocol": _protocol_of(config, address, channel.name, catalog),
+                "method": None,
+                # The channel name IS the identity this question is about;
+                # there is no address, which is the whole question.
+                "path": channel.name,
+                "question": _CHANNEL_DESTINATION,
+                # A list of dicts, the shape every other question kind and
+                # every renderer arm uses (`egress/render/document.py`).
+                "candidates": json.dumps(
+                    [{"channel": channel.name, "handler": channel.handler}],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "evidence": _NO_KEY_TEMPLATE if key is None else _NO_AGREED_VALUE.format(key=key),
+            }
+        )
+    return rows
+
+
+def _annotation_arguments(raw: object) -> dict[str, Any]:
+    """One annotation's arguments, decoded — an empty mapping where the fact
+    carries none, which is what an annotation written with no arguments is
+    (the `scheduled_work._arguments` precedent)."""
+    if raw is None:
+        return {}
+    decoded = json.loads(str(raw))
+    return decoded if isinstance(decoded, dict) else {}
 
 
 # --- job 2: serializer media stamping (D02 §2d's `media_from_config`) -----
@@ -570,7 +837,28 @@ def _validate_matches(catalog: Catalog) -> None:
 
 
 def _validate_address(catalog: Catalog, address: Any) -> None:
-    if not isinstance(address, dict) or "key" not in address or "binding" not in address:
+    if not isinstance(address, dict) or not isinstance(address.get("binding"), dict):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{_ADDRESS}` needs `key` and `binding` (D02 §2d)"
+        )
+    source = address["binding"].get("from")
+    if source not in _BINDING_SOURCES:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{_ADDRESS}.binding.from` must be one of "
+            f"{', '.join(f'`{name}`' for name in _BINDING_SOURCES)} — the binding-name "
+            f"sources this engine implements (D02 §2d)"
+        )
+    # `key` is required for `bean_name` and OPTIONAL for `annotation_value`,
+    # and the split is a claim about the two sources rather than a relaxation.
+    # A bean-name binding with no key template asks configuration nothing and
+    # can then only ever derive the degraded rows below — a file that reads as
+    # a whole framework's bindings and means none of them. A framework whose
+    # channels have NO standard configuration key is a real case, and the
+    # honest catalog for it declares none: it enumerates the names, derives
+    # nothing, and files each one as a question. Requiring a key there would
+    # force a template to be invented, which is a convention no framework
+    # states.
+    if source == _BEAN_NAME and "key" not in address:
         raise CatalogError(
             f"loading catalog {catalog.source}: `{_ADDRESS}` needs `key` and `binding` (D02 §2d)"
         )
@@ -589,22 +877,51 @@ def _validate_address(catalog: Catalog, address: Any) -> None:
                 f"binding resolves the same answer for every bean (D02 §2d)"
             )
     binding = address["binding"]
-    if not isinstance(binding, dict) or binding.get("from") != _BEAN_NAME:
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `{_ADDRESS}.binding.from` must be "
-            f"`{_BEAN_NAME}` — the only binding-name source this engine "
-            f"implements (D02 §2d)"
-        )
-    suffix = binding.get("suffix")
-    if not isinstance(suffix, list) or not suffix:
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `{_ADDRESS}.binding.suffix` must be "
-            f"a non-empty list of rules (D02 §2d)"
-        )
-    for rule in suffix:
-        _validate_suffix_rule(catalog, rule)
+    if source == _ANNOTATION_VALUE:
+        channels = binding.get(_CHANNELS)
+        if not isinstance(channels, list) or not channels:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{_ADDRESS}.binding.{_CHANNELS}` must "
+                f"be a non-empty list of rules (D02 §2d)"
+            )
+        for rule in channels:
+            _validate_channel_rule(catalog, rule)
+    else:
+        suffix = binding.get("suffix")
+        if not isinstance(suffix, list) or not suffix:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{_ADDRESS}.binding.suffix` must be "
+                f"a non-empty list of rules (D02 §2d)"
+            )
+        for rule in suffix:
+            _validate_suffix_rule(catalog, rule)
     for name, protocol in (address.get("binder_protocols") or {}).items():
         _closed(catalog, f"{_ADDRESS}.binder_protocols.{name}", protocol, Protocol)
+
+
+def _validate_channel_rule(catalog: Catalog, rule: Any) -> None:
+    """One `channels` entry. Both halves are matched VERBATIM against a fact —
+    the annotation's fully qualified name and the argument's attribute name —
+    so a typo in either declines silently and forever, which is why they are
+    checked for shape here and paired with a near-miss and a positive in the
+    suite (§10)."""
+    valid = (
+        isinstance(rule, dict)
+        and isinstance(rule.get("annotation"), str)
+        and isinstance(rule.get("arg"), str)
+    )
+    if not valid:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: every `{_ADDRESS}.binding.{_CHANNELS}` "
+            f"entry must be `{{annotation: <type>, arg: <attribute>, direction: <direction>}}`, "
+            f"got {rule!r}"
+        )
+    _closed(
+        catalog,
+        f"{_ADDRESS}.binding.{_CHANNELS}.direction",
+        rule.get("direction", catalog.direction),
+        Direction,
+    )
 
 
 def _validate_suffix_rule(catalog: Catalog, rule: Any) -> None:
