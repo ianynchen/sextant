@@ -486,28 +486,35 @@ nothing wrong is derived.
 functional-route row. **Falsified by** a functional route whose real work is
 invisible in every trace — which is today's state, stated.
 
-### OI-25 — the traversal has no reader outside its own tests
-**Minor · introduced 2026-09-06 by 2Q `G4`/`I3` ·
-`src/sextant/application/query/trace.py`**
+### OI-27 — FR-6 says a trace is unbounded and stops only at a terminal; three things stop it earlier
+**Minor · found 2026-09-06 by 2Q's rendered trace, verifying the walk against
+its requirement · `docs/REQUIREMENTS.md` FR-6,
+`src/sextant/application/query/trace.py::DEFAULT_MAX_DEPTH`**
 
-`application/query/trace.py` is called by its tests and by nothing in `src/`. No
-rendered document, no CLI verb and no library facade verb reaches it, so the
-work a trace describes is derivable and not yet visible to a reader of Sextant's
-output. This is the `OI-14`/`OI-15`/`OI-20` shape one layer further on, and it
-is entered here rather than argued away because §5.3's rule is to cite the
-CONSUMER: there is none outside tests, so the honest record is a row saying so.
+FR-6 is two sentences long on this point: *"Traces are not bounded by depth. A
+trace stops only at a terminal."* The shipped walk stops at a terminal
+(`boundary`) and at **three other places**: a depth bound of 64, a `cycle`, and
+a `revisited` method expanded elsewhere in the same trace. None is a terminal.
 
-**Why it was not wired in this task.** A rendered trace is `M07`'s surface and
-needs `I4`'s anchor to carry an enrichment claim beside it; the completion plan
-puts `I4` in Stage 5 for exactly that reason. A CLI or `sextant.api` verb is a
-public API addition, which GUIDELINES §7 puts out of scope without explicit
-instruction. Both are decisions rather than oversights, and both are cheap once
-taken.
+**Recorded now rather than earlier because rendering is what makes it visible.**
+While the walk had no reader the divergence cost nothing; `## Traces` puts all
+four stop reasons in front of a person, with a `Complete` column whose only
+possible "no" is the depth bound — so a reader comparing the document to FR-6
+finds the document right and the requirement stale, or the reverse, and nothing
+tells them which.
 
-Graded Minor because the failure mode is silence: the tables are derived, no
-output moves, and a consumer that ignores them sees exactly what it saw before.
-**Closes by** a rendered trace or a query surface reading it. **Falsified by**
-nothing today; it becomes falsifiable the moment a consumer exists.
+**Which of the three is actually a defect is not obvious, and that is the
+point.** `cycle` and `revisited` are defensible: recursion does not terminate if
+followed, and expanding per-route is exponential on an ordinary diamond (D01's
+own stated reason for a trace being a walk rather than a table). The depth bound
+is a safety limit that fires on nothing measured — 0 of `mall-admin`'s 160, the
+deepest being 5 — and it is never silent. So the likely close is an AMENDED
+FR-6 rather than changed code, and it is entered here because §5 makes that
+amendment a change to `REQUIREMENTS.md` somebody has to decide on, not something
+an implementer settles in a docstring.
+**Closes by** FR-6 naming the four stop reasons, or by the walk stopping only at
+terminals. **Falsified by** a real module deeper than 64 edges, which would make
+the depth bound a live under-report rather than a latent one.
 
 ### OI-26 — `SEXTANT_VERSION` is declared three times
 **Minor · found 2026-09-06 by 2Q `G4` while verifying OI-24 ·
@@ -529,6 +536,29 @@ first bump is when they can diverge — silently, in a stamp nothing reads.
 
 
 ## CLOSED
+
+### OI-25 — the traversal had no reader outside its own tests
+**Minor · introduced 2026-09-06 by 2Q `G4`/`I3` · CLOSED 2026-09-06 by 2Q's
+rendered trace · `src/sextant/egress/render/document.py::_trace_sections`**
+
+`application/query/trace.py` was called by its tests and by nothing in `src/`.
+It is now called by `api._assembled_sections`, at the composition root, and its
+answer is handed to `assemble_module_document(traces=…)` as data — so `## Traces`
+renders one trace and one Mermaid `sequenceDiagram` per row of `roots`, in both
+`architecture.md` and `architecture.html`.
+
+**Closed on its own condition** — "a rendered trace or a query surface reading
+it" — by the first of the two. Its two named blockers were both decisions rather
+than work: `I4`'s enrichment anchor is not needed for a machine section (this one
+carries none, and adding an anchor is a separate change), and no public API verb
+was added, so GUIDELINES §7 is untouched.
+
+**What the close does not claim.** `egress` still never sees a workspace: the
+walk runs at the composition root and the import contract "Egress is read-only"
+is unchanged. And the rendering applies none of M07's designed noise filters and
+draws no `alt`/`opt`/`loop` structure — both are recorded in M07 rather than
+here, the first as a deliberate choice and the second as D00 §5's already-priced
+`ordinal` enrichment.
 
 ### OI-24 — D01 §7's conservative re-derivation rule was not enforced anywhere
 **Major · found 2026-09-06 by 2Q `G4` · CLOSED 2026-09-06 by 2Q's rendered trace ·

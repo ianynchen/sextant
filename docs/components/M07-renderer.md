@@ -83,7 +83,7 @@ here; each is either derived now or carries its gap by name:
 | Structure — contract class diagram | `shapes`/`shape_fields`; nodes are payload types with wire fields, edges are `shape_id` references | **built in 2B** (Mermaid `classDiagram`) |
 | Structure — full class diagram (inheritance) | `inherits`/`implements` edges — table does not exist | named gap; call-graph phase |
 | Inbound endpoints — contract field tables per endpoint | endpoints + descriptors + shapes | **built in 2B** |
-| Inbound endpoints — sequence diagram per endpoint | `edges` with control-flow, `dispatch`, `trace_of` | named gap `sequence_diagrams_pending_call_graph`; call-site/call-graph phases |
+| Traces — one rendered trace and one sequence diagram per ROOT | `roots`, `call_edges`, `return_flows` through `application/query/trace.py`, handed to `assemble_module_document(traces=…)` | **built in 2Q** (`## Traces`; Mermaid `sequenceDiagram`). The gap `sequence_diagrams_pending_call_graph` retired by name, and so did `call_graph_not_implemented` |
 | Outbound endpoints | 2B's rows | **built in 2B** |
 | Components, descriptions, algorithm design, extension guides | LLM-authored via overlay, `evidence: llm` | **delivered, 2K** — not via M01: `.sextant-enrichment.json` ([D04](D04-config-and-exclusion.md) §4b, [ARCHITECTURE.md](../ARCHITECTURE.md) DR-2's amendment), a closed, pydantic-validated claim schema `enrich` writes and this renderer's own assembly (`egress/render/document.py`) interleaves at fixed anchors, never through M01's `Overlay` port |
 
@@ -92,6 +92,38 @@ instead — the same NFR-7 corollary the rest of this document argues from: an e
 reads as *Sextant looked and found nothing*, which is a false claim when the underlying
 capability was never built. A gap says *not yet*; only an empty section is permitted to say
 *looked, found nothing*.
+
+### What the shipped trace section does, and the two designs below it that are NOT applied
+
+Recorded here rather than left for a reader to infer from the absence of code (§5.3): the
+2Q rendering is deliberately the plainest thing the walk supports, and the two sections
+that follow describe machinery it does not use.
+
+- **Per ROOT, not per endpoint.** A root is one row of `roots` — an inbound endpoint handler
+  or a scheduled one — so a scheduled job gets a trace and a diagram on the user's own
+  ruling, and a handler serving three paths is one trace rather than three copies of it.
+  The section names a trace by its handler and its kind, never by a wire identity: joining
+  a root back to the endpoints that reach it is a join `roots` already made and did not
+  keep, and re-making it in `egress` would be the renderer deriving.
+- **No noise filtering at all** (the table below). Every step of the walk is a row and an
+  arrow — accessors, `toString`, third-party calls included. The filters are designed and
+  cheap, and the reason they are not applied is that a hidden call is indistinguishable
+  from a call that does not exist, and this is the first document in which anyone reads a
+  trace. A `view` overlay choosing what to hide is a decision a person makes about their
+  own module; the machine half does not make it for them.
+- **No `alt`/`opt`/`loop` blocks** (the section after it). The structure is not in the
+  facts: [D00](D00-fact-schema.md) §5 states that `call_site.ordinal` is *the v1 of the
+  control-flow position* and *"not the richer context a sequence diagram needs to show a
+  `loop` or an `alt` without lying about it"*, with the enrichment priced as a later
+  re-extraction. So the diagram is flat — and it says so, in every diagram's own
+  `Elides:` line and in the section's preamble, because a flat diagram that does not admit
+  it is the lying diagram §8 forbids. **The statement is the mitigation, not an excuse:
+  the honest close is the richer field.**
+- **The elision is stated per diagram, counted from that trace.** `MachineDiagram.elides`
+  carries it, exactly as `DiagramClaim.elides` carries a model's — same field, same
+  `Elides:` prefix, same caption in HTML. A trace diagram is simplified by construction (it
+  draws no lifeline for a body the walk never entered and no subtree for a method expanded
+  elsewhere), so the statement is not optional on any of them.
 
 ### Cross-service sequence diagrams need no new machinery
 
@@ -124,6 +156,11 @@ Most of what makes a raw sequence diagram unreadable is removable by rule:
 These are testable, stable and free. **What genuinely needs judgement is the leftover** —
 which first-party participants carry the story — and that is what a `view` overlay supplies.
 
+**None of them run as of 2Q.** The section above says why: the first document anyone reads
+a trace in is the wrong place to start hiding calls, because a hidden call and an absent
+call are the same bytes to a reader. Every rule here still holds; each needs a way for the
+diagram to SAY it fired, which is what `MachineDiagram.elides` now provides.
+
 ### Control flow is rendered, not flattened
 
 `alt`, `opt` and `loop` blocks come from the control-flow position on each trace step. Four
@@ -132,6 +169,11 @@ calls listed in order, two of which are branches of one `if`, is the lying diagr
 
 Where [M03](M03-scanner.md) could not structure a region, the steps render sequentially and
 **the diagram says the structure was not recovered**.
+
+**As of 2Q that is every region.** `call_site.ordinal` is instruction order and nothing
+more ([D00](D00-fact-schema.md) §5), so the shipped diagram renders every step
+sequentially and says the structure was not recovered — the second half of this rule
+carrying the whole of it until the field is enriched.
 
 ### Two things no filter and no overlay may hide
 

@@ -153,6 +153,7 @@ _ROOTS = "sextant/application/resolve/roots.py"
 _CALL_EDGES = "sextant/application/resolve/call_edges.py"
 _TRACE = "sextant/application/query/trace.py"
 _API = "sextant/api.py"
+_DOCUMENT = "sextant/egress/render/document.py"
 
 
 GUARDS: dict[str, Guard] = {
@@ -890,6 +891,83 @@ GUARDS: dict[str, Guard] = {
                 path=_API,
                 find="        if found != running\n",
                 replace="        if found != running and False  # guard disabled\n",
+            ),
+        ),
+    ),
+    # --- `## Traces`, the rendered walk -------------------------------------
+    "render_trace.an-arrow-ends-at-the-body-that-was-expanded": Guard(
+        what="a sequence-diagram arrow ends at the `callee` the walk expanded, falling back "
+        "to the compiler-written `target` only where no body was read",
+        why="drawing the DECLARED type breaks the diagram outright rather than merely "
+        "reading oddly. On `/order/list` the arrow lands on `OmsOrderService`, and "
+        "`OmsOrderServiceImpl` then sends four messages nobody ever sent it — a lifeline "
+        "that appears from nowhere. A reader cannot follow it, and the one thing a sequence "
+        "diagram exists to show, who calls whom, is the thing it stops showing",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="    return step.target if step.callee is None else bare_descriptor(step.callee)",
+                replace="    return step.target  # guard disabled",
+            ),
+        ),
+    ),
+    "render_trace.two-types-one-simple-name-are-two-lifelines": Guard(
+        what="two distinct owning types whose SIMPLE names collide both fall back to their "
+        "full descriptors as lifeline labels",
+        why="`_disambiguated_shape_names`' rule, and not a cosmetic one: two lifelines both "
+        "labelled `Order` are read as one type, and the diagram then asserts a call between "
+        "things that never touched. A package name is the only thing separating "
+        "`a/one/Order` from `a/two/Order`, and dropping it publishes a relationship nobody "
+        "measured",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="            labels[participants[key]] = name if len(colliding) == 1 else without_type_marker(key)",
+                replace="            labels[participants[key]] = name  # guard disabled",
+            ),
+        ),
+    ),
+    "render_trace.a-dynamic-step-says-the-body-is-created-not-called": Guard(
+        what="a step whose `invoke_kind` is `dynamic` carries `(dynamic)` on its arrow",
+        why="an `invokedynamic` site names the body it CREATES; the lambda runs later, "
+        "elsewhere, if at all. Without the marker a `list.forEach(x -> mapper.insert(x))` "
+        "draws as an insert happening at that line — an execution claim the graph does not "
+        "make, on the 15 lambda bodies `mall-admin` alone reaches",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find='    if step.invoke_kind == "dynamic":\n        label = f"{label} (dynamic)"\n',
+                replace="",
+            ),
+        ),
+    ),
+    "render_trace.an-arrow-says-where-the-walk-stopped": Guard(
+        what="a step the walk did not expand carries its `TraceStop` in brackets on the arrow",
+        why="where a trace ENDS is the single most important fact in its diagram. An "
+        "unmarked arrow into a lifeline nobody entered is indistinguishable from one into a "
+        "lifeline fully explored, so a diagram whose every branch stopped at the "
+        "third-party boundary reads as a complete picture of a shallow system — 1,966 of "
+        "`mall-admin`'s 2,608 edges are exactly that",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find='    if step.stop is not None:\n        label = f"{label} [{step.stop}]"\n',
+                replace="",
+            ),
+        ),
+    ),
+    "render_trace.every-sequence-diagram-states-its-elision": Guard(
+        what="every machine sequence diagram carries an `elides` statement",
+        why="`DiagramClaim.elides`' own rule applied to the machine half — *a simplified "
+        "diagram that does not say it is simplified is a diagram that lies about the "
+        "system's size*. A trace diagram is simplified by construction: it draws no "
+        "lifeline for a body the walk never entered, and no subtree for a method expanded "
+        "elsewhere. Without the statement it claims to be the whole system",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="                elides=_trace_elision(trace),",
+                replace="                elides=None,  # guard disabled",
             ),
         ),
     ),

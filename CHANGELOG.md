@@ -14,6 +14,41 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A trace, in front of a reader** (2Q, closing `OI-25`). Everything before this produced
+  tables; `sextant module render` now writes a **`## Traces`** section into
+  `architecture.md` and `architecture.html` alike — one rendered trace and one Mermaid
+  `sequenceDiagram` **per ROOT**, so a scheduled job gets both for the same reason an
+  endpoint handler does.
+  **Every step is a row and an arrow. Nothing is filtered.** The step table carries `Depth`,
+  `Caller`, `Call`, `Dispatch`, `Resolution`, `Value`, `Returns` and `Stop`, and the walk's
+  2,147 steps on `mall-admin` are 2,147 rows: a hidden call and an absent call are the same
+  bytes to a reader, and this is the first document anyone reads a trace in.
+  **The four places a reader could be misled are stated where they render.** A trace is
+  reachability and never execution — said in the section preamble and again under every
+  diagram; `revisited` keeps its row and says the subtree is at the callee's first
+  appearance; nothing classifies a terminal, because `terminal_kind` has no producer and
+  inventing one in `egress` would be derivation hiding in presentation; and a sibling
+  build module reads `boundary` exactly as the JDK does, which the preamble says in
+  capitals because `/order/list`'s own response composition is where it bites.
+  **`MachineDiagram` gains `elides`**, mirroring `DiagramClaim.elides` field for field —
+  markdown writes an `Elides:` line, HTML passes it to the diagram caption — and every
+  trace diagram carries one, counted from that trace's own stops. `## Structure`'s class
+  diagram passes `None` and is byte-identical to before.
+  **An arrow ends at the body the walk expanded**, not at the interface the compiler named,
+  with `(declared X)` on the message: drawing the interface leaves the implementation
+  sending messages nobody sent it, which is a diagram a reader cannot follow. Two types
+  whose simple names collide fall back to full descriptors, `_disambiguated_shape_names`'
+  rule per diagram, because two lifelines labelled `Order` assert a call between things
+  that never touched.
+  **Verified against the vendored mermaid 11.17.2 build in a live browser**: all 161
+  diagrams in `mall-admin`'s document render, 0 syntax errors, 160 captions. Two renders
+  of one workspace are byte-identical (NFR-1).
+  Two gaps retire BY NAME — `sequence_diagrams_pending_call_graph` and
+  `call_graph_not_implemented` — and **five narrower ones** take their place, because what
+  is still true of a trace is five separate things a reader can act on. Records `OI-27`
+  (FR-6 says a trace is unbounded and stops only at a terminal; three things stop it
+  earlier).
+
 - **A stale workspace is refused instead of rendered short** (2Q, closing `OI-24`).
   [D01](docs/components/D01-graph-schema.md) §7 has said since Phase 1 that *"any Sextant
   version change re-derives, because derivation logic may have changed and there is no cheap

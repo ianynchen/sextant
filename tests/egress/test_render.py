@@ -577,8 +577,18 @@ def test_messaging_gap_retires_and_both_lists_rotate_together():
     # parse-binding pass refuses to cross — a payload parsed past the
     # one-hop horizon, and a payload reaching two different parses — each
     # arrive with their own sentence in the same position. Nothing retired.
-    assert len(KNOWN_GAPS) == 14
-    assert len(_GAPS) == 14
+    #
+    # Fourteen became seventeen when `## Traces` landed, and this is the
+    # first ROTATION the rule was written for rather than a widening: TWO
+    # keys retired by name — `sequence_diagrams_pending_call_graph` and
+    # `call_graph_not_implemented`, both of which said the call graph does
+    # not exist — and FIVE narrower ones took their place, because what is
+    # still true of a trace is five separate things a reader can act on.
+    assert "sequence_diagrams_pending_call_graph" not in KNOWN_GAPS
+    assert "call_graph_not_implemented" not in KNOWN_GAPS
+    assert not any("await the call graph" in gap for gap in _GAPS if "Reactive" not in gap)
+    assert len(KNOWN_GAPS) == 17
+    assert len(_GAPS) == 17
     assert not any("Messaging endpoints" in gap for gap in _GAPS)
 
 

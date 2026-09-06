@@ -147,6 +147,14 @@ optional branches are distinguishable from a straight sequence.
 
 Traces are not bounded by depth. A trace stops only at a terminal.
 
+> **Not met as shipped, and recorded rather than quietly reinterpreted** (2Q,
+> `docs/open-issues.md` OI-27). The walk stops at a terminal and at three other places: a
+> depth bound of 64 (a safety limit, never silent — 0 of `mall-admin`'s 160 traces reach
+> it), a `cycle`, and a method already expanded elsewhere in the same trace. Whether the
+> close is an amended requirement or changed code is a decision this document's owner
+> takes; until then the divergence is stated here, in `COVERAGE.md`, and in the rendered
+> document's own `Known gaps`.
+
 ### FR-7 — Diagrams
 
 Sextant renders sequence diagrams at module and system level, and class diagrams, from
@@ -157,6 +165,13 @@ anything, it states that it has done so and how much.
 
 *Terminals of kind `unresolved` and `cycle` are always drawn, and cannot be suppressed
 by any filter or overlay.*
+
+> **Module-scope sequence diagrams ship in 2Q, one per root, and they are FLAT** — no
+> `alt`/`opt`/`loop`, because `call_site.ordinal` is instruction order and nothing more
+> ([D00](components/D00-fact-schema.md) §5, which prices the richer field as a later
+> re-extraction). "Where a diagram omits anything, it states that it has done so and how
+> much" is met literally: every diagram carries a machine-written `Elides:` line counting
+> each kind of stop, and no step is filtered out of one.
 
 ### FR-8 — System linking
 

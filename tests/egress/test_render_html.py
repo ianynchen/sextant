@@ -18,6 +18,7 @@ from test_render_assembly import (
     GOLDEN_MODULE,
     GOLDEN_REPORT,
     GOLDEN_SHAPE_FIELDS,
+    GOLDEN_TRACES,
     MODULE,
     OPEN_QUESTIONS,
     REPORT,
@@ -255,11 +256,16 @@ def test_the_fixture_workspace_assembles_with_zero_untyped_machine_sections():
 
 def test_every_markdown_heading_becomes_its_own_html_heading():
     """`<h2>` per `##`, `<h1>` for the module title — the golden fixture's own
-    nine `##` sections (Coverage, Structure, Inbound endpoints, Outbound
-    endpoints, Scheduled work, Error handling, Open questions, Known gaps,
-    Catalogs skipped), pinned by count
+    ten `##` sections (Coverage, Structure, Inbound endpoints, Outbound
+    endpoints, Scheduled work, Error handling, Traces, Open questions, Known
+    gaps, Catalogs skipped), pinned by count
     against the same golden markdown this fixture is proven byte-identical to
-    (`test_render_assembly.test_a_module_with_no_overlay_renders_the_checked_in_golden_document`)."""
+    (`test_render_assembly.test_a_module_with_no_overlay_renders_the_checked_in_golden_document`).
+
+    Nine became ten with `## Traces`, which renders unconditionally — the
+    `Scheduled work`/`Error handling` rule rather than the `Open questions`
+    one, because "nothing in this module starts any work" is a finding and a
+    section that disappears cannot say it."""
     sections = assemble_module_document(
         GOLDEN_MODULE,
         GOLDEN_REPORT,
@@ -267,6 +273,7 @@ def test_every_markdown_heading_becomes_its_own_html_heading():
         ("com/example/golden/Newer.class: metadata unreadable",),
         shape_fields=GOLDEN_SHAPE_FIELDS,
         open_questions=OPEN_QUESTIONS,
+        traces=GOLDEN_TRACES,
     )
     document = _html(sections, module_id=GOLDEN_MODULE.module_id)
     # Scoped to the document's own body, before the vendored mermaid script:
@@ -277,7 +284,7 @@ def test_every_markdown_heading_becomes_its_own_html_heading():
     # that coincidence (fix round 1, MINOR 9).
     body = document.split("<script>", 1)[0]
     assert body.count("<h1>") == 1
-    assert body.count("<h2>") == 9
+    assert body.count("<h2>") == 10
     assert "## " not in body
 
 

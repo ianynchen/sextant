@@ -2061,6 +2061,23 @@ and `POST /aliyun/oss/callback` — the same two the roadmap names, verified in 
 leaves for the JDK and comes back, the `collect` result is visible, per-element provenance
 is not.
 
+**Every one of the stops above is now something a reader SEES**, which is what changed when
+`## Traces` landed ([M07](components/M07-renderer.md)). Each is a `Stop` value on the step's
+own row, each is bracketed on the arrow in the sequence diagram, and each is counted in that
+diagram's `Elides:` line. The one that is still incomplete rather than merely stated is the
+sibling-module boundary: nothing in the rendered document distinguishes it from a
+third-party one, because nothing anywhere classifies a terminal, so the section says so in
+prose and leaves the full descriptor in the `Call` column for a reader to judge.
+
+**What the rendered section does NOT do, measured the same way.** No step is filtered — all
+2,147 of `mall-admin`'s steps are rows, and all of them are arrows — so a reader never has
+to wonder whether a call was hidden. No `alt`/`opt`/`loop` structure is drawn, because
+`call_site.ordinal` is instruction order and nothing more ([D00](components/D00-fact-schema.md)
+§5's "v1 of the control-flow position"); the diagram is flat and says so. And no trace is
+named by a wire identity: a root is a handler, `roots` collapsed 160 endpoints to 160
+handlers here and 77 to 66 on the fixture, and the endpoint tables above are where a path
+meets its handler.
+
 ### Where a value chain stops, now that it crosses method boundaries
 
 2Q's `G3` links a callee's returned value to the caller's own `result` id

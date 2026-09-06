@@ -18,8 +18,11 @@ from test_render import MODULE, REPORT
 
 from sextant.application.enrich.validate import stale_claims, validate_overlay
 from sextant.application.ports.detector import ModuleModel
+from sextant.application.query.trace import Step, Trace
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport
+from sextant.application.resolve.roots import Root
+from sextant.domain.closed_sets import Resolution, RootKind, TraceStop
 from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_overlay
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.render.document import (
@@ -396,6 +399,89 @@ GOLDEN_SHAPE_FIELDS = [
 ]
 
 
+# One trace, hand-built rather than walked, covering every shape `## Traces`
+# has a rule for: an interface hop that resolved into a different body (so the
+# `Call` cell renders both descriptors and the diagram's arrow is redirected),
+# a third-party terminal, a SIBLING-MODULE terminal that reads identically to
+# it, a `dynamic` step naming a lambda body, and a `revisited` step whose
+# subtree is shown at its first occurrence. The golden is a byte pin over the
+# regions the assembler cuts at, so a region it never renders is a region
+# nothing pins.
+GOLDEN_TRACES = [
+    Trace(
+        root=Root(
+            handler="s maven c 1 com/example/golden/Api#list().", kind=RootKind.INBOUND_ENDPOINT
+        ),
+        steps=(
+            Step(
+                depth=1,
+                caller="s maven c 1 com/example/golden/Api#list().",
+                ordinal=0,
+                invoke_kind="interface",
+                target="com/example/golden/OrderService#list().",
+                callee="s maven c 1 com/example/golden/OrderServiceImpl#list().",
+                result=7,
+                resolution=Resolution.RESOLVED,
+                stop=None,
+                returns=((0, '{"kind":"unresolved","source":3}'),),
+            ),
+            Step(
+                depth=2,
+                caller="s maven c 1 com/example/golden/OrderServiceImpl#list().",
+                ordinal=0,
+                invoke_kind="interface",
+                target="com/example/golden/OrderMapper#selectAll().",
+                callee=None,
+                result=3,
+                resolution=Resolution.RESOLVED,
+                stop=TraceStop.BOUNDARY,
+            ),
+            Step(
+                depth=2,
+                caller="s maven c 1 com/example/golden/OrderServiceImpl#list().",
+                ordinal=1,
+                invoke_kind="dynamic",
+                target="com/example/golden/OrderServiceImpl#lambda$list$0().",
+                callee="s maven c 1 com/example/golden/OrderServiceImpl#lambda$list$0().",
+                result=None,
+                resolution=Resolution.RESOLVED,
+                stop=None,
+            ),
+            Step(
+                depth=3,
+                caller="s maven c 1 com/example/golden/OrderServiceImpl#lambda$list$0().",
+                ordinal=0,
+                invoke_kind="interface",
+                target="com/example/golden/OrderService#list().",
+                callee="s maven c 1 com/example/golden/OrderServiceImpl#list().",
+                result=None,
+                resolution=Resolution.RESOLVED,
+                stop=TraceStop.REVISITED,
+            ),
+            Step(
+                depth=1,
+                caller="s maven c 1 com/example/golden/Api#list().",
+                ordinal=1,
+                invoke_kind="static",
+                target="com/example/common/api/CommonResult#success().",
+                callee=None,
+                result=12,
+                resolution=Resolution.RESOLVED,
+                stop=TraceStop.BOUNDARY,
+            ),
+        ),
+        response=((0, '{"kind":"unresolved","source":12}'),),
+    ),
+    Trace(
+        root=Root(
+            handler="s maven c 1 com/example/golden/Sweeper#sweep().", kind=RootKind.SCHEDULED
+        ),
+        steps=(),
+        response=((0, "null"),),
+    ),
+]
+
+
 def _golden_document() -> str:
     return render_module_document(
         GOLDEN_MODULE,
@@ -404,6 +490,7 @@ def _golden_document() -> str:
         ("com/example/golden/Newer.class: metadata unreadable",),
         shape_fields=GOLDEN_SHAPE_FIELDS,
         open_questions=OPEN_QUESTIONS,
+        traces=GOLDEN_TRACES,
     )
 
 

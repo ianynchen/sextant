@@ -20,9 +20,19 @@ KNOWN_GAPS = [
     "http_exchange_inbound_use_not_detected",
     "computed_base_addresses_not_traced",
     "config_as_code_not_read",
-    "sequence_diagrams_pending_call_graph",
+    # *Two gaps retired BY NAME here (spec ruling I3), and five narrower ones
+    # took their place.* `sequence_diagrams_pending_call_graph` and
+    # `call_graph_not_implemented` both said the call graph does not exist;
+    # `## Traces` renders one per root, with a sequence diagram apiece, so
+    # keeping either would be the catalog lying in the opposite direction from
+    # usual. What is still true is smaller and more specific, and each of the
+    # five names exactly one thing a reader can act on.
+    "traces_are_reachability_not_execution",
     "structure_diagram_limited_to_contracts",
-    "call_graph_not_implemented",
+    "trace_terminals_are_unclassified_and_cross_module_stops_look_third_party",
+    "a_method_is_expanded_once_per_trace",
+    "trace_depth_is_bounded",
+    "roots_are_declared_handlers_only",
     # *Renamed by F1 (spec ruling I3: a gap that closes retires BY NAME).*
     # Parent inheritance, `<dependencyManagement>`, imported BOMs and `${…}`
     # interpolation ARE resolved now; profiles and transitives are not, and

@@ -125,6 +125,7 @@ from sextant.application.ports.detector import (
 )
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.ports.progress import NullProgress, Progress
+from sextant.application.query.trace import traces_of
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.application.stages import enrich as enrich_stage
@@ -844,6 +845,17 @@ def _assembled_sections(
         redactor=redactor,
         overlay=overlay,
         stale=stale,
+        # The walk runs HERE, at the composition root, and its answer is
+        # handed to the renderer as data (2Q `G4`/`I3`). `traces_of` reads the
+        # workspace once for all roots — the three projections it builds are
+        # the expensive part and the walk itself is not — and `egress` never
+        # sees a workspace at all, which is what keeps "Egress is read-only"
+        # true of a section whose whole content is a graph traversal.
+        #
+        # Not "re-analysis" in M00's sense: `roots`, `call_edges` and
+        # `return_flows` are rows `analyze` already derived, and this reads
+        # them exactly as `endpoints` and `shapes` are read back above.
+        traces=traces_of(workspace),
     )
     return sections, reconstructed.module_id
 

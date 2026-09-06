@@ -28,8 +28,15 @@ from typing import cast
 from pydantic import ValidationError
 
 from sextant.application.ports.detector import ModuleModel
+
+# The walk's own answer, carried in as data (2Q `G4`/`I3`). `egress` reads a
+# report and renders it; the composition root calls `traces_of` and hands the
+# result here, exactly as it already hands `shape_fields` and `open_questions`
+# — this module never reaches for a workspace, which is the import-linter
+# contract "Egress is read-only" in one line.
+from sextant.application.query.trace import Step, Trace
 from sextant.application.resolve.pipeline import ResolveReport
-from sextant.domain.closed_sets import Anchor, Protocol
+from sextant.domain.closed_sets import Anchor, Protocol, TraceStop
 from sextant.domain.enrichment import (
     UNANSWERED,
     Claim,
@@ -50,8 +57,14 @@ from sextant.domain.symbols import (
     owner_of,
     without_type_marker,
 )
-from sextant.egress.render.diagrams import class_diagram
-from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
+from sextant.egress.render.diagrams import class_diagram, sequence_diagram
+from sextant.egress.render.viewmodel import (
+    ClassEdge,
+    ClassNode,
+    SequenceMessage,
+    SequenceParticipant,
+    simple_name,
+)
 
 _GAPS = [
     "An @HttpExchange interface implemented server-side is still reported outbound.",
@@ -64,9 +77,37 @@ _GAPS = [
         "Configuration constructed in code — a settings module, a config "
         "factory — is not read; only configuration files reach resolution."
     ),
-    "Sequence diagrams await the call graph.",
+    (
+        "A trace is reachability, never execution: branches are not distinguished, "
+        "two return statements are two possible answers rather than the one that "
+        "runs, and no step is asserted to have happened."
+    ),
     "The structure diagram covers contract types only: inheritance edges are not extracted.",
-    "The call graph is not implemented: there are no traces or sequence diagrams.",
+    (
+        "A trace stops where this workspace read no body, and nothing classifies "
+        "which kind of stop it is: a third-party library, the JDK, a MyBatis mapper "
+        "and a SIBLING BUILD MODULE all read `boundary`. The last of those is the "
+        "one that under-reports — a body exists somewhere, in a workspace this one "
+        "does not hold — and on a multi-module build it is where a response is "
+        "composed."
+    ),
+    (
+        "A method is expanded once per trace, not once per route to it: a second "
+        "route to the same method reads `revisited` and its calls are shown at the "
+        "first, so a path through a trace is not always followable to a terminal."
+    ),
+    (
+        "A trace's depth is bounded at 64 edges, which FR-6 says it should not be. "
+        "The bound is a safety limit rather than a modelling one and it is never "
+        "silent — the step says `depth_limit` and the Complete column answers — but "
+        "a module deeper than 64 loses everything past it."
+    ),
+    (
+        "A root is a handler this module exposes or schedules. A functional route "
+        "carries no handler symbol, so it produces no root and gets no trace; a "
+        "program entry point has no producer at all, so a module whose only "
+        "starting point is a batch job or a command-line tool gets none either."
+    ),
     (
         "Maven profiles and transitive dependencies are not resolved: the "
         "detector reads pom.xml files instead of asking Maven to resolve them. "
@@ -416,9 +457,20 @@ class MachineDiagram:
 
     The markdown emitter re-fences it byte for byte, which is what the golden
     document pins.
+
+    `elides` is what this diagram leaves out, in the machine's own words, or
+    `None` for one that leaves nothing out. It is `DiagramClaim.elides`' rule
+    applied to the machine half — *"a simplified diagram that does not say it
+    is simplified is a diagram that lies about the system's size"* — and it
+    reaches both serializers exactly as the claim's does: markdown writes an
+    `Elides:` line under the fence, HTML passes it to `_diagram_html`'s
+    caption. `None` renders nothing at all, which is why `## Structure`'s
+    class diagram is byte-identical to what it was before this field existed:
+    that diagram draws every contract type there is.
     """
 
     mermaid: str
+    elides: str | None = None
 
 
 @dataclass(frozen=True)
@@ -754,6 +806,7 @@ def render_module_document(
     redactor: Redactor = _DEFAULT_REDACTOR,
     overlay: EnrichmentOverlay | None = None,
     stale: frozenset[int] = frozenset(),
+    traces: Sequence[Trace] = (),
 ) -> str:
     """`architecture.md` — the markdown serialization of the assembled
     document. Kept as its own entry point because it is what every caller of
@@ -774,6 +827,7 @@ def render_module_document(
             redactor=redactor,
             overlay=overlay,
             stale=stale,
+            traces=traces,
         )
     )
 
@@ -805,6 +859,15 @@ def assemble_module_document(
     # than claims because the overlay is a list written wholesale, and a
     # position is what locates one in the file a reader would go and look at.
     stale: frozenset[int] = frozenset(),
+    # One walk per row of `roots`, already performed by
+    # `application/query/trace.py` and handed in by the composition root.
+    # Carried like every other table this renderer shows and NOT re-derived
+    # here: `egress` reads and renders, and a renderer reaching for a
+    # workspace to walk a graph is derivation hiding in presentation — the
+    # thing the "Egress is read-only" import contract exists to forbid. Empty
+    # for a module that exposes nothing and schedules nothing, which renders
+    # `None found.` the way the two non-wire sections above it do.
+    traces: Sequence[Trace] = (),
 ) -> AssembledDocument:
     """Adds no information. Every row comes from the graph, and every omission
     is stated (M07). Rendering the same report twice is byte-identical
@@ -1004,6 +1067,20 @@ def assemble_module_document(
     sections.append(MachineHeading(2, "Error handling"))
     sections.extend(_error_handler_sections(report.error_handlers))
 
+    # BELOW both non-wire sections, and for the reason they sit where they do:
+    # a trace starts from a ROOT, and a root is an inbound endpoint OR a
+    # scheduled job (2Q `I1`/`I3`). Placing this under `## Inbound endpoints`
+    # would say the scheduled traces are endpoint traces; placing it under
+    # `## Scheduled work` would say the reverse. It goes after both, where it
+    # is a claim about everything above it.
+    #
+    # Unconditional, `None found.` included — the `Scheduled work`/`Error
+    # handling` rule rather than the `Open questions` one. "Nothing in this
+    # module starts any work" is a finding; a section that disappears leaves a
+    # reader unable to tell it from a Sextant that never walked (FR-17).
+    sections.append(MachineHeading(2, "Traces"))
+    sections.extend(_trace_sections(traces, redactor))
+
     # Rendered only when the ledger holds rows (2G design §8): a run with
     # nothing to ask leaves the section absent, the `## Catalogs skipped`
     # precedent below rather than the NFR-7 "looked and found nothing" one —
@@ -1155,6 +1232,440 @@ def _cell(value: object, render: Callable[[str], str]) -> str:
     exactly one meaning in both tables — nothing evidenced it — and never
     becomes a guess at what the framework would have done."""
     return _NONE_RECORDED if value is None else render(str(value))
+
+
+# --------------------------------------------------------------------------
+# `## Traces` (2Q `G4`/`I3`, FR-6/FR-7) — the walk, rendered.
+#
+# **This section renders; it does not decide.** Every column below is a field
+# `application/query/trace.py` already carries, spelled out rather than
+# summarised, and the four places a reader could be misled are stated in the
+# section's own preamble rather than fixed here by a rule this file invented:
+#
+# - **`revisited`.** A method is expanded once per trace, so a path through
+#   the table is not always followable to a terminal. The step is still a ROW
+#   — dropping it would delete the call — and its `Stop` says `revisited`,
+#   which means "this callee's own calls are drawn at its first appearance
+#   above". The renderer neither copies that subtree here (exponential on an
+#   ordinary diamond, D01's own reason for not storing traces) nor hides the
+#   call.
+# - **Reachability, never execution.** Said in the preamble, said again in
+#   every diagram's `Elides:`, and built into the diagram: there are no return
+#   arrows, because the walk records what a callee HANDS BACK and never when
+#   control comes back.
+# - **`terminal_kind` has no producer**, so nothing here classifies a
+#   terminal. A JDK call and a MyBatis mapper call both read `boundary`, and
+#   the `Call` column carries the FULL descriptor the compiler wrote so a
+#   reader can tell them apart themselves. Inventing the classification here
+#   would be derivation hiding in presentation, which the import-linter
+#   contract exists to forbid.
+# - **Cross-module stops read as `boundary` too**, because no body was read in
+#   THIS workspace — which is the truth about what was measured and an
+#   under-report of what exists. Stated where the reader meets it.
+# --------------------------------------------------------------------------
+
+_TRACE_HEADERS = ("Root", "Starts as", "Depth", "Steps", "Terminals", "Complete")
+_TRACE_STEP_HEADERS = (
+    "Depth",
+    "Caller",
+    "Call",
+    "Dispatch",
+    "Resolution",
+    "Value",
+    "Returns",
+    "Stop",
+)
+
+# What a reader has to know before the first table, in the machine's own
+# words. Every line is a property of the WALK rather than of this rendering —
+# which is why they are stated once here and not repeated per trace, and why
+# the wording matches `application/query/trace.py`'s own docstring rather than
+# paraphrasing it.
+_TRACE_PREAMBLE = (
+    (
+        "A trace is REACHABILITY, never execution: every step is a call the compiler "
+        "recorded, branches are not distinguished, and two `return` statements are two "
+        "possible answers rather than the one that runs. No path below is asserted to "
+        "have happened."
+    ),
+    (
+        "Steps are in the walk's own depth-first order, and `Depth` counts edges from "
+        "the root — so a step's caller is named on its own row rather than left to be "
+        "inferred from indentation."
+    ),
+    (
+        "`Stop` says why a step was not expanded. `boundary` means this workspace read "
+        "no body for the callee: a third-party library, the JDK, a MyBatis mapper and a "
+        "SIBLING BUILD MODULE all read alike there, because each is a body that is not "
+        "here. Nothing below classifies which — `terminal_kind` has no producer, and "
+        "the `Call` column carries the full descriptor the compiler wrote so the "
+        "distinction is the reader's to make."
+    ),
+    (
+        "`revisited` means the callee was expanded ELSEWHERE in this same trace and its "
+        "own calls are shown at that first appearance: a method is expanded once per "
+        "trace, not once per route to it, so a path through one of these tables is not "
+        "always followable to a terminal. `cycle` means the callee is already on the "
+        "path from the root. `depth_limit` means the walk's safety bound stopped it, "
+        "and the `Complete` column answers that without a reader scanning for it."
+    ),
+    (
+        "`Value` is the value id the call site produced and `Returns` what the callee "
+        "hands back — both LOCAL to the method on that row, so an id in a step's "
+        "`Returns` is a value inside the callee and matches its own rows, never the "
+        "caller's. `Response` is what the root method itself returns."
+    ),
+)
+
+
+def _trace_sections(traces: Sequence[Trace], redactor: Redactor) -> list[Section]:
+    """`## Traces`' whole body: the preamble, one summary row per root, then
+    one detail block and one sequence diagram per root, in `roots`' own fixed
+    order (NFR-1).
+
+    The summary table then one block per row, in table order, is the inbound
+    endpoint section's shape reused deliberately (§13.5) — correlating a block
+    back to its row needs no identity shared between them, only the order.
+    """
+    if not traces:
+        return [MachineParagraph(_runs("None found."))]
+    sections: list[Section] = [MachineList(tuple(_runs(line) for line in _TRACE_PREAMBLE))]
+    summary = tuple(
+        (
+            _code(bare_descriptor(trace.root.handler)),
+            _text(str(trace.root.kind)),
+            _text(str(trace.depth)),
+            _text(str(len(trace.steps))),
+            _text(str(len(trace.terminals))),
+            _text("no — depth bound reached" if trace.truncated else "yes"),
+        )
+        for trace in traces
+    )
+    sections.append(MachineTable(_TRACE_HEADERS, summary))
+    for trace in traces:
+        sections.append(_trace_detail(trace, redactor))
+        participants, messages = _sequence_view(trace)
+        sections.append(
+            MachineDiagram(
+                sequence_diagram(participants, messages).rstrip("\n"),
+                elides=_trace_elision(trace),
+            )
+        )
+    return sections
+
+
+def _trace_detail(trace: Trace, redactor: Redactor) -> MachineDetail:
+    """One root's block: its own header, the step table, and what the root
+    method returns.
+
+    The header names the root by its HANDLER and its kind, never by a wire
+    identity. A root is a method — one row per (handler, kind), so a handler
+    serving three paths is one root and one walk — and joining it back to the
+    endpoints that reach it is a join `roots` already made and did not keep.
+    Re-making it here would be this renderer deriving.
+    """
+    header = DetailEntry(
+        _code(bare_descriptor(trace.root.handler)) + _text(f" — {trace.root.kind}"),
+        None,
+        None,
+    )
+    entries = [header]
+    if trace.steps:
+        entries.append(DetailEntry(_text("Steps"), None, _trace_step_table(trace, redactor)))
+    else:
+        # A root whose body calls nothing is an answer, not an omission —
+        # `/admin/refreshToken` on `mall-admin` is pure string work — so it
+        # says so rather than showing an empty table.
+        entries.append(DetailEntry(_text("Steps"), _text("None — this root calls nothing."), None))
+    entries.append(
+        DetailEntry(_text("Response"), _text(_returns_cell(trace.response, redactor)), None)
+    )
+    return MachineDetail(tuple(entries))
+
+
+def _trace_step_table(trace: Trace, redactor: Redactor) -> MachineTable:
+    """Every step of one trace, one row each, in the walk's order — never a
+    filtered or collapsed subset. A step the renderer dropped would be a call
+    the document denies, which is the under-report FR-17 exists to prevent."""
+    rows = tuple(
+        (
+            _text(str(step.depth)),
+            _code(_short_handler(bare_descriptor(step.caller))),
+            _call_cell(step),
+            _text(step.invoke_kind),
+            _text(str(step.resolution)),
+            _text(_NONE_RECORDED if step.result is None else str(step.result)),
+            _text(_returns_cell(step.returns, redactor)),
+            _text(_NONE_RECORDED if step.stop is None else str(step.stop)),
+        )
+        for step in trace.steps
+    )
+    return MachineTable(_TRACE_STEP_HEADERS, rows)
+
+
+def _call_cell(step: Step) -> tuple[Run, ...]:
+    """The `Call` column: what the compiler WROTE at that line, and — where
+    dispatch resolved it into a different body — that body after an arrow.
+
+    Both, never one. The bare `target` is the declaration a reader finds in
+    the source; the `callee` is what the walk went on to expand, and an
+    interface call showing only the implementation would hide that the source
+    names an interface (`OmsOrderService#list → OmsOrderServiceImpl#list` is
+    the shape). Where the two are the same descriptor, or where the callee is
+    NULL because no body was read, the target alone IS the whole answer.
+
+    Full descriptors, not `_short_handler`'s spelling: this column is where a
+    reader tells `com/macro/mall/dao/OmsOrderDao#getList` from a runtime
+    library's own unboxing call, and a sibling build module's
+    `com/macro/mall/common/api/CommonResult#success` from either. The package
+    IS the entire distinction — nothing here classifies a terminal — so
+    shortening this column would delete the only evidence a reader has. The
+    `Caller` column shortens because a caller is always a method in this
+    module, already named elsewhere in the document."""
+    if step.callee is None:
+        return _code(step.target)
+    callee = bare_descriptor(step.callee)
+    if callee == step.target:
+        return _code(step.target)
+    return _code(step.target) + _text(" → ") + _code(callee)
+
+
+def _returns_cell(returns: Sequence[tuple[int, str]], redactor: Redactor) -> str:
+    """What a method hands back, as one cell: every recorded return, joined —
+    because several returns are several POSSIBLE answers and no single one,
+    and printing the first would publish a coin toss.
+
+    An empty tuple is the em dash, which here means one of three things the
+    walk deliberately does not tell apart: the callee returns nothing, its body
+    was not read, or the site is a `dynamic` one whose `result` is the lambda
+    instance rather than anything a body returned. All three are "nothing was
+    recorded", which is what `_NONE_RECORDED` says everywhere else in this
+    document."""
+    if not returns:
+        return _NONE_RECORDED
+    return "; ".join(_returned_value(json.loads(value), redactor) for _ordinal, value in returns)
+
+
+def _returned_value(value: object, redactor: Redactor) -> str:
+    """One entry of D00 §5's argument grammar as one short string.
+
+    **Presentation of a closed grammar, not interpretation of it.** Every key
+    the grammar defines is printed if the entry carries it — the kind, the
+    symbol it names, the literal it is, the value id it came from, the
+    elements of an array — and an entry whose kind this function has never
+    heard of still prints that kind rather than vanishing. There is no branch
+    here that decides an entry means something other than what it says.
+
+    A JSON `null` (as opposed to `{"kind": "null"}`) is the VOID return, which
+    is the one distinction `method_returns` keeps deliberately: a method that
+    returns nothing said something, and a method whose return value could not
+    be named said something else (`{"kind": "unresolved"}`).
+
+    A string literal passes the redactor. Nothing else in this document
+    renders a value rather than a name, and a hard-coded credential returned
+    from a method is exactly the exposure `_wire_identity` already masks in a
+    path."""
+    if value is None:
+        return "void"
+    if not isinstance(value, dict):
+        # Not a shape the grammar can produce. Printed rather than dropped:
+        # a fact this renderer cannot read is a gap a reader must see.
+        return f"unreadable {json.dumps(value)}"
+    parts = [str(value.get("kind", "unreadable"))]
+    symbol = value.get("symbol")
+    if symbol is not None:
+        parts.append(f"`{symbol}`")
+    literal = value.get("value")
+    if literal is not None:
+        rendered = json.dumps(literal)
+        parts.append(redactor.redact_text(rendered) if isinstance(literal, str) else rendered)
+    elements = value.get("elements")
+    if elements is not None:
+        # An empty list is a ZERO-LENGTH varargs call, which is a real call
+        # rather than a failure to read one (capability 9.15) — so `[]` is
+        # printed, not skipped.
+        inner = ", ".join(_returned_value(element, redactor) for element in elements)
+        parts.append(f"[{inner}]")
+    source = value.get("source")
+    if source is not None:
+        parts.append(f"value {source}")
+    return " ".join(parts)
+
+
+def _sequence_view(trace: Trace) -> tuple[list[SequenceParticipant], list[SequenceMessage]]:
+    """One trace as participants and messages — the projection, where every
+    decision about the diagram is made (M07 "The renderer adds nothing").
+
+    A participant is the OWNING TYPE of a method, not the method: a sequence
+    diagram's lifeline is the thing that holds state and receives calls, and a
+    lifeline per method would draw `OmsOrderServiceImpl` four times over on
+    `/order/list` alone. First-appearance order, root first, then each step's
+    caller before its target — the walk's own order, so the diagram and the
+    step table are the same sequence read two ways (NFR-1).
+
+    **An arrow ends at the body the walk EXPANDED, not at the type the
+    compiler named** — the `callee`, falling back to the `target` where no
+    body was read. The two differ exactly where dispatch resolved an
+    interface call into its implementation, and drawing the interface there
+    breaks the diagram outright: on `/order/list` the arrow would land on
+    `OmsOrderService`, and `OmsOrderServiceImpl` would then send four
+    messages nobody ever sent it — a lifeline appearing from nowhere, which
+    is a diagram a reader cannot follow. The declared type is not lost: the
+    message label names it (`_message_label`), and the step table's `Call`
+    column carries both descriptors in full.
+    """
+    participants: dict[str, str] = {}
+
+    def _participant(descriptor: str) -> str:
+        owner = owner_of(descriptor)
+        # A descriptor with no owner is a free function — it has no type to
+        # draw, so it is its own lifeline, keyed by the whole descriptor so
+        # two of them can never merge.
+        key = descriptor if owner is None else owner
+        if key not in participants:
+            participants[key] = f"a{len(participants)}"
+        return participants[key]
+
+    # The root's own lifeline first, before any step: a root whose body calls
+    # nothing still draws as itself rather than as an empty diagram, and the
+    # leftmost lifeline is always the thing that starts the work.
+    _participant(bare_descriptor(trace.root.handler))
+    messages = [
+        SequenceMessage(
+            source=_participant(bare_descriptor(step.caller)),
+            target=_participant(_reached(step)),
+            label=_message_label(step),
+        )
+        for step in trace.steps
+    ]
+    labels = _sequence_labels(participants)
+    drawn = [
+        SequenceParticipant(identifier, labels[identifier]) for identifier in participants.values()
+    ]
+    return drawn, messages
+
+
+def _sequence_labels(participants: dict[str, str]) -> dict[str, str]:
+    """Each participant id's display label: the owning type's simple name, or
+    — for every member of a group whose simple names COLLIDE — the full
+    descriptor with its type marker stripped.
+
+    `_disambiguated_shape_names`' rule, applied per diagram (§13.5). Two
+    distinct types reading as one lifeline label is not cosmetic: a diagram
+    showing `Order` twice, or worse showing `com/a/Order` and `com/b/Order`
+    under one name a reader assumes is one type, asserts a call between things
+    that never touched. The fallback goes all the way to the key this dict is
+    built on, which is unique by construction."""
+    by_simple: dict[str, list[str]] = {}
+    for key in participants:
+        by_simple.setdefault(simple_name(key), []).append(key)
+    labels: dict[str, str] = {}
+    for name, colliding in by_simple.items():
+        for key in colliding:
+            labels[participants[key]] = name if len(colliding) == 1 else without_type_marker(key)
+    return labels
+
+
+def _reached(step: Step) -> str:
+    """The BARE descriptor of the body this step reaches — the `callee` where
+    the walk read one, the `target` the compiler wrote where it did not.
+
+    One function, because the diagram's arrow and the diagram's participant
+    list must agree about it: computed twice, a lifeline could be registered
+    for one descriptor and addressed by another, and mermaid would silently
+    draw an extra actor rather than fail."""
+    return step.target if step.callee is None else bare_descriptor(step.callee)
+
+
+def _message_label(step: Step) -> str:
+    """One arrow's whole text: the method called, where it was DECLARED if
+    that is not where it landed, and then what the walk did about it.
+
+    `(declared X)` is what keeps the arrow honest after it was redirected to
+    the implementing body: the source says `orderService.list(...)` and a
+    diagram silently naming `OmsOrderServiceImpl` would be a claim about
+    dispatch presented as a claim about the code. Named by simple name only —
+    the step table's `Call` column carries both descriptors in full, and a
+    package path inside an arrow label is unreadable.
+
+    `(dynamic)` is not decoration either. An `invokedynamic` step names the
+    body the site CREATES, and the lambda runs later, elsewhere, if at all —
+    an arrow reading like an ordinary call there is the one place this diagram
+    could assert something the graph does not say.
+
+    `[stop]` marks a lifeline the walk did not enter, which is where the trace
+    ends on that branch; a step with no stop was expanded, and its own calls
+    follow."""
+    label = method_name(step.target)
+    declared = owner_of(step.target)
+    landed = owner_of(_reached(step))
+    if declared is not None and landed != declared:
+        label = f"{label} (declared {simple_name(declared)})"
+    if step.invoke_kind == "dynamic":
+        label = f"{label} (dynamic)"
+    if step.stop is not None:
+        label = f"{label} [{step.stop}]"
+    return label
+
+
+def _trace_elision(trace: Trace) -> str:
+    """What this trace's diagram leaves out, counted from the trace itself.
+
+    Every step IS drawn — there is no cap and no filter, so the count is not
+    the elision. What the diagram elides is what the WALK did not enter, and
+    the counts say how much of each: a diagram whose arrows all end at
+    lifelines nobody opened looks like a complete picture of a shallow system,
+    and it is a complete picture of where we stopped looking.
+
+    Zero-count clauses are omitted rather than printed as `0`, and the
+    ordering is fixed, so the sentence is a function of the trace alone
+    (NFR-1). Each count is phrased as a noun and a number rather than as a
+    subject and a verb, so no clause has to agree with a count nobody can
+    predict — the mistake `_stale_sentence` fixes with a plural `s` and this
+    would need four of."""
+    stops = {stop: 0 for stop in TraceStop}
+    for step in trace.steps:
+        if step.stop is not None:
+            stops[step.stop] += 1
+    drawn = (
+        "This root calls nothing, so the diagram is its own lifeline and no arrow at all."
+        if not trace.steps
+        else (
+            f"All {len(trace.steps)} step{'' if len(trace.steps) == 1 else 's'} of this "
+            "trace are drawn; nothing is filtered."
+        )
+    )
+    parts = [
+        (
+            "Reachability, not execution: an arrow is a call the compiler recorded, not "
+            "one observed to run, and branches are not distinguished — no order here is "
+            "claimed to have happened."
+        ),
+        drawn,
+    ]
+    if stops[TraceStop.BOUNDARY]:
+        parts.append(
+            "Arrows ending at a lifeline this workspace read no body for — a library, the "
+            "JDK, a mapper or a sibling build module alike — which the walk did not "
+            f"enter: {stops[TraceStop.BOUNDARY]}."
+        )
+    if stops[TraceStop.REVISITED]:
+        parts.append(
+            "Arrows naming a method already expanded earlier in this trace, whose own "
+            f"calls are drawn at that first arrow and not repeated here: "
+            f"{stops[TraceStop.REVISITED]}."
+        )
+    if stops[TraceStop.CYCLE]:
+        parts.append(
+            "Arrows whose callee is already on the path from the root — recursion, stated "
+            f"and not followed: {stops[TraceStop.CYCLE]}."
+        )
+    if stops[TraceStop.DEPTH_LIMIT]:
+        parts.append(
+            "Arrows that reached the walk's depth bound, so everything past them is absent "
+            f"from this diagram: {stops[TraceStop.DEPTH_LIMIT]}."
+        )
+    return " ".join(parts)
 
 
 def _config_coverage_items(
@@ -1767,7 +2278,14 @@ def _machine_lines(section: Section, is_first: bool = False) -> tuple[str, ...] 
     if isinstance(section, MachineSection):
         return section.lines
     if isinstance(section, MachineDiagram):
-        return ("```mermaid", *section.mermaid.split("\n"), "```")
+        fence = ("```mermaid", *section.mermaid.split("\n"), "```")
+        if section.elides is None:
+            return fence
+        # The blank line is `_claim_lines`' own shape for a `DiagramClaim`,
+        # kept identical here: a line landing directly under a closing fence
+        # reads as part of the code block in some renderers, and a machine
+        # diagram's elision must be as visible as a model's.
+        return (*fence, "", f"Elides: {section.elides}")
     return None
 
 
