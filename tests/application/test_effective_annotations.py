@@ -269,6 +269,13 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         # the assertion below either way: `/plain` is already the URL it is
         # served at, and a leaked prefix would still fail the same equality.
         canonical_path=True,
+        # 2O Task 10's direction resolution, inert — this regression's catalog
+        # declares none, so the flip predicate is false for every row and the
+        # direction, handler and canonical answers are the ones it always had.
+        flip_direction=None,
+        flip_owners=[],
+        flip_handlers=[],
+        flip_canonical_path=False,
     )
     rows = workspace.query("endpoints")
     workspace.close()

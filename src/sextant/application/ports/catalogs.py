@@ -127,6 +127,17 @@ class Catalog:
     # protocol into a row of another one. Carried through unread here, like
     # every block above; the pass that reads it refuses a malformed one.
     protocol_hint: dict[str, Any] = field(default_factory=dict)
+    # D02 §2c: the per-match resolution rules that override this catalog's
+    # DECLARED defaults above. `direction` is the only half of that section
+    # that shipped, and the only key any engine reads (`format` turned out not
+    # to be resolvable per match at all and is answered by a late pass instead
+    # — D02 says so in the section itself). Empty on every catalog but the one
+    # whose annotation family genuinely faces both ways, and inert while empty.
+    #
+    # Carried through unread here, like every block above; the engine that
+    # reads it refuses a malformed one, because which conditions an engine can
+    # honour is knowledge of `application/resolve` rather than of this port.
+    resolves: dict[str, Any] = field(default_factory=dict)
 
 
 class CatalogError(ValueError):

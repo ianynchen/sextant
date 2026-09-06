@@ -70,6 +70,12 @@ class YamlCatalogSource:
                     # (`resolve/protocol_hint.py`), which is also where the
                     # target protocol is checked against D00's closed set.
                     protocol_hint=raw.get("protocol_hint", {}),
+                    # D02 §2c — optional, checked where the engine reads it
+                    # (`resolve/engines/annotation_driven.py`), which is also
+                    # where the resolved direction is checked against D00's
+                    # closed set and the condition against the engine's own
+                    # closed vocabulary.
+                    resolves=raw.get("resolves", {}),
                 )
             )
         return catalogs

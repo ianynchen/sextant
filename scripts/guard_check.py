@@ -144,6 +144,7 @@ _SINGLE_CALL = "sextant/application/resolve/engines/single_call.py"
 _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py"
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
 _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
+_ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 
@@ -364,6 +365,46 @@ GUARDS: dict[str, Guard] = {
                 path=_DERIVE_ENDPOINTS,
                 find="WHERE NOT (d.path = '' AND d.peer IS NULL)",
                 replace="WHERE TRUE  -- guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "derive_endpoints.direction-flip-is-owner-scoped": Guard(
+        what="a row takes the catalog's RESOLVED direction only where the type enclosing its "
+        "declaration is one the catalog's own condition held for — never merely because the "
+        "catalog declares a resolution rule",
+        why="`@HttpExchange` is the one family whose direction is not a property of the "
+        "annotation, and the flip's whole risk is scope: a rule keyed on the catalog rather "
+        "than on the owner rewrites EVERY HTTP-interface client in the estate into an "
+        "endpoint the module serves — a whole outbound surface inverted at "
+        "`resolved`/`compiler`, which is the largest single fabrication this file can produce",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="        (fl.owner IS NOT NULL) AS flipped,",
+                replace="        ($flip_direction IS NOT NULL) AS flipped,  -- guard disabled",
+            ),
+        ),
+    ),
+    # The flip's OTHER conjunct is Python rather than SQL, for the reason the
+    # catalog guards below are YAML: what decides where a guard lives is where
+    # the claim is written. This one is written where the framework's own
+    # predicate is mirrored.
+    "annotation_driven.flip-implementer-is-a-controller": Guard(
+        what="a type is a flip OWNER only where the class implementing it carries one of the "
+        "annotations the catalog's condition names — resolved through the composition "
+        "pre-pass, so a module-local stereotype counts",
+        why="this is exactly spec §6's `owner_implemented_in_module: true`, which is weaker "
+        "than Spring's own rule and fabricates: `isHandler` is one "
+        "`AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` call with no "
+        "`@RequestMapping` disjunct on any minor CP-7 measured, so a `@Service` implementing "
+        "an `@HttpExchange` interface is dispatched to by nothing and an inbound row for one "
+        "is an endpoint nobody serves (§8.1 rule 4). The weakening below IS the condition the "
+        "spec ordered",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find="        if implementer not in handler_beans:",
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),

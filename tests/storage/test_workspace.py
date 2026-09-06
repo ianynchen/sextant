@@ -305,6 +305,16 @@ _TOPIC_ENDPOINT_KWARGS = {
     # composed address is recorded exactly as the annotations spell it — the
     # `path_separator` reasoning one word along.
     "canonical_path": False,
+    # 2O Task 10's direction resolution (D02 §2c), inert too: no catalog in
+    # this file declares one, and a broker listener's direction is a property
+    # of the annotation rather than of what else the module contains. With
+    # `flip_direction` NULL and both lists empty the flip predicate is false
+    # for every row here, which is what keeps every assertion below pinning
+    # the direction the catalog declared.
+    "flip_direction": None,
+    "flip_owners": [],
+    "flip_handlers": [],
+    "flip_canonical_path": False,
 }
 
 

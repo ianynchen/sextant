@@ -148,6 +148,31 @@
 --                           D00 §5a's `implemented_interfaces` and passed as
 --                           BARE descriptors, the same strip every other
 --                           reader of that fact makes.
+--   $flip_direction      -- D02 §2c: the direction a row takes where the
+--                           catalog's own resolution condition holds, or NULL
+--                           where the catalog declares no such rule — which is
+--                           every catalog but one, and what keeps their
+--                           derivations byte-identical. A catalog's declared
+--                           direction is a DEFAULT for most families and a
+--                           genuine ambiguity for one: the same annotation
+--                           declares a client to be proxied and an API to be
+--                           served, and which it is depends on what else the
+--                           module contains.
+--   $flip_owners         -- the enclosing types the condition holds for, as
+--                           BARE descriptors — the same strip
+--                           $locally_implemented is passed under, and for the
+--                           same reason. Empty where there is no rule.
+--   $flip_handlers       -- {declaration, handler} rows: for a flipped
+--                           declaration, the symbol that HANDLES it, which is
+--                           not the declaring symbol. A declaration with no
+--                           entry keeps its own symbol as the handler — the
+--                           declaring method IS what runs where nothing
+--                           overrides it. Empty where there is no rule.
+--   $flip_canonical_path -- $canonical_path's twin for a flipped row: the same
+--                           question asked of the direction the row TOOK
+--                           rather than the one the catalog declared. False
+--                           where there is no rule, which is inert because
+--                           nothing then flips.
 --   $synthetic_annotations -- Task 6 (D02 §2, §3): rows the effective-
 --                           annotations pre-pass (`resolve/effective_annotations.py`)
 --                           synthesizes for a module-local composed annotation
@@ -196,6 +221,19 @@ annotations_effective AS (
     UNION ALL
     SELECT s.target, s.annotation, s.args::JSON FROM (SELECT UNNEST(
         $synthetic_annotations::STRUCT(target VARCHAR, annotation VARCHAR, args VARCHAR)[]
+    ) AS s)
+),
+-- D02 §2c's direction resolution, as two lookups. Both UNNEST an empty list
+-- for every catalog that declares no rule, so both LEFT JOINs below find
+-- nothing and the flip predicate is false for every row — which is what keeps
+-- forty catalogs' derivations byte-identical.
+flip_owners AS (
+    SELECT UNNEST($flip_owners::VARCHAR[]) AS owner
+),
+flip_handlers AS (
+    SELECT s.declaration AS declaration, s.handler AS handler
+    FROM (SELECT UNNEST(
+        $flip_handlers::STRUCT(declaration VARCHAR, handler VARCHAR)[]
     ) AS s)
 ),
 -- The type-level gate is optional (D02 §2, amended): a catalog that declares
@@ -644,7 +682,18 @@ mappings AS (
 derived AS (
     SELECT
         $protocol   AS protocol,
-        $direction  AS direction,
+        -- THE DIRECTION FLIP (D02 §2c), spelled ONCE as a column so the four
+        -- places it decides something read one predicate rather than four
+        -- copies of one. A row flips when the type ENCLOSING its declaration is
+        -- one the catalog's own condition holds for — never merely because the
+        -- catalog has a rule, which would rewrite every client this catalog
+        -- describes into an endpoint the module serves.
+        --
+        -- `flipped` is projected out of `unioned` below: it decides `direction`,
+        -- `handler`, `caller` and the canonical-address question, and none of
+        -- those is a second identity column.
+        (fl.owner IS NOT NULL) AS flipped,
+        CASE WHEN flipped THEN $flip_direction ELSE $direction END AS direction,
         m.wire_method AS method,
         -- Three fragments, in address order (2H design §1): the TYPE-level
         -- prefix, the scope this declaration names on its own annotation, and
@@ -764,6 +813,16 @@ derived AS (
              THEN type_prefix || scoped_name
              ELSE rtrim(type_prefix, $path_separator) || $path_separator
                   || ltrim(scoped_name, $path_separator) END AS composed,
+        -- WHICH canonical answer this row takes, decided by the direction the
+        -- row ACTUALLY has rather than the one the catalog declared. Both
+        -- values are `domain/paths.py::serves_urls`, asked once per direction
+        -- by the caller. A flipped row is server-side: an address recorded the
+        -- way a client wrote it would be neither the URL the framework answers
+        -- at nor the same string as the identical route a controller's own
+        -- mapping derives, so the two would not merge (ruling R12). Equal to
+        -- `$canonical_path` for every row that did not flip, which is every row
+        -- of every catalog declaring no rule.
+        CASE WHEN flipped THEN $flip_canonical_path ELSE $canonical_path END AS canonical,
         -- THE CANONICAL-ADDRESS GATE, wrapped around the whole seam above.
         -- `$canonical_path` says the composed address IS a URL this module
         -- serves rather than an address recorded as written, and the two
@@ -797,7 +856,7 @@ derived AS (
         -- BOTH expression notations, mirroring `domain/paths.py`'s own
         -- `_EXPRESSION_OPENS`: a rule that knew only `${` would rewrite an
         -- expression-language address into a URL nobody serves.
-        CASE WHEN NOT $canonical_path
+        CASE WHEN NOT canonical
                   OR contains(composed, '://')
                   OR contains(composed, '${') OR contains(composed, '#{')
              THEN composed
@@ -813,8 +872,20 @@ derived AS (
              END AS path,
         -- The symbol lands by direction (D01 §3, amended): the server side
         -- handles, the client side calls, and a later merge may hold both.
-        CASE WHEN $direction = 'outbound' THEN NULL ELSE s.symbol END AS handler,
-        CASE WHEN $direction = 'outbound' THEN s.symbol END AS caller,
+        -- The ROW's direction, not the catalog's, so a flipped row lands its
+        -- symbol on the side it actually took.
+        --
+        -- And a flipped row's handler is the symbol that HANDLES the
+        -- declaration where one is known, which is not the declaring symbol:
+        -- the declaration sits on the type the flip's condition was tested
+        -- ABOUT, and what runs is the implementing type's own member. Where
+        -- nothing overrides it, `coalesce` leaves the declaring symbol — the
+        -- framework really does invoke the declared member there (CP-7 Q3),
+        -- so that is the handler rather than a gap. `$flip_handlers` is empty
+        -- for every catalog with no rule, so this reduces to `s.symbol`.
+        CASE WHEN direction = 'outbound' THEN NULL
+             ELSE coalesce(fh.handler, s.symbol) END AS handler,
+        CASE WHEN direction = 'outbound' THEN s.symbol END AS caller,
         p.peer      AS peer,
         s.signature AS handler_signature,
         -- THE UNRESOLVED-PATH GATE (2O Task 7 Step 1). Every row this CTE
@@ -874,6 +945,13 @@ derived AS (
     LEFT JOIN controllers c ON coalesce(m.gate_type, s.enclosing) = c.type_symbol
     LEFT JOIN prefixes p ON p.type_symbol = coalesce(m.gate_type, s.enclosing)
     LEFT JOIN qualifier_scopes q ON q.type_symbol = coalesce(m.gate_type, s.enclosing)
+    -- D02 §2c's two flip lookups, both keyed on the BARE descriptor for
+    -- `$locally_implemented`'s reason: the type this declaration sits on and
+    -- the class implementing it are prefixed by whichever module's scan wrote
+    -- them, and only the descriptor is ever compared (D00 §5a).
+    LEFT JOIN flip_owners fl
+           ON fl.owner = regexp_extract(coalesce(m.gate_type, s.enclosing), '[^ ]*$')
+    LEFT JOIN flip_handlers fh ON fh.declaration = regexp_extract(s.symbol, '[^ ]*$')
     WHERE ($type_annotation IS NULL OR c.type_symbol IS NOT NULL)
       AND ($declared_on IS NULL OR e.construct_kind = $declared_on)
       -- THE IMPLEMENTED-INTERFACE FENCE (2I design §4). An outbound catalog
@@ -899,8 +977,21 @@ derived AS (
       -- interface there is still a client. Widening this to every outbound row
       -- would silently delete every such client. Which catalogs make the
       -- stub claim is catalog data, and `declared_on` is where they make it.
+      --
+      -- IT YIELDS TO THE FLIP (D02 §2c, ruling R12). The fence and the
+      -- direction resolution answer the same question about the same row and
+      -- give opposite answers, and the fence's is the coarser one: it subtracts
+      -- because SOMETHING in the module implements the interface, while the
+      -- resolution asks whether that something is what the framework actually
+      -- dispatches to. Where the finer condition holds, the row is not deleted
+      -- — it becomes the inbound row, handler and all — and shipping both
+      -- unconditioned yields no inbound rows at all, which is exactly the
+      -- cancellation spec §6 warns of. Where it does NOT hold, the fence
+      -- stands: an interface implemented by something the framework serves
+      -- nothing through is neither called by this module nor served by it.
       AND NOT (
           $direction = 'outbound' AND $declared_on = 'interface'
+          AND fl.owner IS NULL
           AND list_contains($locally_implemented::VARCHAR[],
                             regexp_extract(coalesce(m.gate_type, s.enclosing), '[^ ]*$'))
       )

@@ -60,9 +60,9 @@ without re-running this harness fails the suite rather than going quiet.
 
 Verbatim from `run.sh`'s generated tables (`probe.py` prints them; nothing here
 is typed by hand). **Every column header of the first table is a version the JAR
-itself reported**, out of its manifest's `Implementation-Version`, and not the
-version the coordinate list asked for; `probe.py` ABORTS the whole run when the
-two disagree rather than filling a mislabelled column.
+itself reported**, read out of its manifest's `Implementation-Version` and
+not the version the coordinate list asked for; `probe.py` ABORTS the whole run
+when the two disagree rather than filling a mislabelled column.
 
 | what the run read | 6.1.6 | 6.2.15 | 7.0.2 | 7.0.9 |
 |---|---|---|---|---|

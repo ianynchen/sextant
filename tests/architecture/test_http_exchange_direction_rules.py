@@ -172,3 +172,41 @@ def test_one_address_alias_list_serves_both_directions():
         f"`spring-http-interface.yml` reads its address from {declared}, which is no longer the "
         "alias pair the measurement names"
     )
+
+
+def test_the_shipped_flip_condition_names_the_stereotypes_the_other_catalogs_declare():
+    """The pin that closes the loop between the measurement and the file.
+
+    Two claims, and the second is the one that rots. FIRST, the flip's `when`
+    tests the framework's own handler predicate — the annotations
+    `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` answers
+    true for — rather than "somebody implements it". SECOND, those annotations
+    are the same ones `spring-mvc.yml` and `spring-web.yml` already declare as
+    their type-level gate, so the estate states Spring's stereotype set in one
+    vocabulary rather than two that can drift.
+
+    `@RestController` is listed beside `@Controller` and is not redundant: the
+    framework's predicate resolves the meta-annotation through the jar, and our
+    own composition pre-pass reaches MODULE-LOCAL compositions only — so naming
+    `@Controller` alone would match no REST controller in any real module.
+    """
+    resolves = catalog("spring-http-interface")["resolves"]["direction"]
+    assert len(resolves) == 1, (
+        "`resolves.direction` carries more than one rule, and first-match-wins over several "
+        "is unimplemented — the engine refuses it, so this file should never see it"
+    )
+    condition = resolves[0]["when"]
+    assert set(condition) == {"owner_implemented_by_type_annotated"}, (
+        f"the flip's condition is {sorted(condition)}, which is no longer the controller check "
+        "CP-7 measured. `owner_implemented_in_module` in particular is the condition spec §6 "
+        "ordered and Spring does not have"
+    )
+    assert resolves[0]["then"] == "inbound"
+    assert set(condition["owner_implemented_by_type_annotated"]) == {
+        catalog("spring-mvc")["matches"]["type_annotation"],
+        catalog("spring-web")["matches"]["type_annotation"],
+    }, (
+        "the flip's controller annotations have drifted from the type-level gates "
+        "`spring-mvc.yml` and `spring-web.yml` declare — one framework's stereotype set, "
+        "stated twice, is a set that can disagree with itself"
+    )

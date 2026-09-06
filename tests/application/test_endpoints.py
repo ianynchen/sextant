@@ -4991,3 +4991,431 @@ def test_an_sqs_listener_naming_no_destination_at_all_still_derives_nothing(tmp_
         )
         == []
     )
+
+
+# --- 2O Task 10: the `@HttpExchange` direction flip -------------------------
+#
+# `@HttpExchange` is the one annotation family in the estate whose DIRECTION is
+# not a property of the annotation. The same interface is an outbound client
+# when a proxy is built from it and an inbound API when a controller implements
+# it — measured, CP-7: `RequestMappingHandlerMapping` builds a mapping from
+# `@HttpExchange` through a `SearchStrategy.TYPE_HIERARCHY` search, so an
+# implementing class inherits the interface's exchange annotations without
+# repeating them.
+#
+# The condition is the CONTROLLER check, not "the module implements it". Spring
+# serves a bean, and `isHandler` is one
+# `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` call with no
+# `@RequestMapping` disjunct on any minor in scope (CP-7 Q1), so a `@Service`
+# implementation is served by nothing and an inbound row for one would invent an
+# endpoint (§8.1 rule 4).
+#
+# Proved against the REAL shipped catalogs, the Task 7 precedent: the flip's
+# condition names Spring's own stereotype annotations, which are catalog data on
+# `spring-mvc.yml` and `spring-web.yml`, and a test spelled with an invented
+# framework could not show that the two files agree.
+
+
+# MODULE-PREFIXED throughout, unlike most fixtures in this file, and the flip is
+# the mechanism that makes it matter: it joins a declaring method to the method
+# implementing it ACROSS a coordinate boundary — an interface scanned out of an
+# opted-in dependency jar carries that jar's coordinates while the class
+# implementing it carries the module's — so every comparison it makes is on the
+# BARE descriptor and the published symbol is the prefixed one. A fixture
+# spelled bare could not tell a correct join from one comparing two prefixed
+# strings that happen to match, and the first version of this code got that
+# exactly wrong (`handlers` keyed on the prefixed symbol, joined against a bare
+# one: the handler silently fell back to the interface's own method on every
+# real module and on no test here).
+_MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
+_EXCHANGE_INTERFACE = _MODULE + "com/acme/api/OrderApi#"
+_EXCHANGE_METHOD = _MODULE + "com/acme/api/OrderApi#list(sig_0a1)."
+_IMPLEMENTER = _MODULE + "com/acme/api/OrderController#"
+_IMPLEMENTER_METHOD = _MODULE + "com/acme/api/OrderController#list(sig_0a1)."
+_LOCAL_STEREOTYPE = _MODULE + "com/acme/api/ApiController#"
+# The same type as a USE site names it. An annotation fact records its
+# annotation as a bare fqn descriptor and its target as a module-prefixed
+# symbol (D00 §5a), so a module-local stereotype appears in the facts under
+# both spellings at once — which is the shape the composition pre-pass
+# resolves and a bare-everywhere fixture cannot show.
+_LOCAL_STEREOTYPE_FQN = "com/acme/api/ApiController#"
+_HTTP_EXCHANGE = "org/springframework/web/service/annotation/HttpExchange#"
+_REST_CONTROLLER = "org/springframework/web/bind/annotation/RestController#"
+_GET_MAPPING = "org/springframework/web/bind/annotation/GetMapping#"
+_SERVICE = "org/springframework/stereotype/Service#"
+
+
+def _flip_facts(
+    root: Path,
+    *,
+    implementer_annotations: dict[str, dict] | None,
+    overrides: bool = True,
+    implementer_method_annotations: dict[str, dict] | None = None,
+    stereotype_meta: str | None = None,
+) -> None:
+    """One `@HttpExchange` interface declaring one exchange operation, and
+    optionally a local class implementing it.
+
+    Every knob is one conjunct of the flip's own rule, so a near-miss differs
+    from its positive in exactly one of them: WHETHER a local class implements
+    the interface (`implementer_annotations=None`), WHAT that class is annotated
+    with, whether it OVERRIDES the operation or inherits a `default`, and
+    whether its stereotype is a module-local annotation composed from a
+    framework one.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/api/OrderApi.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    void = Signature(parameters=[], returns=TypeRef(symbol="void#", wire_type=""))
+    facts: list = [
+        SymbolFact(
+            document_id="doc_1", symbol=_EXCHANGE_INTERFACE, construct_kind=ConstructKind.INTERFACE
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_EXCHANGE_METHOD,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_EXCHANGE_INTERFACE,
+            signature=void,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_EXCHANGE_INTERFACE,
+            retention="runtime",
+            use=AnnotationUse(annotation=_HTTP_EXCHANGE, args={"value": "/orders"}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_EXCHANGE_METHOD,
+            retention="runtime",
+            use=AnnotationUse(annotation=_GET_EXCHANGE, args={"value": "/list"}),
+        ),
+    ]
+    if stereotype_meta is not None:
+        # An annotation type is an interface in bytecode, which is what puts it
+        # in `interface_symbols` and makes the composition pre-pass follow it.
+        facts += [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_LOCAL_STEREOTYPE,
+                construct_kind=ConstructKind.INTERFACE,
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=_LOCAL_STEREOTYPE,
+                retention="runtime",
+                use=AnnotationUse(annotation=stereotype_meta, args={}),
+            ),
+        ]
+    if implementer_annotations is not None:
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_IMPLEMENTER,
+                construct_kind=ConstructKind.CLASS,
+                interfaces=[_EXCHANGE_INTERFACE],
+            )
+        )
+        facts += [
+            AnnotationFact(
+                document_id="doc_1",
+                target=_IMPLEMENTER,
+                retention="runtime",
+                use=AnnotationUse(annotation=fqn, args=args),
+            )
+            for fqn, args in implementer_annotations.items()
+        ]
+        if overrides:
+            facts.append(
+                SymbolFact(
+                    document_id="doc_1",
+                    symbol=_IMPLEMENTER_METHOD,
+                    construct_kind=ConstructKind.METHOD,
+                    enclosing=_IMPLEMENTER,
+                    signature=void,
+                )
+            )
+            facts += [
+                AnnotationFact(
+                    document_id="doc_1",
+                    target=_IMPLEMENTER_METHOD,
+                    retention="runtime",
+                    use=AnnotationUse(annotation=fqn, args=args),
+                )
+                for fqn, args in (implementer_method_annotations or {}).items()
+            ]
+    write_fact_file(root / "OrderApi.jsonl", document, facts)
+
+
+def _flip_rows(tmp_path: Path, catalogs: list[Catalog], **facts: object) -> list[tuple]:
+    _flip_facts(tmp_path / "facts", **facts)  # type: ignore[arg-type]
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    assert derive_endpoints(workspace, catalogs, capabilities=set(_TASK_7_CAPABILITIES)) == []
+    rows = sorted(
+        (
+            str(row["direction"]),
+            row["method"] and str(row["method"]),
+            str(row["path"]),
+            row["handler"] and str(row["handler"]),
+            row["caller"] and str(row["caller"]),
+        )
+        for row in workspace.query("endpoints")
+    )
+    workspace.close()
+    return rows
+
+
+def test_an_http_exchange_interface_a_controller_implements_is_served_inbound(tmp_path: Path):
+    """The defect this closes, in one row. A locally-implemented
+    `@HttpExchange` interface published an OUTBOUND call — the module reported
+    calling a service it actually serves — and its inbound routes were missed
+    entirely; the SEI fence later turned the fabrication into silence, which is
+    honest and still an under-report of a whole HTTP surface.
+
+    Spring serves it (CP-7 Q2: the mapping builder accepts `@HttpExchange`
+    through a type-hierarchy search), so the row is inbound, at the composed
+    address, with the IMPLEMENTING class's method as handler and no caller."""
+    assert _flip_rows(
+        tmp_path,
+        [_shipped("spring-http-interface")],
+        implementer_annotations={_REST_CONTROLLER: {}},
+    ) == [("inbound", "GET", "/orders/list", _IMPLEMENTER_METHOD, None)]
+
+
+@pytest.mark.declines("spring-http-interface")
+@pytest.mark.pins("annotation_driven.flip-implementer-is-a-controller")
+def test_an_http_exchange_interface_a_plain_bean_implements_derives_nothing(tmp_path: Path):
+    """The near-miss for the flip's SECOND conjunct, and the reason spec §6's
+    `owner_implemented_in_module: true` could not ship: one annotation
+    different from the positive above, and Spring serves nothing at all.
+
+    `isHandler` is `AnnotatedElementUtils.hasAnnotation(beanType,
+    Controller.class)` and carries no `@RequestMapping` disjunct on any minor
+    CP-7 measured, so a `@Service` implementing an `@HttpExchange` interface is
+    dispatched to by nothing. An inbound row here would invent an endpoint
+    (§8.1 rule 4); the outbound row the SEI fence already subtracts stays
+    subtracted, because the module does not call what it implements."""
+    assert (
+        _flip_rows(
+            tmp_path,
+            [_shipped("spring-http-interface")],
+            implementer_annotations={_SERVICE: {}},
+        )
+        == []
+    )
+
+
+@pytest.mark.pins("derive_endpoints.direction-flip-is-owner-scoped")
+def test_an_unimplemented_http_exchange_interface_still_derives_outbound(tmp_path: Path):
+    """The near-miss for the flip's FIRST conjunct: the same interface with no
+    local implementation at all is an ordinary HTTP-interface client, and must
+    keep deriving exactly the outbound row it always did — caller intact,
+    handler absent.
+
+    A flip keyed on the catalog's rule rather than on the OWNER would rewrite
+    every `@HttpExchange` client in the estate into an inbound endpoint, which
+    is the largest fabrication available in this file."""
+    assert _flip_rows(
+        tmp_path,
+        [_shipped("spring-http-interface")],
+        implementer_annotations=None,
+    ) == [("outbound", "GET", "/orders/list", None, _EXCHANGE_METHOD)]
+
+
+def test_a_default_method_the_controller_never_overrides_is_still_served(tmp_path: Path):
+    """CP-7 Q3, and the reason the flip is keyed on the OWNER rather than on
+    the method join. `MethodIntrospector.selectMethods` walks the target type's
+    own interfaces as well as the type itself, so a `default` method the
+    controller never overrides IS mapped and served — by the interface's own
+    method, which is the only method symbol there is.
+
+    A flip that required a matching method on the implementing class would have
+    dropped exactly those routes, silently."""
+    assert _flip_rows(
+        tmp_path,
+        [_shipped("spring-http-interface")],
+        implementer_annotations={_REST_CONTROLLER: {}},
+        overrides=False,
+    ) == [("inbound", "GET", "/orders/list", _EXCHANGE_METHOD, None)]
+
+
+def test_a_module_local_stereotype_composed_from_a_controller_flips_the_interface(tmp_path: Path):
+    """`A-C7`'s rule, applied to the flip's own condition. Spring's handler
+    test is a PREDICATE over the composition, so a controller wearing a
+    module-local `@ApiController` meta-annotated `@Controller` is a handler —
+    and a flip encoded as string equality against two framework FQNs would
+    leave that module's whole implemented API published as an outbound
+    dependency it does not have."""
+    assert _flip_rows(
+        tmp_path,
+        [_shipped("spring-http-interface")],
+        implementer_annotations={_LOCAL_STEREOTYPE_FQN: {}},
+        stereotype_meta=_CONTROLLER,
+    ) == [("inbound", "GET", "/orders/list", _IMPLEMENTER_METHOD, None)]
+
+
+@pytest.mark.parametrize("declared_first", ["spring-web", "spring-http-interface"])
+def test_a_doubly_declared_route_merges_into_one_row_handled_by_the_class(
+    tmp_path: Path, declared_first: str
+):
+    """Ruling R12's merge precedence, and it needs no collision detector —
+    there is none in `src/`, and none is added here.
+
+    A controller that implements an `@HttpExchange` interface AND writes its
+    own `@GetMapping` for the same route derives that route twice: once from
+    `spring-web`, once from the flipped `spring-http-interface` row. The two
+    share `(protocol, direction, method, path)`, so the existing dedup folds
+    them into ONE — and the survivor is handled by the implementing class's
+    method, not the interface's.
+
+    **What this test can and cannot show.** The catalogs' run order is not the
+    caller's to choose: `resolve/endpoints.py` sorts them, and an
+    inbound-DECLARED catalog runs before an outbound-declared one whatever
+    order the list arrives in — which is why both parameters here produce the
+    same answer, and why it is worth pinning that they do. So the surviving row
+    is `spring-web`'s in both, and this test proves the merge and the
+    ORDER-INDEPENDENCE rather than the flip's own handler rebind. That rebind
+    is proved where it is the only source of a row at all —
+    `test_an_http_exchange_interface_a_controller_implements_is_served_inbound`
+    above, where the controller writes no mapping of its own and the handler on
+    the one surviving row can only have come from the flip.
+
+    The address is the thing that has to agree for any of this to happen, and
+    it only does because a flipped row is canonicalized as the server-side row
+    it became: composed one way it is `/orders/list`, composed the other it is
+    the same string, and two spellings of one URL would have shipped as two
+    endpoints."""
+    order = ["spring-web", "spring-http-interface"]
+    catalogs = [_shipped(c) for c in (order if declared_first == "spring-web" else order[::-1])]
+    assert _flip_rows(
+        tmp_path,
+        catalogs,
+        implementer_annotations={_REST_CONTROLLER: {}},
+        implementer_method_annotations={_GET_MAPPING: {"value": ["/orders/list"]}},
+    ) == [("inbound", "GET", "/orders/list", _IMPLEMENTER_METHOD, None)]
+
+
+def _flip_catalog(**resolves: object) -> Catalog:
+    """An invented outbound catalog carrying a `resolves` block — the engine
+    vocabulary on its own, deliberately not Spring, for the reason every other
+    invented catalog in this file is not: a refusal test spelled with
+    `@HttpExchange` in it would pin a framework rather than the check."""
+    return Catalog(
+        id="invented-two-faced",
+        style="annotation_driven",
+        protocol="http",
+        direction="outbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-two-faced.yml"),
+        matches={
+            "declared_on": "interface",
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": ["value"],
+                "method_from": "method",
+                "all_methods": ["GET"],
+                "prefix_annotation": None,
+                "annotations": [{"fqn": "com.acme.rpc.Call", "method": ["GET"]}],
+            },
+        },
+        resolves=dict(resolves),
+    )
+
+
+def _flip_refusal(tmp_path: Path, catalog: Catalog) -> str:
+    _flip_facts(tmp_path / "facts", implementer_annotations=None)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    workspace.close()
+    return str(raised.value)
+
+
+def test_a_resolves_block_naming_a_key_that_did_not_ship_is_refused(tmp_path: Path):
+    """D02 §2c names `format` beside `direction` and says in the same section
+    that the format half did NOT ship — it is answered by a late pass over the
+    finished table instead. A catalog writing one here would be declaring a
+    rule nothing runs, and silence about it is how a document becomes evidence
+    for a mechanism that does not exist (§5.3)."""
+    refusal = _flip_refusal(
+        tmp_path, _flip_catalog(format=[{"when": {"whatever": True}, "then": "protobuf"}])
+    )
+    assert "format" in refusal and "invented-two-faced.yml" in refusal
+
+
+def test_a_second_direction_rule_is_refused_rather_than_silently_dropped(tmp_path: Path):
+    """D02 §2c's first-match-wins over several conditions is the section's
+    stated semantics and is unimplemented. An engine honouring one rule while
+    accepting a list of them would drop every rule after the first — a catalog
+    author's second condition evaluating to nothing, with nothing saying so."""
+    rule = {"when": {"owner_implemented_by_type_annotated": ["a.B"]}, "then": "inbound"}
+    refusal = _flip_refusal(tmp_path, _flip_catalog(direction=[rule, rule]))
+    assert "exactly one" in refusal and "invented-two-faced.yml" in refusal
+
+
+def test_a_condition_the_engine_cannot_honour_is_refused(tmp_path: Path):
+    """The closed vocabulary (NFR-5). Spec §6's own
+    `owner_implemented_in_module: true` is the value this refuses by name, and
+    the reason it must be refused rather than ignored: a condition read as "no
+    rule" leaves a served API published as an outbound dependency, which is the
+    exact defect the flip exists to close."""
+    refusal = _flip_refusal(
+        tmp_path,
+        _flip_catalog(
+            direction=[{"when": {"owner_implemented_in_module": True}, "then": "inbound"}]
+        ),
+    )
+    assert "owner_implemented_by_type_annotated" in refusal
+
+
+def test_a_resolved_direction_outside_the_closed_set_is_refused(tmp_path: Path):
+    """D00's closed sets are closed, and this value reaches `endpoints.direction`
+    on every flipped row — a typo there is published as a wire fact."""
+    refusal = _flip_refusal(
+        tmp_path,
+        _flip_catalog(
+            direction=[{"when": {"owner_implemented_by_type_annotated": ["a.B"]}, "then": "inound"}]
+        ),
+    )
+    assert "inound" in refusal
+
+
+def test_a_rule_resolving_to_the_catalogs_own_direction_is_refused(tmp_path: Path):
+    """A rule that resolves nothing is a file claiming a flip it does not
+    perform. Accepted as a no-op it would read, to anyone auditing the catalog,
+    as the two-faced case being handled."""
+    refusal = _flip_refusal(
+        tmp_path,
+        _flip_catalog(
+            direction=[
+                {"when": {"owner_implemented_by_type_annotated": ["a.B"]}, "then": "outbound"}
+            ]
+        ),
+    )
+    assert "resolves nothing" in refusal
+
+
+def test_a_condition_naming_no_annotations_at_all_is_refused(tmp_path: Path):
+    """An empty list is a condition that never holds — the catalog would
+    declare a flip and never perform one, which reads exactly like a rule that
+    works on a module where nothing happens to match."""
+    refusal = _flip_refusal(
+        tmp_path,
+        _flip_catalog(
+            direction=[{"when": {"owner_implemented_by_type_annotated": []}, "then": "inbound"}]
+        ),
+    )
+    assert "non-empty list" in refusal

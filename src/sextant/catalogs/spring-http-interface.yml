@@ -12,6 +12,39 @@ detect:
 
 requires: [annotation_args, typed_signatures]
 
+# D02 §2c. `direction` above is a DEFAULT here in a way it is on no other
+# catalog: the same annotation family declares a client to be proxied and an API
+# to be served, and which one it is depends on what else the module contains.
+#
+# MEASURED (CP-7, `scripts/probes/cp7_http_exchange.md`, spring-webmvc 6.1.6 /
+# 6.2.15 / 7.0.2 / 7.0.9): `RequestMappingHandlerMapping` builds a mapping from
+# `@HttpExchange` exactly as it does from `@RequestMapping`, through a
+# `MergedAnnotations` search with `SearchStrategy.TYPE_HIERARCHY` — so an
+# implementing class serves the interface's exchange annotations, type-level
+# prefix included, without repeating any of them.
+#
+# THE CONDITION IS THE CONTROLLER CHECK, and spec §6's
+# `owner_implemented_in_module: true` is not it. Spring dispatches to a handler
+# BEAN, and `isHandler` is one
+# `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` call with no
+# `@RequestMapping` disjunct on any minor measured — so a `@Service` that
+# implements an `@HttpExchange` interface is served by nothing at all, and an
+# inbound row for one would invent an endpoint (§8.1 rule 4).
+#
+# Both spellings, because `hasAnnotation` resolves meta-annotations and our own
+# composition pre-pass reaches only MODULE-LOCAL compositions: `@RestController`
+# is meta-annotated `@Controller` inside a jar this workspace does not scan, so
+# naming `@Controller` alone would match no REST controller in any real module.
+# They are the same two fqns `spring-mvc.yml` and `spring-web.yml` declare as
+# their own `type_annotation`.
+resolves:
+  direction:
+    - when:
+        owner_implemented_by_type_annotated:
+          - org.springframework.stereotype.Controller
+          - org.springframework.web.bind.annotation.RestController
+      then: inbound
+
 matches:
   # No type gate: @HttpExchange at type level is optional — methods alone may
   # carry the exchange annotations. That is true and it is not the whole rule,
@@ -31,8 +64,15 @@ matches:
   # As on `retrofit.yml`, this also opts the catalog into the SEI fence: an
   # interface the module itself implements is subtracted, on the reading that
   # an outbound interface-gated derivation claims somebody ELSE answers the
-  # call. Stated in COVERAGE §5.2 as an under-report for the module that both
-  # declares an `@HttpExchange` client and implements it locally.
+  # call.
+  #
+  # SINCE THE `resolves.direction` RULE ABOVE, the fence YIELDS to it rather
+  # than cancelling it (ruling R12): where the implementer is a controller the
+  # row is not subtracted, it becomes the inbound row. What the fence still
+  # covers is the case the flip declines — an interface implemented by a bean
+  # the framework serves nothing through — which this module neither calls nor
+  # serves. COVERAGE §5.2's under-report is therefore closed for the
+  # controller-implemented shape and stands for that one.
   declared_on: interface
   request_body: { annotation: org.springframework.web.bind.annotation.RequestBody,
                   fallback: none }

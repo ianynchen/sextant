@@ -7,6 +7,7 @@ parameters. No framework name appears in this module's code.
 """
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -18,8 +19,9 @@ from sextant.application.resolve.effective_annotations import (
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import serves_urls
-from sextant.domain.symbols import bare_descriptor
+from sextant.domain.symbols import bare_descriptor, member_name
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
@@ -42,6 +44,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     declared_on = _declared_on(catalog)
     type_annotation = catalog.matches.get("type_annotation")
     type_annotation_fqn = None if type_annotation is None else _catalog_symbol(type_annotation)
+    flip = _direction_flip(workspace, catalog)
     prefix_annotation = mapping["prefix_annotation"]
     # Optional too (Retrofit, spring-jms): no class-level prefix shape.
     prefix_fqn = None if prefix_annotation is None else _catalog_symbol(prefix_annotation)
@@ -152,6 +155,26 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # site, `_reply_row`, asks it nowhere: that row's direction is a
         # literal `outbound`, so the seam can never reach it (R8).
         canonical_path=serves_urls(catalog.protocol, catalog.direction),
+        # D02 §2c's `resolves.direction`, the ONE resolution rule that shipped:
+        # what a row's direction becomes where the catalog's condition holds,
+        # NULL where the catalog declares no rule — which is every catalog but
+        # the one whose annotation family genuinely faces both ways, and what
+        # keeps their derivations byte-identical.
+        flip_direction=flip.direction,
+        # Which OWNERS the condition holds for, and what handles each flipped
+        # declaration. Both empty where there is no rule.
+        flip_owners=flip.owners,
+        flip_handlers=flip.handlers,
+        # `$canonical_path`'s twin for a FLIPPED row, decided the same way from
+        # the same seam (`serves_urls`) — the resolved direction is the row's
+        # direction, so it is the direction the address question is asked of.
+        # Without this a flipped row's address would be canonicalized under the
+        # rule for the direction the catalog DECLARED rather than the one the
+        # row took, and an inbound route the module serves would keep a
+        # spelling the framework does not answer at — which also splits it from
+        # the identical route a controller's own mapping derives, and stops the
+        # two merging (ruling R12).
+        flip_canonical_path=flip.canonical_path,
         # 2E design §2, §3: the effective-annotations pre-pass widens
         # this catalog's own mapping fqns to every module-local annotation
         # type transitively meta-annotated with one of them PLUS, for a
@@ -384,6 +407,271 @@ def _locally_implemented(workspace: Workspace) -> list[str]:
         for entry in json.loads(str(row["interfaces"]))
     }
     return sorted(found)
+
+
+# D02 §2c's `resolves` block, and the ONE key of it that shipped. `format` is
+# named in the same section and explicitly did NOT ship — it "turned out not to
+# be resolvable per match at all" and is answered by a late pass over the
+# finished table — so a catalog writing it here would be declaring a rule
+# nothing runs. Refused rather than ignored, the `_validate_naming` discipline.
+_RESOLVES = frozenset({"direction"})
+
+# WHICH conditions a `resolves.direction` rule may test (NFR-5). One word today,
+# and its estate cost is one line in one catalog: `spring-http-interface.yml` is
+# the only shipped file that declares `resolves` at all, and every other catalog
+# keeps a constant direction. A closed vocabulary for `_MEMBER_RULES`' reason,
+# and the stakes are the same shape: a condition read as something it is not
+# would publish a served route as an outbound dependency, or the reverse.
+#
+# `owner_implemented_by_type_annotated` reads: the type ENCLOSING this
+# declaration is implemented, inside this module, by a class carrying one of the
+# annotations listed beside the word. Deliberately NOT spec §6's
+# `owner_implemented_in_module` — that condition is weaker than the framework's
+# own and fabricates (CP-7 Q1, GUIDELINES §8.1 rule 4): a class implementing the
+# interface is dispatched to only where it is a handler bean, and a plain
+# service implementation is served by nothing at all.
+_DIRECTION_CONDITIONS = frozenset({"owner_implemented_by_type_annotated"})
+
+_WHEN, _THEN = "when", "then"
+
+
+@dataclass(frozen=True)
+class _DirectionFlip:
+    """What `resolves.direction` resolved to, as the four bound parameters
+    `derive_endpoints.sql` reads.
+
+    All four are inert together: `direction` NULL, both lists empty and
+    `canonical_path` false is what every catalog declaring no rule binds, and
+    the SQL's own flip predicate is then false for every row.
+
+    `owners` are BARE type descriptors, and each `handlers` entry pairs a bare
+    DECLARATION descriptor with the module-prefixed symbol that handles it —
+    the `{declaration, handler}` STRUCT shape the SQL unnests. The same strip
+    `_locally_implemented` makes, for the same reason: an interface's own
+    symbols and the `implemented_interfaces` entries naming it are prefixed by
+    whichever module's scan wrote them, and only the descriptor is ever
+    compared (D00 §5a).
+    """
+
+    direction: str | None
+    owners: list[str]
+    handlers: list[dict[str, str]]
+    canonical_path: bool
+
+
+def _direction_flip(workspace: Workspace, catalog: Catalog) -> _DirectionFlip:
+    """This catalog's `resolves.direction` rule, evaluated against the facts.
+
+    Returns the inert flip for a catalog that declares none, which is every
+    catalog but one — and the workspace is not queried at all in that case, so
+    the pass costs nothing where nothing asked for it.
+    """
+    rule = _direction_rule(catalog)
+    if rule is None:
+        return _DirectionFlip(None, [], [], False)
+    resolved, annotations = rule
+    owners, handlers = _served_owners(workspace, annotations)
+    return _DirectionFlip(resolved, owners, handlers, serves_urls(catalog.protocol, resolved))
+
+
+def _direction_rule(catalog: Catalog) -> tuple[str, list[str]] | None:
+    """The declared `(then, condition annotations)` pair, or `None` where this
+    catalog declares no direction resolution.
+
+    Refused rather than ignored at every step, for the reason the loader checks
+    `protocol`/`direction` at the edge (NFR-5): this value decides which way
+    round a wire identity is published, and a rule read as absent republishes a
+    served API as an outbound dependency the module does not have — a wrong row
+    at `resolved`/`compiler`, not a missing one.
+    """
+    declared = catalog.resolves
+    if not declared:
+        return None
+    if not isinstance(declared, dict) or set(declared) - _RESOLVES:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `resolves` must be a mapping declaring only "
+            f"{', '.join(sorted(_RESOLVES))} — got {declared!r}. D02 §2c's `format` half did "
+            f"not ship (the ladder answers format over the finished table), so a rule written "
+            f"here would be one nothing runs"
+        )
+    rules = declared["direction"]
+    # ONE rule, not a list D02 §2c evaluates in order. First-match-wins over
+    # several conditions is the section's stated semantics and no shipped
+    # catalog needs it; an engine implementing one rule while accepting a list
+    # of them would silently drop every rule after the first, which is the
+    # quiet-wrong-answer failure this whole file is checked for.
+    if not isinstance(rules, list) or len(rules) != 1 or not isinstance(rules[0], dict):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `resolves.direction` must be a list of exactly "
+            f"one `{{{_WHEN}, {_THEN}}}` rule — got {rules!r}. D02 §2c's first-match-wins over "
+            f"several is unimplemented, and accepting a second rule would silently drop it"
+        )
+    rule = rules[0]
+    if set(rule) != {_WHEN, _THEN}:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: a `resolves.direction` rule declares exactly "
+            f"`{_WHEN}` and `{_THEN}` — got {sorted(rule)}"
+        )
+    return _resolved_direction(catalog, rule[_THEN]), _condition_annotations(catalog, rule[_WHEN])
+
+
+def _resolved_direction(catalog: Catalog, declared: Any) -> str:
+    """The direction a matching row takes — one of D00's closed set, and never
+    the catalog's own default.
+
+    A rule resolving to the declared direction resolves nothing, so it is a file
+    that says it faces both ways and does not. Refused rather than accepted as a
+    no-op: a reader of the catalog would believe the flip exists."""
+    allowed = sorted(member.value for member in Direction)
+    if declared not in allowed:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `resolves.direction[0].{_THEN}: {declared}` is "
+            f"not one of {', '.join(allowed)} — D00's closed sets are closed (NFR-5)"
+        )
+    if declared == catalog.direction:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `resolves.direction[0].{_THEN}: {declared}` is "
+            f"the catalog's own declared direction, so the rule resolves nothing"
+        )
+    return str(declared)
+
+
+def _condition_annotations(catalog: Catalog, declared: Any) -> list[str]:
+    """The annotation fqns a `when` clause tests the owner's implementers for.
+
+    The FQNs are catalog data on purpose and are never spelled in this module:
+    which annotation marks a framework's handler bean is that framework's
+    convention, and an engine naming one would be naming a framework in code
+    (ARCHITECTURE §10). They are the same values `spring-mvc.yml` and
+    `spring-web.yml` declare as their own `type_annotation`.
+    """
+    condition = set(declared) if isinstance(declared, dict) else set()
+    if condition - _DIRECTION_CONDITIONS or len(condition) != 1:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: a `resolves.direction` rule's `{_WHEN}` declares "
+            f"exactly one of {', '.join(sorted(_DIRECTION_CONDITIONS))} — got {declared!r} "
+            f"(D02 §2c)"
+        )
+    annotations = declared[next(iter(condition))]
+    if (
+        not isinstance(annotations, list)
+        or not annotations
+        or not all(isinstance(fqn, str) and fqn for fqn in annotations)
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{next(iter(condition))}` must name a non-empty "
+            f"list of annotation fqns — got {annotations!r}. An empty list is a condition that "
+            f"never holds, which reads as "
+            f"'this catalog never flips' while looking like a rule that does"
+        )
+    return [str(fqn) for fqn in annotations]
+
+
+def _served_owners(
+    workspace: Workspace, declared: list[str]
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Every type this module implements with a class carrying one of
+    `declared`, and what handles each of those types' declared methods.
+
+    **The annotation test runs through the composition pre-pass** (`A-C7`), not
+    as string equality against the declared fqns: the framework predicate this
+    mirrors is meta-annotation aware, so a class wearing a module-local
+    stereotype composed from one of these is a handler and a literal compare
+    would leave that module's whole implemented API published as an outbound
+    dependency it does not have.
+
+    **The type-hierarchy half of that predicate is NOT mirrored**, and the
+    boundary is stated rather than approximated (`docs/COVERAGE.md`, the
+    inherited-stereotype row): a class whose only stereotype comes from a
+    superclass or an interface derives nothing here, because whether the
+    framework's own component scan admits such a bean is unmeasured, and
+    deriving on half a predicate adds rows on the framework's behalf under
+    conditions nobody checked (§8.1 rule 4).
+
+    **The handler is matched by name AND descriptor**, never by name alone: the
+    JVM identifies a method by its name and parameter types in order (§8.1's
+    language rule) and `member_name` carries the descriptor's own disambiguator,
+    so two overloads of one operation bind to their own implementations rather
+    than to whichever came first. A declared method the implementing class does
+    not itself declare — an interface `default` the framework still serves
+    (CP-7 Q3) — contributes no entry, and the SQL leaves the declaring method as
+    that row's handler, which is the method the container really invokes.
+
+    Both reads are DIRECT: `implemented_interfaces` names the interfaces a class
+    declares itself, never the ones it inherits through a superclass or through
+    one of those interfaces' own superinterfaces (D00 §5a). Those two shapes
+    derive nothing here and are COVERAGE boundaries rather than silent misses.
+
+    Sorted throughout, and `setdefault` over implementers in symbol order, so
+    two classes implementing one interface resolve the same handler twice
+    (NFR-1) — a shape the framework itself refuses to start on, since two beans
+    would register one mapping.
+    """
+    condition = {_catalog_symbol(fqn) for fqn in declared}
+    annotation_rows = [
+        {
+            "target": row["target"],
+            "annotation": row["annotation"],
+            "args": json.loads(str(row["args"])) if row["args"] is not None else {},
+        }
+        for row in workspace.query("annotations")
+    ]
+    composed = composed_mapping_rows(
+        annotation_rows,
+        {str(row["symbol"]) for row in workspace.query("interface_symbols")},
+        condition,
+    )
+    handler_beans = {
+        bare_descriptor(str(row["target"]))
+        for row in (*annotation_rows, *composed)
+        if str(row["annotation"]) in condition
+    }
+    methods = _methods_by_bare_type(workspace)
+
+    owners: set[str] = set()
+    handlers: dict[str, str] = {}
+    for row in sorted(workspace.query("implementations"), key=lambda row: str(row["symbol"])):
+        implementer = bare_descriptor(str(row["symbol"]))
+        if implementer not in handler_beans:
+            continue
+        own = methods.get(implementer, {})
+        for entry in json.loads(str(row["interfaces"])):
+            owner = bare_descriptor(str(entry))
+            owners.add(owner)
+            for key, declaration in methods.get(owner, {}).items():
+                if key in own:
+                    # The KEY is bare and the VALUE is not, and the asymmetry is
+                    # the join: the SQL looks this up by the declaring method's
+                    # own bare descriptor (a declaration scanned out of an
+                    # opted-in jar carries that jar's coordinates, the class
+                    # implementing it carries the module's), while the handler
+                    # is published exactly as its fact wrote it (D00 §5a).
+                    handlers.setdefault(bare_descriptor(declaration), own[key])
+    return sorted(owners), [
+        {"declaration": declaration, "handler": handlers[declaration]}
+        for declaration in sorted(handlers)
+    ]
+
+
+def _methods_by_bare_type(workspace: Workspace) -> dict[str, dict[str, str]]:
+    """Bare enclosing-type descriptor -> `name(descriptor)` -> the method's own
+    symbol, exactly as the fact wrote it.
+
+    Keyed bare on the OUTER level and module-prefixed in the VALUE on purpose:
+    the lookup crosses a coordinate boundary (an interface scanned out of an
+    opted-in dependency jar carries that jar's coordinates while the class
+    implementing it carries the module's), and the value is a handler symbol
+    that has to be published exactly as emitted.
+    """
+    found: dict[str, dict[str, str]] = {}
+    for row in workspace.query("method_declarations"):
+        enclosing = row["enclosing"]
+        if enclosing is None:
+            continue
+        symbol = str(row["symbol"])
+        key = member_name(bare_descriptor(symbol))
+        found.setdefault(bare_descriptor(str(enclosing)), {})[key] = symbol
+    return found
 
 
 def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:

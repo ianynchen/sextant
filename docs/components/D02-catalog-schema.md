@@ -544,6 +544,11 @@ matches:
   `@FeignClient(fallback = …)` names a local class implementing the client interface, and
   that interface is still a client — widening the rule would delete every Feign client
   declaring a fallback.
+- **It YIELDS to a `resolves.direction` rule** (§2c, 2O Task 10). Where the catalog resolves
+  a row's direction, the fence's coarser test — SOMETHING implements this interface — has
+  already been answered more precisely, and subtracting the row would delete exactly the one
+  the resolution flips. The subtraction stands wherever the resolution declines, and stands
+  unchanged on every catalog that declares no resolution at all.
 
 **Three catalogs, one engine change.** The forms are stated in framework-neutral words for
 a reason that was tested rather than asserted: `spring-graphql.yml` introduced them, and
@@ -1958,7 +1963,8 @@ most catalogs they are constant. Three cases break that, and all three are real:
   payload type extending a generated message says the same thing; a Kafka `value.serializer`
   says it in configuration rather than code.
 
-So a catalog may declare resolution rules alongside its defaults:
+So a catalog may declare resolution rules alongside its defaults. **This is the sketch, not
+what shipped** — the shipped form is the block below it:
 
 ```yaml
 protocol: rest
@@ -1976,6 +1982,61 @@ resolves:
 
 **Rules are evaluated at match time**, in order, first match wins. `direction` resolution must
 complete before §3's inbound/outbound merge, which is why it cannot be a later pass.
+
+### `resolves.direction`, as built (2O Task 10)
+
+Shipped on `spring-http-interface.yml`, the only catalog that declares `resolves` at all, and
+read by `annotation_driven` alone. It differs from the sketch in three ways, each of which is a
+correction rather than a simplification:
+
+```yaml
+resolves:
+  direction:
+    - when:
+        owner_implemented_by_type_annotated:
+          - org.springframework.stereotype.Controller
+          - org.springframework.web.bind.annotation.RestController
+      then: inbound
+```
+
+1. **The condition is not `owner_implemented_in_module`.** That one is weaker than the
+   framework's own rule and fabricates: Spring dispatches to a handler BEAN, and its handler
+   test is one `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` call carrying
+   no `@RequestMapping` disjunct — measured on spring-webmvc 6.1.6, 6.2.15, 7.0.2 and 7.0.9
+   (`scripts/probes/cp7_http_exchange.md`). A plain `@Service` implementing an exchange
+   interface is served by nothing, so an inbound row for one invents an endpoint. The shipped
+   condition `owner_implemented_by_type_annotated` reads: *the type enclosing this declaration
+   is implemented, in this module, by a class carrying one of these annotations*. The fqns are
+   catalog data — the same values `spring-mvc.yml` and `spring-web.yml` declare as their own
+   `type_annotation` — because which annotation marks a handler bean is the framework's
+   convention, never an engine's to know.
+2. **The condition vocabulary is CLOSED** (NFR-5), one word today, and a `when` naming anything
+   else is REFUSED rather than read as "never flips" — by the engine, where `declared_on` and
+   the `mapping` vocabulary are also checked, not by the loader. So is a `resolves` block
+   naming any key but `direction` (`format` is named in this section and did not ship, so a
+   rule written under it would be one nothing runs), and so is a `then` outside D00's
+   direction set or equal to the catalog's own declared direction — a rule that resolves
+   nothing is a file claiming a flip it does not perform.
+3. **Exactly ONE rule, not a list evaluated in order.** First-match-wins over several
+   conditions is this section's stated semantics and nothing shipped needs it; an engine
+   honouring one rule while accepting a list would silently drop every rule after the first, so
+   a second rule is refused until the semantics is built.
+
+**What a flipped row carries.** The resolved direction, and the handler that goes with it: the
+symbol handling a flipped declaration is the IMPLEMENTING type's own member where it declares
+one, and the declaring member itself where it does not — a `default` method the implementer
+never overrides is still selected and served, because the framework's handler-method walk
+covers the type's interfaces (CP-7 Q3). Its address is canonicalized under the rule for the
+direction the row TOOK, not the one the catalog declared, which is what lets it merge with the
+identical route a controller's own mapping derives (§3's dedup, ruling R12 — there is no
+collision detector and this needs none).
+
+**Where the interface gate and the flip meet.** An OUTBOUND catalog declaring
+`declared_on: interface` also engages §2's implemented-interface fence, which subtracts every
+interface the module implements. The fence and the flip answer the same question with opposite
+answers, and the fence's is the coarser: it YIELDS where the flip's condition holds. Shipping
+both unconditioned cancels — the fence subtracts exactly the rows the flip must flip, and no
+inbound row survives.
 
 **A default that survives unchallenged is not an observation.** If no rule fires and the
 endpoint takes the catalog's declared `format: json` — because Jackson is simply the framework

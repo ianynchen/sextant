@@ -14,6 +14,33 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **`@HttpExchange` faces both ways: `resolves.direction`, the direction flip** (2O design §6,
+  Task 10). An `@HttpExchange` interface a local CONTROLLER implements now derives the INBOUND
+  routes Spring actually serves, at the composed address, handled by the implementing class's
+  own method — where before the module was published as CALLING a service it serves, and, after
+  `A-C1`'s SEI fence turned that fabrication into silence, as neither. [D02](docs/components/D02-catalog-schema.md)
+  §2c's `resolves.direction` is the mechanism, shipped on `spring-http-interface.yml` and read
+  by no other catalog; the register entry that recorded it as documented-and-unbuilt closes with
+  it.
+  **The CONDITION is not the one D02 sketched, and that is the point.**
+  `owner_implemented_in_module: true` is weaker than Spring's own rule and fabricates: measured
+  on spring-webmvc 6.1.6, 6.2.15, 7.0.2 and 7.0.9 (`scripts/probes/cp7_http_exchange.md`),
+  `isHandler` is one `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` call with
+  no `@RequestMapping` disjunct, so a `@Service` implementing an exchange interface is
+  dispatched to by nothing and an inbound row for one would invent an endpoint. The shipped
+  condition names the controller annotations as catalog data — the same fqns `spring-mvc.yml`
+  and `spring-web.yml` already declare — and resolves them through the composition pre-pass, so
+  a module-local stereotype composed from `@Controller` counts. The type-HIERARCHY half of that
+  predicate is deliberately not mirrored and aligns with COVERAGE's existing
+  inherited-stereotype boundary.
+  **Behaviour change for real modules:** on a module that both declares an `@HttpExchange`
+  interface and implements it with a controller, rows that were absent become inbound endpoints;
+  nothing moves in the other direction, and an interface with no local controller implementation
+  keeps deriving exactly the outbound row it always did. Where the controller ALSO writes its
+  own mapping for the same route, the two rows share a wire identity and the existing dedup
+  folds them into one, with the implementing class's method surviving as handler — no collision
+  detector is involved, because there is none.
+
 - **Spring Integration's channels, enumerated and handed off** (2O design §5, Task 9).
   `config_join` gains a second binding-name source, **`binding.from: annotation_value`** — the
   name is the value of a declared argument on a declared annotation instead of a bean's own
