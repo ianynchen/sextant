@@ -14,6 +14,20 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Both legacy `@SqsListener` spellings are measured, and were already right** —
+  `spring-sqs-legacy.yml` gains a `measured:` row per artifact (**CP-17**,
+  `org.springframework.cloud:spring-cloud-aws-messaging` 2.2.6.RELEASE and
+  `io.awspring.cloud:spring-cloud-aws-messaging` 2.4.4, each version read out of that jar's
+  own manifest). Nothing about the catalog changed: both annotations declare exactly
+  `value(): String[]` and a `deletionPolicy()` and nothing else, both are `@Target(METHOD)`
+  so a class-level use is illegal rather than merely unmodelled, neither is `@Repeatable`,
+  neither jar holds a container-shaped sibling, and `QueueMessageHandler` reads those two
+  attributes and no third in either generation.
+
+  Recorded as a result rather than passed over, because a pass that only retired entries it
+  had to FIX would leave the correct catalogs permanently unmeasured. `_NOT_MEASURED_YET`
+  drops to **19**.
+
 - **SQS listeners have a class-level, polymorphic form, and this catalog said they had
   none** (`OI-40`) — Stage 4's per-catalog pass, measured by **CP-17** at
   spring-cloud-aws-sqs 3.1.1 and 4.1.1. `io.awspring.cloud.sqs.annotation.SqsHandler` was

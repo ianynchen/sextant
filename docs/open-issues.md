@@ -275,7 +275,7 @@ restricting the walk to poms inside the repository and losing
 `spring-boot-starter-parent` with it. **Falsified by** two machines deriving
 different endpoint sets from one commit.
 
-### OI-10 — 20 shipped catalogs state no measured version at all
+### OI-10 — 19 shipped catalogs state no measured version at all
 **Major · pre-existing, made countable 2026-09-06 by F5 ·
 `tests/architecture/test_catalog_measurement_coverage.py::_NOT_MEASURED_YET`**
 
@@ -304,9 +304,17 @@ since: `spring-scheduling` (CP-14, spring-context 6.1.6/6.2.19/7.0.9),
 `microprofile-graphql` (CP-15, smallrye-graphql-schema-builder 2.0.0/2.18.5),
 and `spring-kafka`, `spring-jms` and `spring-rabbit` (CP-16, spring-kafka
 3.1.4/4.1.1, spring-jms 6.1.6/7.0.9, spring-rabbit 3.1.4/4.1.1), and
-`spring-pulsar` (CP-17, spring-pulsar 1.2.11/2.0.7). The
+`spring-pulsar` and `spring-sqs-legacy` (CP-17, spring-pulsar 1.2.11/2.0.7 and
+both legacy messaging artifacts at 2.2.6.RELEASE and 2.4.4). The
 heading above is the count as it stands and is edited down with each entry, so
 this row cannot go stale about its own subject.
+
+**A catalog measured and found CORRECT retires an entry too**, and that is worth
+saying because the list's name suggests otherwise: `spring-sqs-legacy` needed no
+change at all — both annotations are exactly what its `CHECKPOINT FACT` comment
+claimed. What changed is that the claim now cites a run, which is the whole
+point of the block. A pass that only retired entries it had to FIX would leave
+the correct catalogs permanently unmeasured.
 
 ### OI-11 — nothing compares a catalog's measured version against the module's
 **Major · pre-existing, stated 2026-09-06 by F5 · D02 §1a**

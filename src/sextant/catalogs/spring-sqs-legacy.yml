@@ -8,6 +8,17 @@ detect:
   coordinates: ["org.springframework.cloud:spring-cloud-aws-messaging",
                 "io.awspring.cloud:spring-cloud-aws-messaging"]
 
+# TWO rows, one per artifact, because this file is two generations of one
+# annotation under two groupIds and a single row would file the evidence for
+# both against whichever jar it named. Both versions are the ones the comment
+# below already claimed; the difference is that a probe has now opened them.
+measured:
+  - { artifact: org.springframework.cloud:spring-cloud-aws-messaging,
+      versions: ["2.2.6.RELEASE"],
+      identity: reported, by: scripts/probes/cp17_containers_and_class_level.md }
+  - { artifact: io.awspring.cloud:spring-cloud-aws-messaging, versions: ["2.4.4"],
+      identity: reported, by: scripts/probes/cp17_containers_and_class_level.md }
+
 requires: [annotation_args, typed_signatures]
 
 matches:
@@ -25,16 +36,33 @@ matches:
                   excludes: [org.springframework.cloud.aws.messaging.listener.Acknowledgment,
                              io.awspring.cloud.messaging.listener.Acknowledgment] }
   mapping:
-    # CHECKPOINT FACT (javap, spring-cloud-aws-messaging 2.2.6.RELEASE and
-    # io.awspring.cloud:spring-cloud-aws-messaging 2.4.4): BOTH legacy
-    # annotations declare exactly `value()` as `String[]` and
-    # `deletionPolicy()`, and both are `@Target(METHOD)`. The queue names
-    # therefore arrive as an array on `value` in either spelling — the same
-    # read `spring-sqs.yml` makes of the current annotation, which is why
-    # this file is pure data and needs no engine word of its own.
+    # MEASURED (CP-17 rows 1g/1h, 3g/3h and 5g/5h), replacing a `CHECKPOINT
+    # FACT` comment that named both versions and cited no evidence: BOTH legacy
+    # annotations declare exactly `value()` as `String[]` and a
+    # `deletionPolicy()` of their own generation's enum type, and nothing else.
+    # The queue names therefore arrive as an array on `value` in either
+    # spelling — the same read `spring-sqs.yml` makes of the current
+    # annotation, which is why this file is pure data and needs no engine word
+    # of its own.
+    #
+    # Rows 5g/5h are the half that makes `value` the DESTINATION rather than
+    # merely an attribute: `QueueMessageHandler` finds the annotation with
+    # `AnnotationUtils.findAnnotation` and reads `value()` and
+    # `deletionPolicy()` and no third attribute, in either generation. Rows
+    # 3g/3h looked for a container-shaped sibling in each jar and found none,
+    # and rows 2g/2h carry no `@Repeatable`, so this file's silence about a
+    # container is a measured claim (§8.1 rule 4).
+    #
+    # The catalog was measured and found CORRECT. That is recorded rather than
+    # passed over, because it is what makes the audit re-runnable instead of
+    # repeated.
     path_from: [value]
     # No class-level listener shape in either legacy spelling — both are
-    # `@Target(METHOD)`, so there is no type-level annotation to prefix from.
+    # `@Target(METHOD)` (CP-17 rows 2g/2h), so a type-level use is not merely
+    # unmodelled but ILLEGAL, and there is no type-level annotation to prefix
+    # from. Contrast `spring-sqs.yml`, whose 4.x annotation gained `TYPE` and a
+    # handler sibling: this is the same framework's rule at a different
+    # generation, not a different reading of one rule.
     prefix_from: []
     method_from: method
     # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.

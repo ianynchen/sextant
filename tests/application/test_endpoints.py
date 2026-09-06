@@ -5109,9 +5109,14 @@ _CURRENT_SQS = "io/awspring/cloud/sqs/annotation/SqsListener#"
 def test_both_legacy_sqs_spellings_derive_the_same_inbound_row(tmp_path: Path, annotation: str):
     """The annotation moved package twice and kept its shape: both legacy
     spellings declare exactly `value()` as `String[]` and `deletionPolicy()`
-    (javap, spring-cloud-aws-messaging 2.2.6.RELEASE and
+    and nothing else (CP-17 rows 1g/1h, at
+    org.springframework.cloud:spring-cloud-aws-messaging 2.2.6.RELEASE and
     io.awspring.cloud:spring-cloud-aws-messaging 2.4.4). That is why the file
-    is pure data — one more `annotations` entry, no engine word."""
+    is pure data — one more `annotations` entry, no engine word.
+
+    Rows 5g/5h are what make `value` the destination rather than an attribute
+    that resembles one: `QueueMessageHandler` reads `value()` and
+    `deletionPolicy()` and no third attribute, in either generation."""
     rows = _rows_from(
         tmp_path,
         [_shipped("spring-sqs-legacy")],
