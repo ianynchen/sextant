@@ -14,9 +14,9 @@ here would restate those documents rather than add anything.
 
 ### Added
 
-- **`## Traces` draws every trace, and `--brief` is the opt-in** (GUIDELINES §8.4, ruled
-  2026-09-06). `mall-admin` — one module, 157 classes — walks **160 traces**, and the
-  document draws all of them: a **711 KB** `architecture.md` and a **4.6 MB**
+- **`## Traces` draws every trace, and `render` has no display flag at all** (GUIDELINES
+  §8.4, ruled 2026-09-06). `mall-admin` — one module, 157 classes — walks **160 traces**,
+  and the document draws all of them: a **711 KB** `architecture.md` and a **4.6 MB**
   `architecture.html` with **161 diagrams**. That was briefly bounded to 37 traces by
   default, on the grounds that 711 KB is a document nobody opens, and the ruling reversed
   it: *"we should be focused on telling the truth, not the amount of information ... which
@@ -25,13 +25,16 @@ here would restate those documents rather than add anything.
   to read linearly is a navigation problem**, solved by indices and by the agents that read
   it, never by leaving 123 walked traces undrawn.
 
-  The bound survives as **`sextant module render --brief`** (500 steps' worth of whole
-  traces, 230 KB, 38 diagrams) — named for what it withholds rather than for what the
-  default already is, and **the brief document opens its trace section by saying it is the
-  brief one and is not complete**, with the counts and the command that draws every trace.
-  Every trace keeps its summary row either way, a trace is drawn whole or not at all, and
-  selection is by ORDER, never by size. `render_trace.the-default-document-draws-every-trace`
-  in `scripts/guard_check.py` is what stops the default flipping back.
+  The bound survived one day longer as `sextant module render --brief` and was then
+  **deleted outright** — *"deleting that --brief if it only cuts the first N. that's same
+  as lying"*. What it drew was whole traces while a 500-step budget lasted, taken in the
+  summary table's own order: an arbitrary **prefix**, presented as a reduced document.
+  Saying in-band that it was reduced made the omission honest and never made the prefix a
+  summary, and which traces a reader can spare is a judgement no renderer can compute — so
+  a trimmed document is enrichment work (an LLM overlay), not a render flag: *"that's a
+  different story and a different ask"*. Nothing in `## Traces` takes a bound now; every
+  trace keeps its summary row, is drawn whole, and the section states the two counts —
+  drawn and walked — that would differ if that ever stopped being true.
 
   Closes `OI-30`. Records `OI-31` (the 3.5 MB of inlined mermaid and the 161 eagerly
   rendered diagrams — a payload question, whose close is lazy per-diagram rendering and is

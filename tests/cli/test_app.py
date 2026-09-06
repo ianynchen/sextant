@@ -294,35 +294,6 @@ def test_render_writes_the_document_after_analyze(tmp_path: Path):
     assert "POST" in document and "/v1/orders" in document
 
 
-def test_brief_changes_nothing_for_a_module_the_budget_never_reaches(tmp_path: Path):
-    """`--brief` bounds a DOCUMENT, and this fixture's 68 roots walk 108 steps
-    — a fifth of the budget — so both documents draw every trace and the flag
-    costs a reader of a small module nothing at all. Byte equality is the
-    assertion because the alternative failure is silent: a bound that quietly
-    reshaped every document, large or small, would be a reduction nobody asked
-    for on the modules that never needed one.
-
-    The section still says which of the two it is showing, on both sides —
-    M07's `--env` rule: a reader cannot tell a complete document from a
-    reduced one by looking at it."""
-    runner = CliRunner()
-    runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
-    document = tmp_path / "render" / "architecture.md"
-    assert (
-        runner.invoke(
-            cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
-        ).exit_code
-        == 0
-    )
-    complete = document.read_text(encoding="utf-8")
-    result = runner.invoke(
-        cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path), "--brief"]
-    )
-    assert result.exit_code == 0, result.output
-    assert document.read_text(encoding="utf-8") == complete
-    assert "Every trace is rendered in full below" in complete
-
-
 def test_render_also_writes_a_self_contained_offline_html_document(tmp_path: Path):
     """2K design §6b, the live pin over a real analysed module rather than a
     synthetic one: `architecture.html` lands beside `architecture.md`, wraps

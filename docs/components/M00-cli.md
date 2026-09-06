@@ -65,21 +65,22 @@ side effect out of a module.
 Pipeline stages are internal. `--from-stage` and `--to-stage` exist for debugging and are
 not part of the surface.
 
-### `module render --brief` ([GUIDELINES](../../GUIDELINES.md) §8.4)
+### `module render` has no display flag ([GUIDELINES](../../GUIDELINES.md) §8.4)
 
-The one DISPLAY flag on `render`, and [M07](M07-renderer.md)'s `--env` rule applied to a
-second choice. **The default draws every trace**; `--brief` draws whole traces while a
-stated step budget lasts and stops. It re-reads the same workspace and derives nothing —
-the walk, the roots and the steps are identical either way; only how much of the answer
-this document spends its bytes on changes, and every trace keeps its summary row in both.
+**One module, one document, and that document is the complete one.** `render` takes a path
+and a `--workspace`; it carries nothing that changes what the document shows.
 
-**Opt-in, and named for what it withholds.** It was briefly the other way round —
-`--all-traces`, over a bounded default — and §8.4 reversed it: completeness is the
-deliverable, a document too large to read linearly is a navigation problem, and a flag
-whose name asserts the default is incomplete is the tell that the default is wrong.
-**The brief document opens its trace section by saying it is the brief one**, how many of
-how many it drew, and the command that draws them all, because a reader handed the file
-never ran the command and has no other way to know.
+There was one such flag, `--brief`, and it was deleted rather than repaired — *"deleting
+that --brief if it only cuts the first N. that's same as lying"*. It drew whole traces
+while a 500-step budget lasted, in the summary table's own order, which is an arbitrary
+prefix and not a summary; saying so in the document's own text made the omission honest
+and never made the prefix an answer. A **trimmed** document is still wanted and is
+enrichment work — *"we may want to leverage llm to produce that trimmed down version,
+that's a different story and a different ask"* — because which traces a reader can spare
+is a judgement, and a renderer cannot compute one.
+
+Volume itself stays a **navigation** problem, answered by indices and by the agents that
+read the document, never by drawing less.
 
 ### `module enrich` (2K design §3/§8)
 

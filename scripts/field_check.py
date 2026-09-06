@@ -230,9 +230,8 @@ def _ensure_compiled(
 
 
 def _analyze_and_render(module: Path) -> None:
-    """`render` with no flags, deliberately: the pin validates the DEFAULT document, which
-    is the complete one (GUIDELINES §8.4). A field check run against `--brief` would pass
-    over a renderer that had quietly stopped drawing things."""
+    """`render` takes no display flags, so the pin validates the only document there is,
+    which is the complete one (GUIDELINES §8.4)."""
     sextant = _sextant_bin()
     analyze = _run([sextant, "module", "analyze", str(module)], cwd=REPO_ROOT)
     if analyze.returncode != 0:

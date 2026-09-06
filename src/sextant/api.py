@@ -138,7 +138,6 @@ from sextant.domain.redaction import RedactionError, Redactor
 from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
 from sextant.egress.export.manifest import write_manifest
 from sextant.egress.render.document import (
-    BRIEF_TRACE_STEP_BUDGET,
     AssembledDocument,
     ClaimRedactionError,
     assemble_module_document,
@@ -829,17 +828,15 @@ def _assembled_sections(
     redactor: Redactor,
     overlay: EnrichmentOverlay | None,
     stale: frozenset[int],
-    brief: bool = False,
 ) -> tuple[AssembledDocument, str]:
     """One assembly, called by both `render` and `enrich` (2K design §8:
     "the same code path, so the two can never disagree").
 
-    `brief` is `render --brief`, and it is the ONE display choice this
-    composition passes down: with it, `## Traces` draws whole traces while a
-    stated step budget lasts and says what it withheld; without it — the
-    default, and what `enrich` gets — every trace is drawn in full. Defaulted
-    to the COMPLETE document on the ruling GUIDELINES §8.4 records: a bound on
-    what the reader is shown is opt-in, never the default."""
+    It passes no display choice down at all: there is one document, the
+    complete one, for the person and for the model alike. `render --brief`
+    was the one exception and was deleted rather than repaired (GUIDELINES
+    §8.4's audit list) — it drew a prefix of `## Traces` in table order, which
+    is an arbitrary cut presented as a reduced document."""
     reconstructed, report = _reconstructed_report(path, workspace, metadata)
     sections = assemble_module_document(
         reconstructed,
@@ -865,7 +862,6 @@ def _assembled_sections(
         # `return_flows` are rows `analyze` already derived, and this reads
         # them exactly as `endpoints` and `shapes` are read back above.
         traces=traces_of(workspace),
-        trace_step_budget=BRIEF_TRACE_STEP_BUDGET if brief else None,
     )
     return sections, reconstructed.module_id
 
@@ -893,15 +889,13 @@ def _stale_of(
     return frozenset(refusal.index for refusal in stale_claims(overlay, workspace, path, redactor))
 
 
-def _render(path: Path, *, workspace_dir: Path | None, brief: bool = False) -> RenderResult:
+def _render(path: Path, *, workspace_dir: Path | None) -> RenderResult:
     """`render`'s own composition, shared by the public `render()` and
     `cli/app.py`'s `module_render`. Reads the workspace `analyze` left
     behind — it never re-detects, re-scans, or re-resolves (M00).
 
-    `brief` draws only the step budget's worth of traces rather than every
-    one. It changes what this document SHOWS and nothing about what was
-    derived, so it is a flag rather than a re-analysis — and the brief
-    document opens its trace section by saying it is the brief one."""
+    It takes no display flag: there is one document and it is the complete
+    one (GUIDELINES §8.4)."""
     resolved_workspace_dir = _workspace_dir_of(path, workspace_dir)
     _refuse_if_unanalyzed(path, resolved_workspace_dir)
     metadata_path = resolved_workspace_dir / "metadata.json"
@@ -916,7 +910,7 @@ def _render(path: Path, *, workspace_dir: Path | None, brief: bool = False) -> R
         try:
             stale = _stale_of(overlay, workspace, path, redactor)
             sections, module_id = _assembled_sections(
-                path, workspace, metadata, redactor, overlay, stale, brief
+                path, workspace, metadata, redactor, overlay, stale
             )
         except ClaimRedactionError as refused:
             raise ConfigurationError(str(refused)) from refused
@@ -928,17 +922,15 @@ def _render(path: Path, *, workspace_dir: Path | None, brief: bool = False) -> R
     return RenderResult(markdown=markdown_target, html=html_target)
 
 
-def render(path: Path, brief: bool = False) -> RenderResult:
+def render(path: Path) -> RenderResult:
     """Renders the workspace `analyze` left at `path` — the library
     equivalent of `sextant module render`. Raises `NotAnalyzedError` where
     the CLI would refuse for the same reason, `ConfigurationError` for a bad
     `.sextant.yml`/overlay.
 
-    `brief` is the flag of the same name: `## Traces` draws the step budget's
-    worth of traces instead of every one, and says so. Defaulted off — the
-    complete document is what this function returns unless a caller asks it
-    not to be."""
-    return _render(path, workspace_dir=None, brief=brief)
+    There is one document and it is the complete one: this function carries
+    no display parameter, and `## Traces` draws every trace."""
+    return _render(path, workspace_dir=None)
 
 
 # --------------------------------------------------------------------------

@@ -122,17 +122,18 @@ that follow describe machinery it does not use.
   truth, not the amount of information"* — because a document too large to read linearly is
   a **navigation** problem, answered by indices and by the agents that read it, never by
   leaving 123 walked traces undrawn for a reader who cannot see they are missing.
-  **The bound survives only as `render --brief`'s** (`BRIEF_TRACE_STEP_BUDGET`, 500 steps),
-  and three properties make even that a reduction rather than a loss: every trace keeps its
-  summary row, with its addresses, depth, step count and terminals, so nothing is dropped;
-  a trace is drawn whole or not at all, because half a trace is the under-report the
-  section exists not to be; and the section opens by saying the document is the brief one,
-  how many of how many it drew, and the command that draws them all. **The statement is a
-  sentence rather than an `elides` caption** because what is withheld is whole BLOCKS: an
-  undrawn trace has no diagram to carry a caption, and the boundary a reader meets is under
-  the summary table. Selection is by ORDER, never by size or by any measure of interest —
-  drawing the cheap traces first would answer "which traces matter" with a judgement this
-  renderer has no basis for.
+  **The bound survived one day as `render --brief`'s and is now gone entirely** — *"deleting
+  that --brief if it only cuts the first N. that's same as lying"*. It drew whole traces
+  while a 500-step budget lasted, taken in the summary table's own order, and order was
+  chosen precisely because it claims nothing: drawing the cheap traces first would answer
+  "which traces matter" with a judgement this renderer has no basis for. But a rule that
+  claims nothing selects nothing either — what it produced was an arbitrary **prefix** of
+  the section, and the three properties that made it careful (every trace keeps its summary
+  row; a trace is drawn whole or not at all; the section said it was the brief one, how
+  many of how many, and the command that drew them all) made the omission honest without
+  making the prefix a summary. A trimmed document is enrichment work, an LLM overlay, and
+  not a render flag. **`## Traces` now takes no bound**, and the sentence under the summary
+  table states the count drawn and the count walked, which are the same count.
 - **No `alt`/`opt`/`loop` blocks** (the section after it). The structure is not in the
   facts: [D00](D00-fact-schema.md) §5 states that `call_site.ordinal` is *the v1 of the
   control-flow position* and *"not the richer context a sequence diagram needs to show a
@@ -215,13 +216,18 @@ scope there is no choice: the system's declared environment is used, and named.
 A simplified diagram says how many steps were hidden. A truncated list says how many were
 omitted. A diagram derived from a partial analysis says so.
 
-**The trace section under `--brief` is the live instance.** It draws whole traces while its
-step budget lasts and then says, under the summary table: that this document is the brief
-one and is not complete, how many of how many it drew, that the rest keep their rows, that
-nothing was filtered out of a trace it did draw, and which command draws every one. The
-rule that makes the sentence necessary is the same one that makes an `Elides:` caption
-necessary — a reduced output that does not say it was reduced is indistinguishable from a
-complete one.
+**The trace section is the live instance, and it now states a reduction of zero.** Under
+the summary table it says how many traces it drew of how many were walked — the same
+number, because nothing bounds it — so a reader meets the boundary question and gets an
+answer rather than a silence. The rule that makes the sentence necessary is the same one
+that makes an `Elides:` caption necessary: a reduced output that does not say it was
+reduced is indistinguishable from a complete one, and so is a complete one that says
+nothing.
+
+**The reduced form of this section is deleted, not tuned.** `render --brief` drew the first
+traces in table order, and *"deleting that --brief if it only cuts the first N. that's same
+as lying"* is the ruling that removed it — a prefix is not a summary, whatever it says
+about itself.
 
 **And stating it is not a licence to reduce by default** ([GUIDELINES](../../GUIDELINES.md)
 §8.4). This section's own defect was exactly that inference: the omission WAS stated, three

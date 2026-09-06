@@ -234,91 +234,23 @@ def _paragraphs(sections: list[object]) -> list[str]:
     ]
 
 
-@pytest.mark.pins("render_trace.every-trace-is-listed-even-when-it-is-not-drawn")
-def test_a_trace_the_budget_did_not_reach_is_still_a_row_with_its_own_counts():
-    """**Never drop a trace silently.** The budget decides how much of the
-    document a trace gets, never whether the reader is told it exists: every
-    root keeps its summary row, its addresses, its depth and its step count,
-    so a reader can see that a trace was walked and how big it is even where
-    its steps are not drawn. A root that vanished from this table would be a
-    walk the document denies, which is the second cardinal sin."""
-    traces = _many(20)
-    sections = _trace_sections(traces, REDACTOR, budget=50)
-    table = next(s for s in sections if isinstance(s, MachineTable))
-    assert len(table.rows) == 20
-    assert [row[-1] for row in table.rows].count((("text", "summary only"),)) > 0
-    assert (("code", "GET /order/19"),) in [row[0] for row in table.rows]
-
-
-@pytest.mark.pins("render_trace.a-budgeted-section-says-what-it-did-not-draw")
-def test_the_section_says_how_much_of_itself_it_drew_and_how_to_get_the_rest():
-    """M07: *"every reduced output states that it was reduced"*. The reduction
-    here is whole BLOCKS rather than steps inside a diagram, so it cannot ride
-    on `MachineDiagram.elides` — a block that is not drawn has no diagram to
-    carry a caption — and it is a sentence under the summary table instead,
-    where a reader meets the boundary. It names the count and the command,
-    because "what was left out" without "how to get it" is half an answer."""
-    sentence = " ".join(_paragraphs(_trace_sections(_many(20), REDACTOR, budget=50)))
-    assert "5 of 20 traces" in sentence
-    assert "IS THE BRIEF ONE" in sentence
-    assert "without --brief" in sentence
-
-
-def test_a_trace_that_is_drawn_is_drawn_whole():
-    """Half a trace is the under-report this section exists not to be, so the
-    budget is spent per TRACE and never per step: the last trace drawn takes
-    the total past the bound rather than stopping mid-walk."""
-    sections = _trace_sections(_many(20), REDACTOR, budget=50)
-    tables = [
-        entry.table
-        for section in sections
-        if hasattr(section, "entries")
-        for entry in section.entries
-        if entry.table is not None
-    ]
-    assert [len(table.rows) for table in tables] == [10] * 5
-
-
-def test_only_the_traces_drawn_in_full_carry_a_diagram():
-    """A diagram belongs to a block: a trace the brief document did not draw
-    has no diagram, rather than a diagram floating free of the steps it
-    draws."""
-    sections = _trace_sections(_many(20), REDACTOR, budget=50)
-    assert len([s for s in sections if isinstance(s, MachineDiagram)]) == 5
-
-
-@pytest.mark.pins("render_trace.the-default-document-draws-every-trace")
-def test_the_default_draws_every_trace_however_many_there_are():
-    """**The default is the whole truth** (GUIDELINES §8.4, ruled 2026-09-06:
+def test_every_trace_carries_a_diagram_however_many_there_are():
+    """**Completeness is the deliverable** (GUIDELINES §8.4, ruled 2026-09-06:
     *"we should be focused on telling the truth, not the amount of
-    information"*). This section shipped for one commit with the budget as its
-    DEFAULT, so a module with 160 roots documented 37 of them unless a reader
-    knew a flag existed — and the reader who did not know is exactly the one
-    who cannot tell an incomplete document from a complete one.
+    information"*). This section shipped for one commit with a step budget as
+    its DEFAULT, so a module with 160 roots documented 37 of them. The budget
+    survived one more day as `render --brief` and was deleted with it —
+    *"deleting that --brief if it only cuts the first N. that's same as
+    lying"* — because a prefix of the summary table in table order is an
+    arbitrary cut, not a summary.
 
-    Asserted with no `budget` argument at all, because the defect this pins is
-    a DEFAULT: passing `budget=None` here would test a value no caller passes
-    and would still pass on the day the default flipped back.
-
-    Sixty traces of ten steps, deliberately: at 600 steps the old default of
-    500 BITES, so restoring it drops ten traces and ten diagrams. The twenty
-    the tests above use total 200 steps and would fit inside the old bound
-    unchanged — a set too small to notice is how a ratchet passes over the
-    mutation it names."""
+    Sixty traces of ten steps, deliberately: 600 steps is past the 500 the old
+    bound spent, so a renderer that started counting again drops ten traces and
+    ten diagrams here.
+    """
     sections = _trace_sections(_many(60), REDACTOR)
     assert len([s for s in sections if isinstance(s, MachineDiagram)]) == 60
     assert "Every trace is rendered in full" in " ".join(_paragraphs(sections))
-    assert "BRIEF" not in " ".join(_paragraphs(sections))
-
-
-def test_the_brief_section_is_byte_identical_across_two_renders():
-    """NFR-1 over the selection itself: which traces are drawn is a function
-    of their order and their step counts, both fixed by `roots`, so two runs
-    over one workspace choose the same ones."""
-    traces = _many(20)
-    assert _trace_sections(traces, REDACTOR, budget=50) == _trace_sections(
-        traces, REDACTOR, budget=50
-    )
 
 
 # --- the arrow lands where the walk went ----------------------------------

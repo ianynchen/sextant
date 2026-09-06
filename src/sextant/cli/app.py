@@ -96,26 +96,15 @@ def module_analyze(path: Path, workspace_dir: Path | None, allow_resolve: bool) 
 @module.command("render")
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("--workspace", "workspace_dir", type=click.Path(path_type=Path), default=None)
-@click.option(
-    "--brief",
-    "brief",
-    is_flag=True,
-    default=False,
-    help=(
-        "Draw only the step budget's worth of traces in `## Traces`, instead of "
-        "every one. The document is then INCOMPLETE and says so: the section "
-        "names how many of how many it drew and how to get the default document. "
-        "Every trace keeps its summary row either way. Without this flag a module "
-        "with 160 endpoints renders a 711 KB document with 160 trace diagrams, "
-        "which is the truth about that module."
-    ),
-)
-def module_render(path: Path, workspace_dir: Path | None, brief: bool) -> None:
+def module_render(path: Path, workspace_dir: Path | None) -> None:
     """Reads the workspace `analyze` left behind — it never re-detects,
     re-scans, or re-resolves (M00 "no analysis"; the workspace persists
-    precisely so render is a cheap read)."""
+    precisely so render is a cheap read).
+
+    It takes no display flag: one module, one document, and that document is
+    the complete one (GUIDELINES §8.4)."""
     try:
-        result = api._render(path, workspace_dir=workspace_dir, brief=brief)
+        result = api._render(path, workspace_dir=workspace_dir)
     except api.SextantError as refused:
         raise click.ClickException(str(refused)) from refused
     click.echo(str(result.markdown))

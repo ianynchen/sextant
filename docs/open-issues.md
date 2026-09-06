@@ -62,9 +62,11 @@ overturned rather than forgotten:
   requires a stated omission, and this one was stated three ways. Nothing written
   down said the default must be the complete form. GUIDELINES **§8.4** is that
   missing rule, and it ships with the audit list §8.3 requires — one live entry, the
-  budget itself, closed the same day. If this judgement is ever overturned the
-  consequence is §13.8 step 3, not another correction: the rule now exists and is
-  ratcheted by `render_trace.the-default-document-draws-every-trace`.
+  budget itself, closed the same day and its site deleted the day after with
+  `render --brief`. If this judgement is ever overturned the consequence is §13.8
+  step 3, not another correction: the rule now exists, and what enforces it is
+  that there is no bound left in `## Traces` to flip — the guard that ratcheted the
+  default went with the behaviour it pinned.
 
 - **Stage 4 measured `microprofile-graphql`'s naming rule, found it WRONG, and shipped
   the wrong rule anyway** (`OI-5`). Brushes the cardinal sin directly: a wrong address
@@ -623,20 +625,19 @@ terminals. **Falsified by** a real module deeper than 64 edges, which would make
 the depth bound a live under-report rather than a latent one.
 
 **Checked against the trace step budget and UNAFFECTED — deliberately, and
-re-checked when §8.4 made that budget `--brief`'s alone.** The budget looks like
-a fifth stop and is not one: it bounds the DOCUMENT, never the walk. Every trace
-is walked in full, every trace keeps its summary row with the depth and step
-count that walk found, and a trace the budget did not reach is not drawn rather
-than cut short — a trace is drawn whole or not at all. So FR-6's subject, where
-a trace stops, is untouched, and the two claims stay separate columns: `Complete`
-is the WALK's answer (its only "no" is still the depth bound) and `Detail` is
-this document's. A budget that had truncated a trace's steps would have been a
-fifth stop reason and a change to this row; it was rejected for exactly that
-reason. Inverting the default touched neither column, and the `--brief` document
-still reports every walk's `Complete` — but the inversion does raise this row's
-priority rather than lower it: `DEFAULT_MAX_DEPTH` is now the ONLY bound left on
-the default document, which is why GUIDELINES §8.4's audit list names it and
-files it as a termination bound rather than a size one.
+re-checked twice: when §8.4 made that budget `render --brief`'s alone, and when
+the flag was deleted and the budget with it.** The budget looked like a fifth
+stop and never was one: it bounded the DOCUMENT, never the walk. Every trace was
+walked in full, every trace kept its summary row with the depth and step count
+that walk found, and a trace the budget did not reach was not drawn rather than
+cut short. So FR-6's subject, where a trace stops, was untouched throughout, and
+the two claims stay separate columns: `Complete` is the WALK's answer (its only
+"no" is still the depth bound) and `Detail` is this document's. A budget that
+had truncated a trace's steps would have been a fifth stop reason and a change
+to this row; it was rejected for exactly that reason. Removing the budget
+altogether raises this row's priority rather than lowers it: `DEFAULT_MAX_DEPTH`
+is the ONLY bound left anywhere on the document, which is why GUIDELINES §8.4's
+audit list names it and files it as a termination bound rather than a size one.
 
 ### OI-29 — `analyze` over a workspace whose graph schema moved crashes instead of rebuilding
 **Major · introduced 2026-09-06 by 2Q's close, defect 1; found the same day by
@@ -684,7 +685,9 @@ no diagram is: what is expensive is when the rendering happens, and how much
 JavaScript rides along to do it. Recording it because it is the cost that made
 bounding the document look attractive in the first place — and because
 GUIDELINES §8.4's audit list names it as the one entry whose close must never be
-"draw less".
+"draw less". **That is now the only close available**: `render --brief`, the one
+command that produced a smaller HTML, was deleted 2026-09-06, so this row's
+priority rises and its close condition does not move.
 **Closes by** rendering each diagram lazily — an `IntersectionObserver` over
 `pre.mermaid` calling `mermaid.run({ nodes: [node] })` on approach, with
 `panzoom.js`'s `fit()` moving from the one global
@@ -761,6 +764,16 @@ recorded "it fits" or a stated, `MAX_RESULT_BYTES`-style cap on the document the
 brief carries. `--dry-run` writes that file already, so the measurement is one
 command. **Falsified by** the brief fitting comfortably, which turns this row
 into a recorded bound.
+
+**Checked against the deletion of `render --brief` and NOT closed by it
+(2026-09-06).** The flag never reached this path: `_assembled_sections` has
+always handed `enrich` the complete document, so deleting the flag changes
+neither the 711 KB nor the fact that nothing has measured it — this row's close
+is still one `enrich --dry-run` and a token count. What the deletion does change
+is the shape of the answer if that measurement comes back over the limit: there
+is no longer a bounded rendering to reach for, so a cap here would be a new,
+separately argued bound on what a MODEL is handed, and §8.4's audit list is
+where it would have to be entered.
 
 ### OI-26 — `SEXTANT_VERSION` is declared three times
 **Minor · found 2026-09-06 by 2Q `G4` while verifying OI-24 ·
@@ -963,12 +976,22 @@ truth, not the amount of information"* — and the register's own suggested clos
 There was never a budget the document needed.
 
 **Closed by inverting the default rather than by any of the three renderings
-this row proposed.** `## Traces` now draws all 160; the budget survives as
-`render --brief` alone; `BRIEF_TRACE_STEP_BUDGET` is the constant's new name and
-`scripts/guard_check.py`'s `render_trace.the-default-document-draws-every-trace`
-is what stops it flipping back. Its own falsifier — *"a reader who could not find
-what they needed in the summary row and did not know the flag existed"* — is now
-unreachable by construction, since nothing is left out to find.
+this row proposed.** `## Traces` now draws all 160. Its own falsifier — *"a
+reader who could not find what they needed in the summary row and did not know
+the flag existed"* — is now unreachable by construction, since nothing is left
+out to find.
+
+**Amended 2026-09-06, same day: the budget is gone rather than opt-in.** The
+close above left it as `render --brief`, ratcheted by
+`render_trace.the-default-document-draws-every-trace`; the user then deleted the
+flag — *"deleting that --brief if it only cuts the first N. that's same as
+lying"* — because what it drew was a prefix of the summary table in table order,
+which no in-band statement turns into a summary. `BRIEF_TRACE_STEP_BUDGET`, the
+`trace_step_budget` parameter, the CLI flag, the banner and the three guards
+that pinned the bounded form are all deleted; there is one render and it is the
+complete one. This row stays CLOSED and its close is now stronger, not weaker.
+A trimmed document is enrichment work — *"that's a different story and a
+different ask"* — and would be an overlay, never a render flag.
 
 **The lesson is in GUIDELINES §8.4 and not in this row**: the omission was
 stated three ways (a `Detail` column, a sentence, M07) and the default was still
