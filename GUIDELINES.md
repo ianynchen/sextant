@@ -390,7 +390,14 @@ The difference between 3 and 4 matters. A *new* rule needs the backlog it now go
 
 **The worked example is this rule's own second occurrence, and it is uncomfortable.** A deployment default was read as a code fact twice: Spring Boot Actuator's `management.endpoints.web.exposure.include`, then Tomcat's connector `allowTrace`. The RUNBOOK entry recorded the second correctly, generalised it correctly, and even *named the principle it violated* — "§8's 'exclude only on proof, never on inference' is the same rule read from the other end" — and then the work continued. The analysis was right, written down, and inert. §8.2 exists because a human raised it afterwards, not because the record did. **Naming the violated principle IS the trigger; it is not the conclusion.**  
 
-On the **third**, stop and raise it with your human partner. Do not fix it and continue. A defect class recurring three times is evidence of a systemic cause — a wrong assumption, a missing rule, a misleading document — and **fixing instances is what prevents you from finding it**. Each individual fix is correct, feels like progress, and leaves the cause untouched.  
+**A principle violation counts on a shorter fuse. Ruled 2026-09-06 (user): stop
+at the SECOND.** A recurring *error* may be a hard problem; a recurring *violation
+of a rule we already wrote and agreed* is evidence the rule has no enforcement,
+and a third instance buys nothing the second did not already prove. Count
+violations in `docs/open-issues.md`, where they are visible to someone other than
+the agent that committed them.
+
+On the **third** occurrence of an error class, stop and raise it with your human partner. Do not fix it and continue. A defect class recurring three times is evidence of a systemic cause — a wrong assumption, a missing rule, a misleading document — and **fixing instances is what prevents you from finding it**. Each individual fix is correct, feels like progress, and leaves the cause untouched.  
 
 **Count by cause, not by symptom.** "Cited a mechanism that does not exist" and "assumed a mechanism's behaviour from its name" look like two bugs and are one cause — treating documentation as evidence about code. Counted separately, both stay below the threshold forever.  
 

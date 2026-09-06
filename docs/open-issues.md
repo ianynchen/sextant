@@ -18,6 +18,30 @@ describe that code does not implement. `docs/COVERAGE.md` states BOUNDARIES: wha
 we cannot see and say so. **This file holds what is WRONG**, whether or not it is
 also stated elsewhere.
 
+**Not an issue: a fact or table whose reader is planned in the roadmap.** Ruled
+2026-09-06 (user): *"as long as reader is planned in the roadmap, it's not an
+issue, simply because the planning is not aligned yet."* A producer that ships
+before its consumer is a sequencing artefact, not a defect — PROVIDED the consumer
+is a named item in `docs/superpowers/plans/`. A producer whose consumer is named
+nowhere is the `detect.coordinates` defect and stays an issue.
+
+**Stop rules (§13.8).** Third occurrence of an error class → stop and raise.
+**Second principle violation → stop and raise.** The running count is below and is
+kept here rather than in an agent's head.
+
+### Principle-violation count: 0 confirmed
+
+Two candidates were judged NOT violations and are recorded so the judgement can be
+overturned rather than forgotten:
+- **`entry_point` ships as a `RootKind` member with no producer** (OI-22). §5.3's
+  defect is an *unstated* claim; this one is stated in D00, COVERAGE §7, the enum,
+  a test asserting no such row can appear, and its own register row. Producing it
+  would have required a language rule in `resolve/`, which ARCHITECTURE §10
+  forbids — so the alternative was violating a different principle.
+- **F2's merge changed behaviour for 38 catalogs and moved zero tests** (OI-12).
+  Brushes §10. Judged a coverage gap rather than a violation because the widening
+  is a union of declarations already shipped elsewhere, and it is registered.
+
 Severity: **Critical** = publishes a wrong row a reader would act on ·
 **Major** = wrong under a realistic input, or a silent drop · **Minor** = stale
 prose or a latent shape with no live consequence.
