@@ -846,31 +846,6 @@ and still right for the reason its OTHER half gives: an ungated walk synthesises
 a listener onto every implementer, which is a different fabrication from this
 under-report.
 
-### OI-40 — `@SqsListener` grew a class-level, polymorphic form and the catalog says it has none
-**Major · found 2026-09-06 by Stage 4 batch 2 (CP-17 rows 2e/2f, 4e/4f, 5f, 6f) ·
-`src/sextant/catalogs/spring-sqs.yml`**
-
-`io.awspring.cloud:spring-cloud-aws-sqs` 4.1.1 ships
-`io.awspring.cloud.sqs.annotation.SqsHandler` and widens `@SqsListener`'s
-`@Target` from `{METHOD}` to `{METHOD, TYPE}`; its post-processor takes the
-class-level annotation's `value()` as the queue names of a
-`MultiMethodSqsEndpoint` and dispatches to every `@SqsHandler` method of the
-class. That is `spring-kafka.yml`'s class-level shape one framework over, and
-`spring-sqs.yml` states in a comment that *"No class-level listener shape for
-SQS"* exists — true at 3.1.1, where `SqsHandler` is ABSENT FROM THE JAR and
-`@Target` is `{METHOD}` alone, and **false at 4.1.1**.
-
-**Cost:** every `@SqsHandler` method in a module on Spring Cloud AWS 4.x is
-absent from the export — a silent drop of a whole shape rather than one
-attribute, and the class-level `@SqsListener` that names the queue derives
-nothing either, because the derivation joins method symbols only.
-**Closes by** the `spring-kafka.yml` shape: `prefix_from` on the listener's own
-address aliases, `prefix_annotation` naming `@SqsListener`, and an `@SqsHandler`
-entry carrying no address of its own. Nothing needs a version constraint — code
-built against 3.1.1 cannot carry an annotation that artifact does not declare.
-**Falsified by** a class-level `@SqsListener` + `@SqsHandler` bean appearing in
-an export.
-
 ### OI-41 — the probe-provenance rule accepted a version spelling it could not then verify
 **Minor · found and FIXED 2026-09-06 by Stage 4 batch 2 ·
 `tests/architecture/test_probe_provenance.py`**
@@ -896,6 +871,56 @@ least afford.
 
 
 ## CLOSED
+
+### OI-40 — `@SqsListener` grew a class-level, polymorphic form and the catalog said it had none
+**Major · found and CLOSED 2026-09-06 by Stage 4 batch 2 ·
+`scripts/probes/cp17_containers_and_class_level.md`,
+`src/sextant/catalogs/spring-sqs.yml`**
+
+`io.awspring.cloud:spring-cloud-aws-sqs` **4.1.1** ships
+`io.awspring.cloud.sqs.annotation.SqsHandler` and widens `@SqsListener`'s
+`@Target` from `{METHOD}` to `{METHOD, TYPE}`; its post-processor takes the
+class-level annotation's own `value()` as the queue names of a
+`MultiMethodSqsEndpoint` and dispatches to every `@SqsHandler` method of the
+class. That is `spring-kafka.yml`'s class-level shape one framework over, and
+`spring-sqs.yml` stated in a comment that *"No class-level listener shape for
+SQS"* exists.
+
+**The comment was true when it was written and had stopped being true**, which
+is the version-scope failure §5.4 exists for and is why it took a probe rather
+than a review to find. CP-17 rows 2e/2f, 4e/4f and 5f measure the three halves
+in the class files, and row 6f is the branch itself, out of the sources jar —
+against row 6e, the *same method* at 3.1.1, which has no `classListener` at all.
+
+**Cost while it stood:** every `@SqsHandler` method in a module on Spring Cloud
+AWS 4.x was absent from the export, and so was the class-level `@SqsListener`
+that names the queue, because the derivation joins method symbols only. A whole
+shape missing, not an attribute of one.
+
+**Closed** by the `spring-kafka.yml` shape, as the row asked: `prefix_from:
+[value, queueNames]`, `prefix_annotation` naming `@SqsListener`, and an
+`@SqsHandler` entry carrying no address of its own. **No version constraint**,
+per the plan's own rule — code built against 3.1.1 cannot carry an annotation
+that artifact does not declare, and a class-level `@SqsListener` is illegal
+there under `@Target(METHOD)`, so the entries are inert against a 3.x module
+rather than wrong about one. One test and one §10 near-miss, the guard
+`spring-sqs.class-level-listener-is-the-prefix` mutation-proved to kill.
+
+**CP-17 gained a family in the course of closing this**, which is worth
+recording because it is §8.1 rule 4 catching a real omission mid-fix: the `sqs`
+family asks `@Repeatable` of `@SqsListener` and reads `@SqsHandler`'s
+attributes only, so the new handler entry would have declined a container on no
+evidence. Rows 2n and 3n answer it — `@Target(METHOD)`, no `@Repeatable`, no
+`SqsHandlers` in the jar — and appending the family left every earlier row
+letter naming the same cell, checked by diffing the two runs rather than assumed.
+
+**The residual boundaries, stated in `docs/COVERAGE.md` rather than left
+silent:** a class-level listener naming more than one queue is read element-0
+only (`spring-kafka.yml`'s own limitation, and row 6f shows the framework
+resolving all of them), and a class carrying BOTH a class-level and a
+method-level `@SqsListener` composes the two where the framework registers them
+independently — the same seam `spring-kafka.yml` and `spring-rabbit.yml` already
+carry a row for.
 
 ### OI-38 — a second `@PulsarListener` written into the container derived nothing
 **Major · found and CLOSED 2026-09-06 by Stage 4 batch 2 ·

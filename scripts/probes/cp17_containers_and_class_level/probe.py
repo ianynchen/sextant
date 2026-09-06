@@ -227,6 +227,25 @@ _FAMILIES = (
         setters="org/springframework/amqp/rabbit/listener/",
         source=None,
     ),
+    # Added after the first run, when closing `OI-40` needed a question the
+    # `sqs` family does not carry: that family asks `@Repeatable` of
+    # `@SqsListener` and reads `@SqsHandler`'s ATTRIBUTES only, so
+    # `spring-sqs.yml`'s new handler entry would have declined a container on
+    # no evidence — which is the omission §8.1 rule 4 forbids and the one the
+    # two families below already answer for the other two frameworks. The
+    # `sqs` family is left exactly as it was rather than widened, so the row
+    # letters every verdict cites still name the same cells.
+    Family(
+        key="sqs-handler",
+        group="io.awspring.cloud",
+        artifact="spring-cloud-aws-sqs",
+        annotation="io.awspring.cloud.sqs.annotation.SqsHandler",
+        container="io.awspring.cloud.sqs.annotation.SqsHandlers",
+        handler=None,
+        post_processor="io.awspring.cloud.sqs.annotation.SqsListenerAnnotationBeanPostProcessor",
+        setters="io/awspring/cloud/sqs/config/",
+        source=None,
+    ),
 )
 
 
@@ -442,6 +461,13 @@ def q5_what_the_post_processor_reads(artifact: Artifact, family: Family) -> str:
     output = _javap("-p", "-c", family.post_processor, classpath=artifact.jar)
     if output is None:
         return _ABSENT
+    if _javap("-p", family.annotation, classpath=artifact.jar) is None:
+        # The annotation itself is not in this jar, so a post-processor that
+        # never mentions it is the ONLY possible answer and an abort here would
+        # be the harness refusing its own finding. Checked against the archive
+        # rather than against an empty marker set, so a post-processor that
+        # really does read nothing still aborts.
+        return f"{_ABSENT} — the annotation this question reads for is not in this jar"
     seen: dict[str, None] = {}
     for line in output.splitlines():
         step = _step(line)

@@ -10,11 +10,18 @@ detect:
 measured:
   - { artifact: io.awspring.cloud:spring-cloud-aws-sqs, versions: ["3.1.1"],
       identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
+  # A SECOND row rather than a widened first one: CP-12 measured the `@AliasFor`
+  # pair and CP-17 measured the class-level shape, and a reader of a `by:` needs
+  # to reach the probe that asked the question, not the one that asked another.
+  - { artifact: io.awspring.cloud:spring-cloud-aws-sqs, versions: ["3.1.1", "4.1.1"],
+      identity: reported, by: scripts/probes/cp17_containers_and_class_level.md }
 
 requires: [annotation_args, typed_signatures]
 
 matches:
-  # No type-level gate: `@SqsListener` sits on the method directly.
+  # No type-level gate: a listener method carries its own `@SqsListener` (or, on
+  # a class-level, polymorphic listener, `@SqsHandler`) directly — there is no
+  # marker interface or class annotation every listener shares.
   request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
                   fallback: sole_unannotated,
                   excludes: [io.awspring.cloud.sqs.listener.acknowledgement.Acknowledgement] }
@@ -40,15 +47,67 @@ matches:
     # First-alias-wins is `value`, and that mirrors `@AliasFor`: Spring refuses
     # an annotation setting both to different values, so the two can never
     # disagree on a declaration the framework would accept.
+    #
+    # CP-17 rows 5e/5f and 6e/6f confirm the read at a SECOND version and show
+    # why only one spelling appears in the disassembly: the post-processor calls
+    # `SqsListener.value()` and never `queueNames()`, because the merge happens
+    # inside `AnnotatedElementUtils.findMergedAnnotation` and `value` is the
+    # spelling that survives it. That is the `@AliasFor` working, not a third
+    # rule.
     path_from: [value, queueNames]
-    # No class-level listener shape for SQS — no prefix annotation to declare.
-    prefix_from: []
+    # CLASS-LEVEL `@SqsListener` + `@SqsHandler`, the `spring-kafka.yml` shape
+    # one framework over. This file said "No class-level listener shape for
+    # SQS", which was true at 3.1.1 and FALSE at 4.1.1 (`OI-40`), and the
+    # framework's own bytes are what say so — CP-17 rows 2e/2f read `@Target`
+    # widening from `{METHOD}` to `{METHOD, TYPE}`, rows 4e/4f read
+    # `io.awspring.cloud.sqs.annotation.SqsHandler` as ABSENT FROM THE JAR at
+    # 3.1.1 and declaring `isDefault(): boolean` at 4.1.1, and row 6f is the
+    # branch itself:
+    #
+    #   A classListener = findMergedAnnotation(targetClass, getAnnotationClass());
+    #   if (hasClassLevelListeners) { Set<Method> handlerMethods = getHandlerMethods(targetClass);
+    #     createAndConfigureMultiMethodEndpoint(bean, targetClass, classListener, …); }
+    #
+    # — against row 6e, the same method at 3.1.1, which has no `classListener`
+    # at all. The endpoint takes its queue names from the CLASS-level
+    # annotation's own `value()`, so the class-level listener doubles as the
+    # prefix for every `@SqsHandler` the class declares (the known limitation
+    # `spring-kafka.yml` states: element 0 only, for a multi-queue class-level
+    # listener).
+    #
+    # NO version constraint, and the plan's rule is why: code built against
+    # 3.1.1 cannot carry an annotation that artifact does not declare, and a
+    # class-level `@SqsListener` is illegal there under `@Target(METHOD)`. The
+    # entries below are inert against a 3.x module rather than wrong about one.
+    prefix_from: [value, queueNames]
+    # DELIBERATELY no `path_separator`, `spring-kafka.yml`'s reason exactly: the
+    # prefix above is a QUEUE NAME, and a queue name has no segments to join. A
+    # `/` at this seam would invent a destination no broker carries. An
+    # `@SqsHandler` — carrying no queue attribute at all, so an empty suffix —
+    # is then the class-level queue unchanged.
     method_from: method
     # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
     all_methods: []
-    prefix_annotation: null
+    prefix_annotation: io.awspring.cloud.sqs.annotation.SqsListener
     annotations:
+      # A plain, method-level `@SqsListener` — the ordinary listener shape.
+      #
+      # It declares NO container, and the absence is a measured claim rather
+      # than an omission: CP-17 rows 2e/2f read no `@Repeatable` on it at either
+      # version, and rows 3e/3f looked for an `io.awspring.cloud.sqs.annotation
+      # .SqsListeners` and found none (§8.1 rule 4).
       - { fqn: io.awspring.cloud.sqs.annotation.SqsListener }
+      # `@SqsHandler` carries no queue attribute of its own (path suffix ''),
+      # and reaches a destination only through the class-level prefix above.
+      # CP-17 rows 4f and 5f: it declares `isDefault(): boolean` and nothing
+      # else — the `@KafkaHandler`/`@RabbitHandler` declaration exactly — and
+      # the 4.1.1 post-processor references the class and calls `isDefault()`.
+      #
+      # It declares NO container, and that is its OWN measurement rather than
+      # the listener's: rows 2n and 3n — added to CP-17 for exactly this
+      # question — read `@Target(METHOD)` with no `@Repeatable` on it, and found
+      # no `io.awspring.cloud.sqs.annotation.SqsHandlers` in the jar.
+      - { fqn: io.awspring.cloud.sqs.annotation.SqsHandler }
 
 # Copied verbatim from spring-resttemplate.yml: shape (type) expansion is a
 # *global*, insert-if-absent pass keyed on the type symbol alone

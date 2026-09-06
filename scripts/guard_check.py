@@ -813,6 +813,25 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "spring-sqs.class-level-listener-is-the-prefix": Guard(
+        what="a class-level `@SqsListener` is declared as the prefix annotation, so the queue "
+        "it names reaches every `@SqsHandler` method of the class",
+        why="`OI-40`. spring-cloud-aws-sqs 4.1.1 ships `@SqsHandler` and widens "
+        "`@SqsListener`'s `@Target` to include `TYPE`, and its post-processor builds a "
+        "`MultiMethodSqsEndpoint` from the class-level annotation's own `value()` (CP-17 rows "
+        "2f, 4f and 6f). `@SqsHandler` carries no address of its own, so with no prefix "
+        "annotation declared the composed address is empty and the addresses-nothing gate "
+        "withholds the row — the handler is ABSENT from the export rather than present with a "
+        "blank queue, which is the harder of the two for a reader to notice. The weakening "
+        "restores the `null` this file shipped for a year",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-sqs.yml",
+                find="    prefix_annotation: io.awspring.cloud.sqs.annotation.SqsListener",
+                replace="    prefix_annotation: null",
+            ),
+        ),
+    ),
     "spring-pulsar.container-is-the-frameworks-own": Guard(
         what="`container` names the annotation Spring for Apache Pulsar ACTUALLY reads a "
         "second `@PulsarListener` out of",

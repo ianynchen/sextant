@@ -14,6 +14,25 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **SQS listeners have a class-level, polymorphic form, and this catalog said they had
+  none** (`OI-40`) — Stage 4's per-catalog pass, measured by **CP-17** at
+  spring-cloud-aws-sqs 3.1.1 and 4.1.1. `io.awspring.cloud.sqs.annotation.SqsHandler` was
+  added at 4.1.1, `@SqsListener`'s `@Target` widened from `{METHOD}` to `{METHOD, TYPE}`, and
+  the post-processor grew a branch that builds a `MultiMethodSqsEndpoint` from the
+  **class-level** annotation's own `value()` and dispatches to every `@SqsHandler` method —
+  read verbatim out of the sources jar, against the *same method* at 3.1.1, which has no such
+  branch. `spring-sqs.yml`'s comment was true when it was written and had stopped being true,
+  which is the version-scope failure §5.4 exists for; every `@SqsHandler` method in a 4.x
+  module was absent from the export. Closed with the `spring-kafka.yml` prefix shape, and
+  **no version constraint** — code built against 3.1.1 cannot carry an annotation that
+  artifact does not declare.
+
+  Also measured and found CORRECT: the `value`/`queueNames` `@AliasFor` pair at a second
+  version, confirmed *by omission* — the post-processor reads `value()` alone at both, because
+  the merge happens inside `findMergedAnnotation`. And `@SqsListener` names no container in
+  any of its three spellings, which CP-17 measured rather than assumed. One new guard,
+  mutation-proved: `spring-sqs.class-level-listener-is-the-prefix`.
+
 - **Spring for Apache Pulsar's second inbound annotation, and its container** — Stage 4's
   per-catalog pass, measured by **CP-17**
   (`scripts/probes/cp17_containers_and_class_level.md`, spring-pulsar 1.2.11 and 2.0.7,

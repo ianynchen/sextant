@@ -5146,6 +5146,64 @@ def test_the_legacy_sqs_catalog_declines_the_current_annotation(tmp_path: Path):
     assert rows == []
 
 
+_SQS_HANDLER = "io/awspring/cloud/sqs/annotation/SqsHandler#"
+
+
+@pytest.mark.pins("spring-sqs.class-level-listener-is-the-prefix")
+def test_a_class_level_sqs_listener_gives_its_queue_to_every_sqs_handler(tmp_path: Path):
+    """`OI-40`. spring-cloud-aws-sqs **4.1.1** widened `@SqsListener`'s
+    `@Target` from `{METHOD}` to `{METHOD, TYPE}` and shipped `@SqsHandler`
+    (CP-17 rows 2e/2f and 4e/4f), and its post-processor grew the branch that
+    builds a `MultiMethodSqsEndpoint` from the CLASS-level annotation's own
+    `value()` and dispatches to every `@SqsHandler` method (row 6f, against row
+    6e's same method at 3.1.1 which has no such branch at all).
+
+    So this is the `spring-kafka.yml` polymorphic shape one framework over, and
+    the catalog said in as many words that SQS has none — true at 3.1.1, false
+    at 4.1.1, and every `@SqsHandler` method in a 4.x module was absent from the
+    export. The queue name is composed BARE, with no separator: a queue name has
+    no segments, and a `/` here would invent a destination no broker carries."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-sqs")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_CURRENT_SQS: {"value": ["orders-queue"]}},
+        method_annotations={_SQS_HANDLER: {}},
+    )
+
+    assert [(r["protocol"], r["path"], r["handler"]) for r in rows] == [
+        ("sqs", "orders-queue", _LISTENER_METHOD)
+    ]
+
+
+@pytest.mark.declines("spring-sqs")
+@pytest.mark.pins("derive_endpoints.addresses-nothing")
+def test_an_sqs_handler_on_a_class_carrying_no_listener_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the polymorphic matcher above, negating its second
+    conjunct: the method is annotated exactly as a real handler is, and the
+    enclosing class carries no `@SqsListener`.
+
+    `@SqsHandler` declares `isDefault(): boolean` and nothing else (CP-17 row
+    4f/1n), so the only thing such a row could carry is the EMPTY address — a
+    resolved endpoint addressing nothing. The framework derives nothing here
+    either: row 6f registers the multi-method endpoint only under
+    `hasClassLevelListeners`, so a handler with no class-level listener above it
+    reaches no container at all.
+
+    Paired positive:
+    `test_a_class_level_sqs_listener_gives_its_queue_to_every_sqs_handler`."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-sqs")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_SQS_HANDLER: {"isDefault": True}},
+    )
+
+    assert rows == []
+
+
 _ENDPOINT = "org/springframework/boot/actuate/endpoint/annotation/Endpoint#"
 _READ_OPERATION = "org/springframework/boot/actuate/endpoint/annotation/ReadOperation#"
 _WRITE_OPERATION = "org/springframework/boot/actuate/endpoint/annotation/WriteOperation#"

@@ -5,7 +5,10 @@
 # ../cp17_containers_and_class_level.md for the questions, the version scope and
 # the verdicts.
 #
-# THE QUESTION, asked once of seven annotation families. The vocabulary pass
+# THE QUESTION, asked once of eight annotation families (seven at the first
+# run; `sqs-handler` was added when closing `OI-40` needed a question the
+# `sqs` family does not carry, and appending it left every earlier row letter
+# naming the same cell). The vocabulary pass
 # shipped `mapping.annotations[].container`, and its report then listed four
 # annotations whose repeatability NOTHING had measured — `@PulsarListener`,
 # `@SqsListener`, `@KafkaHandler`, `@RabbitHandler` — converting four grammar
