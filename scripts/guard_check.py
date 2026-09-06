@@ -607,6 +607,41 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "spring-integration.channels-are-the-channel-attributes": Guard(
+        what="`channels` names the annotation arguments that ARE a channel, and nothing else",
+        why="`sendTimeout` is a real `@ServiceActivator` attribute, it is a `String` exactly "
+        "as the two channel attributes are, and it is not a channel. Reading it files a "
+        "`channel_destination` question about a channel called `3000` — sending the "
+        "enrichment seat after a destination for a send timeout, in the one table whose "
+        "whole purpose is to be answered by a human",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-integration.yml",
+                find="        - { annotation: org.springframework.integration.annotation."
+                "ServiceActivator,\n            arg: inputChannel, direction: inbound }",
+                replace="        - { annotation: org.springframework.integration.annotation."
+                "ServiceActivator,\n            arg: inputChannel, direction: inbound }\n"
+                "        - { annotation: org.springframework.integration.annotation."
+                "ServiceActivator,\n            arg: sendTimeout, direction: inbound }",
+            ),
+        ),
+    ),
+    "config_join.channel-target-is-a-method": Guard(
+        what="an `annotation_value` channel counts only where the annotation's target is a "
+        "METHOD — a use on an annotation TYPE is a composition, not a wired handler",
+        why="a channel annotation is `@Target`-legal on an annotation type, which is how a "
+        "module composes its own stereotype. Nothing subscribes there, so the question "
+        "carries a handler symbol that names no method — and the enrichment seat is asked "
+        "for the destination of a channel nobody reads. "
+        "`scheduled_work.declaration-is-a-method` is the same conjunct one table over",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="        if target not in methods:",
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "jakarta-servlet.every-type-is-spelled-jakarta": Guard(
         what="every type `jakarta-servlet.yml` names is spelled `jakarta`, the API it describes",
         why="the mirror leak: a `javax` name kept in the jakarta catalog would match legacy "

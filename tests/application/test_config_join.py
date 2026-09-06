@@ -2298,3 +2298,172 @@ def test_a_channel_row_takes_the_same_seam_from_its_own_channel_rule(tmp_path: P
     workspace.close()
 
     assert rows == {"inbound": "/orders", "outbound": "orders"}
+
+
+# --- the SHIPPED `spring-integration` catalog ------------------------------
+#
+# Everything above is invented on purpose. This section is the other half:
+# what the file Sextant actually ships answers, in the framework's own
+# spellings, so a change to those spellings fails here rather than silently
+# covering nothing.
+
+_SI = "org/springframework/integration/annotation/"
+_SERVICE_ACTIVATOR = _SI + "ServiceActivator#"
+_INBOUND_ADAPTER = _SI + "InboundChannelAdapter#"
+_FLOW = "com/acme/orders/OrderFlow#"
+
+
+def _spring_integration() -> Catalog:
+    return next(
+        catalog
+        for catalog in YamlCatalogSource(CATALOGS_DIR).load()
+        if catalog.id == "spring-integration"
+    )
+
+
+def _flow_method(name: str) -> SymbolFact:
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=f"{_MODULE}{_FLOW}{name}(sig_{name}).",
+        construct_kind=ConstructKind.METHOD,
+        enclosing=_MODULE + _FLOW,
+        signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+    )
+
+
+def _flow_annotation(
+    args: dict[str, object],
+    *,
+    annotation: str = _SERVICE_ACTIVATOR,
+    target: str = f"{_FLOW}handleOrder(sig_handleOrder).",
+) -> AnnotationFact:
+    return AnnotationFact(
+        document_id="doc_1",
+        target=_MODULE + target,
+        use=AnnotationUse(annotation=annotation, args=args),
+        retention="RUNTIME",
+    )
+
+
+def test_the_shipped_catalog_files_a_question_for_every_channel_and_derives_no_wire(
+    tmp_path: Path,
+):
+    """The deliverable, whole (2O design §5). This catalog declares no `key`,
+    because Spring Integration defines no standard configuration key for a
+    channel's destination — a template here would be a PROJECT convention. So
+    it derives nothing at all, and every channel the code names becomes a
+    `channel_destination` question carrying the channel and the handler.
+
+    The two shapes measured by the probe are both here: the service
+    activator's `inputChannel`/`outputChannel` (Q2, Q3 — the same literal the
+    adapter's own `setOutputChannelName` writes) and the polled adapter's
+    `channel` (Q2). Never a fabricated wire, never `peer: in-process`."""
+    workspace = _workspace(
+        tmp_path,
+        [
+            _flow_method("handleOrder"),
+            _flow_method("tick"),
+            _flow_annotation(
+                {"inputChannel": "amqpInputChannel", "outputChannel": "amqpAuditChannel"}
+            ),
+            _flow_annotation(
+                {"channel": "tickChannel"},
+                annotation=_INBOUND_ADAPTER,
+                target=f"{_FLOW}tick(sig_tick).",
+            ),
+        ],
+    )
+    catalog = _spring_integration()
+    config_join.run(workspace, catalog)
+    questions = config_join.gaps(workspace, catalog)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert [(q["protocol"], q["path"], q["question"]) for q in questions] == [
+        ("amqp", "amqpAuditChannel", "channel_destination"),
+        ("amqp", "amqpInputChannel", "channel_destination"),
+        ("amqp", "tickChannel", "channel_destination"),
+    ]
+    assert json.loads(questions[1]["candidates"]) == [
+        {
+            "channel": "amqpInputChannel",
+            "handler": f"{_MODULE}{_FLOW}handleOrder(sig_handleOrder).",
+        }
+    ]
+
+
+@pytest.mark.declines("spring-integration")
+@pytest.mark.pins("spring-integration.channels-are-the-channel-attributes")
+def test_a_service_activator_naming_no_channel_attribute_asks_nothing(tmp_path: Path):
+    """`sendTimeout` is a real `@ServiceActivator` attribute, it is a `String`
+    exactly as the two channel attributes are, and it is not a channel. Every
+    conjunct but one is satisfied here — the shipped annotation, on a method,
+    with a string argument written — which is what makes this a near-miss
+    rather than an empty input.
+
+    Reading it would file a question about a channel called `3000` in the
+    ledger a human is asked to answer, and an enrichment seat would go looking
+    for a destination for a send timeout."""
+    workspace = _workspace(
+        tmp_path,
+        [_flow_method("handleOrder"), _flow_annotation({"sendTimeout": "3000"})],
+    )
+    catalog = _spring_integration()
+    config_join.run(workspace, catalog)
+    questions = config_join.gaps(workspace, catalog)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert (rows, questions) == ([], [])
+
+
+@pytest.mark.pins("config_join.channel-target-is-a-method")
+def test_a_channel_annotation_on_an_annotation_type_asks_nothing(tmp_path: Path):
+    """`@ServiceActivator` is `@Target`-legal on an ANNOTATION TYPE, which is
+    how a module composes its own stereotype. That declaration wires nothing
+    to any channel: no method subscribes, so a question there would send an
+    enrichment seat after a destination for a handler that does not exist.
+    `scheduled_work.declaration-is-a-method` is the same conjunct one table
+    over, and `derive_endpoints.sql`'s `handler-is-a-method` join is it on the
+    wire side."""
+    composed = "com/acme/orders/OnOrders#"
+    workspace = _workspace(
+        tmp_path,
+        [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_MODULE + composed,
+                construct_kind=ConstructKind.INTERFACE,
+            ),
+            _flow_annotation({"inputChannel": "amqpInputChannel"}, target=composed),
+        ],
+    )
+    catalog = _spring_integration()
+    config_join.run(workspace, catalog)
+    questions = config_join.gaps(workspace, catalog)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert (rows, questions) == ([], [])
+
+
+def test_the_shipped_catalog_is_skipped_where_the_build_declares_no_integration(
+    tmp_path: Path,
+):
+    """The dependency gate, and the paired positive for the near-misses above
+    in the other axis: a catalog that derived nothing must be distinguishable
+    from a framework that exposes nothing (M04, FR-17). `config_join` is
+    dependency-gated by STYLE, so this file is gated like the other two."""
+    workspace = _workspace(
+        tmp_path,
+        [_flow_method("handleOrder"), _flow_annotation({"inputChannel": "amqpInputChannel"})],
+        coordinates=("com.acme:something-else",),
+    )
+    skipped = derive_endpoints(
+        workspace, [_spring_integration()], capabilities={"resolved_config", "annotation_args"}
+    )
+    workspace.close()
+
+    assert [entry.catalog_id for entry in skipped] == ["spring-integration"]
+    assert "spring-integration-core" in skipped[0].missing_capabilities[0]

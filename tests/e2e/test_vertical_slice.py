@@ -1037,9 +1037,12 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
     # "Selected and derived nothing" is a different claim from "never
     # selected", and only this distinguishes them: a catalog whose `requires`
     # were unmet would be reported here by name, and the assertion below would
-    # then be proving nothing about `declared_on`.
+    # then be proving nothing about `declared_on`. Asserted EXACTLY, not
+    # emptily, since 2O Task 9: this fixture's build declares no Spring
+    # Integration, so the dependency gate skips that catalog by name — which
+    # is the gate working and leaves every claim below unaffected.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
-    assert metadata["skipped_catalogs"] == []
+    assert [entry["catalog_id"] for entry in metadata["skipped_catalogs"]] == ["spring-integration"]
 
     workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
     try:

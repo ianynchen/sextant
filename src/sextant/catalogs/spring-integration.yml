@@ -1,0 +1,103 @@
+id: spring-integration
+displayName: Spring Integration (channel endpoints)
+style: config_join
+
+# WHAT THIS CATALOG SHIPS, stated first because it is unusual: it declares no
+# `key`, so it derives NO endpoint rows at all. It enumerates the channels this
+# module's code names and files each one as a `channel_destination` open
+# question (2O design §5). That is the honest whole of what bytecode plus
+# in-repo configuration can say here, and the reason is measured rather than
+# assumed — see the block above `channels` below.
+#
+# `protocol` and `direction` are required of every WIRE style
+# (`resolve/endpoints.py`), and this style is one. Neither reaches an endpoint
+# row from this file, because this file mints none; `protocol` reaches exactly
+# one place, the `protocol` column of the questions this catalog files, which
+# is a hand-off inbox key rather than a published boundary.
+#
+# **The bound on that word, stated where the value is written (§5.4).** A
+# Spring Integration channel is an in-process pipe; which broker it reaches, if
+# any, is precisely what the question asks. `amqp` is what the probe measured
+# the channel join against end to end — `@ServiceActivator` fed by an
+# `AmqpInboundChannelAdapter`, the same literal on both sides
+# (`scripts/probes/spring-integration-destinations.md`, Q3) — and a channel fed
+# by a Kafka or JMS adapter files its question under `amqp` too. That is
+# recorded in `docs/COVERAGE.md` as an over-statement of one column on a ledger
+# row, and it is the cost of a closed set with no "unknown" member (NFR-5).
+protocol: amqp
+direction: inbound
+
+# `spring-integration-core` declares the annotations below; the Boot starter is
+# how a real module usually reaches it, and Maven records DIRECT declarations
+# only, so a build that names the starter and never the core artifact must not
+# read as a build with no Spring Integration (`resolve/dependencies.py`).
+detect:
+  coordinates:
+    - org.springframework.integration:spring-integration-core
+    - org.springframework.boot:spring-boot-starter-integration
+
+# `resolved_config` is the PIPELINE-declared capability every `config_join`
+# catalog needs — this one derives nothing without a `key`, but the style's
+# engine reads the table for the binder lookup and for `gaps`'s own answer, and
+# a catalog that quietly ran against a table pass 2 never filled would be the
+# silent degradation the gate exists to prevent (M04, FR-17).
+requires: [resolved_config, annotation_args]
+
+matches:
+  address_from_config:
+    # NO `key`, and its absence is the deliverable rather than an omission.
+    #
+    # Spring Integration defines no standard configuration key for a channel's
+    # destination. Real applications wire destinations in BEAN DEFINITIONS — an
+    # `AmqpInboundChannelAdapter` bean, a `SimpleMessageListenerContainer` — and
+    # any key template written here would be a PROJECT convention, which D02
+    # places in a repo's own catalog and never in a built-in. A template
+    # invented here would resolve nothing in every module that does not share
+    # the convention, and would silently address the wrong key in one that
+    # spells it differently.
+    #
+    # **What the destinations ARE readable in, and why that is not this join
+    # (§5.3).** Since extractor capability 9.15 the adapter's own destination
+    # reaches the fact stream: `Amqp.inboundAdapter(cf, String...)` and
+    # `setQueueNames(String...)` now emit
+    # `{"kind":"array","elements":[{"kind":"string","value":"…"}]}` rather than
+    # one opaque `unresolved` (the probe's "Re-run after extractor capability
+    # 9.15" section — its one-line headline says the opposite and is corrected
+    # in place). Those elements are CALL-SITE arguments. This engine's address
+    # input is `resolved_config` and nothing else
+    # (`application/resolve/engines/config_join.py`, `_config_values`), and
+    # `resolved_config` is built from `config_entries` alone
+    # (`application/resolve/config.py:107`) — configuration FILES, never a call
+    # site. So the destination a 9.15 element carries cannot reach this join,
+    # and reading it is engine work in a style that reads call sites. Stated in
+    # `docs/COVERAGE.md` as a boundary with a readable fact behind it, which is
+    # a different and better-placed gap than an unreadable one.
+    binding:
+      from: annotation_value
+      # WHICH ANNOTATION ARGUMENTS NAME A CHANNEL, and what each one means.
+      #
+      # This is an attribute SET, not the annotations' attribute lists.
+      # `@ServiceActivator` also carries `adviceChain`, `autoStartup`, `phase`,
+      # `poller`, `reactive`, `requiresReply`, `sendTimeout` and `order`, and
+      # not one of them is a channel. `sendTimeout` is the sharpest: it is a
+      # `String` like the two below, so reading it would file a question about
+      # a channel called `3000` — a name nobody wrote, in the ledger a human is
+      # asked to answer.
+      #
+      # Both annotations and all three attributes were MEASURED reaching the
+      # fact stream verbatim, keyed by attribute name, against Spring
+      # Integration 6.2.4 under the Spring Boot 3.2.5 BOM, javac release 21
+      # (`scripts/probes/spring-integration-destinations.md`, Q2 — which also
+      # records that a constant-valued attribute arrives INLINED as its value,
+      # and a `${...}` placeholder verbatim and unresolved). The direction each
+      # attribute means is the framework's own: a service activator SUBSCRIBES
+      # to its `inputChannel` and SENDS its return value to its
+      # `outputChannel`, and an inbound channel adapter is a message SOURCE
+      # that publishes what its method returns onto `channel`.
+      channels:
+        - { annotation: org.springframework.integration.annotation.ServiceActivator,
+            arg: inputChannel, direction: inbound }
+        - { annotation: org.springframework.integration.annotation.ServiceActivator,
+            arg: outputChannel, direction: outbound }
+        - { annotation: org.springframework.integration.annotation.InboundChannelAdapter,
+            arg: channel, direction: outbound }

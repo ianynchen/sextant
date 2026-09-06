@@ -3152,12 +3152,12 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
     catalog declares is granted, because a catalog gated out never reaches
     its engine and so would never be validated at all.
 
-    **Three catalogs ARE skipped here, and that is the behaviour rather than a
+    **Four catalogs ARE skipped here, and that is the behaviour rather than a
     hole in it** (2O design §2a, ruling R9; `A-C5`): the two dependency-gated
     styles derive from evidence that names no framework — `spring-data-rest`
-    from an interface that names no HTTP, the two `config_join` files from a
-    method's return type and a configuration key — so all three are gated on
-    the module's build declaring the framework. This workspace has no module
+    from an interface that names no HTTP, the three `config_join` files from a
+    method's return type, a configuration key and an annotation argument — so
+    all four are gated on the module's build declaring the framework. This workspace has no module
     fact at all, which is the unanswerable case, and the skip carried into the
     manifest with its reason is exactly the visible degradation the gate exists
     to produce. Every other catalog reaches its engine, which is what makes
@@ -3176,6 +3176,7 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
     assert sorted(entry.catalog_id for entry in skipped) == [
         "spring-cloud-stream",
         "spring-data-rest",
+        "spring-integration",
         "spring-kafka-media",
     ]
     assert all(
