@@ -58,6 +58,9 @@ messaging) both exist.
 | **2P** | Spring Cloud + Meridian contract + docs-honesty backlog | planned | Spring Cloud Gateway's config-declared proxy routes (today invisible — a live gateway analysis showed four `lb://` routes the tables cannot see); `lb://` discovery URIs; the Config Server honesty story; **the Meridian integration** ([docs/meridian-integration.md](../../meridian-integration.md), ruled into 2P 2026-09-03): boundary vocabulary (FR-21), derivation diff (FR-22), observability map (FR-23) — FR-24's library embedding largely delivered by 2N's `sextant.api` facade | config-declared endpoints — routes that exist in YAML, not code — plus the typed diff/observability contract a consumer can gate PRs on |
 | **2J** | Second frameworks | planned | Micronaut, Quarkus/JAX-RS, MicroProfile REST Client — **zero engine changes is the acceptance test**; then the typed-Catalog refactor | none — that is the point |
 | **2Q** | Call graph and traces | **delivered 2026-09-06** — scope and evidence below | `call_edges` and a bounded, cycle-refusing traversal from every ROOT kind; `return_flows` linking a callee's returned value to its caller's result, so a trace runs request → handler → service → terminal → back through the composition → **response**; lambda bodies (9.17) and return values (9.18) as extractor capabilities; a `roots` table carrying wire identity; a rendered trace and a Mermaid sequence diagram per root with machine-stated elision | the graph itself — and it came in AHEAD of 2J rather than after it, because the sweep's fixes made the boundary set trustworthy enough to trace from |
+| **2R** | Catalog measurement + near-miss coverage | **in progress** — 10 of 55 catalogs measured, 19 on the unmeasured allowlist | one pass per catalog answering two questions with one reading: is the encoded rule what the framework ACTUALLY does (a `measured:` block naming coordinate, version and probe), and does a test prove the catalog DECLINES. Batch 1 found a disabled cron reported as live work and a wrong GraphQL address; batch 2 found `@PulsarReader`, an entire inbound surface named nowhere | the `annotation_driven` vocabulary pass — `container`, `path_from_siblings`, direction-aware accessor fallback — each key forced by a measurement, after §13.8's third-occurrence rule fired |
+| **2S** | Documentation debt + the open-issue sweep | planned | ~34 rows answered built / designed / retired, every retirement recorded; then `docs/open-issues.md` worked top to bottom — every Major, plus every Minor whose fix is cheaper than the row describing it, and a stated reason on any that is not | nothing new — this is the phase that makes the documents true |
+| **2T** | Multi-version | planned | Boot 2.x and Boot 4.x acceptance runs (only 3.x has ever been run), then the Jackson 2 vs Jackson 3 shape catalogs F2 made a two-file change instead of 84 | selecting a shape model by resolved dependency coordinate — `tools.jackson.core` vs `com.fasterxml.jackson.core` |
 | **L** | Linking and system scope | planned | `participants`, `links`, DR-5 over bundles; the system document; shape provenance fixed structurally | M05/M06 over federated Parquet |
 
 ## What 2O actually carries
@@ -360,7 +363,51 @@ impossible to write a near-miss test that proves nothing and have it counted.
 introduced, entered in the commit group that finds it, with the §13.8 stop rules
 and a principle-violation count in its header.
 
+### The order the table runs in — 2R, 2S, 2T come BEFORE 2P
+
+The table is alphabetical-ish by the letter each phase was given, not by
+execution order, and that has misled a reader once. **Execution order from here:**
+
+**2R** (catalog measurement, running) → **2S** (documentation debt + the issue
+sweep) → **2T** (multi-version) → **2P** (Spring Cloud + Meridian) → **2J**
+(second frameworks; the version-bump gate) → **L** (linking).
+
+2R and 2S come before 2P for the reason the sweep section already gives: 2P hands
+a boundary vocabulary to an outside consumer, and a fabrication that survives to
+that point stops being our bug and becomes someone else's data.
+
+### What "done" means, and why our own scorecard cannot say it
+
+**COVERAGE §2's generator never writes `✅` for a protocol cell — by design.** It
+writes `◐ —` for a cell whose rows are all shipped and whose gap list is empty,
+and `◐ <tiers>` for one with gaps. So the Java row reads `✅ ASM` followed by
+thirteen `◐`, and **"one feature fully done" is literally unrepresentable in the
+document we use to judge whether anything is done.** That is a defect in the
+scorecard, not only in the coverage.
+
+Measured 2026-09-06 over §5's Java rows:
+
+| | count |
+|---|---|
+| ✅ shipped | **59** |
+| **stated boundaries** — deliberate limits, documented with what falsifies them | **55** |
+| **pending** — A/B/C tier work not built | **29** |
+| unclassified | 27 |
+
+So the shape is not "111 things half done". It is **59 shipped, 55 deliberate
+limits, and 29 real gaps** — and `5.5 WebSocket` is already 3 shipped, 0
+boundaries, 0 pending, which is a complete cell the matrix cannot mark complete.
+
+**And the one `✅` in the Java row is the least defensible mark on it.** `✅ ASM`
+means "implemented, tested, verified against a real project", and the scanner
+gained **four capabilities in two days** — 9.15 varargs, 9.16 nested annotations,
+9.17 lambda handles, 9.18 return values — each because something it could not do
+was found by measurement rather than by test. `OI-19` records that `sig_` is now
+computed in two languages with no guard the harness can carry. Nobody has audited
+that mark, and it is the prerequisite every other cell in the row depends on.
+
 ### What is next, in order
+
 
 1. **Stage 4 batch 3** — the jar-enumeration sweep across the 20
    `annotation_driven` catalogs (list the framework's annotation package and diff
