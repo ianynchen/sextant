@@ -623,6 +623,38 @@ before it is built on"* forbids. **Falsified by** a document whose diagrams all
 render fast enough that nobody notices, or by that ordering being measured in a
 real browser, which turns this into a small edit.
 
+### OI-32 — `spring-petclinic-rest`'s pinned routes are stale and the pin has been failing since 2O
+**Major · found 2026-09-06 by running the field check while adding the `mall`
+pin · `scripts/field-expectations/spring-petclinic-rest.json`**
+
+`python scripts/field_check.py spring-petclinic-rest` FAILS today, and has since
+2O's identity migration: 13 of its 44 recorded inbound routes are spelled without
+their leading separator (`GET api/pets`), and the renderer now emits every one
+with it (`GET /api/pets`). The counts match — 44 either way, and no route
+appeared or disappeared — so this is the migration CHANGELOG's own documented
+consequence (*"Every recorded INBOUND HTTP path that omitted its leading
+separator now carries one"*) reaching a recorded expectation nobody re-recorded.
+`jhipster-sample-app` is clean and `mall-admin` is clean; this is the only stale
+pin.
+
+**Major rather than Minor because of what a red pin costs.** The field check is
+the only always-available evidence for §5's beyond-fixture claims, and a suite
+that is known-red is a suite nobody reads: the next real regression in these two
+repositories lands in a check that was already failing, and looks identical to
+this. It also means nothing has run this pin for the whole of 2O — an opt-in
+check that is never run is not a net.
+
+**Not fixed here, deliberately.** `field_check.py`'s own docstring reserves
+refreshing a pin — *"a new `commit`, and the counts/routes re-recorded against
+it"* — as *"a deliberate, reviewed act"*, and re-recording an expectation to
+match today's output is exactly the move that would hide a real regression if
+this were one. Someone has to look at the 13 rows and agree the new spelling is
+right.
+**Closes by** the 13 routes re-recorded with their leading separators, under
+review, in a commit that says the migration is why. **Falsified by** the new
+spelling being wrong, which would make this a renderer defect rather than a
+stale pin.
+
 ### OI-33 — `enrich`'s brief now carries the complete document, and nothing has measured that
 **Minor · introduced 2026-09-06 by inverting the trace default (GUIDELINES
 §8.4) · `src/sextant/api.py::_enrich`, `src/sextant/api.py::_assembled_sections`**

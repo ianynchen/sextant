@@ -39,6 +39,19 @@ here would restate those documents rather than add anything.
   have been stale since 2O's identity migration, so that field pin has been failing
   unnoticed for a phase).
 
+- **`macrozheng/mall` is a pinned, reproducible example** (`scripts/field-expectations/mall-admin.json`).
+  It is the corpus every claim about document size in this repository is measured on, and
+  it existed only in one session's scratch directory — so nobody else could re-measure any
+  of them, which GUIDELINES §8.4 rule 4 forbids. It is carried exactly as every other
+  example is (`examples/` is gitignored; the pin holds the `remote`, the `commit`, and the
+  counts and routes recorded against it), with three new optional keys `field_check.py`
+  needed to reach it: **`module`** (`mall-admin`, whose own `target/classes` decides
+  whether a build is needed — the reactor root has none), **`maven`** (`mall` ships no
+  `mvnw`), and **`jdk`** (`21` — a newer JDK breaks Lombok's annotation processor, and the
+  pin is refused against Maven's own `-v` banner before anything is built rather than
+  failing several screens into a stack trace). `README.md` carries the four commands.
+
+
 - **A trace can be found by the URL a reader knows** (2Q close, defect 1). `## Traces`
   named every trace by its handler descriptor and its kind, so `GET /order/list` appeared
   nowhere in `mall-admin`'s section: finding the trace for an endpoint required already

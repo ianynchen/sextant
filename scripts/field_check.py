@@ -16,6 +16,22 @@ exactly that commit before validating, so upstream drift can never masquerade as
 regression — refreshing a pin (a new `commit`, and the counts/routes re-recorded against
 it) is a deliberate, reviewed act, not something this script does on its own.
 
+Three optional keys carry an upstream whose build is not one wrapper-script invocation at
+the repository root (`mall-admin.json` is the first to need any of them):
+
+- **`module`** — the path under the clone that `analyze`/`render` run against, and whose
+  `target/classes` decides whether a build is needed. Absent, the repository root is both,
+  which is every single-module pin.
+- **`maven`** — the Maven launcher, defaulting to the wrapper `./mvnw`. `macrozheng/mall`
+  ships no wrapper, so its pin names the system `mvn`; naming it here rather than falling
+  back silently keeps "which Maven built this" a property of the recorded pin.
+- **`jdk`** — the MAJOR Java version the upstream's build requires, checked against the one
+  Maven will actually use (its own `-v` banner) and REFUSED on a mismatch rather than left
+  to fail somewhere inside the build. `macrozheng/mall` is why: on a JDK newer than 21 its
+  Lombok annotation processor throws and the build dies several screens deep in a stack
+  trace with nothing pointing at the toolchain. Recording the identity from the run's own
+  output rather than from an environment variable is GUIDELINES §5.4.
+
 Checks, per expectation:
 
 - **Endpoint counts** — `metadata.json`'s own `endpoints` object, compared whole.
@@ -55,6 +71,14 @@ EXPECTATIONS_DIR = REPO_ROOT / "scripts" / "field-expectations"
 _TABLE_ROW = re.compile(r"^\| `([^`]+)` \|", re.MULTILINE)
 _PRE_OPEN = re.compile(r"<pre(?P<attrs>[^>]*)>")
 _BACKTICK_SPAN = re.compile(r"`[^`]*`")
+# Maven's own `-v` banner line: `Java version: 21.0.12.1, vendor: Homebrew, runtime: ...`.
+# The MAJOR component alone is captured — a pin declaring `21` is a statement about the
+# language level the upstream's build needs, never about a patch release.
+_MVN_JAVA_VERSION = re.compile(r"^Java version: (\d+)", re.MULTILINE)
+
+# The Maven launcher a pin gets when it names none: the wrapper every pin before
+# `mall-admin` had, run from the repository root.
+_DEFAULT_MAVEN = "./mvnw"
 
 
 class FieldCheckFailure(Exception):
@@ -133,7 +157,44 @@ def _checkout(repo: Path, commit: str) -> bool:
     return True
 
 
-def _ensure_compiled(repo: Path, force: bool) -> None:
+def _refused_if_wrong_jdk(repo: Path, maven: str, required_major: str) -> None:
+    """Refuse before building unless the JDK **Maven itself** reports is `required_major`.
+
+    Read from Maven's own `-v` banner rather than from `JAVA_HOME` or from whichever
+    `java` happens to be first on `PATH`, because those are what the runner INTENDED and
+    the banner is what will run (GUIDELINES §5.4: *"record identity from the run's own
+    output, never from the parameter you passed in"*). Maven resolves its JDK through
+    `JAVA_HOME`, so the two disagree exactly when it matters.
+
+    **Fatal rather than advisory**, for the same reason §5.4 gives: the failure this
+    prevents is not a missing JDK but a WRONG one, and a wrong one fails deep inside the
+    build — `macrozheng/mall` on a JDK newer than 21 dies in Lombok's annotation
+    processor, with nothing in the output naming the toolchain as the cause.
+
+    Called only for a pin that declares `jdk`; a pin that does not is unchanged and runs
+    on whatever the machine has."""
+    banner = _run([maven, "-v"], cwd=repo)
+    if banner.returncode != 0:
+        raise FieldCheckFailure(
+            f"could not read {repo}'s Maven toolchain (`{maven} -v`):\n"
+            f"{banner.stdout}\n{banner.stderr}"
+        )
+    found = _MVN_JAVA_VERSION.search(banner.stdout)
+    if found is None:
+        raise FieldCheckFailure(
+            f"`{maven} -v` in {repo} printed no `Java version:` line, so the JDK this pin "
+            f"requires ({required_major}) cannot be verified:\n{banner.stdout}"
+        )
+    if found.group(1) != required_major:
+        raise FieldCheckFailure(
+            f"{repo} pins JDK {required_major} and Maven will use {found.group(1)}; "
+            f"set JAVA_HOME to a {required_major} JDK and re-run"
+        )
+
+
+def _ensure_compiled(
+    repo: Path, force: bool, module: Path | None = None, maven: str = _DEFAULT_MAVEN
+) -> None:
     """`target/classes` populated at the checked-out commit — the compiled-first reading
     `MavenDetector` requires (it never runs Maven itself). Skipped when `target/classes`
     already exists AND `force` is `False`: `_checkout` proves the tree's SOURCES are at
@@ -147,13 +208,20 @@ def _ensure_compiled(repo: Path, force: bool) -> None:
     Delete `target/` to force one by hand. Offline first (`-o`), the same posture the
     detectors themselves default to; only retried without it — reaching the network —
     when the offline attempt fails, since this script is explicitly allowed to
-    (network-using by nature, see the module docstring)."""
-    if not force and (repo / "target" / "classes").is_dir():
+    (network-using by nature, see the module docstring).
+
+    `module` is the ANALYSED module's directory on a multi-module pin, and only the
+    already-built check reads it: `target/classes` belongs to the module, while the Maven
+    launcher is the reactor's and runs from the repository root — building the whole
+    reactor rather than one module because a module's own compile needs its siblings
+    installed, which a root build gives for free. Defaults to `repo`, which is every
+    single-module pin."""
+    if not force and ((module or repo) / "target" / "classes").is_dir():
         return
-    offline = _run(["./mvnw", "-q", "-o", "compile"], cwd=repo)
+    offline = _run([maven, "-q", "-o", "compile"], cwd=repo)
     if offline.returncode == 0:
         return
-    online = _run(["./mvnw", "-q", "compile"], cwd=repo)
+    online = _run([maven, "-q", "compile"], cwd=repo)
     if online.returncode != 0:
         raise FieldCheckFailure(
             f"`mvn compile` failed in {repo} even with the network allowed:\n"
@@ -161,17 +229,20 @@ def _ensure_compiled(repo: Path, force: bool) -> None:
         )
 
 
-def _analyze_and_render(repo: Path) -> None:
+def _analyze_and_render(module: Path) -> None:
+    """`render` with no flags, deliberately: the pin validates the DEFAULT document, which
+    is the complete one (GUIDELINES §8.4). A field check run against `--brief` would pass
+    over a renderer that had quietly stopped drawing things."""
     sextant = _sextant_bin()
-    analyze = _run([sextant, "module", "analyze", str(repo)], cwd=REPO_ROOT)
+    analyze = _run([sextant, "module", "analyze", str(module)], cwd=REPO_ROOT)
     if analyze.returncode != 0:
         raise FieldCheckFailure(
-            f"`sextant module analyze {repo}` failed:\n{analyze.stdout}\n{analyze.stderr}"
+            f"`sextant module analyze {module}` failed:\n{analyze.stdout}\n{analyze.stderr}"
         )
-    render = _run([sextant, "module", "render", str(repo)], cwd=REPO_ROOT)
+    render = _run([sextant, "module", "render", str(module)], cwd=REPO_ROOT)
     if render.returncode != 0:
         raise FieldCheckFailure(
-            f"`sextant module render {repo}` failed:\n{render.stdout}\n{render.stderr}"
+            f"`sextant module render {module}` failed:\n{render.stdout}\n{render.stderr}"
         )
 
 
@@ -238,20 +309,27 @@ def _check_one(name: str) -> list[str]:
     expectation_path = EXPECTATIONS_DIR / f"{name}.json"
     expectation = json.loads(expectation_path.read_text(encoding="utf-8"))
     repo = EXAMPLES_DIR / expectation["repo"]
+    # The analysed module, which is the repository root on every single-module pin. `repo
+    # / "."` would be `repo` here too, but the conditional says out loud that the key is
+    # optional rather than relying on a pathlib normalisation a reader has to know.
+    module = repo / expectation["module"] if "module" in expectation else repo
     problems: list[str] = []
 
     _ensure_repo_present(repo, expectation["remote"])
+    maven = expectation.get("maven", _DEFAULT_MAVEN)
+    if "jdk" in expectation:
+        _refused_if_wrong_jdk(repo, maven, expectation["jdk"])
     moved_head = _checkout(repo, expectation["commit"])
-    _ensure_compiled(repo, force=moved_head)
-    _analyze_and_render(repo)
+    _ensure_compiled(repo, force=moved_head, module=module, maven=maven)
+    _analyze_and_render(module)
 
-    metadata = json.loads((repo / ".sextant" / "metadata.json").read_text(encoding="utf-8"))
+    metadata = json.loads((module / ".sextant" / "metadata.json").read_text(encoding="utf-8"))
     if metadata["endpoints"] != expectation["endpoints"]:
         problems.append(
             f"endpoint counts: expected {expectation['endpoints']!r}, got {metadata['endpoints']!r}"
         )
 
-    markdown = (repo / ".sextant" / "render" / "architecture.md").read_text(encoding="utf-8")
+    markdown = (module / ".sextant" / "render" / "architecture.md").read_text(encoding="utf-8")
     inbound = _routes_in_section(markdown, "Inbound endpoints")
     outbound = _routes_in_section(markdown, "Outbound endpoints")
     if inbound != expectation["routes"]["inbound"]:
@@ -263,7 +341,7 @@ def _check_one(name: str) -> list[str]:
             f"outbound routes: expected {expectation['routes']['outbound']!r}, got {outbound!r}"
         )
 
-    html_text = (repo / ".sextant" / "render" / "architecture.html").read_text(encoding="utf-8")
+    html_text = (module / ".sextant" / "render" / "architecture.html").read_text(encoding="utf-8")
     if not _zero_pre_outside_code_blocks(html_text):
         problems.append("a <pre> outside a code block or a diagram survived in architecture.html")
     if not _first_diagram_parses(html_text):

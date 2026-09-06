@@ -670,3 +670,26 @@ the same string.
 written in the coordinate space the facts actually use.** It costs one constant.
 `test_effective_annotations.py`'s `_MODULE` prefix is the precedent, and it is
 there for exactly this reason.
+
+## An opt-in check that nobody runs is not a net (2Q close, §8.4 wave)
+
+`scripts/field_check.py` is the only always-available evidence for §5's
+beyond-fixture claims. Adding a third pin to it meant running the other two for
+the first time in a while, and one of them — `spring-petclinic-rest` — **had
+been failing since 2O's identity migration**: 13 of its 44 recorded inbound
+routes are spelled without the leading separator that migration added to every
+one. The counts still matched, so nothing about the failure was subtle; it was
+simply never observed. It is now `OI-32`.
+
+Two things to do differently:
+
+- **When you add an entry to an opt-in suite, run the whole suite, not your
+  entry.** The marginal cost is minutes and it is the only moment anyone has a
+  reason to look at the others.
+- **A CHANGELOG entry that says "goldens moved" is a work item, not a notice.**
+  2O's identity migration listed its own blast radius accurately — *"Every
+  recorded INBOUND HTTP path that omitted its leading separator now carries
+  one"* — and the recorded expectations that sentence describes were not
+  re-recorded. Enumerate the artifacts a migration invalidates and fix or file
+  each; a correct prose warning that reaches no file is §8.3's failure in
+  miniature.

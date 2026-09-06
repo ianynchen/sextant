@@ -118,6 +118,28 @@ for the HTTP inbound surface, against `examples/jhipster-sample-app` and
 module docstring states exactly what it checks (endpoint counts, route sets, the HTML
 output-quality assertions) and how "the first diagram parses" is defined without a browser.
 
+**Reproducing an example.** `examples/` is gitignored — the upstreams are not ours and are
+never committed — so each pinned example lives as one file under
+`scripts/field-expectations/`, carrying the `remote` to clone, the `commit` to validate at,
+and the counts and routes recorded against it. `macrozheng/mall` is the largest, and the
+corpus every claim about document size in this repository is measured on:
+
+```bash
+git clone https://github.com/macrozheng/mall.git examples/mall
+export JAVA_HOME=$(brew --prefix openjdk@21)   # JDK 26 breaks mall's Lombok processor
+(cd examples/mall && mvn -q compile)           # mall ships no `mvnw`
+python scripts/field_check.py mall-admin       # checkout, build if needed, analyze, render, assert
+```
+
+`mall-admin` is the analysed module: **157 classes, 160 inbound HTTP endpoints, 160 traces**,
+rendering a **711 KB** `architecture.md` and a **4.6 MB** `architecture.html` with **161
+diagrams** — the complete document, which is the default (GUIDELINES §8.4). The pin declares
+its own `module`, `maven` launcher and `jdk`, and the JDK is checked against Maven's own
+banner before anything is built, so the Lombok failure above is a one-line refusal rather
+than a stack trace. **First run in an existing clone:** if `analyze` raises
+`_duckdb.BinderException`, that is `OI-29` — delete `examples/mall/mall-admin/.sextant/workspace.duckdb`
+and re-run.
+
 ## `.sextant.yml` — reading a dependency's own code
 
 Some declarations a module depends on are not in the module. A generated SOAP client stub,
