@@ -387,6 +387,39 @@ checked against source. **Falsified by** a real `narrowed` row whose candidate
 set is wrong.
 
 ---
+### OI-19 — `sig_` is computed in two languages and only an uncatchable test guards the drift
+**Major · found 2026-09-06 by G3 (`4e644fd`)**
+
+The overload disambiguator `sig_<hex>` — the first four bytes of SHA-256 of the
+JVM method descriptor — is now computed **twice**: in Java by
+`ClassScanner.disambiguatorOf`, and in Python by `domain/symbols.method_descriptor`
+for G3's cross-method join. The two must agree byte for byte or every caller→callee
+link silently returns nothing.
+
+**Why it is not covered.** Only a test that scans real compiled classes catches
+drift, and that test **cannot be a `pins` guard** — the guard harness copies no
+compiled fixture. So the one mechanism that would make this permanent is
+structurally unavailable to it.
+
+**Closes by** either deriving the Python side from a value the extractor emits
+(so there is one producer), or a build-time conformance check that hashes the
+same descriptor in both languages and compares. **Falsified by** a change to
+either implementation that the other does not follow: the join returns zero rows
+on every real module while fixtures spelling symbols bare stay green — OI-4's
+shape, one layer down.
+
+### OI-20 — `return_flows` has no reader until G4
+**Minor · introduced 2026-09-06 by G3 (`4e644fd`)**
+
+G3 derives the `return_flows` table every resolve; its consumer is G4's traversal,
+which is not built. Stated in D01 and CHANGELOG. Registered here as well because
+§5.3's rule is to cite the consumer, and "the consumer is a planned task" is a
+claim this register exists to keep honest — the `detect.coordinates` defect began
+exactly this way.
+
+**Closes by** G4 reading it. **Falsified by** G4 shipping and reading something
+else, which would mean the table's shape was designed against a guess.
+
 
 ## CLOSED
 
