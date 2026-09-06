@@ -10,6 +10,7 @@ from sextant.application.resolve.format import resolve_format
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
 from sextant.application.resolve.return_flow import record_return_flows
+from sextant.application.resolve.roots import record_roots
 from sextant.application.resolve.service_identity import record_service_identity_gaps
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.parse_binding import bind_parse_calls
@@ -82,6 +83,16 @@ def resolve(
     # not read as though it might be.
     record_return_flows(workspace)
     skipped = derive_endpoints(workspace, declared, capabilities)
+    # 2Q `I1`, and its position is a dependency rather than a preference: it
+    # reads `endpoints.handler`/`direction` and `scheduled_work.handler`, and
+    # BOTH are written by the call above — the scheduled engine runs as one of
+    # its styles, and the inbound/outbound merge that can turn two rows into
+    # one `both` row is its last statement. Nothing below this line writes
+    # either column (`reclassify_protocol` and `stamp_format` both MATCH on
+    # `handler` and set neither it nor `direction`), so this is the earliest
+    # point at which the root set is final, and the latest at which it could
+    # be read without depending on a pass that has nothing to do with it.
+    record_roots(workspace)
     # After the endpoints, never beside them: an endpoint's payload types come
     # off its handler's signature, which is a column on the row derive_endpoints
     # just wrote.

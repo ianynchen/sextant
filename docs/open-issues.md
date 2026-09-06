@@ -420,6 +420,61 @@ exactly this way.
 **Closes by** G4 reading it. **Falsified by** G4 shipping and reading something
 else, which would mean the table's shape was designed against a guess.
 
+### OI-22 — `root_kind`'s third member has no producer
+**Minor · introduced 2026-09-06 by 2Q `I1` · `src/sextant/domain/closed_sets.py`
+(`RootKind`), `docs/components/D00-fact-schema.md` §4, `docs/COVERAGE.md` §7**
+
+`I1` built the `root_kind` producer that D00 documented and nothing wrote —
+closing register entry #7 — and two of the set's three members are produced from
+real facts: `inbound_endpoint` from every exposed `endpoints` row, `scheduled`
+from every `scheduled_work` row. **`entry_point` is produced by nothing.**
+
+**Why it was not built rather than built badly.** Which signature starts a
+program is a rule of a LANGUAGE, not of this analysis, and ARCHITECTURE §10
+keeps language knowledge out of the language-blind half — the descriptor a
+runtime looks for is catalog data exactly as a framework's annotation is, and
+`tests/architecture/test_source_rules.py::test_jvm_names_stay_in_the_jvm_extractor`
+is the rule that says so. The cheap alternative, matching a method by NAME
+alone, would derive a root for any method that happens to be called that, which
+is a fabrication with an unusually low bar. The member stays in the set because
+the traversal branches on no kind at all: it costs nothing to keep and a
+removal would have to be undone.
+
+**Cost:** a module whose only starting point is a program entry point — a batch
+job, a command-line tool — produces no root and therefore no trace, and the
+output does not say why. That is an under-report, which is the second sin, and
+it is stated in `docs/COVERAGE.md` §7 rather than silent.
+**Closes by** a catalog declaring the entry-point signature and a producer
+reading it, with the catalog carrying a `measured:` row like any other.
+**Falsified by** a module whose `main` starts real work and appears in no trace.
+
+### OI-23 — a functional route is an endpoint with no handler, so it has no root
+**Minor · found 2026-09-06 by 2Q `I1` · `docs/COVERAGE.md` §7,
+`src/sextant/application/resolve/roots.py`**
+
+A root is derived from an `endpoints` row that NAMES a handler. A functional
+route does not: `RouterFunctions.route(GET("/kt/orders"), handler)` derives a
+correct inbound row whose handler is a **lambda** the chain reader never named,
+so the row carries `caller` — the method that BUILT the router — and a NULL
+`handler`. **Measured on the orders-service fixture: 5 of 82 exposed rows**,
+four functional routes and one binding whose destination configuration named
+nothing. Each is a real served address that will appear in no trace.
+
+**Not fixed by reading `caller` instead, which is why this is a row and not a
+patch.** The router-building method runs ONCE at startup; a trace rooted there
+would report route registration as the work a request does, and would do it at
+`resolved`/`compiler` beside traces that are real. The honest fix is upstream —
+the chain reader naming the lambda it already reads as the row's handler, which
+capability 9.17 makes nameable — and then these become roots with no change to
+`roots.py` at all.
+
+Graded Minor rather than Major because the endpoint row itself is correct and
+published: what is missing is its trace, the absence is stated in COVERAGE, and
+nothing wrong is derived.
+**Closes by** the `combinator` engine writing the handler symbol onto a
+functional-route row. **Falsified by** a functional route whose real work is
+invisible in every trace — which is today's state, stated.
+
 
 ## CLOSED
 

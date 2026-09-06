@@ -33,7 +33,7 @@ mechanism exists.** A spec that depends on one must verify it in `src/` first.
 | 4 | `constant` fact kind (`Symbol, value`) | D00 §5 | No `ConstantFact` class. `ClassScanner.visitField` receives ASM's `Object value` — the field's `ConstantValue` attribute — and never reads it. | **Deliberately routed around** in 2O (ruling R11); still unimplemented |
 | 5 | `resolves:` / `resolves.direction` | D02 §2c | **CLOSED, 2O Task 10 — and the documented CONDITION was wrong, not merely unbuilt.** `resolves.direction` is on the `Catalog` model, read by the loader, validated and evaluated by `engines/annotation_driven.py` (`_direction_rule`, `_served_owners`) and bound into `derive_endpoints.sql` as `$flip_direction`/`$flip_owners`/`$flip_handlers`. What did NOT ship is `when: {owner_implemented_in_module: true}`: measured (CP-7), Spring serves an implemented interface only where the implementer is a handler bean, so that condition would publish an inbound route for a `@Service` implementation — an endpoint nothing serves. The shipped word is `owner_implemented_by_type_annotated`, naming the controller annotations as catalog data. `resolves.format` is separately retired in D02 §2c itself. | Closed |
 | 6 | `default_produces` | D02; 2E's spec and plan | **CLOSED, 2O Task 6.** Read as a TOP-LEVEL catalog key (not under `mapping:`, where D02 first sketched it — the catalog that needed it declares no `mapping` at all) and written into `produces` by `derived_resource`, which refuses a catalog of its own style that declares none. `default_consumes` stays specified-not-used: Data REST negotiates the request side, so no catalog could declare one honestly. | Closed; `default_consumes` open |
-| 7 | `root_kind` | D00:181, with a full member list | The token appears **nowhere in `src/`** — not merely the `scheduled` member, the whole concept. | **Open — must be resolved before 2P's Meridian vocabulary is specified** |
+| 7 | `root_kind` | D00:181, with a full member list | **CLOSED, 2Q `I1`.** `domain/closed_sets.RootKind` defines the set and `application/resolve/roots.py` produces it into D01 §3's `roots`, from `endpoints` (exposed handlers) and `scheduled_work` (scheduled handlers); `resolve/roots.py::roots_of` is the typed read a walk uses; the walk itself is 2Q's `G4`, landing in the same phase, and until it does this row's consumer citation is `roots_of` and its tests rather than a rendered output. The member list changed as part of closing it: four protocol-flavoured `*_inbound` members collapse to one `inbound_endpoint` (protocol is a property of the endpoint, and `message_inbound` named a retired protocol family) and `cli_entry` becomes `entry_point`. **One of the three members still has no producer** — `entry_point`, because the signature that starts a program is a LANGUAGE rule ARCHITECTURE §10 keeps out of the resolver, so it needs a catalog and none declares one. That residue is `docs/open-issues.md` OI-22, not a row here: the concept, the set and the table exist and are read. | **Closed** — the set has a producer and a consumer; `entry_point`'s missing producer is OI-22 |
 | 8 | Rung 5 marker semantics | D02: markers are "package families whose presence **anywhere in the module** is evidence" | Code read annotation FQNs only — narrower than documented. | **CLOSED, 2O Task 2** |
 | 9 | Routing-ambiguity "finding" | D01:296 — "that collision is a routing-ambiguity finding" | No findings mechanism exists anywhere in `src/`. D01 describes a *property* of content-derived identity (two handlers sharing one wire contract merge into a single row), not a detector that reports anything. Found 2026-09-04 by the mechanism-existence pass, **before** Task 10 was dispatched against it. Task 10 shipped without one and needed none: where an `@HttpExchange` interface and the controller implementing it derive one route, the two rows share a wire identity and the existing dedup folds them, with the implementing class's method surviving as handler. | Open — no detector, and 2O Task 10 landed on merge precedence instead |
 | 10 | Project catalogs — D02 §6's repository-supplied catalog directory | D02 §6; reached through D04 §2's `catalogs:` key | **No repository-supplied catalog is ever loaded.** The catalog set is hard-wired to the installed package's own directory: `api.py:565` → `resources.py::catalogs_dir` (`:34-46`), which resolves `<package root>/catalogs` and raises if it is absent. There is no parameter, no merge and no search path, so a `catalogs:` key has nothing to reach — and the file it would be written in is entry #13's, which aborts every command on an unknown key. Found by the pre-dispatch mechanism-existence audit; the number was allocated then and the row never written. | **Retired — standing ruling** (2O roadmap `:201-205`), recorded with #13, whose amendment boxes carry it: a repository-supplied catalog makes D02's schema a public API, after which every schema change is breaking. NFR-9's stated case is knowingly unmet |
@@ -86,12 +86,16 @@ requires javac to inline such constants at their use sites, so the literal
 appears in `call_site` facts, but a constant declared and never used in its own
 module stays invisible.
 
-**One is a live risk to the NEXT phase.** #7: the Meridian integration scoped
-into 2P specifies a boundary vocabulary derived from D00/D01/D06. `root_kind`
-is documented in D00 with a full member list and does not exist in the code. A
-vocabulary specified from those documents the way 2O's spec was would be built
-against fiction, and the failure would surface at a *consumer* rather than in
-our own tests.
+**One WAS a live risk to the next phase, and 2Q's `I1` closed it.** #7: the
+Meridian integration scoped into 2P specifies a boundary vocabulary derived
+from D00/D01/D06, and `root_kind` was documented in D00 with a full member list
+and absent from the code — a vocabulary specified from those documents the way
+2O's spec was would have been built against fiction, and the failure would have
+surfaced at a *consumer* rather than in our own tests. It is now produced and
+read, and D00's member list was corrected in the same change rather than
+implemented as written: 2P inherits three members that exist instead of six
+that did not, one of which (`entry_point`) is explicitly marked in D00 as having
+no producer.
 
 ---
 

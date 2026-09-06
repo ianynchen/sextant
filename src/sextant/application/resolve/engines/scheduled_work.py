@@ -7,17 +7,21 @@ no direction. A row claiming any of the three would be a boundary nothing
 serves — the cardinal sin, reached by widening a table rather than by
 misreading a fact.
 
-**Scheduled handlers are deliberately not endpoints, and this omission is
-scoped rather than permanent.** [D00](docs/components/D00-fact-schema.md) §4
-documents a `root_kind` set whose members include `scheduled`, and
-[D01](docs/components/D01-graph-schema.md) §5 documents a `trace_of` walk.
-**Neither exists anywhere in `src/` today** — they are entries #7 and #11 of
-`docs/documented-not-implemented.md`, documented and never built — so this
-phase neither feeds nor reads either of them, and nothing here should be read
-as one half of a live mechanism. **This omission becomes wrong the moment a
-`root_kind` producer ships**: at that point a scheduled method IS a root, and
-these rows have to be re-examined as roots rather than left as a table nobody
-traverses. 2Q, which builds traversal, is where that happens (§9).
+**Scheduled handlers are deliberately not endpoints, and a row here IS a
+root.** The two are separate claims and both hold. A method the framework
+calls on a clock still serves no protocol and no address, so it never becomes
+an `endpoints` row — but it starts work and contains business logic, so it is
+one of [D00](docs/components/D00-fact-schema.md) §4's `root_kind` members and a
+trace begins at it exactly as one begins at a served handler.
+
+*This docstring said the opposite until 2Q's `I1`* — that `root_kind` "does
+not exist anywhere in `src/`", entry #7 of
+`docs/documented-not-implemented.md`, and that the omission "becomes wrong the
+moment a `root_kind` producer ships". It shipped:
+`resolve/roots.py` reads this table and writes one `roots` row per handler
+here, so nothing in this file is half of a live mechanism any more. The engine
+itself is unchanged by that — it still derives `scheduled_work` and nothing
+else; what changed is that something downstream now walks from what it wrote.
 
 **What is read, and what is not.** The catalog names one annotation, the
 container javac folds repeats into, and which of the annotation's attributes

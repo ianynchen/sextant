@@ -14,6 +14,30 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A scheduled job is a root, not a table nobody walks** (2Q, `I1`).
+  [D00](docs/components/D00-fact-schema.md) §4 has documented a `root_kind` set for as long
+  as the fact schema has existed and **nothing produced one** — entry #7 of
+  [documented-not-implemented.md](docs/documented-not-implemented.md), and the reason
+  `resolve/engines/scheduled_work.py` carried a docstring saying its own rows fed no root
+  set. New derived table **`roots`** ([D01](docs/components/D01-graph-schema.md) §3): one
+  row per (`handler`, `root_kind`), written from every `endpoints` row the module exposes
+  and names a handler for, and from every `scheduled_work` handler.
+  **A root is a place a walk starts, not an address.** A method serving three paths is ONE
+  root — the walk is the same whichever path invoked it — so the fixture's 77
+  handler-bearing endpoint rows collapse to 66 roots. A method that is both exposed and
+  scheduled is two rows, because those are two different answers to "what starts this".
+  **The member list is corrected as part of shipping it.** `http_inbound`, `soap_inbound`,
+  `grpc_inbound` and `message_inbound` collapse to one `inbound_endpoint`: protocol is a
+  property of an endpoint (`CONTEXT.md`), an inbound row already carries it, and
+  `message_inbound` named a `message` protocol family this schema had already retired.
+  `cli_entry` becomes `entry_point`, which is what `CONTEXT.md` calls it and claims no
+  command-line surface nobody measured.
+  **`entry_point` has no producer, deliberately.** Which signature starts a program is a
+  LANGUAGE rule and ARCHITECTURE §10 keeps those out of the resolver, so it needs a
+  catalog and none declares one. Recorded as `OI-22` and in
+  [COVERAGE](docs/COVERAGE.md) §7 rather than left for a reader to discover. Closes
+  register entry #7.
+
 - **A value chain now crosses a method boundary** (2Q, `G3`). Within a method the chain was
   already complete — a `call_site` carries the value id its call produced, and every
   argument carries the `source` id of the call that produced it — so

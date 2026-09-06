@@ -607,11 +607,52 @@ mechanism), and a reset owned by the engine would run once per catalog and leave
 whichever ran last. Both are pre-declared empty like `endpoints` and `shapes`, so the query
 answers with an empty result rather than an error on a module that schedules nothing.
 
-**Neither feeds a root set.** [D00](D00-fact-schema.md) §4 documents a `root_kind` set whose
-members include `scheduled`, and §5 below documents a `trace_of` walk. Neither exists in the
-implementation, so a scheduled row is not a root today and nothing traverses from one.
-**That becomes wrong the moment a `root_kind` producer ships**, at which point these rows
-must be re-examined as roots rather than left as a table nobody walks.
+**`scheduled_work` now feeds the root set, and `error_handlers` deliberately does not.**
+That paragraph read "neither feeds a root set" until 2Q's `I1` shipped the `root_kind`
+producer this section named as the condition that would make it wrong — so a scheduled row
+IS a root now, and `roots` below carries one per scheduled handler. An error handler is
+not: it runs INSIDE work something else already started, so a trace beginning at one would
+report an exception path as though a request or a clock had begun it.
+
+### Roots
+
+2Q's `I1`, and the thing that made a scheduled method first-class rather than a row in a
+table nobody walked.
+
+| Table | Holds |
+|---|---|
+| `roots` | One row per (`handler`, `root_kind`): the method a trace starts at, and what starts it |
+
+**Written by `application/resolve/roots.py`** from two tables the catalog-driven half has
+already finished with: every `endpoints` row the module EXPOSES and names a handler for
+(`direction <> outbound`, the `resolved_peers` test rather than `= inbound`, so a merged
+`both` row keeps its trace), and every `scheduled_work` row's handler.
+[D00](D00-fact-schema.md) §4's third member, `entry_point`, has no producer — which
+signature starts a program is a LANGUAGE rule and [ARCHITECTURE](../ARCHITECTURE.md) §10
+keeps those out of the resolver, so its producer is a catalog nobody has written
+(`docs/open-issues.md`, OI-22).
+
+**One row per handler and kind, never per address.** A method serving three paths is ONE
+root: the walk that runs from it is the same walk whichever address invoked it, and three
+rows would be three copies of one answer. A method that is both exposed and scheduled is
+two rows, because those are two different answers to "what starts this". On the
+orders-service fixture, 77 handler-bearing endpoint rows collapse to 66 roots.
+
+**It carries no `resolution` or `evidence`, deliberately.** A row says one thing — this
+method is where a trace of this kind begins — and every claim underneath it lives on the
+row that named the handler, with its own trust columns. Copying them here would be §6's
+"no fact that was merely copied", with nothing keeping the two copies equal.
+
+**Not exported** ([D06](D06-bundle-format.md) §5's table list is unchanged), for
+`return_flows`' reason: the bundle is a published surface, and a root is trivially
+recomputable from two tables that ARE exported, so freezing this shape into one buys a
+consumer nothing it could not derive.
+
+**Why a table and not an argument to the walk.** A traversal that took an endpoint handler
+would have to be reopened the first time something else started work, and every question
+the walk asks — which method, how deep, where it stops — is identical for a request and for
+a clock. So the walk takes a row from here and branches on the kind nowhere at all, which
+is also what makes the third kind free the day it gains a producer.
 
 ---
 

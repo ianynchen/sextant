@@ -500,6 +500,13 @@ _NAMED_QUERIES = {
         ORDER BY advice, handler, exception, status, response_shape,
                  declared_by, scope::VARCHAR, resolution, evidence, catalog_id
     """,
+    # 2Q `I1`'s root set — the methods a trace starts at, with the kind of
+    # thing that starts it. Ordered on the whole row because that is all there
+    # is: `handler` alone is not total (one method can be both the target of a
+    # request and the target of a clock, which is two rows and two different
+    # answers), and an ordering with ties is one that can change between runs
+    # (NFR-1) — the `scheduled_work` reasoning, one table on.
+    "roots": "SELECT handler, root_kind FROM roots ORDER BY handler, root_kind",
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
     "facts": "SELECT count(*) AS facts FROM raw_facts",
@@ -656,6 +663,10 @@ _NAMED_DERIVATIONS = {
     # more than one catalog writes to them.
     "return_flows_reset": "reset_return_flows.sql",
     "return_flows_insert": "insert_return_flows.sql",
+    # 2Q `I1`. A reset/insert pair owned by its one writing pass, exactly as
+    # `return_flows` above is and for the same reason.
+    "roots_reset": "reset_roots.sql",
+    "roots_insert": "insert_roots.sql",
 }
 
 

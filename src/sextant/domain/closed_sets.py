@@ -93,6 +93,42 @@ class Direction(StrEnum):
     BOTH = "both"
 
 
+class RootKind(StrEnum):
+    """What kind of thing a trace starts from (D00 §4, 2Q `I1`).
+
+    `CONTEXT.md` settles the modelling: a root is "an inbound endpoint, a
+    scheduled job, or a program entry point" — three kinds, and the set is
+    those three.
+
+    **It was six, and four of them were one member spelled per protocol.**
+    D00 §4 documented `http_inbound`, `soap_inbound`, `grpc_inbound` and
+    `message_inbound` beside `scheduled` and `cli_entry`, with no producer for
+    any of them. Collapsing the four is not a narrowing: protocol is a property
+    of an endpoint (`CONTEXT.md`), an inbound endpoint row already carries it,
+    and a second copy on the root would be the same value in two places with
+    nothing keeping them equal. `message_inbound` was worse than redundant —
+    it named a `message` protocol family this schema RETIRED, so the one root
+    kind a broker listener could take named nothing in `Protocol` at all.
+    `cli_entry` becomes `ENTRY_POINT` for the reason `CONTEXT.md` writes it
+    that way: a `main` is a program entry point whether or not anything about
+    it is a command-line interface, and `cli` claimed a surface nobody
+    measured.
+
+    **`ENTRY_POINT` has no producer, and that is stated rather than glossed**
+    (§5.3, GUIDELINES §2). Which signature starts a program is knowledge about
+    a LANGUAGE, and ARCHITECTURE §10 keeps language knowledge out of the
+    language-blind half — so its producer is a catalog, and no catalog declares
+    one yet (`docs/open-issues.md`, OI-22). The member is here anyway because
+    the traversal that reads this table branches on no kind at all: it takes a
+    root, and a root of this kind traces exactly as the other two do the day
+    something writes one.
+    """
+
+    INBOUND_ENDPOINT = "inbound_endpoint"
+    SCHEDULED = "scheduled"
+    ENTRY_POINT = "entry_point"
+
+
 class Format(StrEnum):
     """What is on a channel's wire (2G design §4). A property of the channel,
     inferred, never a protocol and never a property of a payload *type*: a

@@ -178,8 +178,29 @@ an observation, never a trust judgement.
 
 **`relationship_kind`** — `extends`, `implements`, `type_of`
 
-**`root_kind`** — `http_inbound`, `soap_inbound`, `grpc_inbound`, `message_inbound`,
-`scheduled`, `cli_entry`
+**`root_kind`** — `inbound_endpoint`, `scheduled`, `entry_point`. What kind of thing a
+trace starts from, and the set is `CONTEXT.md`'s own three: "an inbound endpoint, a
+scheduled job, or a program entry point". Produced by `application/resolve/roots.py` into
+[D01](D01-graph-schema.md) §3's `roots` since 2Q's `I1` — before which this set had no
+producer at all and was entry #7 of
+[documented-not-implemented.md](../documented-not-implemented.md).
+
+*It read `http_inbound`, `soap_inbound`, `grpc_inbound`, `message_inbound`, `scheduled`,
+`cli_entry` until `I1`, and four of those six were one member spelled once per protocol.*
+**Protocol is a property of an endpoint, not a second kind of root** (`CONTEXT.md`): an
+inbound `endpoints` row already carries it, so a per-protocol root kind is the same value
+in two places with nothing keeping them equal — and it does not even cover the set, since
+`message_inbound` names a `message` protocol family this schema **retired**, leaving a
+broker listener's root kind naming nothing in `protocol` at all. `cli_entry` became
+`entry_point` because a `main` is a program entry point whether or not anything about it
+is a command-line interface, and `cli` claimed a surface no producer measured.
+
+**`entry_point` has no producer, and that is stated rather than left to a reader.** Which
+signature starts a program is a fact about a LANGUAGE, and [ARCHITECTURE](../ARCHITECTURE.md)
+§10 keeps language knowledge out of the language-blind half — so its producer is a catalog,
+and none declares one (`docs/open-issues.md`, OI-22). The member stays in the set because
+the traversal that reads `roots` branches on no kind at all: a root of this kind traces
+exactly as the other two do the day something writes one.
 
 **`terminal_kind`** — `outbound_call`, `returns`, `ends_silently`, `persistence`,
 `throws`, `unresolved`, `async_handoff`, `cycle`

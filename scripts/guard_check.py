@@ -149,6 +149,7 @@ _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 _ARGUMENTS = "sextant/application/resolve/shapes/arguments.py"
 _RETURN_FLOW = "sextant/application/resolve/return_flow.py"
+_ROOTS = "sextant/application/resolve/roots.py"
 
 
 GUARDS: dict[str, Guard] = {
@@ -714,6 +715,40 @@ GUARDS: dict[str, Guard] = {
                 find="jakarta.servlet",
                 replace="javax.servlet",
                 occurrences=23,
+            ),
+        ),
+    ),
+    # --- 2Q `I1`, the root set ---------------------------------------------
+    "roots.a-row-naming-no-handler-is-no-root": Guard(
+        what="an endpoint row becomes a root only where it NAMES a handler — and an exposed "
+        "row need not: a functional route's handler is a lambda no chain reader named",
+        why="the missing value does not stay missing. Read anyway it becomes a root handler "
+        "in its own right — a symbol no fact ever declared — and a walk starts at a method "
+        "that does not exist, finding nothing and saying nothing about why. The compiled "
+        "fixture carries five such rows, so this is one root in thirteen that would be a "
+        "trace of nothing published beside traces that are real",
+        edits=(
+            Edit(
+                path=_ROOTS,
+                find='        if row["handler"] is not None and str(row["direction"]) != str(Direction.OUTBOUND)',
+                replace='        if str(row["direction"]) != str(Direction.OUTBOUND)  # guard disabled',
+            ),
+        ),
+    ),
+    "roots.only-a-row-the-module-exposes-is-a-root": Guard(
+        what="only an endpoint row the module EXPOSES becomes a root — a row the module "
+        "calls is a call it makes, whatever method the row happens to name",
+        why="`CONTEXT.md`'s definition, and the wire direction inverted when it is gone: a "
+        "trace from an outbound row starts at whatever method built the REQUEST and reports "
+        "a client-side call as a place work begins. The test that measures it stages a row "
+        "no engine writes today (an outbound row naming a handler) on purpose — the rule has "
+        "to hold on the day one does, rather than by accident of which column currently "
+        "happens to be NULL",
+        edits=(
+            Edit(
+                path=_ROOTS,
+                find='        if row["handler"] is not None and str(row["direction"]) != str(Direction.OUTBOUND)',
+                replace='        if row["handler"] is not None  # guard disabled',
             ),
         ),
     ),

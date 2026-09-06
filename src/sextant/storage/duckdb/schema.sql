@@ -325,6 +325,50 @@ CREATE TABLE IF NOT EXISTS return_flows (
     evidence       TEXT
 );
 
+-- 2Q `I1`: the set a trace starts FROM (D01 §3). One row per (method, kind).
+--
+-- D00 §4 has documented a `root_kind` set since the fact schema was written
+-- and nothing produced it, which is why the two non-wire tables above carry
+-- the note that they "feed no root set" — an inbound row and a scheduled row
+-- were equally the start of some work and only one of them was ever traced
+-- from. This table is that set, made real, and it is what lets a traversal
+-- take a ROOT rather than an endpoint handler: the same walk runs from work
+-- the framework starts on a clock as from work a request starts, because
+-- nothing in it branches on the kind.
+--
+-- **It carries no trust columns, deliberately.** A row says one thing — this
+-- method is where a trace of this kind begins — and every claim underneath it
+-- (which address is served, which schedule declares it, how well either
+-- resolved) already lives on the row that named the handler. Copying a
+-- `resolution` or an `evidence` here would put one claim in two places with
+-- nothing keeping the two equal, which is the rule D01 §6 states as "no fact
+-- that was merely copied".
+--
+-- **One row per (handler, kind), never per address.** A method serving three
+-- paths is one root: the trace that runs from it is the same walk whichever
+-- path invoked it, and three rows would be three copies of one answer. A
+-- reader that wants the addresses joins `endpoints` on `handler`, which is
+-- also where their wire identity and trust columns are.
+--
+-- Replaced WHOLE per resolve through reset_roots.sql + insert_roots.sql, and
+-- BOTH run from the one pass that writes here — the return_flows discipline
+-- rather than the scheduled_work one, because there is exactly one writer.
+-- Pre-declared empty like every table above it, so the "roots" query answers
+-- with an empty result rather than an error on a module that exposes nothing.
+CREATE TABLE IF NOT EXISTS roots (
+    -- The method a trace starts at, module-prefixed exactly as the row that
+    -- named it spells it (D00 §5a) — `endpoints.handler` or
+    -- `scheduled_work.handler`, verbatim, so a reader joins straight back.
+    handler   TEXT,
+    -- D00 §4's root_kind. `inbound_endpoint` where a row the module EXPOSES
+    -- named this handler; `scheduled` where a declaration hands it to a clock.
+    -- The third member, `entry_point`, has no producer — which signature
+    -- starts a program is knowledge about a language, and ARCHITECTURE §10
+    -- keeps that out of the language-blind half, so its producer is a catalog
+    -- nobody has written (`docs/open-issues.md`, OI-22).
+    root_kind TEXT
+);
+
 CREATE OR REPLACE VIEW documents AS
 SELECT document_id,
        payload ->> 'relative_path'   AS relative_path,

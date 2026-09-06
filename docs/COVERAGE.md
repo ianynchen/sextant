@@ -1997,6 +1997,35 @@ is catalogs and an `AndroidManifest.xml` reader, not a scanner.
 
 ## 7. Cross-cutting findings
 
+### What a trace can start from
+
+2Q's `I1` produces [D00](components/D00-fact-schema.md) §4's `root_kind` into
+[D01](components/D01-graph-schema.md) §3's `roots`, so "a scheduled job is a first-class
+root" stopped being a sentence in a document. Two of the set's three members have a
+producer; the third does not, and this is where a reader meets that.
+
+| Root kind | Produced from | State |
+|---|---|---|
+| `inbound_endpoint` | every `endpoints` row the module exposes and names a handler for — `direction <> outbound`, so a merged `both` row keeps its trace | ✅ shipped. 77 handler-bearing rows collapse to 66 roots on the orders-service fixture: a root is a place a walk starts, not an address |
+| `scheduled` | every `scheduled_work` handler | ✅ shipped. The user's own ruling — a scheduled job still contains business logic — and the reason `I1` was promoted out of paperwork |
+| `entry_point` | nothing | **Boundary — the member exists and no producer writes it.** Which signature starts a program is a rule of a LANGUAGE, and ARCHITECTURE §10 keeps language knowledge out of the language-blind half: the descriptor a runtime looks for belongs in a catalog exactly as a framework's annotation does, and no catalog declares one. Matching on a method's NAME alone would derive a root for any method that happens to be called that. **Falsified by** a module whose only starting point is a `main` producing no trace at all. **Closes with** a catalog declaring the entry-point signature — `docs/open-issues.md` OI-22 |
+
+**An error handler is deliberately not a root.** It runs INSIDE work something else already
+started, so a trace beginning at one would report an exception path as though a request or
+a clock had begun it. `error_handlers` therefore feeds nothing here, while `scheduled_work`
+does.
+
+**An exposed row that names no handler produces no root, and that is an under-report worth
+naming.** A functional-route row — `RouterFunctions.route(GET("/kt/orders"), handler)` — is
+a real served address whose handler is a LAMBDA the chain reader did not name, so the row
+carries `caller` (the method that built the router) and a NULL `handler`. **Measured: 5 of
+the orders-service fixture's 82 exposed rows**, four functional routes and one binding whose
+destination configuration named nothing. Making the `caller` a root instead would state that
+a request trace begins at the router REGISTRATION, which runs once at startup and is not the
+work the request does. **Falsified by** a functional route whose real work is invisible in
+every trace. **Closes with** the chain reader naming the lambda as the row's handler — at
+which point these become roots with no change here — `docs/open-issues.md` OI-23.
+
 ### Where a value chain stops, now that it crosses method boundaries
 
 2Q's `G3` links a callee's returned value to the caller's own `result` id
