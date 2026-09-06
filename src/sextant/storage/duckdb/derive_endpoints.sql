@@ -19,14 +19,32 @@
 --                           amended) — a Retrofit interface carries no marker,
 --                           so its method annotations are the whole evidence.
 --   $mapping_annotations -- list of {fqn, methods, requires_qualifier,
---                           unless_attribute, unless_equals} rows: one per
+--                           unless_attribute, unless_equals, path_fallback,
+--                           path_fallback_prefixes} rows: one per
 --                           mapping annotation. `methods` holds the methods
 --                           that annotation pre-sets, or NULL where it pre-sets
 --                           none; the `unless_*` pair names the attribute whose
 --                           value makes the rule derive NOTHING (2I design §2,
---                           word 4), both NULL where it withdraws nothing.
+--                           word 4), both NULL where it withdraws nothing; the
+--                           `path_fallback*` pair is `$path_fallback`'s answer
+--                           FOR THIS ANNOTATION (`OI-5`), already resolved
+--                           against the catalog-level default by
+--                           `annotation_driven.py::_mapping_annotation`, so this
+--                           file never asks which level declared it.
 --   $prefix_annotation   -- fqn of the type-level annotation carrying the path prefix
 --   $path_from           -- attribute names that alias one another, first present wins
+--   $path_from_siblings  -- `OI-35`: {ordinal, annotation, arg} rows naming a
+--                           name source that lives on ANOTHER annotation of the
+--                           same declaration, `ordinal` counting from the order
+--                           the catalog wrote — which is the order the framework
+--                           consults them in, and the whole content of the key,
+--                           since a set would not say which of two present
+--                           sources supplies the name. Consulted only where
+--                           every $path_from alias was absent. Empty for every
+--                           catalog that declares none, which is every catalog
+--                           written before it: an empty list matches no
+--                           annotation, the lookup below finds nothing, and the
+--                           composed address is exactly what it was.
 --   $prefix_from         -- attribute names the prefix annotation's address
 --                           prefix is read from (D02 §2, amended, spec ruling
 --                           I2): kept apart from $peer_from because on some
@@ -49,11 +67,27 @@
 --                           response media types are read from; same rules as
 --                           $consumes_from.
 --   $path_fallback       -- what the declared name is when every $path_from
---                           attribute is ABSENT, or NULL to keep the empty
---                           default. Today's one word is 'construct_name':
+--                           attribute and every $path_from_siblings source is
+--                           ABSENT, or NULL to keep the empty
+--                           default. The first word was 'construct_name':
 --                           the annotated construct's own name. A closed
 --                           vocabulary rather than a boolean, so a second
 --                           source is a new word here, not a second key.
+--                           Read at this level only by a row that carries no
+--                           mapping annotation to read a word off — an
+--                           unannotated exposed member ($members). Every
+--                           ANNOTATED declaration reads `mc.path_fallback`,
+--                           which is this value or the annotation's own
+--                           override (`OI-5`).
+--   $path_fallback_prefixes -- the accessor prefixes $path_fallback's word
+--                           strips off the construct's own name before
+--                           publishing it, or an empty list for a word that
+--                           strips none ('construct_name') and for no word at
+--                           all. Which prefixes belong to which word is
+--                           `annotation_driven.py::_PATH_FALLBACKS`, measured
+--                           by CP-15 rows 4a-4b; the three CONDITIONS of the
+--                           strip are spelled below, where the construct's own
+--                           name is read.
 --   $qualifier_from      -- attribute names holding the SCOPE the declared
 --                           name sits inside, read off the SAME (method-level)
 --                           annotation, first present wins — kept apart from
@@ -203,11 +237,22 @@ WITH RECURSIVE mapping_catalog AS (
            -- bytecode JSON boolean compare without either side guessing at the
            -- other's type. Both NULL where the rule withdraws nothing.
            s.unless_attribute AS unless_attribute,
-           s.unless_equals AS unless_equals
+           s.unless_equals AS unless_equals,
+           -- `OI-5`: this annotation's own answer to "what is the declared name
+           -- when nothing named one". The framework CP-15 measured chooses the
+           -- transformation by WHICH operation annotation matched — the read
+           -- direction strips `get`/`is`, the write direction strips `set` —
+           -- so one word for the whole file makes one of the two newly wrong.
+           -- Both columns already carry the catalog-level default for an entry
+           -- that declares no override, so a catalog written before this word
+           -- binds one value on every entry and derives byte-identically.
+           s.path_fallback AS path_fallback,
+           s.path_fallback_prefixes AS path_fallback_prefixes
     FROM (SELECT UNNEST(
         $mapping_annotations::STRUCT(
             fqn VARCHAR, methods VARCHAR[], requires_qualifier BOOLEAN,
-            unless_attribute VARCHAR, unless_equals VARCHAR
+            unless_attribute VARCHAR, unless_equals VARCHAR,
+            path_fallback VARCHAR, path_fallback_prefixes VARCHAR[]
         )[]
     ) AS s)
 ),
@@ -222,6 +267,44 @@ annotations_effective AS (
     SELECT s.target, s.annotation, s.args::JSON FROM (SELECT UNNEST(
         $synthetic_annotations::STRUCT(target VARCHAR, annotation VARCHAR, args VARCHAR)[]
     ) AS s)
+),
+-- `OI-35`: the name sources that live on ANOTHER annotation of the same
+-- declaration, and the ONE of them a declaration is actually served under.
+--
+-- **The order is the rule.** CP-15 rows 1a-1b disassemble
+-- `OperationCreator.getOperationName` and show it building an array of name
+-- sources whose `iconst_N` indices ARE the order, then taking the first entry
+-- WITH A VALUE. So a method carrying two of these is served under the earlier
+-- one, and a vocabulary that could only name a SET would not say which. The
+-- ordinal is attached in `annotation_driven.py::_sibling_sources` because a
+-- list's order is not a column, and `min_by` is "first present wins" said over
+-- one.
+--
+-- Grouped by TARGET rather than by the matched annotation, and that is what
+-- makes it a sibling read: these annotations sit beside the mapping annotation
+-- on the same declaration and are not the mapping annotation, so nothing here
+-- joins `mapping_catalog` at all. At most one row per target reaches `declared`
+-- below, which is why the LEFT JOIN there cannot fan a declaration out.
+--
+-- Scalar-or-array like every other attribute read in this file, so a framework
+-- that arrays its name attribute needs no second rule.
+--
+-- Both CTEs are empty for every catalog that declares no sibling source, so the
+-- LEFT JOIN below finds nothing and the `coalesce` reduces to what it was.
+sibling_path_sources AS (
+    SELECT s.ordinal AS ordinal, s.annotation AS annotation, s.arg AS arg
+    FROM (SELECT UNNEST(
+        $path_from_siblings::STRUCT(ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[]
+    ) AS s)
+),
+sibling_names AS (
+    SELECT a.target AS target,
+           min_by(coalesce(TRY_CAST(a.args -> sp.arg AS VARCHAR[]), [a.args ->> sp.arg]),
+                  sp.ordinal) AS found
+    FROM annotations_effective a
+    JOIN sibling_path_sources sp ON sp.annotation = a.annotation
+    WHERE coalesce(a.args -> sp.arg ->> 0, a.args ->> sp.arg) IS NOT NULL
+    GROUP BY a.target
 ),
 -- D02 §2c's direction resolution, as two lookups. Both UNNEST an empty list
 -- for every catalog that declares no rule, so both LEFT JOINs below find
@@ -253,12 +336,20 @@ declared AS (
         -- `coalesce` reads "no gate type was carried" and falls through to the
         -- behaviour every catalog written before `A-M15` had.
         CAST(NULL AS VARCHAR) AS gate_type,
+        -- The matched annotation's own aliases first, then `OI-35`'s sibling
+        -- sources, then the empty default that `$path_fallback` answers. That
+        -- ORDER is the framework's, not a convenience: CP-15 row 1 puts the
+        -- operation annotation's own `value` at index 0 of the source array,
+        -- ahead of all four siblings. A framework consulting a sibling BEFORE
+        -- the matched annotation's own attribute cannot be stated in this
+        -- grammar, and that boundary is in `docs/COVERAGE.md` rather than
+        -- silent.
         coalesce(list_extract(list_filter(list_transform(
             $path_from::VARCHAR[],
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
-        ), v -> v IS NOT NULL), 1), ['']) AS paths,
+        ), v -> v IS NOT NULL), 1), sn.found, ['']) AS paths,
         coalesce(
             CASE WHEN len(coalesce(
                 TRY_CAST(a.args -> $method_from AS VARCHAR[]),
@@ -304,9 +395,15 @@ declared AS (
             $qualifier_from::VARCHAR[],
             n -> coalesce(a.args -> n ->> 0, a.args ->> n)
         ), v -> v IS NOT NULL), 1) AS qualifier,
-        mc.requires_qualifier AS requires_qualifier
+        mc.requires_qualifier AS requires_qualifier,
+        -- `OI-5`: carried per ROW because it is per ANNOTATION, and the union
+        -- with `member_declarations` below puts both kinds of row through one
+        -- expression.
+        mc.path_fallback AS path_fallback,
+        mc.path_fallback_prefixes AS path_fallback_prefixes
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
+    LEFT JOIN sibling_names sn ON sn.target = a.target
     -- THE WITHDRAWAL FILTER (2I design §2, word 4). A declaration whose named
     -- attribute carries the withdrawing value derives NOTHING: the framework
     -- itself does not expose it, so a row here would be an endpoint nobody
@@ -559,7 +656,14 @@ member_declarations AS (
         -- confidently-wrong-address failure `requires_qualifier` exists to
         -- close, reached by the one route that carries no annotation.
         (SELECT coalesce(bool_or(requires_qualifier), FALSE) FROM mapping_catalog)
-            AS requires_qualifier
+            AS requires_qualifier,
+        -- The CATALOG-level word, and never a per-annotation one: this row
+        -- exists precisely because the member carries no annotation to read an
+        -- override off (`OI-5`). `_validate_naming` already refuses `$members`
+        -- declared without `$path_fallback`, so this is never NULL on a catalog
+        -- that reaches here.
+        $path_fallback AS path_fallback,
+        $path_fallback_prefixes::VARCHAR[] AS path_fallback_prefixes
     FROM exposed_members em
     JOIN symbols s ON s.symbol = em.symbol
     WHERE em.nearest = 1
@@ -665,7 +769,9 @@ mapped_methods AS (
            d.consumes_list AS consumes_list,
            d.produces_list AS produces_list,
            d.qualifier AS qualifier,
-           d.requires_qualifier AS requires_qualifier
+           d.requires_qualifier AS requires_qualifier,
+           d.path_fallback AS path_fallback,
+           d.path_fallback_prefixes AS path_fallback_prefixes
     FROM (SELECT * FROM declared UNION ALL SELECT * FROM member_declarations) d
 ),
 mappings AS (
@@ -676,7 +782,9 @@ mappings AS (
            mm.consumes_list AS consumes_list,
            mm.produces_list AS produces_list,
            mm.qualifier AS qualifier,
-           mm.requires_qualifier AS requires_qualifier
+           mm.requires_qualifier AS requires_qualifier,
+           mm.path_fallback AS path_fallback,
+           mm.path_fallback_prefixes AS path_fallback_prefixes
     FROM mapped_methods mm
 ),
 derived AS (
@@ -731,20 +839,55 @@ derived AS (
         -- exclusive by contract (`annotation_driven.py::_validate_naming`),
         -- so this reads as one rule with two spellings rather than two rules
         -- racing.
+        --
+        -- The construct's own name, off the symbol the join below already
+        -- resolved. D00 §1's descriptor puts it between the type separator and
+        -- the signature — the shape `$method_from`'s own read above already
+        -- relies on. `$` is in the class because the JVM admits it in a method
+        -- name; a symbol this failed to match would yield '' silently, which is
+        -- the empty-address failure again. Spelled once as a column because the
+        -- accessor strip below reads it four times.
+        regexp_extract(s.symbol, '#([A-Za-z0-9_$]+)\(', 1) AS construct_name,
         CASE WHEN coalesce(m.qualifier, q.qualifier) IS NOT NULL
              THEN CASE WHEN $qualifier_format = 'qname'
                        THEN '{' || coalesce(m.qualifier, q.qualifier) || '}'
                        ELSE coalesce(m.qualifier, q.qualifier) || $qualifier_separator END
              ELSE '' END
-            || CASE WHEN m.path_suffix = '' AND $path_fallback = 'construct_name'
-                    -- The construct's own name, off the symbol the join below
-                    -- already resolved. D00 §1's descriptor puts it between
-                    -- the type separator and the signature — the shape
-                    -- `$method_from`'s own read above already relies on.
-                    -- `$` is in the class because the JVM admits it in a
-                    -- method name; a symbol this failed to match would yield
-                    -- '' silently, which is the empty-address failure again.
-                    THEN regexp_extract(s.symbol, '#([A-Za-z0-9_$]+)\(', 1)
+            -- THE FALLBACK, and the ACCESSOR STRIP some words apply to it
+            -- (`OI-5`). `m.path_fallback` is the word for THIS row's own
+            -- annotation, already resolved against the catalog default, so a
+            -- catalog whose two operation annotations face opposite directions
+            -- gets one rule each instead of one rule that is wrong for one of
+            -- them. NULL means no fallback at all, which is what every catalog
+            -- declaring none binds, and the branch is then never taken.
+            --
+            -- The strip is MEASURED and its three conditions are the
+            -- framework's own (CP-15 rows 4a-4b, exercised by row 5's compiled
+            -- run): the name starts with the prefix, is LONGER than it, and
+            -- carries an upper-case character AT THE SEAM — then the remainder
+            -- is taken with its FIRST CHARACTER lowercased, never the whole of
+            -- it. `getURL -> uRL` is the edge that tells this rule apart from
+            -- every plausible paraphrase, `get -> get` is the length test and
+            -- `gettotal -> gettotal` the seam test. A word that strips nothing
+            -- ('construct_name') binds an empty prefix list, so the
+            -- `list_transform` yields nothing and the `coalesce` hands the name
+            -- back unchanged — which is exactly what it did before this key.
+            --
+            -- `[A-Z]` is ASCII because the name this can ever see is: the
+            -- extraction above admits `[A-Za-z0-9_$]` and nothing else, so a
+            -- method named with a non-ASCII letter yields '' here long before
+            -- the seam test runs. This stops being right the day that character
+            -- class widens.
+            || CASE WHEN m.path_suffix = '' AND m.path_fallback IS NOT NULL
+                    THEN coalesce(list_extract(list_filter(list_transform(
+                             m.path_fallback_prefixes,
+                             x -> CASE WHEN starts_with(construct_name, x)
+                                            AND length(construct_name) > length(x)
+                                            AND regexp_matches(
+                                                substr(construct_name, length(x) + 1, 1), '[A-Z]')
+                                       THEN lower(substr(construct_name, length(x) + 1, 1))
+                                            || substr(construct_name, length(x) + 2) END
+                         ), v -> v IS NOT NULL), 1), construct_name)
                     ELSE m.path_suffix END AS scoped_name,
         -- THE CONSTANT PREFIX ($path_prefix), joined onto the FRONT of the
         -- type-level prefix under the same seam rule the address seam below

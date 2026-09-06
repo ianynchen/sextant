@@ -14,6 +14,7 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_annotations import (
     composed_mapping_rows,
+    folded_rows,
     inherited_rows,
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
@@ -48,25 +49,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     prefix_annotation = mapping["prefix_annotation"]
     # Optional too (Retrofit, spring-jms): no class-level prefix shape.
     prefix_fqn = None if prefix_annotation is None else _catalog_symbol(prefix_annotation)
-    mapping_annotations = [
-        {
-            "fqn": _catalog_symbol(m["fqn"]),
-            "methods": m.get("method"),
-            # 2H design §1: this annotation names a member of a scope, so a
-            # declaration under it has no address at all until the scope is
-            # found. Absent (the default) on every annotation that names a
-            # top-level identity, which is every annotation shipped before it.
-            "requires_qualifier": bool(m.get("requires_qualifier", False)),
-            # 2I design §2, word 4: the attribute this rule withdraws itself on,
-            # and the value that withdraws it. Both NULL on every annotation
-            # that withdraws nothing, which is every annotation shipped before
-            # this word — the pair is read as "no filter" and the rule derives
-            # exactly what it always did.
-            "unless_attribute": _unless_attribute(m),
-            "unless_equals": _unless_equals(m),
-        }
-        for m in mapping["annotations"]
-    ]
+    mapping_annotations = [_mapping_annotation(mapping, m) for m in mapping["annotations"]]
     workspace.derive(
         "endpoints",
         protocol=catalog.protocol,
@@ -96,6 +79,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # derivation reads that absence as "every method in all_methods".
         mapping_annotations=mapping_annotations,
         path_from=list(mapping["path_from"]),
+        # `OI-35`: the name sources that live on OTHER annotations of the same
+        # declaration, consulted in the order the catalog lists them and only
+        # where every `path_from` alias was absent. Empty for every catalog that
+        # declares none, which is every catalog written before this word — an
+        # empty list matches no annotation, so the lookup finds nothing and the
+        # composed address is exactly what it was. The ordinal is attached HERE
+        # rather than relied on in the query, because a list's order is not a
+        # column and `min_by` needs one to be able to say "first present".
+        path_from_siblings=_sibling_sources(catalog, mapping),
         prefix_from=list(mapping["prefix_from"]),
         peer_from=list(mapping.get("peer_from", [])),
         method_from=mapping["method_from"],
@@ -113,6 +105,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # in front of that name. Absent on every catalog written before them,
         # which is what keeps their derivations byte-identical.
         path_fallback=mapping.get("path_fallback"),
+        # The catalog-level word's own prefix data, for the one row shape that
+        # carries no mapping annotation to read a per-annotation word off — an
+        # unannotated exposed member (`$members`). Empty where the catalog
+        # declares no fallback at all, and empty for `construct_name`.
+        path_fallback_prefixes=list(_PATH_FALLBACKS.get(str(mapping.get("path_fallback")), ())),
         qualifier_from=list(mapping.get("qualifier_from", [])),
         qualifier_separator=mapping.get("qualifier_separator"),
         # 2I design §2's two QName forms, both optional and both inert unless
@@ -175,7 +172,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # the identical route a controller's own mapping derives, and stops the
         # two merging (ruling R12).
         flip_canonical_path=flip.canonical_path,
-        # 2E design §2, §3: the effective-annotations pre-pass widens
+        # 2E design §2, §3: the effective-annotations pre-pass UNFOLDS every
+        # repeatable container the catalog names (`OI-36`, first, so the two
+        # passes below see a folded use as an ordinary one) and widens
         # this catalog's own mapping fqns to every module-local annotation
         # type transitively meta-annotated with one of them PLUS, for a
         # catalog that declares its own type-level gate, every mapping a
@@ -186,7 +185,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # inheritance walk each time) and handed to the SQL as synthetic
         # `annotations` rows rather than as a second code path there.
         synthetic_annotations=_synthetic_annotations(
-            workspace, mapping_annotations, prefix_fqn, type_annotation_fqn
+            workspace, catalog, mapping_annotations, prefix_fqn, type_annotation_fqn
         ),
     )
     # Optional (D02 §2, amended): a catalog with no `reply` block declares no
@@ -308,7 +307,137 @@ def _corroboration(catalog: Catalog) -> list[str] | None:
 # a second source is a new word here instead of a second catalog key — and so
 # a typo is refused rather than read as "no fallback", which would silently
 # restore the empty path this form exists to remove.
-_PATH_FALLBACKS = frozenset({"construct_name"})
+#
+# A MAPPING rather than a set since `OI-5`, and for `_NAMESPACE_DEFAULTS`'
+# reason: each word owes the derivation a rule as well as a name, and the rule
+# here is WHICH bean-accessor prefixes the word strips off the construct's own
+# name before publishing it. `construct_name` strips none, which is what it
+# always did.
+#
+# **The two accessor words are MEASURED, not conventional** (CP-15 rows 3a-5b,
+# smallrye-graphql-schema-builder 2.0.0 and 2.18.5, row 5 compiled and RUN).
+# The framework's un-named-operation fallback is direction-dependent and the
+# direction is chosen by which operation annotation matched: the read direction
+# strips `get` and `is`, the write direction strips `set` and nothing else.
+# That is why the word sits on an ANNOTATION ENTRY as well as on the catalog —
+# one word for the file would make one of the two annotations newly wrong.
+#
+# The prefixes are engine data rather than catalog data because they are the
+# accessor convention of the LANGUAGE these facts come from, not any one
+# framework's naming choice; what a catalog states is which direction an
+# annotation faces, which is the framework's own fact. The strip's three
+# conditions — the prefix, a name longer than it, and an upper-case character
+# AT THE SEAM — and the lowercasing of that single character are spelled in
+# `derive_endpoints.sql`, because that is where the construct's own name is
+# read. `getURL -> uRL` is the edge that tells this rule apart from every
+# plausible paraphrase of it, and it is asserted.
+_PATH_FALLBACKS: dict[str, tuple[str, ...]] = {
+    "construct_name": (),
+    "read_accessor_property": ("get", "is"),
+    "write_accessor_property": ("set",),
+}
+
+
+def _mapping_annotation(mapping: dict[str, Any], entry: dict[str, Any]) -> dict[str, object]:
+    """One `mapping.annotations` entry as the STRUCT row the derivation binds.
+
+    Every field but `fqn` answers "what differs about THIS annotation", which is
+    the section's own statement of the shape (D02 §2) — and each is the inert
+    value on an entry that declares nothing, so a catalog written before any of
+    these words binds exactly what it always did.
+    """
+    fallback = _entry_fallback(mapping, entry)
+    return {
+        "fqn": _catalog_symbol(entry["fqn"]),
+        "methods": entry.get("method"),
+        # 2H design §1: this annotation names a member of a scope, so a
+        # declaration under it has no address at all until the scope is
+        # found. Absent (the default) on every annotation that names a
+        # top-level identity, which is every annotation shipped before it.
+        "requires_qualifier": bool(entry.get("requires_qualifier", False)),
+        # 2I design §2, word 4: the attribute this rule withdraws itself on,
+        # and the value that withdraws it. Both NULL on every annotation
+        # that withdraws nothing, which is every annotation shipped before
+        # this word — the pair is read as "no filter" and the rule derives
+        # exactly what it always did.
+        "unless_attribute": _unless_attribute(entry),
+        "unless_equals": _unless_equals(entry),
+        # `OI-5`: the fallback name rule, resolved to ONE word for this
+        # annotation — the entry's own where it states one, the catalog's
+        # otherwise. Resolved here rather than coalesced in the query, so the
+        # SQL reads one value and never has to know which level wrote it.
+        "path_fallback": fallback,
+        "path_fallback_prefixes": list(_PATH_FALLBACKS[fallback]) if fallback else [],
+    }
+
+
+def _entry_fallback(mapping: dict[str, Any], entry: dict[str, Any]) -> str | None:
+    """This annotation's own fallback word, or the catalog's where it declares
+    none — `None` where neither does, which is every catalog that declares no
+    fallback at all."""
+    declared = entry.get("path_fallback", mapping.get("path_fallback"))
+    return None if declared is None else str(declared)
+
+
+def _sibling_sources(catalog: Catalog, mapping: dict[str, Any]) -> list[dict[str, object]]:
+    """`mapping.path_from_siblings` as `{ordinal, annotation, arg}` rows, the
+    ordinal counting from the order the catalog wrote (`OI-35`).
+
+    The ORDER is the rule and not a presentation detail: CP-15 rows 1a-1b show
+    `getOneOfTheseMethodAnnotationsValue` taking the FIRST source with a value
+    out of an array whose `iconst_N` indices ARE that order, so a set would not
+    say which name a declaration carrying two of them is served under. It is
+    carried as a column because a list's order is not one, and the query's
+    "first present wins" is a `min_by` over it.
+
+    Refused rather than ignored when malformed, the `_validate_naming`
+    discipline: an unread entry is indistinguishable from a typo, and a typo
+    here leaves the operation published under the name the framework does not
+    serve it at — a wrong address, which is what this key exists to remove.
+    """
+    declared = mapping.get("path_from_siblings")
+    if declared is None:
+        return []
+    valid = isinstance(declared, list) and bool(declared)
+    if valid:
+        valid = all(
+            isinstance(source, dict)
+            and set(source) == _SIBLING_KEYS
+            and isinstance(source.get("annotation"), str)
+            and source["annotation"]
+            and isinstance(source.get("arg"), str)
+            and source["arg"]
+            for source in declared
+        )
+    if not valid:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.path_from_siblings` must be a non-empty "
+            f"list of `{{{', '.join(sorted(_SIBLING_KEYS))}}}` entries naming an annotation and "
+            f"one of its attributes, in the order the framework consults them — got {declared!r} "
+            f"(`OI-35`)"
+        )
+    return [
+        {
+            "ordinal": ordinal,
+            "annotation": _catalog_symbol(str(source["annotation"])),
+            "arg": str(source["arg"]),
+        }
+        for ordinal, source in enumerate(declared, start=1)
+    ]
+
+
+# The two keys a `path_from_siblings` entry may carry, and no others — a closed
+# SHAPE rather than a closed vocabulary, for `_UNLESS_KEYS`' reason: which
+# annotation names an operation and which of its attributes carries the name is
+# the framework's own convention, and an engine naming one would be naming a
+# framework in code.
+_SIBLING_KEYS = frozenset({"annotation", "arg"})
+
+# The `mapping.annotations` entry key naming the repeatable container javac
+# folds two uses of that annotation into (`OI-36`). Read in Python only — the
+# folded uses reach the query as ordinary synthetic annotation rows, so there is
+# no container in the SQL at all.
+_CONTAINER = "container"
 
 # How a scope composes with the name it qualifies, where a single separator
 # cannot say it (2I design §2, word 1). Today's one word is 'qname': the
@@ -781,6 +910,9 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
             )
     for entry in mapping["annotations"]:
         _validate_unless(catalog, entry)
+        _validate_entry_fallback(catalog, entry)
+        _validate_container(catalog, entry)
+    _sibling_sources(catalog, mapping)
     qualifier_format = mapping.get("qualifier_format")
     if qualifier_format is not None and qualifier_format not in _QUALIFIER_FORMATS:
         # An unrecognised word would fall through to the separator
@@ -898,6 +1030,45 @@ def _validate_unless(catalog: Catalog, entry: dict[str, Any]) -> None:
         )
 
 
+def _validate_entry_fallback(catalog: Catalog, entry: dict[str, Any]) -> None:
+    """Refuses an annotation entry whose own fallback word is not one this
+    engine knows (`OI-5`).
+
+    The catalog-level word is checked in `_validate_naming` above and this is
+    the same check one level down, for the same reason and with higher stakes:
+    an unrecognised word read as "no fallback" restores the empty path the form
+    exists to remove, and one read as a fallback it does not mean publishes the
+    method's own name where the framework serves a stripped one. Both are a
+    wrong address at `resolved`/`compiler`, and both are worse than a refused
+    file.
+    """
+    declared = entry.get("path_fallback")
+    if declared is not None and declared not in _PATH_FALLBACKS:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `path_fallback: {declared}` on "
+            f"`{entry.get('fqn')}` is not one of {', '.join(sorted(_PATH_FALLBACKS))} (`OI-5`)"
+        )
+
+
+def _validate_container(catalog: Catalog, entry: dict[str, Any]) -> None:
+    """Refuses a `container` that is not a usable annotation fqn (`OI-36`).
+
+    Read as absent, a malformed value restores exactly the silent under-report
+    this key exists to remove — a method carrying two of this annotation derives
+    NOTHING, beside a single-use neighbour that derives normally — and an
+    absence is the harder of the two failures to notice, because there is no
+    wrong row to see. So it is refused rather than ignored, the
+    `_validate_naming` discipline.
+    """
+    declared = entry.get(_CONTAINER)
+    if declared is not None and not (isinstance(declared, str) and declared):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{_CONTAINER}: {declared!r}` on "
+            f"`{entry.get('fqn')}` is not a non-empty annotation fqn — it names the repeatable "
+            f"container javac folds two uses of that annotation into (`OI-36`)"
+        )
+
+
 def _unless_attribute(entry: dict[str, Any]) -> str | None:
     declared = entry.get("unless")
     return None if declared is None else str(declared["attribute"])
@@ -925,16 +1096,32 @@ def _unless_equals(entry: dict[str, Any]) -> str | None:
 
 def _synthetic_annotations(
     workspace: Workspace,
+    catalog: Catalog,
     mapping_annotations: list[dict[str, object]],
     prefix_fqn: str | None,
     type_annotation_fqn: str | None,
 ) -> list[dict[str, str]]:
     """The bound-parameter form `derive_endpoints.sql`'s `annotations_effective`
-    CTE expects (D02 §2, §3): every row `composed_mapping_rows` and, where
-    `run_inheritance`, `inherited_rows` derive, `args` re-serialized to JSON
-    text — DuckDB's `STRUCT(... VARCHAR)` binding shape carries a string,
-    not a nested JSON value, the same way every other JSON-typed bound
+    CTE expects (D02 §2, §3): every row `folded_rows`, `composed_mapping_rows`
+    and, where `run_inheritance`, `inherited_rows` derive, `args` re-serialized
+    to JSON text — DuckDB's `STRUCT(... VARCHAR)` binding shape carries a
+    string, not a nested JSON value, the same way every other JSON-typed bound
     parameter in this engine already does.
+
+    **The FOLDING pass runs first, and everything downstream reads its output**
+    (`OI-36`). A repeated annotation reaches the class file as its container and
+    not as N annotations (JLS 9.7.5), so unfolding is not a widening of what the
+    catalog matches — it is reading the shape javac actually wrote. Running it
+    ahead of the other two is what lets a folded use compose and inherit exactly
+    as a written one does, and it is why there is no container in the SQL at
+    all: by the time the query runs, a folded use IS an ordinary annotation row.
+
+    It is NOT restricted to method targets, and that is the framework's answer
+    rather than a widening: the two listener annotations CP-16 measured are
+    `@Target`-legal on a TYPE as well (rows 2a/2e), so a class carrying two
+    class-level listeners folds identically and the prefix join composes both.
+    `derive_endpoints.handler-is-a-method` is still what stops a type-level use
+    minting a row of its own.
 
     Task 7's inheritance walk runs over the COMPOSED universe (real rows
     plus Task 6's own synthetic ones), not just the real `annotations`
@@ -971,6 +1158,8 @@ def _synthetic_annotations(
         }
         for row in workspace.query("annotations")
     ]
+    folded = folded_rows(annotation_rows, _containers(catalog))
+    annotation_rows = [*annotation_rows, *folded]
     scanned_targets = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
     mapping_fqns = {str(m["fqn"]) for m in mapping_annotations}
     # The type-level GATE composes exactly as a method-level mapping does
@@ -1006,8 +1195,25 @@ def _synthetic_annotations(
     )
     return [
         {"target": row["target"], "annotation": row["annotation"], "args": json.dumps(row["args"])}
-        for row in (*composed, *inherited)
+        for row in (*folded, *composed, *inherited)
     ]
+
+
+def _containers(catalog: Catalog) -> dict[str, str]:
+    """Container fqn -> the member fqn it folds, for every `mapping.annotations`
+    entry that declares one (`OI-36`).
+
+    Empty for every catalog that declares none, which is every catalog written
+    before the word — and `folded_rows` then reads no annotation row at all, so
+    the pass costs nothing where nothing asked for it. Both sides are converted
+    to the `annotations` view's own symbol form here, once, so nothing
+    downstream compares a catalog spelling against a fact spelling.
+    """
+    return {
+        _catalog_symbol(str(entry[_CONTAINER])): _catalog_symbol(str(entry["fqn"]))
+        for entry in catalog.matches["mapping"]["annotations"]
+        if entry.get(_CONTAINER) is not None
+    }
 
 
 def _implementation_rows(workspace: Workspace) -> list[dict[str, object]]:

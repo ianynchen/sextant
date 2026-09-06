@@ -725,6 +725,110 @@ matches:
   an unread key is indistinguishable from a typo, and a typo here silently restores the
   silence the block exists to remove.
 
+**The 2026-09-06 vocabulary pass adds three words at once, and the "at once" is the point.**
+Every generalisation above arrived alone, against whichever framework was in front of its
+author — which is how a style **21 catalogs** share reached a state where three of them knew
+their framework's rule exactly and could not say it. GUIDELINES §13.8's third-occurrence rule
+fired on that (`docs/open-issues.md`, "The §13.8 stop rule fired in Stage 4"), and these three
+words are its answer. **No word here is speculative: each names the measurement that forces
+it**, and a fourth need found later re-triggers §13.8 rather than being pre-solved.
+
+```yaml
+mapping:
+  path_from: [value]                        # …as before: the MATCHED annotation's aliases
+  path_from_siblings:                       # …then these, in order, if none of those is present
+    - { annotation: org.eclipse.microprofile.graphql.Name,        arg: value }
+    - { annotation: jakarta.json.bind.annotation.JsonbProperty,   arg: value }
+  path_fallback: construct_name             # …then this, as before — now a DEFAULT
+  annotations:
+    - { fqn: "…graphql.Query",    method: [query],    path_fallback: read_accessor_property }
+    - { fqn: "…graphql.Mutation", method: [mutation], path_fallback: write_accessor_property }
+    - { fqn: "…annotation.RabbitListener", container: "…annotation.RabbitListeners" }
+```
+
+- **`container` names the repeatable container javac folds two uses of that annotation
+  into** — the `scheduled_work` style's own key, one style over, and the same rule.
+  **Forced by CP-16** (`scripts/probes/cp16_listener_destinations.md`, rows 2a–2f and 4a–4f;
+  six versions across three frameworks): `@KafkaListener`, `@JmsListener` and
+  `@RabbitListener` are each `@Repeatable`, and each framework's post-processor reads the
+  container. javac writes the container and **not** the member (JLS 9.7.5), so a method
+  carrying two listeners carries no listener annotation at all, the mapping join matches
+  nothing, and **both** destinations vanish — silently, beside a single-listener neighbour
+  that derives normally (`OI-36`). The engine reads each container use's `value` array and
+  synthesizes one ordinary `{target, annotation, args}` row per folded use, before
+  composition and before inheritance, so a folded use is an ordinary annotation everywhere
+  downstream and **there is no container in the query at all**.
+  - **`value` is not catalog data.** JLS 9.6.3 requires a containing annotation type to
+    declare exactly `value()` returning an array of the repeatable type, so it is the
+    *language's* word; a key for it would let a file state something Java forbids. Each
+    entry of the array is checked against the declared member fqn rather than taken on
+    position — a container is an ordinary annotation whose `value` happens to be an array.
+  - **Declared per ANNOTATION ENTRY, not per catalog**, and that is where the difference
+    lives: `scheduled_work` names one annotation, this style names a list, and CP-16
+    measured `@Repeatable` on the listener annotations only — whether the sibling handler
+    annotations are repeatable is **not measured**, so no entry claims a container it has
+    no evidence for.
+  - **It needs extractor capability 9.16** (`nested_annotation_args`), because a folded use
+    is a nested annotation. A catalog declaring a container therefore `requires` it, for
+    `spring-scheduling.yml`'s stated reason: a scanner that cannot read one must skip the
+    catalog **visibly** rather than report part of a module's listener surface and stay
+    silent about the rest.
+
+- **`path_from_siblings` names name sources that live on OTHER annotations of the same
+  declaration**, consulted **in the order written** and only where every `path_from` alias
+  is absent. **Forced by CP-15** (`scripts/probes/cp15_mp_graphql_names.md`, rows 1a–1b and
+  2a–2b): `OperationCreator.getOperationName` consults five sources in order and takes the
+  first with a value — the operation annotation's own `value`, then `@Name`, then the
+  `jakarta` and `javax` spellings of `@JsonbProperty`, then Jackson's `@JsonProperty`.
+  `microprofile-graphql.yml` read the first alone, so `@Query @Name("allOrders")
+  List<Order> orders()` was served as `allOrders` while we published `orders` — a wrong
+  address, not a missing one (`OI-35`).
+  - **The order is the rule, not a presentation detail.** The `iconst_N` indices of the
+    source array ARE the order, and a set would not say which name a declaration carrying
+    two of them is served under. So the key is a list, and the engine carries an ordinal.
+  - **`path_from` first, then these, then `path_fallback`** — which is exactly the measured
+    order, since row 1 puts the matched annotation's own value at index 0. **A framework
+    that consulted a sibling BEFORE the matched annotation's own attribute cannot be stated
+    in this grammar**; the boundary is in `docs/COVERAGE.md` rather than left silent, and a
+    framework needing it is a fourth measurement, not a key to add now.
+  - Read scalar-or-array, first present wins, like every other attribute read in this style.
+    A closed SHAPE (`annotation` and `arg`, nothing else) rather than a closed vocabulary,
+    for `unless`'s reason: which annotation renames an operation is the framework's own
+    convention.
+
+- **`path_fallback` on an ANNOTATION ENTRY overrides `mapping.path_fallback` for the
+  declarations that annotation matches**, and **two new words join the closed vocabulary**:
+  `read_accessor_property` and `write_accessor_property`. **Forced by CP-15 rows 3a–5b**,
+  row 5 *compiled and run* against both jars: the un-named-operation fallback is
+  `MethodHelper.getPropertyName`, and **which transformation it applies is chosen by which
+  operation annotation matched** — `@Query`/`@Subscription` take `Direction.OUT`, which
+  strips `get` and `is`; `@Mutation` takes `Direction.IN`, which strips `set` and nothing
+  else. One catalog-level word therefore makes one of the two annotations newly wrong,
+  which §8.1 rule 1 forbids in as many words — that is why `OI-5` shipped a
+  measured-and-wrong address for a month rather than a plausible fix.
+
+  | word | strips | measured (CP-15 row 5) |
+  |---|---|---|
+  | `construct_name` | nothing | the construct's own name — unchanged, the word every catalog already declares |
+  | `read_accessor_property` | `get`, `is` | `getOrders→orders`, `isActive→active`, `getX→x`, `get→get`, `gettotal→gettotal`, `getURL→uRL`, `setStatus→setStatus` |
+  | `write_accessor_property` | `set` | `setStatus→status`, `getOrders→getOrders` |
+
+  - **The strip's three conditions are the framework's own**, not a paraphrase that fits the
+    examples: the name starts with the prefix, is **longer** than it, and carries an
+    **upper-case character at the seam** — then the remainder is taken with its **first
+    character** lowercased, never the whole of it. `getURL → uRL` is the case that tells
+    this rule apart from every plausible paraphrase, and any encoding that does not
+    reproduce it is not this rule.
+  - **Which prefixes belong to which word is engine data**, the `namespace_default`
+    precedent: a closed-vocabulary word owes the derivation a rule as well as a name, and
+    the accessor prefixes are the *language's* bean convention rather than any framework's
+    naming choice. What a catalog states is which direction an annotation faces, which is
+    the framework's own fact.
+  - **The catalog-level key stays**, as the default every entry declaring no override
+    carries — so a catalog written before this word binds one value on every entry and
+    derives byte-identically — and as the **only** word an unannotated `members` row can
+    read, since such a row has no annotation to read an override off.
+
 ### `single_call`
 
 One call carries the whole declaration. Arguments are addressed by position or name.

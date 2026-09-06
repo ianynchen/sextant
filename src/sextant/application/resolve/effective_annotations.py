@@ -132,6 +132,69 @@ def composed_mapping_rows(
     return synthetic
 
 
+def folded_rows(
+    annotation_rows: list[dict[str, Any]],
+    containers: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Synthesizes one row per use FOLDED INTO a repeatable container — the same
+    `{target, annotation, args}` shape the other two passes synthesize, and
+    `annotation` always the MEMBER fqn the catalog declared, so the caller's SQL
+    never has to know a folding happened any more than it has to know a
+    composition did (`OI-36`).
+
+    `containers` maps a container fqn to the member fqn it folds, both in the
+    `annotations` view's own symbol form. Empty for every catalog that declares
+    none, in which case this returns an empty list without reading a row.
+
+    **Two or more uses of one repeatable annotation on one declaration are not
+    N annotations in the class file.** javac writes the CONTAINER and nothing
+    else (JLS 9.7.5), so a method carrying two listener annotations carries no
+    listener annotation at all and the mapping join matches nothing — both
+    destinations vanish, silently, beside a single-use neighbour that derives
+    normally. That is the under-report CP-16 measured at six versions across
+    three frameworks, and this is the read that closes it.
+
+    **`value` is the LANGUAGE's word, not a framework's**, which is why it is
+    spelled here and is not catalog data: JLS 9.6.3 requires a containing
+    annotation type to declare exactly `value()`, returning an array of the
+    repeatable type. A catalog key for it would let a file state something the
+    language forbids. `scheduled_work._folded` spells it in the same place for
+    the same reason.
+
+    Every entry is checked against the declared member fqn rather than taken on
+    position, `scheduled_work._folded`'s reason unchanged: a container is an
+    ordinary annotation whose `value` happens to be an array, and reading
+    whatever it holds would let some other array-valued annotation contribute
+    declarations. An entry the extractor recorded as unread carries no `args`
+    key and contributes nothing, rather than reading as an annotation genuinely
+    written with no arguments — which is why the `args` type is checked and not
+    defaulted.
+    """
+    if not containers:
+        return []
+    synthetic: list[dict[str, Any]] = []
+    for row in annotation_rows:
+        member = containers.get(str(row["annotation"]))
+        if member is None:
+            continue
+        value = (row["args"] or {}).get("value")
+        if not isinstance(value, list):
+            continue
+        synthetic.extend(
+            {"target": str(row["target"]), "annotation": member, "args": dict(entry["args"])}
+            for entry in value
+            if isinstance(entry, dict)
+            and entry.get("annotation") == member
+            and isinstance(entry.get("args"), dict)
+        )
+    # NFR-1: deterministic order, sorted by (target, annotation) — the same
+    # normalisation `composed_mapping_rows` ends with. The folded uses of ONE
+    # container keep the array order javac wrote, which is the declaration
+    # order the source had, because `sort` is stable and the key names neither.
+    synthetic.sort(key=lambda row: (row["target"], row["annotation"]))
+    return synthetic
+
+
 def inherited_rows(
     annotation_rows: list[dict[str, Any]],
     implementation_rows: list[dict[str, Any]],

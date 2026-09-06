@@ -145,6 +145,7 @@ _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
 _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
 _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
+_EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 _ARGUMENTS = "sextant/application/resolve/shapes/arguments.py"
@@ -432,6 +433,102 @@ GUARDS: dict[str, Guard] = {
                 path=_ANNOTATION_DRIVEN,
                 find="        if implementer not in handler_beans:",
                 replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    # --- the 2026-09-06 vocabulary pass (`OI-5`, `OI-35`, `OI-36`) ---------
+    "annotation_driven.folded-uses-are-read": Guard(
+        what="a repeatable container the catalog names is unfolded into one ordinary "
+        "annotation row per use written inside it",
+        why="`OI-36`, measured by CP-16 at six versions across three frameworks. javac writes "
+        "the CONTAINER and not the annotation (JLS 9.7.5), so a method carrying two listeners "
+        "carries no listener annotation at all and the mapping join matches nothing: BOTH "
+        "destinations vanish from the export, silently, beside a single-listener neighbour "
+        "that derives normally. A silent under-report is the harder of the two sins to notice, "
+        "because there is no wrong row to see — and without this read the `container` key is a "
+        "comment",
+        edits=(
+            Edit(
+                path=_EFFECTIVE_ANNOTATIONS,
+                find="    if not containers:\n        return []",
+                replace="    if True:  # guard disabled by scripts/guard_check.py\n        return []",
+            ),
+        ),
+    ),
+    "annotation_driven.folded-entry-is-the-declared-annotation": Guard(
+        what="each entry of a container's array counts only where it IS the annotation the "
+        "catalog declared that container for — never merely because it sits in the array",
+        why="a container is an ordinary annotation whose `value` happens to be an array, so "
+        "without this conjunct any array-of-annotations argument contributes destinations. "
+        "`@RabbitListener(bindings = @QueueBinding(...))` is exactly that shape one attribute "
+        "over, and reading it would publish a binding's own attribute as a queue name at "
+        "`resolved`/`compiler` — the `scheduled_work._folded` conjunct, one style over",
+        edits=(
+            Edit(
+                path=_EFFECTIVE_ANNOTATIONS,
+                find='            and entry.get("annotation") == member',
+                replace='            and entry.get("annotation") is not None',
+            ),
+        ),
+    ),
+    "derive_endpoints.sibling-name-source-order": Guard(
+        what="where several sibling name sources are present on one declaration, the FIRST in "
+        "the order the catalog wrote supplies the name",
+        why="`OI-35`. CP-15 rows 1a-1b show the framework building an array of name sources "
+        "whose `iconst_N` indices ARE the order and taking the first WITH A VALUE, so a "
+        "declaration carrying two of them is served under the earlier one. A vocabulary that "
+        "could only name a SET would not say which — and picking the other one publishes a "
+        "name the framework does not serve the operation at, which is the wrong address this "
+        "key exists to remove, reached from the other side",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="           min_by(coalesce(TRY_CAST(a.args -> sp.arg AS VARCHAR[]),"
+                " [a.args ->> sp.arg]),\n                  sp.ordinal) AS found",
+                replace="           max_by(coalesce(TRY_CAST(a.args -> sp.arg AS VARCHAR[]),"
+                " [a.args ->> sp.arg]),\n                  sp.ordinal) AS found",
+            ),
+        ),
+    ),
+    "derive_endpoints.path-fallback-is-per-annotation": Guard(
+        what="an annotated declaration takes the fallback word of the annotation that MATCHED "
+        "it, not the catalog's own default",
+        why="`OI-5`, measured by CP-15 rows 3-5 with row 5 compiled and run. The framework's "
+        "un-named-operation fallback is direction-dependent and the direction is chosen by "
+        "which operation annotation matched — one strips `get`/`is`, the other strips `set` — "
+        "so a single catalog-level word makes one of the two annotations newly wrong. That is "
+        "the approximation §8.1 rule 1 forbids, and it is why this defect shipped a measured "
+        "wrong address rather than a plausible fix",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="        mc.path_fallback AS path_fallback,\n"
+                "        mc.path_fallback_prefixes AS path_fallback_prefixes",
+                replace="        $path_fallback AS path_fallback,\n"
+                "        $path_fallback_prefixes::VARCHAR[] AS path_fallback_prefixes",
+            ),
+        ),
+    ),
+    "derive_endpoints.accessor-strip-is-the-measured-one": Guard(
+        what="the accessor strip fires only where the construct's name is LONGER than the "
+        "prefix and carries an upper-case character AT THE SEAM",
+        why="CP-15 row 5, compiled and run: `get -> get` is the length test and "
+        "`gettotal -> gettotal` is the seam test. Without them a method named exactly `get` "
+        "composes the EMPTY address and vanishes, and an ordinary lower-case name beginning "
+        "with those three letters is republished under a property name the framework never "
+        "derives. §8.1 rule 1 is that a framework's rule is mirrored rather than approximated, "
+        "and the approximation here is the one that fits every example but the edges",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="                             x -> CASE WHEN starts_with(construct_name, x)\n"
+                "                                            AND length(construct_name)"
+                " > length(x)\n"
+                "                                            AND regexp_matches(\n"
+                "                                                substr(construct_name,"
+                " length(x) + 1, 1), '[A-Z]')",
+                replace="                             x -> CASE WHEN"
+                " starts_with(construct_name, x)",
             ),
         ),
     ),

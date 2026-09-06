@@ -966,6 +966,491 @@ def test_a_non_single_character_qualifier_separator_is_refused_by_type_and_lengt
     assert "invented-naming.yml" in str(raised.value)
 
 
+# --- the 2026-09-06 vocabulary pass, on an invented framework -------------
+#
+# Three words, three measurements, one style shared by twenty-one catalogs.
+# Deliberately NOT spelled with `@KafkaListener` or `@Query`, the discipline
+# every mechanism test in this file keeps: `container`, `path_from_siblings`
+# and the per-annotation `path_fallback` are ENGINE vocabulary, and a test
+# written against a shipped file would pin a framework rather than a mechanism
+# — and would pass or fail because somebody edited YAML.
+#
+# The invented framework below is the shape all three measurements share and
+# that the vocabulary could not express before: an annotation that may be
+# written twice on one declaration (so javac folds it into a container and the
+# class file carries no annotation at all), a name that may live on a SIBLING
+# annotation rather than on the matched one, and two annotations of one family
+# whose un-named fallback strips OPPOSITE accessor prefixes.
+
+_ON_EVENT = "com/acme/messaging/annotation/OnEvent#"
+_ON_EVENTS = "com/acme/messaging/annotation/OnEvents#"
+_ON_ACTION = "com/acme/messaging/annotation/OnAction#"
+_ALIAS = "com/acme/messaging/annotation/Alias#"
+_LATE_ALIAS = "com/acme/messaging/annotation/LateAlias#"
+
+
+def _vocabulary_catalog(**mapping: object) -> Catalog:
+    """A gateless catalog over the invented annotations above, with whatever
+    the pass's vocabulary a test layers on. Two mapping annotations, because
+    every one of the three words is about a difference BETWEEN annotations of
+    one family."""
+    return Catalog(
+        id="invented-vocabulary",
+        style="annotation_driven",
+        protocol="kafka",
+        direction="inbound",
+        requires=("annotation_args", "nested_annotation_args"),
+        source=Path("tests/invented-vocabulary.yml"),
+        matches={
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": [],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": None,
+                "annotations": [
+                    {"fqn": "com.acme.messaging.annotation.OnEvent"},
+                    {"fqn": "com.acme.messaging.annotation.OnAction"},
+                ],
+                **mapping,
+            }
+        },
+    )
+
+
+def _vocabulary_facts(root: Path) -> None:
+    """One class and five declarations, each the smallest input that separates
+    one of the three words from the behaviour it replaces.
+
+    `folded` is the shape javac writes for TWO uses of one repeatable
+    annotation (JLS 9.7.5): a single CONTAINER whose `value` is an array of
+    annotations, and NO `@OnMessage` fact of its own. `misfolded` is the same
+    container holding an annotation the catalog never named — the near-miss for
+    the conjunct that stops any array-valued annotation contributing
+    destinations.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/notify/Vocabulary.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    owner = "com/acme/notify/Vocabulary#"
+    folded_uses = [
+        AnnotationUse(annotation=_ON_EVENT, args={"value": ["orders.first"]}),
+        AnnotationUse(annotation=_ON_EVENT, args={"value": ["orders.second"]}),
+    ]
+    declarations: dict[str, list[tuple[str, dict[str, object]]]] = {
+        # An un-named declaration on each of the two mapping annotations,
+        # named so the accessor strip has something to bite on — and named
+        # ACROSS the two directions, so a rule that is right for one and wrong
+        # for the other cannot pass.
+        "getOrders": [(_ON_EVENT, {})],
+        "setStatus": [(_ON_ACTION, {})],
+        # Two sibling name sources present at once: the ORDER decides.
+        "renamed": [
+            (_ON_EVENT, {}),
+            (_ALIAS, {"value": "by-alias"}),
+            (_LATE_ALIAS, {"value": "by-late-alias"}),
+        ],
+        # Its own name AND a sibling carrying another: the matched annotation
+        # wins, which is the order CP-15 row 1 measured.
+        "selfNamed": [(_ON_EVENT, {"value": ["own-name"]}), (_ALIAS, {"value": "by-alias"})],
+        # The container, and a container of something else.
+        "folded": [(_ON_EVENTS, {"value": folded_uses})],
+        "misfolded": [
+            (_ON_EVENTS, {"value": [AnnotationUse(annotation=_ALIAS, args={"value": ["nope"]})]})
+        ],
+    }
+    facts: list[object] = [
+        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS)
+    ]
+    for name, uses in declarations.items():
+        symbol = f"{owner}{name}(sig_3d92af60)."
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=symbol,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+            )
+        )
+        facts.extend(
+            AnnotationFact(
+                document_id="doc_1",
+                target=symbol,
+                retention="runtime",
+                use=AnnotationUse(annotation=annotation, args=args),
+            )
+            for annotation, args in uses
+        )
+    write_fact_file(root / "Vocabulary.jsonl", document, facts)
+
+
+def _vocabulary_paths(tmp_path: Path, catalog: Catalog) -> set[str]:
+    _vocabulary_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(
+        workspace, [catalog], capabilities={"annotation_args", "nested_annotation_args"}
+    )
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+    return paths
+
+
+def test_a_catalog_declaring_none_of_the_pass_words_derives_exactly_what_it_always_did(
+    tmp_path: Path,
+):
+    """The inertness pin for all three words at once.
+
+    Only the declaration that spells its own name derives anything: the two
+    accessor declarations and the sibling one carry the annotation with no
+    `value`, and the two container declarations carry no mapping annotation at
+    all. So four of the five derive NOTHING — the addresses-nothing gate,
+    exactly as before this pass — and every row the tests below assert is one
+    this vocabulary ADDS rather than one it moves."""
+    assert _vocabulary_paths(tmp_path, _vocabulary_catalog()) == {"own-name"}
+
+
+@pytest.mark.pins("annotation_driven.folded-uses-are-read")
+def test_two_uses_of_one_annotation_on_one_declaration_derive_both_destinations(
+    tmp_path: Path,
+):
+    """`OI-36`, measured by CP-16 at six versions across three frameworks.
+
+    javac writes the CONTAINER and not the annotation (JLS 9.7.5), so before
+    this word the mapping join matched nothing and BOTH destinations vanished —
+    silently, beside a single-use neighbour deriving normally. That is a
+    silent under-report, the second sin and the harder of the two to notice,
+    because the row is absent rather than wrong.
+
+    Both are asserted, not one: reading only the first entry of the array would
+    be a plausible half-fix that this exact input catches."""
+    paths = _vocabulary_paths(
+        tmp_path,
+        _vocabulary_catalog(
+            annotations=[
+                {
+                    "fqn": "com.acme.messaging.annotation.OnEvent",
+                    "container": "com.acme.messaging.annotation.OnEvents",
+                },
+                {"fqn": "com.acme.messaging.annotation.OnAction"},
+            ]
+        ),
+    )
+
+    assert paths == {"orders.first", "orders.second", "own-name"}
+
+
+@pytest.mark.pins("annotation_driven.folded-entry-is-the-declared-annotation")
+def test_a_container_holding_some_other_annotation_contributes_no_destination(
+    tmp_path: Path,
+):
+    """§10 near-miss on the conjunct that makes the container read safe.
+
+    Every other condition holds: the catalog declares this container, the fact
+    is present on a method, its `value` IS an array of annotations, and each
+    entry carries a readable `value` that would compose a perfectly plausible
+    destination. The one thing that is false is that the folded annotation is
+    the one the catalog named.
+
+    A container is an ordinary annotation whose `value` happens to be an array,
+    so without this conjunct ANY array-of-annotations argument contributes
+    destinations — `misfolded` would publish `nope`, an address nothing serves,
+    at `resolved`/`compiler` where nothing downstream can tell it from an
+    observation.
+    """
+    paths = _vocabulary_paths(
+        tmp_path,
+        _vocabulary_catalog(
+            annotations=[
+                {
+                    "fqn": "com.acme.messaging.annotation.OnEvent",
+                    "container": "com.acme.messaging.annotation.OnEvents",
+                },
+            ]
+        ),
+    )
+
+    assert "nope" not in paths
+    assert paths == {"orders.first", "orders.second", "own-name"}
+
+
+@pytest.mark.pins("derive_endpoints.sibling-name-source-order")
+def test_the_first_sibling_source_in_the_declared_order_supplies_the_name(
+    tmp_path: Path,
+):
+    """`OI-35`, measured by CP-15 rows 1-2: the framework builds an array of
+    name sources whose indices ARE the order and takes the FIRST with a value.
+
+    `renamed` carries both sibling annotations at once, which is the only input
+    that can tell an ordered list from a set — and a set is what the vocabulary
+    had, which is why the register's close condition says "with the ORDER
+    preserved". Reversing the two entries below reverses the answer, which is
+    what the second assertion says."""
+    mapping: dict[str, object] = {
+        "path_from_siblings": [
+            {"annotation": "com.acme.messaging.annotation.Alias", "arg": "value"},
+            {"annotation": "com.acme.messaging.annotation.LateAlias", "arg": "value"},
+        ]
+    }
+    assert _vocabulary_paths(tmp_path, _vocabulary_catalog(**mapping)) == {
+        "by-alias",
+        "own-name",
+    }
+
+
+def test_reversing_the_sibling_sources_reverses_which_one_names_the_declaration(
+    tmp_path: Path,
+):
+    """The paired positive for the ordering above (§10's "a near-miss needs a
+    positive PAIRED with it"): the answer follows the catalog's order rather
+    than some incidental order of the facts, the annotations' own names, or
+    whichever the query happened to read first."""
+    mapping: dict[str, object] = {
+        "path_from_siblings": [
+            {"annotation": "com.acme.messaging.annotation.LateAlias", "arg": "value"},
+            {"annotation": "com.acme.messaging.annotation.Alias", "arg": "value"},
+        ]
+    }
+    assert _vocabulary_paths(tmp_path, _vocabulary_catalog(**mapping)) == {
+        "by-late-alias",
+        "own-name",
+    }
+
+
+def test_the_matched_annotations_own_alias_still_wins_over_every_sibling(
+    tmp_path: Path,
+):
+    """CP-15 row 1 puts the operation annotation's own `value` at index 0 of
+    the source array, ahead of all four siblings — so the sibling list is
+    consulted only where every `path_from` alias was absent, and this is that
+    order asserted rather than assumed.
+
+    `selfNamed` declares its own name AND carries a sibling naming another; the
+    name it declares is the one served, and `by-alias` appears only because
+    `renamed` — which names nothing of its own — takes it."""
+    paths = _vocabulary_paths(
+        tmp_path,
+        _vocabulary_catalog(
+            path_from_siblings=[
+                {"annotation": "com.acme.messaging.annotation.Alias", "arg": "value"}
+            ]
+        ),
+    )
+
+    assert paths == {"own-name", "by-alias"}
+
+
+@pytest.mark.pins("derive_endpoints.path-fallback-is-per-annotation")
+def test_two_annotations_of_one_family_fall_back_under_opposite_accessor_rules(
+    tmp_path: Path,
+):
+    """`OI-5`, measured by CP-15 rows 3-5 with row 5 COMPILED AND RUN.
+
+    The framework's un-named-operation fallback is direction-dependent and the
+    direction is chosen by WHICH annotation matched: one strips `get`/`is`, the
+    other strips `set`. `mapping.path_fallback` was one catalog-level word, so
+    every single word made one of the two newly wrong — which is why `OI-5`
+    shipped a measured-and-wrong address rather than a plausible fix.
+
+    Both directions in one assertion, and each with the OTHER direction's
+    accessor visible in the same class: `getOrders` must not be touched by the
+    write rule and `setStatus` must not be touched by the read rule. A single
+    shared word cannot produce this set."""
+    paths = _vocabulary_paths(
+        tmp_path,
+        _vocabulary_catalog(
+            path_fallback="construct_name",
+            annotations=[
+                {
+                    "fqn": "com.acme.messaging.annotation.OnEvent",
+                    "path_fallback": "read_accessor_property",
+                },
+                {
+                    "fqn": "com.acme.messaging.annotation.OnAction",
+                    "path_fallback": "write_accessor_property",
+                },
+            ],
+        ),
+    )
+
+    # `renamed` takes the catalog-level default, which strips nothing — the
+    # inertness of the per-annotation word where no entry declares one.
+    assert paths == {"orders", "status", "renamed", "own-name"}
+
+
+@pytest.mark.parametrize(
+    ("name", "read_rule", "write_rule"),
+    [
+        # CP-15 row 5, verbatim, both columns. Each row is an edge of the
+        # measured rule rather than an illustration of it.
+        ("getOrders", "orders", "getOrders"),
+        ("isActive", "active", "isActive"),
+        ("setStatus", "setStatus", "status"),
+        ("orders", "orders", "orders"),
+        ("createOrder", "createOrder", "createOrder"),
+        ("getX", "x", "getX"),
+        # The LENGTH test: a name that is exactly the prefix is not an accessor.
+        ("get", "get", "get"),
+        # The SEAM test: no capital where the property name would start.
+        ("gettotal", "gettotal", "gettotal"),
+        # The case that tells "lowercase the remainder" from "lowercase its
+        # FIRST CHARACTER" — and it is the second. Any encoding of this rule
+        # that does not reproduce `uRL` is not this rule.
+        ("getURL", "uRL", "getURL"),
+    ],
+)
+@pytest.mark.pins("derive_endpoints.accessor-strip-is-the-measured-one")
+def test_the_accessor_strip_reproduces_every_measured_edge(
+    tmp_path: Path, name: str, read_rule: str, write_rule: str
+):
+    """CP-15 row 5's own table, run through this engine.
+
+    The probe compiled `MethodHelper.getPropertyName` against
+    smallrye-graphql-schema-builder 2.0.0 and 2.18.5 and RAN it; these are the
+    strings that process printed. A table of names could agree with several
+    rules, which is why the three edges — too short, no capital at the seam,
+    and `getURL` — are each their own row here rather than being represented by
+    `getOrders` alone."""
+    _accessor_facts(tmp_path / "facts", name)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(
+        workspace,
+        [
+            _vocabulary_catalog(
+                annotations=[
+                    {
+                        "fqn": "com.acme.messaging.annotation.OnEvent",
+                        "path_fallback": "read_accessor_property",
+                    },
+                    {
+                        "fqn": "com.acme.messaging.annotation.OnAction",
+                        "path_fallback": "write_accessor_property",
+                    },
+                ]
+            )
+        ],
+        capabilities={"annotation_args", "nested_annotation_args"},
+    )
+    rows = {(str(row["path"])) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert rows == {read_rule, write_rule}
+
+
+def _accessor_facts(root: Path, name: str) -> None:
+    """One method name, declared twice — once under each of the two mapping
+    annotations, on two classes so the two rows cannot merge into one wire
+    identity when the two rules agree."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/notify/Accessors.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="asm",
+        scanner_version="9.7",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    facts: list[object] = []
+    for owner, annotation in (
+        ("com/acme/notify/Reads#", _ON_EVENT),
+        ("com/acme/notify/Writes#", _ON_ACTION),
+    ):
+        symbol = f"{owner}{name}(sig_3d92af60)."
+        facts.append(
+            SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS)
+        )
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=symbol,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+            )
+        )
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=symbol,
+                retention="runtime",
+                use=AnnotationUse(annotation=annotation, args={}),
+            )
+        )
+    write_fact_file(root / "Accessors.jsonl", document, facts)
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        # An unrecognised word, which read as "no fallback" restores the empty
+        # address the form exists to remove.
+        {"fqn": "com.acme.messaging.annotation.OnEvent", "path_fallback": "parameter_name"},
+        # A container that is not a string at all.
+        {"fqn": "com.acme.messaging.annotation.OnEvent", "container": 5},
+        # An EMPTY container, which would match no annotation and silently
+        # restore the under-report the key exists to close.
+        {"fqn": "com.acme.messaging.annotation.OnEvent", "container": ""},
+    ],
+)
+def test_a_malformed_annotation_entry_word_is_refused_by_file(
+    tmp_path: Path, declared: dict[str, object]
+):
+    """NFR-5, one level down from `mapping`. Both new entry-level words are
+    refused rather than read as absent, and the direction of the danger is
+    what makes that the right choice: an unread `path_fallback` publishes the
+    method's own name where the framework serves a stripped one, and an unread
+    `container` drops both destinations of a two-use declaration while its
+    single-use neighbour derives normally."""
+    with pytest.raises(CatalogError) as raised:
+        _vocabulary_paths(tmp_path, _vocabulary_catalog(annotations=[declared]))
+
+    assert "invented-vocabulary.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        # An empty list: a key declared and saying nothing, which reads as
+        # "consult these" while consulting none.
+        [],
+        # A bare string where a `{annotation, arg}` pair belongs — the shape
+        # `path_from` takes, written in the key that does not take it.
+        ["value"],
+        # A pair naming an annotation and no attribute of it.
+        [{"annotation": "com.acme.messaging.annotation.Alias"}],
+        # A third key: the shape is closed, so a misspelling cannot pass for
+        # one of the two.
+        [{"annotation": "com.acme.messaging.annotation.Alias", "arg": "value", "of": "x"}],
+    ],
+)
+def test_a_malformed_sibling_name_source_is_refused_by_file(tmp_path: Path, declared: object):
+    """NFR-5 again, and the same asymmetry: a `path_from_siblings` read as
+    absent leaves the operation published under a name the framework does not
+    serve it at — a wrong address, which is the failure the key exists to
+    remove, restored silently by a typo."""
+    with pytest.raises(CatalogError) as raised:
+        _vocabulary_paths(tmp_path, _vocabulary_catalog(path_from_siblings=declared))
+
+    assert "path_from_siblings" in str(raised.value)
+    assert "invented-vocabulary.yml" in str(raised.value)
+
+
 # --- 2I design §2: the two QName forms, on an invented framework ----------
 #
 # Deliberately NOT Spring-WS and NOT JAX-WS, for the reason the 2H forms above

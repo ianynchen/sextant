@@ -244,6 +244,10 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         # 2H Task 2's two naming forms, inert — this regression is about the
         # PREFIX join, so both stay at the values every pre-2H catalog has.
         path_fallback=None,
+        # The 2026-09-06 vocabulary pass's two query-side words, inert for the
+        # same reason.
+        path_from_siblings=[],
+        path_fallback_prefixes=[],
         qualifier_from=[],
         qualifier_separator=None,
         # 2I Task 2's two QName forms and its member rule, inert for the

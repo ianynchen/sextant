@@ -14,6 +14,36 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **`annotation_driven` gains three words, designed as one pass** (D02 §2). The style
+  **21 catalogs** share grew a key at a time against whichever framework was in front of its
+  author, and Stage 4 found three catalogs at once whose framework rule was known exactly and
+  whose grammar had no word for it — which is GUIDELINES §13.8's third occurrence. Each word
+  names the measurement that forces it, each is optional, and each is inert while absent, so
+  every catalog that declares none derives byte-identically.
+
+  - **`mapping.annotations[].container`** — the repeatable container javac folds two uses of
+    that annotation into. **CP-16**, six versions across three frameworks: the three listener
+    annotations are each `@Repeatable` and each post-processor reads the container, while
+    javac writes the container and *not* the member (JLS 9.7.5) — so a method carrying two
+    listeners derived **nothing at all** (`OI-36`). The engine unfolds each container use into
+    ordinary annotation rows before composition and inheritance, so there is no container in
+    the query at all. Needs extractor capability 9.16.
+  - **`mapping.path_from_siblings`** — ordered `{annotation, arg}` name sources that live on
+    *other* annotations of the same declaration, consulted only where every `path_from` alias
+    is absent. **CP-15 rows 1-2**: `getOperationName` consults five sources in order and takes
+    the first with a value; the catalog read the first alone (`OI-35`).
+  - **`mapping.annotations[].path_fallback`, and two new fallback words** —
+    `read_accessor_property` (strips `get`, `is`) and `write_accessor_property` (strips
+    `set`). **CP-15 rows 3-5**, row 5 *compiled and run*: the un-named-operation fallback is
+    direction-dependent and the direction is chosen by which annotation matched, so one
+    catalog-level word made one of two annotations newly wrong (`OI-5`).
+
+  Five new guards, all measured to kill: `annotation_driven.folded-uses-are-read`,
+  `annotation_driven.folded-entry-is-the-declared-annotation`,
+  `derive_endpoints.sibling-name-source-order`,
+  `derive_endpoints.path-fallback-is-per-annotation` and
+  `derive_endpoints.accessor-strip-is-the-measured-one`.
+
 - **`## Traces` draws every trace, and `render` has no display flag at all** (GUIDELINES
   §8.4, ruled 2026-09-06). `mall-admin` — one module, 157 classes — walks **160 traces**,
   and the document draws all of them: a **711 KB** `architecture.md` and a **4.6 MB**

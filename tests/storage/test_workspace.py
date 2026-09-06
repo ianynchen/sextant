@@ -274,6 +274,14 @@ _TOPIC_ENDPOINT_KWARGS = {
     # here at all is what keeps the assertions below pinning the ORIGINAL
     # composition (`prefix || suffix`) rather than a new one.
     "path_fallback": None,
+    # The 2026-09-06 vocabulary pass's two query-side words, at their inert
+    # values for the same reason: no catalog in this file names a sibling
+    # source or a fallback that strips anything, so the composition every
+    # assertion below pins is the one it always was. The per-annotation
+    # `path_fallback` pair rides inside `mapping_annotations` above and is
+    # absent there for the same reason.
+    "path_from_siblings": [],
+    "path_fallback_prefixes": [],
     "qualifier_from": [],
     "qualifier_separator": None,
     # 2I Task 2: the two QName forms, at their inert values for the same
