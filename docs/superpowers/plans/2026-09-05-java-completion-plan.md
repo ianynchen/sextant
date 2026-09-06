@@ -395,6 +395,36 @@ Built / designed / retired, for ~34 rows. Cheap, deliberate, recorded. It moves
 after Stage 4 on the user's ruling of 2026-09-05: confidence in the output
 matters more than honest documents about it.
 
+### Stage 5b — the open-issue sweep, ruled 2026-09-06 (user)
+
+*"After stage 5, go through OI, and fix the major ones. If the others are cheap
+to fix, fix them as well."*
+
+Between Stage 5 and Stage 6, work `docs/open-issues.md` top to bottom:
+
+1. **Every Major, without exception.** At the time of writing that is seven.
+2. **Every Minor that is cheap** — where cheap means the fix is smaller than the
+   row describing it. Several are: `OI-26` (`SEXTANT_VERSION` declared three
+   times), `OI-23` (a functional route has no root), `OI-6`'s remaining Class A
+   Minors.
+3. **A Minor that is NOT cheap gets a stated reason on its row**, not silence.
+   `OI-18` is the model: the several-implementations rule has no real-code
+   exercise after four separate measurements found zero occurrences, so the fix
+   is a corpus, not a code change.
+
+**Why here and not earlier.** Stage 4's per-catalog pass closes several of them
+as a by-product — `OI-2`, `OI-3`, `OI-5` and `OI-10` are all "measure this
+framework rule", which is exactly what that stage does per catalog. Sweeping
+before Stage 4 would fix them twice. Sweeping after Stage 5 also means the
+documentation debt has settled, so a row whose fix is "state it" has a document
+to state it in.
+
+**The two that would change if left too long:** `OI-5` (MicroProfile GraphQL
+publishes a WRONG address, not an under-report) and `OI-19` (`sig_` computed in
+two languages with no enforceable guard, because the guard harness copies no
+compiled fixture). Both are Stage 4 candidates; if Stage 4 does not close them,
+they head this sweep.
+
 ### Stage 6 — multi-version support (F6, F7)
 
 Boot 2.x and Boot 4.x acceptance projects, then the Jackson 2/3 shape catalogs
