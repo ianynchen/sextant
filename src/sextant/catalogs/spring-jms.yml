@@ -62,3 +62,27 @@ wrappers:
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.
 shape_model: json
+
+# CP-16 measured what this file's `CHECKPOINT FACT` comment above asserted
+# without a version, and found it right: `@JmsListener` declares six attributes
+# at 6.1.6 and 7.0.9, `destination()` is the only address among them, and it is
+# genuinely scalar. The post-processor reads `destination`, `selector`,
+# `subscription`, `concurrency`, `containerFactory` and `id` — there is no
+# seventh source of a destination to have missed.
+#
+# It also measured the claim just above about there being no class-level shape:
+# `@JmsListener` is `@Target({METHOD, ANNOTATION_TYPE})`, where `@KafkaListener`
+# and `@RabbitListener` add `TYPE`. So `prefix_annotation: null` here is the
+# framework's own rule rather than a simplification of it.
+#
+# ONE THING CP-16 FOUND THAT THIS FILE DOES NOT HANDLE, stated rather than
+# encoded: `@JmsListener` is `@Repeatable(JmsListeners.class)` and the
+# post-processor calls
+# `AnnotatedElementUtils.getMergedRepeatableAnnotations(element, JmsListener,
+# JmsListeners)`, naming both. Two listeners on one method are folded by javac
+# into the container, and this catalog — which names no container, a key
+# `annotation_driven` does not have — sees no annotation at all and drops BOTH
+# destinations (`OI-36`).
+measured:
+  - { artifact: org.springframework:spring-jms, versions: ["6.1.6", "7.0.9"],
+      identity: reported, by: scripts/probes/cp16_listener_destinations.md }

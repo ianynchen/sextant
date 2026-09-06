@@ -4617,6 +4617,59 @@ def test_an_actuator_operation_outside_an_endpoint_class_derives_nothing(tmp_pat
     assert rows == []
 
 
+_KAFKA_LISTENER = "org/springframework/kafka/annotation/KafkaListener#"
+_JMS_LISTENER = "org/springframework/jms/annotation/JmsListener#"
+
+
+@pytest.mark.declines("spring-kafka")
+@pytest.mark.pins("spring-kafka.path-from-is-the-topic-attributes")
+def test_a_kafka_listener_declaring_only_a_group_id_derives_nothing(tmp_path: Path):
+    """§10 near-miss on the alias set, `spring-scheduling`'s `initialDelay`
+    shape one framework over. `groupId` is a real `@KafkaListener` attribute, a
+    `String` exactly as `topicPattern` is, and CP-16 row 4 measures the
+    post-processor reading it at spring-kafka 3.1.4 and 4.1.1 — but it names
+    the CONSUMER GROUP a service joins, not a topic it consumes. Reading it
+    would publish `orders-consumers` as a Kafka destination: an address no
+    broker carries, at `resolved`/`compiler`, indistinguishable downstream from
+    a topic somebody wrote.
+
+    Every other conjunct holds — the shipped annotation, spelled in full, on a
+    method, with an argument this pass can read."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-kafka")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_KAFKA_LISTENER: {"groupId": "orders-consumers"}},
+    )
+
+    assert rows == []
+
+
+@pytest.mark.declines("spring-jms")
+@pytest.mark.pins("spring-jms.path-from-is-the-destination-attribute")
+def test_a_jms_listener_declaring_only_a_subscription_derives_nothing(tmp_path: Path):
+    """§10 near-miss on the alias set. `subscription` is a real `@JmsListener`
+    attribute, it is a `String` exactly as `destination` is, it sits directly
+    beside it in the annotation, and CP-16 row 4 measures the post-processor
+    reading both at spring-jms 6.1.6 and 7.0.9. It names the DURABLE
+    SUBSCRIPTION a consumer registers under, not the queue or topic a message
+    arrives on — so reading it publishes a name the broker does not route to.
+
+    `@JmsListener` declares six attributes and exactly one is an address (CP-16
+    row 1), which is what makes the other five the near-miss set rather than
+    one chosen example."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-jms")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_JMS_LISTENER: {"subscription": "orders-durable"}},
+    )
+
+    assert rows == []
+
+
 _GRAPHQL_API = "org/eclipse/microprofile/graphql/GraphQLApi#"
 _MP_QUERY = "org/eclipse/microprofile/graphql/Query#"
 

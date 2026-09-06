@@ -75,3 +75,26 @@ wrappers:
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.
 shape_model: json
+
+# CP-16 measured what this file's `CHECKPOINT FACT` comments above asserted,
+# and found them right at both 3.1.4 and 4.1.1: `queues()` is `String[]`,
+# `queuesToDeclare()` is `Queue[]`, `bindings()` is `QueueBinding[]`,
+# `@RabbitListener` is `@Target({TYPE, METHOD, ANNOTATION_TYPE})` and
+# `@RabbitHandler` declares `isDefault(): boolean` and nothing else. The
+# post-processor reads all three destination attributes, so the two this file
+# declines to read are a measured under-report rather than a remembered one.
+#
+# TWO THINGS CP-16 FOUND THAT THIS FILE DOES NOT HANDLE, both stated rather
+# than encoded. `@RabbitListener` is `@Repeatable(RabbitListeners.class)`, so
+# two listeners on one method fold into a container this catalog cannot name
+# and BOTH destinations are dropped (`OI-36`). And at 3.1.4 the post-processor
+# searches `MergedAnnotations.from(element, SearchStrategy.TYPE_HIERARCHY)` —
+# the strategy arrives as a constant the probe could read — so a
+# `@RabbitListener` on a superclass or interface method registers a listener on
+# the implementing bean, while an annotation fact exists only on the
+# declaration that carries it (`OI-37`). At 4.1.1 that search moved into
+# `spring-amqp`'s `AbstractListenerAnnotationBeanPostProcessor`, an artifact
+# CP-16 does not open, so the search verdict is bounded to 3.1.4.
+measured:
+  - { artifact: org.springframework.amqp:spring-rabbit, versions: ["3.1.4", "4.1.1"],
+      identity: reported, by: scripts/probes/cp16_listener_destinations.md }

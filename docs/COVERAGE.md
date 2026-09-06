@@ -1713,6 +1713,30 @@ told them the row was present-but-empty when the listener is absent from the exp
 which is the harder of the two to notice. Closes for the `topicPartitions` case by a `path_from`
 that can fan out a nested annotation.
 
+**A method carrying TWO listener annotations derives nothing at all, in all three
+frameworks** (`OI-36`, measured 2026-09-06 by CP-16). `@KafkaListener`, `@JmsListener` and
+`@RabbitListener` are each `@Repeatable`, into `KafkaListeners`, `JmsListeners` and
+`RabbitListeners` respectively, and each framework's post-processor reads that container —
+Kafka calls `KafkaListeners.value()`, JMS calls
+`AnnotatedElementUtils.getMergedRepeatableAnnotations(element, JmsListener, JmsListeners)`,
+spring-rabbit 3.1.4 streams `RabbitListener` out of a `MergedAnnotations` view. javac writes
+the CONTAINER and not the annotation on such a method (JLS 9.7.5), so the class file carries
+no `@KafkaListener` at all and the mapping join matches nothing: **both** destinations vanish
+from the export while the single-listener neighbour derives normally. `spring-scheduling.yml`
+names a `container:` key for exactly this shape; the `annotation_driven` style has no such key,
+which is why this is stated here rather than encoded. **Closes by** a `container` word in
+`annotation_driven`'s vocabulary, reading the folded uses the way `scheduled_work` already
+does. **Falsified by** a two-listener method exporting either destination.
+
+**A `@RabbitListener` declared on a superclass or interface method registers a listener on the
+implementing bean, and we see it only where it is written** (`OI-37`). CP-16 row 4e:
+spring-rabbit 3.1.4 searches `MergedAnnotations.from(element, SearchStrategy.TYPE_HIERARCHY)`,
+and the strategy arrives as a constant the probe could read rather than a contract it had to
+assume. Bounded to spring-rabbit 3.1.4: Kafka's `findMergedAnnotation` and JMS's
+`getMergedRepeatableAnnotations` carry no such constant, so what they search is unmeasured, and
+spring-rabbit 4.1.1 moved its search into `spring-amqp`, an artifact CP-16 does not open.
+**Falsified by** an inherited listener declaration appearing in an export.
+
 **`@SqsListener(queueNames = …)` was the other half of this and is now shipped** (`A-M8`,
 principles sweep §3.3). `value()` and `queueNames()` are one attribute under two spellings —
 `queueNames` carries `@AliasFor(value = "value")`, measured at spring-cloud-aws-sqs 3.1.1

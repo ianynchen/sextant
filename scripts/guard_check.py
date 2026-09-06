@@ -657,6 +657,38 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "spring-kafka.path-from-is-the-topic-attributes": Guard(
+        what="`path_from` names the two attributes of `@KafkaListener` that ARE a topic, and "
+        "nothing else",
+        why="`groupId` is a real `@KafkaListener` attribute, it is a `String` exactly as "
+        "`topicPattern` is, the post-processor reads it (CP-16 row 4), and it is a CONSUMER "
+        "GROUP rather than a destination. Reading it publishes the group a service joins as a "
+        "topic it consumes — a plausible-looking Kafka boundary at `resolved`/`compiler` that "
+        "no broker carries",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-kafka.yml",
+                find="    path_from: [topics, topicPattern]",
+                replace="    path_from: [topics, topicPattern, groupId]",
+            ),
+        ),
+    ),
+    "spring-jms.path-from-is-the-destination-attribute": Guard(
+        what="`path_from` names the one attribute of `@JmsListener` that IS a destination, and "
+        "nothing else",
+        why="`subscription` is a real `@JmsListener` attribute, it is a `String` exactly as "
+        "`destination` is, it sits beside it, and the post-processor reads both (CP-16 row 4). "
+        "It names the DURABLE SUBSCRIPTION a consumer registers under, not the queue or topic "
+        "the message arrives on; reading it publishes a subscription name as a JMS "
+        "destination, which is an address the broker does not route to",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-jms.yml",
+                find="    path_from: [destination]",
+                replace="    path_from: [destination, subscription]",
+            ),
+        ),
+    ),
     "spring-sqs.path-from-is-the-destination-aliases": Guard(
         what="`path_from` names the destination attribute under both its spellings, and "
         "nothing else",

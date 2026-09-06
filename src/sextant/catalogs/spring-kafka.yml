@@ -84,3 +84,24 @@ wrappers:
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.
 shape_model: json
+
+# CP-16 measured what this file's `CHECKPOINT FACT` comments above asserted
+# without a version, and found them right: `topics()` is `String[]`,
+# `topicPattern()` is `String`, `topicPartitions()` is `TopicPartition[]`, and
+# the post-processor reads all three and feeds them to `setTopics`,
+# `setTopicPattern` and `setTopicPartitions` — identically at 3.1.4 and 4.1.1.
+# `@KafkaHandler` declares `isDefault(): boolean` and nothing else, so it
+# really does reach a destination only through the class-level prefix.
+#
+# TWO THINGS CP-16 FOUND THAT THIS FILE DOES NOT HANDLE, both stated rather
+# than encoded. `@KafkaListener` is `@Repeatable(KafkaListeners.class)` and the
+# post-processor calls `KafkaListeners.value()`, so TWO listeners on one method
+# are folded by javac into the container and this catalog — which names no
+# container, a key `annotation_driven` does not have — sees no annotation at
+# all and drops BOTH destinations (`OI-36`). And the post-processor finds the
+# annotation through `AnnotatedElementUtils.findMergedAnnotation`, which
+# carries no search-strategy constant, so what it searches is Spring's contract
+# and stays unmeasured (`OI-37`'s boundary).
+measured:
+  - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4", "4.1.1"],
+      identity: reported, by: scripts/probes/cp16_listener_destinations.md }

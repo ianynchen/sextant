@@ -70,10 +70,8 @@ TESTS = REPO / "tests"
 # still live.
 _NO_DECLINING_TEST_YET = frozenset(
     {
-        "spring-kafka",
         "spring-kafka-media",
         "spring-kafka-message",
-        "spring-jms",
         "aws-sqs-sdk",
         "google-pubsub-publisher",
         "google-pubsub-subscriber",

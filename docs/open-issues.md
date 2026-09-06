@@ -31,7 +31,7 @@ kept here rather than in an agent's head.
 
 ### Principle-violation count: 0 confirmed
 
-Four candidates were judged NOT violations and are recorded so the judgement can be
+Five candidates were judged NOT violations and are recorded so the judgement can be
 overturned rather than forgotten:
 - **`entry_point` ships as a `RootKind` member with no producer** (OI-22). §5.3's
   defect is an *unstated* claim; this one is stated in D00, COVERAGE §7, the enum,
@@ -65,6 +65,43 @@ overturned rather than forgotten:
   budget itself, closed the same day. If this judgement is ever overturned the
   consequence is §13.8 step 3, not another correction: the rule now exists and is
   ratcheted by `render_trace.the-default-document-draws-every-trace`.
+
+- **Stage 4 measured `microprofile-graphql`'s naming rule, found it WRONG, and shipped
+  the wrong rule anyway** (`OI-5`). Brushes the cardinal sin directly: a wrong address
+  keeps going out, now with a measurement saying so. Judged NOT a violation on three
+  grounds, recorded so the judgement can be overturned rather than forgotten: (1) the
+  defect is pre-existing and the pass neither introduced nor widened it — what changed is
+  that it is measured, stated in `docs/COVERAGE.md` §5.4, and **asserted by a test**, so it
+  can no longer be lost; (2) the exact rule is direction-dependent per annotation and
+  `mapping.path_fallback` is one catalog-level word, so every available encoding makes a
+  case that is right today newly wrong, which §8.1 rule 1 forbids in as many words; (3) the
+  alternative of dropping `path_fallback` trades one wrong address for the silent loss of
+  every correctly-named un-annotated operation, which is the second sin bought with the
+  first. If this judgement is overturned the consequence is that `OI-5` becomes a blocker
+  rather than a backlog row, not that a different approximation ships.
+
+### The §13.8 stop rule fired in Stage 4: THREE catalogs whose real rule the grammar cannot say
+
+Recorded here rather than in an agent's head, because §13.8 says the third occurrence of an
+error class is a diagnosis rather than a third correction. One dispatch found three, in three
+different catalogs, all the same shape — **the framework's rule is known exactly and the
+catalog vocabulary has no word for it**:
+
+| # | issue | the rule | the word that is missing |
+|---|---|---|---|
+| 1 | `OI-5` | the un-named-operation fallback strips a bean-accessor prefix, and WHICH prefix depends on which annotation matched | `mapping.path_fallback` is one scalar per catalog; it would have to be per annotation |
+| 2 | `OI-35` | the operation name may come from any of four OTHER annotations on the same method, in a fixed order | `mapping.path_from` names attributes on the MATCHED annotation only |
+| 3 | `OI-36` | two listener annotations on one method are folded by javac into a container the framework reads | `annotation_driven` has no `container` word; `scheduled_work` has one, for this exact reason |
+
+**The cause is one thing, not three.** `annotation_driven` is the style twenty-one catalogs
+use, and its vocabulary grew a key at a time against whichever framework was in front of the
+implementer. Each of the three above was reachable by adding one more key — and each was left
+open instead, because §8.1 rule 1 forbids the approximation and adding a key mid-dispatch
+would widen the engine every one of those twenty-one catalogs runs through, on one framework's
+evidence. **The mechanism §13.8 asks for is a design pass over `annotation_driven`'s
+vocabulary that takes all three at once**, with the three measurements above as its input;
+`scheduled_work`'s `container` and `disabled` keys are the shape it would follow. Until then
+the three rows stay open and none of them is fixed in isolation.
 
 Severity: **Critical** = publishes a wrong row a reader would act on ·
 **Major** = wrong under a realistic input, or a silent drop · **Minor** = stale
@@ -273,7 +310,7 @@ restricting the walk to poms inside the repository and losing
 `spring-boot-starter-parent` with it. **Falsified by** two machines deriving
 different endpoint sets from one commit.
 
-### OI-10 — 24 shipped catalogs state no measured version at all
+### OI-10 — 21 shipped catalogs state no measured version at all
 **Major · pre-existing, made countable 2026-09-06 by F5 ·
 `tests/architecture/test_catalog_measurement_coverage.py::_NOT_MEASURED_YET`**
 
@@ -299,8 +336,9 @@ a framework version nobody in this repository has opened.
 
 **Stage 4 progress (2026-09-06).** Twenty-six when F5 counted them. Retired
 since: `spring-scheduling` (CP-14, spring-context 6.1.6/6.2.19/7.0.9),
-`microprofile-graphql` (CP-15, smallrye-graphql-schema-builder 2.0.0/2.18.5).
-The
+`microprofile-graphql` (CP-15, smallrye-graphql-schema-builder 2.0.0/2.18.5),
+and `spring-kafka`, `spring-jms` and `spring-rabbit` (CP-16, spring-kafka
+3.1.4/4.1.1, spring-jms 6.1.6/7.0.9, spring-rabbit 3.1.4/4.1.1). The
 heading above is the count as it stands and is edited down with each entry, so
 this row cannot go stale about its own subject.
 
@@ -810,6 +848,74 @@ module using it for the documented purpose gets a wrong address.
 `channels` already uses one table over), with the ORDER preserved, since the
 framework takes the first present and a set would not say which.
 **Falsified by** a `@Query @Name("x")` method exporting `orders` rather than `x`.
+
+
+### OI-36 — a method carrying TWO listener annotations derives nothing, in all three frameworks
+**Major · found 2026-09-06 by Stage 4's listener pass (CP-16 rows 2 and 4) ·
+`src/sextant/catalogs/spring-kafka.yml`, `spring-jms.yml`, `spring-rabbit.yml`**
+
+`@KafkaListener`, `@JmsListener` and `@RabbitListener` are each `@Repeatable`
+— into `KafkaListeners`, `JmsListeners` and `RabbitListeners` — at every one of
+the six versions CP-16 read, and each framework's post-processor reads that
+container: Kafka calls `KafkaListeners.value()`, JMS calls
+`AnnotatedElementUtils.getMergedRepeatableAnnotations(element, JmsListener,
+JmsListeners)` naming both classes, spring-rabbit 3.1.4 streams `RabbitListener`
+out of a `MergedAnnotations` view.
+
+javac writes the CONTAINER and not the annotation on such a method (JLS 9.7.5),
+so the class file carries no `@KafkaListener` at all and
+`derive_endpoints.sql`'s `mc.fqn = a.annotation` join matches nothing. **Both
+destinations vanish from the export**, silently, beside a single-listener
+neighbour that derives normally — a silent under-report, the second sin, and
+the harder of the two to notice because the row is absent rather than wrong.
+
+**This is not a new class of mistake; it is the one `spring-scheduling.yml`
+already names a key to avoid.** That catalog's `container:` key exists because
+two `@Scheduled` on one method fold the same way. The difference is that the
+`scheduled_work` style HAS such a key and `annotation_driven` has none — so
+this is a grammar gap raised rather than an approximation encoded (§8.1 rule
+4), and the Stage 4 dispatch's own instruction for that case.
+
+**Cost:** bounded to a method declaring two or more listeners of one
+framework — uncommon but entirely ordinary (one handler serving two topics with
+different container factories, or a queue and its dead-letter queue), and the
+whole method's surface is lost when it happens.
+**Closes by** a `container` word in `annotation_driven`'s vocabulary that reads
+the folded uses the way `scheduled_work._folded` already does; the extractor
+capability it needs (9.16, nested annotation arguments) already ships and
+`spring-scheduling.yml` already `requires` it.
+**Falsified by** a two-listener method exporting either of its destinations.
+
+### OI-37 — an INHERITED `@RabbitListener` registers a listener we do not see
+**Minor · found 2026-09-06 by Stage 4's listener pass (CP-16 row 4e) ·
+`src/sextant/catalogs/spring-rabbit.yml`**
+
+spring-rabbit 3.1.4 finds its annotation through
+`MergedAnnotations.from(element, SearchStrategy.TYPE_HIERARCHY)`, and the
+strategy arrives as a bytecode CONSTANT the probe could read rather than a
+contract it had to assume. So a `@RabbitListener` declared on a superclass
+method or an interface method registers a listener on the implementing bean,
+while this repository holds an annotation fact only on the declaration that
+carries it — the queue is under-reported for the implementing module.
+
+**Scoped, and the scope is the point.** Kafka's `findMergedAnnotation` and JMS's
+`getMergedRepeatableAnnotations` carry NO strategy constant, so what those two
+search is Spring's own contract and CP-16 did not measure it; spring-rabbit
+4.1.1 moved its search into `spring-amqp`'s
+`AbstractListenerAnnotationBeanPostProcessor`, an artifact CP-16 does not open.
+This row therefore claims spring-rabbit 3.1.4 and nothing else, which is §5.4
+working rather than a hedge.
+
+**Cost:** bounded to a module whose listener declaration is inherited — and the
+ancestor is often in the same module, in which case its own row is derived and
+only the ATTRIBUTION is wrong rather than the destination being absent. That is
+why it is a Minor.
+**Closes by** measuring the other two searches (one probe question each,
+against the same jars CP-16 already resolves) and then, if the answer is the
+same, a rule that walks a scanned ancestor's annotations — which is `A-M13`'s
+mechanism one table over, and should be one decision rather than two.
+**Falsified by** an inherited listener declaration appearing in an export
+against the implementing bean.
 
 
 ## CLOSED
