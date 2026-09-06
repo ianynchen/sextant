@@ -4617,6 +4617,83 @@ def test_an_actuator_operation_outside_an_endpoint_class_derives_nothing(tmp_pat
     assert rows == []
 
 
+_GRAPHQL_API = "org/eclipse/microprofile/graphql/GraphQLApi#"
+_MP_QUERY = "org/eclipse/microprofile/graphql/Query#"
+
+
+def test_a_microprofile_query_naming_its_own_operation_derives_that_name(tmp_path: Path):
+    """The half CP-15 leaves untouched, and the reason `path_fallback` was
+    carried rather than dropped: an operation that NAMES itself is read from
+    its own `value` and reaches the same address SmallRye serves —
+    `getOperationName` consults the operation annotation's value first, before
+    every other source and before any transformation (CP-15 rows 1 and 3, at
+    smallrye-graphql-schema-builder 2.0.0 and 2.18.5)."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("microprofile-graphql")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_GRAPHQL_API: {}},
+        method_annotations={_MP_QUERY: {"value": "orders"}},
+    )
+
+    assert [(r["protocol"], r["direction"], r["method"], r["path"]) for r in rows] == [
+        ("graphql", "inbound", "query", "orders")
+    ]
+
+
+def test_a_microprofile_query_naming_nothing_publishes_the_wrong_address(tmp_path: Path):
+    """**A characterisation test of a KNOWN-WRONG output** (`OI-5`), written so
+    the defect is a fact in the suite rather than a paragraph in a register.
+
+    CP-15 row 5 compiled `MethodHelper.getPropertyName` against both measured
+    SmallRye jars and RAN it: `getOrders -> OUT orders`. So SmallRye serves
+    this operation as `orders`, and `path_fallback: construct_name` publishes
+    `getOrders` — a wrong address, at `resolved`/`compiler`, indistinguishable
+    downstream from an observation.
+
+    It is asserted rather than fixed because the framework's rule is
+    direction-dependent per annotation — `@Query` strips `get`/`is` and
+    `@Mutation` strips `set` (CP-15 rows 3-5) — and `mapping.path_fallback` is
+    one catalog-level word. Encoding either half alone makes the OTHER
+    annotation newly wrong, which is the approximation §8.1 rule 1 forbids. The
+    day the grammar can say it, this assertion is what changes."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("microprofile-graphql")],
+        class_symbol="com/acme/task7/Orders#",
+        method_symbol="com/acme/task7/Orders#getOrders(sig_mp1).",
+        class_annotations={_GRAPHQL_API: {}},
+        method_annotations={_MP_QUERY: {}},
+    )
+
+    assert [r["path"] for r in rows] == ["getOrders"]
+
+
+@pytest.mark.declines("microprofile-graphql")
+@pytest.mark.pins("derive_endpoints.type-annotation-gate")
+def test_a_microprofile_query_outside_a_graphql_api_class_derives_nothing(tmp_path: Path):
+    """§10 near-miss on the conjunct this catalog rests on. `@Query` carries no
+    address of its own beyond a name, and `@GraphQLApi` on the enclosing type
+    is the only thing separating an operation SmallRye scans from a method that
+    merely borrowed the annotation's simple name — the sweep ranks this catalog
+    in tier 3 for exactly that reason.
+
+    Every other conjunct holds: the operation annotation is present, spelled in
+    full, on a method, with a value it could publish. Without the type gate
+    this class's method becomes a resolved GraphQL operation at `orders` that
+    no schema declares."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("microprofile-graphql")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_MP_QUERY: {"value": "orders"}},
+    )
+
+    assert rows == []
+
+
 def test_a_web_filter_derives_nothing_from_any_shipped_catalog(tmp_path: Path):
     """§10 near-miss for the STATED BOUNDARY rather than for one matcher.
 

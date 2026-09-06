@@ -48,8 +48,9 @@ row is evidence rather than an intention.
 ## Why an allowlist rather than a count
 
 §8.3 requires a new enforceable rule to ship with the audit list of the sites it
-governs, and `_NOT_MEASURED_YET` IS that audit: twenty-six catalogs whose rule no
-committed probe has measured, listed by name with what each is waiting on. Listed
+governs, and `_NOT_MEASURED_YET` IS that audit: the catalogs whose rule no
+committed probe has measured, listed by name with what each is waiting on —
+twenty-six when F5 counted them, and shorter by every Stage 4 pass since. Listed
 rather than counted so retiring one is a deliberate edit visible in a diff, and
 so a NEW catalog cannot join them silently — adding a `.yml` without a
 `measured:` block fails `test_every_shipped_catalog_declares_what_it_measured`
@@ -101,7 +102,6 @@ _NOT_MEASURED_YET: dict[str, str] = {
     "grpc-schema": "a schema-file rule; no framework jar has been read for it",
     "grpc-spring": "no probe opens `org.springframework.grpc:spring-grpc-core`",
     "jakarta-jws-client": "CP-13 measured the SERVER side (`RuntimeModeler`) only",
-    "microprofile-graphql": "`A-Mi9`/`OI-5` — the naming rule is a prediction, unmeasured",
     "netflix-dgs": "no probe opens `com.netflix.graphql.dgs:graphql-dgs`",
     "spring-advice": "no probe opens `ExceptionHandlerExceptionResolver`",
     "spring-cloud-openfeign": "no probe opens `spring-cloud-openfeign-core`",

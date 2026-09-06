@@ -139,14 +139,59 @@ answer, and its guard moved with it and is measured to kill
 a real-scan half asserts the composed descriptor against what the extractor
 wrote. Four crossings, four discharges, and still no type.
 
-### OI-5 — MicroProfile GraphQL publishes a wrong address
-**Major · pre-existing (`A-Mi9`) · stated, not closed**
+### OI-5 — MicroProfile GraphQL publishes a wrong address — CONFIRMED BY MEASUREMENT, still open
+**Major · pre-existing (`A-Mi9`) · measured 2026-09-06 by Stage 4's
+`microprofile-graphql` pass · `scripts/probes/cp15_mp_graphql_names.md`**
 
-`microprofile-graphql.yml`'s `path_fallback: construct_name` is a prediction: MP
-GraphQL likely strips a `get`/`is` prefix, so `@Query List<Order> getOrders()`
-would be served as `orders` while we publish `getOrders`. **A wrong address, not
-an under-report** — the highest-value item in the probe backlog.
-**Closes by** a live SmallRye run.
+`microprofile-graphql.yml`'s `path_fallback: construct_name` WAS a prediction.
+CP-15 compiled `MethodHelper.getPropertyName` against
+smallrye-graphql-schema-builder 2.0.0 and 2.18.5 and ran it, so the prediction
+is now an observation: **`getOrders -> orders`**. We publish `getOrders`; the
+address is wrong, at `resolved`/`compiler`, and nothing downstream can tell it
+from an observation.
+
+**The rule is bigger than this row predicted, and that is why the row is still
+open.** It is direction-dependent, and the direction is chosen by WHICH
+operation annotation matched (CP-15 rows 3-5): `@Query` and `@Subscription`
+take `Direction.OUT`, which strips `get` and `is`; `@Mutation` takes
+`Direction.IN`, which strips `set` and nothing else. Measured edges:
+`get -> get` (too short), `gettotal -> gettotal` (no capital at the seam),
+`getX -> x`, and `getURL -> uRL` — the FIRST character is lowercased, not the
+remainder, which is the case that tells this rule apart from every plausible
+paraphrase of it.
+
+**Why it is not fixed.** `mapping.path_fallback` is ONE catalog-level word and
+this rule needs one per annotation. A `get`/`is` strip fixes every `@Query` and
+makes `@Mutation Order getOrder()` newly wrong (served `getOrder`, we would say
+`order`); a `set` strip does the mirror. §8.1 rule 1 forbids an approximation
+that fits the examples in front of you, and the Stage 4 dispatch says to raise
+a grammar gap rather than encode around it. `construct_name` is kept rather
+than dropped because it is correct for every operation whose method name is not
+a bean accessor, and dropping it composes the empty address and loses those too.
+
+**What the measurement DID buy**, so this is not a year of standing still: the
+catalog now carries a `measured:` block (its `_NOT_MEASURED_YET` row is
+retired), the boundary in `docs/COVERAGE.md` §5.4 states an observation rather
+than a hypothesis, and
+`tests/application/test_endpoints.py::test_a_microprofile_query_naming_nothing_publishes_the_wrong_address`
+**asserts the wrong output**, so the defect is a fact in the suite and the fix
+will show up as a changed assertion rather than as a paragraph somebody has to
+notice.
+
+**Closes by** either (a) `mapping.path_fallback` becoming per-annotation data —
+the `mapping_catalog` struct already carries four per-annotation columns, so
+this is a fifth plus one `CASE` — or (b) splitting the file into a `@Query`
+catalog and a `@Mutation` catalog, each with a single-word fallback, which the
+`spring-sqs`/`spring-sqs-legacy` pair is the precedent for. Whichever is taken,
+the rule to encode is CP-15 row 4's, including `getURL -> uRL`.
+**Falsified by** — now measured, so the falsifier is the other way round: a
+SmallRye deployment serving `getOrders` under its written name would mean CP-15
+row 5 does not describe what a server does, which row 3 is what re-checks.
+
+**What is still NOT measured**, and the row is bounded by it: nothing was
+deployed. Row 5 is the schema builder's own answer, and SmallRye is one
+implementation of a specification several vendors implement. A live SmallRye
+run stays rank 2 of the sweep's probe backlog.
 
 ### OI-6 — 6 Class A Minors remain open
 **Minor · pre-existing · `docs/principles-sweep-2026-09-05.md` §13**
@@ -228,7 +273,7 @@ restricting the walk to poms inside the repository and losing
 `spring-boot-starter-parent` with it. **Falsified by** two machines deriving
 different endpoint sets from one commit.
 
-### OI-10 — 25 shipped catalogs state no measured version at all
+### OI-10 — 24 shipped catalogs state no measured version at all
 **Major · pre-existing, made countable 2026-09-06 by F5 ·
 `tests/architecture/test_catalog_measurement_coverage.py::_NOT_MEASURED_YET`**
 
@@ -253,7 +298,9 @@ that list as it goes. **Falsified by** a shipped catalog deriving a wrong row on
 a framework version nobody in this repository has opened.
 
 **Stage 4 progress (2026-09-06).** Twenty-six when F5 counted them. Retired
-since: `spring-scheduling` (CP-14, spring-context 6.1.6/6.2.19/7.0.9). The
+since: `spring-scheduling` (CP-14, spring-context 6.1.6/6.2.19/7.0.9),
+`microprofile-graphql` (CP-15, smallrye-graphql-schema-builder 2.0.0/2.18.5).
+The
 heading above is the count as it stands and is edited down with each entry, so
 this row cannot go stale about its own subject.
 
@@ -726,6 +773,43 @@ the wrong row describes an application no reader can be looking at.
 accepted-combination rule measured beside it, or a recorded ruling that
 non-starting code is out of scope for every catalog rather than for this one.
 **Falsified by** such a declaration exporting a `scheduled_work` row.
+
+
+### OI-35 — four of MicroProfile GraphQL's five operation-name sources are not read
+**Major · found 2026-09-06 by Stage 4's `microprofile-graphql` pass (CP-15 rows
+1-2) · `src/sextant/catalogs/microprofile-graphql.yml`**
+
+`OI-5` is about the FALLBACK. This is about the sources that come before it, and
+nothing in this register had recorded them. CP-15 disassembles
+`OperationCreator.getOperationName` at smallrye-graphql-schema-builder 2.0.0 and
+2.18.5 and finds it consulting five sources in order, taking the first with a
+value: the operation annotation's own `value`, then
+`org.eclipse.microprofile.graphql.Name`, then
+`jakarta.json.bind.annotation.JsonbProperty`, then its `javax` spelling, then
+`com.fasterxml.jackson.annotation.JsonProperty`. Row 2 reads each fully
+qualified name out of `Annotations`' own static initialiser, so the cell names
+annotation types rather than fields.
+
+`microprofile-graphql.yml`'s `path_from: [value]` reads the first alone. So
+`@Query @Name("allOrders") List<Order> orders()` is served as `allOrders` while
+we publish `orders` — **a wrong address**, the same class as `OI-5` and reached
+by a different route.
+
+**Not encoded**, and for a different grammar reason from `OI-5`'s:
+`mapping.path_from` names attributes on the MATCHED annotation, and these are
+four OTHER annotations on the same method. No shipped vocabulary reads a name
+off a sibling annotation — `request_body` reads a sibling annotation but answers
+a different question and feeds a different column.
+
+**Cost:** bounded to a MicroProfile GraphQL operation carrying one of the four,
+which `@Name` makes ordinary — it is the specification's own renaming
+annotation and the same one this catalog already names for `request_body`, so a
+module using it for the documented purpose gets a wrong address.
+**Closes by** a `path_from` form that can name a sibling annotation's attribute
+(`{ annotation: …, arg: value }`, the shape `spring-integration.yml`'s
+`channels` already uses one table over), with the ORDER preserved, since the
+framework takes the first present and a set would not say which.
+**Falsified by** a `@Query @Name("x")` method exporting `orders` rather than `x`.
 
 
 ## CLOSED

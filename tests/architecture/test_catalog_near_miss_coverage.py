@@ -88,7 +88,6 @@ _NO_DECLINING_TEST_YET = frozenset(
         "spring-data-rest",
         "spring-graphql",
         "graphql-schema",
-        "microprofile-graphql",
         "netflix-dgs",
         "grpc-java",
         "grpc-spring",

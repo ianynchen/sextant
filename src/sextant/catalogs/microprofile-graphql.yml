@@ -16,6 +16,21 @@ matches:
   mapping:
     # CHECKPOINT FACT: `@Query` and `@Mutation` declare exactly one attribute
     # each, `value()`, and it arrives SCALAR.
+    #
+    # **ONE OF FIVE NAME SOURCES, and the other four are not read (`OI-35`).**
+    # CP-15 rows 1-2 disassemble `OperationCreator.getOperationName` at
+    # smallrye-graphql-schema-builder 2.0.0 and 2.18.5 and find it consulting,
+    # in order and taking the first with a value: the operation annotation's
+    # own `value`, then `org.eclipse.microprofile.graphql.Name`, then
+    # `jakarta.json.bind.annotation.JsonbProperty`, then its `javax` spelling,
+    # then `com.fasterxml.jackson.annotation.JsonProperty`. So
+    # `@Query @Name("allOrders") List<Order> orders()` is SERVED as
+    # `allOrders` while this catalog publishes `orders`.
+    #
+    # Not encoded, because `path_from` names attributes on the MATCHED
+    # annotation and these are four other annotations on the same method —
+    # a shape no shipped vocabulary reads. Raised rather than approximated
+    # (§8.1 rule 1); `OI-35` carries the close condition.
     path_from: [value]
     # CHECKPOINT FACT: `@Query.value()` is declared `default ""` and the
     # default never reaches the class file — the third framework with the
@@ -23,20 +38,39 @@ matches:
     # three catalog workarounds. Rides `spring-graphql.yml`'s form with no
     # engine change of its own (2H design §1's amended acceptance test).
     #
-    # **WHAT IS MEASURED HERE IS THE FACT ABOVE, NOT THE NAME BELOW (§5.4).**
-    # That the default never reaches the class file was checked. What
-    # MicroProfile serves for a method whose `@Query` names nothing was NOT:
-    # the fallback publishes the method's own name because that is Spring's
-    # rule, and MicroProfile is a different implementation. If SmallRye strips
-    # a `get`/`is` prefix — which its own naming section suggests and no run in
-    # this repository has confirmed — then `@Query List<Order> getOrders()` is
-    # served as `orders` while this catalog publishes `getOrders`, which is a
-    # WRONG address rather than a missing one (§8.1 rule 1: mirror the
-    # framework's rule, never an approximation that fits the examples in
-    # front of you). Carried anyway rather than dropped, because dropping it
-    # loses every un-annotated operation and the annotated case — `@Query("orders")`,
-    # reading its own value — is unaffected either way. `docs/COVERAGE.md`
-    # states the boundary and names the probe that closes it (`A-Mi9`).
+    # **MEASURED, AND WRONG. `OI-5` is confirmed and this key is not the
+    # framework's rule.** It used to say the fallback was a prediction; CP-15
+    # ran the framework and the prediction was right about the direction and
+    # wrong about the size.
+    #
+    # What SmallRye actually does (CP-15 rows 3-5, byte-identical at 2.0.0 and
+    # 2.18.5, row 5 COMPILED AND RUN rather than read): the fallback is
+    # `MethodHelper.getPropertyName`, and which transformation it applies
+    # depends on WHICH operation annotation matched. `@Query` and
+    # `@Subscription` take `Direction.OUT`, which strips `get` and `is`;
+    # `@Mutation` takes `Direction.IN`, which strips `set` and nothing else.
+    # Measured outputs: `getOrders -> orders`, `isActive -> active`,
+    # `setStatus -> status` (mutation) but `setStatus` unchanged (query),
+    # `get -> get` (too short), `gettotal -> gettotal` (no capital at the
+    # seam), `getURL -> uRL` (the FIRST character is lowercased, not the
+    # remainder).
+    #
+    # **Why the rule is not encoded here.** `path_fallback` is one
+    # catalog-level word and this rule needs one per annotation, so any single
+    # word makes one of the two annotations newly wrong: a `get`/`is` strip
+    # fixes every `@Query` and breaks `@Mutation Order getOrder()`, which is
+    # served as `getOrder`. §8.1 rule 1 forbids an approximation that fits the
+    # examples in front of you, and the dispatch that measured this raises a
+    # grammar gap rather than encoding one. `construct_name` is kept because
+    # it is CORRECT for every operation whose method name is not a bean
+    # accessor — which is most of them — and dropping it would compose the
+    # empty address and lose those too.
+    #
+    # `OI-5` carries the close condition (a per-annotation fallback, or two
+    # catalogs); `docs/COVERAGE.md` §5.4 states the boundary; and
+    # `test_a_microprofile_query_naming_nothing_publishes_the_wrong_address`
+    # asserts the wrong output, so the day the grammar can say it, a test
+    # changes rather than a paragraph.
     path_fallback: construct_name
     # No qualifier: MicroProfile's non-root resolver is `@Source` on a
     # PARAMETER, which names the parent type through the parameter's own type
@@ -79,3 +113,15 @@ wrappers:
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.
 shape_model: json
+
+# The naming rule this file encodes belongs to an IMPLEMENTATION, not to the
+# API artifact `detect.coordinates` names: `microprofile-graphql-api` declares
+# the annotations and no naming rule at all. So the artifact recorded here is
+# the one the rule was READ OUT OF (D02 §1a's own contract, and
+# `spring-web.yml`'s handler gate living in `spring-webmvc` is the precedent).
+# SmallRye is ONE implementation of the specification, and every verdict CP-15
+# reaches is scoped to it — a second implementation is a second row here, not
+# an assumption.
+measured:
+  - { artifact: io.smallrye:smallrye-graphql-schema-builder, versions: ["2.0.0", "2.18.5"],
+      identity: reported, by: scripts/probes/cp15_mp_graphql_names.md }
