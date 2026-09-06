@@ -1,0 +1,235 @@
+"""Which method a call site can actually run — the JVM's own dispatch rule,
+mirrored rather than approximated (DR-6).
+
+**One rule, one place, because there is already going to be a second.**
+[M04](docs/components/M04-resolver.md) §4 designs a `dispatch`/`dispatch_site`
+pair with rapid type analysis narrowing candidates to types the program
+constructs; none of it is built, and `docs/open-issues.md` OI-16 records that
+the day it lands there will be two answers to one question. `G3` answered it
+inline for `return_flows`; `G4` needs the identical answer for `call_edges`.
+Deriving it twice would have made OI-16 a three-way disagreement, so the rule
+moved here and both passes read it. This module is a MOVE of `return_flow`'s
+own resolution, not a new rule: its behaviour, its comments and the two guards
+that pin it are the ones `G3` shipped.
+
+## The rule
+
+The caller-to-callee join is **arithmetic, not a lookup** (`domain/symbols
+.method_descriptor`): a `call_site` carries owner, name and JVM descriptor, and
+a method's own symbol is that owner and name with the first four bytes of the
+SHA-256 of the descriptor. So asking what one site calls costs a hash, and a
+callee outside the workspace produces a descriptor that matches nothing rather
+than an error.
+
+- `invokestatic` and `invokespecial` name the method that runs, exactly. A
+  private call, a `super.` call and a constructor have no virtual dispatch, so
+  no implementation of anything is a candidate for them. A static method is
+  HIDDEN by a subclass's, never overridden.
+- `invokevirtual` and `invokeinterface` dispatch on the receiver's runtime
+  class, so the candidates are the declared method **where it has a body** plus
+  every in-module override of it. One candidate is `resolved`; several are
+  `narrowed`, all listed, none picked — the roadmap's own rule for 2Q, and the
+  same refusal the extractor already applies to a merged value.
+- `invokedynamic` names no callee at all in its target: the target is the
+  BOOTSTRAP factory, and the body the site creates is `call_site.implementation`
+  (capability 9.17). What each reader does with that differs, so it is not
+  decided here — `return_flow` excludes such sites whole, `call_edges` follows
+  the implementation. Both need the constant, which is why it lives here.
+
+## Where a candidate set stops
+
+A call whose callee this workspace never scanned yields no candidate. That is
+the third-party boundary as ruled: a mapper, a repository, a driver, anything
+in the JDK — the call IS the terminal, and a candidate claiming to know its
+body would be the cardinal sin. Measured on `macrozheng/mall`'s `mall-admin`,
+it is also the common case.
+
+A candidate is kept only where the workspace read its BODY, and "read its body"
+is asked as "did the extractor emit a `method_return` fact for it": an abstract
+or interface declaration is a scanned symbol with no returns, and every
+analysable body has at least one return instruction, `void` included. That is
+what lets a reader count candidates and get the dispatch tier right, and what
+makes an in-module interface with no implementation — a data-access declaration
+whose implementation the framework generates — correctly terminal.
+
+## Termination
+
+The one walk that could not terminate is the hierarchy descent, which keeps a
+visited set. Valid bytecode cannot describe a cycle of types, and that is
+exactly why an unbounded walk here would be a hang triggered by a file nobody
+wrote by hand.
+"""
+
+import json
+from collections import defaultdict
+from dataclasses import dataclass
+
+from sextant.application.ports.workspace import Workspace
+from sextant.domain.symbols import bare_descriptor, method_descriptor
+
+# D00 §5's dispatch forms, as the extractor spells them (`MethodFlow.invokeKind`).
+# The two that dispatch on the receiver's RUNTIME class are the two that admit
+# an override; the rest name what runs.
+VIRTUAL_DISPATCH = frozenset({"virtual", "interface"})
+# `invokedynamic`. Its target names the bootstrap factory rather than a callee,
+# so every reader has to decide what to do with it and none of them can take
+# the target at face value — see the module docstring.
+DYNAMIC = "dynamic"
+
+
+@dataclass(frozen=True)
+class Dispatch:
+    """Everything needed to answer "which method can this site run", read once
+    per pass rather than per call site.
+
+    `bodies` maps a BARE method descriptor to the module-prefixed symbols of
+    every method the workspace read a body for under it, in symbol order
+    (NFR-1). `declared` is every declared method symbol, bare. `subtypes` maps
+    a bare TYPE descriptor to its transitive in-module descendants, sorted.
+    """
+
+    bodies: dict[str, list[str]]
+    declared: set[str]
+    subtypes: dict[str, list[str]]
+
+    def candidates(self, site: dict[str, object]) -> list[str]:
+        """Every method `site` can run and whose body this workspace read, as
+        the module-prefixed symbols `method_return` spells them, in a fixed
+        order.
+
+        Empty is an ANSWER and the common one: the third-party boundary, or an
+        in-module declaration nothing in this module implements. Neither is a
+        failure to resolve — the call IS the terminal, and nothing further is
+        knowable from this workspace.
+
+        A `dynamic` site is not asked this question: its target names a
+        bootstrap factory, so composing a descriptor from it would look up a
+        method nobody calls. Callers handle that form themselves.
+        """
+        name, descriptor = str(site["name"]), str(site["descriptor"])
+        declared = method_descriptor(str(site["owner"]), name, descriptor)
+        if declared not in self.declared:
+            return []
+        found = list(self.bodies.get(declared, ()))
+        if site["invoke_kind"] not in VIRTUAL_DISPATCH:
+            return found
+        for subtype in self.subtypes.get(bare_descriptor(str(site["owner"])), ()):
+            for override in self.bodies.get(method_descriptor(subtype, name, descriptor), ()):
+                if override not in found:
+                    found.append(override)
+        return found
+
+
+def dispatch_of(workspace: Workspace) -> Dispatch:
+    """Reads the three indices once. Every one of them is a compiler fact —
+    there is no framework knowledge in a call site, so nothing here gates on a
+    capability or reads a catalog."""
+    return Dispatch(
+        bodies=_bodies_by_descriptor(workspace),
+        declared=_declared(workspace),
+        subtypes=_subtypes(workspace),
+    )
+
+
+def _declared(workspace: Workspace) -> set[str]:
+    """Every method-like symbol this workspace scanned, bare — the conjunct
+    that keeps a call THROUGH a library-declared type from picking up the
+    module's own overrides of it (OI-17).
+
+    **Constructors are in this set, and leaving them out was a silent
+    under-report.** D00 §4 gives a constructor its own `construct_kind`, so
+    `method_symbols` — whose own job is a receiver lookup — does not list one;
+    the JVM does not make that distinction, and `invokespecial` to an in-module
+    `<init>` is a call into a body this workspace read like any other. Without
+    them every `new` on a type the module declares read as the third-party
+    boundary, and a constructor that does real work — validation, defaulting —
+    was invisible to a trace. Measured on `macrozheng/mall`'s `mall-admin`,
+    including them turns 13 of 1,979 boundary edges into in-module ones — a
+    small number precisely because most `new` in a service names a platform or
+    dependency type, and the thirteen that do not are the module's own.
+
+    It changes nothing for `return_flows`: a constructor call site carries no
+    `result` (the object comes from the preceding `new`, not from `<init>`), so
+    that pass drops the site before dispatch is asked anything.
+    """
+    scanned = workspace.query("method_symbols") + workspace.query("constructor_declarations")
+    return {bare_descriptor(str(row["symbol"])) for row in scanned}
+
+
+def _bodies_by_descriptor(workspace: Workspace) -> dict[str, list[str]]:
+    """Bare descriptor to the module-prefixed symbols of every method the
+    workspace read a body for, in symbol order (NFR-1) — **the join, and the
+    one place a spelling is stripped.**
+
+    **OI-4, discharged by stripping exactly one side.** `method_return.method`
+    is a declaration this module made, so it carries the module-prefixed
+    spelling — the same one `call_sites.caller` and the method's own symbol
+    fact use, measured equal at G2. A call site's target, by contrast, is the
+    JVM's own triple, from which `method_descriptor` composes a BARE
+    descriptor, and it must stay bare: a callee may live in a library, and D00
+    §1 requires that two modules seeing `String#trim` produce one symbol rather
+    than two. So the strip happens here and nowhere else, and it is pinned
+    against a MODULE-PREFIXED scan rather than a fixture that spells symbols
+    bare — the exact shape that cost round 1's `F6` and 2O Task 10 six green
+    tests and zero rows. G1 discharged the same trap in the opposite direction
+    (`call_site.implementation` is bare), which is why "strip both sides
+    always" is not the rule and each join has to say which side it strips.
+
+    The **bare** key is what a call site's target composes to and what a
+    subtype's override composes to; the module-prefixed value is what a row
+    carries, so a reader can join a callee straight to that method's own
+    `call_sites` and take the next hop. One key normally holds one symbol; it
+    holds several where a workspace scanned two coordinates that declare the
+    same class and method — an opted-in library beside the module's own output
+    — and then both are candidates, because both are bodies this workspace
+    actually read and choosing between them would be a claim about a classpath
+    nobody measured.
+
+    A `void` return counts here, unlike in `return_flow`'s own value index: the
+    question this index answers is "did we read a body", and a method that
+    hands nothing back has one. Excluding it would make every void call in the
+    module read as the third-party boundary.
+    """
+    bodies: dict[str, list[str]] = defaultdict(list)
+    for symbol in sorted({str(row["method"]) for row in workspace.query("method_returns")}):
+        bodies[bare_descriptor(symbol)].append(symbol)
+    return bodies
+
+
+def _subtypes(workspace: Workspace) -> dict[str, list[str]]:
+    """The transitive descendants of every type the module declares, keyed by
+    BARE type descriptor and sorted (NFR-1).
+
+    Built from the two halves the symbol facts carry — `interfaces` (capability
+    9.10, entries BARE) and `superclass` (capability 9.13, module-prefixed) —
+    normalised to one spelling here rather than at each comparison. A type
+    outside the module appears only as a PARENT: nothing declares it, so it has
+    no row of its own, and asking for its descendants correctly yields only the
+    in-module ones.
+
+    The walk keeps a visited set. Valid bytecode cannot describe a cycle of
+    types, and that is exactly why an unbounded walk here would be a hang
+    triggered by a file nobody wrote by hand.
+    """
+    children: dict[str, list[str]] = defaultdict(list)
+    for row in workspace.query("implementations"):
+        child = bare_descriptor(str(row["symbol"]))
+        for parent in json.loads(str(row["interfaces"])):
+            children[bare_descriptor(str(parent))].append(child)
+    for row in workspace.query("superclasses"):
+        children[bare_descriptor(str(row["superclass"]))].append(
+            bare_descriptor(str(row["symbol"]))
+        )
+    return {parent: _descendants(parent, children) for parent in children}
+
+
+def _descendants(root: str, children: dict[str, list[str]]) -> list[str]:
+    reached: set[str] = set()
+    frontier = [root]
+    while frontier:
+        for child in children.get(frontier.pop(), ()):
+            if child in reached:
+                continue
+            reached.add(child)
+            frontier.append(child)
+    return sorted(reached)

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from sextant.application.ports.catalogs import CatalogSource
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.config import resolve_config
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 from sextant.application.resolve.environment_divergence import record_environment_divergence
@@ -82,6 +83,12 @@ def resolve(
     # framework knowledge in a return, and a pass that cannot be skipped should
     # not read as though it might be.
     record_return_flows(workspace)
+    # 2Q `G4`, beside `G3` and for the same reason: it reads `call_sites` and
+    # the type hierarchy — compiler facts, all loaded — takes no catalog and
+    # gates on no capability. The two are independent (disjoint tables, one
+    # shared reader in `resolve/dispatch.py` that each builds for itself), so
+    # this order is the order they were written and nothing depends on it.
+    record_call_edges(workspace)
     skipped = derive_endpoints(workspace, declared, capabilities)
     # 2Q `I1`, and its position is a dependency rather than a preference: it
     # reads `endpoints.handler`/`direction` and `scheduled_work.handler`, and

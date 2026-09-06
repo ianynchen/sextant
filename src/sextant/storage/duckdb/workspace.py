@@ -507,6 +507,19 @@ _NAMED_QUERIES = {
     # answers), and an ordering with ties is one that can change between runs
     # (NFR-1) — the `scheduled_work` reasoning, one table on.
     "roots": "SELECT handler, root_kind FROM roots ORDER BY handler, root_kind",
+    # 2Q `G4`'s call graph. `caller, ordinal` alone is not total — a site whose
+    # dispatch narrowed to two bodies is two rows — so `target` and `callee`
+    # close it; `callee` is last because it is the column those two rows differ
+    # in, and NULLs sort together at one end rather than interleaving (NFR-1).
+    #
+    # Ordered by `ordinal` within a caller and NOT by anything else first,
+    # because that order is the answer: it is the control-flow position the
+    # statements were written in, and it is what gives a walk over these rows
+    # its nesting.
+    "call_edges": """
+        SELECT caller, ordinal, invoke_kind, target, callee, result, resolution, evidence
+        FROM call_edges ORDER BY caller, ordinal, target, callee
+    """,
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
     "facts": "SELECT count(*) AS facts FROM raw_facts",
@@ -667,6 +680,9 @@ _NAMED_DERIVATIONS = {
     # `return_flows` above is and for the same reason.
     "roots_reset": "reset_roots.sql",
     "roots_insert": "insert_roots.sql",
+    # 2Q `G4`. A reset/insert pair owned by its one writing pass, as above.
+    "call_edges_reset": "reset_call_edges.sql",
+    "call_edges_insert": "insert_call_edges.sql",
 }
 
 

@@ -148,8 +148,10 @@ _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 _ARGUMENTS = "sextant/application/resolve/shapes/arguments.py"
-_RETURN_FLOW = "sextant/application/resolve/return_flow.py"
+_DISPATCH = "sextant/application/resolve/dispatch.py"
 _ROOTS = "sextant/application/resolve/roots.py"
+_CALL_EDGES = "sextant/application/resolve/call_edges.py"
+_TRACE = "sextant/application/query/trace.py"
 
 
 GUARDS: dict[str, Guard] = {
@@ -752,8 +754,90 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
-    # --- 2Q `G3`, cross-method return propagation --------------------------
-    "return_flow.callee-descriptor-is-stripped-to-bare": Guard(
+    # --- 2Q `G4`, the call graph and the walk over it ----------------------
+    "call_edges.a-lambda-site-names-the-body-not-the-bootstrap": Guard(
+        what="an `invokedynamic` edge names the body the site CREATES "
+        "(`call_site.implementation`, capability 9.17), never the bootstrap factory its own "
+        "target names",
+        why="the target of every lambda site in every module is the same platform factory, "
+        "so reading it makes each one a third-party terminal and a trace stops at the line "
+        "that creates a lambda. The business logic inside is then invisible: a "
+        "`forEach(x -> mapper.insert(x))` reports `forEach` and never the persistence. "
+        "Measured on `macrozheng/mall`'s `mall-admin` — fifteen bodies reached this way, "
+        "seven of them holding a terminal no other path reaches",
+        edits=(
+            Edit(
+                path=_CALL_EDGES,
+                find='    if str(site["invoke_kind"]) == DYNAMIC:',
+                replace="    if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "call_edges.a-lambda-site-creating-no-body-is-no-edge": Guard(
+        what="an `invokedynamic` that names no implementation contributes NO edge — the key "
+        "is written only where the bootstrap creates a body",
+        why="not every `invokedynamic` is a lambda: string concatenation compiles to one "
+        "whose bootstrap is a compiler artifact rather than a call the program makes. The "
+        "missing value does not stay missing — read anyway it becomes an edge to the "
+        "four-character text `None`, a symbol no fact ever declared, once per concatenated "
+        "string in the module (56 of `mall-admin`'s 74 `dynamic` sites)",
+        edits=(
+            Edit(
+                path=_CALL_EDGES,
+                find="        if implementation is None:\n            return None, []\n",
+                replace="",
+            ),
+        ),
+    ),
+    "call_edges.a-callee-with-no-body-read-is-still-a-row": Guard(
+        what="a call site whose callee's body this workspace never read is written as a row "
+        "with a NULL `callee` — the boundary is a row, not an absence",
+        why='"this call leaves the module here" and "this method makes no calls" are '
+        "different answers, and dropping the row makes them identical. Every third-party "
+        "terminal disappears from every trace — 1,966 of `mall-admin`'s 2,608 edges — and "
+        "what is left reads as a service that reaches no database, no cache and no object "
+        "store, which is the second sin at full volume",
+        edits=(
+            Edit(
+                path=_CALL_EDGES,
+                find="    reached: list[str | None] = list(callees) or [None]",
+                replace="    reached: list[str | None] = list(callees)  # guard disabled",
+            ),
+        ),
+    ),
+    "trace.a-callee-on-the-current-path-is-a-cycle": Guard(
+        what="a callee already on the path from the root is reported as a `cycle`, which is "
+        "a different answer from a method shown elsewhere in the same trace",
+        why="the walk still terminates without it — the expanded set catches the second "
+        "visit — so the loss is not a hang but a WORD: a self-recursive method reports "
+        '`revisited`, which says "shown elsewhere in this trace" about a method calling '
+        "ITSELF. A reader looking for recursion finds none, on every recursive method in "
+        "the module, and `mall-admin` has one reachable only through a lambda body",
+        edits=(
+            Edit(
+                path=_TRACE,
+                find="    if callee in path:\n        return TraceStop.CYCLE\n",
+                replace="",
+            ),
+        ),
+    ),
+    "trace.a-depth-bound-reached-is-said-out-loud": Guard(
+        what="a step the depth bound refused carries `depth_limit`, so `Trace.truncated` "
+        "can answer whether what a caller holds is the whole walk",
+        why="a bound that fires without saying so is an under-report with nothing to notice "
+        "it. The deepest steps read as ordinary leaves, `truncated` answers False, and every "
+        "trace on a module deeper than the bound silently loses everything past it — the "
+        "same shape as a trace that stops at a lambda, with a switch on it",
+        edits=(
+            Edit(
+                path=_TRACE,
+                find="    if depth >= max_depth:\n        return TraceStop.DEPTH_LIMIT\n",
+                replace="",
+            ),
+        ),
+    ),
+    # --- 2Q, the shared dispatch rule --------------------------------------
+    "dispatch.callee-descriptor-is-stripped-to-bare": Guard(
         what="the method a return flow joins TO is keyed by its BARE descriptor, because "
         "the call-site side composes a bare one and a callee may live in a library",
         why="OI-4 on its third appearance, and the first two each shipped: one identity, two "
@@ -766,13 +850,13 @@ GUARDS: dict[str, Guard] = {
         "call as a terminal",
         edits=(
             Edit(
-                path=_RETURN_FLOW,
+                path=_DISPATCH,
                 find="        bodies[bare_descriptor(symbol)].append(symbol)",
                 replace="        bodies[symbol].append(symbol)  # guard disabled",
             ),
         ),
     ),
-    "return_flow.exact-dispatch-admits-no-override": Guard(
+    "dispatch.exact-dispatch-admits-no-override": Guard(
         what="only `invokevirtual` and `invokeinterface` admit an implementation as a "
         "candidate — a static, special or constructor call names the method that runs",
         why="the JVM's own rule, mirrored rather than approximated (DR-6). A static method "
@@ -783,8 +867,8 @@ GUARDS: dict[str, Guard] = {
         "`resolved` to `narrowed` to say so",
         edits=(
             Edit(
-                path=_RETURN_FLOW,
-                find='    if site["invoke_kind"] not in _VIRTUAL_DISPATCH:\n        return candidates\n',
+                path=_DISPATCH,
+                find='        if site["invoke_kind"] not in VIRTUAL_DISPATCH:\n            return found\n',
                 replace="",
             ),
         ),

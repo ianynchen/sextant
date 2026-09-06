@@ -364,7 +364,7 @@ def hand_built(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, objec
     return rows
 
 
-@pytest.mark.pins("return_flow.callee-descriptor-is-stripped-to-bare")
+@pytest.mark.pins("dispatch.callee-descriptor-is-stripped-to-bare")
 def test_a_bare_call_target_finds_a_module_prefixed_callee(hand_built):
     """**The join, on facts spelled the way a real scan spells them.** The call
     site names `Gateway#send` as the JVM's triple, which composes BARE; the
@@ -385,7 +385,7 @@ def test_a_bare_call_target_finds_a_module_prefixed_callee(hand_built):
     assert json.loads(str(rows[0]["value"]))["value"] == "sent"
 
 
-@pytest.mark.pins("return_flow.exact-dispatch-admits-no-override")
+@pytest.mark.pins("dispatch.exact-dispatch-admits-no-override")
 def test_a_static_call_admits_no_hiding_subclass(hand_built):
     """DR-6, mirrored from the JVM. `invokestatic` dispatches on nothing:
     `GatewayImpl.tag()` runs `GatewayImpl.tag()` whatever `StrictGateway`

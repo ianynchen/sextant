@@ -91,14 +91,19 @@ own ATTRIBUTE as an address**, and that is a refusal rather than an omission: gi
 `@RabbitListener` a `path_from: [bindings]` would publish a `@QueueBinding`'s JSON text as
 a queue name. `docs/COVERAGE.md` carries that boundary and the condition that closes it.
 
-**9.17 and 9.18 have NO consumer, and that is stated rather than glossed** (§5.3,
-GUIDELINES §2). `implementation` and `method_return` are produced and nothing reads them:
-their planned reader is 2Q's G3/G4 — cross-method return propagation and the `call_edges`
-traversal — neither of which exists. They ship ahead of both because these are the facts G3
-consumes and because a lambda body was being extracted and orphaned in the meantime, but a
-capability with no consumer is a half-shipped feature by this file's own rule, and both are
-carried as open issues (`docs/open-issues.md`, OI-14 and OI-15) until a traversal reads
-them.
+**9.17 and 9.18 both have a consumer now, and each names a different one.** 9.18's
+`method_return` is read by `resolve/return_flow.py`, which joins it to `call_sites` to link
+a callee's returned value to the caller's own `result` id (2Q's `G3`, closing OI-15), and
+again by `resolve/dispatch.py`, whose "did we read a body" test is the presence of the
+fact. 9.17's `implementation` is read by `resolve/call_edges.py`, which makes an
+`invokedynamic` site an edge into the **lambda body it creates** rather than into the
+bootstrap factory its own target names (2Q's `G4`, closing OI-14) — without which every
+lambda in a module is a platform terminal and a `forEach(x -> mapper.insert(x))` reports
+`forEach` and never the persistence. Measured on `macrozheng/mall`'s `mall-admin`: fifteen
+bodies reached this way, seven of them holding a terminal no other path reaches.
+*Both were listed here as having no consumer until 2Q's `G3` and `G4` shipped, which is the
+state this file's own rule — a capability with no consumer is a half-shipped feature —
+exists to make visible while it lasts.*
 
 **`chain_reconstruction` means exactly this: receiver and result value ids are present on
 `call_site` facts** ([D00](D00-fact-schema.md) §5) — a `fluent` catalog's steps are a join

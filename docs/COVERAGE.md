@@ -2026,6 +2026,41 @@ work the request does. **Falsified by** a functional route whose real work is in
 every trace. **Closes with** the chain reader naming the lambda as the row's handler — at
 which point these become roots with no change here — `docs/open-issues.md` OI-23.
 
+### Where a TRACE stops, now that there is one
+
+2Q's `G4`/`I3` walk from a root to every terminal (`application/query/trace.py`, over
+`call_edges`). Measured on `macrozheng/mall`'s `mall-admin` — 160 endpoints, Boot 3.x, JDK
+21, built and analysed with the shipped pipeline — rather than reasoned about.
+
+| Where it stops | Measured on `mall-admin` | Why, and what closes it |
+|---|---|---|
+| **The third party.** A mapper, a repository, a driver, the JDK: the call IS the terminal | **1,966 of 2,608** call edges | Ruled, not a gap. We do not trace into a dependency and we do not read its configuration, so a terminal is a method name and never a table name |
+| **A sibling build module.** A call into another module of the same reactor leaves for a workspace this one does not hold | included in the 1,966 above, and **indistinguishable from it** — `CommonPage#restPage` and `CommonResult#success`, the two calls that compose `/order/list`'s response, are both this | Correct in that no body was read here, incomplete in that a body exists somewhere. Joining the two is `Bundle`/`Link` work, not this walk's. **Falsified by** a service that delegates real logic to a sibling module and shows a one-hop trace |
+| **A cycle.** The callee is already on the path from the root | 1 trace, reachable only through a lambda body (`UmsMenuServiceImpl#covertMenuNode`, a recursive menu tree) | Not a gap: recursion is real code, so the walk states it and stops. Following it is the only alternative and it does not terminate |
+| **A method already expanded elsewhere in the same trace** | 40 steps | Its subtree is shown at its first occurrence. Expanding per route copies every shared subtree once per path that reaches it, which is the cost D01 gives as its reason for a trace being a walk rather than a stored table |
+| **The depth bound** | **0 of 160** — the deepest trace is 5 against a bound of 64 | A safety bound, not a modelling one, and it is never silent: the step says `depth_limit` and `Trace.truncated` answers without a reader scanning the steps |
+| **A `dynamic` site that creates no body** | 56 of `mall-admin`'s 74 `invokedynamic` sites | String concatenation compiles to one whose bootstrap is a compiler artifact rather than a call the program makes. An edge to it would put a platform factory into a trace at every string a method builds |
+
+**A trace is reachability, never execution**, and three consequences of that belong to a
+reader rather than to a footnote: branches are not distinguished (two `return` statements
+are two possible answers; an `if` contributes both sides); a `narrowed` step walks every
+candidate and picks none; and a `dynamic` step names a body **created** at that line, which
+runs later, elsewhere, if at all.
+
+**What "reaches a terminal" counts, and why our number differs from the roadmap's.** Every
+one of `mall-admin`'s 160 roots reaches a boundary, because a call into the JDK is a
+boundary exactly as a call into a mapper is — this walk does not CLASSIFY a terminal, and
+`terminal_kind` has no producer for that reason (D00 §4). The roadmap's "158 of 160 reach a
+real terminal (DB / cache / object store)" is a classified count, and it reproduces exactly
+when the classification is applied by hand to what the walk returns: **155 roots reach a
+mapper or DAO terminal**, three more reach an object-store client (`io/minio/MinioClient`,
+`com/aliyun/oss/OSSClient`), and the two that reach neither are `GET /admin/refreshToken`
+and `POST /aliyun/oss/callback` — the same two the roadmap names, verified in source.
+
+**Values through library code** are unchanged by any of this: `stream().map(f).collect()`
+leaves for the JDK and comes back, the `collect` result is visible, per-element provenance
+is not.
+
 ### Where a value chain stops, now that it crosses method boundaries
 
 2Q's `G3` links a callee's returned value to the caller's own `result` id

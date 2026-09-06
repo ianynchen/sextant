@@ -14,6 +14,43 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A trace, from a root to every terminal** (2Q, `G4` + `I3`). The thing this project has
+  been asked for since day one, and the missing half of what `CONTEXT.md` promises. New
+  derived table **`call_edges`** ([D01](docs/components/D01-graph-schema.md) §3) — one row
+  per (call site, candidate callee), carrying `caller`, `ordinal`, `invoke_kind`, the bare
+  `target` the compiler wrote, the module-prefixed `callee` whose body it reaches, `result`,
+  `resolution` and `evidence` — and **`application/query/trace.py`**, a bounded,
+  cycle-refusing walk over it.
+  **It takes a ROOT, not an endpoint** (`I3`, the user's ruling: *a scheduled job still
+  contains business logic, so there should still be sequence diagrams*). The walk reads
+  `Root.kind` for exactly one purpose — carrying it back on the answer — and branches on it
+  nowhere, so the third root kind costs nothing on the day it gains a producer.
+  **`callee IS NULL` is the third-party boundary and the row is still written**: "this call
+  leaves the module here" and "this method makes no calls" are different answers, and a
+  table recording neither would report them identically.
+  **A lambda body is reached, not stopped at.** An `invokedynamic` edge names the body the
+  site CREATES (capability 9.17's `implementation`), never the bootstrap factory — closing
+  `OI-14`, whose condition was a terminal reachable only through a lambda. Seven of
+  `mall-admin`'s 160 traces have one.
+  **Each step says why it was not expanded**, from a new closed set `TraceStop` —
+  `boundary`, `cycle`, `revisited`, `depth_limit`. It is deliberately NOT D00 §4's
+  `terminal_kind`, which classifies what a call REACHES and still has no producer, because
+  three of its members need framework knowledge nothing has applied at a call site.
+  **The depth bound is never silent**: `Trace.truncated` answers whether a walk is whole.
+  **Measured on `macrozheng/mall`'s `mall-admin`**: 2,608 edges over 2,664 call sites (the
+  56 without one are `invokedynamic` string concatenation, whose bootstrap is a compiler
+  artifact); 1,966 boundary rows; 160 roots, all producing a trace, deepest 5 against a
+  bound of 64. `GET /order/list` derives exactly the source: `OmsOrderService#list` →
+  `OmsOrderServiceImpl#list` (sole implementation) → `PageHelper.startPage` and
+  `OmsOrderDao#getList`, with `CommonPage#restPage` and `CommonResult#success` as the
+  sibling-module terminals that compose the response. 155 roots reach a mapper or DAO
+  terminal and three more an object-store client, which is the roadmap's 158 reproduced
+  when the classification it used is applied by hand; the two that reach neither are
+  `/admin/refreshToken` and `/aliyun/oss/callback`, as recorded.
+  Closes `OI-14` and `OI-20`. Records `OI-24` (D01 §7's re-derivation rule is documentation,
+  not code — G3's concern 3, verified), `OI-25` (nothing outside tests reads the walk) and
+  `OI-26` (`SEXTANT_VERSION` is declared three times).
+
 - **A scheduled job is a root, not a table nobody walks** (2Q, `I1`).
   [D00](docs/components/D00-fact-schema.md) §4 has documented a `root_kind` set for as long
   as the fact schema has existed and **nothing produced one** — entry #7 of
@@ -367,6 +404,21 @@ here would restate those documents rather than add anything.
   a Spring WebSocket registration gains its dispatch path, and a multi-path registration gains
   one row per path. `url_arg` is deliberately untouched — no shipped address capture is
   varargs, and CP-2's peer/path split has no measured meaning applied element-wise.
+
+### Changed
+
+- **One dispatch rule, in one place** (2Q, `G4`). Which method a call site can run moved out
+  of `resolve/return_flow.py` into **`resolve/dispatch.py`**, unchanged, so `call_edges` and
+  `return_flows` read the same answer rather than deriving it twice — `OI-16` already
+  records that M04 §4's designed pass will one day be a second answer, and this keeps it
+  from being a third. The move exposed one defect and fixed it: the "is this a method this
+  workspace scanned" set was built from `method_symbols`, which excludes constructors by
+  construct kind, so every `new` on a type the module declares read as the third-party
+  boundary — 13 of `mall-admin`'s 1,979 boundary edges, and a constructor doing real work
+  invisible to a trace. `return_flows` is unaffected and byte-identical (566 rows over 552
+  sites, measured before and after). The two guards moved with the rule and are renamed
+  `dispatch.callee-descriptor-is-stripped-to-bare` and
+  `dispatch.exact-dispatch-admits-no-override`.
 
 ### Fixed
 

@@ -177,6 +177,49 @@ class Anchor(StrEnum):
     END_OF_DOCUMENT = "end-of-document"
 
 
+class TraceStop(StrEnum):
+    """Why a walk did not expand a step (2Q `G4`, D01 §3's Traces).
+
+    Not a D00 §4 fact-stream set — the `Anchor` precedent, and here for the same
+    reason: NFR-5's rule is that a closed set has exactly one definition, and
+    `test_closed_sets_are_defined_only_where_the_schema_defines_them` enforces
+    that by file.
+
+    **It is deliberately NOT D00 §4's `terminal_kind`, and the difference is the
+    whole reason it exists.** `terminal_kind` classifies what a call REACHES —
+    `persistence`, `async_handoff`, an `outbound_call` in D01's sense of a
+    matched outbound endpoint — and three of its members need framework
+    knowledge no pass has applied at a call site: a data-access call is
+    `persistence` only to something that knows the callee is one, and nothing
+    here does. Publishing a guess under that name would be a classification a
+    reader takes as measured. These four members answer a question the walk can
+    answer entirely from what it did: it is a property of the WALK, never of the
+    callee, and every one of them is decided without reading a catalog.
+
+    A step with no stop reason was expanded. A step that was expanded and has no
+    children is a method whose body this workspace read and which calls nothing
+    — that needs no member, because the absence of children says it exactly.
+    """
+
+    # The workspace read no body for the callee. The ruled third-party
+    # boundary: a mapper, a repository, a driver, anything in the JDK — the call
+    # IS the terminal, and the row names it.
+    BOUNDARY = "boundary"
+    # The callee is already on the path from the root to this step. Recursion is
+    # real code; the walk states it and stops rather than following it forever.
+    CYCLE = "cycle"
+    # The callee was expanded elsewhere in THIS trace, on a path that is not
+    # this one. Its subtree is shown at its first occurrence; repeating it would
+    # copy a shared subtree once per route that reaches it, which is the cost
+    # D01 gives as the reason a trace is a walk rather than a stored table.
+    REVISITED = "revisited"
+    # The walk's depth bound was reached. **The one member that reports a limit
+    # rather than the code**, and it exists so that a bound is never applied
+    # silently: a truncated trace that looked complete would be an under-report
+    # with nothing saying so.
+    DEPTH_LIMIT = "depth_limit"
+
+
 _RANKS = {Evidence.HUMAN: 90, Evidence.LLM: 10}
 _CODE_DERIVED_RANK = 50
 

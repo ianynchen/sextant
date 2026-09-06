@@ -205,6 +205,17 @@ exactly as the other two do the day something writes one.
 **`terminal_kind`** — `outbound_call`, `returns`, `ends_silently`, `persistence`,
 `throws`, `unresolved`, `async_handoff`, `cycle`
 
+> **SPECIFIED HERE, NOT YET USED — nothing produces a `terminal_kind`,** and 2Q's traversal
+> deliberately does not. This set CLASSIFIES what a call reaches, and three of its members
+> — `persistence`, `async_handoff`, and `outbound_call` in [D01](D01-graph-schema.md)'s
+> sense of a matched outbound endpoint — need framework knowledge no pass has applied at a
+> call site: a data-access call is `persistence` only to something that knows the callee is
+> one. What the traversal reports instead is why the WALK stopped, which is a different
+> question answered entirely from what the walk did, under a vocabulary of its own
+> (`domain/closed_sets.TraceStop`, [D01](D01-graph-schema.md) §3's Traces). Publishing a
+> guess under this set's name would be a classification a reader takes as measured. §5.3's
+> second corollary.
+
 `persistence` carries `target_kind`: `database`, `cache`, `file`. A sub-field, so that
 splitting it later is a rendering choice rather than a re-index.
 

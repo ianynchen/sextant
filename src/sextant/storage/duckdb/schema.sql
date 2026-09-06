@@ -369,6 +369,71 @@ CREATE TABLE IF NOT EXISTS roots (
     root_kind TEXT
 );
 
+-- 2Q `G4`: the call graph a trace walks (D01 §3's Edges). One row per (call
+-- site, candidate callee), and one row for a call site whose callee's body this
+-- workspace never read — because THAT is the terminal, and a trace that
+-- reported nothing there would be indistinguishable from a call nobody made.
+--
+-- **`return_flows` is the value chain; this is the control one, and the second
+-- is the larger.** A return flow exists only where a call produced a value, so
+-- a method that hands nothing back — a write, a publish, a delete — contributes
+-- no row there at all. A trace has to see those: they are frequently the whole
+-- point of the work.
+--
+-- **Which method a site can run is answered once**, in
+-- `resolve/dispatch.py`, and both this table and `return_flows` read it. M04 §4
+-- designs a third answer that is not built; the open register carries that as a
+-- known future disagreement rather than this table quietly minting a second one.
+--
+-- Replaced WHOLE per resolve through reset_call_edges.sql +
+-- insert_call_edges.sql, both run from the one pass that writes here — the
+-- return_flows discipline. Pre-declared empty like every table above it.
+CREATE TABLE IF NOT EXISTS call_edges (
+    -- The method containing the call site, module-prefixed exactly as
+    -- `call_sites.caller` spells it (D00 §5a).
+    caller      TEXT,
+    -- The call site's own control-flow position within `caller`. `caller` plus
+    -- `ordinal` is the site's identity, the same pair `call_sites` uses — and
+    -- it is what gives a walk its NESTING, so the order statements were
+    -- written survives into anything rendered from this table.
+    ordinal     INTEGER,
+    -- The dispatch form, carried verbatim from `call_sites.invoke_kind` rather
+    -- than re-spelled. It is what tells a reader a `dynamic` row apart, and a
+    -- `dynamic` row means something different from every other: the body named
+    -- below is CREATED at this site and runs later, elsewhere, if at all. A
+    -- new vocabulary for that distinction would have been a second spelling of
+    -- a value the facts already carry.
+    invoke_kind TEXT,
+    -- The method this edge NAMES, as a bare descriptor (D00 §5a): what the
+    -- compiler wrote at the site, or — for a `dynamic` site — the
+    -- implementation the bootstrap will run, which is the only thing at such a
+    -- site that names a body at all. Always present; it is what a reader sees
+    -- in the source at that line.
+    target      TEXT,
+    -- The body this edge REACHES, module-prefixed so a walk can join it
+    -- straight to that method's own rows and take the next hop. **NULL is the
+    -- third-party boundary and the answer, not a gap**: the workspace read no
+    -- body for `target`, so the call IS the terminal. A site whose dispatch
+    -- narrowed to several bodies is several rows, one per body, none picked.
+    callee      TEXT,
+    -- The value id, IN THE CALLER, that this call produced — `call_sites.result`
+    -- verbatim, NULL where the callee hands nothing back. It is what an
+    -- argument of a later call in the same method carries as its `source`,
+    -- which is how a reader follows a value within the caller without this
+    -- table having to restate one.
+    result      INTEGER,
+    -- D00 §4's resolution set, describing the SITE (D01 §3's dispatch rule:
+    -- the tier lives on the site and does not rank candidates against one
+    -- another). `resolved` where exactly one body can run — and where NONE
+    -- can, because the compiler named that target exactly and there is no
+    -- candidate set to be uncertain about; `narrowed` where several can, all
+    -- listed and none picked.
+    resolution  TEXT,
+    -- D00 §4's evidence set. Always `compiler`: the call site, the descriptors
+    -- and the hierarchy are what the compiler wrote into the class files.
+    evidence    TEXT
+);
+
 CREATE OR REPLACE VIEW documents AS
 SELECT document_id,
        payload ->> 'relative_path'   AS relative_path,

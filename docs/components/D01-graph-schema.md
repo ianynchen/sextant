@@ -75,6 +75,42 @@ Kinds kept, and why each survives NFR-6:
 of the graph, and a diagrams-only tool would drop them as unused. Blast radius is on our
 list, and they are its substrate.
 
+> **What ships is `call_edges`, the `calls` kind alone** (2Q's `G4`,
+> `application/resolve/call_edges.py`). The single `edges` table above, its eight kinds and
+> its `sites` column remain designed and unbuilt; a trace needs one of the eight, and
+> building the other seven for a walk that does not read them would be seven derivations
+> costing time on every run with no consumer (§6's own rule). The rest arrives when
+> something asks for it.
+
+**`call_edges`** carries `caller`, `ordinal` (the call site's control-flow position, which
+is what gives a walk its nesting), `invoke_kind`, `target`, `callee`, `result`,
+`resolution` and `evidence`. One row per (call site, candidate callee); a site whose
+dispatch narrowed to several bodies is several rows, none picked.
+
+- **`target` is bare and `callee` is module-prefixed, on purpose.** `target` is what the
+  compiler wrote at that line — what a reader sees in the source — and `callee` is the
+  symbol of the body it reaches, spelled so a walk joins it straight to that method's own
+  rows and takes the next hop. Both spellings on one row is OI-4 answered rather than
+  risked.
+- **`callee IS NULL` is the third-party boundary, and it is the answer.** The workspace
+  read no body, so the call IS the terminal. The row is still written, because "this call
+  leaves the module here" and "this method makes no calls" are different answers and a
+  table recording neither would report them identically. Measured on `macrozheng/mall`'s
+  `mall-admin`: 1,966 of 2,608 rows.
+- **A `dynamic` row's `target` is the body the site CREATES**, from
+  `call_site.implementation` (capability 9.17) — never the bootstrap factory the site's own
+  target names, which would make every lambda in every module a platform terminal.
+  `invoke_kind` rides on the row so a reader is never told the body runs at that line: it
+  is created there and runs later, elsewhere, if at all. A `dynamic` site that creates no
+  body — string concatenation compiles to one — contributes no row at all.
+- **It is not `return_flows` with more columns.** That table is the VALUE chain and exists
+  only where a call produced one; this is the CONTROL chain, and a write, a publish or a
+  delete is frequently the whole point of the work a trace is about. Which method a site
+  can run is answered once, in `application/resolve/dispatch.py`, and both read it.
+- **Not exported** ([D06](D06-bundle-format.md) §5's table list is unchanged), for
+  `return_flows`' reason: the bundle is a published surface, and freezing this shape into
+  one before anything outside the workspace reads it makes every later change breaking.
+
 Kinds deliberately **absent**: `imports` (restates references and containment),
 `field_read` and `field_write` (in JVM code, cross-object field access goes through
 accessors, which are already `calls`), and `contains` from class to method (the method's
@@ -90,13 +126,14 @@ own identifier already names its class).
 The tier lives on the **site**, not the candidate. It describes how much is known about the
 call, and does not rank candidates against one another.
 
-**Neither table exists yet** (`documented-not-implemented` #11's neighbourhood: the whole
-`edges`/`dispatch`/`trace_of` layer is designed and unbuilt). 2Q's `G3` needed the dispatch
-QUESTION answered — which method a call can run — before either table existed, so
-`return_flows` below carries the answer per row and applies the JVM's own rule directly,
-without [M04](M04-resolver.md) §4's RTA narrowing. That is a duplicate rule the day
-`dispatch` ships, and it is recorded as such (`docs/open-issues.md`, OI-16) rather than
-left for a reader to discover from two tables that disagree.
+**Neither table exists yet.** 2Q's `G3` needed the dispatch QUESTION answered — which
+method a call can run — before either existed, so it applied the JVM's own rule directly,
+without [M04](M04-resolver.md) §4's RTA narrowing. `G4` needed the identical answer for
+`call_edges`, so the rule now lives in ONE place — `application/resolve/dispatch.py` — and
+both derived tables read it. That is still a duplicate of the designed pass the day
+`dispatch` ships, recorded as such (`docs/open-issues.md`, OI-16) rather than left for a
+reader to discover from two tables that disagree; what it is not is a duplicate of itself.
+The `edges` layer beside it is the `call_edges` note above.
 
 ### Return flows
 
@@ -465,6 +502,51 @@ So the walk **is** the representation: `trace_of` (§5) computes it on demand, d
 `cycle` as it goes, over the same tables at module scope and over the federation at system
 scope. A trace can never disagree with the edges it came from, because it is them.
 
+**Built by 2Q's `G4`/`I3`** — `application/query/trace.py`, over `call_edges`, `roots` and
+`return_flows`. Module scope only; the federation half is `Bundle`/`Link` work and unbuilt.
+
+**It takes a ROOT, not an endpoint** (`I3`, ruled by the user): a scheduled job contains
+business logic and gets the same trace a request does, so the walk reads `Root.kind` for
+exactly one purpose — carrying it back on the answer — and branches on it nowhere. That is
+what makes `entry_point` free on the day it gains a producer.
+
+**Each step says why it was not expanded**, from a four-member closed set
+(`domain/closed_sets.TraceStop`; a step with no reason was expanded, and an expanded step
+with no children is a method that calls nothing):
+
+| Stop | Means |
+|---|---|
+| `boundary` | The workspace read no body for the callee — the ruled third-party boundary, where a trace stops |
+| `cycle` | The callee is already on the path from the root. Recursion is real code: it is stated, not followed |
+| `revisited` | The callee was expanded elsewhere in this trace; its subtree is shown at its first occurrence |
+| `depth_limit` | The bound was reached — **never silently**, and `Trace.truncated` answers it without a reader scanning the steps |
+
+**This is deliberately not [D00](D00-fact-schema.md) §4's `terminal_kind`.** That set
+CLASSIFIES what a call reaches — `persistence`, `async_handoff`, an `outbound_call` in the
+sense of a matched outbound endpoint — and three of its members need framework knowledge no
+pass has applied at a call site: a data-access call is `persistence` only to something that
+knows the callee is one. `terminal_kind` therefore still has no producer, and publishing a
+guess under its name would be a classification a reader takes as measured. `TraceStop`
+answers a question the walk can answer entirely from what it did.
+
+**Reachability, never execution**, and the walk is weaker than it looks in three specific
+ways a reader must be told: branches are not distinguished (two `return` statements are two
+possible answers, an `if` contributes both sides); a `narrowed` step walks every candidate
+and picks none; and a `dynamic` step names a body created at that line rather than called
+at it.
+
+**Bounded twice, and neither bound is a modelling decision.** A method is expanded at most
+once per trace, which makes the walk finite on its own; the depth bound
+(`DEFAULT_MAX_DEPTH`, 64) covers the one shape that does not — a long chain of distinct
+methods — and the interpreter's own stack with it. Measured on `macrozheng/mall`'s
+`mall-admin`, the deepest of 160 traces is 5, so the bound is inert on real code, which is
+what a safety bound should be.
+
+**Cross-module depth reads as `boundary` and is incompletely so.** A call into a sibling
+build module leaves for a workspace this one does not hold, so no body was read here —
+correct — while a body exists somewhere. Joining the two is `Bundle`/`Link` work, not this
+walk's; `docs/COVERAGE.md` §7 carries the measurement.
+
 One table is materialised, because findings need its numbers without walking everything:
 
 | Table | Holds |
@@ -670,10 +752,13 @@ literals are already extracted for endpoint paths; storing all of them is nearly
 
 ## 5. Named queries
 
-> **SPECIFIED HERE, NOT YET USED — none of the ten below exists.** Across `src/` and
-> `tests/` the ten names occur exactly once, and that occurrence is
-> `application/resolve/engines/scheduled_work.py:13` citing `trace_of` as a thing that does
-> not exist. The registry that DOES exist is
+> **SPECIFIED HERE, NOT YET USED — nine of the ten below do not exist.** `trace_of` does,
+> as of 2Q's `G4`/`I3`: `application/query/trace.py` is the walk, and it takes a ROOT rather
+> than an endpoint. It is a Python function over `call_edges`/`roots`/`return_flows` rather
+> than an entry in the registry named below, it answers at MODULE scope only, and no
+> rendered output reads it yet (`docs/open-issues.md`, OI-25) — so this section's own
+> vocabulary is one query less absent and still not a shipped surface. The other nine are
+> untouched. The registry that DOES exist is
 > `storage/duckdb/workspace.py:10`'s `_NAMED_QUERIES` — a different, resolver-internal set
 > (`documents`, `endpoints`, `shapes`, `annotations`, …) reached through `Workspace.query`,
 > serving M04 rather than M09 — and no consumer of this section's vocabulary has been

@@ -93,6 +93,19 @@ function under test and would agree with themselves either way.
 mypy still sees two `str`s, and the next join is as free to compare them as the
 first two were.
 
+**Fourth crossing, 2026-09-06, 2Q `G4` — no defect, and the row still stays
+open.** `call_edges` joins the same two spellings and carries BOTH on every row
+— `target` bare (what the compiler wrote at that line) and `callee`
+module-prefixed (what a walk joins to for the next hop) — which is the sharpest
+form the trap has taken yet, since one row now holds both members of the pair.
+It was discharged the same way: the strip is still in exactly one function,
+which MOVED to `dispatch._bodies_by_descriptor` when `G4` needed the same
+answer, and its guard moved with it and is measured to kill
+(`dispatch.callee-descriptor-is-stripped-to-bare`). The near-misses in
+`tests/application/test_call_edges.py` are module-prefixed hand-built facts, and
+a real-scan half asserts the composed descriptor against what the extractor
+wrote. Four crossings, four discharges, and still no type.
+
 ### OI-5 — MicroProfile GraphQL publishes a wrong address
 **Major · pre-existing (`A-Mi9`) · stated, not closed**
 
@@ -277,44 +290,10 @@ outbound HTTP one, asserting the shape both ways. **Falsified by** a shipped
 `LocalDate` shape that a reader says is wrong under the module's serialiser
 configuration.
 
-### OI-14 — capability 9.17 produces a fact nothing reads
-**Minor · introduced 2026-09-06 by 2Q G1 · `docs/components/M03-scanner.md`, the
-capability table**
-
-`call_site.implementation` names the lambda body a `dynamic` site dispatches
-into. **Nothing consumes it.** Its planned reader is 2Q's `G3` (cross-method
-return propagation) and `G4` (the `call_edges` traversal), and neither exists —
-G1 was scheduled ahead of both because the fact is what G3 consumes.
-
-**This is the `detect.coordinates` shape, and it is entered here rather than
-argued away.** §5.3's rule is to cite the CONSUMER, not the declaration; there
-is no consumer to cite, so the honest record is a row saying so. It is graded
-Minor rather than Major because the failure mode is silence, not a wrong value:
-no output moves, the key is absent wherever no body is named, and an engine that
-ignores it sees exactly the facts it saw before.
-
-What makes it a debt rather than a neutral wait is M03's own rule — a capability
-with no consumer is a half-shipped feature — and the fact that `lambda_body` is
-now declared, so a catalog **can** require it and be told the scan provides it
-while nothing in the pipeline acts on it.
-**Closes by** G4's traversal following `implementation` into the body, with a
-trace that reaches a terminal only reachable through a lambda. **Falsified by**
-nothing today; it becomes falsifiable the moment a consumer exists.
-
-**Amended 2026-09-06 by 2Q G3, and NOT closed by it.** The row named G3 and G4
-jointly as its readers; G3 has now shipped and deliberately does not read this
-key, so the remaining reader is G4 alone. An `invokedynamic`'s `result` is the
-functional-interface INSTANCE the bootstrap builds, not anything the lambda body
-hands back — the body runs later, elsewhere, if at all — so linking the body's
-returns to that site's `result` would state that a `Supplier` call site produced
-the supplier's value. `return_flow.py` excludes `dynamic` sites for exactly that
-reason and says so. Following `implementation` INTO the body is a traversal
-step, which is what this row's close condition already asked for.
-
-
 ### OI-16 — two dispatch rules will exist, and only one is designed
-**Minor · introduced 2026-09-06 by 2Q G3 · `docs/components/M04-resolver.md` §4,
-`docs/components/D01-graph-schema.md` §3, `src/sextant/application/resolve/return_flow.py`**
+**Minor · introduced 2026-09-06 by 2Q G3 · amended 2026-09-06 by 2Q `G4` ·
+`docs/components/M04-resolver.md` §4, `docs/components/D01-graph-schema.md` §3,
+`src/sextant/application/resolve/dispatch.py`**
 
 M04 §4 designs dispatch resolution in full — a `dispatch` table of candidates, a
 `dispatch_site` table carrying the tier, rapid type analysis narrowing candidates
@@ -333,13 +312,26 @@ This is over-report rather than a wrong value, which is why it is Minor: every
 candidate listed is a method the JVM could reach at that site given the declared
 type. It becomes wrong the day `dispatch` ships and the two disagree about one
 call, and a reader has no way to know which table to believe.
-**Closes by** the designed pass landing and `return_flows` reading its
-candidates instead of re-deriving them. **Falsified by** a call site where the
-two tables list different candidates.
+**Amended 2026-09-06 by 2Q `G4`, and it did NOT become three.** `call_edges`
+needed the same question answered, so the rule moved out of `return_flow.py`
+into `resolve/dispatch.py` and both derived tables read it — one inline rule,
+two readers, rather than a second copy that could drift from the first. The
+move also fixed a defect the single reader had hidden: `dispatch`'s "is this a
+method this workspace scanned" set was built from `method_symbols` alone, which
+excludes constructors by construct kind, so every `new` on a type the module
+declares read as the third-party boundary. Harmless for `return_flows` (a
+constructor call site carries no `result`); a silent under-report for a trace,
+and 13 of `mall-admin`'s 1,979 boundary edges. Fixed in the same commit group,
+recorded here rather than as its own row because it is this row's subject.
+**Closes by** the designed pass landing and both tables reading its candidates
+instead of re-deriving them. **Falsified by** a call site where the tables list
+different candidates.
 
 ### OI-17 — an in-module override of a library-declared method is not linked
 **Minor · introduced 2026-09-06 by 2Q G3 · `docs/COVERAGE.md` §7 ·
-`src/sextant/application/resolve/return_flow.py`, `_callees`**
+`src/sextant/application/resolve/dispatch.py`, `Dispatch.candidates` (the rule
+moved out of `return_flow.py` at `G4`; it is unchanged, and it now governs
+`call_edges` and therefore every trace as well)**
 
 A return flow considers candidates only where the DECLARED callee is a method
 this workspace scanned. So a virtual call through a library-declared type is a
@@ -401,24 +393,19 @@ drift, and that test **cannot be a `pins` guard** — the guard harness copies n
 compiled fixture. So the one mechanism that would make this permanent is
 structurally unavailable to it.
 
+**Widened 2026-09-06 by 2Q `G4`, not closed.** The same arithmetic now decides
+`call_edges` and therefore every trace: a drift would not merely empty
+`return_flows`, it would make every call in every module read as the third-party
+boundary, so every trace would be one hop deep and every root would appear to
+reach a database it never touches. The tests that would notice are still the
+real-scan halves (`test_call_edges.py`, `test_trace.py`), and a real scan still
+cannot be a `pins` guard.
 **Closes by** either deriving the Python side from a value the extractor emits
 (so there is one producer), or a build-time conformance check that hashes the
 same descriptor in both languages and compares. **Falsified by** a change to
 either implementation that the other does not follow: the join returns zero rows
 on every real module while fixtures spelling symbols bare stay green — OI-4's
 shape, one layer down.
-
-### OI-20 — `return_flows` has no reader until G4
-**Minor · introduced 2026-09-06 by G3 (`4e644fd`)**
-
-G3 derives the `return_flows` table every resolve; its consumer is G4's traversal,
-which is not built. Stated in D01 and CHANGELOG. Registered here as well because
-§5.3's rule is to cite the consumer, and "the consumer is a planned task" is a
-claim this register exists to keep honest — the `detect.coordinates` defect began
-exactly this way.
-
-**Closes by** G4 reading it. **Falsified by** G4 shipping and reading something
-else, which would mean the table's shape was designed against a guess.
 
 ### OI-22 — `root_kind`'s third member has no producer
 **Minor · introduced 2026-09-06 by 2Q `I1` · `src/sextant/domain/closed_sets.py`
@@ -475,8 +462,120 @@ nothing wrong is derived.
 functional-route row. **Falsified by** a functional route whose real work is
 invisible in every trace — which is today's state, stated.
 
+### OI-24 — D01 §7's conservative re-derivation rule is not enforced anywhere
+**Major · found 2026-09-06 by 2Q `G4`, verifying G3's concern (3) ·
+`src/sextant/api.py::_refuse_if_unanalyzed`, `docs/components/D01-graph-schema.md` §7**
+
+D01 §7 states the rule plainly: *"Any Sextant version change re-derives, because
+derivation logic may have changed and there is no cheap way to know"*, and
+`graph_schema_version` invalidates derived tables. **Neither is enforced in
+code.** `SEXTANT_VERSION`, `GRAPH_SCHEMA_VERSION` and `FACT_SCHEMA_VERSION` are
+WRITTEN — into `metadata.json` (`egress/render/metadata.py`) and a bundle
+manifest (`egress/export/manifest.py`) — and read back for comparison by
+nothing; a grep finds no site that compares a recorded version against the
+running one. `render`, `enrich` and `export` all gate on
+`_refuse_if_unanalyzed`, which checks only that `metadata.json` and
+`workspace.duckdb` **exist**.
+
+G3's report raised this as its concern (3) and asked `G4` to verify it, because
+`G4` is where it becomes live: a workspace derived before this phase answers the
+`call_edges`, `roots` and `return_flows` queries with **empty tables**, and an
+empty table here is indistinguishable from a module whose roots call nothing.
+Verified, and the answer is that the rule is documentation.
+
+**What limits the cost today, and what will not limit it tomorrow.** No rendered
+output reads these three tables yet (OI-25), so no document can currently be
+wrong because of it, and every analysis path re-derives from scratch. The moment
+anything renders a trace, a stale workspace renders an empty one.
+**Closes by** a version comparison at the read gate — refuse, or re-derive —
+against the stamp `metadata.json` already carries. **Falsified by** a workspace
+analysed by one version and rendered by another producing a document that is
+wrong rather than refused.
+
+### OI-25 — the traversal has no reader outside its own tests
+**Minor · introduced 2026-09-06 by 2Q `G4`/`I3` ·
+`src/sextant/application/query/trace.py`**
+
+`application/query/trace.py` is called by its tests and by nothing in `src/`. No
+rendered document, no CLI verb and no library facade verb reaches it, so the
+work a trace describes is derivable and not yet visible to a reader of Sextant's
+output. This is the `OI-14`/`OI-15`/`OI-20` shape one layer further on, and it
+is entered here rather than argued away because §5.3's rule is to cite the
+CONSUMER: there is none outside tests, so the honest record is a row saying so.
+
+**Why it was not wired in this task.** A rendered trace is `M07`'s surface and
+needs `I4`'s anchor to carry an enrichment claim beside it; the completion plan
+puts `I4` in Stage 5 for exactly that reason. A CLI or `sextant.api` verb is a
+public API addition, which GUIDELINES §7 puts out of scope without explicit
+instruction. Both are decisions rather than oversights, and both are cheap once
+taken.
+
+Graded Minor because the failure mode is silence: the tables are derived, no
+output moves, and a consumer that ignores them sees exactly what it saw before.
+**Closes by** a rendered trace or a query surface reading it. **Falsified by**
+nothing today; it becomes falsifiable the moment a consumer exists.
+
+### OI-26 — `SEXTANT_VERSION` is declared three times
+**Minor · found 2026-09-06 by 2Q `G4` while verifying OI-24 ·
+`src/sextant/domain/version.py:1`, `src/sextant/ingress/read/__init__.py:16`,
+`src/sextant/application/stages/analyze.py:67`**
+
+The same constant, `"0.1.0"`, is written literally in three modules. Two of them
+stamp it onto every `document` fact (`ingress/read`, `stages/analyze`) and the
+third is the one `egress` reads. They must agree or two documents in one
+workspace disagree about which version produced them — and nothing makes them.
+
+Pre-existing and found rather than introduced; it is recorded because OI-24's
+close condition is a version comparison, and a comparison against a constant
+with three definitions would compare one of them. **Cost today is latent**: the
+three literals happen to match, and the version-bump gate has not opened, so the
+first bump is when they can diverge — silently, in a stamp nothing reads.
+**Closes by** the two stamping sites importing `domain/version.SEXTANT_VERSION`.
+**Falsified by** a version bump that moves one literal and not the others.
+
 
 ## CLOSED
+
+### OI-14 — capability 9.17 produced a fact nothing read
+**Minor · introduced 2026-09-06 by 2Q G1 · CLOSED 2026-09-06 by 2Q `G4` ·
+`src/sextant/application/resolve/call_edges.py`**
+
+`call_site.implementation` named the lambda body a `dynamic` site dispatches
+into and nothing consumed it. The row's own close condition was "G4's traversal
+following `implementation` into the body, with a trace that reaches a terminal
+only reachable through a lambda", and that is exactly what closed it, not a
+re-reading of the condition.
+
+`resolve/call_edges.py` makes an `invokedynamic` site an edge into the body it
+CREATES rather than into the bootstrap factory its own target names — which
+would make every lambda in every module a platform terminal. **Measured on
+`macrozheng/mall`'s `mall-admin`: 15 lambda bodies reached, and 7 of the 160
+traces reach a terminal that no other path in the trace reaches**, including the
+module's one recursive cycle (`UmsMenuServiceImpl#covertMenuNode`, a menu tree
+built through a lambda). The condition asked for one; there are seven.
+
+**The amendment stands and is not weakened by the close.** `return_flow.py`
+still excludes `dynamic` sites whole, and for the reason the amendment gave: an
+`invokedynamic`'s `result` is the functional-interface INSTANCE, not anything
+the body handed back. Reachability is a different claim from provenance, and
+`call_edges` carries `invoke_kind` on the row so a reader is never told the body
+runs at that line.
+
+### OI-20 — `return_flows` had no reader until G4
+**Minor · introduced 2026-09-06 by G3 (`4e644fd`) · CLOSED 2026-09-06 by 2Q `G4` ·
+`src/sextant/application/query/trace.py`**
+
+`return_flows` was derived every resolve and queried by nobody but its tests.
+The row named its own closer — "G4 reading it" — and that is what closed it:
+`application/query/trace.py` joins it on (`caller`, `ordinal`, `callee`) so
+every trace step carries what its callee hands back, which is the "→ response"
+half of request-to-response the phase promised.
+
+**The falsification condition is worth recording as NOT met**: the row said it
+would be falsified by "G4 shipping and reading something else, which would mean
+the table's shape was designed against a guess". G4 reads the shape as designed,
+on the key as designed, and needed no column added to it.
+
 
 ### OI-15 — capability 9.18 produced a fact kind nothing read
 **Minor · introduced 2026-09-06 by 2Q G2 · CLOSED 2026-09-06 by 2Q G3 ·
