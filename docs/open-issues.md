@@ -259,6 +259,30 @@ outbound HTTP one, asserting the shape both ways. **Falsified by** a shipped
 `LocalDate` shape that a reader says is wrong under the module's serialiser
 configuration.
 
+### OI-14 — capability 9.17 produces a fact nothing reads
+**Minor · introduced 2026-09-06 by 2Q G1 · `docs/components/M03-scanner.md`, the
+capability table**
+
+`call_site.implementation` names the lambda body a `dynamic` site dispatches
+into. **Nothing consumes it.** Its planned reader is 2Q's `G3` (cross-method
+return propagation) and `G4` (the `call_edges` traversal), and neither exists —
+G1 was scheduled ahead of both because the fact is what G3 consumes.
+
+**This is the `detect.coordinates` shape, and it is entered here rather than
+argued away.** §5.3's rule is to cite the CONSUMER, not the declaration; there
+is no consumer to cite, so the honest record is a row saying so. It is graded
+Minor rather than Major because the failure mode is silence, not a wrong value:
+no output moves, the key is absent wherever no body is named, and an engine that
+ignores it sees exactly the facts it saw before.
+
+What makes it a debt rather than a neutral wait is M03's own rule — a capability
+with no consumer is a half-shipped feature — and the fact that `lambda_body` is
+now declared, so a catalog **can** require it and be told the scan provides it
+while nothing in the pipeline acts on it.
+**Closes by** G4's traversal following `implementation` into the body, with a
+trace that reaches a terminal only reachable through a lambda. **Falsified by**
+nothing today; it becomes falsifiable the moment a consumer exists.
+
 ---
 
 ## CLOSED

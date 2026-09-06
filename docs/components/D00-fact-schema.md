@@ -641,6 +641,34 @@ what the site means, where the instruction's own name and descriptor describe on
 site's signature. A `dynamic` site is recorded like any other: skipping it would leave every
 `source` pointing at it dangling, and a string concatenation is a real producer.
 
+**`implementation` is the optional symbol of the function this site's DISPATCH will run,
+written only where the target does not already name it** (capability 9.17). It is the
+canonical cross-language answer to "the call site names a mechanism, not the code" — a JVM
+`invokedynamic`, and whatever another language's extractor finds in the same position. The
+JVM mapping: an indy bootstrapped by `LambdaMetafactory` (`metafactory` or
+`altMetafactory` — the gate is the OWNER) carries the implementation handle in
+`bootstrapMethodArguments[1]`, and that handle's owner, name and descriptor become the
+lambda body's symbol. It is a **bare** descriptor path, exactly like the `lambda` argument
+kind and for the same §1 stability reason: a method reference is very often into a library,
+and stamping the caller's coordinates onto `java/lang/String` would mint a different symbol
+for `String::trim` in every module. **An in-module body therefore joins to its own method
+fact by stripping that fact's module prefix**, which is the join every consumer of these
+symbols already performs.
+
+Absent on every other call site, and that is a claim rather than a shrug: a
+`StringConcatFactory` site's bootstrap arguments are a format recipe, not a method, so
+there is no implementation to name and writing one would assert a call to code that does
+not exist. Strictly additive — an engine that does not read `implementation` sees exactly
+the facts it saw before 9.17.
+
+**Why it is a field and not a better `target`.** Overwriting `target` with the handle would
+make one column mean two things — a real method at a lambda site, a bootstrap class and a
+call-site signature at a concat site — so a consumer joining `target` to method symbols
+would silently match the first and silently miss the second. The bootstrap owner is also
+load-bearing in its own right (it is what says the site is a lambda at all), and the SAM
+name and descriptor on the instruction are the only record of the interface being
+implemented. Both are kept; the body is added beside them.
+
 **`invoke_kind`** is one of `virtual`, `static`, `interface`, `special`, `dynamic` — the
 five JVM dispatch forms — plus `throw`, which the row above already names: a throw site is
 a call-site-shaped observation whose target is the thrown exception type, and it is what

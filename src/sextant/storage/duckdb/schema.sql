@@ -341,6 +341,11 @@ SELECT document_id,
        payload -> 'target' ->> 'name'          AS name,
        payload -> 'target' ->> 'descriptor'    AS descriptor,
        payload ->> 'invoke_kind'               AS invoke_kind,
+       -- Capability 9.17: the lambda body a `dynamic` site dispatches into,
+       -- bare-spelled (D00 §5). `->>` on an absent key is SQL NULL, which is
+       -- the answer for every site whose target already names its callee —
+       -- the extractor writes the key only where there is a body to name.
+       payload ->> 'implementation'            AS implementation,
        (payload ->> 'ordinal')::INTEGER        AS ordinal,
        (payload ->> 'receiver')::INTEGER       AS receiver,
        (payload ->> 'result')::INTEGER         AS result,

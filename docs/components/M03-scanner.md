@@ -62,15 +62,17 @@ finding fewer endpoints.
 | `superclass` | Capability 9.13 — a class symbol fact's erased direct superclass, read regardless of whether its signature is generic. [D00](D00-fact-schema.md) §4's `relationship_kind: extends`, made real |
 | `array_arguments` | Capability 9.15 — a call-site argument produced by an array construction reads as `{kind: array, elements: […]}` rather than one opaque `unresolved`. Every `String...` API in the estate depends on it |
 | `nested_annotation_args` | Capability 9.16 — an annotation-valued annotation argument reads as a nested `{annotation, args}` use of its own, recursively, rather than being dropped with no key at all ([D00](D00-fact-schema.md) §5) |
+| `lambda_body` | Capability 9.17 — a `dynamic` call site carries `implementation`, the symbol of the lambda body its dispatch will run, where `target` names only the bootstrap factory. A traversal that follows call targets reaches a lambda's statements instead of stopping at `LambdaMetafactory` |
 
-**Twelve of the scanner's now-fifteen designed capabilities are shipped**, and the shipped
+**Thirteen of the scanner's now-sixteen designed capabilities are shipped**, and the shipped
 set is `ingress/extract/jvm/scanner.py`'s `_CAPABILITIES`, which is what a catalog's
 `requires:` is actually checked against. `annotation_args`, `typed_signatures`,
 `type_annotations` and `kotlin_metadata` since Phase 2A/2B; `call_site`, `string_constants`
 and `chain_reconstruction` from Phase 2C's dataflow pass (below); `implemented_interfaces`
 from a class symbol fact's own `interfaces` list, in declaration order
-([D00](D00-fact-schema.md) §5a); and `superclass`, `generic_interfaces`, `array_arguments`
-and `nested_annotation_args` — capabilities 9.13, 9.14, 9.15 and 9.16 — from Phase 2O.
+([D00](D00-fact-schema.md) §5a); `superclass`, `generic_interfaces`, `array_arguments`
+and `nested_annotation_args` — capabilities 9.13, 9.14, 9.15 and 9.16 — from Phase 2O; and
+`lambda_body` — capability 9.17 — from 2Q.
 *The four 2O capabilities were absent from this table until the 2O documentation sweep,
 which is the §5.1 failure of documenting a schema in one file and shipping it in another.*
 
@@ -88,15 +90,25 @@ own ATTRIBUTE as an address**, and that is a refusal rather than an omission: gi
 `@RabbitListener` a `path_from: [bindings]` would publish a `@QueueBinding`'s JSON text as
 a queue name. `docs/COVERAGE.md` carries that boundary and the condition that closes it.
 
+**9.17 has NO consumer, and that is stated rather than glossed** (§5.3, GUIDELINES §2).
+`implementation` is produced and nothing reads it: its planned reader is 2Q's G3/G4 —
+cross-method return propagation and the `call_edges` traversal — neither of which exists.
+It ships ahead of them because the fact is what G3 consumes and because a lambda body was
+being extracted and orphaned in the meantime, but a capability with no consumer is a
+half-shipped feature by this file's own rule, and it is carried as an open issue
+(`docs/open-issues.md`, OI-14) until a traversal reads it.
+
 **`chain_reconstruction` means exactly this: receiver and result value ids are present on
 `call_site` facts** ([D00](D00-fact-schema.md) §5) — a `fluent` catalog's steps are a join
 over those links, nothing more. `invokedynamic` stays undeclared: an indy call site is
 still recorded — a `call_site` fact exists for it — but its arguments are honestly
 `unresolved` rather than decompiled (Java 9+ string concatenation compiles to indy, and
 refusing to guess it is the point); a lambda's own bootstrap handle is captured separately,
-through the `lambda` argument kind ([D00](D00-fact-schema.md) §5), wherever a lambda or
-method reference is passed as an argument. `constant_propagation` and `control_flow` remain
-unshipped, each for the reason recorded below.
+through the `lambda` argument kind ([D00](D00-fact-schema.md) §5) wherever a lambda or
+method reference is passed as an argument, and — since 9.17 — through the site's own
+`implementation`, which does not need the lambda to reach an argument slot at all.
+`constant_propagation` and `control_flow` remain unshipped, each for the reason recorded
+below.
 
 ## Inputs
 

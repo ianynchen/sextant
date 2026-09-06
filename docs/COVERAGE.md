@@ -133,11 +133,12 @@ same `annotation_driven` engine also reads REST outbound — Feign `@FeignClient
 more engines read REST outbound from method calls rather than annotations, both fed by the
 same linked `call_site` facts: `single_call` reads `RestTemplate`, and `fluent` reconstructs
 builder chains for `RestClient`, `WebClient` and OkHttp, calls made inside lambdas included.
-A module's full analysis exports as a self-describing D06 bundle. Twelve of the fifteen designed
+A module's full analysis exports as a self-describing D06 bundle. Thirteen of the sixteen designed
 scanner capabilities are implemented: `annotation_args`, `typed_signatures`,
 `type_annotations`, `kotlin_metadata`, `call_site`, `string_constants`, `chain_reconstruction`,
-`implemented_interfaces`, and — from Phase 2O — `superclass` (9.13), `generic_interfaces`
-(9.14), `array_arguments` (9.15) and `nested_annotation_args` (9.16). The three unshipped are
+`implemented_interfaces`, from Phase 2O `superclass` (9.13), `generic_interfaces`
+(9.14), `array_arguments` (9.15) and `nested_annotation_args` (9.16), and from 2Q
+`lambda_body` (9.17). The three unshipped are
 `invokedynamic`, `constant_propagation` and `control_flow` ([M03](components/M03-scanner.md)).
 Verified end-to-end on spring-petclinic: 17 endpoints, byte-identical
 across runs.

@@ -278,6 +278,79 @@ class MethodFlowTest {
         assertTrue(line.contains("\"symbol\":\"" + OWNER + "#lambda$lambdaArgument$0(sig_"), line);
     }
 
+    /** Capability 9.17, on the site itself rather than on a slot that happens
+     *  to hold it: a `dynamic` call site names the body its dispatch will run.
+     *  Before it, a traversal following call targets stopped at
+     *  `LambdaMetafactory` and every statement inside the lambda — a
+     *  `mapper.insert` among them — was extracted into a synthetic method that
+     *  nothing referenced. */
+    @Test
+    void names_the_lambda_body_a_dynamic_site_will_dispatch_into() throws Exception {
+        String line = callSites("lambdaArgument").get(0);
+        assertTrue(line.contains("\"invoke_kind\":\"dynamic\""), line);
+        assertTrue(line.contains("\"implementation\":\"" + OWNER + "#lambda$lambdaArgument$0(sig_"),
+                   line);
+        // The bootstrap is still recorded, and must be: it is what says this
+        // site is a lambda at all, where the body alone does not.
+        assertTrue(line.contains("\"owner\":\"java/lang/invoke/LambdaMetafactory#\""), line);
+    }
+
+    /** The gap the `lambda` argument kind cannot close, which is why 9.17 is a
+     *  field on the site rather than a wider read of arguments: a returned
+     *  lambda fills no argument slot, so nothing in this method's facts carried
+     *  its body before — the assertion below is that the `lambda` kind is
+     *  genuinely absent here, not merely elsewhere. */
+    @Test
+    void names_the_body_of_a_lambda_that_fills_no_argument_slot() throws Exception {
+        List<String> lines = callSites("returnedLambda");
+        assertEquals(1, lines.size());
+        String line = lines.get(0);
+        assertTrue(line.contains("\"implementation\":\"" + OWNER + "#lambda$returnedLambda$0(sig_"),
+                   line);
+        assertFalse(line.contains("\"kind\":\"lambda\""), line);
+    }
+
+    /** The near-miss, and the reason `implementationOf` asks the bootstrap
+     *  rather than the opcode: **not every invokedynamic is a lambda**. A
+     *  string concatenation's bootstrap arguments are a format recipe and its
+     *  constants — there is no implementation method, so naming one would
+     *  assert a call to code that does not exist.
+     *
+     *  <p>Paired with a positive in the same body, because a rule that matched
+     *  nothing would pass the negative half forever: the site IS a real
+     *  `dynamic` call site with a `StringConcatFactory` bootstrap, and the
+     *  lambda case above still fires. */
+    @Test
+    void names_no_body_for_an_invokedynamic_that_bootstraps_no_method() throws Exception {
+        String line = callSites("concatenated").get(0);
+        assertTrue(line.contains("\"invoke_kind\":\"dynamic\""), line);
+        assertTrue(line.contains("\"owner\":\"java/lang/invoke/StringConcatFactory#\""), line);
+        assertFalse(line.contains("\"implementation\""), line);
+    }
+
+    /** The other near-miss: an ordinary invoke's `target` already names its
+     *  callee, so a second field saying the same thing would be a claim
+     *  duplicated in two places that can disagree. The key is absent — not
+     *  null — on every call site but a lambda's. */
+    @Test
+    void names_no_body_for_an_ordinary_call_whose_target_already_is_one() throws Exception {
+        assertFalse(callSites("stringLiteral").get(0).contains("\"implementation\""),
+                    callSites("stringLiteral").get(0));
+    }
+
+    /** D00 §1's stability rule again, at the new field: `implementation` is the
+     *  same **bare** descriptor path the `lambda` argument kind emits, so
+     *  `String::trim` is one symbol in every module that writes it. The cost is
+     *  stated in D00 §5 rather than discovered later — an in-module body joins
+     *  to its own method fact by stripping that fact's module prefix, which is
+     *  what every consumer of these symbols already does. */
+    @Test
+    void names_a_jdk_body_without_stamping_the_callers_coordinates_on_it() throws Exception {
+        String line = callSites("jdkMethodReferenceArgument").get(0);
+        assertTrue(line.contains("\"implementation\":\"java/lang/String#trim(sig_"), line);
+        assertFalse(line.contains("com.acme/orders 1.0.0 java/lang/String"), line);
+    }
+
     /** A method reference bootstraps identically and names the referenced
      *  method itself — there is no synthetic body to lift. */
     @Test

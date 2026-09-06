@@ -41,18 +41,25 @@ _CAPABILITIES = {
     # sharpest case — every `@Scheduled` on a method carrying two of them,
     # which javac folds into one `@Schedules` array.
     "nested_annotation_args",
+    # Capability 9.17: a `dynamic` call site names the lambda body its
+    # dispatch will run (`implementation`), not only the bootstrap factory its
+    # target records. The body is a synthetic method whose own symbol and call
+    # sites were already facts and which nothing could reach — a
+    # `list.forEach(x -> mapper.insert(x))` was extracted and orphaned.
+    "lambda_body",
 }
 
 
 class AsmScanner:
-    """One backend covering every JVM language, declaring twelve capabilities:
-    the four Phase 1 read from declarations, the three Phase 2C's per-method
-    dataflow pass added — the call sites themselves, the literals they carry,
-    and the within-method value ids a chain is rebuilt from — plus a class
-    symbol's own declared interfaces, its generic superinterface references,
-    its erased superclass, the elements of an array-valued argument, and the
-    arguments of an annotation nested inside another (2O capabilities 9.14,
-    9.13, 9.15 and 9.16)."""
+    """One backend covering every JVM language, declaring thirteen
+    capabilities: the four Phase 1 read from declarations, the three Phase 2C's
+    per-method dataflow pass added — the call sites themselves, the literals
+    they carry, and the within-method value ids a chain is rebuilt from — plus
+    a class symbol's own declared interfaces, its generic superinterface
+    references, its erased superclass, the elements of an array-valued
+    argument, and the arguments of an annotation nested inside another (2O
+    capabilities 9.14, 9.13, 9.15 and 9.16), and the lambda body a `dynamic`
+    call site dispatches into (2Q capability 9.17)."""
 
     def __init__(self, jar: Path) -> None:
         self._jar = jar

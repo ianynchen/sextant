@@ -89,7 +89,7 @@ public final class MethodFlow {
                 : null;
             Integer result = Type.getReturnType(target.descriptor()).getSort() == Type.VOID ? null : i;
             lines.add(callSiteJson(documentId, callerSymbol, target, ordinal++, receiver, result,
-                                   arguments));
+                                   implementationOf(insns[i]), arguments));
         }
         return lines;
     }
@@ -313,6 +313,31 @@ public final class MethodFlow {
     /** One invoke's callee, in the two spellings the JVM has for it. */
     private record Target(String owner, String name, String descriptor, String invokeKind,
                           boolean hasReceiver) {}
+
+    /** Capability 9.17: the method a call site's DISPATCH will land in, where
+     *  the instruction's own target does not name it — or null wherever the
+     *  target already is the answer.
+     *
+     *  <p>Only an {@code invokedynamic} has the gap, and only some of those.
+     *  {@link #targetOf} records the bootstrap method's owner, which is what
+     *  says what the site MEANS; the body the site will actually run is a
+     *  different thing and until now was recorded nowhere at all. A lambda's
+     *  code is lifted into a synthetic method of the enclosing class — a method
+     *  whose own symbol and call sites are already facts, and which nothing
+     *  could reach, because no fact named it from the site that creates it. So
+     *  {@code list.forEach(x -> mapper.insert(x))} loses its {@code insert} to
+     *  a traversal that follows targets: the body is extracted and orphaned.
+     *
+     *  <p>**Not every {@code invokedynamic} is a lambda**, and this records what
+     *  the bootstrap actually names rather than assuming. A {@code
+     *  StringConcatFactory} site's bootstrap arguments are a format recipe and
+     *  a set of constants — there is no implementation method, so there is no
+     *  symbol, and writing the recipe's owner here would claim a call to code
+     *  that does not exist. {@link #lambdaSymbol} is the gate: null for every
+     *  bootstrap but {@code LambdaMetafactory}'s two. */
+    private static String implementationOf(AbstractInsnNode insn) {
+        return insn instanceof InvokeDynamicInsnNode indy ? lambdaSymbol(indy) : null;
+    }
 
     /** The owner's internal name, which is what {@code Analyzer.analyze} wants,
      *  read back out of the caller's symbol: the method symbol already carries
@@ -661,7 +686,16 @@ public final class MethodFlow {
      *  implementation method to name.
      *
      *  <p>Both {@code metafactory} and {@code altMetafactory} put the
-     *  implementation handle in the same slot, behind the SAM method type.
+     *  implementation handle in the same slot, behind the SAM method type. The
+     *  gate is the bootstrap's OWNER for that reason, never its name.
+     *
+     *  <p>Two readers, asking the same question at different sites: the {@code
+     *  lambda} argument kind, where a lambda is HANDED to another call, and
+     *  {@link #implementationOf} (capability 9.17), where the indy is the call
+     *  site itself. The second exists because the first only fires where the
+     *  lambda fills an argument slot — a lambda that is returned, stored in a
+     *  field, or invoked through its own interface reaches no slot, and its
+     *  body was then named nowhere.
      *
      *  <p>The **bare descriptor path** — {@code java/lang/String#trim(sig_…).} —
      *  with no coordinates prefix, exactly like the {@code class}, {@code enum}
@@ -730,7 +764,7 @@ public final class MethodFlow {
 
     private static String callSiteJson(String documentId, String callerSymbol, Target invoke,
                                        int ordinal, Integer receiver, Integer result,
-                                       List<String> arguments) {
+                                       String implementation, List<String> arguments) {
         TreeMap<String, String> target = new TreeMap<>();
         // The owner goes through the same symbol grammar every type reference
         // uses, so an array receiver reads as `java/lang/String#[]` here too
@@ -747,6 +781,14 @@ public final class MethodFlow {
         fact.put("caller", JsonOut.string(callerSymbol));
         fact.put("target", JsonOut.object(target));
         fact.put("invoke_kind", JsonOut.string(invoke.invokeKind()));
+        // Capability 9.17, written only where a dispatch names a body its
+        // target does not — which today is a `LambdaMetafactory` indy and
+        // nothing else. Absent rather than null on every other site, for the
+        // reason an argument's own optional keys are absent: a key on every
+        // call site would rewrite every fact file to say "not applicable"
+        // 2,500 times, and D00 §5 already makes an absent optional key
+        // unambiguous.
+        if (implementation != null) fact.put("implementation", implementation);
         fact.put("ordinal", String.valueOf(ordinal));
         fact.put("receiver", receiver == null ? "null" : String.valueOf(receiver));
         fact.put("result", result == null ? "null" : String.valueOf(result));

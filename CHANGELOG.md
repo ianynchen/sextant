@@ -14,6 +14,23 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A lambda's body is named by the site that creates it — extractor capability 9.17**
+  (2Q, `G1`). An `invokedynamic` call site recorded the BOOTSTRAP method and discarded the
+  implementation, so the synthetic method javac lifts a lambda body into was extracted with
+  its own symbol and its own call sites and referenced by nothing. `call_site` gains an
+  optional **`implementation`** ([D00](docs/components/D00-fact-schema.md) §5): the symbol
+  of the method the dispatch will run, read from the bootstrap's second argument. Seventeen
+  bodies on the orders-service fixture, four of them Spring Cloud Stream `@Bean` methods
+  that RETURN their lambda — the shape the existing `lambda` argument kind cannot see at
+  all, because the lambda fills no argument slot.
+  **Written only where the bootstrap names a method.** A `StringConcatFactory` site's
+  bootstrap arguments are a format recipe, so the key is absent there and on every ordinary
+  invoke, whose `target` already is the answer. Strictly additive: an engine that does not
+  read it sees exactly what it saw before, and `scanner_version` moves `9.16` → `9.17` so a
+  stale jar's silence is distinguishable from a module with no lambdas.
+  **No consumer yet** — the reader is 2Q's `G3`/`G4`, and the honest state is recorded as
+  `OI-14` rather than claimed here.
+
 - **`@HttpExchange` faces both ways: `resolves.direction`, the direction flip** (2O design §6,
   Task 10). An `@HttpExchange` interface a local CONTROLLER implements now derives the INBOUND
   routes Spring actually serves, at the composed address, handled by the implementing class's

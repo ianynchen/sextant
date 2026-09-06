@@ -730,6 +730,72 @@ def test_scanner_declares_the_array_arguments_capability():
     assert "array_arguments" in AsmScanner(JAR).capabilities()
 
 
+def test_a_returned_lambdas_body_is_named_by_the_site_that_creates_it(tmp_path: Path):
+    """Capability 9.17 against real framework code. `OrderStreamBindings`'
+    four `@Bean` methods each RETURN a lambda, so the body fills no argument
+    slot and the `lambda` argument kind — the only thing that named a body
+    before — never fires. The site itself now carries it, which is what makes
+    a Spring Cloud Stream handler's code reachable from the bean that declares
+    it rather than an orphaned synthetic method."""
+    out = _scan(tmp_path)
+    facts = [
+        json.loads(line)
+        for line in (out / "com" / "acme" / "orders" / "streams" / "OrderStreamBindings.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    sites = [fact for fact in facts if fact.get("kind") == "call_site"]
+    dynamic = [site for site in sites if site["invoke_kind"] == "dynamic"]
+    assert len(dynamic) == 4, "four @Bean methods, each returning one lambda"
+    assert [site["implementation"] for site in dynamic] == [
+        "com/acme/orders/streams/OrderStreamBindings#lambda$handleOrder$0(sig_b2a754d9).",
+        "com/acme/orders/streams/OrderStreamBindings#lambda$auditTap$0(sig_7f15bbda).",
+        "com/acme/orders/streams/OrderStreamBindings#lambda$orphanConsumer$0(sig_b2a754d9).",
+        "com/acme/orders/streams/OrderStreamBindings#lambda$unselectedBean$0(sig_b2a754d9).",
+    ]
+    # The near-miss on the emission side, and the reason it is checked here
+    # too: `implementation` belongs to a bootstrap that names a method, so the
+    # constructor's plain `invokespecial` beside these four must be
+    # byte-identical to what it was before 9.17.
+    assert all("implementation" not in site for site in sites if site["invoke_kind"] != "dynamic")
+
+
+def test_a_lambda_body_is_bare_where_the_method_it_names_is_module_prefixed(tmp_path: Path):
+    """OI-4, proven on a MODULE-PREFIXED scan rather than on a fixture that
+    spells everything bare. One identity, two spellings: a method's own symbol
+    fact carries the full SCIP form and `implementation` carries the bare
+    descriptor path, deliberately — D00 §1 requires `String::trim` to be one
+    symbol in every module, which stamping the caller's coordinates on it
+    would break.
+
+    So the join is bare-against-stripped, and this test states it as a
+    measurement rather than an assumption: on the orders-service fixture the
+    direct join matches **nothing at all**, which is exactly the failure mode
+    OI-4 records — six green tests and no match on any real module."""
+    out = _scan(tmp_path)
+    methods: set[str] = set()
+    bodies: set[str] = set()
+    for path in out.rglob("*.jsonl"):
+        for line in path.read_text().splitlines():
+            fact = json.loads(line)
+            if fact.get("kind") == "symbol" and fact.get("construct_kind") == "method":
+                methods.add(fact["symbol"])
+            if fact.get("kind") == "call_site" and fact.get("implementation"):
+                bodies.add(fact["implementation"])
+    assert bodies, "the fixture declares lambdas"
+    assert all(symbol.startswith("sextant-jvm maven com.acme/orders 1.0.0 ") for symbol in methods)
+    assert not (bodies & methods), "the direct join is the OI-4 trap and must match nothing"
+    assert bodies <= {symbol.split(" ")[-1] for symbol in methods}
+
+
+def test_scanner_declares_the_lambda_body_capability():
+    """Capability 9.17 passes the same gate as 9.15 and 9.16. A traversal that
+    followed `implementation` against an older extractor would find the key
+    absent on every site and conclude the module contains no lambdas — the
+    silent degradation capability gating exists to make visible."""
+    assert "lambda_body" in AsmScanner(JAR).capabilities()
+
+
 def test_scanner_declares_the_nested_annotation_args_capability():
     """Capability 9.16 passes the same gate. A catalog reading `@Poller` inside
     `@InboundChannelAdapter`, or a `@Scheduled` folded into a `@Schedules`

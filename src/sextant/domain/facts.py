@@ -243,6 +243,17 @@ class CallSiteFact(BaseModel):
     ordinal: int
     receiver: int | None = None
     result: int | None = None
+    # Capability 9.17: the function this site's dispatch will run, where
+    # `target` names the mechanism instead of the code — a JVM
+    # `invokedynamic` bootstrapped by `LambdaMetafactory`, whose second
+    # bootstrap argument is the lambda body javac lifted out. A **bare**
+    # symbol, like the `lambda` argument kind beside it (D00 §1's stability
+    # rule), so an in-module body joins to its own method fact by stripping
+    # that fact's module prefix. `None` everywhere the target already is the
+    # answer, a `StringConcatFactory` site included: there is no
+    # implementation method to name there, and naming one would assert a call
+    # to code that does not exist.
+    implementation: str | None = None
     arguments: list[CallArgument] = Field(default_factory=list)
 
 

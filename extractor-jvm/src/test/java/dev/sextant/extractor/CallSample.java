@@ -217,6 +217,21 @@ public final class CallSample {
         values.forEach(this::sink);
     }
 
+    /** The shape capability 9.17 exists for: a lambda that fills **no argument
+     *  slot at all**, so the {@code lambda} argument kind never fires and the
+     *  body javac lifted out was named nowhere. The synthetic method's own
+     *  symbol and call sites are facts already; nothing pointed at them.
+     *
+     *  <p>Returning it is the cheapest spelling of that shape, and it is not a
+     *  contrived one — {@code OrderStreamBindings#handleOrder} in the
+     *  orders-service fixture is a {@code @Bean} that does exactly this, and
+     *  Spring Cloud Stream's whole functional model is written this way. A
+     *  lambda parked in a field or invoked through its own interface is the
+     *  same gap. */
+    public java.util.function.Supplier<String> returnedLambda() {
+        return () -> url;
+    }
+
     /** A method reference into the JDK, which is the common case: the symbol
      *  names a class no module declares, and every module that writes
      *  {@code String::trim} must produce the same one (D00 §1). */
