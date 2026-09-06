@@ -229,6 +229,73 @@ too absolute — it conflated inventing a fact with explaining that there is non
 and the user asked for the second. An overlay may say what silence means; it may
 never break it.
 
+### J. Meridian (FR-21..FR-24) — checked 2026-09-05, and two gaps are unrecorded
+
+`docs/meridian-integration.md` is the statement of record for what Meridian needs.
+It is already ruled into **2P** in the roadmap, so it is not missing — but the
+implementation status was never measured and two dependencies are unstated.
+
+| | status, measured |
+|---|---|
+| **FR-21** boundary vocabulary (`module`/`endpoint`/`dependency`/`data-contract`/`boundary-property`) | **not implemented** — no boundary-kind closed set anywhere in `src/` |
+| **FR-22** derivation diff | **not implemented** — no diff operation, no CLI verb |
+| **FR-23** observability map (`observable`/`partial`/`not-observable` per kind) | **not implemented** |
+| **FR-24** library embedding | **partial** — `sextant.api` ships analyze/render/enrich/export; **`query` and `diff` do not exist**, and FR-24 names all four |
+
+**Two dependencies nobody wrote down:**
+
+1. **FR-21's `dependency` kind is derived from "edges/dispatch"** — tables that do
+   not exist (Class B). So FR-21 cannot be completed before 2Q builds them.
+   *Meridian's boundary vocabulary depends on the call graph.*
+2. **FR-24 is described in the roadmap as "largely delivered by 2N's `sextant.api`
+   facade".** "Largely" is carrying two missing verbs. `query` has no
+   implementation at all — M00 documents 25 CLI verbs and four exist.
+
+Neither changes 2P's placement; both change what 2P can honestly claim on arrival,
+and FR-21 now has a hard prerequisite it did not declare.
+
+### K. Confidence on every claim, and the LLM invited wherever we are unsure
+
+**Ruled 2026-09-05, user:** *"everywhere we don't have resolved or human curated,
+let llm put its analysis in … llm should also provide the confidence level … such
+that when human reads the section, the person knows it's llm generated vs really
+resolved or human curated."*
+
+**Most of the machinery already exists.** `Evidence` is a closed set already
+containing `COMPILER`, `HUMAN` and `LLM`; `Precedence` already rules that a person
+outranks code and code outranks a model; and the renderer already marks an
+enrichment distinctly — `> **Enrichment — evidence: llm** (model …, agent …)` in
+Markdown and its own `div` in HTML — so a reader cannot mistake one for a derived
+fact. Three pieces are missing:
+
+**K1. Widen where an overlay is invited. (M.)** The brief offers the model four
+anchors (`domain/closed_sets.Anchor`). The rule becomes: **anywhere a row's
+resolution is not `resolved`, or its evidence is not `human`, an overlay is
+invited.** That is a much larger surface than four anchors and needs the brief to
+carry the unsure rows, not just the endpoint table.
+
+**K2. An LLM claim carries its own resolution, not only `evidence: llm`. (S.)**
+`Resolution` and `Evidence` are independent axes by design — CONTEXT.md calls them
+"three independent properties, deliberately never collapsed". Today an enrichment
+claim carries evidence and no resolution, so "this IS the payment flow" and "this
+MIGHT be" render identically. The claim schema gains a resolution the model must
+state.
+
+**K3. Render all three axes together** so a reader sees, per claim: what produced
+it (`compiler` / `llm` / `human`), how certain the source is
+(`resolved` / `narrowed` / `partial` / `unresolved`), and who wins if two disagree.
+
+**Stated honestly, because it bears on how much K2 is worth:** a model's
+self-reported confidence is not calibrated, and we should not present it as if it
+were. It is more informative than nothing, and `evidence: llm` already caps how
+far a reader should trust the row — but K2 buys *relative* ordering within LLM
+claims, never comparability with a compiler fact. Say so where it renders.
+
+**Related:** sweep 3's MAJ-3 found the `syntax`, `name_match` and `human` evidence
+tiers have **no producer** and `resolution: partial` is never produced. K3 is
+worth little while three of the tiers it renders cannot occur — close MAJ-3 in the
+same pass.
+
 ### H. Quality and infrastructure debt
 
 - **mall is scratch.** If it is the acceptance corpus it needs a committed
