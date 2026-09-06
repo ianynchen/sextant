@@ -114,7 +114,6 @@ _NOT_MEASURED_YET: dict[str, str] = {
     "spring-kafka": "CP-10/CP-12 measured the TEMPLATE side only, not `@KafkaListener`",
     "spring-pulsar": "no probe opens `org.springframework.pulsar:spring-pulsar`",
     "spring-rabbit": "CP-10 measured `RabbitTemplate`, not `@RabbitListener`",
-    "spring-scheduling": "`OI-2` — no probe has measured the disable sentinel either",
     "spring-sqs-legacy": "two versions named in comments; no probe opens either artifact",
     "spring-ws": "CP-10 measured `WebServiceTemplate`, not `@Endpoint`/`@PayloadRoot`",
     "wsdl-schema": "a schema-file rule; no framework jar has been read for it",

@@ -1900,7 +1900,18 @@ matches:
     fixedDelayString: fixedDelay
     fixedRate: fixedRate
     fixedRateString: fixedRate
+  disabled:                       # attribute -> the value the FRAMEWORK reads as "never"
+    cron: "-"                     # `@Scheduled.CRON_DISABLED`, measured by CP-14
 ```
+
+**`disabled` is optional, and its absence claims that the framework has no such value.**
+Not that nobody looked: `OI-2` was exactly the second state, and what retires it is a probe,
+so a catalog claiming a sentinel cites one in `measured:` and a catalog claiming none says
+so in prose. A key naming an attribute `triggers` does not is REFUSED rather than ignored —
+a sentinel written against the wrong spelling withdraws nothing, silently, which is the
+mistake it exists to prevent. The value is compared against the expression the declaration
+WROTE, after the "is this a literal we can spell" test and never before it, so an
+unreadable value is never attributed to a disable nobody wrote.
 
 **`container` is where extractor capability 9.16 is load-bearing, and the catalog REQUIRES
 it rather than degrading.** Two or more `@Scheduled` on one method are folded by javac into

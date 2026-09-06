@@ -624,6 +624,39 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "spring-scheduling.the-disable-sentinel-is-the-frameworks-own": Guard(
+        what="the value that withdraws a `cron` schedule is the one Spring's own "
+        "post-processor compares against — `@Scheduled.CRON_DISABLED`, which is `-`",
+        why="`OI-2`. A sentinel encoded from memory withdraws nothing: the framework "
+        'registers no task for `cron = "-"` (CP-14 rows 1-3, three spring-context '
+        "minors), so a catalog naming any other value publishes a `scheduled_work` row "
+        "for work that will never run, at `resolved`/`compiler`, beside schedules that "
+        "really do. The weakening is exactly the mistake §8.1 forbids — a plausible word "
+        "in place of the measured one",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-scheduling.yml",
+                find='  disabled:\n    cron: "-"',
+                replace='  disabled:\n    cron: "disabled"',
+            ),
+        ),
+    ),
+    "scheduled_work.a-disabled-trigger-declares-no-task": Guard(
+        what="a trigger attribute written with the value the catalog names as its disable "
+        "sentinel derives no row",
+        why="the engine half of the rule above, measured on its own so a catalog that "
+        "states the right value and an engine that ignores it cannot pass for each other. "
+        "Without the test the sentinel is a comment: every disabled schedule is published "
+        "as live work again, and the catalog's `disabled` block reads as if it were doing "
+        "something",
+        edits=(
+            Edit(
+                path=_SCHEDULED_WORK,
+                find="            if expression == disabled.get(attribute):",
+                replace="            if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "spring-sqs.path-from-is-the-destination-aliases": Guard(
         what="`path_from` names the destination attribute under both its spellings, and "
         "nothing else",

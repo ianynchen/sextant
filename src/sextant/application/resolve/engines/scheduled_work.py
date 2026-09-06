@@ -51,6 +51,7 @@ from sextant.application.resolve.shapes.rooting import _catalog_symbol
 _ANNOTATION = "annotation"
 _CONTAINER = "container"
 _TRIGGERS = "triggers"
+_DISABLED = "disabled"
 _REQUIRED_MATCHES = (_ANNOTATION, _CONTAINER, _TRIGGERS)
 
 # The one form of expression this pass refuses to answer for. A property
@@ -73,6 +74,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     (§4a's "Quartz: later catalog, same table") writes to the same table.
     """
     triggers = _validate_matches(catalog)
+    disabled = _validate_disabled(catalog, triggers)
     rows: list[dict[str, Any]] = []
     for target, args in _declarations(workspace, catalog):
         for attribute in sorted(triggers):
@@ -85,6 +87,23 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 # extractor recorded as unread. There is no expression, so
                 # there is no row: an attribute that was written and could not
                 # be read must never become a schedule with an invented one.
+                continue
+            if expression == disabled.get(attribute):
+                # THE FRAMEWORK'S OWN "never schedule this" VALUE, which the
+                # catalog states and CP-14 measured. The framework compares the
+                # written value against it and registers no task at all, so a
+                # row here would be work that never runs, published at
+                # `resolved`/`compiler` beside schedules that really do — the
+                # shape `OI-2` names. Dropped rather than marked, because
+                # `scheduled_work` carries no column in which a row could say
+                # it is inert, and a row that cannot say so is read as live
+                # work.
+                #
+                # Reached only after the `None` test above, so an attribute
+                # this pass could not read never falls in here: `.get` answers
+                # None for an attribute the catalog gives no sentinel, and
+                # `None == None` would otherwise attribute an unreadable value
+                # to a disable that was never written.
                 continue
             rows.append(
                 {
@@ -223,3 +242,39 @@ def _validate_matches(catalog: Catalog) -> dict[str, object]:
             f"`attribute: trigger kind`, got {triggers!r} (2O design §4a)"
         )
     return dict(triggers)
+
+
+def _validate_disabled(catalog: Catalog, triggers: dict[str, object]) -> dict[str, str]:
+    """The framework's own "never schedule this" value, per trigger attribute.
+
+    OPTIONAL, and absent means the framework has no such value rather than
+    that nobody looked — `OI-2` is exactly the second state, and what retires
+    it is a probe, so a catalog claiming a sentinel cites one (`measured:`) and
+    a catalog claiming none says so in prose.
+
+    Refused rather than ignored where the key names an attribute `triggers`
+    does not: such an entry withdraws nothing, silently, and the mistake it
+    reads as — a sentinel written against the wrong spelling of an attribute —
+    is the one this key exists to prevent. Values are compared against the
+    expression the declaration WROTE, so they are strings for the same reason
+    `_verbatim` returns one.
+    """
+    disabled = catalog.matches.get(_DISABLED)
+    if disabled is None:
+        return {}
+    valid = isinstance(disabled, dict) and all(
+        isinstance(key, str) and isinstance(value, str) for key, value in disabled.items()
+    )
+    if not valid:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `disabled` must be a mapping of "
+            f"`attribute: the value that withdraws it`, got {disabled!r} (`OI-2`)"
+        )
+    unknown = sorted(set(disabled) - set(triggers))
+    if unknown:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `disabled` names {unknown}, which "
+            f"`triggers` does not — a sentinel on an attribute no schedule is read from "
+            f"withdraws nothing at all"
+        )
+    return dict(disabled)

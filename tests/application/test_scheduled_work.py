@@ -256,6 +256,96 @@ def test_an_initial_delay_alone_is_not_a_schedule_and_derives_nothing(tmp_path: 
     assert rows == []
 
 
+@pytest.mark.declines("spring-scheduling")
+@pytest.mark.pins("spring-scheduling.the-disable-sentinel-is-the-frameworks-own")
+def test_a_cron_written_as_the_frameworks_disable_sentinel_derives_nothing(tmp_path: Path):
+    """`-` is `@Scheduled.CRON_DISABLED`, and Spring's post-processor compares
+    `cron()` against it immediately before `scheduleCronTask` and before
+    nothing else — CP-14 rows 1-3, byte-identical at spring-context 6.1.6,
+    6.2.19 and 7.0.9. So this declaration registers NO task, and a row for it
+    would be work the framework will never do, published at
+    `resolved`/`compiler` beside schedules that really run.
+
+    Every conjunct but one is satisfied: the shipped annotation, on a method,
+    with a trigger attribute the shipped catalog names and a value this pass
+    can spell. The one that fails is the value itself, which is `OI-2`."""
+    workspace = _resolve(tmp_path, [_method(), _annotated({"cron": "-"})])
+    rows = workspace.query("scheduled_work")
+    workspace.close()
+
+    assert rows == []
+
+
+@pytest.mark.pins("scheduled_work.a-disabled-trigger-declares-no-task")
+def test_a_trigger_written_with_its_catalogs_own_sentinel_derives_nothing(tmp_path: Path):
+    """The engine half, on an invented catalog naming no framework — the
+    `test_endpoints.py` discipline, so this cannot pass or fail because a
+    shipped file changed. A catalog that states the right sentinel and an
+    engine that ignores it look identical from the shipped side; this is what
+    tells them apart.
+
+    Two attributes, one sentinel: `fixedRate` is written with the same text and
+    keeps its row, which is what makes this a measurement of the pairing rather
+    than of the value."""
+    catalog = _invented(
+        {
+            "annotation": SCHEDULED,
+            "container": SCHEDULES,
+            "triggers": {"cron": "cron", "fixedRate": "fixedRate"},
+            "disabled": {"cron": "off"},
+        }
+    )
+    facts = [_method(), _annotated({"cron": "off", "fixedRate": "off"})]
+    workspace = _resolve(tmp_path, facts, catalog)
+    rows = workspace.query("scheduled_work")
+    workspace.close()
+
+    assert [row["trigger"] for row in rows] == ["fixedRate"]
+
+
+def test_a_disabled_sentinel_naming_no_trigger_attribute_is_refused(tmp_path: Path):
+    """A sentinel written against an attribute no schedule is read from
+    withdraws nothing at all, silently — the `A-Mi8` shape one key over. It is
+    refused at load rather than ignored, because the mistake it reads as is a
+    misspelled attribute name, which is exactly what the key exists to
+    prevent."""
+    catalog = _invented(
+        {
+            "annotation": SCHEDULED,
+            "container": SCHEDULES,
+            "triggers": {"cron": "cron"},
+            "disabled": {"crons": "-"},
+        }
+    )
+    with pytest.raises(CatalogError, match="crons"):
+        _resolve(tmp_path, [_method(), _annotated({"cron": "0 0 3 * * *"})], catalog)
+
+
+def test_an_unreadable_trigger_value_is_not_read_as_a_disable(tmp_path: Path):
+    """`disabled.get()` answers None for an attribute the catalog gives no
+    sentinel, and `_verbatim` answers None for a value this pass cannot spell.
+    Comparing the two before the readability test would attribute an unread
+    value to a disable nobody wrote — the same row either way, but attributed
+    to the wrong rule, which is what makes a guard measure the wrong thing.
+
+    `fixedRate` carries an annotation-valued argument and has no sentinel;
+    `cron` beside it is ordinary and must still derive."""
+    facts = [
+        _method(),
+        _annotated(
+            {
+                "cron": "0 0 3 * * *",
+                "fixedRate": AnnotationUse(annotation="com/acme/orders/Tag#", args={}),
+            }
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _invented())
+    rows = workspace.query("scheduled_work")
+    workspace.close()
+
+    assert [row["trigger"] for row in rows] == ["cron"]
+
+
 @pytest.mark.pins("scheduled_work.declaration-is-a-method")
 def test_the_annotation_on_an_annotation_type_derives_nothing(tmp_path: Path):
     """The framework's annotation is `@Target`-legal on an ANNOTATION TYPE,

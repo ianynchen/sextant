@@ -74,21 +74,6 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
-### OI-2 — a DISABLED scheduled job is reported as live work
-**Major · introduced 2026-09-06 by 2O Task 8 (`35fa4d5..4e51317`) · COVERAGE.md:1922**
-
-`spring-scheduling.yml` treats no cron value as the framework's "never schedule
-this" sentinel, because no probe has measured which value the framework so reads
-and encoding one from memory is what §8.1 forbids. So a schedule the framework
-will never run publishes a `scheduled_work` row saying it does.
-
-**This is not the Actuator case.** A disable sentinel is not deployment-
-overridable — it is a code fact we are misreading, so §8.2 does not excuse it.
-The implementer chose correctly under "measure or do not encode", but the honest
-close is a probe, and it is among the cheapest on the list.
-**Closes by** one probe question and one catalog key. **Falsified by** a disabled
-schedule appearing in an export.
-
 ### OI-3 — the multi-path WebSocket rule is documentation, not measurement
 **Minor · introduced 2026-09-06 by 2O Task 13 (`2a1c918`)**
 
@@ -243,7 +228,7 @@ restricting the walk to poms inside the repository and losing
 `spring-boot-starter-parent` with it. **Falsified by** two machines deriving
 different endpoint sets from one commit.
 
-### OI-10 — 26 shipped catalogs state no measured version at all
+### OI-10 — 25 shipped catalogs state no measured version at all
 **Major · pre-existing, made countable 2026-09-06 by F5 ·
 `tests/architecture/test_catalog_measurement_coverage.py::_NOT_MEASURED_YET`**
 
@@ -266,6 +251,11 @@ fabricates). The two the plan already names as live are `A-C5`
 named artifact at a version the artifact itself reports — retiring entries from
 that list as it goes. **Falsified by** a shipped catalog deriving a wrong row on
 a framework version nobody in this repository has opened.
+
+**Stage 4 progress (2026-09-06).** Twenty-six when F5 counted them. Retired
+since: `spring-scheduling` (CP-14, spring-context 6.1.6/6.2.19/7.0.9). The
+heading above is the count as it stands and is edited down with each entry, so
+this row cannot go stale about its own subject.
 
 ### OI-11 — nothing compares a catalog's measured version against the module's
 **Major · pre-existing, stated 2026-09-06 by F5 · D02 §1a**
@@ -706,7 +696,68 @@ first bump is when they can diverge — silently, in a stamp nothing reads.
 **Falsified by** a version bump that moves one literal and not the others.
 
 
+### OI-34 — a DISABLED cron beside a live rate is a declaration the container refuses, and we publish its other row
+**Minor · found 2026-09-06 by Stage 4's `spring-scheduling` pass (CP-14 rows
+4-5) · `src/sextant/catalogs/spring-scheduling.yml`, `docs/COVERAGE.md`**
+
+`OI-2`'s close drops the row a disabled `cron` would have published. CP-14 then
+measured the half `OI-2` never asked about: reaching the sentinel still counts
+as having declared a schedule. Row 4 ends `... iconst_1 ; istore ; ldc_w
+String - ; aload ; String.equals` — the flag is written BEFORE the comparison,
+for any non-empty cron including `-` — and row 5 carries the read, where after
+`fixedDelay()` is found non-negative that flag is loaded, negated and passed to
+`Assert.isTrue`, which fails. So `@Scheduled(cron = "-", fixedDelay = 1000)`
+starts no task at all, because the post-processor throws and the context does
+not come up, while this repository publishes the `fixedDelay` row.
+
+**Not encoded, deliberately.** Every conjunct `scheduled_work` has is per
+ATTRIBUTE — `triggers` is an alias set and `disabled` is keyed the same way —
+and this rule is about a DECLARATION as a whole: one attribute's value
+withdrawing a different attribute's row. Building half of it (dropping the
+sibling rows without also modelling which combinations the framework accepts)
+is what §8.1 rule 4 forbids, so it is stated in `docs/COVERAGE.md` §5.12 and
+registered here.
+
+**Cost:** bounded to a declaration that writes the disable sentinel AND a
+second trigger — code that cannot start, so the module it describes is not
+running anywhere. That is why it is a Minor rather than the Major `OI-2` was:
+the wrong row describes an application no reader can be looking at.
+**Closes by** either a declaration-level refusal in `scheduled_work` with the
+accepted-combination rule measured beside it, or a recorded ruling that
+non-starting code is out of scope for every catalog rather than for this one.
+**Falsified by** such a declaration exporting a `scheduled_work` row.
+
+
 ## CLOSED
+
+### OI-2 — a DISABLED scheduled job was reported as live work
+**Major · introduced 2026-09-06 by 2O Task 8 (`35fa4d5..4e51317`) · CLOSED
+2026-09-06 by Stage 4's `spring-scheduling` pass ·
+`scripts/probes/cp14_schedule_sentinel.md`,
+`src/sextant/catalogs/spring-scheduling.yml`**
+
+`spring-scheduling.yml` treated no cron value as the framework's "never schedule
+this" sentinel, because no probe had measured which value the framework so
+reads and encoding one from memory is what §8.1 forbids. So a schedule the
+framework would never run published a `scheduled_work` row saying it does.
+
+**Closed the way the row asked — one probe question and one catalog key.**
+CP-14 reads `@Scheduled.CRON_DISABLED` off the annotation's own class file at
+spring-context 6.1.6, 6.2.19 and 7.0.9 (byte-identical: `-`), puts the
+comparison between the `cron()` read and `ScheduledTaskRegistrar.scheduleCronTask`
+with no other `schedule*` call downstream of it, and — the converse question
+CP-10's table is criticised for never asking — enumerates every string
+comparison in the post-processor and finds exactly ONE, which is what bounds
+the new `disabled:` key to `cron` by measurement rather than by choice.
+`spring-scheduling.the-disable-sentinel-is-the-frameworks-own` and
+`scheduled_work.a-disabled-trigger-declares-no-task` are the two guards, both
+measured to kill; the falsifier this row named — a disabled schedule appearing
+in an export — is now a failing test rather than a hope.
+
+**What the close did NOT settle**, and both are stated rather than implied: a
+`${...}` placeholder whose deployed value is `-` is disabled by the same rule
+and stays `unresolved` here (§8.2), and a disabled cron sitting beside a live
+rate is `OI-34`.
 
 ### OI-30 — the default document drew the steps of a minority of a large module's traces
 **Minor · introduced 2026-09-06 by 2Q's close, defect 2 · found AND closed
