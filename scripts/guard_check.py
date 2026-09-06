@@ -813,6 +813,44 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "spring-pulsar.container-is-the-frameworks-own": Guard(
+        what="`container` names the annotation Spring for Apache Pulsar ACTUALLY reads a "
+        "second `@PulsarListener` out of",
+        why="`OI-38`, and the same silent drop as the three CP-16 guards above, reached by a "
+        "different mechanism: `@PulsarListener` is NOT `@Repeatable` (CP-17 rows 2a/2b), so "
+        "the container is one an AUTHOR writes and the post-processor registers the union of "
+        "it and the direct use (rows 3a/3b, 6a/6b). A container named wrong matches nothing "
+        "and every topic declared that way vanishes with no wrong row to notice. The "
+        "weakening below is a plausible name — the `@KafkaHandler`/`@RabbitHandler` spelling, "
+        "one framework over — that CP-17 rows 4a/4b measured ABSENT from this jar",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-pulsar.yml",
+                find="          container: org.springframework.pulsar.annotation.PulsarListeners }",
+                replace="          container: org.springframework.pulsar.annotation.PulsarHandlers }",
+            ),
+        ),
+    ),
+    "spring-pulsar.reader-is-a-second-inbound-surface": Guard(
+        what="the `annotations` list names `@PulsarReader` as well as `@PulsarListener` — the "
+        "framework's SECOND inbound annotation, with its own post-processor and its own "
+        "endpoint type",
+        why="`OI-39`. The two annotations live in one jar and one package and neither is "
+        "reachable from the other: a module whose consumers are readers had its whole Pulsar "
+        "surface absent from the export, which is a silent drop of an entire shape rather "
+        "than one attribute of one. CP-17 rows 1c/1d read `topics(): java.lang.String[]` off "
+        "the annotation and rows 5c/5d show the post-processor feeding it to "
+        "`MethodPulsarReaderEndpoint.setTopics`. The weakening names the container spelling "
+        "rows 3c/3d measured ABSENT, so the entry matches no annotation any class file "
+        "carries — which is exactly what a missing entry does",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-pulsar.yml",
+                find="      - { fqn: org.springframework.pulsar.annotation.PulsarReader }",
+                replace="      - { fqn: org.springframework.pulsar.annotation.PulsarReaders }",
+            ),
+        ),
+    ),
     "microprofile-graphql.fallback-direction-is-per-annotation": Guard(
         what="each operation annotation declares the accessor direction its OWN fallback strips "
         "— the read direction for `@Query`, the write direction for `@Mutation`",

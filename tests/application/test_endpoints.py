@@ -4982,6 +4982,124 @@ def test_a_type_level_pulsar_listener_alone_derives_nothing(tmp_path: Path):
     assert rows == []
 
 
+_PULSAR_LISTENERS = "org/springframework/pulsar/annotation/PulsarListeners#"
+_PULSAR_READER = "org/springframework/pulsar/annotation/PulsarReader#"
+
+
+@pytest.mark.pins("spring-pulsar.container-is-the-frameworks-own")
+def test_two_pulsar_listeners_held_in_the_container_derive_both_topics(tmp_path: Path):
+    """`OI-38`. CP-17 rows 3a/3b read
+    `org.springframework.pulsar.annotation.PulsarListeners` out of spring-pulsar
+    1.2.11 and 2.0.7 declaring `value(): PulsarListener[]`, and rows 6a/6b show
+    the post-processor adding every member of it to the listener set. Before
+    the container was named, a method declaring its topics this way derived
+    NOTHING — beside a single-listener neighbour deriving normally, which is
+    the shape that makes an under-report hard to notice."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-pulsar")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={
+            _PULSAR_LISTENERS: {
+                "value": [
+                    _folded_use(_PULSAR_LISTENER, {"topics": ["orders.v1"]}),
+                    _folded_use(_PULSAR_LISTENER, {"topics": ["orders.dlq"]}),
+                ]
+            }
+        },
+    )
+
+    assert {(str(r["protocol"]), str(r["path"])) for r in rows} == {
+        ("pulsar", "orders.v1"),
+        ("pulsar", "orders.dlq"),
+    }
+
+
+@pytest.mark.pins("spring-pulsar.container-is-the-frameworks-own")
+def test_a_pulsar_container_beside_a_direct_listener_derives_the_union(tmp_path: Path):
+    """**The case that cannot exist for a `@Repeatable` annotation**, and the
+    reason this catalog's `container` entry means something slightly different
+    from `spring-kafka.yml`'s. CP-17 rows 2a/2b measured NO `@Repeatable` on
+    `@PulsarListener`, so javac never folds and a declaration may legally carry
+    both a direct `@PulsarListener` AND a hand-written `@PulsarListeners`. Rows
+    6a/6b are what say the framework registers the union of the two rather than
+    one instead of the other:
+
+        PulsarListener ann = findMergedAnnotation(method, PulsarListener.class);
+        if (ann != null) { listeners.add(ann); }
+        PulsarListeners anns = findAnnotation(method, PulsarListeners.class);
+        if (anns != null) { listeners.addAll(...anns.value()...); }
+
+    Three topics served, so three rows — the direct annotation's row survives
+    beside the synthesized ones because the unfolding pass ADDS and never
+    replaces."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-pulsar")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={
+            _PULSAR_LISTENER: {"topics": ["orders.direct"]},
+            _PULSAR_LISTENERS: {
+                "value": [
+                    _folded_use(_PULSAR_LISTENER, {"topics": ["orders.v1"]}),
+                    _folded_use(_PULSAR_LISTENER, {"topics": ["orders.dlq"]}),
+                ]
+            },
+        },
+    )
+
+    assert {(str(r["protocol"]), str(r["path"])) for r in rows} == {
+        ("pulsar", "orders.direct"),
+        ("pulsar", "orders.v1"),
+        ("pulsar", "orders.dlq"),
+    }
+
+
+@pytest.mark.pins("spring-pulsar.reader-is-a-second-inbound-surface")
+def test_a_pulsar_reader_derives_one_inbound_pulsar_row_per_declared_topic(tmp_path: Path):
+    """`OI-39`. `@PulsarReader` is a second inbound surface of the same
+    framework and this catalog named it nowhere. CP-17 rows 1c/1d read
+    `topics(): java.lang.String[]` off its own class file at spring-pulsar
+    1.2.11 and 2.0.7; rows 5c/5d show `PulsarReaderAnnotationBeanPostProcessor`
+    reading `PulsarReader.topics()` and feeding
+    `MethodPulsarReaderEndpoint.setTopics([Ljava/lang/String;)` before
+    registering the endpoint. Every reader in a scanned module was absent from
+    the export."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-pulsar")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_PULSAR_READER: {"topics": ["persistent://public/default/audit"]}},
+    )
+
+    assert [(r["protocol"], r["direction"], r["path"]) for r in rows] == [
+        ("pulsar", "inbound", "persistent://public/default/audit")
+    ]
+
+
+@pytest.mark.declines("spring-pulsar")
+@pytest.mark.pins("derive_endpoints.handler-is-a-method")
+def test_a_type_level_pulsar_reader_alone_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the reader entry above, negating the conjunct that the
+    annotation sits on a METHOD. `@PulsarReader` is
+    `@Target({TYPE, METHOD, ANNOTATION_TYPE})` (CP-17 rows 2c/2d) and its
+    discovery method takes a `Method` and nothing else (rows 6c/6d), so a
+    type-level use registers no reader. A row here would give every method of
+    an annotated class the class's own topic."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-pulsar")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_PULSAR_READER: {"topics": ["persistent://public/default/audit"]}},
+    )
+
+    assert rows == []
+
+
 _LEGACY_SPRING_SQS = "org/springframework/cloud/aws/messaging/listener/annotation/SqsListener#"
 _LEGACY_AWSPRING_SQS = "io/awspring/cloud/messaging/listener/annotation/SqsListener#"
 _CURRENT_SQS = "io/awspring/cloud/sqs/annotation/SqsListener#"

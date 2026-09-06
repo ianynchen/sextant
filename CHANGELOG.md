@@ -14,6 +14,36 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Spring for Apache Pulsar's second inbound annotation, and its container** — Stage 4's
+  per-catalog pass, measured by **CP-17**
+  (`scripts/probes/cp17_containers_and_class_level.md`, spring-pulsar 1.2.11 and 2.0.7,
+  both versions read out of each jar's own manifest).
+
+  - **`@PulsarReader` is derived at all** (`OI-39`). It ships in the artifact
+    `spring-pulsar.yml` already depends on, declares `topics(): java.lang.String[]`, and has
+    its own post-processor, endpoint type and registrar — and the catalog named it **nowhere**,
+    so every reader in a scanned module was absent from the export. A whole shape missing, not
+    an attribute of one.
+  - **A second `@PulsarListener` written into `@PulsarListeners` is derived** (`OI-38`) —
+    `OI-36`'s silent drop one framework over, and by a **different mechanism**:
+    `@PulsarListener` is *not* `@Repeatable`, so the container is one an author writes by hand
+    and the framework registers the **union** of it and any direct use (read verbatim out of
+    the sources jar at the same coordinate). The `container:` key the vocabulary pass shipped
+    says that exactly — a class file does not record whose container it is — and only the
+    documentation was narrower than the key. D02 §2 and two engine docstrings now say so; the
+    key, the engine and every other catalog are unchanged. Needs extractor capability 9.16,
+    which the catalog now `requires`.
+
+  Also measured and found CORRECT, which is what makes the audit re-runnable rather than
+  repeated: `@PulsarListener`'s `topics`/`topicPattern` split at a second version, and the
+  claim that the framework ships **no** class-level handler annotation —
+  `org.springframework.pulsar.annotation.PulsarHandler` is absent from both jars, so
+  `prefix_from: []` is the framework's own rule rather than a simplification.
+
+  Two new guards, both mutation-proved: `spring-pulsar.container-is-the-frameworks-own` and
+  `spring-pulsar.reader-is-a-second-inbound-surface`. `spring-pulsar` leaves
+  `_NOT_MEASURED_YET`, which drops to **20** (`OI-10`).
+
 - **`annotation_driven` gains three words, designed as one pass** (D02 §2). The style
   **21 catalogs** share grew a key at a time against whichever framework was in front of its
   author, and Stage 4 found three catalogs at once whose framework rule was known exactly and

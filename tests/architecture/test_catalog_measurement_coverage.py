@@ -110,7 +110,6 @@ _NOT_MEASURED_YET: dict[str, str] = {
     "spring-integration": "its probe predates §5.4 — a `dependency:list` block, no identities",
     "spring-kafka-media": "no probe opens the serializer table this file encodes",
     "spring-kafka-message": "CP-10/CP-12 measured the TEMPLATE side only",
-    "spring-pulsar": "no probe opens `org.springframework.pulsar:spring-pulsar`",
     "spring-sqs-legacy": "two versions named in comments; no probe opens either artifact",
     "spring-ws": "CP-10 measured `WebServiceTemplate`, not `@Endpoint`/`@PayloadRoot`",
     "wsdl-schema": "a schema-file rule; no framework jar has been read for it",

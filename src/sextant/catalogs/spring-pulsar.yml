@@ -1,5 +1,5 @@
 id: spring-pulsar
-displayName: Spring for Apache Pulsar (PulsarListener)
+displayName: Spring for Apache Pulsar (PulsarListener, PulsarReader)
 style: annotation_driven
 protocol: pulsar
 direction: inbound
@@ -7,7 +7,17 @@ direction: inbound
 detect:
   coordinates: ["org.springframework.pulsar:spring-pulsar"]
 
-requires: [annotation_args, typed_signatures]
+measured:
+  - { artifact: org.springframework.pulsar:spring-pulsar, versions: ["1.2.11", "2.0.7"],
+      identity: reported, by: scripts/probes/cp17_containers_and_class_level.md }
+
+# `nested_annotation_args` (capability 9.16) because a `@PulsarListeners` member
+# reaches the class file only as a nested annotation inside the container's
+# array (`OI-38`). Required rather than optional for `spring-kafka.yml`'s
+# reason: a scanner that cannot read a nested annotation must skip this catalog
+# VISIBLY (M04, FR-17) instead of reporting the single-listener half of a
+# module's surface and staying silent about the rest.
+requires: [annotation_args, typed_signatures, nested_annotation_args]
 
 matches:
   # No type-level gate: `@PulsarListener` sits on the method directly.
@@ -15,25 +25,68 @@ matches:
                   fallback: sole_unannotated,
                   excludes: [org.springframework.pulsar.listener.Acknowledgement] }
   mapping:
-    # CHECKPOINT FACT (javap, spring-pulsar 1.2.11): `@PulsarListener`
-    # declares `topics()` as `String[]` and `topicPattern()` as a scalar
-    # `String` — the `@KafkaListener` shape exactly. The two alias one
-    # another (a listener declares only one), so first present wins.
+    # MEASURED at spring-pulsar 1.2.11 and 2.0.7 (CP-17 rows 1a-1d), replacing a
+    # checkpoint note that named one version and cited no evidence:
+    # `@PulsarListener` declares `topics()` as `String[]` and `topicPattern()`
+    # as a scalar `String` — the `@KafkaListener` shape exactly. The two alias
+    # one another (a listener declares only one), so first present wins.
+    #
+    # `@PulsarReader` declares `topics()` as `String[]` and NO `topicPattern`
+    # (rows 1c/1d), and the same alias list reads it: first present wins picks
+    # `topics`, and a reader that names none addresses nothing. Row 5c/5d shows
+    # its post-processor reading `PulsarReader.topics()` and feeding
+    # `MethodPulsarReaderEndpoint.setTopics([Ljava/lang/String;)`, which is what
+    # makes this attribute the destination rather than a resemblance to the
+    # listener's.
     path_from: [topics, topicPattern]
-    # NO class-level listener shape for Pulsar: `@PulsarListener` is
-    # `@Target({TYPE, METHOD, ANNOTATION_TYPE})`, but the jar declares no
-    # `@PulsarHandler` counterpart at all — there is no annotation a
-    # class-level listener would dispatch to, so there is no prefix to
-    # declare. A TYPE-level use derives nothing (the derivation joins method
-    # symbols only). That stops being true the day the framework ships a
-    # handler annotation for the class-level form.
+    # NO class-level listener shape for Pulsar, and that is now MEASURED rather
+    # than asserted: `@PulsarListener` is `@Target({TYPE, METHOD,
+    # ANNOTATION_TYPE})` (CP-17 rows 2a/2b), and
+    # `org.springframework.pulsar.annotation.PulsarHandler` is ABSENT FROM THE
+    # JAR at both 1.2.11 and 2.0.7 (rows 4a/4b) — there is no annotation a
+    # class-level listener would dispatch to, so there is no prefix to declare.
+    # Rows 6a/6b are the framework saying the same thing in its own source: the
+    # discovery method takes a `Method` and nothing else. A TYPE-level use
+    # derives nothing (the derivation joins method symbols only). That stops
+    # being true the day the framework ships a handler annotation for the
+    # class-level form — which is exactly what spring-cloud-aws-sqs did between
+    # the two versions `spring-sqs.yml` measures.
     prefix_from: []
     method_from: method
     # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
     all_methods: []
     prefix_annotation: null
     annotations:
-      - { fqn: org.springframework.pulsar.annotation.PulsarListener }
+      # `container` names what carries a SECOND `@PulsarListener` on one
+      # declaration (`OI-38`). MEASURED, and the measurement is the reason the
+      # entry looks like `spring-kafka.yml`'s and means something slightly
+      # different: CP-17 rows 2a/2b read NO `@Repeatable` on `@PulsarListener`
+      # at either version, while rows 3a/3b read
+      # `org.springframework.pulsar.annotation.PulsarListeners` out of the same
+      # jar declaring `value(): PulsarListener[]` — the container SHAPE without
+      # the language mechanism, for an author to write by hand. Rows 6a/6b
+      # settle what the framework does with it, out of the sources jar at the
+      # same coordinate: it registers the UNION of a direct `@PulsarListener`
+      # and every member of the container. That is what a real annotation row
+      # plus the engine's synthesized member rows already are, so the key says
+      # the framework's rule exactly. Before it, a method declaring its topics
+      # through `@PulsarListeners` derived NOTHING beside a single-listener
+      # neighbour deriving normally.
+      - { fqn: org.springframework.pulsar.annotation.PulsarListener,
+          container: org.springframework.pulsar.annotation.PulsarListeners }
+      # `@PulsarReader` is a SECOND inbound surface of the same framework, and
+      # this file named it nowhere until CP-17 read the jar (`OI-39`): a
+      # separate annotation, a separate post-processor
+      # (`PulsarReaderAnnotationBeanPostProcessor`), a separate endpoint type
+      # (`MethodPulsarReaderEndpoint`) and a separate registrar, all shipped in
+      # the artifact `detect.coordinates` already names. It reads a topic and
+      # consumes from it, which is this catalog's protocol and direction.
+      #
+      # It declares NO container, and the absence is a claim rather than an
+      # omission: rows 3c/3d looked for a `PulsarReaders` and found none, and
+      # rows 6c/6d show a discovery method that reads the annotation alone
+      # (§8.1 rule 4).
+      - { fqn: org.springframework.pulsar.annotation.PulsarReader }
 
 # Copied verbatim from spring-resttemplate.yml: shape (type) expansion is a
 # *global*, insert-if-absent pass keyed on the type symbol alone

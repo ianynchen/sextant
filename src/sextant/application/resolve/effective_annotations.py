@@ -136,7 +136,7 @@ def folded_rows(
     annotation_rows: list[dict[str, Any]],
     containers: dict[str, str],
 ) -> list[dict[str, Any]]:
-    """Synthesizes one row per use FOLDED INTO a repeatable container — the same
+    """Synthesizes one row per use held INSIDE a container annotation — the same
     `{target, annotation, args}` shape the other two passes synthesize, and
     `annotation` always the MEMBER fqn the catalog declared, so the caller's SQL
     never has to know a folding happened any more than it has to know a
@@ -153,6 +153,15 @@ def folded_rows(
     destinations vanish, silently, beside a single-use neighbour that derives
     normally. That is the under-report CP-16 measured at six versions across
     three frameworks, and this is the read that closes it.
+
+    **A container the AUTHOR wrote is the same bytes and the same read.** CP-17
+    rows 2a/2b, 3a/3b and 6a/6b measured `@PulsarListeners`: the container shape
+    without the language mechanism, on an annotation that is not `@Repeatable`,
+    whose post-processor registers the union of a direct use and every member of
+    the container. This pass emits the members and the real annotation row
+    survives untouched beside them, so the union is what the caller sees —
+    which is the framework's own answer rather than a widening. Nothing here
+    asks whose container it is, because a class file does not record that.
 
     **`value` is the LANGUAGE's word, not a framework's**, which is why it is
     spelled here and is not catalog data: JLS 9.6.3 requires a containing

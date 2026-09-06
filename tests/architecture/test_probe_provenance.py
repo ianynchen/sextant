@@ -142,7 +142,20 @@ def _failures(path: Path) -> list[str]:
             "headers, so no cell can be attributed to a configuration"
         )
 
-    unscoped = sorted(claimed - set(re.findall(r"\d+(?:\.\d+)+", _version_scope(text))))
+    # Compared as a LITERAL spelling rather than by re-extracting versions out
+    # of the scope paragraph with a narrower pattern than `_IDENTITY`. The two
+    # patterns disagreed, and the disagreement was a latent defect this rule
+    # could not survive meeting: `_IDENTITY` admits a Spring `.RELEASE`
+    # identity (`2.2.6.RELEASE`) as a column header, and `\d+(?:\.\d+)+`
+    # re-extracted only `2.2.6` from the very paragraph that spelled it in
+    # full — so a probe measuring such an artifact failed for stating exactly
+    # what §5.4 asks it to state. A literal comparison is also the stricter
+    # reading of the rule the message states: the column and the scope must
+    # AGREE, and `4.1` is not agreement with `4.1.1`. It is the same
+    # comparison `test_catalog_measurement_coverage.py` makes on the catalog
+    # side of the pairing (`OI-41`).
+    scope = _version_scope(text)
+    unscoped = sorted(identity for identity in claimed if identity not in scope)
     if unscoped:
         problems.append(
             f"measured on {unscoped} but the version-scope statement does not name them — "

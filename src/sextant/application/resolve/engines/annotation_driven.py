@@ -433,10 +433,16 @@ def _sibling_sources(catalog: Catalog, mapping: dict[str, Any]) -> list[dict[str
 # framework in code.
 _SIBLING_KEYS = frozenset({"annotation", "arg"})
 
-# The `mapping.annotations` entry key naming the repeatable container javac
-# folds two uses of that annotation into (`OI-36`). Read in Python only — the
-# folded uses reach the query as ordinary synthetic annotation rows, so there is
-# no container in the SQL at all.
+# The `mapping.annotations` entry key naming the container annotation whose
+# `value` array holds uses of that annotation (`OI-36`). Read in Python only —
+# the folded uses reach the query as ordinary synthetic annotation rows, so
+# there is no container in the SQL at all.
+#
+# Usually javac's, and not necessarily: CP-17 rows 2a/2b, 3a/3b and 6a/6b
+# measured `@PulsarListeners`, an author-written container for an annotation
+# that is NOT `@Repeatable`, whose post-processor registers the union of the
+# direct use and every member. The class file is the same shape either way, so
+# this reads them the same way and asks whose it is nowhere.
 _CONTAINER = "container"
 
 # How a scope composes with the name it qualifies, where a single separator
@@ -1064,8 +1070,8 @@ def _validate_container(catalog: Catalog, entry: dict[str, Any]) -> None:
     if declared is not None and not (isinstance(declared, str) and declared):
         raise CatalogError(
             f"loading catalog {catalog.source}: `{_CONTAINER}: {declared!r}` on "
-            f"`{entry.get('fqn')}` is not a non-empty annotation fqn — it names the repeatable "
-            f"container javac folds two uses of that annotation into (`OI-36`)"
+            f"`{entry.get('fqn')}` is not a non-empty annotation fqn — it names the container "
+            f"annotation whose `value` array holds uses of that annotation (`OI-36`)"
         )
 
 

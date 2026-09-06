@@ -746,8 +746,8 @@ mapping:
     - { fqn: "…annotation.RabbitListener", container: "…annotation.RabbitListeners" }
 ```
 
-- **`container` names the repeatable container javac folds two uses of that annotation
-  into** — the `scheduled_work` style's own key, one style over, and the same rule.
+- **`container` names the container annotation whose `value` array holds uses of that
+  annotation** — the `scheduled_work` style's own key, one style over, and the same rule.
   **Forced by CP-16** (`scripts/probes/cp16_listener_destinations.md`, rows 2a–2f and 4a–4f;
   six versions across three frameworks): `@KafkaListener`, `@JmsListener` and
   `@RabbitListener` are each `@Repeatable`, and each framework's post-processor reads the
@@ -758,16 +758,30 @@ mapping:
   synthesizes one ordinary `{target, annotation, args}` row per folded use, before
   composition and before inheritance, so a folded use is an ordinary annotation everywhere
   downstream and **there is no container in the query at all**.
+  - **The container need not be javac's, and this key does not ask whose it is.** CP-17
+    (`scripts/probes/cp17_containers_and_class_level.md`, rows 2a/2b, 3a/3b and 6a/6b, at
+    spring-pulsar 1.2.11 and 2.0.7) measured a framework that ships the container SHAPE
+    without the language mechanism: `@PulsarListener` is **not** `@Repeatable`, and
+    `@PulsarListeners` is an ordinary annotation declaring `value(): PulsarListener[]` for
+    an author to write by hand. Its post-processor then registers the **union** of a direct
+    `@PulsarListener` and every member of the container. A class file cannot tell the two
+    mechanisms apart — the bytes are identical — so the engine reads them identically, and
+    the union is what a real row plus the synthesized ones already are. This wording was
+    narrower than the key until CP-17 measured the case; the key itself did not change.
   - **`value` is not catalog data.** JLS 9.6.3 requires a containing annotation type to
     declare exactly `value()` returning an array of the repeatable type, so it is the
-    *language's* word; a key for it would let a file state something Java forbids. Each
-    entry of the array is checked against the declared member fqn rather than taken on
+    *language's* word; a key for it would let a file state something Java forbids. A
+    hand-written container is under no such obligation, and one declaring its array under
+    another name is unreadable here — a stated boundary in `docs/COVERAGE.md`, not a key.
+    Each entry of the array is checked against the declared member fqn rather than taken on
     position — a container is an ordinary annotation whose `value` happens to be an array.
   - **Declared per ANNOTATION ENTRY, not per catalog**, and that is where the difference
-    lives: `scheduled_work` names one annotation, this style names a list, and CP-16
-    measured `@Repeatable` on the listener annotations only — whether the sibling handler
-    annotations are repeatable is **not measured**, so no entry claims a container it has
-    no evidence for.
+    lives: `scheduled_work` names one annotation, this style names a list, and an entry
+    claims a container only where one was measured. CP-16 measured `@Repeatable` on the
+    listener annotations only; **CP-17 then measured the four the audit left open** (rows
+    2e–2l, 3e–3l) and found `@SqsListener` in all three spellings, `@KafkaHandler` and
+    `@RabbitHandler` neither repeatable nor accompanied by a container-shaped sibling — so
+    those entries' silence is now a measured claim rather than an absence of evidence.
   - **It needs extractor capability 9.16** (`nested_annotation_args`), because a folded use
     is a nested annotation. A catalog declaring a container therefore `requires` it, for
     `spring-scheduling.yml`'s stated reason: a scanner that cannot read one must skip the

@@ -275,7 +275,7 @@ restricting the walk to poms inside the repository and losing
 `spring-boot-starter-parent` with it. **Falsified by** two machines deriving
 different endpoint sets from one commit.
 
-### OI-10 — 21 shipped catalogs state no measured version at all
+### OI-10 — 20 shipped catalogs state no measured version at all
 **Major · pre-existing, made countable 2026-09-06 by F5 ·
 `tests/architecture/test_catalog_measurement_coverage.py::_NOT_MEASURED_YET`**
 
@@ -303,7 +303,8 @@ a framework version nobody in this repository has opened.
 since: `spring-scheduling` (CP-14, spring-context 6.1.6/6.2.19/7.0.9),
 `microprofile-graphql` (CP-15, smallrye-graphql-schema-builder 2.0.0/2.18.5),
 and `spring-kafka`, `spring-jms` and `spring-rabbit` (CP-16, spring-kafka
-3.1.4/4.1.1, spring-jms 6.1.6/7.0.9, spring-rabbit 3.1.4/4.1.1). The
+3.1.4/4.1.1, spring-jms 6.1.6/7.0.9, spring-rabbit 3.1.4/4.1.1), and
+`spring-pulsar` (CP-17, spring-pulsar 1.2.11/2.0.7). The
 heading above is the count as it stands and is edited down with each entry, so
 this row cannot go stale about its own subject.
 
@@ -845,8 +846,118 @@ and still right for the reason its OTHER half gives: an ungated walk synthesises
 a listener onto every implementer, which is a different fabrication from this
 under-report.
 
+### OI-40 — `@SqsListener` grew a class-level, polymorphic form and the catalog says it has none
+**Major · found 2026-09-06 by Stage 4 batch 2 (CP-17 rows 2e/2f, 4e/4f, 5f, 6f) ·
+`src/sextant/catalogs/spring-sqs.yml`**
+
+`io.awspring.cloud:spring-cloud-aws-sqs` 4.1.1 ships
+`io.awspring.cloud.sqs.annotation.SqsHandler` and widens `@SqsListener`'s
+`@Target` from `{METHOD}` to `{METHOD, TYPE}`; its post-processor takes the
+class-level annotation's `value()` as the queue names of a
+`MultiMethodSqsEndpoint` and dispatches to every `@SqsHandler` method of the
+class. That is `spring-kafka.yml`'s class-level shape one framework over, and
+`spring-sqs.yml` states in a comment that *"No class-level listener shape for
+SQS"* exists — true at 3.1.1, where `SqsHandler` is ABSENT FROM THE JAR and
+`@Target` is `{METHOD}` alone, and **false at 4.1.1**.
+
+**Cost:** every `@SqsHandler` method in a module on Spring Cloud AWS 4.x is
+absent from the export — a silent drop of a whole shape rather than one
+attribute, and the class-level `@SqsListener` that names the queue derives
+nothing either, because the derivation joins method symbols only.
+**Closes by** the `spring-kafka.yml` shape: `prefix_from` on the listener's own
+address aliases, `prefix_annotation` naming `@SqsListener`, and an `@SqsHandler`
+entry carrying no address of its own. Nothing needs a version constraint — code
+built against 3.1.1 cannot carry an annotation that artifact does not declare.
+**Falsified by** a class-level `@SqsListener` + `@SqsHandler` bean appearing in
+an export.
+
+### OI-41 — the probe-provenance rule accepted a version spelling it could not then verify
+**Minor · found and FIXED 2026-09-06 by Stage 4 batch 2 ·
+`tests/architecture/test_probe_provenance.py`**
+
+`_IDENTITY` admits a column header of the form `2.2.6.RELEASE` — the Spring
+spelling — while the check that the header also appears in the version-scope
+paragraph re-extracted versions from that paragraph with the NARROWER
+`\d+(?:\.\d+)+`, which yields `2.2.6`. So a probe measuring such an artifact
+failed the rule *for stating exactly what §5.4 asks it to state*, and the two
+patterns had disagreed since the file was written.
+
+Latent until CP-17 measured
+`org.springframework.cloud:spring-cloud-aws-messaging 2.2.6.RELEASE`, which is
+one of the two artifacts `spring-sqs-legacy.yml` names. **Fixed** by comparing
+the claimed identity as a LITERAL spelling against the scope paragraph — the
+same comparison `test_catalog_measurement_coverage.py` already makes on the
+catalog side of the pairing, and the stricter reading of the rule's own message:
+`4.1` is not agreement with `4.1.1`.
+
+Recorded rather than fixed silently because it is a rule that would have
+rejected honest evidence, which is the failure mode a rule about provenance can
+least afford.
+
 
 ## CLOSED
+
+### OI-38 — a second `@PulsarListener` written into the container derived nothing
+**Major · found and CLOSED 2026-09-06 by Stage 4 batch 2 ·
+`scripts/probes/cp17_containers_and_class_level.md`,
+`src/sextant/catalogs/spring-pulsar.yml`**
+
+`OI-36`'s silent drop, one framework over and by a different mechanism. CP-17
+rows 2a/2b read **no** `@Repeatable` on `@PulsarListener` at spring-pulsar
+1.2.11 or 2.0.7 — so the vocabulary pass's guess that this would be the Kafka
+case was wrong — while rows 3a/3b read
+`org.springframework.pulsar.annotation.PulsarListeners` out of the same jars
+declaring `value(): PulsarListener[]`, the JLS 9.6.3 container SHAPE on an
+annotation the language never folds into. Rows 6a/6b, out of the sources jar at
+the same coordinate, settle what the framework does with it:
+`findListenerAnnotations` registers the **union** of a direct `@PulsarListener`
+and every member of a hand-written `@PulsarListeners`.
+
+A method declaring its topics that way therefore derived NOTHING, beside a
+single-listener neighbour deriving normally.
+
+**Closed** by `container:` — the key the vocabulary pass shipped, unchanged. A
+class file does not record whose container it is, so the engine already read
+this shape and only the DOCUMENTATION was narrower than the key (D02 §2 and two
+engine docstrings now say so). Two tests, both mutation-proved against
+`spring-pulsar.container-is-the-frameworks-own`: the container alone derives
+both topics, and a container BESIDE a direct listener derives the union — the
+case that cannot exist for a `@Repeatable` annotation and is the reason this
+entry means something slightly different from `spring-kafka.yml`'s.
+
+### OI-39 — `@PulsarReader` is a whole inbound surface the Pulsar catalog named nowhere
+**Major · found and CLOSED 2026-09-06 by Stage 4 batch 2 ·
+`scripts/probes/cp17_containers_and_class_level.md`,
+`src/sextant/catalogs/spring-pulsar.yml`**
+
+`org.springframework.pulsar.annotation.PulsarReader` ships in the artifact
+`spring-pulsar.yml`'s `detect.coordinates` already names, declares
+`topics(): java.lang.String[]` (CP-17 rows 1c/1d), and has its own
+post-processor, endpoint type and registrar — rows 5c/5d show
+`PulsarReaderAnnotationBeanPostProcessor` reading `PulsarReader.topics()` and
+feeding `MethodPulsarReaderEndpoint.setTopics([Ljava/lang/String;)` before
+registering. The catalog named the annotation nowhere, so **every reader in a
+scanned module was absent from the export entirely** — not wrong, missing, which
+is the second sin rather than the first and the harder of the two to notice.
+
+**Not found by any review.** It was found by enumerating the annotation package
+of a jar the catalog already depended on, which is the reading Stage 4 is sized
+as. A file that describes one annotation of a framework says nothing at all
+about the ones it does not mention, and nothing in this repository asked it to.
+
+**Closed** by one more `annotations` entry. It needs no new word: `path_from:
+[topics, topicPattern]` reads `topics` first-present-wins, and `@PulsarReader`
+declares no `topicPattern`. It declares no container either, and that absence is
+a measured claim — rows 3c/3d looked for a `PulsarReaders` and found none, rows
+6c/6d show a discovery method reading the annotation alone (§8.1 rule 4). One
+test and one §10 near-miss, the guard
+`spring-pulsar.reader-is-a-second-inbound-surface` mutation-proved to kill.
+
+**The residual worry this leaves, stated rather than closed:** nothing has
+enumerated the annotation packages of the other twenty `annotation_driven`
+frameworks, so a second `@PulsarReader` elsewhere would look exactly like this
+one did — invisible. That is a COVERAGE question for the remaining Stage 4
+passes, and it is why this row is written as a class rather than an instance.
 
 ### OI-5 — MicroProfile GraphQL published a wrong address for an un-named operation
 **Major · pre-existing (`A-Mi9`) · measured 2026-09-06 by Stage 4's
