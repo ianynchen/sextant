@@ -97,23 +97,25 @@ def module_analyze(path: Path, workspace_dir: Path | None, allow_resolve: bool) 
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("--workspace", "workspace_dir", type=click.Path(path_type=Path), default=None)
 @click.option(
-    "--all-traces",
-    "all_traces",
+    "--brief",
+    "brief",
     is_flag=True,
     default=False,
     help=(
-        "Draw every trace in `## Traces` in full. Without it the section draws "
-        "what its step budget allows and says how many it did not draw — a "
-        "module with 160 endpoints otherwise renders a 697 KB document with "
-        "161 diagrams. Every trace is listed either way."
+        "Draw only the step budget's worth of traces in `## Traces`, instead of "
+        "every one. The document is then INCOMPLETE and says so: the section "
+        "names how many of how many it drew and how to get the default document. "
+        "Every trace keeps its summary row either way. Without this flag a module "
+        "with 160 endpoints renders a 711 KB document with 160 trace diagrams, "
+        "which is the truth about that module."
     ),
 )
-def module_render(path: Path, workspace_dir: Path | None, all_traces: bool) -> None:
+def module_render(path: Path, workspace_dir: Path | None, brief: bool) -> None:
     """Reads the workspace `analyze` left behind — it never re-detects,
     re-scans, or re-resolves (M00 "no analysis"; the workspace persists
     precisely so render is a cheap read)."""
     try:
-        result = api._render(path, workspace_dir=workspace_dir, all_traces=all_traces)
+        result = api._render(path, workspace_dir=workspace_dir, brief=brief)
     except api.SextantError as refused:
         raise click.ClickException(str(refused)) from refused
     click.echo(str(result.markdown))

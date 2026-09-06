@@ -65,15 +65,21 @@ side effect out of a module.
 Pipeline stages are internal. `--from-stage` and `--to-stage` exist for debugging and are
 not part of the surface.
 
-### `module render --all-traces` (2Q close, defect 2)
+### `module render --brief` ([GUIDELINES](../../GUIDELINES.md) §8.4)
 
 The one DISPLAY flag on `render`, and [M07](M07-renderer.md)'s `--env` rule applied to a
-second choice: `## Traces` draws whole traces while a stated step budget lasts, and this
-draws every one instead. It re-reads the same workspace and derives nothing — the walk, the
-roots and the steps are identical either way; only how much of the answer this document
-spends its bytes on changes. **Both documents say which of the two they are**, because a
-reader cannot tell a complete document from a reduced one by looking at it, and every trace
-keeps its summary row in both.
+second choice. **The default draws every trace**; `--brief` draws whole traces while a
+stated step budget lasts and stops. It re-reads the same workspace and derives nothing —
+the walk, the roots and the steps are identical either way; only how much of the answer
+this document spends its bytes on changes, and every trace keeps its summary row in both.
+
+**Opt-in, and named for what it withholds.** It was briefly the other way round —
+`--all-traces`, over a bounded default — and §8.4 reversed it: completeness is the
+deliverable, a document too large to read linearly is a navigation problem, and a flag
+whose name asserts the default is incomplete is the tell that the default is wrong.
+**The brief document opens its trace section by saying it is the brief one**, how many of
+how many it drew, and the command that draws them all, because a reader handed the file
+never ran the command and has no other way to know.
 
 ### `module enrich` (2K design §3/§8)
 

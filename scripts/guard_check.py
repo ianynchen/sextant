@@ -947,6 +947,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "render_trace.the-default-document-draws-every-trace": Guard(
+        what="`## Traces` bounds nothing unless a caller asked it to — the step budget is "
+        "`--brief`'s, and the DEFAULT draws every trace in full",
+        why="GUIDELINES §8.4, and the instance the rule was written for. This exact "
+        "default shipped as 500 for one commit, and it documented 37 of `mall-admin`'s 160 "
+        "traces to anyone who did not know a flag existed — which is precisely the reader "
+        "who cannot tell an incomplete document from a complete one. Flip it back and every "
+        "assertion about the brief form still passes, because they all pass a budget "
+        "explicitly: the default is the one value no other test in this file exercises",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="    traces: Sequence[Trace], redactor: Redactor, budget: int | None = None\n",
+                replace="    traces: Sequence[Trace],\n    redactor: Redactor,\n"
+                "    budget: int | None = BRIEF_TRACE_STEP_BUDGET,  # guard disabled\n",
+            ),
+        ),
+    ),
     "render_trace.every-trace-is-listed-even-when-it-is-not-drawn": Guard(
         what="every trace gets a summary row — its addresses, depth, step count and "
         "terminals — whether or not the step budget also draws it in full",

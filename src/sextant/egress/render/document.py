@@ -813,24 +813,31 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     raise ValueError(f"open question `{question!r}` has no rendering rule")
 
 
-# How many trace STEPS this section draws in full before it stops drawing and
-# leaves the rest to their summary rows (2Q close, defect 2). `None` — what
-# `--all-traces` passes — means no bound at all.
+# How many trace STEPS `## Traces` draws in full when a reader asks for the
+# BRIEF document (`render --brief`) before it stops drawing and leaves the rest
+# to their summary rows. `None`, which is every other caller and the default
+# everywhere in this module, means no bound at all.
 #
-# **Measured rather than guessed.** `mall-admin` walks 2,147 steps in 160
-# traces, and drawing every one produced a 697 KB `architecture.md` and a 4.5 MB
-# `architecture.html` with 161 diagrams that all render eagerly on load: one
-# module, and a document a reader cannot open, let alone navigate. At 500 the
-# same module draws 37 traces in full — about 200 KB and 38 diagrams — and every
-# one of the 160 keeps its summary row, its addresses and its step count.
+# **The default is the whole truth, and this is the opt-in** (GUIDELINES §8.4,
+# ruled 2026-09-06). This constant was `DEFAULT_TRACE_STEP_BUDGET` for one
+# commit, and the default was wrong: `mall-admin` walks 2,147 steps in 160
+# traces, drawing every one produces a 711 KB `architecture.md` with 160 trace
+# diagrams, and that document was reduced to 230 KB and 37 by default. The
+# ruling reversed it — *"we should be focused on telling the truth, not the
+# amount of information"* — because a document too large to read linearly is a
+# NAVIGATION problem, answered by indices and by the agents that read it, and
+# never by leaving 123 walked traces undrawn for a reader who cannot see they
+# are missing without running a second command.
 #
 # **A number, and stated as one.** It bounds the DOCUMENT rather than any
 # trace: the walk is unchanged, no step is filtered out of a trace that is
 # drawn, and nothing here decides that some traces matter more than others —
 # `_drawn_in_full` takes them in the section's own order for exactly that
 # reason. `application/query/trace.py::DEFAULT_MAX_DEPTH` is the precedent for
-# a stated bound whose value is a judgement.
-DEFAULT_TRACE_STEP_BUDGET = 500
+# a stated bound whose value is a judgement — and NOT for a bound that is the
+# default, which that one is only because it is a safety bound that fires on
+# nothing measured.
+BRIEF_TRACE_STEP_BUDGET = 500
 
 
 def render_module_document(
@@ -847,7 +854,7 @@ def render_module_document(
     overlay: EnrichmentOverlay | None = None,
     stale: frozenset[int] = frozenset(),
     traces: Sequence[Trace] = (),
-    trace_step_budget: int | None = DEFAULT_TRACE_STEP_BUDGET,
+    trace_step_budget: int | None = None,
 ) -> str:
     """`architecture.md` — the markdown serialization of the assembled
     document. Kept as its own entry point because it is what every caller of
@@ -911,13 +918,18 @@ def assemble_module_document(
     # `None found.` the way the two non-wire sections above it do.
     traces: Sequence[Trace] = (),
     # How many trace steps `## Traces` draws in full before it leaves the rest
-    # to their summary rows (2Q close, defect 2); `None` draws every trace,
-    # which is what `render --all-traces` asks for. A DISPLAY choice made here
-    # rather than upstream: the walk is unchanged and every trace still reaches
-    # this renderer, so nothing about the answer depends on it — only how much
-    # of the answer this one document spends its bytes on. M07's `--env` rule
+    # to their summary rows. `None` — the DEFAULT, and what every caller that
+    # does not ask otherwise gets — draws every trace; `render --brief` passes
+    # `BRIEF_TRACE_STEP_BUDGET` instead. A DISPLAY choice made here rather than
+    # upstream: the walk is unchanged and every trace still reaches this
+    # renderer, so nothing about the answer depends on it — only how much of
+    # the answer this one document spends its bytes on. M07's `--env` rule
     # applies, and the section states which of the two it is showing.
-    trace_step_budget: int | None = DEFAULT_TRACE_STEP_BUDGET,
+    #
+    # Defaulted to the complete document rather than the bounded one on the
+    # ruling GUIDELINES §8.4 records: completeness is the deliverable, and a
+    # bound is opt-in or it is not a bound a reader consented to.
+    trace_step_budget: int | None = None,
 ) -> AssembledDocument:
     """Adds no information. Every row comes from the graph, and every omission
     is stated (M07). Rendering the same report twice is byte-identical
@@ -1386,10 +1398,11 @@ _TRACE_PREAMBLE = (
     ),
     (
         "`Detail` says whether this trace's steps and diagram are drawn below or whether "
-        "the row IS the answer here. Every trace is listed either way, with its depth and "
-        "its step count; the sentence under the table says how many are drawn and how to "
-        "get a document that draws them all. A trace is never drawn in part — half a "
-        "trace is the under-report this section exists not to be."
+        "the row IS the answer here. Every trace is drawn unless this document was asked "
+        "for `--brief`, every trace is listed either way with its depth and its step "
+        "count, and the sentence under the table says how many were drawn — naming the "
+        "command that draws them all where that is not all of them. A trace is never "
+        "drawn in part: half a trace is the under-report this section exists not to be."
     ),
 )
 
@@ -1427,6 +1440,12 @@ def _budget_sentence(traces: Sequence[Trace], drawn: list[bool]) -> str:
     filtered step would: a block that is not drawn has no diagram to carry a
     caption. It is a sentence under the summary table instead, where a reader
     meets the boundary, and it names the way to get the rest.
+
+    **The reduced form opens by saying it is reduced** (GUIDELINES §8.4). A
+    reader who did not run the command — someone handed the file, or an agent
+    reading it — has no other way to know the document in front of them is not
+    the default one, and a stated omission read as a complete answer is the
+    same under-report as an unstated one.
     """
     full = sum(drawn)
     if full == len(traces):
@@ -1435,18 +1454,19 @@ def _budget_sentence(traces: Sequence[Trace], drawn: list[bool]) -> str:
             f"{sum(len(trace.steps) for trace in traces)} steps."
         )
     return (
+        "THIS DOCUMENT IS THE BRIEF ONE (`render --brief`) AND IS NOT COMPLETE. "
         f"Rendered in full below: {full} of {len(traces)} traces, in this table's order, "
         "whole traces while the step budget lasted. The other "
         f"{len(traces) - full} keep their row above — root, addresses, depth, step count, "
-        "terminals — and their steps and diagrams are not drawn: a module with this many "
-        "roots renders a document nobody can open if every one is drawn. Nothing about "
-        "them is unknown, and nothing here was filtered out of a trace that IS drawn: run "
-        "`sextant module render --all-traces` for the document that draws every one."
+        "terminals — and their steps and diagrams are not drawn. Nothing about them is "
+        "unknown, and nothing here was filtered out of a trace that IS drawn: run "
+        "`sextant module render` without `--brief` for the default document, which draws "
+        "every one."
     )
 
 
 def _trace_sections(
-    traces: Sequence[Trace], redactor: Redactor, budget: int | None = DEFAULT_TRACE_STEP_BUDGET
+    traces: Sequence[Trace], redactor: Redactor, budget: int | None = None
 ) -> list[Section]:
     """`## Traces`' whole body: the preamble, one summary row per root, the
     sentence saying how much of it is drawn, then one detail block and one

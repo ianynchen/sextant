@@ -207,7 +207,7 @@ def test_a_roots_path_passes_the_redactor_exactly_as_an_endpoints_does():
     assert "s3cret" not in "".join(content for _kind, content in tables[0].rows[0][0])
 
 
-# --- the document at scale (2Q close, defect 2) ---------------------------
+# --- the document at scale (GUIDELINES §8.4) ------------------------------
 
 
 def _many(count: int, steps_each: int = 10) -> list[Trace]:
@@ -260,7 +260,8 @@ def test_the_section_says_how_much_of_itself_it_drew_and_how_to_get_the_rest():
     because "what was left out" without "how to get it" is half an answer."""
     sentence = " ".join(_paragraphs(_trace_sections(_many(20), REDACTOR, budget=50)))
     assert "5 of 20 traces" in sentence
-    assert "--all-traces" in sentence
+    assert "IS THE BRIEF ONE" in sentence
+    assert "without --brief" in sentence
 
 
 def test_a_trace_that_is_drawn_is_drawn_whole():
@@ -279,23 +280,38 @@ def test_a_trace_that_is_drawn_is_drawn_whole():
 
 
 def test_only_the_traces_drawn_in_full_carry_a_diagram():
-    """The 161 eagerly-rendered diagrams are half of why the shipped document
-    was unusable, and a diagram belongs to a block: a trace with no block has
-    no diagram, rather than a diagram floating free of the steps it draws."""
+    """A diagram belongs to a block: a trace the brief document did not draw
+    has no diagram, rather than a diagram floating free of the steps it
+    draws."""
     sections = _trace_sections(_many(20), REDACTOR, budget=50)
     assert len([s for s in sections if isinstance(s, MachineDiagram)]) == 5
 
 
-def test_no_budget_draws_every_trace_and_says_that_is_what_it_did():
-    """`--all-traces`. The document states which of the two it is showing —
-    M07's rule for `--env`, and for the same reason: a reader cannot tell a
-    complete document from a reduced one by looking at it."""
-    sections = _trace_sections(_many(20), REDACTOR, budget=None)
-    assert len([s for s in sections if isinstance(s, MachineDiagram)]) == 20
+@pytest.mark.pins("render_trace.the-default-document-draws-every-trace")
+def test_the_default_draws_every_trace_however_many_there_are():
+    """**The default is the whole truth** (GUIDELINES §8.4, ruled 2026-09-06:
+    *"we should be focused on telling the truth, not the amount of
+    information"*). This section shipped for one commit with the budget as its
+    DEFAULT, so a module with 160 roots documented 37 of them unless a reader
+    knew a flag existed — and the reader who did not know is exactly the one
+    who cannot tell an incomplete document from a complete one.
+
+    Asserted with no `budget` argument at all, because the defect this pins is
+    a DEFAULT: passing `budget=None` here would test a value no caller passes
+    and would still pass on the day the default flipped back.
+
+    Sixty traces of ten steps, deliberately: at 600 steps the old default of
+    500 BITES, so restoring it drops ten traces and ten diagrams. The twenty
+    the tests above use total 200 steps and would fit inside the old bound
+    unchanged — a set too small to notice is how a ratchet passes over the
+    mutation it names."""
+    sections = _trace_sections(_many(60), REDACTOR)
+    assert len([s for s in sections if isinstance(s, MachineDiagram)]) == 60
     assert "Every trace is rendered in full" in " ".join(_paragraphs(sections))
+    assert "BRIEF" not in " ".join(_paragraphs(sections))
 
 
-def test_the_budgeted_section_is_byte_identical_across_two_renders():
+def test_the_brief_section_is_byte_identical_across_two_renders():
     """NFR-1 over the selection itself: which traces are drawn is a function
     of their order and their step counts, both fixed by `roots`, so two runs
     over one workspace choose the same ones."""

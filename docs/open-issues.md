@@ -547,16 +547,21 @@ an implementer settles in a docstring.
 terminals. **Falsified by** a real module deeper than 64 edges, which would make
 the depth bound a live under-report rather than a latent one.
 
-**Checked against 2Q's close (defect 2) and UNAFFECTED — deliberately.** The
-trace step budget looks like a fifth stop and is not one: it bounds the
-DOCUMENT, never the walk. Every trace is walked in full, every trace keeps its
-summary row with the depth and step count that walk found, and a trace the
-budget did not reach is not drawn rather than cut short — a trace is drawn whole
-or not at all. So FR-6's subject, where a trace stops, is untouched, and the two
-claims stay separate columns: `Complete` is the WALK's answer (its only "no" is
-still the depth bound) and `Detail` is this document's. A budget that had
-truncated a trace's steps would have been a fifth stop reason and a change to
-this row; it was rejected for exactly that reason.
+**Checked against the trace step budget and UNAFFECTED — deliberately, and
+re-checked when §8.4 made that budget `--brief`'s alone.** The budget looks like
+a fifth stop and is not one: it bounds the DOCUMENT, never the walk. Every trace
+is walked in full, every trace keeps its summary row with the depth and step
+count that walk found, and a trace the budget did not reach is not drawn rather
+than cut short — a trace is drawn whole or not at all. So FR-6's subject, where
+a trace stops, is untouched, and the two claims stay separate columns: `Complete`
+is the WALK's answer (its only "no" is still the depth bound) and `Detail` is
+this document's. A budget that had truncated a trace's steps would have been a
+fifth stop reason and a change to this row; it was rejected for exactly that
+reason. Inverting the default touched neither column, and the `--brief` document
+still reports every walk's `Complete` — but the inversion does raise this row's
+priority rather than lower it: `DEFAULT_MAX_DEPTH` is now the ONLY bound left on
+the default document, which is why GUIDELINES §8.4's audit list names it and
+files it as a termination bound rather than a size one.
 
 ### OI-29 — `analyze` over a workspace whose graph schema moved crashes instead of rebuilding
 **Major · introduced 2026-09-06 by 2Q's close, defect 1; found the same day by
@@ -587,26 +592,68 @@ a fresh database file when they disagree (the `_run_analyze` render-directory
 precedent, which already deletes derived output it is about to replace).
 **Falsified by** a column added to a derived table with no user hitting this.
 
-### OI-30 — the default document draws the steps of a minority of a large module's traces
-**Minor · introduced 2026-09-06 by 2Q's close, defect 2 ·
-`src/sextant/egress/render/document.py::DEFAULT_TRACE_STEP_BUDGET`**
+### OI-31 — `architecture.html` inlines 3.5 MB of mermaid and renders every diagram on load
+**Minor · found 2026-09-06 while inverting the trace default (GUIDELINES §8.4) ·
+`src/sextant/egress/render/html.py::html_document`,
+`src/sextant/egress/render/assets/panzoom.js`**
 
-`mall-admin` renders 37 of 160 traces in full; the other 123 are a summary row
-each. That is the deliberate answer to a 697 KB document with 161 eagerly
-rendered diagrams, which was ruled not acceptable, and it is stated three ways
-(a `Detail` column per row, a sentence naming the counts and the command, and
-M07). It is recorded anyway, because the cost is real and lands on a reader:
-**the trace you came for may be one of the 123**, and seeing its steps means
-re-running `render --all-traces` and reading the larger document.
+`mall-admin`'s complete document is a 4.6 MB `architecture.html`: **3.5 MB of it
+is the vendored `mermaid.min.js`**, inlined verbatim so the page opens offline
+(2K design §6b), and the remaining ~1 MB is the document itself. On load,
+`mermaid.run({ querySelector: ".mermaid" })` renders all **161** diagrams before
+the page settles.
 
-The register is where that cost lives rather than a `Known gaps` line, because
-it is a property of one default and not of the analysis: nothing is unknown,
-nothing is filtered out of a trace that IS drawn, and no walk was shortened
-(see OI-27's own note).
-**Closes by** a rendering that needs no budget — a collapsed block in HTML, a
-per-trace document, or an on-demand surface — rather than by raising the number,
-which only moves the boundary. **Falsified by** a reader who could not find what
-they needed in the summary row and did not know the flag existed.
+**This is a PAYLOAD question and not a completeness one**, which is why it is
+here rather than an argument for drawing fewer diagrams. No row is withheld and
+no diagram is: what is expensive is when the rendering happens, and how much
+JavaScript rides along to do it. Recording it because it is the cost that made
+bounding the document look attractive in the first place — and because
+GUIDELINES §8.4's audit list names it as the one entry whose close must never be
+"draw less".
+**Closes by** rendering each diagram lazily — an `IntersectionObserver` over
+`pre.mermaid` calling `mermaid.run({ nodes: [node] })` on approach, with
+`panzoom.js`'s `fit()` moving from the one global
+`sextant:diagrams-rendered` announcement to a per-container event. **Not taken in
+the change that found it**: the suite has no browser and cannot execute either
+form (`tests/egress/test_render_html.py` asserts the coordination as STRINGS),
+so the ordering claim that makes the per-container event safe — that an
+`IntersectionObserver` callback cannot be delivered before both `DOMContentLoaded`
+handlers have run — would ship measured by nothing, which §8.1's *"measured
+before it is built on"* forbids. **Falsified by** a document whose diagrams all
+render fast enough that nobody notices, or by that ordering being measured in a
+real browser, which turns this into a small edit.
+
+### OI-33 — `enrich`'s brief now carries the complete document, and nothing has measured that
+**Minor · introduced 2026-09-06 by inverting the trace default (GUIDELINES
+§8.4) · `src/sextant/api.py::_enrich`, `src/sextant/api.py::_assembled_sections`**
+
+`enrich` composes its brief around an in-memory `architecture.md` assembled by
+the same `_assembled_sections` `render` uses — deliberately, so *"the two can
+never disagree"* (2K design §8). That document is now the complete one, so for
+`mall-admin` the brief's document grew from **230 KB to 711 KB**, roughly
+180,000 tokens of markdown before the instructions, the tool definitions and the
+model's own turns.
+
+**Kept consistent rather than capped, and that is the judgement to overturn if
+it is wrong.** GUIDELINES §8.4 exempts a bound taken against a HARD EXTERNAL
+limit — a context window is exactly that, and
+`application/enrich/tools.py::MAX_RESULT_BYTES` is the shipped precedent — so a
+cap here would be permitted. It was not taken because **nothing has measured
+that the brief overflows anything**: `enrich` needs an API key and a network, so
+this repository cannot run it, and §8.1's *"measured before it is built on"*
+makes an unmeasured cap a prediction. Capping the model's document while the
+person's is complete would also re-introduce the exact split the 2K design
+rejected.
+
+**Cost if the prediction is wrong:** a large module's `enrich` fails at the
+provider rather than at Sextant, with a context-length error naming nothing
+about which section is large.
+**Closes by** a measurement — one `enrich --dry-run` over `mall-admin` and a
+token count of `enrich-brief.json`, which needs no key — and then either a
+recorded "it fits" or a stated, `MAX_RESULT_BYTES`-style cap on the document the
+brief carries. `--dry-run` writes that file already, so the measurement is one
+command. **Falsified by** the brief fitting comfortably, which turns this row
+into a recorded bound.
 
 ### OI-26 — `SEXTANT_VERSION` is declared three times
 **Minor · found 2026-09-06 by 2Q `G4` while verifying OI-24 ·
@@ -628,6 +675,33 @@ first bump is when they can diverge — silently, in a stamp nothing reads.
 
 
 ## CLOSED
+
+### OI-30 — the default document drew the steps of a minority of a large module's traces
+**Minor · introduced 2026-09-06 by 2Q's close, defect 2 · found AND closed
+2026-09-06 by GUIDELINES §8.4 (same commit group) ·
+`src/sextant/egress/render/document.py::BRIEF_TRACE_STEP_BUDGET`**
+
+`mall-admin` rendered 37 of 160 traces in full and left 123 as a summary row
+each, and the cost this row recorded was borne by a reader: **the trace you came
+for may be one of the 123**. It was recorded as a Minor with the cost accepted;
+the user overruled the trade a day later — *"we should be focused on telling the
+truth, not the amount of information"* — and the register's own suggested close
+("a rendering that needs no budget") turned out to be the answer read backwards.
+There was never a budget the document needed.
+
+**Closed by inverting the default rather than by any of the three renderings
+this row proposed.** `## Traces` now draws all 160; the budget survives as
+`render --brief` alone; `BRIEF_TRACE_STEP_BUDGET` is the constant's new name and
+`scripts/guard_check.py`'s `render_trace.the-default-document-draws-every-trace`
+is what stops it flipping back. Its own falsifier — *"a reader who could not find
+what they needed in the summary row and did not know the flag existed"* — is now
+unreachable by construction, since nothing is left out to find.
+
+**The lesson is in GUIDELINES §8.4 and not in this row**: the omission was
+stated three ways (a `Detail` column, a sentence, M07) and the default was still
+wrong, because a stated omission is honest and is not thereby acceptable. What
+remains of the cost is `OI-31`, which is the payload question this row's
+`4.5 MB` measurement was actually about.
 
 ### OI-28 — a root's copied wire address could be taken before the row finished being written
 **Major · found AND closed 2026-09-06 by 2Q's close, defect 1 (same commit

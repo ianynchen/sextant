@@ -14,23 +14,30 @@ here would restate those documents rather than add anything.
 
 ### Added
 
-- **A document a reader can open** (2Q close, defect 2). Drawing all 160 of `mall-admin`'s
-  traces produced a **697 KB** `architecture.md` and a **4.5 MB** `architecture.html` with
-  **161 eagerly-rendered diagrams** — one module. `## Traces` now draws whole traces, in
-  the table's own order, while a stated **500-step budget** lasts: the same module renders
-  **230 KB** and **38 diagrams**, and `sextant module render --all-traces` still draws
-  every one. **Nothing is dropped and nothing is filtered.** Every trace keeps its summary
-  row — addresses, kind, depth, step count, terminals — with a new `Detail` column saying
-  whether its steps are drawn below; a trace is drawn whole or not at all, because half a
-  trace is an under-report; and a sentence under the table says how many were drawn and
-  which command draws the rest. The statement is a sentence rather than a diagram caption
-  for a structural reason: what is withheld is whole blocks, and an undrawn trace has no
-  diagram to carry an `Elides:` line. Selection is by ORDER — drawing the small traces
-  first would answer "which traces matter" with a judgement this renderer cannot make.
-  A module the budget never reaches renders byte-identically with and without the flag.
-  Records `OI-30` (the cost, on the reader whose trace is one of the 123) and `OI-29`
-  (`analyze` over a workspace whose graph schema moved raises a DuckDB binder error instead
-  of rebuilding — found by this change's acceptance run, introduced by defect 1's column).
+- **`## Traces` draws every trace, and `--brief` is the opt-in** (GUIDELINES §8.4, ruled
+  2026-09-06). `mall-admin` — one module, 157 classes — walks **160 traces**, and the
+  document draws all of them: a **711 KB** `architecture.md` and a **4.6 MB**
+  `architecture.html` with **161 diagrams**. That was briefly bounded to 37 traces by
+  default, on the grounds that 711 KB is a document nobody opens, and the ruling reversed
+  it: *"we should be focused on telling the truth, not the amount of information ... which
+  is why we have indices planned for sextant, such that agents can leverage the truth +
+  indices to quickly find things"*. **Completeness is the deliverable; a document too large
+  to read linearly is a navigation problem**, solved by indices and by the agents that read
+  it, never by leaving 123 walked traces undrawn.
+
+  The bound survives as **`sextant module render --brief`** (500 steps' worth of whole
+  traces, 230 KB, 38 diagrams) — named for what it withholds rather than for what the
+  default already is, and **the brief document opens its trace section by saying it is the
+  brief one and is not complete**, with the counts and the command that draws every trace.
+  Every trace keeps its summary row either way, a trace is drawn whole or not at all, and
+  selection is by ORDER, never by size. `render_trace.the-default-document-draws-every-trace`
+  in `scripts/guard_check.py` is what stops the default flipping back.
+
+  Closes `OI-30`. Records `OI-31` (the 3.5 MB of inlined mermaid and the 161 eagerly
+  rendered diagrams — a payload question, whose close is lazy per-diagram rendering and is
+  **never** drawing fewer diagrams) and `OI-32` (`spring-petclinic-rest`'s pinned routes
+  have been stale since 2O's identity migration, so that field pin has been failing
+  unnoticed for a phase).
 
 - **A trace can be found by the URL a reader knows** (2Q close, defect 1). `## Traces`
   named every trace by its handler descriptor and its kind, so `GET /order/list` appeared

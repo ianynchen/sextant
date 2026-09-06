@@ -115,20 +115,24 @@ that follow describe machinery it does not use.
   from a call that does not exist, and this is the first document in which anyone reads a
   trace. A `view` overlay choosing what to hide is a decision a person makes about their
   own module; the machine half does not make it for them.
-- **A step budget over the DOCUMENT, and never over a trace** (2Q close, defect 2). Drawing
-  all 160 of `mall-admin`'s traces produced a 697 KB `architecture.md` and a 4.5 MB
-  `architecture.html` with 161 eagerly-rendered diagrams — one module, and a document a
-  reader cannot open. So the section draws whole traces, in the table's own order, while a
-  stated budget lasts (`DEFAULT_TRACE_STEP_BUDGET`, 500 steps), and `render --all-traces`
-  draws every one. **Three properties make this a reduction rather than a loss**: every
-  trace keeps its summary row, with its addresses, depth, step count and terminals, so
-  nothing is dropped; a trace is drawn whole or not at all, because half a trace is the
-  under-report the section exists not to be; and the section says in words how many it drew
-  and which command draws the rest. **The statement is a sentence rather than an `elides`
-  caption** because what is withheld is whole BLOCKS: an undrawn trace has no diagram to
-  carry a caption, and the boundary a reader meets is under the summary table. Selection is
-  by ORDER, never by size or by any measure of interest — drawing the cheap traces first
-  would answer "which traces matter" with a judgement this renderer has no basis for.
+- **Every trace, every diagram, by default** ([GUIDELINES](../../GUIDELINES.md) §8.4, ruled
+  2026-09-06). All 160 of `mall-admin`'s traces are drawn: a 711 KB `architecture.md` and a
+  4.6 MB `architecture.html` with 161 diagrams, for one module. That was briefly bounded to
+  37 traces by default and the ruling reversed it — *"we should be focused on telling the
+  truth, not the amount of information"* — because a document too large to read linearly is
+  a **navigation** problem, answered by indices and by the agents that read it, never by
+  leaving 123 walked traces undrawn for a reader who cannot see they are missing.
+  **The bound survives only as `render --brief`'s** (`BRIEF_TRACE_STEP_BUDGET`, 500 steps),
+  and three properties make even that a reduction rather than a loss: every trace keeps its
+  summary row, with its addresses, depth, step count and terminals, so nothing is dropped;
+  a trace is drawn whole or not at all, because half a trace is the under-report the
+  section exists not to be; and the section opens by saying the document is the brief one,
+  how many of how many it drew, and the command that draws them all. **The statement is a
+  sentence rather than an `elides` caption** because what is withheld is whole BLOCKS: an
+  undrawn trace has no diagram to carry a caption, and the boundary a reader meets is under
+  the summary table. Selection is by ORDER, never by size or by any measure of interest —
+  drawing the cheap traces first would answer "which traces matter" with a judgement this
+  renderer has no basis for.
 - **No `alt`/`opt`/`loop` blocks** (the section after it). The structure is not in the
   facts: [D00](D00-fact-schema.md) §5 states that `call_site.ordinal` is *the v1 of the
   control-flow position* and *"not the richer context a sequence diagram needs to show a
@@ -211,12 +215,18 @@ scope there is no choice: the system's declared environment is used, and named.
 A simplified diagram says how many steps were hidden. A truncated list says how many were
 omitted. A diagram derived from a partial analysis says so.
 
-**The trace section is the live instance** (2Q close, defect 2). It draws whole traces
-while its step budget lasts and then says, under the summary table: how many of how many it
-drew, that the rest keep their rows, that nothing was filtered out of a trace it did draw,
-and that `render --all-traces` draws every one. The rule that makes the sentence necessary
-is the same one that makes an `Elides:` caption necessary — a reduced output that does not
-say it was reduced is indistinguishable from a complete one.
+**The trace section under `--brief` is the live instance.** It draws whole traces while its
+step budget lasts and then says, under the summary table: that this document is the brief
+one and is not complete, how many of how many it drew, that the rest keep their rows, that
+nothing was filtered out of a trace it did draw, and which command draws every one. The
+rule that makes the sentence necessary is the same one that makes an `Elides:` caption
+necessary — a reduced output that does not say it was reduced is indistinguishable from a
+complete one.
+
+**And stating it is not a licence to reduce by default** ([GUIDELINES](../../GUIDELINES.md)
+§8.4). This section's own defect was exactly that inference: the omission WAS stated, three
+ways, and the default was still wrong, because the reader who has to be told is the one who
+never chose. A statement makes a reduction honest; it does not make it a default.
 
 ### The renderer adds nothing
 
