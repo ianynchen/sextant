@@ -39,9 +39,9 @@ Boot 4.0.1 / spring-data-rest 5.0.1):
   than falling back to the unpluralized name. So a working Data REST
   application always pluralizes, and `domain/pluralize.py` is applied whenever
   the gate passes. (Checking for the coordinate as well would be actively
-  wrong under Maven, whose recorded coordinates are DIRECT declarations only:
-  a transitive evo-inflector would be absent from them, and the engine would
-  derive `/order` — a path nobody serves.)
+  wrong on Maven, whose recorded coordinates carry no transitives (F1 resolved
+  inheritance, not mediation): a transitive evo-inflector would be absent from
+  them, and the engine would derive `/order` — a path nobody serves.)
 * **Item routes honour which CRUD interface is extended.** Since Spring Data 3
   `PagingAndSortingRepository` no longer extends `CrudRepository`, and a
   repository extending only it serves a collection GET and nothing else — not

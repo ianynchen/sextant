@@ -522,21 +522,20 @@ def test_a_module_whose_build_does_not_declare_the_framework_derives_nothing(tmp
     assert routes == set()
     assert [entry.catalog_id for entry in skipped] == ["test-spring-data-rest"]  # type: ignore[attr-defined]
     reason = skipped[0].missing_capabilities[0]  # type: ignore[attr-defined]
-    assert "declares none of them" in reason
-    # Fix round 3, I-2: on Maven the recorded coordinates are the POM's DIRECT
-    # declarations, so this same message covers a starter inherited through a
-    # company parent. The caveat has to be in the string a manifest reader
-    # sees, not only in the documents behind it — a flat "declares none of
-    # them" is a confident negative the evidence does not support.
-    assert "DIRECT declarations" in reason
+    assert "declares and inherits none of them" in reason
+    # Fix round 3, I-2, narrowed by F1: an INHERITED starter is now recorded,
+    # so the caveat is down to one case — a framework reaching the classpath
+    # only as another artifact's own transitive. It has to be in the string a
+    # manifest reader sees, not only in the documents behind it: a flat
+    # "declares none of them" is a confident negative the evidence does not
+    # support.
+    assert "own transitive" in reason
 
 
 def test_an_analysis_that_recorded_no_coordinates_skips_rather_than_deriving(tmp_path: Path):
-    """The unanswerable case, which Maven makes real: a starter arriving
-    transitively through a company parent is invisible in a POM's direct
-    declarations, and a workspace whose facts predate the module fact records
-    nothing at all. Deriving would fabricate an API; omitting silently would
-    read exactly like a module that has none."""
+    """The unanswerable case: a workspace whose facts predate the module fact
+    records nothing at all. Deriving would fabricate an API; omitting silently
+    would read exactly like a module that has none."""
     workspace, skipped = _resolve(tmp_path, _repository(), coordinates=None)
     routes = _routes(workspace)
     workspace.close()

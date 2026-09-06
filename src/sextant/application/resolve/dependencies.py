@@ -24,13 +24,17 @@ so the framework's presence is the only thing that turns it into an API.
 
 **Why "unanswerable" degrades visibly rather than either way.** The two build
 systems answer with different reach: Gradle reports the resolved compile
-classpath, Maven the POM's direct declarations only (the standing parent/BOM
-resolution gap). So a starter arriving transitively through a company parent is
-invisible on Maven. Deriving anyway would fabricate an API for every plain
-Spring Data JPA module; omitting silently would leave a reader unable to tell
-"the framework is absent" from "we could not tell". The catalog is therefore
-SKIPPED, through the same channel and into the same manifest section an unmet
-capability already uses (M04, FR-17).
+classpath, transitives included; Maven reports what a module's pom declares
+plus what it INHERITS from every ancestor pom the detector could open, and no
+transitives (F1). *Until F1 the Maven side was direct declarations alone, which
+skipped every module whose starter came from a company parent — the single
+worst case this gate had, and it is closed.* What remains is a framework that
+reaches the classpath only as another artifact's own transitive dependency, and
+for that the answer is still "we could not tell". Deriving anyway would
+fabricate an API for every plain Spring Data JPA module; omitting silently would
+leave a reader unable to tell "the framework is absent" from "we could not
+tell". The catalog is therefore SKIPPED, through the same channel and into the
+same manifest section an unmet capability already uses (M04, FR-17).
 """
 
 import json
@@ -55,11 +59,12 @@ from sextant.application.ports.workspace import Workspace
 #     defines, a call on a type only it ships, a supertype or an interface only
 #     it declares. The dependency is implied by the match itself, and gating on
 #     the coordinate as well would only subtract rows the evidence already
-#     earned. Worse, under Maven — where only DIRECT declarations are recorded
-#     — it would subtract them from every module inheriting the framework
-#     through a parent or a starter. (The last two are the NON-WIRE styles 2O
-#     Task 8 added; they were absent from this enumeration when it counted
-#     eleven, and the answer for both is the same as for the eight above.)
+#     earned. Worse, on Maven — where a coordinate reaching the classpath as
+#     another artifact's own transitive is not recorded — it would subtract
+#     them from every module reaching the framework through a starter. (The
+#     last two are the NON-WIRE styles 2O Task 8 added; they were absent from
+#     this enumeration when it counted eleven, and the answer for both is the
+#     same as for the eight above.)
 #   * `schema_operations` reads a `.proto`, `.graphql` or WSDL file in the
 #     repository. The schema is the evidence, and it is first-party; a build
 #     coordinate is not what makes its operations real.
@@ -86,25 +91,27 @@ from sextant.application.ports.workspace import Workspace
 DEPENDENCY_GATED = frozenset({"derived_resource", "config_join"})
 
 # The caveat rides BOTH messages, and on this one it is the load-bearing half
-# (fix round 3, I-2): on Maven the recorded coordinates are the POM's direct
-# declarations, so a starter inherited through a company parent is genuinely
-# absent from them and this message would otherwise read as a confident "the
-# framework is not here". A reader who cannot tell that from real absence
-# cannot act on the skip, which is the whole of what "SKIPPED with a reason"
-# is for. Stated in the STRING rather than only in the three documents that
+# (fix round 3, I-2): a coordinate absent from the recorded set is not proven
+# absent from the classpath, so this message would otherwise read as a
+# confident "the framework is not here". A reader who cannot tell that from
+# real absence cannot act on the skip, which is the whole of what "SKIPPED with
+# a reason" is for. Stated in the STRING rather than only in the documents that
 # already say it, because the string is the only one a manifest reader sees.
+#
+# *The caveat used to name Maven's DIRECT declarations. F1 closed that half —
+# an inherited starter is now recorded — and the sentence narrowed to what is
+# still true rather than being deleted along with the case it covered.*
 _NOT_DECLARED = (
     "a build declaration of one of {coordinates} — this module's build declares "
-    "none of them (D02 `detect.coordinates`; Maven records DIRECT declarations "
-    "only, so a starter inherited through a parent or a BOM is absent from them "
-    "and cannot be told apart from real absence here)"
+    "and inherits none of them (D02 `detect.coordinates`; on Maven a dependency "
+    "reaching this module only as another artifact's own transitive is absent "
+    "from the recorded set and cannot be told apart from real absence here)"
 )
 
 _NOT_RECORDED = (
     "a build declaration of one of {coordinates} — this analysis recorded no "
     "dependency coordinates for the module, so the question cannot be answered "
-    "(Maven records DIRECT declarations only; a workspace whose facts predate the "
-    "module fact records none)"
+    "(a workspace whose facts predate the module fact records none)"
 )
 
 

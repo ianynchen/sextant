@@ -75,17 +75,41 @@ class ModuleModel:
     #
     # **The two build systems answer differently, and the difference is
     # visible rather than smoothed over.** Gradle reports the RESOLVED compile
-    # classpath, transitives included; Maven reports the POM's own DIRECT
-    # declarations, because this detector parses `pom.xml` rather than asking
-    # Maven to resolve it (the standing
-    # `maven_parent_and_profile_resolution_not_implemented` gap). So a
-    # dependency arriving transitively through a company parent is invisible
-    # on Maven, and a reader of these coordinates must treat "absent" as
-    # "not declared here", never as "not on the classpath". Empty for a module
-    # whose build declares none, and for every hand-built model in a test —
-    # which is why the gate that reads it treats empty as UNANSWERABLE rather
-    # than as absence.
+    # classpath, transitives included. Maven reports what the module's own POM
+    # DECLARES plus what it INHERITS — every ancestor pom the detector could
+    # open contributes its `<dependencies>`, since Maven puts those on the
+    # child's classpath too (F1). What it still does not reach is TRANSITIVES:
+    # a third-party artifact's own dependencies need Maven's mediation rules,
+    # which is a resolver rather than a parse, so a coordinate arriving only
+    # that way is absent here. A reader must therefore still treat "absent" as
+    # "not declared or inherited here", never as "not on the classpath".
+    # *Before F1 this was the POM's DIRECT declarations alone, which had the
+    # dependency gate skipping every module whose starter came from a company
+    # parent.* Empty for a module whose build declares none, and for every
+    # hand-built model in a test — which is why the gate that reads it treats
+    # empty as UNANSWERABLE rather than as absence.
     dependency_coordinates: tuple[str, ...] = ()
+    # The VERSION each of those coordinates resolved to, for the subset that
+    # resolved (F1). Built in sorted key order, so its serialization is stable
+    # (NFR-1). A separate mapping rather than a third segment on the
+    # coordinate, because the coordinate is an IDENTITY that `detect
+    # .coordinates` matches on and a version glued to it would match nothing.
+    #
+    # **Not every coordinate is in it, and that is the honest shape.** Maven
+    # resolves a version from the declaration, from an ancestor's
+    # `<dependencyManagement>`, from an imported BOM, and through `${…}`
+    # properties — each of which needs the pom that states it to be readable,
+    # on disk or in the local Maven repository. Every coordinate that leaves
+    # unversioned is named in `dependencies_not_resolved` below. Gradle's
+    # resolved report carries a version for every entry, so on Gradle this maps
+    # the whole set.
+    dependency_versions: dict[str, str] = field(default_factory=dict)
+    # Why a coordinate above has no version, and which ancestor or BOM could
+    # not be opened — one sentence each, sorted (NFR-1). Carried rather than
+    # raised, exactly as `libraries_not_resolved` is: a version nobody could
+    # resolve is a gap the artifacts must name (FR-17), and an under-report
+    # this analysis can SEE is one it must state.
+    dependencies_not_resolved: tuple[str, ...] = ()
     # The coordinates it named that could NOT be resolved to an archive — a
     # dependency the build never declares a version for, or one no local
     # repository holds. Carried rather than raised: a library nobody could find

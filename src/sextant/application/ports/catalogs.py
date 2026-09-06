@@ -55,9 +55,9 @@ class Catalog:
     # **It is deliberately NOT yet a module-wide catalog-activation gate**,
     # which is what D02 §12 describes: that would deactivate ~40 catalogs on
     # every module whose recorded coordinates do not name their framework, and
-    # under Maven — where only DIRECT declarations are recorded — a module
-    # declaring `spring-boot-starter-web` would lose `spring-mvc.yml`
-    # outright. Making the key real for one style is what this phase's scope
+    # on Maven — where a starter's OWN dependencies are transitives F1 does not
+    # resolve — a module declaring `spring-boot-starter-web` would lose
+    # `spring-mvc.yml` outright. Making the key real for one style is what this phase's scope
     # covers; the activation gate needs a resolved classpath first, and the
     # register entry stays open until it has one.
     detect_coordinates: tuple[str, ...] = ()

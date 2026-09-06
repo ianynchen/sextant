@@ -329,6 +329,23 @@ module today produces:
   than counted, any schema source `protoc` refused to compile (`schema_sources_not_compiled`)
   and any embedded payload the interpreter could not read (`descriptors_not_interpreted`);
   and `open_questions` is one of the bundle's tables.
+- **The module's resolved dependency set, with a version each** (F1) — on the `module` fact
+  and in `metadata.json`'s `module.dependencies`. **Reach differs by build system and the
+  difference is not smoothed over.** Gradle reports its own RESOLVED compile classpath,
+  transitives included, with the version its conflict resolution actually chose. Maven is
+  read from pom FILES — the module's own, every ancestor reachable through
+  `<relativePath>` or already unpacked in the local Maven repository, and every BOM those
+  import — because `mvn` may not be installed and running a build as a side effect of
+  ANALYSING one is not a thing an analyser may do. That reaches inheritance,
+  `<dependencyManagement>`, imported BOMs and `${…}` interpolation, and it reaches no
+  transitive at all. Four consequences are stated rather than left to be discovered:
+  a coordinate arriving only as another artifact's own dependency is absent on Maven and
+  present on Gradle; **`<scope>` is not read on the Maven side**, so a `test`-scoped
+  dependency is in the set where Gradle's compile classpath excludes it; a version range
+  is carried verbatim, since choosing within it is mediation; and the local Maven
+  repository is one of this analysis's INPUTS, so a machine that never built the module
+  resolves fewer versions — every shortfall named, with its reason, in
+  `metadata.json`'s `dependencies_not_resolved` rather than silently shortening the map.
 
 What a run does **not** give you, each entry named in the output's own gap list rather
 than silently absent:
@@ -346,7 +363,7 @@ than silently absent:
 | The HTTP address a GraphQL or STOMP service listens on | the `path` column carries the OPERATION, because that is what the identity is; no engine derives `/graphql` or the STOMP endpoint registration ([D01](components/D01-graph-schema.md) §3) | undecided |
 | Cross-service links or a system document | linking is a system-scope pass over bundles; no `participants`/`links` exist yet | linking phase |
 | A handler symbol for a Kotlin WebFlux functional route | Kotlin compiles every DSL handler to an `instance`-kind argument naming a generated class, never a method | undecided |
-| Trustworthy analysis of a POM using parents/profiles/interpolation | the detector reads `pom.xml` raw (`maven_parent_and_profile_resolution_not_implemented`) | undecided |
+| A Maven dependency that is neither declared nor inherited — a TRANSITIVE, or one declared inside a `<profile>` | F1 resolves the pom chain: a parent's own `<dependencies>`, `<dependencyManagement>`, imported BOMs and `${…}` properties all reach the recorded set with a version each. Another artifact's OWN dependencies do not, because following them means implementing Maven's mediation — nearest-wins, scopes, exclusions, ranges — which is a resolver rather than a parse, and a wrong one silently ADDS coordinates the build does not have. Profiles are unread for the same reason one level up: which profile is active is a property of an invocation this analysis never makes (`maven_profile_and_transitive_resolution_not_implemented`) | undecided |
 | A payload bound from a parse more than one delegation hop from its handler | a flow followed further than it was observed is an assumption; the parse is found at hop two and ledgered as an open question instead, and past hop two it is not found at all (`payload_parsed_beyond_horizon`, §4.2) | the enrichment tier |
 | A payload bound where one channel's bytes reach two different parses | two answers about one wire is a question for a reader, not a coin toss to publish (`payload_parse_ambiguous`) | the enrichment tier |
 | Anything declared inside a dependency jar nobody named | a jar's own bytecode is scanned only where `.sextant.yml` opts it in, per library; the dependency tree is never walked, because scanning everything reachable publishes every framework's annotated types as this module's endpoints ([D04](components/D04-config-and-exclusion.md) §2a) | opt-in, per library |
@@ -1257,8 +1274,13 @@ than about correctness:
   `.sextant.yml` is invisible, and that is the design: scanning everything reachable would
   publish every framework's own annotated types as this module's endpoints.
 - **A version managed by a parent POM or a BOM does not resolve from the two-part
-  coordinate**, because the detector reads `pom.xml` directly
-  (`maven_parent_and_profile_resolution_not_implemented`). The remedy is in the file:
+  coordinate**, even though F1 resolves exactly that for the module's own recorded
+  dependency set: `_library_roots` still reads `_dependency_versions`, the one-pom
+  reader, because it answers a different question — which ARCHIVE to open, where a
+  `<classifier>` or a non-jar `<type>` makes the file name wrong however well the
+  version resolves. Routing it through the fuller resolution would widen library
+  extraction on the change that widened the dependency gate, with neither measured;
+  it is registered in `docs/open-issues.md` instead. The remedy is in the file:
   `groupId:artifactId:version` states the release outright.
 - **A relocated local repository is invisible.** `settings.xml`'s `<localRepository>`,
   `-Dmaven.repo.local` and `M2_REPO` are all unread, so such a coordinate lands in the

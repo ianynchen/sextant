@@ -399,9 +399,39 @@ class GradleDetector:
                     }
                 )
             ),
+            # The version Gradle resolved for each of them (F1). No resolution
+            # of our own is needed or wanted on this side: the report is the
+            # output of Gradle's own conflict resolution, so the version here
+            # is the one that would actually be on the classpath — which is a
+            # STRONGER answer than the Maven side's, where a version is read
+            # off the poms that declare it and transitives are out of reach.
+            #
+            # An entry with no `version` is skipped rather than defaulted: a
+            # `files()` entry and an inter-project dependency carry no
+            # coordinate at all (they are already excluded above), and a
+            # coordinate Gradle reported without a version is a shape nothing
+            # here has seen — inventing one would be a release nobody cut.
+            dependency_versions=GradleDetector._dependency_versions(project["classpath"]),
             library_roots=library_roots,
             libraries_not_resolved=libraries_not_resolved,
         )
+
+    @staticmethod
+    def _dependency_versions(classpath: list[dict[str, Any]]) -> dict[str, str]:
+        """`groupId:artifactId` to resolved version, in sorted key order so the
+        mapping serializes the same way twice (NFR-1).
+
+        Two entries for one coordinate cannot disagree — Gradle already
+        resolved the conflict before it reported — so the first wins and no
+        tiebreak is invented for a case the report cannot produce."""
+        versions: dict[str, str] = {}
+        for entry in sorted(
+            classpath, key=lambda item: (str(item.get("group")), str(item.get("name")))
+        ):
+            if not (entry.get("group") and entry.get("name") and entry.get("version")):
+                continue
+            versions.setdefault(f"{entry['group']}:{entry['name']}", str(entry["version"]))
+        return versions
 
     @staticmethod
     def _schema_roots(project: dict[str, Any]) -> tuple[Path, ...]:

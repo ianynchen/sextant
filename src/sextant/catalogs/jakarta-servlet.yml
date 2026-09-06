@@ -12,7 +12,8 @@ direction: inbound
 #
 # The list is DIRECT API declarations only, and it is incomplete on purpose:
 # the API usually arrives transitively, through a container or a web starter,
-# and Maven records direct declarations only. Nothing reads it — `detect
+# and no build system's recorded set here carries another artifact's own
+# transitives (F1 resolved Maven inheritance, not mediation). Nothing reads it — `detect
 # .coordinates` gates exactly one style (`derived_resource`, 2O Task 6) and
 # this is not it — so an incomplete list costs nothing here and would cost
 # every servlet in the estate if it ever became an activation gate without

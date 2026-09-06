@@ -14,6 +14,7 @@ from sextant.domain.facts import (
     CallTarget,
     ConfigEntryFact,
     Document,
+    ModuleFact,
     SymbolFact,
 )
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
@@ -1054,3 +1055,56 @@ def test_two_exports_of_one_workspace_are_byte_identical(tmp_path: Path):
     }
     assert one == two and one
     workspace.close()
+
+
+def test_module_dependencies_projects_the_versions_beside_the_coordinates(tmp_path: Path):
+    """F1. The two travel on one `module` fact and must reach a reader on one
+    row: a version with no coordinate beside it identifies nothing, and a
+    coordinate whose version is in a second query could be joined against a
+    different run's answer.
+
+    A coordinate ABSENT from the map is a version this analysis could not read
+    — a different answer from a dependency that has none — so the projection
+    hands the map over whole and lets the reader see which keys are missing."""
+    document = Document(
+        document_id="doc_module",
+        relative_path="module",
+        module_id="com.acme:orders",
+        language="module",
+        sextant_version="0.1.0",
+        fact_schema_version="1.0.0",
+        scanner_id="detector",
+        scanner_version="0",
+        content_hash="sha256:a",
+        origin_entry="com.acme/orders",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    write_fact_file(
+        tmp_path / "facts" / "module.jsonl",
+        document,
+        [
+            ModuleFact(
+                document_id="doc_module",
+                module_id="com.acme:orders",
+                module_kind="service",
+                languages=["java"],
+                source_roots=["src/main/java"],
+                output_dirs=["target/classes"],
+                dependency_coordinates=["com.acme:unmanaged", "org.springframework:spring-web"],
+                dependency_versions={"org.springframework:spring-web": "6.1.6"},
+            )
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    [row] = workspace.query("module_dependencies")
+    workspace.close()
+
+    assert json.loads(str(row["dependency_coordinates"])) == [
+        "com.acme:unmanaged",
+        "org.springframework:spring-web",
+    ]
+    assert json.loads(str(row["dependency_versions"])) == {
+        "org.springframework:spring-web": "6.1.6"
+    }

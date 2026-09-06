@@ -149,3 +149,53 @@ def test_the_module_fact_is_rewritten_whole_on_every_run(tmp_path: Path):
     lines = (tmp_path / "facts" / "module.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert json.loads(lines[1])["dependency_coordinates"] == []
+
+
+def test_the_module_fact_carries_the_resolved_versions_beside_the_coordinates(tmp_path: Path):
+    """F1. The coordinates say WHAT the module builds against; the versions say
+    WHICH RELEASE, and without them no catalog rule can ever be scoped to the
+    versions it was measured against. Both travel on the one fact, because a
+    version with no coordinate beside it identifies nothing."""
+    detector = _RecordingDetector(
+        replace(
+            _module(tmp_path),
+            dependency_coordinates=("org.springframework:spring-web",),
+            dependency_versions={"org.springframework:spring-web": "6.1.6"},
+        )
+    )
+    _analyzed(tmp_path, detector, False)
+
+    _, fact = (
+        json.loads(line)
+        for line in (tmp_path / "facts" / "module.jsonl").read_text(encoding="utf-8").splitlines()
+    )
+    assert fact["dependency_versions"] == {"org.springframework:spring-web": "6.1.6"}
+
+
+def test_a_run_that_resolved_a_version_the_last_one_could_not_writes_a_new_content_hash(
+    tmp_path: Path,
+):
+    """The versions are part of the identity this document records. A parent
+    pom that was missing and is now in the local repository changes what the
+    analysis knows about the module, and a `content_hash` that ignored it would
+    tell every downstream reader nothing had changed."""
+    unresolved = _RecordingDetector(
+        replace(_module(tmp_path), dependency_coordinates=("org.springframework:spring-web",))
+    )
+    _analyzed(tmp_path, unresolved, False)
+    first = json.loads(
+        (tmp_path / "facts" / "module.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    resolved = _RecordingDetector(
+        replace(
+            _module(tmp_path),
+            dependency_coordinates=("org.springframework:spring-web",),
+            dependency_versions={"org.springframework:spring-web": "6.1.6"},
+        )
+    )
+    _analyzed(tmp_path, resolved, False)
+    second = json.loads(
+        (tmp_path / "facts" / "module.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+
+    assert first["content_hash"] != second["content_hash"]

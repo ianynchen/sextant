@@ -173,9 +173,10 @@ def test_classes_dirs_come_from_the_capture_as_output_dirs():
 
 
 def test_dependency_coordinates_come_from_the_resolved_compile_classpath():
-    """2O design §2a, ruling R9. Unlike Maven's direct-declaration answer, the
-    init script already walks the RESOLVED compile classpath — transitives
-    included — so this is the reach a dependency gate gets on Gradle. Entries
+    """2O design §2a, ruling R9. Unlike the Maven side — which reads the poms
+    a module declares and inherits, and no transitives — the init script
+    already walks the RESOLVED compile classpath, transitives included, so
+    this is the reach a dependency gate gets on Gradle. Entries
     Gradle gave no component id (an inter-project dependency, a `files()`
     entry) carry no coordinate and contribute none: inventing one would name
     an artifact nobody published."""
@@ -812,3 +813,44 @@ def test_a_missing_init_script_is_a_named_refusal(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr(gradle_module.resources, "files", lambda package: tmp_path)
     with pytest.raises(gradle_module.MissingInitScriptError):
         gradle_module._init_script()
+
+
+# --- F1: the resolved versions beside the coordinates ------------------------
+
+
+def test_dependency_versions_come_from_the_same_resolved_report(tmp_path: Path):
+    """F1. Gradle already resolved every conflict before it reported, so the
+    version here is the one that would actually be on the classpath — a
+    stronger answer than the Maven side's, which reads versions off the poms
+    that declare them and reaches no transitive at all."""
+    project = _project(tmp_path, classpath=[_SPRING_WEB_ENTRY])
+    module = GradleDetector._module_of(tmp_path, project)
+
+    assert module.dependency_versions == {"org.springframework:spring-web": "6.1.6"}
+    # Nothing to report: Gradle carries a version for every component it
+    # named, so this list is a Maven-side answer only.
+    assert module.dependencies_not_resolved == ()
+
+
+def test_an_entry_with_no_coordinate_contributes_no_version(tmp_path: Path):
+    """The same rule the coordinates keep, one column over: a `files()` entry
+    and an inter-project dependency have no coordinate to key a version on, and
+    inventing one would name a release nobody cut."""
+    project = _project(
+        tmp_path, classpath=[_SPRING_WEB_ENTRY, _PATH_ONLY_ENTRY, _INTERNAL_PROJECT_ENTRY]
+    )
+    module = GradleDetector._module_of(tmp_path, project)
+
+    assert module.dependency_versions == {"org.springframework:spring-web": "6.1.6"}
+
+
+def test_every_recorded_coordinate_carries_a_version_on_the_capture():
+    """Against the captured report of a real Gradle build rather than a
+    hand-built project: the two maps must describe the same set, or a
+    version-scoped rule would read "unanswerable" for a dependency the report
+    answered for."""
+    model = _repository_model(CAPTURE)
+    module = next(m for m in model.modules if m.module_id.endswith("service-app"))
+
+    assert set(module.dependency_versions) == set(module.dependency_coordinates)
+    assert list(module.dependency_versions) == sorted(module.dependency_versions)

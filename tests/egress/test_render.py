@@ -1029,3 +1029,37 @@ def test_a_repo_value_pattern_reaches_the_rendered_addresses_too():
     redactor = Redactor.from_rules(RedactionRules(value_patterns=(r"ACME_[A-Z0-9]{4}",)))
     text = render_module_document(MODULE, report, "a3f91c", redactor=redactor)
     assert f"`GET /v1/invoices?key={REDACTED}`" in text
+
+
+def test_metadata_records_what_the_module_builds_against_and_which_release(tmp_path: Path):
+    """F1. `metadata.json` is the one place a reader can see the CONDITIONS
+    every framework rule in this run was applied under — a rule is true of a
+    version, and until F1 the estate had no way to say which. The two keys are
+    read together: `dependencies` is what resolved, and
+    `dependencies_not_resolved` is why the rest did not, so a short map is
+    never mistaken for a short build."""
+    module = replace(
+        MODULE,
+        dependency_coordinates=("com.acme:unmanaged", "org.springframework:spring-web"),
+        dependency_versions={"org.springframework:spring-web": "6.1.6"},
+        dependencies_not_resolved=("com.acme:unmanaged: no version on the declaration",),
+    )
+    write_metadata(tmp_path / "metadata.json", module, REPORT, "asm", "9.7", "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+
+    assert written["module"]["dependencies"] == {"org.springframework:spring-web": "6.1.6"}
+    assert written["dependencies_not_resolved"] == [
+        "com.acme:unmanaged: no version on the declaration"
+    ]
+
+
+def test_metadata_writes_both_dependency_keys_even_when_nothing_was_recorded(tmp_path: Path):
+    """The key never depends on whether this run had anything to put in it: an
+    absent key reads as "no dependencies", which is a different and stronger
+    claim than "none recorded" (the same distinction the dependency gate keeps
+    between an empty list and no module fact at all)."""
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+
+    assert written["module"]["dependencies"] == {}
+    assert written["dependencies_not_resolved"] == []

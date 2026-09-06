@@ -305,9 +305,16 @@ _NAMED_QUERIES = {
     # predate the module fact, or one a test built by hand, and it is a
     # DIFFERENT answer from an empty array (a build that declares nothing) —
     # which is why the gate distinguishes them.
+    # `dependency_versions` rides the same row (F1): the version each of those
+    # coordinates resolved to, projected whole for the same reason the
+    # coordinates are. A coordinate ABSENT from the map is a version this
+    # analysis could not read, which is a different answer from a dependency
+    # with no version — so a reader scoping a rule to a version must treat the
+    # absence as unanswerable, exactly as the gate treats a missing row.
     "module_dependencies": """
         SELECT payload ->> 'module_id'            AS module_id,
-               payload -> 'dependency_coordinates' AS dependency_coordinates
+               payload -> 'dependency_coordinates' AS dependency_coordinates,
+               payload -> 'dependency_versions'    AS dependency_versions
         FROM raw_facts WHERE kind = 'module'
         ORDER BY module_id
     """,

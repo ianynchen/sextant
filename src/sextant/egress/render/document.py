@@ -68,22 +68,22 @@ _GAPS = [
     "The structure diagram covers contract types only: inheritance edges are not extracted.",
     "The call graph is not implemented: there are no traces or sequence diagrams.",
     (
-        "Maven profiles and property interpolation are not resolved: the "
-        "detector reads pom.xml directly instead of asking Maven to resolve "
-        "it. Parent coordinate inheritance and reactor `<modules>` discovery "
-        "ARE read, so an ordinary parent-and-children build detects "
-        "correctly — but a coordinate behind a `${property}` or inside a "
-        "profile is misread."
+        "Maven profiles and transitive dependencies are not resolved: the "
+        "detector reads pom.xml files instead of asking Maven to resolve them. "
+        "Parent inheritance, reactor `<modules>` discovery, "
+        "`<dependencyManagement>`, imported BOMs and `${property}` "
+        "interpolation ARE read — but a dependency declared inside a profile, "
+        "and one that reaches the module only through another artifact's own "
+        "dependencies, are absent from the recorded set."
     ),
     (
         "Catalogs are matched to modules only where the framework rule is "
         "conditional on the library being present: `detect.coordinates` is read, "
         "and such a catalog is skipped with a reason where the module's build "
         "declares none of them. Every other catalog still runs against every "
-        "module whether or not the module depends on that framework — and on "
-        "Maven, where only DIRECT build declarations are recorded, a framework "
-        "inherited through a parent or a starter cannot be told apart from an "
-        "absent one."
+        "module whether or not the module depends on that framework — and a "
+        "framework reaching a module only as another artifact's own transitive "
+        "dependency cannot be told apart from an absent one."
     ),
     (
         "Module classification reads only a container file and a declared main "

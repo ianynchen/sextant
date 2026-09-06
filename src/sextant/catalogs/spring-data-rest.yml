@@ -23,10 +23,10 @@ direction: inbound
 # the manifest says so).
 #
 # All three coordinates, because a module may declare any of them directly and
-# Maven records DIRECT declarations only: the Boot starter is what an
-# application writes, and the two Data REST artifacts are what a non-Boot
-# application (or a Gradle module, whose resolved classpath carries all three)
-# declares or resolves.
+# the Maven side resolves no transitives (F1 reaches inheritance, not
+# mediation): the Boot starter is what an application writes, and the two Data
+# REST artifacts are what a non-Boot application (or a Gradle module, whose
+# resolved classpath carries all three) declares or resolves.
 detect:
   coordinates:
     - "org.springframework.boot:spring-boot-starter-data-rest"

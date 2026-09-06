@@ -432,11 +432,18 @@ def _write_module_fact(fact_root: Path, module: ModuleModel) -> None:
     passing argument": three later components need it and never see the
     detector, and a stage resumed from disk never runs one).
 
-    **What it carries today is the coordinate half** — `dependency_coordinates`
-    — because that is the half both build systems can answer and the half a
-    dependency-gated catalog reads (2O design §2a, ruling R9). Classpath
-    TIERING, which D00 also names here, needs a resolved archive per entry and
-    stays unwritten rather than half-invented.
+    **What it carries is the coordinate half plus the versions** —
+    `dependency_coordinates` and `dependency_versions` (F1) — because that is
+    what both build systems can answer: the coordinates are what a
+    dependency-gated catalog reads (2O design §2a, ruling R9), and the version
+    beside each is what a rule scoped to one can. Classpath TIERING, which D00
+    also names here, needs a resolved ARCHIVE per entry — which the Gradle
+    report carries and a pom parse does not — and stays unwritten rather than
+    half-invented.
+
+    `dependencies_not_resolved` is deliberately NOT a fact: it says what this
+    ANALYSIS could not read, not what the module is, and D05 §3 already has the
+    place for that — `metadata.json`, beside `libraries_not_scanned`.
 
     The document is synthesized rather than read from a file: this stage may
     not touch the filesystem (ARCHITECTURE §10), so `content_hash` is the hash
@@ -448,7 +455,17 @@ def _write_module_fact(fact_root: Path, module: ModuleModel) -> None:
     would write to the same target.
     """
     identity = "\n".join(
-        [module.module_id, module.version, module.kind, *module.dependency_coordinates]
+        [
+            module.module_id,
+            module.version,
+            module.kind,
+            *module.dependency_coordinates,
+            # The versions are part of the identity this document records (F1),
+            # so a run whose resolution reached further — a parent pom that was
+            # missing and is now in the local repository — writes a different
+            # `content_hash` rather than the previous run's.
+            *(f"{coordinate}:{found}" for coordinate, found in module.dependency_versions.items()),
+        ]
     )
     document = Document(
         document_id=hashlib.sha256(f"module:{module.module_id}".encode()).hexdigest(),
@@ -479,6 +496,7 @@ def _write_module_fact(fact_root: Path, module: ModuleModel) -> None:
         source_roots=[root.as_posix() for root in module.source_roots],
         output_dirs=[directory.as_posix() for directory in module.output_dirs],
         dependency_coordinates=list(module.dependency_coordinates),
+        dependency_versions=dict(module.dependency_versions),
     )
     write_fact_file(fact_root / f"{_MODULE_DOCUMENT}.jsonl", document, [fact])
 

@@ -91,6 +91,69 @@ an under-report** — the highest-value item in the probe backlog.
 unmeasured version would repeat CP-5's own mistake), `A-Mi17/18/19/20/21`
 (extractor, engine and ratchet code rather than text), `A-Mi22` (a published
 contract column, waiting on the serializer question). **None is a fabrication.**
+### OI-7 — the Maven set carries test-scoped dependencies and the Gradle set does not
+**Minor · introduced 2026-09-06 by F1**
+
+`MavenDetector._declared_versions` does not read `<scope>`, so a `test`-scoped
+dependency is in `dependency_coordinates` exactly as a compile-scoped one is.
+The Gradle side reports the resolved COMPILE classpath and excludes it. The two
+build systems therefore answer a slightly different question, which is the
+thing `ports/detector.py` says it will not smooth over — and here it is not
+smoothing it over so much as not having noticed it until F1 widened the set.
+
+Kept deliberately: it is what a POM parse recorded before F1 too, and narrowing
+it is a decision with its own evidence rather than a detail to slip into a
+widening. **Cost:** a dependency-gated catalog can pass its gate on a framework
+a module only test-depends on. `derived_resource` and `config_join` are the two
+gated styles; a module test-depending on Spring Data REST and never using it is
+the shape that would derive a fabricated API.
+**Closes by** filtering `test` (and deciding `provided`/`system` with it, since
+Gradle's compile classpath includes `compileOnly`) — and by a test per scope.
+**Falsified by** a module whose only Spring Data REST declaration is
+`<scope>test</scope>` deriving REST routes.
+
+### OI-8 — library archive resolution still reads one pom
+**Minor · found 2026-09-06 during F1**
+
+F1 resolves a version through parents, `<dependencyManagement>`, imported BOMs
+and `${…}` properties for the module's own dependency set.
+`MavenDetector._library_roots` does not use it: it still calls
+`_dependency_versions`, which reads the module's own pom alone. So a
+`.sextant.yml` naming `groupId:artifactId` for a library whose version only a
+parent manages is still reported in `libraries_not_resolved` asking the author
+to pin it — a shortfall the same change could have closed one call away.
+
+Left open on purpose rather than fixed in passing: `_dependency_versions` also
+refuses a `<classifier>` and a non-default `<type>`, because those make the
+ARCHIVE name wrong however well the version resolves, and routing library
+extraction through the fuller resolution would widen it on the same change that
+widened the dependency gate with neither widening measured.
+**Closes by** composing the two — the fuller resolution for the version, the
+existing classifier/type refusal for the archive name — with a test for a
+library whose version a parent manages. **Falsified by** exactly that library
+landing in `libraries_not_resolved`. Stated in `docs/COVERAGE.md` §5.3.
+
+### OI-9 — what a Maven analysis records now depends on the local repository
+**Minor · introduced 2026-09-06 by F1**
+
+An ancestor pom or an imported BOM from OUTSIDE the repository is read from
+`~/.m2/repository`. Two machines analysing the same commit therefore record
+different `dependency_versions`, and — where the ancestor itself declares
+`<dependencies>` — different `dependency_coordinates`, which the dependency
+gate reads. A machine that has never built the module resolves least.
+
+**This does not breach NFR-1 in its own terms** (same inputs, byte-identical
+outputs) and the local repository was already an input, for `library_roots`.
+What is new is that it now reaches the GATE, so which catalogs run for a module
+can differ by machine. Visible rather than silent: every unopened pom is named
+in `metadata.json`'s `dependencies_not_resolved`, and the module fact's
+`content_hash` covers the versions, so a run that reached further is a
+different document rather than the same one.
+**Closes by** either declaring the local repository a stated input of Maven
+analysis in REQUIREMENTS (documentation, and probably the right answer), or
+restricting the walk to poms inside the repository and losing
+`spring-boot-starter-parent` with it. **Falsified by** two machines deriving
+different endpoint sets from one commit.
 
 ---
 

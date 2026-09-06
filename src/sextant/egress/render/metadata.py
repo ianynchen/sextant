@@ -23,7 +23,11 @@ KNOWN_GAPS = [
     "sequence_diagrams_pending_call_graph",
     "structure_diagram_limited_to_contracts",
     "call_graph_not_implemented",
-    "maven_parent_and_profile_resolution_not_implemented",
+    # *Renamed by F1 (spec ruling I3: a gap that closes retires BY NAME).*
+    # Parent inheritance, `<dependencyManagement>`, imported BOMs and `${…}`
+    # interpolation ARE resolved now; profiles and transitives are not, and
+    # the name says only what is still true.
+    "maven_profile_and_transitive_resolution_not_implemented",
     "catalog_module_matching_not_implemented",
     "module_classification_evidence_incomplete",
     "merged_endpoints_keep_only_the_handlers_contract",
@@ -69,6 +73,19 @@ def write_metadata(
             "id": module.module_id,
             "kind": module.kind,
             "languages": sorted(module.languages),
+            # What this module builds against, with the version each
+            # coordinate resolved to (F1). Here rather than only in the
+            # `module` fact because it is the one place a reader — a person, a
+            # later phase, or 2K's seat — can see the CONDITIONS every
+            # framework rule in this run was applied under: a rule is true of a
+            # version, and the estate has had no way to say which.
+            #
+            # A coordinate the resolution could not settle a version for is
+            # absent from this map and named, with why, in
+            # `dependencies_not_resolved` below. Sorted by the detector
+            # (NFR-1); the key is always present, empty where nothing was
+            # recorded, so it never reads as "no dependencies" by omission.
+            "dependencies": dict(module.dependency_versions),
         },
         "provenance": {
             "commit": commit,
@@ -111,6 +128,14 @@ def write_metadata(
         # the scanner failing on an archive it did find (the file is corrupt).
         "libraries_not_resolved": list(module.libraries_not_resolved),
         "libraries_not_scanned": list(libraries_not_scanned),
+        # F1's own gap list, carried for the same FR-17 reason and read the
+        # same way: a coordinate whose VERSION this analysis could not settle,
+        # and every ancestor pom or imported BOM it could not open. It is what
+        # makes `module.dependencies` an honest map rather than a silently
+        # short one — a reader comparing the two can see exactly which
+        # dependencies have no version and why, which is the difference
+        # between "this rule does not apply" and "nobody could tell".
+        "dependencies_not_resolved": list(module.dependencies_not_resolved),
         "endpoints": {"inbound": inbound, "outbound": outbound},
         # The count says how much was expanded; the list says what was not, by
         # name. Both, because a reader who only knows how many shapes exist

@@ -25,9 +25,10 @@ style: config_join
 # which is the true answer: nobody has read one.*
 
 # `spring-integration-core` declares the annotations below; the Boot starter is
-# how a real module usually reaches it, and Maven records DIRECT declarations
-# only, so a build that names the starter and never the core artifact must not
-# read as a build with no Spring Integration (`resolve/dependencies.py`).
+# how a real module usually reaches it, and the core artifact is then the
+# starter's own transitive — which no recorded set carries — so a build that
+# names the starter and never the core artifact must not read as a build with
+# no Spring Integration (`resolve/dependencies.py`).
 detect:
   coordinates:
     - org.springframework.integration:spring-integration-core

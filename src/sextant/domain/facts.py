@@ -119,9 +119,22 @@ class ModuleFact(BaseModel):
     # **Reach differs by build system and the difference is not smoothed
     # over** (`application/ports/detector.py`'s own field states it in full):
     # Gradle reports the resolved compile classpath, transitives included;
-    # Maven reports the POM's direct declarations only. Empty means "this
-    # analysis recorded none", never "the classpath is empty".
+    # Maven reports what the pom declares plus what it inherits from every
+    # ancestor pom the detector could open, and no transitives (F1). Empty
+    # means "this analysis recorded none", never "the classpath is empty".
     dependency_coordinates: list[str] = Field(default_factory=list)
+    # The version each of those coordinates resolved to, for the subset that
+    # resolved (F1), in sorted key order (NFR-1). Written beside the
+    # coordinates rather than folded into them because the coordinate is the
+    # identity a catalog's `detect.coordinates` matches on.
+    #
+    # **A coordinate absent from this map is a version this analysis could not
+    # read, never a dependency with no version** — the two build systems reach
+    # differently and the Maven side needs the pom that states a managed or
+    # property-held version to be readable. A rule scoped to a version range
+    # must therefore treat an absent version as UNANSWERABLE, the same way the
+    # dependency gate treats an absent coordinate list.
+    dependency_versions: dict[str, str] = Field(default_factory=dict)
 
 
 class SymbolFact(BaseModel):
