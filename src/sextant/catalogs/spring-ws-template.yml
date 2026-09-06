@@ -16,6 +16,10 @@ detect:
 # case: there the annotation read is a fallback rung under a literal, here it
 # is the whole identity. `typed_signatures` for the same reason one rung
 # further: the payload type is read off the caller's declared signature.
+measured:
+  - { artifact: org.springframework.ws:spring-ws-core, versions: ["4.1.4"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
 requires: [call_site, string_constants, annotation_args, typed_signatures]
 
 # A SECOND FILE beside `spring-ws.yml`, not a second block inside it, and the

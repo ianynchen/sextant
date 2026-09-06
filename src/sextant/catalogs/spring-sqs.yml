@@ -7,6 +7,10 @@ direction: inbound
 detect:
   coordinates: ["io.awspring.cloud:spring-cloud-aws-sqs"]
 
+measured:
+  - { artifact: io.awspring.cloud:spring-cloud-aws-sqs, versions: ["3.1.1"],
+      identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
+
 requires: [annotation_args, typed_signatures]
 
 matches:

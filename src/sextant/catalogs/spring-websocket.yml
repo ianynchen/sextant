@@ -7,6 +7,14 @@ direction: inbound
 detect:
   coordinates: ["org.springframework:spring-websocket"]
 
+# 6.1.6 is the version the descriptor sweep OPENED and the jar reported, and
+# it is what the row below is bounded by. Nothing in this repository depends
+# on spring-websocket, so no run has ever exercised this rule at any other
+# version — CP-10 says so in its own version-scope paragraph.
+measured:
+  - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
 requires: [call_site, string_constants]
 
 # `WebSocketHandlerRegistry.addHandler(WebSocketHandler handler, String...

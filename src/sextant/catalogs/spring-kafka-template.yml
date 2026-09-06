@@ -7,6 +7,10 @@ direction: outbound
 detect:
   coordinates: ["org.springframework.kafka:spring-kafka"]
 
+measured:
+  - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
+
 requires: [call_site, string_constants]
 
 matches:

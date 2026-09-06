@@ -42,6 +42,10 @@ detect:
 # defaults to empty and the detection strategy to `default`, so a module with
 # no configuration at all derives its full route set. Requiring the capability
 # would skip this catalog on exactly those modules.
+measured:
+  - { artifact: org.springframework.data:spring-data-commons, versions: ["3.2.5", "4.1.1"],
+      identity: reported, by: scripts/probes/cp13_inherited_members.md }
+
 requires: [annotation_args, implemented_interfaces, generic_interfaces]
 
 # D02's specified-but-unused `default_produces`, implemented here (register

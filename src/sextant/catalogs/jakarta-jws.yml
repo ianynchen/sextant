@@ -7,6 +7,13 @@ direction: inbound
 detect:
   coordinates: ["jakarta.jws:jakarta.jws-api", "javax.jws:javax.jws-api"]
 
+# ONE of the two reference implementations this file's prose claims. The
+# Apache CXF half is still unmeasured (`A-Mi7`), and an artifact nobody ran
+# gets no row here — that is the whole point of the block.
+measured:
+  - { artifact: com.sun.xml.ws:jaxws-rt, versions: ["4.0.2"],
+      identity: reported, by: scripts/probes/cp13_inherited_members.md }
+
 requires: [annotation_args, typed_signatures]
 
 matches:

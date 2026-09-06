@@ -7,6 +7,10 @@ direction: inbound
 detect:
   coordinates: ["org.springframework.boot:spring-boot-actuator"]
 
+measured:
+  - { artifact: org.springframework.boot:spring-boot-actuator, versions: ["3.5.10", "4.1.1"],
+      identity: reported, by: scripts/probes/cp5_actuator_paths.md }
+
 requires: [annotation_args, type_annotations, typed_signatures]
 
 matches:

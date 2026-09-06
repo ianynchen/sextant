@@ -7,6 +7,10 @@ direction: outbound
 detect:
   coordinates: ["org.springframework.amqp:spring-rabbit"]
 
+measured:
+  - { artifact: org.springframework.amqp:spring-rabbit, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
 requires: [call_site, string_constants]
 
 matches:

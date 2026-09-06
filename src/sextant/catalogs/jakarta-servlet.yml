@@ -27,6 +27,10 @@ detect:
 # 35-43), and it arrives only as a call site. A scan that produced none skips
 # this catalog and reports the skip, which is the honest degradation — the
 # alternative is reading every delegating wrapper as a replacement.
+measured:
+  - { artifact: org.apache.tomcat.embed:tomcat-embed-core, versions: ["10.1.50", "11.0.24"],
+      identity: reported, by: scripts/probes/cp9_servlet_shapes.md }
+
 requires: [annotation_args, call_site, type_annotations, typed_signatures, superclass]
 
 matches:

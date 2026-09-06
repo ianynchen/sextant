@@ -7,6 +7,10 @@ direction: inbound
 detect:
   coordinates: ["org.springframework:spring-webflux"]
 
+measured:
+  - { artifact: org.springframework:spring-webflux, versions: ["6.1.6", "7.0.2"],
+      identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
+
 requires: [call_site, string_constants, chain_reconstruction]
 
 # D02 §2's `combinator` style, both DSLs Spring WebFlux ships for functional

@@ -39,6 +39,7 @@ matches:
 | `style` | Which engine interprets `matches` |
 | `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c. Omitted only by a NON-WIRE style, below |
 | `detect` | Coordinates that make this catalog's framework rule applicable to a module. **Read since Phase 2O Task 6, by one style** — see below |
+| `measured` | The artifact(s) and version(s) this catalog's rule was verified against, and the probe that verified it — §1a |
 | `requires` | Capabilities — scanner-declared or pipeline-declared (below). **If unmet, the catalog does not run and the skip is reported.** |
 | `matches` | Style-specific |
 
@@ -100,6 +101,55 @@ in `requires` does not run — and is reported skipped, the same as any unmet sc
 capability — until that pass has produced it in this run. A config-less run therefore
 skips such a catalog visibly, never silently, the guarantee `requires` already gives every
 scanner capability above.
+
+---
+
+## 1a. `measured` — the version(s) a rule was verified against
+
+A framework rule is version-scoped, and [GUIDELINES](../../GUIDELINES.md) §5.4 says a
+verdict is bounded by what it measured. A catalog is a standing verdict, so it states its
+bound:
+
+```yaml
+measured:
+  - { artifact: org.springframework:spring-webmvc, versions: ["6.1.6", "6.2.15", "7.0.2", "7.0.9"],
+      identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+```
+
+| Key | Meaning |
+|---|---|
+| `artifact` | `groupId:artifactId` of the archive the rule was READ OUT OF |
+| `versions` | Every version of that artifact the rule was verified against, as strings |
+| `identity` | `reported` \| `assumed` — where the version STRING itself came from |
+| `by` | The committed probe document that measured it, repository-relative |
+
+**`artifact` is what was opened, not what the module declares.** It is often not the
+coordinate `detect` names: `spring-web.yml`'s handler gate is `spring-webmvc`'s own
+`isHandler` predicate, and filing the evidence against `spring-web` would name a jar
+nobody read.
+
+**`identity` exists because of CP-5.** That probe published eight observation cells under a
+version header no process had reported. `reported` means the artifact or the running
+process stated the version itself — a manifest's `Implementation-Version`, a
+`pom.properties`, a Boot banner — and every probe harness aborts when that self-report
+disagrees with the coordinate that resolved it. `assumed` means nothing in the archive
+states one at all and the value is the coordinate: Retrofit's two rows are the only
+`assumed` ones that ship, because the retrofit jar states a version nowhere. The
+vocabulary is closed; a third value is a schema change (NFR-5).
+
+**A version nobody measured is never written here.** A catalog whose rule no probe has
+opened declares no block at all and is listed by name in
+`tests/architecture/test_catalog_measurement_coverage.py`'s audit list (§8.3), with what it
+is waiting on. Writing a plausible number instead is `A-Mi8`'s own defect — a catalog
+naming a version because a sibling named two — and it is the failure this block exists to
+end, not a shortcut it permits.
+
+**Its consumer is that test**, which is why there is no `Catalog.measured` field: a value
+carried into the domain and read by nothing is the `detect.coordinates` defect (§5.3), and
+the runtime comparison this block eventually enables — a module's RESOLVED dependency
+versions (`metadata.json`'s `module.dependencies`) against the versions its catalogs
+measured — is not built. The test reads the shipped YAML, refuses a malformed row, and
+refuses a version absent from the version-scope paragraph of the probe the row cites.
 
 ---
 

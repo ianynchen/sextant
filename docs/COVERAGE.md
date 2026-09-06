@@ -2091,6 +2091,22 @@ so `@Nullable List<String>` and `List<@Nullable String>` stay apart. Nullability
 `org.springframework.lang.Nullable` is deprecated but still present in compiled code — the
 catalogs match both FQNs, alongside the `javax`/`jakarta`/JetBrains spellings.
 
+### A catalog's measured version is recorded and never compared to the module's
+
+**BOUNDARY, stated 2026-09-06 with F5** ([D02](components/D02-catalog-schema.md) §1a;
+`docs/open-issues.md` OI-10, OI-11). A catalog now declares the artifact(s) and version(s)
+its rule was verified against, and twenty-nine of the fifty-five do. **Nothing compares
+that against the version the analysed module resolves**, and twenty-six catalogs declare no
+measured version at all because no committed probe has opened their framework's jar.
+
+So a run says nothing about whether the rules that produced it were ever measured on the
+framework generation the module actually builds against. The shape this hides is a rule
+that MOVED: `WebClient$RequestHeadersSpec.exchange` is declared by `spring-webclient.yml`,
+exists at spring-webflux 6.1.6 and is **removed** at 7.0.2 (CP-12), so on a Framework 7
+module its rows are simply absent — indistinguishable from a call site nobody wrote. A
+version-aware verdict is Stage 6 work and needs a version ordering §7's dependency rule
+forbids importing; `docs/open-issues.md` OI-11 lists what it would take.
+
 ---
 
 ## 8. Open questions

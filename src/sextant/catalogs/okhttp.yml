@@ -7,6 +7,10 @@ direction: outbound
 detect:
   coordinates: ["com.squareup.okhttp3:okhttp"]
 
+measured:
+  - { artifact: com.squareup.okhttp3:okhttp, versions: ["4.12.0"],
+      identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+
 requires: [call_site, string_constants, chain_reconstruction]
 
 matches:

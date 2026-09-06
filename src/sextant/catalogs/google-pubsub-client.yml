@@ -7,6 +7,10 @@ direction: outbound
 detect:
   coordinates: ["com.google.cloud:google-cloud-pubsub"]
 
+measured:
+  - { artifact: com.google.cloud:google-cloud-pubsub, versions: ["1.129.3"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
 requires: [call_site, string_constants]
 
 matches:

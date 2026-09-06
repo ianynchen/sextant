@@ -7,6 +7,16 @@ direction: outbound
 detect:
   coordinates: ["com.squareup.retrofit2:retrofit"]
 
+# `identity: assumed` — the retrofit jar writes no version into its manifest,
+# ships no `pom.properties` and declares no version constant, so CP-11 and
+# CP-12 both label their column `assumed` rather than `yes`. The bytecode was
+# read; the version string beside it is the coordinate that resolved the jar.
+measured:
+  - { artifact: com.squareup.retrofit2:retrofit, versions: ["2.11.0"],
+      identity: assumed, by: scripts/probes/cp11_sweep_round1.md }
+  - { artifact: com.squareup.retrofit2:retrofit, versions: ["2.11.0"],
+      identity: assumed, by: scripts/probes/cp12_sweep_round1b.md }
+
 requires: [annotation_args, typed_signatures]
 
 matches:

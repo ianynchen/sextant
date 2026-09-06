@@ -7,6 +7,10 @@ direction: outbound
 detect:
   coordinates: ["io.awspring.cloud:spring-cloud-aws-sqs"]
 
+measured:
+  - { artifact: io.awspring.cloud:spring-cloud-aws-sqs, versions: ["3.1.1"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
 requires: [call_site, string_constants]
 
 matches:

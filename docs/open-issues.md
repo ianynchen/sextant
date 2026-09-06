@@ -84,13 +84,22 @@ would be served as `orders` while we publish `getOrders`. **A wrong address, not
 an under-report** — the highest-value item in the probe backlog.
 **Closes by** a live SmallRye run.
 
-### OI-6 — 8 Class A Minors remain open
+### OI-6 — 6 Class A Minors remain open
 **Minor · pre-existing · `docs/principles-sweep-2026-09-05.md` §13**
 
-`A-Mi4` (needs a D02 schema field — the `measured:` block), `A-Mi8` (writing an
-unmeasured version would repeat CP-5's own mistake), `A-Mi17/18/19/20/21`
-(extractor, engine and ratchet code rather than text), `A-Mi22` (a published
-contract column, waiting on the serializer question). **None is a fabrication.**
+`A-Mi17/18/19/20/21` (extractor, engine and ratchet code rather than text),
+`A-Mi22` (a published contract column, waiting on the serializer question).
+**None is a fabrication.**
+
+**Two closed by F5** (`measured:` on the catalog schema). `A-Mi4` — "D02 has no
+field for the version a rule was measured against" — closed by D02 §1a and
+`tests/architecture/test_catalog_measurement_coverage.py`, which is the field's
+consumer. `A-Mi8` — "the modern `@SqsListener` catalog names no version where
+its legacy sibling names two" — closed by `spring-sqs.yml`'s row citing CP-12's
+measurement of `io.awspring.cloud:spring-cloud-aws-sqs 3.1.1`, which is a
+measurement that already existed rather than a version anybody chose.
+The sweep document itself is frozen as that audit's record and is not edited;
+this row is where their state is now kept.
 ### OI-7 — the Maven set carries test-scoped dependencies and the Gradle set does not
 **Minor · introduced 2026-09-06 by F1**
 
@@ -154,6 +163,58 @@ analysis in REQUIREMENTS (documentation, and probably the right answer), or
 restricting the walk to poms inside the repository and losing
 `spring-boot-starter-parent` with it. **Falsified by** two machines deriving
 different endpoint sets from one commit.
+
+### OI-10 — 26 shipped catalogs state no measured version at all
+**Major · pre-existing, made countable 2026-09-06 by F5 ·
+`tests/architecture/test_catalog_measurement_coverage.py::_NOT_MEASURED_YET`**
+
+F5 gave the catalog schema a `measured:` block (D02 §1a) and twenty-nine
+catalogs a row citing a committed probe. **Twenty-six have none, because no
+probe has ever opened the artifact whose rule they encode** — every
+`@KafkaListener`, `@JmsListener`, `@RabbitListener`, gRPC, GraphQL and schema
+catalog among them. Their rules are claimed for every version of their
+framework on evidence from none.
+
+This is not a new defect and F5 did not introduce it; what F5 changed is that
+the twenty-six are now a named list with a reason each, and a NEW catalog cannot
+join them silently. **Cost:** a framework rule that moved between versions —
+`isHandler` losing a disjunct, `WebClient.exchange` disappearing at 7.0.2 — is
+undetectable in these twenty-six, and the failure is silent in both directions
+(a rule that stopped firing under-reports; a rule whose meaning changed
+fabricates). The two the plan already names as live are `A-C5`
+(`spring-cloud-stream`) and `OI-5` (`microprofile-graphql`).
+**Closes by** the Stage 4 per-catalog pass — one probe per catalog against a
+named artifact at a version the artifact itself reports — retiring entries from
+that list as it goes. **Falsified by** a shipped catalog deriving a wrong row on
+a framework version nobody in this repository has opened.
+
+### OI-11 — nothing compares a catalog's measured version against the module's
+**Major · pre-existing, stated 2026-09-06 by F5 · D02 §1a**
+
+`measured:` records the version a catalog's rule was verified against. F1 made a
+module's RESOLVED dependency versions reach `metadata.json`'s
+`module.dependencies` (`mall-admin` records `spring-boot-configuration-processor
+= 3.5.14`). **The two are never compared.** So a module on Spring Framework 7
+is analysed by `spring-webclient.yml`, whose `exchange` terminal CP-12 measured
+as REMOVED at 7.0.2, and the output says nothing about it: the row is simply
+absent, indistinguishable from a call site that was never written.
+
+Deliberately not wired in F5, on the task's own instruction — this is the
+catalog's side only. Recorded here rather than left implicit because §8.1 rule 3
+makes an unstated boundary a defect, and the boundary is now stateable for the
+first time.
+**What a later comparison needs**, so it is not re-derived: (a) a join key —
+`measured[].artifact` is `groupId:artifactId` and `module.dependencies` is keyed
+the same way, so the join exists today; (b) a version-ordering decision, since
+"6.1.6 measured, 7.0.2 resolved" is a comparison and Maven version ordering is
+not string ordering, and §7 forbids a new dependency to do it; (c) a verdict
+vocabulary — the honest answer for an unmeasured version is `narrowed` or an
+open question, never a suppressed row, because a rule that still holds and a
+rule that broke look identical from here; (d) a decision about
+`identity: assumed` rows, which name a version no archive confirmed and
+therefore cannot bound anything on their own.
+**Falsified by** a module resolving a version outside every `measured:` row of a
+catalog that ran on it, with nothing in `metadata.json` saying so.
 
 ---
 

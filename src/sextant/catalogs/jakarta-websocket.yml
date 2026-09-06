@@ -7,6 +7,12 @@ direction: inbound
 detect:
   coordinates: ["jakarta.websocket:jakarta.websocket-api", "javax.websocket:javax.websocket-api"]
 
+measured:
+  - { artifact: jakarta.websocket:jakarta.websocket-api, versions: ["2.2.0"],
+      identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+  - { artifact: jakarta.websocket:jakarta.websocket-client-api, versions: ["2.2.0"],
+      identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+
 requires: [annotation_args, typed_signatures]
 
 matches:

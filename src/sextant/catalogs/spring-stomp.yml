@@ -7,6 +7,10 @@ direction: inbound
 detect:
   coordinates: ["org.springframework:spring-messaging"]
 
+measured:
+  - { artifact: org.springframework:spring-messaging, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+
 requires: [annotation_args, typed_signatures]
 
 matches:

@@ -30,6 +30,10 @@ detect:
 # `call_site` for `bypassed_by`, exactly as the jakarta twin declares it and
 # for the same reason: a delegating `service()` override is told from a
 # replacing one by a call, and by nothing else.
+measured:
+  - { artifact: org.apache.tomcat.embed:tomcat-embed-core, versions: ["9.0.121"],
+      identity: reported, by: scripts/probes/cp9_servlet_shapes.md }
+
 requires: [annotation_args, call_site, type_annotations, typed_signatures, superclass]
 
 matches:

@@ -7,6 +7,10 @@ direction: outbound
 detect:
   coordinates: ["jakarta.jms:jakarta.jms-api"]
 
+measured:
+  - { artifact: jakarta.jms:jakarta.jms-api, versions: ["3.1.0"],
+      identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
+
 requires: [call_site, string_constants]
 
 matches:
