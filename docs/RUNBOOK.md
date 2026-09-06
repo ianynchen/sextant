@@ -607,3 +607,59 @@ Three things that generalise while it is unsettled:
   same probe had not covered. Reviewers looked for the first shape and found
   it. Ask of every verdict: which configurations does it now decide, and which
   of those did the run touch?
+
+## A brief's premise can be stale in the direction that hides the defect (2O Task 10)
+
+Task 10's brief opened: "a locally-implemented `@HttpExchange` interface derives
+an **outbound** row — the module reported calling a service it actually serves —
+and its inbound routes are missed entirely. Both errors in the same rows."
+
+The first half had already been closed, by a different pass. `A-C1` gave
+`spring-http-interface.yml` `declared_on: interface`, which on an outbound
+catalog also engages the SEI fence, and the fence subtracts every interface the
+module implements. So the shipped behaviour on the day the task started was not
+a fabrication and silence — it was **silence alone**: no outbound row, no
+inbound row, a whole HTTP surface absent from the export. `docs/documented-not-implemented.md`
+still described the fabrication too, in the present tense.
+
+Two things generalise, and the second is the uncomfortable one.
+
+- **Check the defect the brief describes before fixing it.** It cost one query
+  to find out, and it changed the implementation: the brief's Step 2 said "do
+  NOT also add `declared_on: interface`", which reads as advice about a key that
+  is not there and is in fact a warning about one that is. Had it been followed
+  literally — flip added, fence untouched — the fence would have subtracted
+  exactly the rows the flip flips and **no inbound row would have shipped at
+  all**, which is the cancellation the spec warned of, reached from the other
+  side. The fix was to make the fence YIELD to the flip, which nothing in the
+  brief could have said.
+- **A fix that converts a wrong row into a missing row moves the entry down the
+  severity list and out of everyone's attention.** The fabrication was the
+  reason #5 was called "the only entry where shipped output is actively false".
+  Closing that half quietly demoted the entry to an under-report while its
+  register text still claimed the worse failure — so the register overstated the
+  problem and the estate understated it, at the same time. When a pass narrows a
+  known defect rather than closing it, the register entry is part of the change.
+
+### A fixture spelled in a simpler coordinate space cannot see a coordinate-space bug
+
+Most synthetic fixtures in `tests/application/test_endpoints.py` write BARE
+descriptors (`com/acme/api/OrderApi#`) where a real fact writes a
+module-prefixed symbol (`sextant-jvm maven com.acme/orders-service 1.0.0
+com/acme/api/OrderApi#`). That is harmless for a rule comparing two values from
+the same space, and it is not harmless for a rule that crosses one.
+
+Task 10's flip crosses one: it joins a declaring method to the method
+implementing it, and an interface scanned out of an opted-in dependency jar
+carries that jar's coordinates while the class implementing it carries the
+module's. So every comparison is on the bare descriptor and the published symbol
+is the prefixed one. The first version keyed its handler map on the **prefixed**
+declaration and joined it against a **bare** one — which cannot match, so on
+every real module the handler would silently have fallen back to the interface's
+own method. Six tests passed, because in a bare fixture the two spellings are
+the same string.
+
+**The rule: a fixture for a rule that crosses a coordinate boundary must be
+written in the coordinate space the facts actually use.** It costs one constant.
+`test_effective_annotations.py`'s `_MODULE` prefix is the precedent, and it is
+there for exactly this reason.

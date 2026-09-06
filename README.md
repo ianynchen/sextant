@@ -123,9 +123,12 @@ output-quality assertions) and how "the first diagram parses" is defined without
 Some declarations a module depends on are not in the module. A generated SOAP client stub,
 for instance, is usually published as a jar — and so are Spring Boot Actuator's built-in
 endpoints (`/actuator/health`, `/actuator/info` and the rest), which live in the actuator jar
-rather than in your code and are therefore invisible until you ask for that jar here. A file
-beside the module's build file names the dependencies whose **own bytecode** should be scanned
-alongside it:
+rather than in your code and are therefore invisible until you ask for that jar here. The same
+goes for a **shared API interface**: a Spring `@HttpExchange` contract published as a jar and
+implemented by your controller carries its routes in that jar, so those routes are missing from
+your module's surface until the jar is named below — the controller's own `@GetMapping`s are
+read either way. A file beside the module's build file names the dependencies whose **own
+bytecode** should be scanned alongside it:
 
 ```yaml
 # .sextant.yml, beside pom.xml
