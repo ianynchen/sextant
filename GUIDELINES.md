@@ -225,6 +225,37 @@ The cost of skipping this is measurable. §8.1's language rule says Java identif
 
 **A principle that audits nothing on the day it lands is a note, not a rule.** This is §8's "architecture rules are enforceable, not aspirational" applied to the moment of writing rather than to the rule's steady state — and it is the harder half, because a new rule is exactly when the backlog is invisible and the author is thinking about the defect in front of them.  
 
+### 8.4 Completeness is the deliverable; volume is a navigation problem  
+
+**Ruled 2026-09-06 (user)**, overturning a renderer that had just made a bounded document its default so one module's `architecture.md` would be 230 KB rather than 711 KB:  
+
+> *"i agree that if a service contains a lot, the document will be hard for human to read, but we should be focused on telling the truth, not the amount of information. whether that information is useable is the other half of the task, which is why we have indices planned for sextant, such that agents can leverage the truth + indices to quickly find things, and help humans to navigate, not for a human to be able to read through a service with 1000 endpoints."*  
+
+This is the standing answer whenever output volume is weighed against completeness — in a renderer, an exporter, an index, a report, or a summary handed to a person. Four rules:  
+
+1. **The deliverable is completeness, not brevity.** Byte count, diagram count and row count are not quality measures and never a reason to derive less, show less, or draw less. "Nobody will read all of it" is true of every reference work ever written and is an argument about *readers*, not about *truth*.  
+
+2. **A document too large to read linearly is a NAVIGATION problem, and navigation has its own mechanisms** — indices, search, anchors, a table of contents, and the agents that read the document on a person's behalf. Solve it there. Omitting rows is not a navigation mechanism; it is a smaller document that answers fewer questions, and the questions it stops answering are chosen by whoever set the bound rather than by the reader.  
+
+3. **Where a default MUST bound something, the bound is the opt-in and the full form is the default** — never the reverse. The flag is named for what it withholds (`--brief`), never for what the default already is (`--all-traces`): a flag whose name asserts the default is incomplete is the tell that the default is wrong. And the reduced form still states, in its own text, that it is the reduced one, what it withheld, and the exact command that returns the whole (§8.1 rule 3). **Stating an omission makes it honest; it does not make it acceptable as a default.** A reader handed the file — or an agent parsing it — never ran the command and has no other way to know.  
+
+4. **A bound justified by size needs a reproducible measurement.** The number that motivates it, and the corpus it was measured on, must be re-derivable by someone who was not there; otherwise the bound is unfalsifiable and nobody can ever argue it down. (§5.4, applied to this rule's own evidence.)  
+
+**Not this rule's subject**, and the distinction is worth stating because both look like caps: a bound that exists for TERMINATION (a recursion guard, a cycle bound) or against a HARD EXTERNAL limit (a model's context window) is not trading completeness for volume — it is buying an answer at all. Each still owes rule 3's statement when it fires.  
+
+**Its §8.3 audit list, run the day this was written.** Every bound in the codebase that reduces what a consumer is shown, with its verdict. The two closes and the register rows it names land in this same change's following commits.  
+
+| Site | Verdict |
+|---|---|
+| `egress/render/document.py::BRIEF_TRACE_STEP_BUDGET` (was `DEFAULT_TRACE_STEP_BUDGET`) | **The violation this rule was written for. Closed the same day**: the default is now unbounded and the budget is `render --brief`'s alone. Ratcheted by `render_trace.the-default-document-draws-every-trace` in `scripts/guard_check.py`, so flipping it back is a killed guard rather than a review question. |
+| The acceptance corpus (`macrozheng/mall`, `mall-admin`) lived only in a session scratch directory | **A rule-4 violation, closed the same day.** Every volume claim this repo makes cites that module, and nobody outside the session could re-measure any of them. Now `scripts/field-expectations/mall-admin.json`, the same way every other example is carried. |
+| `application/query/trace.py::DEFAULT_MAX_DEPTH` (64) | **In register, not a violation.** A termination bound, not a size one; it fires on nothing measured (the deepest of `mall-admin`'s 160 traces is 5); and it is reported per step (`depth_limit`) and per trace (`Trace.truncated`) when it does. Its divergence from FR-6 is open as `OI-27`, on its own grounds. |
+| `application/enrich/tools.py::MAX_RESULT_BYTES`, `DEFAULT_READ_LINES`, `MAX_GREP_MATCHES`; `agents/__init__.py::DEFAULT_MAX_TURNS` | **In register, not violations.** Each bounds what a MODEL is handed against a context window, not what a reader is shown, and each says in-band that it fired. The document `enrich` wraps in its brief is deliberately NOT bounded, and grew with this rule — `OI-33` carries the measurement that would settle whether it should be. |
+| `ingress/detect/maven.py::_MAX_INHERITANCE_DEPTH`, `_MAX_INTERPOLATION_PASSES` | **In register, not violations.** Termination guards over POM inheritance; each records an `unreadable` reason rather than returning quietly. |
+| `architecture.html` inlines ~3.5 MB of mermaid and renders every diagram eagerly on load | **Not a completeness trade — no row and no diagram is withheld — and registered as `OI-31` anyway**, because it is the cost that made bounding the document look attractive. Its close is lazy per-diagram rendering; it is **never** closed by drawing fewer diagrams. |
+
+The list is short and honestly so: the pipeline derives everything it can see and the renderer prints every row it is handed, which is the shape §8's anti-fabrication and anti-exclusion rules already push it into. The condition that would falsify this audit is a second output-side bound arriving as a default — at which point this table starts shrinking rather than staying still.  
+
 
 ---  
 

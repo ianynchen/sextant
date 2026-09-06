@@ -31,7 +31,7 @@ kept here rather than in an agent's head.
 
 ### Principle-violation count: 0 confirmed
 
-Two candidates were judged NOT violations and are recorded so the judgement can be
+Four candidates were judged NOT violations and are recorded so the judgement can be
 overturned rather than forgotten:
 - **`entry_point` ships as a `RootKind` member with no producer** (OI-22). §5.3's
   defect is an *unstated* claim; this one is stated in D00, COVERAGE §7, the enum,
@@ -54,6 +54,17 @@ overturned rather than forgotten:
   ENFORCED "Egress is read-only" contract, so the choice was between a brush and
   a breach. The drift the rule warns about was real and is now measured:
   `roots.the-address-is-the-one-the-endpoint-row-ends-with`.
+- **`## Traces` shipped a bounded document as its DEFAULT** (2Q close, defect 2;
+  OI-30, now closed). Judged NOT a violation and instead §13.8's step 4 — *"if no
+  existing principle covers it, the missing principle is the finding"*. The
+  candidates were checked and none reached it: §8's *exclude only on proof* governs
+  what is DERIVED, not what a rendering of derived rows chooses to draw; §8.1 rule 3
+  requires a stated omission, and this one was stated three ways. Nothing written
+  down said the default must be the complete form. GUIDELINES **§8.4** is that
+  missing rule, and it ships with the audit list §8.3 requires — one live entry, the
+  budget itself, closed the same day. If this judgement is ever overturned the
+  consequence is §13.8 step 3, not another correction: the rule now exists and is
+  ratcheted by `render_trace.the-default-document-draws-every-trace`.
 
 Severity: **Critical** = publishes a wrong row a reader would act on ·
 **Major** = wrong under a realistic input, or a silent drop · **Minor** = stale
