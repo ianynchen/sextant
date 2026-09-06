@@ -7,7 +7,13 @@ direction: inbound
 detect:
   coordinates: ["org.springframework.amqp:spring-rabbit"]
 
-requires: [annotation_args, typed_signatures]
+# `nested_annotation_args` (capability 9.16): a REPEATED `@RabbitListener`
+# reaches the class file only as the nested array inside `@RabbitListeners`
+# (`OI-36`), and `spring-kafka.yml`'s note gives the reason this is a
+# requirement rather than a nicety. It does NOT make the `queuesToDeclare`
+# and `bindings` attributes readable — those are a nested annotation's own
+# ATTRIBUTE, which no `path_from` alias can name, and that boundary stands.
+requires: [annotation_args, typed_signatures, nested_annotation_args]
 
 matches:
   # No type-level gate: a listener method carries its own `@RabbitListener`
@@ -50,7 +56,19 @@ matches:
     prefix_annotation: org.springframework.amqp.rabbit.annotation.RabbitListener
     annotations:
       # A plain, method-level `@RabbitListener` — the ordinary listener shape.
-      - { fqn: org.springframework.amqp.rabbit.annotation.RabbitListener }
+      #
+      # `container` names what javac writes for two `@RabbitListener` on one
+      # declaration (`OI-36`). MEASURED: CP-16 rows 2e/2f read
+      # `@Repeatable(RabbitListeners.class)` at 3.1.4 and 4.1.1, and row 4e
+      # shows the 3.1.4 post-processor streaming `RabbitListener` out of a
+      # `MergedAnnotations` view, which is the container-aware read.
+      - { fqn: org.springframework.amqp.rabbit.annotation.RabbitListener,
+          container: org.springframework.amqp.rabbit.annotation.RabbitListeners }
+      # `@RabbitHandler` declares NO container, and the absence is a claim:
+      # CP-16 row 2 measured `@Repeatable` on the listener annotation only, and
+      # row 3 read `@RabbitHandler`'s whole declaration without asking whether
+      # it is repeatable (§8.1 rule 4).
+      #
       # `@RabbitHandler` carries no queue attribute of its own (path suffix
       # ''), and reaches a destination only through the class-level prefix
       # above — the polymorphic, class-level shape.
@@ -84,10 +102,11 @@ shape_model: json
 # post-processor reads all three destination attributes, so the two this file
 # declines to read are a measured under-report rather than a remembered one.
 #
-# TWO THINGS CP-16 FOUND THAT THIS FILE DOES NOT HANDLE, both stated rather
-# than encoded. `@RabbitListener` is `@Repeatable(RabbitListeners.class)`, so
-# two listeners on one method fold into a container this catalog cannot name
-# and BOTH destinations are dropped (`OI-36`). And at 3.1.4 the post-processor
+# TWO THINGS CP-16 FOUND. The first is now encoded: `@RabbitListener` is
+# `@Repeatable(RabbitListeners.class)`, so two listeners on one method fold
+# into a container — which `mapping.annotations[].container` above now names,
+# where before both destinations were dropped (`OI-36`, closed). The second
+# stays a boundary. At 3.1.4 the post-processor
 # searches `MergedAnnotations.from(element, SearchStrategy.TYPE_HIERARCHY)` —
 # the strategy arrives as a constant the probe could read — so a
 # `@RabbitListener` on a superclass or interface method registers a listener on

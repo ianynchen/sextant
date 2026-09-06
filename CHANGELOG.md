@@ -560,6 +560,33 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Four catalogs adopt the three new words, and three register rows close.**
+  `spring-kafka.yml`, `spring-jms.yml` and `spring-rabbit.yml` each name their
+  repeatable container, so a method carrying two listeners now exports both
+  destinations instead of none (`OI-36`); all three gain a `nested_annotation_args`
+  requirement, so a scanner that cannot read a folded use skips the catalog visibly
+  rather than reporting half a module's listener surface.
+  `microprofile-graphql.yml` reads all five of the operation-name sources SmallRye
+  consults, in the measured order (`OI-35`), and falls back per annotation —
+  `@Query` stripping `get`/`is`, `@Mutation` stripping `set` (`OI-5`). The
+  characterisation test that asserted the wrong address now asserts the served one.
+
+  **CP-15 gains a sixth question**, added because `OI-35`'s close needed an
+  attribute name and rows 1-2 give annotation types: `getOneOfTheseMethodAnnotationsValue`
+  reads each source's member named `value`, and an empty value stops the search
+  rather than falling through. Taking that from the method's own name would have
+  been §5.3's own failure, and Jackson's `@JsonProperty` declares six members.
+
+  Five more guards, all measured to kill — one per catalog on the container fqn,
+  plus `microprofile-graphql.fallback-direction-is-per-annotation` and
+  `microprofile-graphql.name-sources-are-the-measured-annotations`.
+
+  **`OI-37` is NOT closed**, and its row says why: two of the three annotation
+  searches carry no strategy constant, so what they search is unmeasured. What the
+  pass did settle is that `annotation_driven._synthetic_annotations`' claim that "a
+  messaging listener annotation is never interface-inherited by its own framework"
+  is false (CP-16 row 4e), and the comment no longer says it.
+
 - **`config_join` asked the canonical-path seam nothing, on rows whose protocol and direction
   are both per-row** (2O Task 9 step 4; the Task 2 carry). `single_call` had the identical
   shape and the identical bug — its rows carried a per-row `direction` override while its seam

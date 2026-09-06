@@ -693,3 +693,46 @@ Two things to do differently:
   re-recorded. Enumerate the artifacts a migration invalidates and fix or file
   each; a correct prose warning that reaches no file is §8.3's failure in
   miniature.
+
+## A grammar gap is cheaper to close in a batch than in a dispatch (the `annotation_driven` vocabulary pass)
+
+Three catalogs in one Stage 4 dispatch knew their framework's rule exactly and
+had no word for it. The implementer fixed none and was right not to: each had an
+obvious local hack, and three local hacks to one grammar is how a vocabulary
+rots. §13.8 fired, and the design pass that followed is what this entry is about.
+
+Four things it is worth doing the same way next time.
+
+- **Design the whole key set against every measurement before writing any of
+  it.** The three words interlock — `container` feeds the same synthetic-row
+  channel composition and inheritance already use, and the per-annotation
+  `path_fallback` only makes sense beside the sibling sources that run before it.
+  Taken one at a time each would have been a plausible local key; taken together
+  they are one shape.
+
+- **The additive form beats the general one when 21 files run through the
+  code.** `OI-35`'s close condition literally said "make `path_from` take
+  `{annotation, arg}` entries, with the ORDER preserved" — the fully interleaved
+  list. That rewrites the single most load-bearing expression in the engine to
+  buy an interleaving no measurement asks for. A separate ordered list expresses
+  the measured order exactly, leaves 20 catalogs byte-identical, and puts the
+  generality given up in COVERAGE as a named boundary. **Name what you gave up;
+  that is what makes the smaller change honest rather than lazy.**
+
+- **A close condition can be missing a question, and the missing one is usually
+  an identifier.** `OI-35` named the annotation TYPES and the ORDER, and a
+  catalog needs a third thing: the ATTRIBUTE. The method that reads them is
+  called `getOneOfTheseMethodAnnotationsValue`, so `value` was one inference
+  away — and one of the five sources declares six members. CP-15 gained a sixth
+  question rather than the catalog gaining a guess. **Before encoding a
+  measurement, list the identifiers the catalog will have to spell and check
+  each came from the run.**
+
+- **An unmeasured absence is a claim and belongs in the file.** Two of the words
+  had somewhere obvious to go that nothing had measured: `@KafkaHandler`'s and
+  `@RabbitHandler`'s repeatability, and `@PulsarListener`'s. Each catalog says in
+  place why it declares nothing, and the Pulsar COVERAGE row was rewritten from
+  "the grammar cannot say it" to "one `javap` question would settle it" — which
+  is a different and much cheaper backlog item. **When a pass makes something
+  newly expressible, re-read the boundaries that blamed the grammar; some of
+  them just changed category.**

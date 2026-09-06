@@ -1141,9 +1141,20 @@ def _synthetic_annotations(
     already joins on directly, so synthesizing a row onto some OTHER class
     that merely happens to implement that interface mints a caller/handler
     for a type nobody declared as a client — a Retrofit interface is itself
-    the client, not a contract some unrelated implementer fulfills, and a
-    messaging listener annotation is never interface-inherited by its own
-    framework either. Left ungated, one declared route produced three rows
+    the client, not a contract some unrelated implementer fulfills.
+    *This paragraph also said "and a messaging listener annotation is never
+    interface-inherited by its own framework either", and CP-16 row 4e
+    FALSIFIES that: spring-rabbit 3.1.4 searches
+    `MergedAnnotations.from(element, SearchStrategy.TYPE_HIERARCHY)`, with the
+    strategy arriving as a constant the probe could read. The claim is deleted
+    rather than corrected in place, because the gate does not rest on it — the
+    reason above stands on its own — and because a rationale that has quietly
+    become false is worse than none (§9). What the falsification costs is
+    `OI-37`, which stays open: the OTHER two searches carry no strategy
+    constant and are unmeasured, and the rule needs a second answer nobody has
+    measured (whether the ancestor's own declaration still derives, and which
+    symbol handles it), so a walk here would be deriving on half a measured
+    rule.* Left ungated, one declared route produced three rows
     (the real interface row plus a synthesized row per implementer in the
     hierarchy) in the reviewer's own repro; `test_a_gateless_catalog_never_
     synthesizes_onto_an_implementing_class` (`test_endpoints.py`) pins the

@@ -7,7 +7,11 @@ direction: inbound
 detect:
   coordinates: ["org.springframework:spring-jms"]
 
-requires: [annotation_args, typed_signatures]
+# `nested_annotation_args` (capability 9.16): a REPEATED `@JmsListener`
+# reaches the class file only as the nested array inside `@JmsListeners`
+# (`OI-36`), and `spring-kafka.yml`'s note gives the reason this is a
+# requirement rather than a nicety.
+requires: [annotation_args, typed_signatures, nested_annotation_args]
 
 matches:
   # No type-level gate: `@JmsListener` sits on the method directly.
@@ -31,7 +35,15 @@ matches:
     all_methods: []
     prefix_annotation: null
     annotations:
-      - { fqn: org.springframework.jms.annotation.JmsListener }
+      # `container` names what javac writes for two `@JmsListener` on one
+      # method (`OI-36`). MEASURED: CP-16 rows 2c/2d read
+      # `@Repeatable(JmsListeners.class)` at 6.1.6 and 7.0.9, and rows 4c/4d
+      # show the post-processor calling
+      # `AnnotatedElementUtils.getMergedRepeatableAnnotations(element,
+      # JmsListener, JmsListeners)` — naming both classes, so the framework
+      # reads the container as well as the annotation.
+      - { fqn: org.springframework.jms.annotation.JmsListener,
+          container: org.springframework.jms.annotation.JmsListeners }
 
 # Copied verbatim from spring-resttemplate.yml: shape (type) expansion is a
 # *global*, insert-if-absent pass keyed on the type symbol alone
@@ -75,14 +87,12 @@ shape_model: json
 # and `@RabbitListener` add `TYPE`. So `prefix_annotation: null` here is the
 # framework's own rule rather than a simplification of it.
 #
-# ONE THING CP-16 FOUND THAT THIS FILE DOES NOT HANDLE, stated rather than
-# encoded: `@JmsListener` is `@Repeatable(JmsListeners.class)` and the
-# post-processor calls
-# `AnnotatedElementUtils.getMergedRepeatableAnnotations(element, JmsListener,
-# JmsListeners)`, naming both. Two listeners on one method are folded by javac
-# into the container, and this catalog — which names no container, a key
-# `annotation_driven` does not have — sees no annotation at all and drops BOTH
-# destinations (`OI-36`).
+# THE ONE THING CP-16 FOUND THAT THIS FILE DID NOT HANDLE IS NOW ENCODED:
+# `@JmsListener` is `@Repeatable(JmsListeners.class)` and the post-processor
+# calls `AnnotatedElementUtils.getMergedRepeatableAnnotations(element,
+# JmsListener, JmsListeners)`, naming both. Two listeners on one method are
+# folded by javac into the container, and this catalog dropped BOTH
+# destinations until it could name one (`OI-36`, closed).
 measured:
   - { artifact: org.springframework:spring-jms, versions: ["6.1.6", "7.0.9"],
       identity: reported, by: scripts/probes/cp16_listener_destinations.md }

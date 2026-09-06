@@ -81,6 +81,12 @@ overturned rather than forgotten:
   every correctly-named un-annotated operation, which is the second sin bought with the
   first. If this judgement is overturned the consequence is that `OI-5` becomes a blocker
   rather than a backlog row, not that a different approximation ships.
+  **Discharged 2026-09-06** by the `annotation_driven` vocabulary pass: `OI-5` is closed,
+  the wrong address no longer ships, and the grammar gap the judgement rested on is gone. The
+  judgement is left standing rather than deleted, because what it argued — that raising a
+  grammar gap beats encoding an approximation — is the reasoning the pass then acted on, and
+  a register that erased it would lose the only record of why the defect was allowed to stand
+  for a month. The count stays **0**.
 
 ### The §13.8 stop rule fired in Stage 4: THREE catalogs whose real rule the grammar cannot say
 
@@ -104,6 +110,17 @@ evidence. **The mechanism §13.8 asks for is a design pass over `annotation_driv
 vocabulary that takes all three at once**, with the three measurements above as its input;
 `scheduled_work`'s `container` and `disabled` keys are the shape it would follow. Until then
 the three rows stay open and none of them is fixed in isolation.
+
+**THE PASS RAN, 2026-09-06, and all three rows are CLOSED below.** Three words, designed
+together and each naming the measurement that forces it —
+`mapping.annotations[].container` (`OI-36`, CP-16), `mapping.path_from_siblings` (`OI-35`,
+CP-15 rows 1-2 and the new row 6), and `mapping.annotations[].path_fallback` with the two
+measured accessor words (`OI-5`, CP-15 rows 3-5). Every word is optional and inert while
+absent, so the other seventeen `annotation_driven` catalogs derive byte-identically; the
+design, what was rejected, and the §8.3 audit of which catalogs gained expressiveness are in
+`.superpowers/sdd/2026-09-03-phase-2o-spring-surface/vocabulary-pass-report.md`, and the
+vocabulary itself is D02 §2. **`OI-37` was in the pass's input and is NOT closed by it** —
+its row says why, and the reason is a missing measurement rather than a missing word.
 
 Severity: **Critical** = publishes a wrong row a reader would act on ·
 **Major** = wrong under a realistic input, or a silent drop · **Minor** = stale
@@ -177,60 +194,6 @@ answer, and its guard moved with it and is measured to kill
 `tests/application/test_call_edges.py` are module-prefixed hand-built facts, and
 a real-scan half asserts the composed descriptor against what the extractor
 wrote. Four crossings, four discharges, and still no type.
-
-### OI-5 — MicroProfile GraphQL publishes a wrong address — CONFIRMED BY MEASUREMENT, still open
-**Major · pre-existing (`A-Mi9`) · measured 2026-09-06 by Stage 4's
-`microprofile-graphql` pass · `scripts/probes/cp15_mp_graphql_names.md`**
-
-`microprofile-graphql.yml`'s `path_fallback: construct_name` WAS a prediction.
-CP-15 compiled `MethodHelper.getPropertyName` against
-smallrye-graphql-schema-builder 2.0.0 and 2.18.5 and ran it, so the prediction
-is now an observation: **`getOrders -> orders`**. We publish `getOrders`; the
-address is wrong, at `resolved`/`compiler`, and nothing downstream can tell it
-from an observation.
-
-**The rule is bigger than this row predicted, and that is why the row is still
-open.** It is direction-dependent, and the direction is chosen by WHICH
-operation annotation matched (CP-15 rows 3-5): `@Query` and `@Subscription`
-take `Direction.OUT`, which strips `get` and `is`; `@Mutation` takes
-`Direction.IN`, which strips `set` and nothing else. Measured edges:
-`get -> get` (too short), `gettotal -> gettotal` (no capital at the seam),
-`getX -> x`, and `getURL -> uRL` — the FIRST character is lowercased, not the
-remainder, which is the case that tells this rule apart from every plausible
-paraphrase of it.
-
-**Why it is not fixed.** `mapping.path_fallback` is ONE catalog-level word and
-this rule needs one per annotation. A `get`/`is` strip fixes every `@Query` and
-makes `@Mutation Order getOrder()` newly wrong (served `getOrder`, we would say
-`order`); a `set` strip does the mirror. §8.1 rule 1 forbids an approximation
-that fits the examples in front of you, and the Stage 4 dispatch says to raise
-a grammar gap rather than encode around it. `construct_name` is kept rather
-than dropped because it is correct for every operation whose method name is not
-a bean accessor, and dropping it composes the empty address and loses those too.
-
-**What the measurement DID buy**, so this is not a year of standing still: the
-catalog now carries a `measured:` block (its `_NOT_MEASURED_YET` row is
-retired), the boundary in `docs/COVERAGE.md` §5.4 states an observation rather
-than a hypothesis, and
-`tests/application/test_endpoints.py::test_a_microprofile_query_naming_nothing_publishes_the_wrong_address`
-**asserts the wrong output**, so the defect is a fact in the suite and the fix
-will show up as a changed assertion rather than as a paragraph somebody has to
-notice.
-
-**Closes by** either (a) `mapping.path_fallback` becoming per-annotation data —
-the `mapping_catalog` struct already carries four per-annotation columns, so
-this is a fifth plus one `CASE` — or (b) splitting the file into a `@Query`
-catalog and a `@Mutation` catalog, each with a single-word fallback, which the
-`spring-sqs`/`spring-sqs-legacy` pair is the precedent for. Whichever is taken,
-the rule to encode is CP-15 row 4's, including `getURL -> uRL`.
-**Falsified by** — now measured, so the falsifier is the other way round: a
-SmallRye deployment serving `getOrders` under its written name would mean CP-15
-row 5 does not describe what a server does, which row 3 is what re-checks.
-
-**What is still NOT measured**, and the row is bounded by it: nothing was
-deployed. Row 5 is the schema builder's own answer, and SmallRye is one
-implementation of a specification several vendors implement. A live SmallRye
-run stays rank 2 of the sweep's probe backlog.
 
 ### OI-6 — 6 Class A Minors remain open
 **Minor · pre-existing · `docs/principles-sweep-2026-09-05.md` §13**
@@ -826,79 +789,6 @@ non-starting code is out of scope for every catalog rather than for this one.
 **Falsified by** such a declaration exporting a `scheduled_work` row.
 
 
-### OI-35 — four of MicroProfile GraphQL's five operation-name sources are not read
-**Major · found 2026-09-06 by Stage 4's `microprofile-graphql` pass (CP-15 rows
-1-2) · `src/sextant/catalogs/microprofile-graphql.yml`**
-
-`OI-5` is about the FALLBACK. This is about the sources that come before it, and
-nothing in this register had recorded them. CP-15 disassembles
-`OperationCreator.getOperationName` at smallrye-graphql-schema-builder 2.0.0 and
-2.18.5 and finds it consulting five sources in order, taking the first with a
-value: the operation annotation's own `value`, then
-`org.eclipse.microprofile.graphql.Name`, then
-`jakarta.json.bind.annotation.JsonbProperty`, then its `javax` spelling, then
-`com.fasterxml.jackson.annotation.JsonProperty`. Row 2 reads each fully
-qualified name out of `Annotations`' own static initialiser, so the cell names
-annotation types rather than fields.
-
-`microprofile-graphql.yml`'s `path_from: [value]` reads the first alone. So
-`@Query @Name("allOrders") List<Order> orders()` is served as `allOrders` while
-we publish `orders` — **a wrong address**, the same class as `OI-5` and reached
-by a different route.
-
-**Not encoded**, and for a different grammar reason from `OI-5`'s:
-`mapping.path_from` names attributes on the MATCHED annotation, and these are
-four OTHER annotations on the same method. No shipped vocabulary reads a name
-off a sibling annotation — `request_body` reads a sibling annotation but answers
-a different question and feeds a different column.
-
-**Cost:** bounded to a MicroProfile GraphQL operation carrying one of the four,
-which `@Name` makes ordinary — it is the specification's own renaming
-annotation and the same one this catalog already names for `request_body`, so a
-module using it for the documented purpose gets a wrong address.
-**Closes by** a `path_from` form that can name a sibling annotation's attribute
-(`{ annotation: …, arg: value }`, the shape `spring-integration.yml`'s
-`channels` already uses one table over), with the ORDER preserved, since the
-framework takes the first present and a set would not say which.
-**Falsified by** a `@Query @Name("x")` method exporting `orders` rather than `x`.
-
-
-### OI-36 — a method carrying TWO listener annotations derives nothing, in all three frameworks
-**Major · found 2026-09-06 by Stage 4's listener pass (CP-16 rows 2 and 4) ·
-`src/sextant/catalogs/spring-kafka.yml`, `spring-jms.yml`, `spring-rabbit.yml`**
-
-`@KafkaListener`, `@JmsListener` and `@RabbitListener` are each `@Repeatable`
-— into `KafkaListeners`, `JmsListeners` and `RabbitListeners` — at every one of
-the six versions CP-16 read, and each framework's post-processor reads that
-container: Kafka calls `KafkaListeners.value()`, JMS calls
-`AnnotatedElementUtils.getMergedRepeatableAnnotations(element, JmsListener,
-JmsListeners)` naming both classes, spring-rabbit 3.1.4 streams `RabbitListener`
-out of a `MergedAnnotations` view.
-
-javac writes the CONTAINER and not the annotation on such a method (JLS 9.7.5),
-so the class file carries no `@KafkaListener` at all and
-`derive_endpoints.sql`'s `mc.fqn = a.annotation` join matches nothing. **Both
-destinations vanish from the export**, silently, beside a single-listener
-neighbour that derives normally — a silent under-report, the second sin, and
-the harder of the two to notice because the row is absent rather than wrong.
-
-**This is not a new class of mistake; it is the one `spring-scheduling.yml`
-already names a key to avoid.** That catalog's `container:` key exists because
-two `@Scheduled` on one method fold the same way. The difference is that the
-`scheduled_work` style HAS such a key and `annotation_driven` has none — so
-this is a grammar gap raised rather than an approximation encoded (§8.1 rule
-4), and the Stage 4 dispatch's own instruction for that case.
-
-**Cost:** bounded to a method declaring two or more listeners of one
-framework — uncommon but entirely ordinary (one handler serving two topics with
-different container factories, or a queue and its dead-letter queue), and the
-whole method's surface is lost when it happens.
-**Closes by** a `container` word in `annotation_driven`'s vocabulary that reads
-the folded uses the way `scheduled_work._folded` already does; the extractor
-capability it needs (9.16, nested annotation arguments) already ships and
-`spring-scheduling.yml` already `requires` it.
-**Falsified by** a two-listener method exporting either of its destinations.
-
 ### OI-37 — an INHERITED `@RabbitListener` registers a listener we do not see
 **Minor · found 2026-09-06 by Stage 4's listener pass (CP-16 row 4e) ·
 `src/sextant/catalogs/spring-rabbit.yml`**
@@ -930,8 +820,158 @@ mechanism one table over, and should be one decision rather than two.
 **Falsified by** an inherited listener declaration appearing in an export
 against the implementing bean.
 
+**NOT closed by the 2026-09-06 `annotation_driven` vocabulary pass, and the
+reason is a missing measurement rather than a missing word.** This row was in
+that pass's input beside `OI-5`, `OI-35` and `OI-36`, and the pass rejected a
+`search:` word for it explicitly. The mechanism already exists —
+`effective_annotations.inherited_rows` walks a scanned ancestor's mappings, and
+`annotation_driven._synthetic_annotations` gates it on the catalog declaring a
+`type_annotation` — so a word turning that gate into a catalog declaration is
+one line. What is missing is the evidence to point it at: two of the three
+searches carry no strategy constant (CP-16's own boundary (b)), spring-rabbit
+4.1.1's moved into an artifact the probe does not open, and the rule needs a
+SECOND answer nothing has measured — whether the ancestor's own declaration
+still derives a row of its own, and which symbol is the handler when it does.
+Deriving on half of that is what §8.1 rule 4 forbids in as many words, and it is
+the same judgement `OI-34` records one style over.
+
+**What the pass DID establish, and it narrows this row.**
+`annotation_driven._synthetic_annotations`' own docstring justified the gate
+partly on the claim that *"a messaging listener annotation is never
+interface-inherited by its own framework either"* — CP-16 row 4e falsifies that
+for spring-rabbit 3.1.4, and the comment is corrected to say so rather than left
+as a rationale that has quietly become false (§9). The gate itself is unchanged
+and still right for the reason its OTHER half gives: an ungated walk synthesises
+a listener onto every implementer, which is a different fabrication from this
+under-report.
+
 
 ## CLOSED
+
+### OI-5 — MicroProfile GraphQL published a wrong address for an un-named operation
+**Major · pre-existing (`A-Mi9`) · measured 2026-09-06 by Stage 4's
+`microprofile-graphql` pass · CLOSED 2026-09-06 by the `annotation_driven`
+vocabulary pass · `scripts/probes/cp15_mp_graphql_names.md`,
+`src/sextant/catalogs/microprofile-graphql.yml`**
+
+`path_fallback: construct_name` was a prediction, CP-15 made it an observation
+(`getOrders -> orders`, compiled and RUN against smallrye-graphql-schema-builder
+2.0.0 and 2.18.5), and the observation said the prediction was right about the
+direction and wrong about the size: the rule is **direction-dependent, and the
+direction is chosen by WHICH operation annotation matched** — `@Query` and
+`@Subscription` take `Direction.OUT` (strips `get`, `is`), `@Mutation` takes
+`Direction.IN` (strips `set`). So no single catalog-level word could be right,
+and the row stayed open with the measurement asserted in the suite rather than
+a plausible half-fix shipped.
+
+**Closed the way the row asked, by option (a).** `mapping.path_fallback` is now
+a DEFAULT and `mapping.annotations[].path_fallback` overrides it per
+annotation, and the closed vocabulary gained the two measured words —
+`read_accessor_property` (`get`, `is`) and `write_accessor_property` (`set`).
+The strip's three conditions are the framework's own and every edge of CP-15
+row 5 is a parametrised assertion, `getURL -> uRL` included, which is the case
+that tells this rule apart from every plausible paraphrase of it.
+`test_a_microprofile_query_naming_nothing_publishes_the_wrong_address` — the
+characterisation test that asserted the WRONG output so the defect could not be
+lost — is now
+`test_a_microprofile_operation_falls_back_to_the_name_smallrye_serves`, and it
+asserts `orders`. Two guards, both measured to kill:
+`derive_endpoints.path-fallback-is-per-annotation` (the engine reads the
+annotation's word, not the catalog's) and
+`derive_endpoints.accessor-strip-is-the-measured-one` (the length and seam
+tests, without which `get` composes the empty address and `gettotal` is
+republished as `total`).
+
+**What the close does NOT settle**, stated rather than implied. Nothing was
+deployed: CP-15 row 5 is the schema builder's own answer and row 3 is what says
+nothing transforms the name between that call and the `Operation`'s own. And
+**SmallRye is one implementation** of a specification several vendors implement,
+so the rule this catalog now encodes is scoped to the two versions its
+`measured:` block names — a second implementation is a second row there, not an
+assumption. A live SmallRye run stays rank 2 of the sweep's probe backlog.
+**Falsified by** a SmallRye deployment serving `getOrders` under its written
+name.
+
+### OI-35 — four of MicroProfile GraphQL's five operation-name sources were not read
+**Major · found 2026-09-06 by Stage 4's `microprofile-graphql` pass (CP-15 rows
+1-2) · CLOSED 2026-09-06 by the `annotation_driven` vocabulary pass ·
+`src/sextant/catalogs/microprofile-graphql.yml`**
+
+`getOperationName` consults five sources in order and takes the first with a
+value: the operation annotation's own `value`, then
+`org.eclipse.microprofile.graphql.Name`, then
+`jakarta.json.bind.annotation.JsonbProperty`, then its `javax` spelling, then
+`com.fasterxml.jackson.annotation.JsonProperty`. The catalog read the first
+alone, so `@Query @Name("allOrders") List<Order> orders()` was served as
+`allOrders` while we published `orders` — a wrong address, reached by a
+different route from `OI-5`'s.
+
+**Closed the way the row asked**, with the shape it named: `path_from_siblings`
+is an ORDERED list of `{annotation, arg}` entries, consulted in the order the
+catalog writes and only where every `path_from` alias is absent — which is
+exactly the measured order, since CP-15 row 1 puts the matched annotation's own
+`value` at index 0 of the source array. `derive_endpoints.sibling-name-source-order`
+is the guard, measured to kill, and the test that kills it declares BOTH sibling
+sources at once, because that is the only input an ordered list and a set answer
+differently.
+
+**One question the row did not ask, and the close needed: WHICH member of each
+of those four annotations carries the name.** `@JsonProperty` declares six, so
+reading `value` off the method's own name (`getOneOfTheseMethodAnnotationsValue`)
+would have been §5.3's "assumed a mechanism's behaviour from its name" — the
+inference that produced that rule in the first place. **CP-15 row 6** was added
+for it and disassembles the loop: the selection predicate is
+`containsKeyAndValidValue` (the annotation is present AND
+`AnnotationInstance.value()` is non-null) and the read is the same no-argument
+`value()`, at both versions. So `arg: value` on all four is measured rather than
+assumed.
+
+**What the close does NOT settle.** Row 6 shows the call and not jandex's own
+contract for it: that `AnnotationInstance.value()` returns the member literally
+named `value` is jandex's API rather than something this probe executed, and the
+`value(String)` sibling that takes a member name — which the class also calls,
+elsewhere — is what makes the distinction visible rather than assumed. And the
+`javax`/`jakarta` pair is listed because the framework lists both, so a catalog
+dropping either would under-report a source the schema builder still consults.
+**Falsified by** a `@Query @Name("x")` method exporting anything but `x`.
+
+### OI-36 — a method carrying TWO listener annotations derived nothing, in all three frameworks
+**Major · found 2026-09-06 by Stage 4's listener pass (CP-16 rows 2 and 4) ·
+CLOSED 2026-09-06 by the `annotation_driven` vocabulary pass ·
+`src/sextant/catalogs/spring-kafka.yml`, `spring-jms.yml`, `spring-rabbit.yml`**
+
+`@KafkaListener`, `@JmsListener` and `@RabbitListener` are each `@Repeatable` at
+every one of the six versions CP-16 read, and each framework's post-processor
+reads the container. javac writes the CONTAINER and not the annotation (JLS
+9.7.5), so the class file carried no listener annotation at all, the mapping
+join matched nothing, and **both** destinations vanished from the export beside
+a single-listener neighbour deriving normally — a silent under-report, the
+second sin and the harder of the two to notice.
+
+**Closed the way the row asked**, with the key `spring-scheduling.yml` already
+had one style over: `mapping.annotations[].container` names the container, and
+the engine unfolds each container use into ordinary `{target, annotation, args}`
+rows BEFORE composition and inheritance, so a folded use is an ordinary
+annotation everywhere downstream and there is no container in the SQL at all.
+The three catalogs now `requires` capability 9.16, for `spring-scheduling.yml`'s
+stated reason: a scanner that cannot read a nested annotation must skip the
+catalog VISIBLY rather than report part of a module's listener surface and stay
+silent about the rest. Five guards measured to kill, two of them this row's own
+— `annotation_driven.folded-uses-are-read` and
+`annotation_driven.folded-entry-is-the-declared-annotation`, the second being
+`scheduled_work._folded`'s conjunct that stops any array-of-annotations argument
+contributing destinations — plus one per catalog on the container fqn itself.
+
+**What the close does NOT settle**, and each is an absence claimed rather than
+overlooked. `@KafkaHandler` and `@RabbitHandler` declare NO container here,
+because CP-16 row 2 measured `@Repeatable` on the listener annotations only and
+row 3 read the handler annotations' whole declaration without asking whether
+they are repeatable — an unmeasured container is not one a catalog names (§8.1
+rule 4). And the folding is deliberately NOT restricted to method targets, since
+`@KafkaListener` and `@RabbitListener` are `@Target`-legal on a TYPE (CP-16 rows
+2a/2e): a class carrying two class-level listeners folds identically and the
+prefix join composes both, which is the framework's answer rather than a
+widening. **Falsified by** a two-listener method exporting neither destination.
 
 ### OI-2 — a DISABLED scheduled job was reported as live work
 **Major · introduced 2026-09-06 by 2O Task 8 (`35fa4d5..4e51317`) · CLOSED

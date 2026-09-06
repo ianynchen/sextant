@@ -181,6 +181,29 @@ def _body(output: str, method: str) -> list[str]:
     return body
 
 
+def _overload_body(output: str, declaration: str) -> list[str]:
+    """One OVERLOAD's instruction sequence, by an exact substring of its
+    declaration line.
+
+    `_body` matches on a method's NAME, which is enough while a name is unique
+    and silently answers the first overload where it is not — and question 6
+    reads two overloads of `getStringValue` that differ only in their parameter
+    type. The language identifies a method by its name and parameter types in
+    order (GUIDELINES §8.1), so the lookup here does too.
+    """
+    lines = output.splitlines()
+    start = next((i for i, line in enumerate(lines) if declaration in line), None)
+    if start is None:
+        raise ProbeError(f"javap printed no `{declaration}` at all")
+    body: list[str] = []
+    for line in lines[start + 2 :]:
+        step = _step(line)
+        if step is None:
+            break
+        body.append(step)
+    return body
+
+
 def _named(artifacts: list[Artifact], name: str) -> list[Artifact]:
     found = [artifact for artifact in artifacts if artifact.name == name]
     if not found:
@@ -327,6 +350,39 @@ def q5_what_the_implementation_returns(artifacts: list[Artifact]) -> list[tuple[
     return rows
 
 
+def q6_which_member_each_source_is_read_from(
+    artifacts: list[Artifact],
+) -> list[tuple[str, str, str]]:
+    """Q6. WHICH attribute of each source annotation carries the name, and what
+    makes a written value count as one.
+
+    Question 1 answers WHICH annotations are consulted and in what order; it
+    does not say which of their members is read, and `@JsonProperty` declares
+    six. A catalog needs an ATTRIBUTE NAME, so reading the order and inferring
+    the member from the method's own name (`…AnnotationsValue`) would be
+    exactly the "assumed a mechanism's behaviour from its name" failure §5.3
+    was written for. This is that inference replaced by the instructions.
+
+    Four bodies, because the answer is spread across them: the loop that picks
+    a source (`getOneOfTheseMethodAnnotationsValue`), the predicate deciding
+    that a source HAS a value (`hasValidMethodAnnotation`, and
+    `containsKeyAndValidValue` under it), and the two `getStringValue`
+    overloads that turn the chosen instance into the name.
+    """
+    rows = []
+    for artifact in _named(artifacts, "smallrye-graphql-schema-builder"):
+        output = _javap("-p", "-c", _ANNOTATIONS, classpath=artifact.jar)
+        body = [
+            *_body(output, "getOneOfTheseMethodAnnotationsValue"),
+            *_body(output, "hasValidMethodAnnotation"),
+            *_body(output, "containsKeyAndValidValue"),
+            *_overload_body(output, "getStringValue(org.jboss.jandex.AnnotationInstance)"),
+            *_overload_body(output, "getStringValue(org.jboss.jandex.AnnotationValue)"),
+        ]
+        rows.append((artifact.name, artifact.observed, _STEP.join(body)))
+    return rows
+
+
 _QUESTIONS: list[tuple[str, str, Callable[[list[Artifact]], list[tuple[str, str, str]]]]] = [
     (
         "1",
@@ -341,6 +397,11 @@ _QUESTIONS: list[tuple[str, str, Callable[[list[Artifact]], list[tuple[str, str,
     ),
     ("4", "`MethodHelper`'s two transformations", q4_the_transformation),
     ("5", "what `getPropertyName` returned, compiled and run", q5_what_the_implementation_returns),
+    (
+        "6",
+        "which MEMBER of each name source is read, and what counts as a value",
+        q6_which_member_each_source_is_read_from,
+    ),
 ]
 
 

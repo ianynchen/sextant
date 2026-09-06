@@ -770,6 +770,82 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "spring-kafka.container-is-the-frameworks-own": Guard(
+        what="`container` names the annotation javac ACTUALLY folds two `@KafkaListener` into",
+        why="`OI-36`. A container named wrong matches nothing, and the failure is SILENT in the "
+        "worst direction: a method carrying two listeners derives no row at all while its "
+        "single-listener neighbour derives normally, so there is no wrong row to notice. "
+        "CP-16 rows 2a/2b read `@Repeatable(KafkaListeners.class)` off the annotation's own "
+        "class file at 3.1.4 and 4.1.1; the weakening below is a plausible name in place of "
+        "the measured one, which is the mistake §8.1 forbids",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-kafka.yml",
+                find="          container: org.springframework.kafka.annotation.KafkaListeners }",
+                replace="          container: org.springframework.kafka.annotation.KafkaHandlers }",
+            ),
+        ),
+    ),
+    "spring-jms.container-is-the-frameworks-own": Guard(
+        what="`container` names the annotation javac ACTUALLY folds two `@JmsListener` into",
+        why="`OI-36`, and the same silent drop as the Kafka guard above. CP-16 rows 2c/2d read "
+        "`@Repeatable(JmsListeners.class)` at 6.1.6 and 7.0.9, and rows 4c/4d show the "
+        "post-processor naming both classes in one call",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-jms.yml",
+                find="          container: org.springframework.jms.annotation.JmsListeners }",
+                replace="          container: org.springframework.jms.annotation.JmsHandlers }",
+            ),
+        ),
+    ),
+    "spring-rabbit.container-is-the-frameworks-own": Guard(
+        what="`container` names the annotation javac ACTUALLY folds two `@RabbitListener` into",
+        why="`OI-36`, and the same silent drop again. CP-16 rows 2e/2f read "
+        "`@Repeatable(RabbitListeners.class)` at 3.1.4 and 4.1.1",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-rabbit.yml",
+                find="          container: org.springframework.amqp.rabbit.annotation."
+                "RabbitListeners }",
+                replace="          container: org.springframework.amqp.rabbit.annotation."
+                "RabbitHandlers }",
+            ),
+        ),
+    ),
+    "microprofile-graphql.fallback-direction-is-per-annotation": Guard(
+        what="each operation annotation declares the accessor direction its OWN fallback strips "
+        "— the read direction for `@Query`, the write direction for `@Mutation`",
+        why="`OI-5`, and the catalog half of the engine guard `derive_endpoints.path-fallback-"
+        "is-per-annotation`, measured separately so a file that states the wrong direction and "
+        "an engine that ignores the right one cannot pass for each other. CP-15 row 3 switches "
+        "on the operation type and row 5 shows both halves: `setStatus -> IN status` and "
+        "`setStatus` unchanged under OUT. One direction written on both annotations publishes "
+        "an operation under a name SmallRye does not serve it at",
+        edits=(
+            Edit(
+                path="sextant/catalogs/microprofile-graphql.yml",
+                find="          path_fallback: write_accessor_property }",
+                replace="          path_fallback: read_accessor_property }",
+            ),
+        ),
+    ),
+    "microprofile-graphql.name-sources-are-the-measured-annotations": Guard(
+        what="`path_from_siblings` names the annotation TYPES CP-15 read out of the framework's "
+        "own source array, and not ones that merely look like renaming annotations",
+        why="`OI-35`. `@Name` is the specification's own renaming annotation and the second "
+        "source `getOperationName` consults (CP-15 rows 1-2), so a method carrying it is served "
+        "under the name it gives. A sibling list naming the wrong type matches nothing and the "
+        "operation is published under its method name instead — a wrong address at "
+        "`resolved`/`compiler`, which is the defect this key closed",
+        edits=(
+            Edit(
+                path="sextant/catalogs/microprofile-graphql.yml",
+                find="      - { annotation: org.eclipse.microprofile.graphql.Name, arg: value }",
+                replace="      - { annotation: org.eclipse.microprofile.graphql.Id, arg: value }",
+            ),
+        ),
+    ),
     "spring-jms.path-from-is-the-destination-attribute": Guard(
         what="`path_from` names the one attribute of `@JmsListener` that IS a destination, and "
         "nothing else",

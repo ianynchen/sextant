@@ -4772,6 +4772,12 @@ def test_the_soap_template_catalog_skips_visibly_without_annotation_arguments(
 _TASK_7_CAPABILITIES = frozenset(
     {
         "annotation_args",
+        # Capability 9.16, and required by the three listener catalogs since
+        # they learned to name their repeatable container (`OI-36`): a folded
+        # use reaches the class file only as a nested annotation. Without it
+        # here those catalogs would be SKIPPED rather than run, which is the
+        # visible failure the `requires` entry is for.
+        "nested_annotation_args",
         "type_annotations",
         "typed_signatures",
         "call_site",
@@ -5155,8 +5161,107 @@ def test_a_jms_listener_declaring_only_a_subscription_derives_nothing(tmp_path: 
     assert rows == []
 
 
+# --- `OI-36`: the repeatable container, against the three shipped catalogs --
+#
+# javac writes the CONTAINER and not the annotation when one is used twice on a
+# declaration (JLS 9.7.5), so the class file below carries no listener
+# annotation at all — which is why these read as "two destinations from a fact
+# that mentions neither". CP-16 rows 2 and 4 measured the container and the
+# post-processor's read of it at six versions across the three frameworks.
+
+
+def _folded_use(annotation: str, args: dict[str, object]) -> AnnotationUse:
+    return AnnotationUse(annotation=annotation, args=args)
+
+
+@pytest.mark.pins("spring-kafka.container-is-the-frameworks-own")
+def test_two_kafka_listeners_on_one_method_derive_both_topics(tmp_path: Path):
+    """CP-16 rows 2a/2b and 4a/4b: `@KafkaListener` is
+    `@Repeatable(KafkaListeners.class)` at 3.1.4 and 4.1.1, and the
+    post-processor calls `KafkaListeners.value()`. So the framework registers
+    both listeners while this repository saw nothing at all — a silent
+    under-report beside a single-listener neighbour deriving normally, which is
+    the shape that makes it hard to notice."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-kafka")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={
+            "org/springframework/kafka/annotation/KafkaListeners#": {
+                "value": [
+                    _folded_use(_KAFKA_LISTENER, {"topics": ["orders.v1"]}),
+                    _folded_use(_KAFKA_LISTENER, {"topics": ["orders.dlq"]}),
+                ]
+            }
+        },
+    )
+
+    assert {(str(r["protocol"]), str(r["path"])) for r in rows} == {
+        ("kafka", "orders.v1"),
+        ("kafka", "orders.dlq"),
+    }
+
+
+@pytest.mark.pins("spring-jms.container-is-the-frameworks-own")
+def test_two_jms_listeners_on_one_method_derive_both_destinations(tmp_path: Path):
+    """CP-16 rows 2c/2d and 4c/4d: `@JmsListener` is
+    `@Repeatable(JmsListeners.class)` at 6.1.6 and 7.0.9, and the post-processor
+    calls `getMergedRepeatableAnnotations(element, JmsListener, JmsListeners)` —
+    naming BOTH classes, which is the framework saying in its own words that the
+    container is part of the rule."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-jms")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={
+            "org/springframework/jms/annotation/JmsListeners#": {
+                "value": [
+                    _folded_use(_JMS_LISTENER, {"destination": "orders.queue"}),
+                    _folded_use(_JMS_LISTENER, {"destination": "orders.retry"}),
+                ]
+            }
+        },
+    )
+
+    assert {(str(r["protocol"]), str(r["path"])) for r in rows} == {
+        ("jms", "orders.queue"),
+        ("jms", "orders.retry"),
+    }
+
+
+@pytest.mark.pins("spring-rabbit.container-is-the-frameworks-own")
+def test_two_rabbit_listeners_on_one_method_derive_both_queues(tmp_path: Path):
+    """CP-16 rows 2e/2f and 4e: `@RabbitListener` is
+    `@Repeatable(RabbitListeners.class)` at 3.1.4 and 4.1.1, and 3.1.4's
+    post-processor streams `RabbitListener` out of a `MergedAnnotations` view,
+    which is the container-aware read."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-rabbit")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={
+            "org/springframework/amqp/rabbit/annotation/RabbitListeners#": {
+                "value": [
+                    _folded_use(_RABBIT_LISTENER, {"queues": ["orders.q"]}),
+                    _folded_use(_RABBIT_LISTENER, {"queues": ["orders.dlq"]}),
+                ]
+            }
+        },
+    )
+
+    assert {(str(r["protocol"]), str(r["path"])) for r in rows} == {
+        ("amqp", "orders.q"),
+        ("amqp", "orders.dlq"),
+    }
+
+
 _GRAPHQL_API = "org/eclipse/microprofile/graphql/GraphQLApi#"
 _MP_QUERY = "org/eclipse/microprofile/graphql/Query#"
+_MP_MUTATION = "org/eclipse/microprofile/graphql/Mutation#"
+_MP_NAME = "org/eclipse/microprofile/graphql/Name#"
 
 
 def test_a_microprofile_query_naming_its_own_operation_derives_that_name(tmp_path: Path):
@@ -5180,22 +5285,22 @@ def test_a_microprofile_query_naming_its_own_operation_derives_that_name(tmp_pat
     ]
 
 
-def test_a_microprofile_query_naming_nothing_publishes_the_wrong_address(tmp_path: Path):
-    """**A characterisation test of a KNOWN-WRONG output** (`OI-5`), written so
-    the defect is a fact in the suite rather than a paragraph in a register.
+@pytest.mark.pins("microprofile-graphql.fallback-direction-is-per-annotation")
+def test_a_microprofile_operation_falls_back_to_the_name_smallrye_serves(tmp_path: Path):
+    """**This assertion used to be the defect** (`OI-5`). It read
+    `== ["getOrders"]` and was named
+    `..._publishes_the_wrong_address`: a characterisation test of a known-wrong
+    output, written so the defect was a fact in the suite rather than a
+    paragraph in a register, with the register saying "the day the grammar can
+    say it, this assertion is what changes". This is that day.
 
     CP-15 row 5 compiled `MethodHelper.getPropertyName` against both measured
-    SmallRye jars and RAN it: `getOrders -> OUT orders`. So SmallRye serves
-    this operation as `orders`, and `path_fallback: construct_name` publishes
-    `getOrders` — a wrong address, at `resolved`/`compiler`, indistinguishable
-    downstream from an observation.
-
-    It is asserted rather than fixed because the framework's rule is
-    direction-dependent per annotation — `@Query` strips `get`/`is` and
-    `@Mutation` strips `set` (CP-15 rows 3-5) — and `mapping.path_fallback` is
-    one catalog-level word. Encoding either half alone makes the OTHER
-    annotation newly wrong, which is the approximation §8.1 rule 1 forbids. The
-    day the grammar can say it, this assertion is what changes."""
+    SmallRye jars and RAN it: `getOrders -> OUT orders`, `setStatus -> IN
+    status`. And the direction is chosen by WHICH annotation matched — `@Query`
+    takes `OUT`, `@Mutation` takes `IN` (row 3) — which is why both are asserted
+    here together, on two methods whose names are each the OTHER direction's
+    accessor. A catalog carrying one word for both cannot produce this pair: it
+    publishes `getOrders` or `setStatus` unchanged, whichever way it leans."""
     rows = _rows_from(
         tmp_path,
         [_shipped("microprofile-graphql")],
@@ -5204,8 +5309,43 @@ def test_a_microprofile_query_naming_nothing_publishes_the_wrong_address(tmp_pat
         class_annotations={_GRAPHQL_API: {}},
         method_annotations={_MP_QUERY: {}},
     )
+    mutations = _rows_from(
+        tmp_path / "mutation",
+        [_shipped("microprofile-graphql")],
+        class_symbol="com/acme/task7/Orders#",
+        method_symbol="com/acme/task7/Orders#setStatus(sig_mp2).",
+        class_annotations={_GRAPHQL_API: {}},
+        method_annotations={_MP_MUTATION: {}},
+    )
 
-    assert [r["path"] for r in rows] == ["getOrders"]
+    assert [r["path"] for r in rows] == ["orders"]
+    assert [r["path"] for r in mutations] == ["status"]
+
+
+@pytest.mark.pins("microprofile-graphql.name-sources-are-the-measured-annotations")
+def test_a_microprofile_operation_renamed_by_a_sibling_annotation_takes_that_name(
+    tmp_path: Path,
+):
+    """`OI-35`. `getOperationName` consults five sources in order and takes the
+    first with a value (CP-15 rows 1-2), and the specification's own renaming
+    annotation — `@Name` — is the second. So
+    `@Query @Name("allOrders") List<Order> orders()` is SERVED as `allOrders`,
+    while this catalog published `orders` until it could name a sibling source.
+
+    The `@Query` here carries NO value of its own, which is what puts the
+    sibling in play at all: CP-15 row 1 puts the matched annotation's own value
+    first, and `test_a_microprofile_query_naming_its_own_operation_derives_that_name`
+    above is the other half of that order."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("microprofile-graphql")],
+        class_symbol="com/acme/task7/Orders#",
+        method_symbol="com/acme/task7/Orders#getOrders(sig_mp1).",
+        class_annotations={_GRAPHQL_API: {}},
+        method_annotations={_MP_QUERY: {}, _MP_NAME: {"value": "allOrders"}},
+    )
+
+    assert [r["path"] for r in rows] == ["allOrders"]
 
 
 @pytest.mark.declines("microprofile-graphql")

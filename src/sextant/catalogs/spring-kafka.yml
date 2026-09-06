@@ -7,7 +7,14 @@ direction: inbound
 detect:
   coordinates: ["org.springframework.kafka:spring-kafka"]
 
-requires: [annotation_args, typed_signatures]
+# `nested_annotation_args` (capability 9.16) because a REPEATED
+# `@KafkaListener` reaches the class file only as the nested array inside
+# its container (`OI-36`). Required rather than optional for
+# `spring-scheduling.yml`'s reason: a scanner that cannot read a nested
+# annotation must skip this catalog VISIBLY (M04, FR-17) instead of
+# reporting the single-listener half of a module's surface and staying
+# silent about the rest.
+requires: [annotation_args, typed_signatures, nested_annotation_args]
 
 matches:
   # No type-level gate: a listener method carries its own `@KafkaListener`
@@ -41,7 +48,25 @@ matches:
     prefix_annotation: org.springframework.kafka.annotation.KafkaListener
     annotations:
       # A plain, method-level `@KafkaListener` — the ordinary listener shape.
-      - { fqn: org.springframework.kafka.annotation.KafkaListener }
+      #
+      # `container` names what javac writes when the annotation is used TWICE
+      # on one declaration (`OI-36`). MEASURED, not remembered: CP-16 rows
+      # 2a/2b read `@Repeatable(KafkaListeners.class)` off the annotation's own
+      # class file at 3.1.4 and 4.1.1 alike, and rows 4a/4b show the
+      # post-processor calling `KafkaListeners.value()` — so the framework
+      # registers BOTH listeners while the class file carries no
+      # `@KafkaListener` at all (JLS 9.7.5). Before this key both destinations
+      # were dropped, silently, beside a single-listener neighbour that derived
+      # normally.
+      - { fqn: org.springframework.kafka.annotation.KafkaListener,
+          container: org.springframework.kafka.annotation.KafkaListeners }
+      # `@KafkaHandler` declares NO container, and the absence is a claim rather
+      # than an omission: CP-16 row 2 measured `@Repeatable` on the listener
+      # annotation only, and row 3 read `@KafkaHandler`'s whole declaration
+      # (`isDefault(): boolean`, nothing else) without asking whether it is
+      # repeatable. An unmeasured container is not one this file names (§8.1
+      # rule 4); `docs/COVERAGE.md` carries the boundary.
+      #
       # `@KafkaHandler` carries no path attribute of its own (path suffix
       # ''), and reaches a path only through the class-level prefix above —
       # the polymorphic, class-level `@KafkaListener` + `@KafkaHandler` shape.
@@ -93,7 +118,7 @@ shape_model: json
 # `@KafkaHandler` declares `isDefault(): boolean` and nothing else, so it
 # really does reach a destination only through the class-level prefix.
 #
-# TWO THINGS CP-16 FOUND THAT THIS FILE DOES NOT HANDLE, both stated rather
+# ONE THING CP-16 FOUND THAT THIS FILE DOES NOT HANDLE, both stated rather
 # than encoded. `@KafkaListener` is `@Repeatable(KafkaListeners.class)` and the
 # post-processor calls `KafkaListeners.value()`, so TWO listeners on one method
 # are folded by javac into the container and this catalog — which names no
