@@ -29,7 +29,39 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 **Second principle violation → stop and raise.** The running count is below and is
 kept here rather than in an agent's head.
 
-### Principle-violation count: 0 confirmed
+### Principle-violation count: 1 confirmed
+
+**PV-1 (2026-09-07) — claims about our own system asserted without measuring them.**
+Seven false statements were written into `docs/superpowers/specs/2026-09-06-java-kotlin-completeness-design.md`
+and its plan, all of the same class: written from the conversation that produced them rather
+than from the repository. Found by a systematic audit of every claim in both documents
+(`8701c0a`), not by review.
+
+Counted as **one** violation, not seven: one error class. Counting instances would inflate the
+register and make §13.8's stop rule meaningless. **The consequence stands — the next principle
+violation stops work.**
+
+| | claimed | measured |
+|---|---|---|
+| 1 | "capability 9.19, extracted today with no consumer" | no 9.19 exists; `_CAPABILITIES` holds 14, highest 9.18 |
+| 2 | W1 opens with "bump asm 9.7 → 9.10.1" | already shipped in `0674bfd`; `build.gradle.kts` pins 9.10.1 |
+| 3 | `terminal_kind`'s set "derived from the corpora, not invented here" — `database`, `remote`, `queue`, `cache` | already declared at `D00-fact-schema.md:205`; the four names match neither it nor `target_kind`, and a second definition fails `test_source_rules.py:158` |
+| 4 | `dependents_of` and `blast_radius` are D01 named queries | neither exists |
+| 5 | "`_NO_DECLINING_TEST_YET` lists 25 of the 55 catalogs" | 27 |
+| 6 | "Nothing in Wave 1 changes derived output" | false for 2 of 8 items — the worst, because it told a reviewer not to look |
+| 7 | "grepping 200KB instead of 50MB is the entire point" | never measured; removed rather than dressed up |
+
+**Closed by** `8701c0a`, `e2530f6`, `0444e63`. **What prevents recurrence:** every factual
+claim in the spec and plan now carries the `verify:` command that produces it, so a claim that
+goes stale is detectable rather than silently wrong (user ruling, option C). All seven were in
+planning documents and none reached shipped code or output.
+
+*Four further errors were in spoken review findings rather than in the documents, each
+corrected in the same exchange: the stale-stamp guard called "silent" when it refuses loudly;
+cross-repo boundary identity called unspecified when `D06 §5b` defines it; three commitments
+called "open-ended" when all three are countable (14 twins, 19 catalogs, 36 attributes); and
+the W3→W39 window described as leaving a bug persisting when it is today's behaviour plus a
+label.*
 
 Five candidates were judged NOT violations and are recorded so the judgement can be
 overturned rather than forgotten:
