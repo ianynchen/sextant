@@ -839,6 +839,15 @@ this is where the stamp makes cache invalidation exact rather than approximate.
 Facts and derived tables version separately, because their invalidation costs differ by an
 order of magnitude.
 
+**Both are single monotonically increasing INTEGERS (Step 0), not semver, and both start at
+`2`.** Neither is ever parsed, ordered or compared for compatibility — the comparison below
+is equality and always has been — so a dotted triple carried two numbers that meant nothing
+and gave the value a text type, which is what let four hand-maintained producers of
+`fact_schema_version` hold two different values with the suite green. Each increases by one
+for a change to the thing it stamps. `sextant_version` keeps semver: it is the tool's
+release, read from `pyproject.toml` through the installed distribution, and it moves on its
+own cadence.
+
 | Change | Invalidates | Cost |
 |---|---|---|
 | `fact_schema_version` | Facts, and everything after | **Re-extraction.** The expensive one. |

@@ -80,7 +80,10 @@ class Document(BaseModel):
     module_id: str
     language: str
     sextant_version: str
-    fact_schema_version: str
+    # An integer, not a version string (Step 0): the stamp is compared for
+    # equality and nothing else, and a text type is what let its four
+    # producers hold two different values undetected.
+    fact_schema_version: int
     scanner_id: str
     scanner_version: str
     content_hash: str

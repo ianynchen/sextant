@@ -12,6 +12,39 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Changed
+
+- **`fact_schema_version` and `graph_schema_version` are single monotonically increasing
+  integers, both set to `2`** (Step 0 of the Java/Kotlin v1 completeness plan, ruled by the
+  user). Neither is ever parsed, ordered or compared for compatibility — `api._stale_stamps`
+  compares each for equality and always has — so a dotted triple carried two numbers that
+  meant nothing, in a text type that let copies of one stamp disagree unnoticed. **Every
+  workspace written before this change is refused by the stamp gate, naming the stamp, and
+  must be re-analysed.** That is the designed behaviour, not a migration: nothing is
+  rewritten in place. Measured, so the shape of the refusal is not a surprise: `render`,
+  `enrich` and `export` refuse at `api._stale_stamps` naming the stamp and both values, and a
+  re-`analyze` over a workspace still holding pre-Step-0 fact files fails in
+  `read_fact_file` with `fact_schema_version — Input should be a valid integer ... input_value='1.0.0'`.
+  Both are loud and both name the field; neither migrates anything.
+
+  The divergence this settles was live and undetected: `fact_schema_version` was maintained
+  by hand in **four** places holding **two** values, and the one producer whose shape had
+  actually changed — `ingress/read/*`, which gained `DeclaredShapeFact.operation` — was the
+  copy that was never bumped. So every `.proto`, WSDL, Avro and GraphQL document on disk
+  carried `operation` while stamping the version that predates it, with the whole suite
+  green: nothing compared the copies, and the staleness gate reads `metadata.json` and never
+  the documents.
+
+- **The four copies of that stamp are gone, not merely tested.** `extractor-jvm`'s literal is
+  deleted — the extractor is HANDED the value as a required `--fact-schema-version` option
+  and refuses without it, so Python owns the number and nothing in a repository that cannot
+  see a Python constant is asked to track one. The two Python restatements
+  (`ingress/read/__init__.py`, `application/stages/analyze.py`) now import from
+  `sextant.domain.version`; the layering always permitted it, and only `application`
+  importing `ingress` was ever forbidden. `SEXTANT_VERSION` gets the same treatment in both
+  directions: `--sextant-version` becomes required rather than defaulted in Java, and the
+  Python constant is read from the installed distribution so `pyproject.toml` owns it.
+
 ### Added
 
 - **The vocabulary pass's own audit table is closed: none of the four annotations it left

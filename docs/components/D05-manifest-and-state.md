@@ -68,7 +68,7 @@ which reads as an undocumented dependency rather than as "we did not look."
 
 ```json
 {
-  "graph_schema_version": "1.0.0",
+  "graph_schema_version": 2,
   "sextant_version": "0.4.0",
   "resolved_at": "2026-08-27T09:14:22Z",
   "environment": "prod",
@@ -76,8 +76,8 @@ which reads as an undocumented dependency rather than as "we did not look."
     "orders": {
       "commit": "a3f91c…", "module_commit": "a3f91c…", "scanned_at": "…",
       "bundle": "s3://sextant/orders@a3f91c",
-      "producer": { "sextant_version": "0.4.0", "fact_schema_version": "1.0.0",
-                    "graph_schema_version": "1.0.0",
+      "producer": { "sextant_version": "0.4.0", "fact_schema_version": 2,
+                    "graph_schema_version": 2,
                     "scanners": [{ "id": "asm", "version": "9.7" }],
                     "catalog_hash": "…", "redaction_set_hash": "…" },
       "stale": false
@@ -205,8 +205,8 @@ Bookkeeping for one module workspace. Never read by a person.
 {
   "stamp": {
     "sextant_version": "0.4.0",
-    "fact_schema_version": "1.0.0",
-    "graph_schema_version": "1.0.0",
+    "fact_schema_version": 2,
+    "graph_schema_version": 2,
     "scanners": { "asm": "9.7" },
     "catalog_hash": "…",
     "redaction_set_hash": "…"

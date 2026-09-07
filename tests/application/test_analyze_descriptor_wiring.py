@@ -52,7 +52,7 @@ def _compiled_document(module_id: str) -> Document:
         module_id=module_id,
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="fake-scanner",
         scanner_version="1.0",
         content_hash="sha256:deadbeef",

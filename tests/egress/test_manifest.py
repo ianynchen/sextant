@@ -10,7 +10,7 @@ def test_the_manifest_carries_provenance_coverage_and_contents(tmp_path: Path):
         "provenance": {
             "commit": "a3f91c",
             "sextant_version": "0.1.0",
-            "fact_schema_version": "1.0.0",
+            "fact_schema_version": 2,
             "scanners": [{"id": "asm", "version": "9.7"}],
         },
         "coverage": {"documents": 4, "partial_documents": 0},

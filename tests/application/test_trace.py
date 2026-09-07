@@ -207,7 +207,7 @@ def _document() -> Document:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
         scanner_version="9.18",
         content_hash="sha256:a",

@@ -177,8 +177,13 @@ public final class Main {
         document.put("relative_path", JsonOut.string(relative));
         document.put("module_id", JsonOut.string(options.get("module-id")));
         document.put("language", JsonOut.string("java"));
-        document.put("sextant_version", JsonOut.string(options.getOrDefault("sextant-version", "0.1.0")));
-        document.put("fact_schema_version", JsonOut.string("1.0.0"));
+        document.put("sextant_version", JsonOut.string(required(options, "sextant-version")));
+        // A JSON NUMBER, and handed in rather than held here (Step 0). Python
+        // owns this stamp: nothing in this repository can see the Python
+        // constant, which is why the literal that used to sit on this line
+        // drifted to a value none of its three siblings held. A required
+        // option cannot drift — it can only be absent, and absence is refused.
+        document.put("fact_schema_version", String.valueOf(factSchemaVersion(options)));
         document.put("scanner_id", JsonOut.string("asm"));
         document.put("scanner_version", JsonOut.string("9.18"));
         document.put("content_hash", JsonOut.string("sha256:" + contentHash));
@@ -266,6 +271,31 @@ public final class Main {
             options.put(args[i].replaceFirst("^--", ""), args[i + 1]);
         }
         return options;
+    }
+
+    /** An option this extractor will not invent a value for. A default here is
+     *  a second copy of somebody else's constant, and the one that used to
+     *  stand in for `--fact-schema-version` is exactly how four producers of
+     *  one stamp came to hold two values (Step 0). Absent is a failed request. */
+    private static String required(Map<String, String> options, String name) {
+        String value = options.get(name);
+        if (value == null) {
+            throw new IllegalArgumentException("--" + name + " is required");
+        }
+        return value;
+    }
+
+    /** Parsed rather than passed through, because it is written as a JSON
+     *  NUMBER: a value that cannot be an integer would otherwise leave this
+     *  extractor emitting a fact file no reader can parse. */
+    private static int factSchemaVersion(Map<String, String> options) {
+        String value = required(options, "fact-schema-version");
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException notAnInteger) {
+            throw new IllegalArgumentException(
+                "--fact-schema-version must be an integer, got: " + value);
+        }
     }
 
     private static String sha256(String value) throws Exception {

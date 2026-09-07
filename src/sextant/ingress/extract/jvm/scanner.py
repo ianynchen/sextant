@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 
 from sextant.application.ports.scanner import ScanError, ScanReport, ScanRequest
+from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
 
 _LANGUAGES = {"java", "kotlin"}
 _CAPABILITIES = {
@@ -100,6 +101,16 @@ class AsmScanner:
                 str(request.classes_dir),
                 "--out",
                 str(request.out_dir),
+                # Handed over rather than held in Java (Step 0). The extractor
+                # used to carry its own literal for the fact-schema stamp and a
+                # default for this one, so both were copies of a Python
+                # constant nothing in that repository can see — which is how
+                # four producers of one stamp came to hold two values. Both are
+                # required there now: absent is a refusal, never a default.
+                "--fact-schema-version",
+                str(FACT_SCHEMA_VERSION),
+                "--sextant-version",
+                SEXTANT_VERSION,
                 *origin,
             ],
             capture_output=True,

@@ -63,7 +63,7 @@ Written once per class file. Every fact points at one.
 | `module_id` | From [M02](M02-detector.md) |
 | `language` | The language of this document |
 | `sextant_version` | **The tool that produced these facts** |
-| `fact_schema_version` | **The version of this document's schema** |
+| `fact_schema_version` | **The version of this document's schema** — a single monotonically increasing INTEGER, not semver (Step 0). Compared for equality and nothing else; it is never parsed or ordered, so the dotted form carried two extra numbers that meant nothing and let four producers of the stamp disagree unnoticed |
 | `scanner_id` | Which scanner produced these facts |
 | `scanner_version` | |
 | `content_hash` | Of the source of truth this was read from |
@@ -586,6 +586,15 @@ Each such fact carries, beside its `fields`:
   it — accepted pre-gate, because every fact file already on disk still validates
   unchanged, with the field simply absent (D01 §7's cache-key rule already treats a
   `fact_schema_version` change as one reason a cached result may no longer be reused).
+
+  **Correction (Step 0).** That bump was applied to ONE of the stamp's four producers —
+  `domain/version.py`, which stamps `metadata.json` — and this field is written by
+  `ingress/read/*`, which was left at `1.0.0`. So every `.proto`, WSDL, Avro and GraphQL
+  document written since carries `operation` while stamping the version that predates it,
+  and nothing detected the disagreement because the staleness gate reads `metadata.json`
+  and never the documents. Step 0 removes the cause rather than the symptom: the stamp
+  becomes an integer, the Java copy is deleted (the extractor is HANDED the value as a
+  required option), and the two Python restatements import the one constant that owns it.
 
 Per field: the schema's own `name` and the encoded `wire_name` (a protobuf `json_name`,
 **read from the descriptor, never computed** — protoc puts the computed default and an

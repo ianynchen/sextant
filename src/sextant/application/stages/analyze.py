@@ -50,6 +50,7 @@ from sextant.domain.facts import (
 )
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import list_files
+from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
 
 # The module fact's own document (`_write_module_fact`). Its `relative_path`,
 # its `language` and its fact file's name are one literal: the document IS the
@@ -60,12 +61,12 @@ _MODULE_DOCUMENT = "module"
 # way `ingress/read`'s own `SCANNER_ID` names the config-reading facility (D00
 # §2: `scanner_id` names the facility, never the format).
 _MODULE_SCANNER_ID = "sextant-detector"
-# Restated rather than imported: these three values are `ingress/read`'s, and
-# `application` may not import `ingress` (the layering contract). They must
-# stay equal to that module's own copies — a document written with a different
-# `fact_schema_version` than its siblings would claim a schema nobody shipped.
-SEXTANT_VERSION = "0.1.0"
-FACT_SCHEMA_VERSION = "1.0.0"
+# `application` may not import `ingress` (the layering contract), which is why
+# these were RESTATED here for three phases — and the restatement is what let a
+# module document and a config document stamp two different fact schemas, the
+# invariant this comment used to assert while violating it. Both may import
+# `domain`, so `SEXTANT_VERSION` and `FACT_SCHEMA_VERSION` now come from the one
+# place that owns them. What is left below is this stage's own.
 SCANNER_VERSION = "0.1.0"
 NO_REDACTION_HASH = "sha256:none"
 

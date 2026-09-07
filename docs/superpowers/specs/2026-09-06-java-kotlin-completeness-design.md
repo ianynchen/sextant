@@ -109,17 +109,37 @@ asserts the four agree.
 project has had, and bumping a stamp that is already inconsistent means the bump cannot be
 verified — a correct new value would be indistinguishable from a fourth wrong one.
 
-**Two sub-decisions this raises, flagged rather than assumed.**
+**Two sub-decisions this raised, both since RULED by the user (2026-09-07, during Wave 0).**
 
-- **JSON number or numeric string?** `facts.py:83` types the field `str`, and `Main.java`
-  writes it through `JsonOut.string`. A value that must always parse as an integer but is
-  typed as text is the weaker of the two, and nothing orders it — so a JSON number is the
-  honest shape. It changes the dataclass, the Java writer and every test fixture holding
-  `"1.0.0"`.
-- **The other two stamps keep semver.** `sextant_version` is `0.1.0` and
-  `graph_schema_version` is `1.2.0`. The ruling named the fact schema only, so after Step 0
-  the three stamps carry two different formats. That is a deliberate consequence, not an
-  oversight, and `graph_schema_version` can follow later if it should.
+- **JSON number, not a numeric string.** `facts.py:83` typed the field `str` and `Main.java`
+  wrote it through `JsonOut.string`. A value that must always parse as an integer but is
+  typed as text is the weaker of the two, and nothing orders it. Changed: the dataclass field
+  is `int`, the Java writer emits it through `String.valueOf` after parsing (so a
+  non-integer is a failed request rather than an unparseable fact file), and the 65 test
+  fixtures holding `"1.0.0"` hold `2`.
+- **`graph_schema_version` becomes an integer too, also `2`.** *"I think graph schema should
+  be integer as well, not semver."* It has the same three properties the fact stamp had —
+  never parsed, never ordered, compared for equality at `api.py:470` and nowhere else — so
+  the argument for the fact stamp was the argument for this one, and the spec's original
+  "the ruling named the fact schema only" was drawing a line the reasoning did not support.
+  Both start at `2`: the second generation, after the semver one.
+- **`sextant_version` keeps semver, and stops being a copy.** It is the tool's own release
+  and moves on its own cadence — `D01` §7 makes a `fact_schema_version` change force
+  re-extraction, while a `sextant_version` change need not — so collapsing the two would
+  re-scan the estate on every release. But the literal `"0.1.0"` in `domain/version.py`
+  duplicated `pyproject.toml:7`, which is the same defect class Step 0 exists to kill. It is
+  now read from the installed distribution, so `pyproject.toml` owns it outright.
+
+**AMENDMENT, ruled during Wave 0: step 3 above is replaced. There are no remaining Python
+copies to test for equality.** The spec assumed the two restatements had to stay and asked
+for an equality test; that assumption was wrong. The import-linter contract
+(`pyproject.toml:147`) puts `domain` at the bottom with `ingress` and `application` both
+above it, and `egress/render/metadata.py:12` already imports the constants directly. Only
+`application` importing `ingress` was ever forbidden — which is all `analyze.py:64`'s comment
+claimed. So both restatements import `sextant.domain.version` instead, and the drift becomes
+STRUCTURALLY IMPOSSIBLE rather than merely detected — the same reasoning that chose C over B
+for the Java copy: *"B fixes detection and leaves the cause."* Applying it to the Java copy
+and not to the two Python copies beside it was an inconsistency in the original ruling.
 
 ### 1.4 What "done" means — the field corpus
 
