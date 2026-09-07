@@ -58,15 +58,11 @@ complete, not exemplary. This forces the §5 restructure in F6 — today §5 has
 (protocol), so a language construct, a shape, a configuration source, the question ledger,
 the bundle and the rendered document have nowhere to be recorded at all.
 
-### 1.2 Open sub-questions
+### 1.2 One thing flagged, not open
 
-Two questions the user has not ruled on. Neither blocks any work below; both are recorded
-so they are not answered by default.
-
-- **Boot 2 support has no stated end date or condition.** Q1 says yes; nothing says until
-  when.
-- **Spring Cloud Gateway (G-30) is out of v1 under Q3.** It is the largest single hole and
-  the commonest edge component. Recorded as a stated boundary, flagged, uncorrected.
+**Spring Cloud Gateway (G-30) is out of v1 under Q3.** It is the largest single hole and the
+commonest edge component, so it is flagged here rather than left to §12 alone. The ruling
+stands unless the user changes it.
 
 ---
 
@@ -1051,8 +1047,8 @@ committed requirement. They are listed rather than decided by default.
 | **G-120** — FR-16 | Curation and proposals: **no verb asserts, corrects or deletes a graph statement.** Build the curation verbs in v1, or descope FR-16? |
 | **G-121** — FR-7 | 68 Mermaid sequence diagrams render; there is **no class diagram of inheritance**. F7 §8.3 closes FR-7's `alt` gap. Does FR-7 also owe a class diagram in v1? |
 
-Plus the two sub-questions from §1.2, unchanged: a stated end condition for Boot 2 support,
-and whether Spring Cloud Gateway is genuinely out of v1.
+Plus §1.2's flag: Spring Cloud Gateway is out of v1 under Q3, and it is the biggest hole we
+are choosing to leave.
 
 ---
 
