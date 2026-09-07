@@ -1110,3 +1110,17 @@ def test_the_scanner_declares_each_capability_w4_added(capability: str):
     failed nothing.
     """
     assert capability in AsmScanner(JAR).capabilities()
+
+
+def test_the_scanner_declares_the_type_parameters_capability_w5_added():
+    """W5's own name. The formal type parameters a class or method declares —
+    with their bounds, in declaration order — are what a generic substitution
+    binds a type variable by, and `typed_signatures` can now emit a bare
+    variable (`T`) at a parameter position that would otherwise be a string
+    attached to nothing.
+
+    No catalog requires it yet, on purpose: W25 is where substitution reads it.
+    That is the legitimate "read, no consumer yet" of the design's §2.3, and the
+    name has to exist first or a catalog could never ask.
+    """
+    assert "type_parameters" in AsmScanner(JAR).capabilities()

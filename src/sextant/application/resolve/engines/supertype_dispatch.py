@@ -340,8 +340,18 @@ def _members(workspace: Workspace) -> dict[str, dict[_Selector, str]]:
             continue
         symbol = str(row["symbol"])
         signature = json.loads(str(row["signature"])) if row["signature"] is not None else {}
+        # `erased_symbol` — the DESCRIPTOR's own answer — not `type.symbol`, which
+        # is the signature's where there is one and so reads a bare type VARIABLE
+        # for a generic parameter. This selector is matched against a
+        # catalog-declared parameter type, which names a real type; a variable's
+        # name is scoped to its own declaration and can match nothing.
         parameters = tuple(
-            bare_descriptor(str((parameter.get("type") or {}).get("symbol", "")))
+            bare_descriptor(
+                str(
+                    parameter.get("erased_symbol")
+                    or (parameter.get("type") or {}).get("symbol", "")
+                )
+            )
             for parameter in signature.get("parameters") or []
         )
         selector = (method_name(bare_descriptor(symbol)), parameters)

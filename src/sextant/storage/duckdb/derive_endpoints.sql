@@ -549,6 +549,26 @@ exposed_members AS (
                 g.gate_symbol,
                 split_part(regexp_extract(s.symbol, '[^#]*$'), '(', 1),
                 coalesce(
+                    -- `erased_symbol`, the DESCRIPTOR's own answer, NOT `type.symbol`.
+                    -- `type.symbol` is the SIGNATURE's where the method has one, so a
+                    -- parameter declared `T` reads `T` — and a type variable's name is
+                    -- scoped to the declaration that named it. An interface declaring
+                    -- `void m(E)` and its implementation declaring `void m(T)` are one
+                    -- method, and keying on the name puts them in two partitions, so
+                    -- both survive the dedup and one method publishes two rows.
+                    --
+                    -- The fallback is for a fact written before `erased_symbol` existed;
+                    -- it is a whole-list fallback, never a per-element one, because the
+                    -- two lists must stay the same length. A JSON path wildcard DROPS
+                    -- elements whose key is absent, so mixing them per element would
+                    -- shorten the key and silently merge two different methods.
+                    list_aggregate(
+                        list_transform(
+                            json_extract_string(s.signature, '$.parameters[*].erased_symbol'),
+                            parameter -> regexp_extract(parameter, '[^ ]*$')
+                        ),
+                        'string_agg', ','
+                    ),
                     list_aggregate(
                         list_transform(
                             json_extract_string(s.signature, '$.parameters[*].type.symbol'),

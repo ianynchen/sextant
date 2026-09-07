@@ -543,9 +543,23 @@ def _is_bridge(
 
 
 def _parameter_types(signature: dict[str, Any] | None) -> list[Any]:
+    """The parameters as the DESCRIPTOR names them, which is what makes them
+    comparable between two declarations.
+
+    `type.symbol` is the signature's answer where the method has one, so a
+    parameter declared `T` reads `T` — and a type variable's name means nothing
+    outside the declaration that introduced it. It matters here specifically: a
+    covariant override carries a `Signature` and reads `T`, while the bridge
+    beside it carries none and reads the erasure, so the rule below — same
+    parameters, different return — stops recognising the pair it exists to find.
+    `erased_symbol` is the same string for both. Falls back for a fact written
+    before the field existed."""
     if not signature:
         return []
-    return [(p.get("type") or {}).get("symbol") for p in signature.get("parameters") or []]
+    return [
+        p.get("erased_symbol") or (p.get("type") or {}).get("symbol")
+        for p in signature.get("parameters") or []
+    ]
 
 
 def _return_type(signature: dict[str, Any] | None) -> Any:

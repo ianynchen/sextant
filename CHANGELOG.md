@@ -14,6 +14,76 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **The `Signature` attribute is read for the half of it that was being dropped** (W5).
+  It was already read for field types, method RETURN types, the generic superclass and the
+  generic superinterfaces. It was not read for method or constructor **parameter** types, nor
+  for the formal type parameters a class or method declares. A fact could therefore say a
+  method returns `Map<K, T>` while being unable to say what `K` or `T` were, and every
+  parameter arrived erased.
+
+  **Two documented gaps close outright**, both in the messaging fixture and both previously
+  frozen as honest limitations with a test asserting the wrong answer:
+  `onBatch(List<OrderEvent>)` now reports `wire_type: array` **carrying its element**, and
+  `onDeadLetter(ConsumerRecord<String, OrderEvent>)` now reaches its payload through the
+  catalog's declared `payload_arg: 1` and reports `OrderEvent` instead of nothing. The
+  checkpoint's own expectation for that row had been recorded as not holding against the
+  scanner's real output; it holds now.
+
+  **`type_parameters` is new on a class or method symbol fact** — an ordered `{name, bounds}`
+  per formal type parameter, emitted only where a declaration has any. Bounds are recorded as
+  the signature states them, an explicit root-type bound included, because `<T>` and
+  `<T extends Object>` compile to identical bytes and an empty list would otherwise mean
+  either "unbounded" or "not read". It is declared as a capability so a catalog can require
+  it, and it has **no consumer yet** — W25 is where generic substitution reads it, recorded
+  as OI-46 rather than left to be discovered.
+
+  **Aligning the descriptor's parameters against the signature's is done with the class
+  file's own flags, not by counting**, and the first attempt here did count. JVMS 4.7.9.1
+  lets a signature omit implicitly declared parameters, and a compiler may also omit ones it
+  synthesised — but the difference in LENGTH does not say which. Measured: an inner class's
+  constructor carries the enclosing instance first and an enum's constructor its name and
+  ordinal first, while a local class that captures carries its captures **last**. Counting
+  from the end is right for the first two and puts a collection's element type onto an `int`
+  in the third — a perfectly well-formed fact that is false. `MethodParameters` (JVMS 4.7.24)
+  distinguishes them: `ACC_MANDATED` and `ACC_SYNTHETIC` mark exactly the parameters a
+  signature may omit, wherever they sit. Where the attribute is absent, or its flags do not
+  account for the difference, every parameter keeps its erased type — less specific, never
+  wrong. A local class inside a **static** method is the real case that needs that fallback:
+  captures at the end and no `MethodParameters` at all.
+
+  **A parameter keeps the descriptor's symbol too, as `erased_symbol`.** Reading the
+  signature was first written as REPLACING the parameter's type, and that deleted something
+  four consumers were using. A parameterized type is unaffected — `List<String>` was and
+  still is `java/util/List#`, it merely keeps `String` now — but a bare **type variable**
+  changes from its erasure to its name, and **a type variable's name is scoped to the
+  declaration that introduced it**: an interface calls it `E` where its implementation calls
+  it `T`, for one method. Four consumers compare or look up by a parameter's symbol ACROSS
+  declarations, and each broke differently:
+
+  | Consumer | What it does | What replacing the symbol did |
+  |---|---|---|
+  | `derive_endpoints.sql` overload dedup | partitions on the parameter symbols | `m(E)` and `m(T)` land in two partitions: one method, two published rows |
+  | `effective_annotations._is_bridge` | matches an override's parameters against its bridge's | the bridge carries no signature, so the pair stops matching and the **synthetic bridge stops being excluded** |
+  | `supertype_dispatch` selector | matched against a catalog-declared parameter type | a variable's name matches no declared type |
+  | `single_call` payload lookup | reads annotations OFF the named type | `<T extends OrderEvent> handle(T)` resolved through `OrderEvent`; `T` resolves through nothing |
+
+  So the fact carries both: `type` is the signature's answer, which is what a substitution
+  binds and what closed the two gaps above, and `erased_symbol` is the descriptor's, which is
+  what can be compared between declarations. All four consumers read `erased_symbol` and are
+  back to exactly their previous answers — restored, not improved: `_is_bridge` keeps its
+  structural rule rather than switching to the `modifiers.synthetic` the fact already carries,
+  because that would also erase a documented over-exclusion, which is its own change (OI-47).
+
+  `erased_symbol` is written on **every** parameter, not only where the two differ: a JSON
+  path wildcard drops elements whose key is absent (measured in DuckDB — three parameters,
+  two entries returned), so a sparse key yields a shorter list that misaligns against the
+  parameters it describes. That is the same class of defect as the descriptor/signature skew
+  above, reached a different way.
+
+  Kotlin needs no alignment and is pinned saying so: kotlinc writes a full-length signature
+  (a `suspend fun`'s trailing `Continuation` appears in both lists) and its `$default` bridge
+  carries no signature at all, so neither path reaches the flag-based alignment.
+
 - **Four JVMS 4.7 attributes that each stood in for an invented rule are now read** (W4).
   Every one was already in the class file, and one was being handed to us by ASM as a
   parameter we ignored.

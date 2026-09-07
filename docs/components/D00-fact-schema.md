@@ -363,6 +363,56 @@ knowledge, so unwrapping is catalog data ([D02](D02-catalog-schema.md)) applied 
 deliberately small role set — `read`, `write`, `import`, `generated`, `type_use` — for
 body-level uses only; signature-level type uses come from the structured signatures.
 
+**A parameter's type reference comes from the `Signature` attribute wherever the
+declaration has one**, exactly as a return type's and a field's already did. The erased
+descriptor has lost every type argument and every type variable by the time it is read:
+`accept(List<String> names, T item)` is written `(Ljava/util/List;Ljava/lang/Comparable;)V`,
+where the elements are gone and `T` has become its own bound. The attribute is the only
+place either survives, so a parameter reads from it and falls back to the descriptor for a
+declaration that carries no attribute at all — which is precisely a declaration with nothing
+generic to lose. A type reference's `symbol` may therefore be a bare **type variable** (`T`),
+which is not a class and is recorded by the name the signature gives it, never resolved to
+its bound; the return position has always been able to yield one.
+
+**The descriptor's own symbol is kept beside the signature's, as `erased_symbol`.** The two
+differ only for a type VARIABLE: the signature names the variable, which is what a generic
+substitution binds, while the descriptor names what it erases to. **A type variable's name is
+scoped to the declaration that introduced it** — an interface may call it `E` where its
+implementation calls it `T`, for one method — so it can never be compared BETWEEN two
+declarations, and every consumer that keys or looks a type up by a parameter reads
+`erased_symbol` instead. It is written on every parameter rather than only where the two
+differ, because a JSON path wildcard drops elements whose key is absent and a shorter list
+silently misaligns against the parameters it describes.
+
+**The two lists are matched by the class file's own parameter flags, never by counting.**
+JVMS 4.7.9.1 permits a signature to omit parameters that are implicitly declared, and a
+compiler may also omit ones it synthesised — so the two lists can be different lengths, and
+**the difference in length does not say which entries are missing**. Measured: an inner
+class's constructor carries the enclosing instance FIRST and an enum's constructor carries
+its name and ordinal FIRST, but a local class that captures carries its captures LAST, all
+against a signature naming only what was written in source. Any rule based on the counts
+alone is right for two of those and wrong for the third — and wrong there in the worst way,
+putting a collection's element type onto an `int` in a fact that is perfectly well formed.
+
+`MethodParameters` (JVMS 4.7.24) is what distinguishes them: a parameter flagged
+`ACC_MANDATED` or `ACC_SYNTHETIC` is exactly one the signature may omit, wherever it sits.
+The signature's entries are laid onto the slots flagged as neither, in order. **Where that
+attribute is absent, or where the flags do not account for the difference, every parameter
+keeps its erased type** — less specific, never wrong. A local class declared inside a static
+method is the real case: it has captures at the end and no `MethodParameters` at all.
+
+**A class or method symbol fact carries the formal type parameters it declares, as
+`type_parameters`** — each an ordered `{name, bounds}` entry, the bounds being type
+references like any other. The name and the position are what a generic substitution binds a
+variable by: without them the `T` a parameter or return type now names refers to nothing.
+Bounds are recorded exactly as the signature states them, `java.lang.Object` included —
+javac writes `T:Ljava/lang/Object;` for a parameter declared `<T>`, so there is no
+distinction between `<T>` and `<T extends Object>` to preserve, and an empty bound list would
+otherwise mean either "unbounded" or "the scanner did not read it". Multiple bounds stay
+multiple, in declaration order. **Emitted only where the declaration has any** — the same
+"nothing generic, nothing captured" rule the generic supertype follows below, since most
+classes and nearly every method declare none.
+
 **A class symbol fact also carries its generic supertype reference, when the superclass
 signature is generic.** `new ParameterizedTypeReference<List<OrderView>>() {}` compiles to
 an anonymous class whose signature names that parameterized supertype, and the fact records

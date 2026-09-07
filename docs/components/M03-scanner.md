@@ -48,7 +48,7 @@ finding fewer endpoints.
 | Capability | Gates |
 |---|---|
 | `annotation_args` | Every annotation-driven framework |
-| `typed_signatures` | Structured parameter and return types — the field a body-parameter or `response_arg` join reads instead of a positional guess ([D00](D00-fact-schema.md) §5a) |
+| `typed_signatures` | Structured parameter and return types — the field a body-parameter or `response_arg` join reads instead of a positional guess ([D00](D00-fact-schema.md) §5a). **Completed in W5**: a parameter's type now comes from the `Signature` attribute where the method has one, as the return type and a field's type already did, so `List<String>` keeps `String` at a parameter position and a type variable stays `T` instead of arriving as its erasure |
 | `type_annotations` | `nullable` on contract fields, per reference — never `required`, which comes from presence machinery ([D00](D00-fact-schema.md) §5b) |
 | `string_constants` | Topic and URL literals |
 | `invokedynamic` | Lambdas, and therefore functional routing |
@@ -68,9 +68,10 @@ finding fewer endpoints.
 | `constant_value` | JVMS 4.7.2 — a compile-time constant field's value, which gives D00 §5's `constant` fact its first producer. Consumer: topic and URL resolution, where `static final String TOPIC = "orders"` is how a great many real listeners name their destination |
 | `enclosing_class` | JVMS 4.7.6/4.7.7 — the class file's own statement of what encloses a nested class, including the enclosing METHOD for an anonymous one. Consumer: **W4b**, which replaces deriving nesting by splitting a binary name on `$` |
 | `class_file_version` | The class-file major each document was read from (JVMS 4.1), taken from the bytes rather than from ASM's constants so it is available even for a class the reader refused. Consumers: the accepted-range test, multi-release selection's target fallback, and language labelling |
+| `type_parameters` | W5 — the formal type parameters a class or method declares, with their bounds, in declaration order ([D00](D00-fact-schema.md) §5a). The name and the position are what a generic substitution binds, and `typed_signatures` can now emit a bare type variable that would otherwise be attached to nothing. **No consumer yet, deliberately**: **W25** is where substitution reads it — §2.3's legitimate "read, no consumer yet", as against "declared, never read" |
 | `method_returns` | Capability 9.18 — a `method_return` fact per return instruction, naming the value the method hands back ([D00](D00-fact-schema.md) §5). The last link in a round trip: a returned call result joins by `source` to the site that produced it |
 
-**Fifteen of the scanner's now-eighteen designed capabilities are shipped**, and the shipped
+**Twenty of the scanner's now-twenty-three designed capabilities are shipped**, and the shipped
 set is **`Capabilities.ALL` in the extractor jar** — the scanner DECLARES what it can read,
 and the caller asks it (`--capabilities`), which is what a catalog's `requires:` is checked
 against. *It was `ingress/extract/jvm/scanner.py`'s `_CAPABILITIES`, a Python-side list

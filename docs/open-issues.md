@@ -1556,3 +1556,56 @@ either deleted or reduced to a string helper nothing derives nesting from.
 **Falsified by** the `$` split being provably correct for every symbol the one
 consumer sees — it reads gRPC generated classes, where the shape is regular — in
 which case this is a stated boundary rather than a defect.
+
+### OI-46 — `type_parameters` is read, declared, and read by nothing (W5)
+**Minor · found 2026-09-07 by code review of W5 · `src/sextant/domain/facts.py`,
+`extractor-jvm/.../Capabilities.java`, `docs/components/M03-scanner.md`**
+
+W5 reads the formal type parameters a class or method declares — name, bounds,
+declaration order — and declares the `type_parameters` capability so a catalog
+can require it. **Nothing requires it.**
+`verify: grep -rn "type_parameters" src/sextant/catalogs/ src/sextant/application/ | wc -l`
+
+**This is the legitimate half of the design's §2.3 distinction**, not the defect:
+*"read, no consumer yet"* — a fact available to a future tier — as against
+*"declared, never read"*, which is an attribute the scanner ignores. The plan
+names the consumer: **W25**, generic substitution, which cannot bind `T` without
+knowing what declared it. It is filed because the previous commit set that
+precedent for W4's two (OI-44, OI-45) and a foundation item's missing consumer
+should be a row in this register rather than a sentence in a code comment.
+
+**Closes by** W25 reading it. **Falsified by** W25 landing without needing it, in
+which case the question is whether to keep emitting it at all.
+
+### OI-47 — `_is_bridge` guesses structurally when the fact already states the answer
+**Minor · pre-existing, entered here 2026-09-07 ·
+`src/sextant/application/resolve/effective_annotations.py:503`**
+
+`_is_bridge` recognises a compiler-generated bridge by shape: same class, same
+name, same parameter types, different return type. Its docstring says why —
+*"Bytecode carries no other marker — no `modifiers`, no `access`, identical
+`visibility` — so this is the only signal there is."*
+
+**That sentence is no longer true, and has not been since the method `modifiers`
+slot shipped.** D00 §5a: a method fact carries `modifiers.synthetic`, and
+`ACC_BRIDGE` is folded into it because javac sets the two together. A bridge says
+outright that it is one. Measured on `GenericSignatureSample$Sub`: the bridge's
+fact carries `"synthetic":true` and the real override's does not.
+
+**What the guess costs, in the code's own words.** The docstring records finding
+I1: the rule is per-class and blind to which ancestor produced a sibling, so a
+class carrying two bridges plus one real override excludes ALL THREE — the real
+override never gets to synthesize its mapping. Reading the flag has no such
+failure: it excludes exactly the methods that say they are synthetic.
+
+**Nearly bit W5.** Reading parameter types from the `Signature` attribute made a
+generic override read `T` where its bridge still read the erasure, so the
+structural match broke and the synthetic bridge stopped being excluded. That was
+fixed by comparing `erased_symbol` — restoring the shape rule exactly rather than
+replacing it — because swapping the rule for the flag is a change to shipped
+derived output, and I1's over-exclusion disappearing IS such a change.
+
+**Closes by** `_is_bridge` reading `modifiers.synthetic`, the I1 note being
+removed from both docstrings, and the COVERAGE boundary it records being deleted.
+**Falsified by** a scanner that reaches these facts without reporting the
+modifier — in which case the structural rule is the fallback, not the rule.

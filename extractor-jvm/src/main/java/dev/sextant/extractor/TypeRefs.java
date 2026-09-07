@@ -132,6 +132,108 @@ public final class TypeRefs {
         return generic;
     }
 
+    /** The generic PARAMETER types from a method or constructor {@code Signature}, in
+     *  declaration order — empty when the method carries no such attribute, which is
+     *  exactly when it has nothing generic to say (JVMS 4.7.9.1 writes the attribute only
+     *  for a method whose declaration uses a type variable or a parameterization).
+     *
+     *  <p>The list is not always as long as the descriptor's. JVMS 4.7.9.1 permits a
+     *  signature to omit parameters that are IMPLICITLY declared, and javac takes it:
+     *  measured on {@code GenericSignatureSample$Inner}, the constructor's descriptor is
+     *  {@code (LGenericSignatureSample;Ljava/util/List;)V} and its signature is
+     *  {@code (Ljava/util/List<Ljava/lang/String;>;)V} — the enclosing instance is in one
+     *  and not the other. Aligning the two positionally would put {@code List<String>} on
+     *  the outer instance and leave the real parameter erased. {@link ClassScanner} does
+     *  the alignment, from the END, for the same reason and by the same rule the parameter
+     *  ANNOTATION tables are aligned: what a signature drops, it drops from the front.
+     *
+     *  <p>Walked by the same {@link NodeCollector} a field and a return type are, so a
+     *  parameter's reference is the identical recursive shape — including a bare type
+     *  VARIABLE, which {@code returnFromSignature} has already been able to yield since
+     *  the collector existed. {@code accept(List<String>, T)} keeps both {@code String}
+     *  and the name {@code T}; the descriptor keeps neither, having erased them to
+     *  {@code List} and {@code Comparable}. */
+    public static List<String> parametersFromSignature(String signature) {
+        if (signature == null) return List.of();
+        List<String> parameters = new ArrayList<>();
+        new SignatureReader(signature).accept(new SignatureVisitor(org.objectweb.asm.Opcodes.ASM9) {
+            @Override public SignatureVisitor visitParameterType() {
+                return new NodeCollector(node -> parameters.add(toJson(node)));
+            }
+        });
+        return parameters;
+    }
+
+    /** The FORMAL type parameters a class or method declares, in declaration order, each
+     *  as {@code {name, bounds}} — empty when the declaration has none.
+     *
+     *  <p>The name and the order are the load-bearing half: a generic substitution binds
+     *  {@code T} by the position it was declared at, and until now nothing in a fact said
+     *  what {@code T} even was. {@code parametersFromSignature} above can now emit a
+     *  reference whose symbol is {@code T}, so this is what stops that from being an
+     *  unattached string.
+     *
+     *  <p>Bounds are recorded exactly as the signature states them, {@code java/lang/Object}
+     *  included. javac writes {@code T:Ljava/lang/Object;} for a parameter declared
+     *  {@code <T>} (measured) — the bytes for {@code <T>} and {@code <T extends Object>} are
+     *  identical, so there is no distinction here to flatten and nothing is gained by
+     *  dropping it. Dropping it would cost something instead: a bounds list that is empty
+     *  for one parameter and populated for the next leaves a reader unable to tell an
+     *  unbounded declaration from a bound the scanner declined to read, which is the
+     *  absence ambiguity GUIDELINES §8 exists to refuse. Multiple bounds stay multiple —
+     *  {@code <U extends Number & Serializable>} is written {@code U:Ljava/lang/Number;:Ljava/io/Serializable;}
+     *  and yields two entries, in that order.
+     *
+     *  <p>A bound is walked by the same {@link NodeCollector} every other reference is, so
+     *  {@code T extends Comparable<T>} keeps the {@code T} inside {@code Comparable} too. */
+    public static List<String> typeParametersFromSignature(String signature) {
+        if (signature == null) return List.of();
+        List<String> declared = new ArrayList<>();
+        FormalTypeParameters collector = new FormalTypeParameters(declared);
+        new SignatureReader(signature).accept(collector);
+        // The reader has no "the formal parameter section ended" callback, so the last
+        // one is still pending here. `accept` is synchronous and every NodeCollector
+        // hands its node over during the walk, so nothing is still in flight.
+        collector.flush();
+        return declared;
+    }
+
+    /** Accumulates one formal type parameter at a time: a name arrives, then zero or more
+     *  bounds, then either the next name or the end of the section. */
+    private static final class FormalTypeParameters extends SignatureVisitor {
+        private final List<String> declared;
+        private String name;
+        private final List<String> bounds = new ArrayList<>();
+
+        FormalTypeParameters(List<String> declared) {
+            super(org.objectweb.asm.Opcodes.ASM9);
+            this.declared = declared;
+        }
+
+        @Override public void visitFormalTypeParameter(String parameterName) {
+            flush();
+            name = parameterName;
+        }
+
+        @Override public SignatureVisitor visitClassBound() {
+            return new NodeCollector(bound -> bounds.add(toJson(bound)));
+        }
+
+        @Override public SignatureVisitor visitInterfaceBound() {
+            return new NodeCollector(bound -> bounds.add(toJson(bound)));
+        }
+
+        void flush() {
+            if (name == null) return;
+            TreeMap<String, String> parameter = new TreeMap<>();
+            parameter.put("name", JsonOut.string(name));
+            parameter.put("bounds", JsonOut.array(bounds));
+            declared.add(JsonOut.object(parameter));
+            name = null;
+            bounds.clear();
+        }
+    }
+
     /** A field's fully augmented type reference: the {symbol, arguments} envelope every
      *  type reference carries (D00 §5a), plus D1's wire-type projection and D3's
      *  nullability at **every** level of the chain — a parameterized type keeps each of

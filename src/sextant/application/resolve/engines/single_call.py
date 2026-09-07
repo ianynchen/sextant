@@ -750,7 +750,13 @@ def _argument_type_identity(
     parameters = facts.signatures.get(caller, {}).get("parameters") or []
     if index >= len(parameters):
         return None, None
-    symbol = (parameters[index].get("type") or {}).get("symbol")
+    # The DESCRIPTOR's symbol: this looks annotations up ON the named type, and a
+    # type variable names no type. `<T extends OrderEvent> handle(T)` resolves
+    # through `OrderEvent` — its erasure, a real type carrying real annotations —
+    # where `T` resolves through nothing.
+    symbol = parameters[index].get("erased_symbol") or (parameters[index].get("type") or {}).get(
+        "symbol"
+    )
     if not symbol:
         return None, None
     payload_type = bare_descriptor(str(symbol))

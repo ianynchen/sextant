@@ -221,6 +221,16 @@ public final class ClassScanner {
             String constructKind = "<init>".equals(name) ? "constructor" : "method";
             int parameterCount = Type.getArgumentTypes(descriptor).length;
             String[] parameterNames = new String[parameterCount];
+            // JVMS 4.7.24 `MethodParameters`' access flags, one slot per DESCRIPTOR
+            // parameter. `ACC_MANDATED` marks a parameter the language declares
+            // implicitly (an inner class's enclosing instance); `ACC_SYNTHETIC` marks
+            // one the compiler invented (a captured local, an enum's name/ordinal).
+            // Together they are exactly the set a `Signature` attribute may omit, and
+            // they are the only thing in the class file that says WHICH descriptor
+            // slots those are. -1, never 0, for a method with no such attribute: 0 is
+            // a real flag value meaning "declared in source".
+            int[] parameterFlags = new int[parameterCount];
+            java.util.Arrays.fill(parameterFlags, -1);
             List<List<String>> parameterAnnotations = new ArrayList<>();
             List<List<String>> parameterTypeAnnotations = new ArrayList<>();
             for (int i = 0; i < parameterCount; i++) {
@@ -306,7 +316,14 @@ public final class ClassScanner {
 
                 @Override
                 public void visitParameter(String parameterName, int parameterAccess) {
-                    if (parameterIndex < parameterNames.length) parameterNames[parameterIndex] = parameterName;
+                    if (parameterIndex < parameterNames.length) {
+                        parameterNames[parameterIndex] = parameterName;
+                        // `parameterAccess` was being discarded. It is JVMS 4.7.24's
+                        // flags, and it is the discriminator the generic-parameter
+                        // alignment below needs: counting alone cannot say whether a
+                        // missing signature entry was dropped from the front or the end.
+                        parameterFlags[parameterIndex] = parameterAccess;
+                    }
                     parameterIndex++;
                 }
 
@@ -377,10 +394,11 @@ public final class ClassScanner {
                 public void visitEnd() {
                     super.visitEnd();
                     emit(methodSymbol, constructKind, typeSymbol,
-                         signatureJson(descriptor, sig, parameterNames, parameterAnnotations,
+                         signatureJson(descriptor, sig, parameterNames, parameterFlags,
+                                       parameterAnnotations,
                                        parameterTypeAnnotations, returnTypeAnnotations), methodAccess,
                          null, methodModifiersJson(methodAccess), null, null, null, null,
-                         annotationDefault);
+                         annotationDefault, typeParametersJson(sig));
                     // After the method's own symbol, never before: a call site
                     // names its caller, and a fact file reads top-down.
                     lines.addAll(MethodFlow.callSites(documentId, methodSymbol, this));
@@ -776,16 +794,52 @@ public final class ClassScanner {
         }
 
         private String signatureJson(String descriptor, String genericSignature,
-                                      String[] parameterNames, List<List<String>> parameterAnnotations,
+                                      String[] parameterNames, int[] parameterFlags,
+                                      List<List<String>> parameterAnnotations,
                                       List<List<String>> parameterTypeAnnotations,
                                       List<String> returnTypeAnnotations) {
             Type[] argumentTypes = Type.getArgumentTypes(descriptor);
+            // W5: the descriptor has already erased every type argument and every type
+            // variable by the time it reaches here — `List<String>` is `List`, and `T` is
+            // whatever it happens to erase to. The `Signature` attribute is the only place
+            // either survives, and it was read for the RETURN type and for fields while
+            // parameters kept taking the erased one.
+            List<String> genericParameters = TypeRefs.parametersFromSignature(genericSignature);
+            int[] genericOf = alignedSignature(argumentTypes.length, genericParameters.size(),
+                                                parameterFlags);
             List<String> parameters = new ArrayList<>();
             for (int i = 0; i < argumentTypes.length; i++) {
                 TreeMap<String, String> parameter = new TreeMap<>();
                 parameter.put("annotations", JsonOut.array(parameterAnnotations.get(i)));
                 parameter.put("name", parameterNames[i] == null ? "null" : JsonOut.string(parameterNames[i]));
-                parameter.put("type", TypeRefs.fromType(argumentTypes[i]));
+                // The erased descriptor type wherever the alignment declined to answer.
+                // It is never wrong, only less specific.
+                parameter.put("type",
+                    genericOf[i] >= 0
+                        ? genericParameters.get(genericOf[i])
+                        : TypeRefs.fromType(argumentTypes[i]));
+                // The DESCRIPTOR's own symbol for this position, kept beside the
+                // signature's rather than replaced by it.
+                //
+                // Reading the signature is what lets `List<String>` keep `String`, but it
+                // also makes a parameter declared `T` report the symbol `T` — and a type
+                // variable's name is scoped to the declaration that introduced it. An
+                // interface calls it `E` where its implementation calls it `T`, for one
+                // method. Four consumers compare parameter symbols ACROSS declarations —
+                // an overload dedup key, a bridge-recognition rule, a supertype selector
+                // matched against catalog-declared types, and a payload-type lookup that
+                // reads annotations off the named type — and every one of them needs a
+                // symbol that means the same thing in both places. Emitting only the
+                // signature's answer did not change that symbol so much as DELETE the one
+                // they were using, with no way back to it from the fact.
+                //
+                // Written on EVERY parameter, not only where it differs. A JSON path
+                // wildcard drops elements whose key is missing (measured in DuckDB), so a
+                // sparse key yields a SHORTER list and silently misaligns against the
+                // parameter it belongs to — the same class of defect as the descriptor /
+                // signature skew above.
+                parameter.put("erased_symbol",
+                    JsonOut.string(TypeRefs.descriptorName(argumentTypes[i])));
                 // Type-use annotations on this parameter's type — distinct from
                 // "annotations" above, which are declaration-level (D00 §5a).
                 parameter.put("type_annotations", JsonOut.array(parameterTypeAnnotations.get(i)));
@@ -798,6 +852,79 @@ public final class ClassScanner {
             signature.put("returns", returns);
             signature.put("return_type_annotations", JsonOut.array(returnTypeAnnotations));
             return JsonOut.object(signature);
+        }
+
+        /** Which entry of the {@code Signature} attribute's parameter list — if any —
+         *  belongs to each DESCRIPTOR parameter. {@code -1} means "no answer": the caller
+         *  keeps the erased type there.
+         *
+         *  <p>The two lists are not always the same length. JVMS 4.7.9.1 lets a signature
+         *  omit parameters that are implicitly declared, and a compiler may also leave out
+         *  ones it synthesised. **The difference in COUNT does not say which slots those
+         *  are**, and this is the correction to a rule that was written here as though it
+         *  did. Measured, javac 26:
+         *
+         *  <ul>
+         *    <li>an inner class's constructor gets the enclosing instance FIRST —
+         *        {@code (LOuter;Ljava/util/List;)V} against {@code (Ljava/util/List<…>;)V};
+         *    <li>an enum's constructor gets name and ordinal FIRST;
+         *    <li>but a LOCAL class that captures gets its captures LAST —
+         *        {@code (Ljava/util/List;Ljava/lang/StringBuilder;I)V} against the same
+         *        one-parameter {@code (Ljava/util/List<…>;)V}.
+         *  </ul>
+         *
+         *  <p>Aligning from the end is right for the first two and wrong for the third: it
+         *  puts {@code List<String>} on an {@code int}, and the fact is WELL FORMED, so
+         *  nothing downstream can notice. Deriving nothing would have been acceptable
+         *  (§8.1 rule 2); deriving that is not.
+         *
+         *  <p>{@code MethodParameters} (JVMS 4.7.24) is what actually distinguishes them,
+         *  and §8.1 rule 5 says to follow the provider where it makes a distinction rather
+         *  than infer one: a parameter flagged {@code ACC_MANDATED} or {@code ACC_SYNTHETIC}
+         *  is exactly one the signature may omit, wherever it sits. So the signature's
+         *  entries are laid onto the slots flagged as neither, in order.
+         *
+         *  <p>The attribute is not always there — measured: a local class in a STATIC
+         *  method has no {@code MethodParameters} at all, and it is also the shape with
+         *  captures at the end. With the counts disagreeing and nothing saying why, there
+         *  is no honest alignment, so every parameter keeps its erased type. Less specific,
+         *  never wrong. */
+        private int[] alignedSignature(int declared, int generic, int[] parameterFlags) {
+            int[] genericOf = new int[declared];
+            java.util.Arrays.fill(genericOf, -1);
+            if (generic == 0) return genericOf;
+            // The overwhelming majority: the signature names every parameter, so the
+            // question of which ones it dropped does not arise.
+            if (generic == declared) {
+                for (int i = 0; i < declared; i++) genericOf[i] = i;
+                return genericOf;
+            }
+            List<Integer> sourceDeclared = new ArrayList<>();
+            for (int i = 0; i < declared; i++) {
+                // -1 is the absent attribute, and it is not a flag value: with no
+                // attribute there is nothing here to align by.
+                if (parameterFlags[i] < 0) return genericOf;
+                if ((parameterFlags[i] & (Opcodes.ACC_MANDATED | Opcodes.ACC_SYNTHETIC)) == 0) {
+                    sourceDeclared.add(i);
+                }
+            }
+            // A disagreement the flags do not explain. Nothing invented on top of it.
+            if (sourceDeclared.size() != generic) return genericOf;
+            for (int i = 0; i < generic; i++) genericOf[sourceDeclared.get(i)] = i;
+            return genericOf;
+        }
+
+        /** W5: the formal type parameters a class or method declares, with their bounds
+         *  (D00 §5a) — null, never `[]`, when the declaration has none, so `emit` leaves
+         *  the key off entirely rather than writing an empty list onto every fact.
+         *
+         *  <p>One helper for both, because they are one question: `class Box<T>` and
+         *  `<K> Map<K,V> pair(K)` declare type parameters by the identical signature
+         *  grammar, and a consumer binding `T` should not have to ask which construct it
+         *  is holding first. */
+        private String typeParametersJson(String genericSignature) {
+            List<String> declared = TypeRefs.typeParametersFromSignature(genericSignature);
+            return declared.isEmpty() ? null : JsonOut.array(declared);
         }
 
         /** A field has no parameter list, only the type reference D00 §5a says it
@@ -901,7 +1028,8 @@ public final class ClassScanner {
             emit(typeSymbol, constructKindOf(constructFlags), enclosingSymbol, null, access, null, null,
                  TypeRefs.genericSuperclassFromSignature(classSignature),
                  interfaceSymbolsJson(classInterfaces),
-                 genericInterfacesJson(classSignature), erasedSuperclassJson(superName));
+                 genericInterfacesJson(classSignature), erasedSuperclassJson(superName), null,
+                 typeParametersJson(classSignature));
             // `emit` appends, and this one belongs FIRST — a class's own symbol
             // precedes its members in every fact file, and `symbols.seq` is that
             // order. Moving the appended line is simpler than redirecting where
@@ -932,6 +1060,14 @@ public final class ClassScanner {
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
                            String ext, String modifiers, String supertype, String interfaces,
                            String genericInterfaces, String superclass, String annotationDefault) {
+            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, supertype,
+                 interfaces, genericInterfaces, superclass, annotationDefault, null);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext, String modifiers, String supertype, String interfaces,
+                           String genericInterfaces, String superclass, String annotationDefault,
+                           String typeParameters) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -949,6 +1085,11 @@ public final class ClassScanner {
             if (genericInterfaces != null) fact.put("generic_interfaces", genericInterfaces);
             if (superclass != null) fact.put("superclass", superclass);
             if (annotationDefault != null) fact.put("annotation_default", annotationDefault);
+            // W5. Emitted only when the declaration HAS formal type parameters, the same
+            // "nothing generic, nothing captured" rule `supertype` and `generic_interfaces`
+            // already follow — most classes and nearly every method declare none, and an
+            // empty list on all of them says nothing with a key on every fact.
+            if (typeParameters != null) fact.put("type_parameters", typeParameters);
             lines.add(JsonOut.object(fact));
         }
     }

@@ -53,7 +53,42 @@ class Parameter(BaseModel):
     model_config = {"frozen": True}
     name: str | None = None
     type: TypeRef
+    # The DESCRIPTOR's own symbol for this position, beside `type`, which carries
+    # the declared signature's answer where there is one (D00 §5a).
+    #
+    # The two differ only for a type VARIABLE — `type` then names the variable,
+    # which is what a generic substitution binds, while this names what the
+    # runtime actually erased it to. A variable's name is scoped to the
+    # declaration that introduced it, so it can never be compared between two of
+    # them; this can, and every consumer that keys or looks up by parameter type
+    # reads it. Written on every parameter, so a positional read of the list is
+    # always the same length as the parameter list itself.
+    #
+    # None only for a fact written before the field existed.
+    erased_symbol: str | None = None
     annotations: list[AnnotationUse] = Field(default_factory=list)
+
+
+class TypeParameter(BaseModel):
+    """One formal type parameter a class or method declares, with its bounds
+    (D00 §5a). `class Box<T extends Comparable<T>>` yields one of these.
+
+    The NAME and the POSITION are the load-bearing half: a type reference's
+    `symbol` may now be a bare type variable — `T`, read off the `Signature`
+    attribute rather than erased to whatever the descriptor says — and this is
+    what that variable refers back to.
+
+    Bounds are recorded exactly as the class file states them, an explicit
+    universal-root-type bound included: a compiler may write that bound for a
+    parameter the source declared with none, in which case the two spellings are
+    the same declaration and there is nothing to preserve by dropping it. An
+    empty list would then mean either "unbounded" or "the scanner did not read
+    the bound" (GUIDELINES §8). Which bound a given compiler writes is the
+    extractor's knowledge, not this record's."""
+
+    model_config = {"frozen": True}
+    name: str
+    bounds: list[TypeRef] = Field(default_factory=list)
 
 
 class Signature(BaseModel):
@@ -221,6 +256,12 @@ class SymbolFact(BaseModel):
     # no interface "extends" it, and every root class gets it implicitly, so
     # writing it there would say nothing with it.
     superclass: str | None = None
+    # `type_parameters` (W5): the formal type parameters this class or method
+    # declares, in declaration order. Empty for the great majority of
+    # declarations, which have none — the same "nothing generic, nothing
+    # captured" rule `supertype` and `generic_interfaces` follow, so the key is
+    # absent rather than an empty list on every fact.
+    type_parameters: list[TypeParameter] = Field(default_factory=list)
 
 
 class AnnotationFact(BaseModel):

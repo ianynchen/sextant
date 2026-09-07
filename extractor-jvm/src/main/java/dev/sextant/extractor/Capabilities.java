@@ -73,5 +73,21 @@ public final class Capabilities {
         // Capability 9.13: a class symbol's erased direct superclass.
         "superclass",
         "type_annotations",
+        // W5. The formal type parameters a class or method declares, with their
+        // bounds — the name and the position a generic substitution binds. The
+        // parameter types `typed_signatures` reports can now be a bare type
+        // VARIABLE, read from the signature instead of erased, and without this
+        // that variable would be a string attached to nothing.
+        //
+        // NO CONSUMER YET, and stated so rather than left to be found: W25 is
+        // where generic substitution reads it. That is the legitimate half of
+        // §2.3's distinction — "read, no consumer yet" — as against "declared,
+        // never read", which is the defect.
+        "type_parameters",
+        // W5 also completed this one: a method's or constructor's PARAMETER
+        // types now come from the `Signature` attribute where it has one, as
+        // the return type and a field's type already did. `List<String>` keeps
+        // `String` at a parameter position, and `T` stays `T` rather than
+        // arriving as whatever it erases to.
         "typed_signatures");
 }

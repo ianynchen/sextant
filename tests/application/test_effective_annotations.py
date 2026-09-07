@@ -689,6 +689,69 @@ def test_a_covariant_override_and_its_bridge_both_miss_honestly():
     assert result == []
 
 
+def test_a_generic_covariant_override_and_its_bridge_still_match_as_a_pair():
+    """W5's parameter types made this pair stop matching, and this is the pin.
+
+    The rule below recognises a bridge by "same class, same name, same
+    parameters, different return". W5 made a parameter's `type` come from the
+    `Signature` attribute — so the real override, which carries one, reads the
+    symbol `T`, while the bridge javac ships beside it carries no signature and
+    still reads the erasure. Measured on javac 26: `Sub<T> extends Base<T>` with
+    `String get(T)` gives `(TT;)Ljava/lang/String;` for the override and no
+    signature at all for `(Object)Object`.
+
+    Compared on `type.symbol` the two are `T` and `java/lang/Object#`, they do
+    not match, and the SYNTHETIC bridge stops being excluded from the walk.
+    `erased_symbol` — the descriptor's own answer, which is what the two actually
+    share — is what both sides are compared on, so the pair holds.
+    """
+    interface_method = _I + "find(sig_a)."
+    bridge_method = _C + "find(sig_a)."
+    override_method = _C + "find(sig_b)."
+    # The override states the type VARIABLE and the erasure; the bridge has only
+    # the erasure, because a bridge carries no `Signature` attribute at all.
+    generic_param = [{"type": {"symbol": "T"}, "erased_symbol": "java/lang/Object#"}]
+    erased_param = [{"type": {"symbol": "java/lang/Object#"}, "erased_symbol": "java/lang/Object#"}]
+    annotation_rows = [
+        {
+            "target": interface_method,
+            "annotation": _GET_MAPPING,
+            "args": {"value": ["/orders/{id}"]},
+        }
+    ]
+    method_rows = [
+        _method(
+            interface_method,
+            _I,
+            {"parameters": erased_param, "returns": {"symbol": "com/acme/orders/OrderResult#"}},
+        ),
+        _method(
+            bridge_method,
+            _C,
+            {"parameters": erased_param, "returns": {"symbol": "com/acme/orders/OrderResult#"}},
+        ),
+        _method(
+            override_method,
+            _C,
+            {
+                "parameters": generic_param,
+                "returns": {"symbol": "com/acme/orders/DetailedOrderResult#"},
+            },
+        ),
+    ]
+
+    result = inherited_rows(
+        annotation_rows,
+        [_implements(_C, [_I])],
+        [],
+        method_rows,
+        _MAPPING_FQNS,
+        _REQUEST_MAPPING,
+    )
+
+    assert result == []
+
+
 def test_a_same_name_overload_with_different_parameters_is_not_a_bridge():
     """(M3, Task 7 review): `_C` declares two real, legitimate overloads —
     `list()` (no params, its own unrelated method, no mapping) and

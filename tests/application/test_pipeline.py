@@ -1743,45 +1743,44 @@ def test_a_kafka_listeners_two_topics_derive_two_rows_off_one_handler(
 def test_a_batch_listeners_request_shape_is_an_array(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """`onBatch(List<OrderEvent> events)`: the checkpoint's own expectation is
-    `wire_type: array`, exactly what this asserts — no `item` (which would
-    name the array's own element shape) survives, because the extractor does
-    not capture a *parameter*'s own generic type arguments the way it does a
-    *return* type's (`OrderController#list`'s `List<OrderResult>` return, by
-    contrast, does carry its element — see
-    `test_an_endpoint_whose_response_is_a_collection_records_its_element_shape`
-    above). A real, pre-existing scanner limitation this task's fixture is
-    the first to expose (no earlier fixture ever put a generic type on a
-    *parameter*), not something a catalog's own rules can work around —
-    verified live rather than assumed, and left as an honest gap rather than
-    worked around."""
+    """`onBatch(List<OrderEvent> events)`: `wire_type: array` carrying its
+    element, which is the checkpoint's own expectation in full.
+
+    This test used to assert `"item" not in descriptor`. That was an honest gap,
+    recorded rather than guessed past: the extractor read the `Signature`
+    attribute for a *return* type but not for a *parameter*, so a parameter's
+    type arguments were erased before anything downstream could see them —
+    `OrderController#list`'s `List<OrderResult>` return kept its element and this
+    parameter could not. **W5 closed it**, and the element is now here, so the
+    row states the element type a consumer of `order-batches` has to expect
+    instead of an array of nothing in particular."""
     _, report = resolved_fixture
     [batch] = _messaging_rows(report, "kafka", "order-batches")
 
     descriptor = json.loads(batch["request_shape"])
     assert descriptor["wire_type"] == "array"
-    assert "item" not in descriptor
+    assert descriptor["item"]["shape_id"] == "com/acme/orders/contracts/OrderEvent#"
 
 
 def test_a_dead_letter_listeners_consumer_record_envelope_yields_no_request_shape(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """`onDeadLetter(ConsumerRecord<String, OrderEvent> record)`: the same
-    erased-parameter-generics limitation as the batch row above means
-    `ConsumerRecord`'s own type arguments never reach the signature, so the
-    declared `{type: ..., payload_arg: 1, semantics: envelope}` wrapper rule
-    finds nothing at its payload position — D02 §2a's "a declared envelope
-    holding nothing at the payload position... is no payload either:
-    describing the envelope would report a type the catalog already declares
-    as one nobody could expand." The checkpoint's own expectation
-    (`ConsumerRecord payload -> OrderEvent via payload_arg 1`) does not hold
-    against this scanner's real output; this is that divergence, verified
-    live and frozen honestly rather than guessed past."""
+    """`onDeadLetter(ConsumerRecord<String, OrderEvent> record)`: the declared
+    `{type: ..., payload_arg: 1, semantics: envelope}` wrapper rule reaches the
+    payload at argument 1 and the row describes `OrderEvent`, not the envelope.
+
+    This test used to assert `request_shape is None`, for the same cause as the
+    batch row above: a parameter's type arguments were erased, so the envelope
+    held nothing at its payload position, and D02 §2a says an envelope holding
+    nothing is no payload — the row was therefore empty. **W5 closed it**, and
+    the checkpoint's own expectation (`ConsumerRecord payload -> OrderEvent via
+    payload_arg 1`) now holds against the scanner's real output, which it could
+    not before."""
     _, report = resolved_fixture
     [dlq] = _messaging_rows(report, "kafka", "order-.*-dlq")
 
     assert dlq["path"] == "order-.*-dlq"  # the pattern lands on `path` verbatim
-    assert dlq["request_shape"] is None
+    assert json.loads(dlq["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
 
 
 def test_a_class_level_kafka_listener_derives_one_row_per_handler_sharing_the_topic(
