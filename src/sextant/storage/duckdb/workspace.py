@@ -531,35 +531,23 @@ _NAMED_QUERIES = {
     "facts": "SELECT count(*) AS facts FROM raw_facts",
 }
 
-# The tables a bundle carries (D06 §5). `documents`, `endpoints`,
-# `resolved_config`, `shapes`, `shape_fields`, `call_sites`,
-# `open_questions` (2G Task 8) and the two non-wire tables (2O design §4)
-# export through their named query, so the row order is the one NFR-1 already
-# fixed; `symbols` and `annotations` export through their own ordered SELECT
-# below, for the same reason — `symbols` has no whole-row named query to reuse
-# (`declared_symbols` above projects the one column existence checking needs,
-# not the table). Sorted by name so the manifest's contents list is
-# deterministic too.
-_EXPORTED_TABLES = (
-    "annotations",
-    "call_sites",
-    "documents",
-    "endpoints",
-    "error_handlers",
-    "open_questions",
-    "resolved_config",
-    "scheduled_work",
-    "shape_fields",
-    "shapes",
-    "symbols",
-)
-
-# What the export PROJECTION masks (2K design §1) — five tables plus the fact
-# stream, each named where its own query below says why: `endpoints.path`/
-# `.peer` and `open_questions.path` (the address columns), `resolved_config`'s
-# `value` (the key-pattern rule), the JSON in `call_sites.arguments` and
-# `annotations.args` (userinfo over every string leaf), and `config_entry` fact
-# payloads on their way into the bundle's parquet (`_stage_fact_redactions`).
+# What the export PROJECTION masks (2K design §1), each named where its own
+# query below says why. THREE MAPS, one per rule, because the rule is the thing
+# that must not be duplicated — not the column:
+#
+#   addresses    `endpoints.path`/`.peer`, `open_questions.path`, `roots.path`
+#   the grammar  `call_sites.arguments`, `annotations.args`,
+#                `return_flows.value`, `method_returns.value`
+#   config       `resolved_config.value`, `config_entries.value`, and
+#                `config_entry` fact payloads (`_stage_fact_redactions`, joined
+#                by BOTH the `facts/*.parquet` stream and `graph/raw_facts`)
+#
+# A column joins the map its VALUE belongs to, never one chosen per table:
+# `roots.path` is carried column-for-column from the endpoint that named the
+# handler, so a root masked by a different map would name a different thing;
+# and all four grammar columns are built from the same string constants read
+# out of bytecode, so a hardcoded `https://user:pass@host` reaches a bundle
+# through any of them.
 # The masking is here and only here: the workspace itself keeps verbatim values,
 # because analysis needs them — peer resolution substitutes real addresses —
 # and the user's own disk is not the trust boundary. The bundle is.
@@ -575,7 +563,35 @@ _REDACTED_CONFIG_VALUES = "redacted_config_values"
 _REDACTED_ADDRESSES = "redacted_addresses"
 _REDACTED_JSON = "redacted_json"
 _REDACTED_PAYLOADS = "redacted_payloads"
+# `config_entries` is the RAW half of what `resolved_config` holds resolved —
+# the same values, before the resolver joined them — so it masks by the same
+# rule through the same `Redactor.redact_value`, keyed on the entry's own
+# `key_path` exactly as `redact_config_entry_line` keys it. Its own map rather
+# than `_REDACTED_CONFIG_VALUES` because the two are keyed on different key
+# spellings: a raw entry's `key_path` and a resolved row's `key` are not
+# always the same string, and a join across them would silently miss.
+_REDACTED_ENTRY_VALUES = "redacted_entry_values"
 
+# One query per table and view IN THE SCHEMA — all eighteen, with no exclusion
+# class. The ratchet runs the direction that catches the defect: an object in
+# `schema.sql` with no query here is a TEST FAILURE
+# (`tests/storage/test_workspace.py`), not a quiet omission.
+#
+# It used to be eleven hand-listed names, and the SEVEN they omitted —
+# `raw_facts`, `call_edges` (1,393 rows on `mall-admin`), `return_flows` (444),
+# `roots` (79), and the three views `config_entries`, `field_writes` and
+# `method_returns` — were dropped from every bundle with nothing saying so. A
+# consumer could read a rendered trace and had no way to recompute or check
+# what it asserted. Ruled by the user: **nothing is dropped on export.**
+# Parquet, DuckDB and the indices exist so an agent or a program can query
+# fast, and making a consumer re-derive what we already hold is the friction
+# the format removes.
+#
+# `_EXPORTED_TABLES` is DERIVED from this dict rather than restated beside it,
+# so adding a table asks its author exactly two questions and neither can be
+# skipped: *does it export?* — write the query or the ratchet fails — and *does
+# analysis read its values?* — yes keeps the real value and redacts here, no
+# redacts at the origin instead (§6.2). There is no third answer to either.
 _EXPORT_QUERIES = {
     "documents": _NAMED_QUERIES["documents"],
     # `path` and `peer` are the columns that can carry a whole address (D01
@@ -647,7 +663,85 @@ _EXPORT_QUERIES = {
         LEFT JOIN {_REDACTED_JSON} j ON j.original = a.args::VARCHAR
         ORDER BY a.target, a.annotation, a.type_path, a.args
     """,
+    # ---- The six a bundle used to drop, plus the fact table itself (C10) ----
+    #
+    # The fact stream ALSO travels as `facts/<document_id>.parquet`, one file
+    # per document, which is the shape a reader wanting ONE document's facts
+    # needs. This is the other shape: the whole table, queryable in a single
+    # scan beside the derived tables it explains. Same rows, same mask, same
+    # `_REDACTED_PAYLOADS` map — `export_facts` and this cannot disagree,
+    # because there is one map and one redactor behind both.
+    #
+    # `rowid` is the order the facts were loaded in, which is the order the
+    # fact files declare them in (D00 §7) — the same ordering `export_facts`
+    # already ships on, reused rather than invented.
+    "raw_facts": f"""
+        SELECT f.kind, f.document_id, coalesce(m.masked::JSON, f.payload) AS payload
+        FROM raw_facts f
+        LEFT JOIN {_REDACTED_PAYLOADS} m ON m.original = f.payload::VARCHAR
+        ORDER BY f.rowid
+    """,
+    # Carries a whole address in `path` — copied column-for-column from the
+    # `endpoints` row that named the handler — so it masks through the SAME
+    # address map those columns and `open_questions.path` use. A root masked
+    # differently from the endpoint it was carried from would name two
+    # different things.
+    #
+    # Ordering is the named query's, which is total where `handler` alone is
+    # not: one method can be both a request target and a clock target, and one
+    # handler can serve three addresses.
+    "roots": f"""
+        SELECT r.handler, r.root_kind, r.protocol, r.method,
+               coalesce(a.masked, r.path) AS path
+        FROM roots r
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = r.path
+        ORDER BY r.handler, r.root_kind, r.protocol, r.method, r.path
+    """,
+    # No masked column, and stated rather than left to inference (the
+    # `scheduled_work`/`error_handlers` precedent above): every column here is
+    # a symbol, a descriptor, a dispatch form, an integer or a closed-set
+    # value. There is nowhere in it for an address, a config value or a string
+    # constant out of bytecode to be.
+    "call_edges": _NAMED_QUERIES["call_edges"],
+    "field_writes": "SELECT * FROM field_writes ORDER BY document_id, field, from_parameter",
+    # `value` is an entry of the ARGUMENT grammar — the same JSON shape
+    # `call_sites.arguments` carries, produced from the same string constants
+    # in bytecode — so it takes the same `redact_json` pass, over userinfo in
+    # every string leaf. Its rows are staged alongside the call-site and
+    # annotation JSON in `_stage_redactions`, one map for one grammar.
+    "return_flows": f"""
+        SELECT rf.caller, rf.ordinal, rf.result, rf.callee, rf.return_ordinal,
+               coalesce(j.masked::JSON, rf.value) AS value, rf.resolution, rf.evidence
+        FROM return_flows rf
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = rf.value::VARCHAR
+        ORDER BY rf.caller, rf.ordinal, rf.callee, rf.return_ordinal
+    """,
+    "method_returns": f"""
+        SELECT mr.document_id, mr.method, mr.ordinal,
+               coalesce(j.masked::JSON, mr.value) AS value
+        FROM method_returns mr
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = mr.value::VARCHAR
+        ORDER BY mr.document_id, mr.method, mr.ordinal
+    """,
+    # The raw half of `resolved_config` — a configuration value as the file
+    # declared it, before the resolver joined profiles and placeholders. It is
+    # therefore exactly as disclosing as the resolved column beside it, and
+    # exporting it in the clear beside a masked `resolved_config` would mask
+    # nothing at all.
+    "config_entries": f"""
+        SELECT c.document_id, c.key_raw, c.key_path,
+               coalesce(m.masked, c.value) AS value, c.doc_index, c.seq
+        FROM config_entries c
+        LEFT JOIN {_REDACTED_ENTRY_VALUES} m
+               ON m.key_path = c.key_path AND m.value = c.value
+        ORDER BY c.document_id, c.doc_index, c.seq
+    """,
 }
+
+# Derived, never restated (see the note above `_EXPORT_QUERIES`): the exported
+# list IS the set of queries, so the two cannot fall out of step. Sorted, so
+# the manifest's `contents.tables` is deterministic too.
+_EXPORTED_TABLES = tuple(sorted(_EXPORT_QUERIES))
 
 _NAMED_DERIVATIONS = {
     "endpoints": "derive_endpoints.sql",
@@ -732,6 +826,10 @@ class DuckDbWorkspace:
         graph = destination / "graph"
         graph.mkdir(parents=True, exist_ok=True)
         self._stage_redactions(redactor)
+        # `raw_facts` exports here as well as through `export_facts`, and both
+        # join the same payload map — so it is staged for both rather than
+        # owned by either.
+        self._stage_fact_redactions(redactor)
         try:
             for name in _EXPORTED_TABLES:
                 sql = _EXPORT_QUERIES[name]
@@ -740,8 +838,42 @@ class DuckDbWorkspace:
                     [str(graph / f"{name}.parquet")],
                 )
         finally:
-            self._drop_staged(_REDACTED_CONFIG_VALUES, _REDACTED_ADDRESSES, _REDACTED_JSON)
+            self._drop_staged(
+                _REDACTED_CONFIG_VALUES,
+                _REDACTED_ADDRESSES,
+                _REDACTED_JSON,
+                _REDACTED_ENTRY_VALUES,
+                _REDACTED_PAYLOADS,
+            )
         return list(_EXPORTED_TABLES)
+
+    def schema_objects(self) -> list[str]:
+        """Every table and view `schema.sql` created, from DuckDB's own
+        catalog rather than from a list beside it — a list would be the very
+        thing the export ratchet exists to stop being hand-maintained.
+
+        Read by `tests/storage/test_workspace.py`, whose assertion runs the
+        direction that catches the defect: an object HERE with no export query
+        fails the build. Eleven names were hand-listed for four phases and the
+        seven they omitted left every bundle quietly incomplete.
+
+        Staged redaction tables are excluded by name — they are temp tables
+        this class creates and drops inside one export, never part of the
+        schema.
+        """
+        rows = self._connection.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main' AND table_name NOT IN (?, ?, ?, ?, ?) "
+            "ORDER BY table_name",
+            [
+                _REDACTED_CONFIG_VALUES,
+                _REDACTED_ADDRESSES,
+                _REDACTED_JSON,
+                _REDACTED_ENTRY_VALUES,
+                _REDACTED_PAYLOADS,
+            ],
+        ).fetchall()
+        return [str(name) for (name,) in rows]
 
     def _drop_staged(self, *names: str) -> None:
         """Dropped rather than left behind: these hold the very values the
@@ -782,10 +914,15 @@ class DuckDbWorkspace:
         # `open_questions` is unioned in with the endpoint columns because it
         # is keyed on a wire identity and carries the same `path` — one map,
         # so a question and the row it asks about cannot mask differently.
+        # `roots` joins for the same reason and is not merely redundant: its
+        # `path` is CARRIED from the endpoint that named the handler, so the
+        # values overlap today, but a map built from endpoints alone would
+        # leave any future root address unmasked with nothing saying so.
         address_rows = self._connection.execute(
             "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL "
-            "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL"
+            "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL "
+            "UNION SELECT DISTINCT path FROM roots WHERE path IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_ADDRESSES,
@@ -797,10 +934,17 @@ class DuckDbWorkspace:
             ],
         )
 
+        # One map for one GRAMMAR: `call_sites.arguments`, `annotations.args`,
+        # `return_flows.value` and `method_returns.value` are all entries of
+        # D00 §5's argument shape, built from the same string constants read
+        # out of bytecode — so one hardcoded `https://user:pass@host` reaches
+        # a bundle through any of the four, and all four take the same pass.
         json_rows = self._connection.execute(
             "SELECT DISTINCT arguments::VARCHAR AS original FROM call_sites "
             "WHERE arguments IS NOT NULL "
-            "UNION SELECT DISTINCT args::VARCHAR FROM annotations WHERE args IS NOT NULL"
+            "UNION SELECT DISTINCT args::VARCHAR FROM annotations WHERE args IS NOT NULL "
+            "UNION SELECT DISTINCT value::VARCHAR FROM return_flows WHERE value IS NOT NULL "
+            "UNION SELECT DISTINCT value::VARCHAR FROM method_returns WHERE value IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_JSON,
@@ -809,6 +953,23 @@ class DuckDbWorkspace:
                 (str(original), masked)
                 for (original,) in json_rows
                 if (masked := redactor.redact_json(str(original))) != str(original)
+            ],
+        )
+
+        # Keyed on `key_path` and masked by `redact_value`, which is the SAME
+        # call `domain/factfile.redact_config_entry_line` makes on the same
+        # field of the same fact — not a second expression of the rule, the
+        # same one, reached from the column instead of from the payload text.
+        entry_rows = self._connection.execute(
+            "SELECT DISTINCT key_path, value FROM config_entries WHERE value IS NOT NULL"
+        ).fetchall()
+        self._stage_map(
+            _REDACTED_ENTRY_VALUES,
+            "key_path VARCHAR, value VARCHAR, masked VARCHAR",
+            [
+                (str(key_path), str(value), masked)
+                for key_path, value in entry_rows
+                if (masked := redactor.redact_value(str(key_path), str(value))) != str(value)
             ],
         )
 

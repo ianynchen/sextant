@@ -800,22 +800,32 @@ def test_exported_tables_include_call_sites(tmp_path: Path):
     assert (tmp_path / "bundle" / "graph" / "call_sites.parquet").exists()
 
 
-def test_exported_tables_read_back_equal_to_the_workspace_query(tmp_path: Path):
+def test_every_table_and_view_in_the_schema_is_exported(tmp_path: Path):
+    """The export ratchet, running the direction that catches the defect (C10).
+
+    It used to assert a hand-written list of eleven names, which is why the
+    seven it omitted — `raw_facts`, `call_edges`, `return_flows`, `roots` and
+    the three views — were dropped from every bundle for four phases with the
+    suite green. A list compared against a list agrees with itself; this
+    compares the export against the SCHEMA, so a new `CREATE TABLE` with no
+    export query fails here rather than shipping an incomplete bundle.
+
+    There is no exclusion class. `raw_facts` travels twice — as this table and
+    as the per-document `facts/*.parquet` stream — because those are two
+    shapes of one thing a reader wants for two different reasons, not an
+    exemption.
+    """
     workspace = _workspace_with_an_endpoint(tmp_path)
     written = workspace.export_tables(tmp_path / "bundle", Redactor.from_rules())
-    assert written == [
-        "annotations",
-        "call_sites",
-        "documents",
-        "endpoints",
-        "error_handlers",
-        "open_questions",
-        "resolved_config",
-        "scheduled_work",
-        "shape_fields",
-        "shapes",
-        "symbols",
-    ]
+    assert sorted(written) == workspace.schema_objects()
+    for name in written:
+        assert (tmp_path / "bundle" / "graph" / f"{name}.parquet").exists(), name
+    workspace.close()
+
+
+def test_exported_tables_read_back_equal_to_the_workspace_query(tmp_path: Path):
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    workspace.export_tables(tmp_path / "bundle", Redactor.from_rules())
     back = duckdb.sql(
         f"SELECT * FROM read_parquet('{tmp_path / 'bundle' / 'graph' / 'endpoints.parquet'}')"
     ).fetchall()
@@ -1105,6 +1115,46 @@ def test_the_exported_facts_mask_a_config_entrys_value_and_the_workspace_keeps_i
     )
     assert exported["orders.db.password"] == REDACTED
     assert exported["soap.billing.uri"] == "http://billing.internal.example.com/ws"
+    in_workspace = {str(row["key_path"]): row["value"] for row in workspace.query("config_entries")}
+    assert in_workspace["orders.db.password"] == "hunter2"
+    workspace.close()
+
+
+def test_the_two_new_fact_shaped_exports_mask_what_the_fact_stream_masks(tmp_path: Path):
+    """C10 put `raw_facts` and the `config_entries` view into the bundle, and a
+    table exported in the clear beside a masked `facts/` masks nothing — the
+    same argument that put the mask on the fact stream in the first place.
+
+    Both go through the one rule: `raw_facts` joins the SAME
+    `_REDACTED_PAYLOADS` map `export_facts` joins, and `config_entries` calls
+    the same `redact_value` keyed on the same `key_path`. So the three cannot
+    disagree about one value. `soap.billing.uri` travels verbatim in both,
+    which is what says this discriminates rather than blanks a column.
+    """
+    _config_entry_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules())
+
+    from_view = dict(
+        duckdb.sql(
+            "SELECT key_path, value FROM read_parquet("
+            f"'{bundle / 'graph' / 'config_entries.parquet'}')"
+        ).fetchall()
+    )
+    assert from_view["orders.db.password"] == REDACTED
+    assert from_view["soap.billing.uri"] == "http://billing.internal.example.com/ws"
+
+    from_table = dict(
+        duckdb.sql(
+            "SELECT payload ->> 'key_path', payload ->> 'value' FROM read_parquet("
+            f"'{bundle / 'graph' / 'raw_facts.parquet'}') WHERE kind = 'config_entry'"
+        ).fetchall()
+    )
+    assert from_table["orders.db.password"] == REDACTED
+    assert from_table["soap.billing.uri"] == "http://billing.internal.example.com/ws"
+
     in_workspace = {str(row["key_path"]): row["value"] for row in workspace.query("config_entries")}
     assert in_workspace["orders.db.password"] == "hunter2"
     workspace.close()

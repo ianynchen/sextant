@@ -45,6 +45,25 @@ here would restate those documents rather than add anything.
   directions: `--sextant-version` becomes required rather than defaulted in Java, and the
   Python constant is read from the installed distribution so `pyproject.toml` owns it.
 
+- **Nothing is dropped on export (C10).** `_EXPORTED_TABLES` was eleven hand-written names;
+  it is now **every table and view in the schema**, derived from the export queries
+  themselves so the two cannot fall out of step. The seven that were silently omitted now
+  travel: `raw_facts`, `call_edges` (1,393 rows on `mall-admin`), `return_flows` (444),
+  `roots` (79), and the three views `config_entries`, `field_writes` and `method_returns`.
+  A consumer can now recompute and check what a rendered trace asserts.
+
+  **The ratchet inverts**: a table in the schema and absent from the export is a test
+  failure, so the list cannot fall behind a new `CREATE TABLE`. It lands before anything that
+  adds a table — two later items add three — because a safety net installed after the things
+  it protects is not one.
+
+  Redaction extends with it, answering the same question per column: `roots.path` joins the
+  address map its value was carried from; `return_flows.value` and `method_returns.value`
+  join the JSON map, since all four columns of that grammar are built from the same string
+  constants; `config_entries.value` is masked by the same `redact_value` keyed on the same
+  `key_path` that masks it in the fact stream; and `graph/raw_facts.parquet` joins the very
+  map `facts/*.parquet` joins, so the two shapes of one table cannot disagree.
+
 ### Added
 
 - **The vocabulary pass's own audit table is closed: none of the four annotations it left

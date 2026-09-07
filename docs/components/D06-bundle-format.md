@@ -80,8 +80,12 @@ columnar need per fact kind is stated.
                 "catalog_hash": "…" },
   "environments": ["dev", "staging", "prod"],
   "coverage": { "documents": 1283, "partial_documents": 0, "partial": false },
-  "contents": { "facts": true, "graph": true, "tables": ["symbols", "edges", "endpoints",
-                                                          "shapes", "shape_fields", "dispatch", "trace_summary"],
+  "contents": { "facts": true, "graph": true, "tables": ["annotations", "call_edges", "call_sites",
+                                                          "config_entries", "documents", "endpoints",
+                                                          "error_handlers", "field_writes", "method_returns",
+                                                          "open_questions", "raw_facts", "resolved_config",
+                                                          "return_flows", "roots", "scheduled_work",
+                                                          "shape_fields", "shapes", "symbols"],
                 "facts_files": 1283,
                 "render": ["architecture.md", "architecture.html"] },
   "gaps": ["call_graph_not_implemented"],
@@ -124,7 +128,10 @@ document field.
 | `facts/*.parquet` `config_entry` payload `value` | the same, keyed by the fact's own `key_path` |
 | `graph/endpoints.parquet` `path`, `peer` | URL userinfo + value patterns |
 | `graph/open_questions.parquet` `path` | the same, through the same map — a question and the row it asks about must mask identically |
-| `graph/call_sites.parquet` `arguments`, `graph/annotations.parquet` `args` | URL userinfo + value patterns, over every string leaf |
+| `graph/call_sites.parquet` `arguments`, `graph/annotations.parquet` `args`, `graph/return_flows.parquet` `value`, `graph/method_returns.parquet` `value` | URL userinfo + value patterns, over every string leaf — one map for one grammar, since all four are entries of D00 §5's argument shape built from the same string constants |
+| `graph/roots.parquet` `path` | the same address map as `endpoints`, because the column is carried from it — a root masked differently from the endpoint it came from would name two different things |
+| `graph/config_entries.parquet` `value` | the raw half of `resolved_config`, masked by the same `redact_value` keyed on the entry's own `key_path` |
+| `graph/raw_facts.parquet` `config_entry` payload `value` | the same map the `facts/*.parquet` stream joins, so the two shapes of one table cannot disagree |
 
 The last row is deliberately **not** key-based. A call argument is not a configuration key,
 and the path and URL literals inside one are the wire identities the linking tier matches
@@ -213,6 +220,41 @@ backwards from the system architecture document:
 ([D01](D01-graph-schema.md)): they travel implicitly, as the tables `trace_of` walks over.
 If `dispatch` or the control-flow positions on `edges` do not travel, the system tier can
 draw a service map but not a sequence — so omitting them is not an optimisation.
+
+### Nothing is dropped on export
+
+**Ruled by the user (C10): every table and view in the D01 schema travels, with no exclusion
+class.** Parquet, DuckDB and the indices exist so an agent or a program can query fast, and
+making a consumer re-derive what the workspace already holds is the friction the format
+removes.
+
+For four phases the export was a hand-written list of eleven names, and the seven it omitted
+— `raw_facts`, `call_edges`, `return_flows`, `roots` and the three views `config_entries`,
+`field_writes` and `method_returns` — were dropped from every bundle with nothing saying so.
+The row above was therefore false as written: a reader could see a rendered trace and had no
+way to recompute or check what it asserted.
+
+**The ratchet runs the direction that catches the defect.** A table in the schema and absent
+from the export is a TEST FAILURE, so the list cannot be hand-maintained and cannot fall
+behind a new `CREATE TABLE`. Adding a table asks its author exactly two questions, and
+neither can be skipped: *does it export?* — automatically, and the ratchet fails the build
+otherwise; and *does analysis read its values?* — yes keeps the real value in the workspace
+and redacts at this exit, no redacts at the origin instead. There is no third answer to
+either.
+
+**`raw_facts` travels twice, and that is not an exemption.** It ships as
+`graph/raw_facts.parquet` — the whole table, queryable in one scan beside the derived tables
+it explains — and as the per-document `facts/<document_id>.parquet` stream, which is the
+shape a reader wanting one document's facts needs. Both join the same redaction map, so the
+two cannot disagree about a single value.
+
+**The cost, measured rather than assumed** (`fixtures/orders-service`, 3,588 facts across
+118 documents): `graph/` is 214 KiB over 18 files, of which `raw_facts.parquet` is **109
+KiB**; `facts/` is **410 KiB** over 118 files. So the second copy adds **21%** to a 625 KiB
+bundle — and the whole-table form is *less than a third the size* of the per-document stream
+carrying the same rows, because a parquet file's footer and column metadata are paid once
+per file. The duplication is real and small; the shape that costs the most is the one that
+was already there.
 
 ## 5a. Open questions, and how a wire format is shown
 

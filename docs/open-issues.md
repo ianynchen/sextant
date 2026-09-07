@@ -768,9 +768,9 @@ check that is never run is not a net.
 refreshing a pin — *"a new `commit`, and the counts/routes re-recorded against
 it"* — as *"a deliberate, reviewed act"*, and re-recording an expectation to
 match today's output is exactly the move that would hide a real regression if
-this were one. Someone has to look at the 13 rows and agree the new spelling is
+this were one. Someone has to look at the rows and agree the new spelling is
 right.
-**Closes by** the 13 routes re-recorded with their leading separators, under
+**Closes by** the routes re-recorded with their leading separators, under
 review, in a commit that says the migration is why. **Falsified by** the new
 spelling being wrong, which would make this a renderer defect rather than a
 stale pin.
@@ -1442,3 +1442,45 @@ inbound and one outbound stamping rule.
 **Not closed by this, and it is not a defect:** which broker feeds a channel is
 still unread. That is the Stage 4 adapter split, and it stays in `COVERAGE.md`
 as an ABSENCE — the honest state — rather than here as a wrong value.
+
+### OI-43 — FR-19 describes a redaction mechanism the project deliberately does not build
+**Major · found 2026-09-07 while wiring Wave 0's W34 redaction · `docs/REQUIREMENTS.md:293`**
+
+FR-19's second paragraph reads: *"Sextant redacts values matching configured
+patterns at the moment facts are produced, so that a secret appearing inside a
+file that is otherwise analysed never reaches storage."*
+
+**Both halves are false of the shipped design, and deliberately so.** 2K design
+§1 ruled the opposite and gave its reason: the workspace stays **verbatim**
+because analysis needs the real values — peer resolution substitutes a real
+address into `${aws.secretsmanager.endpoint}` — and *"the analyst's own disk is
+not the trust boundary. The bundle is."* So redaction happens at the **exits**,
+not at production, and a matching secret **does** reach storage by design. The
+code says so plainly (`storage/duckdb/workspace.py`'s `_stage_redactions`, and
+`export_facts`'s own docstring); the requirement was never restated to match.
+`verify: grep -n "the workspace itself keeps verbatim values" src/sextant/storage/duckdb/workspace.py`
+
+**Major because of who reads it.** FR-19 is the requirement a reader consults to
+decide whether a workspace directory is safe to keep, share or back up. It
+currently tells them a secret never reaches storage, and one does. That is the
+one direction a wrong claim about redaction must never point.
+
+**Not tracked anywhere before this.** FR-19 appears in no other document except
+a Phase 1 plan listing it as not-yet-covered — not in `open-issues.md`, not in
+`documented-not-implemented.md`, not in `COVERAGE.md`.
+
+**Not fixed here, deliberately.** Correcting an FR's wording is F9's RESTATE
+batch (spec §12, `W51`), which is where every other false requirement statement
+in this plan is being repaired; fixing this one ahead of that batch would split
+the work and leave the batch's own list incomplete. It also interacts with a
+ruling not yet built: spec §6.2 rules that columns analysis does **not** read
+are redacted at the ORIGIN (W29's request-metadata table is the first), which
+makes FR-19's wording true of the new columns and still false of the existing
+five — so the restatement has to describe the split, not simply invert.
+
+**Closes by** FR-19 restated to say redaction happens at the exits for values
+analysis consumes and at the origin for values it does not, with the
+verbatim-workspace consequence stated where a reader deciding what to do with a
+workspace will see it. **Falsified by** a decision to actually redact at
+production for all five existing columns, which 2K considered and rejected on
+the grounds that it breaks peer resolution.
