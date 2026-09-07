@@ -48,7 +48,6 @@ def write_fixture_module_fact(facts: Path) -> None:
             sextant_version="0.1.0",
             fact_schema_version=2,
             scanner_id="asm",
-            scanner_version="9.8",
             content_hash="sha256:module",
             origin_entry="target/classes",
             origin_tier=OriginTier.MODULE_OUTPUT,

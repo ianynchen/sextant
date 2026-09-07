@@ -314,3 +314,40 @@ One decision formerly here was closed by Phase 2C's approved design (2026-08-29)
   the derivation's job, a join the `fluent` engine performs over facts already on disk.
   Module size stays bounded on the extractor side because there is nothing left to grow
   there: one dataflow pass, not a graph walk.
+
+## How a scanner declares its capabilities, and what that costs
+
+**Over the subprocess contract, as a command-line question**: the JVM extractor
+answers `--capabilities` with `{"capabilities": [...]}` on stdout, the same
+channel it answers a scan on, and repeats the list inside every scan report so
+what a workspace records and what its catalogs were gated on cannot disagree.
+It is asked once per scanner instance, before any scan, because capabilities
+decide which catalogs run. Measured at 0.02s — the JVM starts and exits without
+opening a class file.
+
+Chosen over a jar-manifest attribute for two reasons. A manifest is **JVM-only**,
+and `capabilities()` is on the port every backend implements, so it would make
+the JVM a special case. And Gradle writes the manifest, so the capability list
+would have to live in `build.gradle.kts` as well as in the Java that implements
+it — the duplication this whole change removes. (Library *versions* are the
+opposite case and do go in the manifest: Gradle is the thing that resolves them,
+so it genuinely owns them.)
+
+### The consequence, stated: every scanner needs something we build
+
+**A command-line protocol assumes we control the scanner's entry point.** A
+third-party analyzer we did not write will not answer `--capabilities`, so
+adopting one means writing a WRAPPER for it — a thin executable that declares
+what that analyzer can read and translates its output into the fact stream.
+That is a real cost per backend and it is accepted deliberately, not overlooked:
+
+- The alternative — inferring capabilities from a version string — is what
+  Sextant did until Step 1, and it is why a field named for a library version
+  held `"9.18"`, a capability number. **A version cannot be interrogated**; you
+  can only look it up in a table someone maintains by hand, which is a second
+  copy of the declaration with none of its authority.
+- A wrapper is needed regardless. A third-party analyzer does not emit D00 facts,
+  so something must already stand between it and the workspace; declaring
+  capabilities is one more line in a component that has to exist anyway.
+- It keeps the rule uniform. Every scanner answers the same question the same
+  way, whoever built it, and no backend gets a private mechanism.

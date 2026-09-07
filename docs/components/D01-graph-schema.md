@@ -826,7 +826,7 @@ records what produced it, and any change forces the affected work to be redone.
 
 | On | Fields |
 |---|---|
-| Each **document** | `sextant_version`, `fact_schema_version`, `scanner_id`, `scanner_version`, `content_hash`, `redaction_set_hash` |
+| Each **document** | `sextant_version`, `fact_schema_version`, `scanner_id`, `content_hash`, `redaction_set_hash` |
 | Each **workspace** | The above, plus `graph_schema_version` and `catalog_hash` |
 | Each **bundle** | The workspace stamp, in its manifest |
 | Each **system workspace** | Its own stamp, plus the stamp of every bundle it used |
@@ -852,7 +852,7 @@ own cadence.
 |---|---|---|
 | `fact_schema_version` | Facts, and everything after | **Re-extraction.** The expensive one. |
 | `graph_schema_version` | Derived tables only | Re-derivation. Minutes. |
-| `scanner_version` or `scanner_id` | That scanner's facts | Re-extraction, for those documents |
+| `scanner_id`, or a change to a scanner's declared libraries | That scanner's facts | Re-extraction, for those documents. The libraries live on the workspace (`metadata.json`'s `provenance.scanners`), not the document — every document one scanner wrote in a run shares them, so repeating the pair per document stored one fact many thousands of times |
 | `redaction_set_hash` | Facts | Re-extraction. A new pattern cannot clean values already written. |
 | `catalog_hash` | Endpoints and everything after | Re-derivation |
 | `sextant_version` | Derived tables | Re-derivation — **conservative by default** |

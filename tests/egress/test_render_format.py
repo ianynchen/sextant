@@ -4,9 +4,20 @@ from pathlib import Path
 import pytest
 
 from sextant.application.ports.detector import ModuleModel
+from sextant.application.ports.scanner import ScannerProvenance
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.egress.render.document import render_module_document
 from sextant.egress.render.metadata import write_metadata
+
+# The facilities a fixture workspace's documents claim (D02 §3: capabilities and
+# provenance are SCANNER-declared). One entry with libraries, one without, so a
+# test exercises both shapes: only a facility running third-party code that can
+# move independently of Sextant records versions at all.
+SCANNERS = (
+    ScannerProvenance("sextant-detector"),
+    ScannerProvenance("sextant-jvm-extractor", ("org.ow2.asm:asm:9.10.1",)),
+)
+
 
 MODULE = ModuleModel(
     module_id="com.acme:orders-service",
@@ -632,8 +643,7 @@ def test_metadata_carries_the_two_analyze_side_gap_lists(tmp_path: Path):
         tmp_path / "metadata.json",
         MODULE,
         report,
-        "asm",
-        "9.7",
+        SCANNERS,
         "a3f91c",
         schema_sources_not_compiled=("broken.proto",),
         descriptors_not_interpreted=("pkg.Widget",),
@@ -645,7 +655,7 @@ def test_metadata_carries_the_two_analyze_side_gap_lists(tmp_path: Path):
 
 def test_metadata_gap_lists_are_empty_by_default(tmp_path: Path):
     report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
-    write_metadata(tmp_path / "metadata.json", MODULE, report, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", MODULE, report, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["schema_sources_not_compiled"] == []
     assert written["descriptors_not_interpreted"] == []

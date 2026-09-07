@@ -46,7 +46,7 @@ class _NoOpScanner:
         return 1
 
     def scan(self, request: ScanRequest) -> ScanReport:
-        return ScanReport(documents=0, facts=0, scanner_id="noop", scanner_version="1.0")
+        return ScanReport(documents=0, facts=0, scanner_id="noop")
 
 
 class _EmptyCatalogs:

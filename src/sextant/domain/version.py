@@ -49,6 +49,13 @@ SEXTANT_VERSION = version("sextant")
 #     2       the integer scheme itself. No shape change: the divergence above
 #             is what it settles, by making every workspace written under either
 #             old value refuse and re-analyse.
+#     3       (Step 1) `scanner_version` is REMOVED from a document. It named a
+#             version for facilities that ship inside the wheel and therefore
+#             have none of their own, and on the one facility that does run
+#             third-party code it held "9.18" — a CAPABILITY number, while the
+#             pinned ASM was 9.10.1. The versions that can actually move are the
+#             extractor's resolved libraries, now recorded once per workspace in
+#             `metadata.json` instead of repeated on every document.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -58,5 +65,5 @@ SEXTANT_VERSION = version("sextant")
 #             additive: a query against the older rows fails rather than
 #             answering empty, which is what comparing a stamp is for.
 #     2       the integer scheme. No table change.
-FACT_SCHEMA_VERSION = 2
+FACT_SCHEMA_VERSION = 3
 GRAPH_SCHEMA_VERSION = 2

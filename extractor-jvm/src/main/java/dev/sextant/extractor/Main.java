@@ -13,9 +13,30 @@ import java.util.zip.ZipFile;
  *  stdout. Errors exit non-zero with a message on stderr. */
 public final class Main {
 
+    /** Names the FACILITY, never the library (D00 §2). It read `"asm"` until
+     *  Step 1, which is what made a library version look like the right thing
+     *  to put beside it — and then that field drifted to a capability number. */
+    private static final String SCANNER_ID = "sextant-jvm-extractor";
+
+    /** The manifest attribute the build writes with the RESOLVED coordinates of
+     *  every declared scanning library (`build.gradle.kts`). */
+    private static final String LIBRARIES_ATTRIBUTE = "Sextant-Scanner-Libraries";
+
     public static void main(String[] args) {
         try {
             Map<String, String> options = parse(args);
+            // Asked BEFORE a scan, because capabilities decide which catalogs
+            // run and the caller needs them without paying for an extraction.
+            // `parse` reads argument PAIRS, so this flag is checked against the
+            // raw arguments rather than through it.
+            if (args.length == 1 && args[0].equals("--capabilities")) {
+                List<String> named = new ArrayList<>();
+                for (String capability : Capabilities.ALL) named.add(JsonOut.string(capability));
+                TreeMap<String, String> answer = new TreeMap<>();
+                answer.put("capabilities", JsonOut.array(named));
+                System.out.println(JsonOut.object(answer));
+                return;
+            }
             Path classes = Path.of(options.get("classes"));
             Path out = Path.of(options.get("out"));
             ClassScanner scanner =
@@ -184,8 +205,14 @@ public final class Main {
         // drifted to a value none of its three siblings held. A required
         // option cannot drift — it can only be absent, and absence is refused.
         document.put("fact_schema_version", String.valueOf(factSchemaVersion(options)));
-        document.put("scanner_id", JsonOut.string("asm"));
-        document.put("scanner_version", JsonOut.string("9.18"));
+        // The FACILITY that produced this document, not the library it used
+        // (D00 §2's own rule, which `"asm"` broke). There is no
+        // `scanner_version` beside it any more: this facility ships inside
+        // Sextant and moves with `sextant_version` above, while the versions
+        // that CAN move on their own — ASM, kotlin-metadata-jvm — are
+        // third-party and are recorded ONCE per workspace in metadata.json
+        // rather than repeated on every one of a module's documents.
+        document.put("scanner_id", JsonOut.string(SCANNER_ID));
         document.put("content_hash", JsonOut.string("sha256:" + contentHash));
         document.put("origin_entry", JsonOut.string(options.get("classes")));
         // The library this document was extracted FROM, as its coordinate —
@@ -253,14 +280,27 @@ public final class Main {
         return (nested < 0 ? withoutSuffix : withoutSuffix.substring(0, nested)) + ".java";
     }
 
-    private static String report(int documents, int facts, List<String> uncovered) {
+    private static String report(int documents, int facts, List<String> uncovered)
+            throws IOException {
         List<String> quoted = new ArrayList<>();
         for (String source : uncovered) quoted.add(JsonOut.string(source));
         TreeMap<String, String> fields = new TreeMap<>();
         fields.put("documents", String.valueOf(documents));
         fields.put("facts", String.valueOf(facts));
-        fields.put("scanner_id", JsonOut.string("asm"));
-        fields.put("scanner_version", JsonOut.string("9.18"));
+        fields.put("scanner_id", JsonOut.string(SCANNER_ID));
+        // What actually read the class files, with the versions Gradle
+        // RESOLVED — provenance a consumer can act on, in place of the literal
+        // "9.18" that named no ASM release at all.
+        List<String> libraries = new ArrayList<>();
+        for (String coordinate : scannerLibraries()) libraries.add(JsonOut.string(coordinate));
+        fields.put("scanner_libraries", JsonOut.array(libraries));
+        // What THIS jar can read (Capabilities). Reported rather than assumed
+        // by the caller: the jar is built by a separate step, so a Python-side
+        // list is a claim about a binary that may be older than the claim, and
+        // it gates which catalogs run.
+        List<String> capabilities = new ArrayList<>();
+        for (String capability : Capabilities.ALL) capabilities.add(JsonOut.string(capability));
+        fields.put("capabilities", JsonOut.array(capabilities));
         fields.put("uncovered", JsonOut.array(quoted));
         return JsonOut.object(fields);
     }
@@ -295,6 +335,34 @@ public final class Main {
         } catch (NumberFormatException notAnInteger) {
             throw new IllegalArgumentException(
                 "--fact-schema-version must be an integer, got: " + value);
+        }
+    }
+
+    /** This jar's own scanning libraries, `group:artifact:version` each, in the
+     *  order the build sorted them.
+     *
+     *  <p>Read through {@link java.util.jar.Manifest} and never by scanning the
+     *  file's text: manifest values FOLD at 72 bytes with a leading-space
+     *  continuation, so this attribute arrives split across lines and a
+     *  substring search would return half a coordinate.
+     *
+     *  <p>Absent is a FAILED BUILD, not an empty list — a jar that cannot say
+     *  what read the class files has lost the provenance a consumer uses to
+     *  decide whether to trust a bundle, and answering `[]` would publish that
+     *  loss as a fact. */
+    private static List<String> scannerLibraries() throws IOException {
+        java.net.URL source = Main.class.getProtectionDomain().getCodeSource().getLocation();
+        try (var jar = new java.util.jar.JarFile(new java.io.File(source.getPath()))) {
+            var manifest = jar.getManifest();
+            String value = manifest == null
+                ? null
+                : manifest.getMainAttributes().getValue(LIBRARIES_ATTRIBUTE);
+            if (value == null || value.isBlank()) {
+                throw new IllegalStateException(
+                    LIBRARIES_ATTRIBUTE + " is missing from " + source
+                        + " — the extractor cannot state what produced its facts");
+            }
+            return List.of(value.split(","));
         }
     }
 

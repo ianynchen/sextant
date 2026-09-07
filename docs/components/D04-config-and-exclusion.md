@@ -460,7 +460,7 @@ rank among those accepting the language**, unless configuration pins one.
 reintroduces cross-tier reconciliation, which is the defect this architecture was shaped to
 avoid. Artifact readers are not competing scanners and are unaffected.
 
-Switching scanners invalidates the cache, because `scanner_id` and `scanner_version` are
+Switching scanners invalidates the cache, because `scanner_id` and the scanner's declared libraries are
 both on the document record.
 
 ---

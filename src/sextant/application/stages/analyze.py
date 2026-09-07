@@ -27,6 +27,7 @@ from sextant.application.ports.progress import Progress
 from sextant.application.ports.scanner import (
     ScanError,
     Scanner,
+    ScannerProvenance,
     ScanRequest,
     select_scanner,
 )
@@ -62,12 +63,13 @@ _MODULE_DOCUMENT = "module"
 # §2: `scanner_id` names the facility, never the format).
 _MODULE_SCANNER_ID = "sextant-detector"
 # `application` may not import `ingress` (the layering contract), which is why
-# these were RESTATED here for three phases — and the restatement is what let a
-# module document and a config document stamp two different fact schemas, the
-# invariant this comment used to assert while violating it. Both may import
-# `domain`, so `SEXTANT_VERSION` and `FACT_SCHEMA_VERSION` now come from the one
-# place that owns them. What is left below is this stage's own.
-SCANNER_VERSION = "0.1.0"
+# `SEXTANT_VERSION` and `FACT_SCHEMA_VERSION` were RESTATED here for three
+# phases — and the restatement is what let a module document and a config
+# document stamp two different fact schemas, the invariant this comment used to
+# assert while violating it. Both may import `domain`, so both now come from the
+# one place that owns them. The detector's own `SCANNER_VERSION = "0.1.0"` is
+# gone entirely rather than moved: the detector ships inside the wheel, so its
+# version IS `sextant_version`, and that literal was a fourth copy of it.
 NO_REDACTION_HASH = "sha256:none"
 
 
@@ -110,8 +112,11 @@ def _config_files(
 class AnalyzeResult:
     module: ModuleModel
     report: ResolveReport
-    scanner_id: str
-    scanner_version: str
+    # EVERY facility that produced a document in this run, not just the class
+    # scanner. `metadata.json` has always shaped this field as a list and has
+    # always been handed one entry, so two of the three facilities that write
+    # documents were invisible in a bundle's provenance.
+    scanners: tuple[ScannerProvenance, ...]
     # Compiled sources the scan did not account for. Carried out of the stage
     # rather than dropped here: a source nothing read is a gap the artifacts
     # must name (FR-17, M03), and this is the only place that knows it.
@@ -331,6 +336,13 @@ def analyze(
     # `ArtifactReader` port's `reads_schema_sources`), never a guess from the
     # root a file was found under: since 2H one schema root lives inside a
     # resource root, so the root no longer tells the two apart.
+    # Collected from the documents the readers actually STAMPED, never from a
+    # copy of their id restated here. `application` may not import `ingress`
+    # (the layering contract) and that is exactly what produced the duplicated
+    # constants Step 1 is removing — so this asks the document who wrote it
+    # instead of asserting an answer. A facility that ran and found no file
+    # writes no document and is correctly absent from the provenance.
+    read_scanner_ids: set[str] = set()
     schema_readers = [reader for reader in readers if reader.reads_schema_sources]
     for root in module.resource_roots:
         for reader, owned in group_files_by_reader(
@@ -343,6 +355,7 @@ def analyze(
                 target = config_fact_target(fact_root, document.relative_path)
                 write_fact_file(target, document, config_facts)
                 entries += len(config_facts)
+                read_scanner_ids.add(document.scanner_id)
     # Schema roots are read the same way, through the same registry — a
     # reader claims its own extension (`avsc`/`proto`/`graphqls`) regardless
     # of which root it is handed, and only the schema readers are offered
@@ -363,6 +376,7 @@ def analyze(
                 target = schema_fact_target(fact_root, document.relative_path)
                 write_fact_file(target, document, schema_facts)
                 entries += len(schema_facts)
+                read_scanner_ids.add(document.scanner_id)
                 if document.partial:
                     schema_sources_not_compiled.append(document.relative_path)
     progress.finish("read", f"{entries} entries")
@@ -414,11 +428,23 @@ def analyze(
     report = resolve(workspace, fact_root, catalogs, scanner.capabilities())
     progress.finish("resolve", f"{len(report.endpoints)} endpoints")
 
+    # The detector always writes the module document, so it is always a
+    # producer; the class scanner reports its own third-party libraries; the
+    # config reader joins only if it wrote at least one document. Sorted by id
+    # so `metadata.json` is byte-identical between runs (NFR-1).
+    # Named `produced_by`, not `scanners`: this stage's `scanners` parameter
+    # holds the Scanner IMPLEMENTATIONS it may choose between, which is a
+    # different thing from the facilities that turned out to write documents.
+    produced_by = [
+        ScannerProvenance(_MODULE_SCANNER_ID),
+        ScannerProvenance(scan_report.scanner_id, scan_report.scanner_libraries),
+    ]
+    produced_by.extend(ScannerProvenance(one) for one in read_scanner_ids)
+
     return AnalyzeResult(
         module,
         report,
-        scan_report.scanner_id,
-        scan_report.scanner_version,
+        tuple(sorted(produced_by, key=lambda one: one.id)),
         tuple(uncovered),
         tuple(schema_sources_not_compiled),
         descriptors_not_interpreted,
@@ -476,7 +502,6 @@ def _write_module_fact(fact_root: Path, module: ModuleModel) -> None:
         sextant_version=SEXTANT_VERSION,
         fact_schema_version=FACT_SCHEMA_VERSION,
         scanner_id=_MODULE_SCANNER_ID,
-        scanner_version=SCANNER_VERSION,
         content_hash="sha256:" + hashlib.sha256(identity.encode()).hexdigest(),
         # The module's own COORDINATES, not a path: this document was not read
         # from a classpath entry at all, and D00 §2's rule that a path under

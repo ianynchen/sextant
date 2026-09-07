@@ -3,10 +3,21 @@ from dataclasses import replace
 from pathlib import Path
 
 from sextant.application.ports.detector import ModuleModel
+from sextant.application.ports.scanner import ScannerProvenance
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.render.document import _GAPS, render_module_document
 from sextant.egress.render.metadata import KNOWN_GAPS, write_metadata
+
+# The facilities a fixture workspace's documents claim (D02 §3: capabilities and
+# provenance are SCANNER-declared). One entry with libraries, one without, so a
+# test exercises both shapes: only a facility running third-party code that can
+# move independently of Sextant records versions at all.
+SCANNERS = (
+    ScannerProvenance("sextant-detector"),
+    ScannerProvenance("sextant-jvm-extractor", ("org.ow2.asm:asm:9.10.1",)),
+)
+
 
 MODULE = ModuleModel(
     module_id="com.acme:orders-service",
@@ -38,7 +49,7 @@ REPORT = ResolveReport(
 
 
 def test_metadata_records_the_commit_so_staleness_is_visible(tmp_path: Path):
-    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["provenance"]["commit"] == "a3f91c"
     assert written["coverage"]["documents"] == 4
@@ -57,8 +68,7 @@ def test_metadata_environments_are_resolved_configs_own_distinct_set(tmp_path: P
         tmp_path / "metadata.json",
         MODULE,
         REPORT,
-        "asm",
-        "9.7",
+        SCANNERS,
         "a3f91c",
         resolved_config=resolved_config,
     )
@@ -67,7 +77,7 @@ def test_metadata_environments_are_resolved_configs_own_distinct_set(tmp_path: P
 
 
 def test_metadata_environments_are_empty_when_pass_2_resolved_nothing(tmp_path: Path):
-    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["environments"] == []
 
@@ -80,7 +90,7 @@ def test_metadata_detect_notes_are_written_sorted_regardless_of_call_order(tmp_p
     to happen HERE, at the write, not merely look sorted by accident because
     every caller so far has passed it in order."""
     write_metadata(
-        tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c", detect_notes=("b", "a")
+        tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c", detect_notes=("b", "a")
     )
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["detect_notes"] == ["a", "b"]
@@ -89,7 +99,7 @@ def test_metadata_detect_notes_are_written_sorted_regardless_of_call_order(tmp_p
 def test_metadata_names_every_type_expansion_could_not_open(tmp_path: Path):
     """The count says how much was expanded; only the names say what was not,
     and a count cannot be acted on (FR-17, the same rule as `uncovered`)."""
-    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["shapes"]["count"] == 1
     assert written["shapes"]["unexpanded_types"] == ["org/example/Opaque#"]
@@ -112,7 +122,7 @@ def test_an_unread_source_reaches_both_the_metadata_and_the_gap_list(tmp_path: P
     Kotlin class whose `@Metadata` a newer compiler wrote still travels this
     path, and a channel nothing exercises is a channel that rots."""
     unread = ("com/acme/orders/Newer.class: kotlin metadata unreadable (2.9)",)
-    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c", unread)
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c", unread)
     assert json.loads((tmp_path / "metadata.json").read_text())["uncovered"] == list(unread)
 
     text = render_module_document(MODULE, REPORT, "a3f91c", unread)
@@ -176,7 +186,7 @@ def test_metadata_buckets_outbound_and_both_endpoints_into_both_sums(tmp_path: P
         ],
         coverage={"documents": 1, "partial_documents": 0},
     )
-    write_metadata(tmp_path / "metadata.json", MODULE, report, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", MODULE, report, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     # 3 rows, but the merged `both` row counts on both sides: 2 inbound
     # (GET + the merged POST), 2 outbound (billing + the merged POST) — the
@@ -856,7 +866,7 @@ def test_metadata_names_every_library_that_resolved_to_nothing(tmp_path: Path):
     coordinate that resolved to nothing would otherwise vanish from the
     document it was recorded for."""
     module = replace(MODULE, libraries_not_resolved=("com.example:missing-client",))
-    write_metadata(tmp_path / "metadata.json", module, REPORT, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", module, REPORT, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["libraries_not_resolved"] == ["com.example:missing-client"]
 
@@ -951,8 +961,7 @@ def test_metadata_keeps_the_two_library_gap_lists_apart(tmp_path: Path):
         tmp_path / "metadata.json",
         module,
         REPORT,
-        "asm",
-        "9.7",
+        SCANNERS,
         "a3f91c",
         libraries_not_scanned=("com.example:broken: unreadable",),
     )
@@ -1054,7 +1063,7 @@ def test_metadata_records_what_the_module_builds_against_and_which_release(tmp_p
         dependency_versions={"org.springframework:spring-web": "6.1.6"},
         dependencies_not_resolved=("com.acme:unmanaged: no version on the declaration",),
     )
-    write_metadata(tmp_path / "metadata.json", module, REPORT, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", module, REPORT, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
 
     assert written["module"]["dependencies"] == {"org.springframework:spring-web": "6.1.6"}
@@ -1068,7 +1077,7 @@ def test_metadata_writes_both_dependency_keys_even_when_nothing_was_recorded(tmp
     absent key reads as "no dependencies", which is a different and stronger
     claim than "none recorded" (the same distinction the dependency gate keeps
     between an empty list and no module fact at all)."""
-    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
 
     assert written["module"]["dependencies"] == {}

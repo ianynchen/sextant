@@ -61,9 +61,36 @@ kotlin {
 
 tasks.test { useJUnitPlatform() }
 
+// The third-party libraries that actually read a class file, with the versions
+// Gradle RESOLVED — not the ones declared, which conflict resolution is free to
+// move. Handed to the extractor through the jar manifest so nothing in Java
+// maintains a copy: `scanner_version` was a hand-typed literal and it drifted to
+// "9.18", a CAPABILITY number, while the pinned library was 9.10.1. A build that
+// bumps a dependency now moves this without anyone remembering to.
+//
+// Derived from the DECLARED coordinates rather than a list written here, so
+// adding a scanning library cannot silently escape provenance; the version comes
+// from the resolved runtime classpath, so it is what will actually load.
+val scannerLibraries: Provider<String> = provider {
+    val declared = configurations.implementation.get().dependencies
+        .mapNotNull { d -> d.group?.let { "$it:${d.name}" } }
+        .toSet()
+    configurations.runtimeClasspath.get().resolvedConfiguration.resolvedArtifacts
+        .map { it.moduleVersion.id }
+        .filter { "${it.group}:${it.name}" in declared }
+        .distinctBy { "${it.group}:${it.name}" }
+        // Sorted so the manifest — and every fact document downstream — is
+        // byte-identical between builds (NFR-1).
+        .sortedBy { "${it.group}:${it.name}" }
+        .joinToString(",") { "${it.group}:${it.name}:${it.version}" }
+}
+
 tasks.shadowJar {
     archiveFileName.set("sextant-extractor.jar")
-    manifest { attributes["Main-Class"] = "dev.sextant.extractor.Main" }
+    manifest {
+        attributes["Main-Class"] = "dev.sextant.extractor.Main"
+        attributes["Sextant-Scanner-Libraries"] = scannerLibraries.get()
+    }
     // Straight into the Python package, because that is where the extractor
     // ships (ARCHITECTURE §9) and one location beats two. Git-ignored: it is a
     // build output that happens to live in the source tree.

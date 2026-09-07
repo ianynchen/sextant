@@ -54,7 +54,6 @@ def _compiled_document(module_id: str) -> Document:
         sextant_version="0.1.0",
         fact_schema_version=2,
         scanner_id="fake-scanner",
-        scanner_version="1.0",
         content_hash="sha256:deadbeef",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -92,7 +91,7 @@ class _FakeCompiledScanner:
             origin="compiled",
         )
         write_fact_file(request.out_dir / "compiled" / "widget.jsonl", self._document, [fact])
-        return ScanReport(documents=1, facts=1, scanner_id="fake-scanner", scanner_version="1.0")
+        return ScanReport(documents=1, facts=1, scanner_id="fake-scanner")
 
 
 class _EmptyCatalogs:
@@ -139,7 +138,7 @@ class _NoOpScanner:
         return 1
 
     def scan(self, request: ScanRequest) -> ScanReport:
-        return ScanReport(documents=0, facts=0, scanner_id="noop", scanner_version="1.0")
+        return ScanReport(documents=0, facts=0, scanner_id="noop")
 
 
 def _write_avsc(root: Path, name: str, field_name: str) -> None:

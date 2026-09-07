@@ -750,3 +750,31 @@ Four things it is worth doing the same way next time.
   is a different and much cheaper backlog item. **When a pass makes something
   newly expressible, re-read the boundaries that blamed the grammar; some of
   them just changed category.**
+
+## Check the contract before asking for a ruling (Step 1)
+
+Removing `scanner_version` exposed that Python's `_CAPABILITIES` — a fourteen-name
+set in `ingress/extract/jvm/scanner.py` — was gating catalogs on an unverified
+claim about a separately-built subprocess. I put it to the user as a design fork
+with three options.
+
+**It was not a fork. It had been decided from the start**, and both halves are
+written down: `D02-catalog-schema.md:96` — *"Capabilities are scanner-declared …
+earned once, up front, by the scanner that produced a module's facts"* — and
+`M03-scanner.md:17`, which puts `capabilities() -> {Capability}` on the scanner's
+own interface. The Python constant was a VIOLATION of a shipped contract, so the
+work was to implement the spec, not to choose between designs.
+
+The lesson is narrower than "read the docs", because the spec-review round had
+already diagnosed writing from the conversation instead of from the repository
+and fixed it with `verify:` commands on every factual claim. That discipline was
+applied to claims and not to QUESTIONS:
+
+- **A question to your human partner is a claim that a decision is open.** It
+  needs the same evidence as any other claim about our own system — grep
+  `docs/components/*` for the vocabulary first. Asking about something already
+  settled costs their time and risks re-deciding it differently from the
+  shipped design.
+- **The tell was in the finding itself.** "Nothing verifies X, and X gates
+  behaviour" almost always means a contract exists and is unimplemented, not
+  that nobody thought about it. Search for the contract before drafting options.

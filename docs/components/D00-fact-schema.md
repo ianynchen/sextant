@@ -64,8 +64,7 @@ Written once per class file. Every fact points at one.
 | `language` | The language of this document |
 | `sextant_version` | **The tool that produced these facts** |
 | `fact_schema_version` | **The version of this document's schema** — a single monotonically increasing INTEGER, not semver (Step 0). Compared for equality and nothing else; it is never parsed or ordered, so the dotted form carried two extra numbers that meant nothing and let four producers of the stamp disagree unnoticed |
-| `scanner_id` | Which scanner produced these facts |
-| `scanner_version` | |
+| `scanner_id` | **Which FACILITY produced these facts** — never the library it used. There is no `scanner_version` beside it: a facility Sextant ships moves with `sextant_version` above, and the third-party libraries that CAN move on their own (ASM, kotlin-metadata-jvm) are recorded once per workspace in `metadata.json`, not repeated on every document one scanner wrote |
 | `content_hash` | Of the source of truth this was read from |
 | `origin_entry` | **The classpath entry this was read from** — the module's own output directory, or a library archive |
 | `origin_tier` | That entry's tier (§4) — module output, a declared dependency, first-party, third-party, platform |
@@ -114,6 +113,23 @@ archive — and deliberately not `first_party` or `third_party`, which answer a 
 question (*whose* dependency) from the group patterns [D04](D04-config-and-exclusion.md)
 §2 declares and nothing yet implements. A tier is a factual origin; it is never a trust
 guess.
+
+**A version is recorded only where the thing can move INDEPENDENTLY of Sextant** (Step 1).
+`sextant-config-reader` and `sextant-detector` ship inside the wheel, so they carry no
+version of their own — `sextant_version` beside them is it, and the `"0.1.0"` each used to
+stamp was a hand-maintained copy of that number which had never once differed from it. The
+JVM extractor is the exception that proves the rule: it runs ASM and kotlin-metadata-jvm in
+a subprocess, those move on someone else's release cycle, and their RESOLVED coordinates are
+what `metadata.json` records. The field that used to sit here read `"9.18"` — capability 9.18
+wearing a library version's name, while the pinned ASM was 9.10.1 — which is exactly what a
+version field means when it names something that cannot independently move.
+
+**What a scanner can READ is likewise declared by the scanner, never by the caller**
+([D02](D02-catalog-schema.md) §3). The JVM extractor answers `--capabilities` over the same
+subprocess contract it answers a scan on, so a jar built by an older `./gradlew build`
+reports fewer capabilities and the catalogs needing them are reported skipped — the visible
+degradation [M04](M04-resolver.md) already defines — instead of running against fact kinds
+that jar never emitted.
 
 **`sextant_version` and `fact_schema_version` are here because a result can change when the
 tool changes, even when the code does not.** A fixed bug in extraction produces different

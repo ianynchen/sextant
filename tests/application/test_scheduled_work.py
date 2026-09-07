@@ -54,7 +54,6 @@ def _document(document_id: str = "doc_1") -> Document:
         sextant_version="0.1.0",
         fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.14",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,

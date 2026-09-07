@@ -84,8 +84,12 @@ class Document(BaseModel):
     # equality and nothing else, and a text type is what let its four
     # producers hold two different values undetected.
     fact_schema_version: int
+    # WHICH facility produced this document (D00 §2). There is no version
+    # beside it: a facility Sextant ships moves with `sextant_version` above,
+    # and the third-party libraries that CAN move on their own are recorded
+    # once per workspace in `metadata.json` rather than repeated on every
+    # document that one scanner wrote.
     scanner_id: str
-    scanner_version: str
     content_hash: str
     origin_entry: str
     origin_tier: OriginTier

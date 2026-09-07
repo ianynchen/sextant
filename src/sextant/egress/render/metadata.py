@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from sextant.application.ports.detector import ModuleModel
+from sextant.application.ports.scanner import ScannerProvenance
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
 
@@ -52,8 +53,7 @@ def write_metadata(
     path: Path,
     module: ModuleModel,
     report: ResolveReport,
-    scanner_id: str,
-    scanner_version: str,
+    scanners: Sequence[ScannerProvenance],
     commit: str,
     uncovered: tuple[str, ...] = (),
     resolved_config: Sequence[dict[str, object]] = (),
@@ -101,7 +101,23 @@ def write_metadata(
             "commit": commit,
             "sextant_version": SEXTANT_VERSION,
             "fact_schema_version": FACT_SCHEMA_VERSION,
-            "scanners": [{"id": scanner_id, "version": scanner_version}],
+            # EVERY facility that produced a document, not the one the class
+            # scanner happened to report. This field has always been a LIST and
+            # was always handed a single entry, so `sextant-config-reader` and
+            # `sextant-detector` — which between them wrote 11 of a fixture
+            # module's 117 documents — were absent from a bundle's provenance.
+            #
+            # `libraries` is present only where a facility runs THIRD-PARTY
+            # code that can move without Sextant moving — each backend reports
+            # its own, and which they are is that adapter's business
+            # (ARCHITECTURE §10). Omitted, not written empty, for a facility
+            # that ships inside the wheel: its version is `sextant_version`
+            # beside it, and a second copy of that number is what this change
+            # removes.
+            "scanners": [
+                {"id": one.id, **({"libraries": list(one.libraries)} if one.libraries else {})}
+                for one in scanners
+            ],
         },
         "coverage": report.coverage,
         # The profiles this module resolved (D06 §3 "environments" — the

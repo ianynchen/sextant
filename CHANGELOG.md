@@ -14,6 +14,48 @@ here would restate those documents rather than add anything.
 
 ### Changed
 
+- **A version is recorded only where the thing can move independently of Sextant** (Step 1
+  of Wave 1, ruled by the user). `scanner_version` is REMOVED from a document, and
+  `fact_schema_version` goes to `3`. It named a version for facilities that ship inside the
+  wheel and therefore have none of their own — `sextant-config-reader` and
+  `sextant-detector` each stamped `"0.1.0"`, a hand-maintained copy of `sextant_version`
+  that had never once differed from it. On the one facility that does run third-party code
+  it read `"9.18"`, which is **capability** 9.18 wearing a library version's name while the
+  pinned ASM was **9.10.1** — a value naming no ASM release at all, in the field a consumer
+  reads to decide whether to trust a bundle. Tests held nine different fabricated values for
+  it (9.7, 9.8, 9.12, 9.14, 9.16, 9.18, 1.0, 0.1.0, "0"), none of them the real one.
+
+- **`metadata.json` records every facility that produced a document, not one.** The field has
+  always been a LIST and was always handed a single entry, so on a fixture module two of the
+  three producers were absent from provenance — `sextant-config-reader` (10 documents across
+  avro, graphql, proto, wsdl, xsd and yaml) and `sextant-detector` (1). Only a facility
+  running third-party code carries `libraries`, and those are the coordinates **Gradle
+  resolved**, written into the jar manifest at build time so nothing in Java maintains a
+  copy. `scanner_id` now names the facility rather than the library (`"asm"` →
+  `"sextant-jvm-extractor"`), which is D00 §2's own rule and what made a library version
+  look like the right thing to put beside it.
+
+- **The extractor declares its own capabilities, over the subprocess contract it already
+  answers scans on** (`--capabilities`, measured at 0.02s, cached per scanner). This
+  implements a day-one contract that had never been built: D02 §3 says *"capabilities are
+  scanner-declared — earned once, up front, by the scanner that produced a module's facts"*,
+  and M03 puts `capabilities()` on the scanner's interface — but the fourteen-name set lived
+  in Python, making an unverified claim about a subprocess built by a separate manual step.
+  Capabilities gate which catalogs run, so a stale jar did not fail: it ran catalogs against
+  fact kinds that jar never emitted, and the module reported an absence nothing could
+  distinguish from a real one. A jar that is behind now reports fewer capabilities and the
+  catalogs needing them are reported in `skipped_catalogs` — the visible degradation D02 §2
+  already defines, so no new refusal was needed.
+
+  **Consequence, recorded rather than discovered later** (M03): a command-line protocol
+  assumes we control the scanner's entry point, so adopting a third-party analyzer we did
+  not write means writing a WRAPPER that declares what it can read. Accepted deliberately —
+  a third-party analyzer does not emit D00 facts either, so something has to stand between
+  it and the workspace regardless, and inferring capabilities from a version string instead
+  is precisely the mechanism that produced `"9.18"`: a version cannot be interrogated, only
+  looked up in a hand-maintained table that is a second copy of the declaration with none
+  of its authority.
+
 - **`fact_schema_version` and `graph_schema_version` are single monotonically increasing
   integers, both set to `2`** (Step 0 of the Java/Kotlin v1 completeness plan, ruled by the
   user). Neither is ever parsed, ordered or compared for compatibility — `api._stale_stamps`

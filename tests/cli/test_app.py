@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from sextant.application.ports.progress import NullProgress
-from sextant.application.ports.scanner import ScanReport, ScanRequest
+from sextant.application.ports.scanner import ScannerProvenance, ScanReport, ScanRequest
 from sextant.application.stages.analyze import analyze
 from sextant.cli.app import cli
 from sextant.domain.factfile import read_fact_tree
@@ -20,6 +20,16 @@ from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.resources import catalogs_dir, extractor_jar
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+# The facilities a fixture workspace's documents claim (D02 §3: capabilities and
+# provenance are SCANNER-declared). One entry with libraries, one without, so a
+# test exercises both shapes: only a facility running third-party code that can
+# move independently of Sextant records versions at all.
+SCANNERS = (
+    ScannerProvenance("sextant-detector"),
+    ScannerProvenance("sextant-jvm-extractor", ("org.ow2.asm:asm:9.10.1",)),
+)
+
 
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
@@ -479,8 +489,7 @@ def test_render_names_the_catalog_and_capability_analyze_skipped(tmp_path: Path)
             tmp_path / "metadata.json",
             result.module,
             result.report,
-            "asm",
-            "9.7",
+            SCANNERS,
             "deadbeef",
         )
     finally:

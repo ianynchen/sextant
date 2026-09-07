@@ -11,13 +11,11 @@ from sextant.domain.closed_sets import OriginTier
 from sextant.domain.facts import Document
 from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
 
+# This facility, named. It carries no version of its own: `ingress/read` ships
+# inside the wheel, so it moves with `sextant_version` — which the document
+# already stamps — and the `"0.1.0"` that used to sit here was a third copy of
+# the tool's version, set when this module was written and never once moved.
 SCANNER_ID = "sextant-config-reader"
-# This facility's own version. It and `SCANNER_ID` above are the two stamps on
-# a document that genuinely belong to THIS module; the other two —
-# `sextant_version` and `fact_schema_version` — are the project's, and come
-# from `domain.version` imported rather than restated. They WERE restated here
-# and in `application/stages/analyze.py` until Step 0, and the pair drifted.
-SCANNER_VERSION = "0.1.0"
 # A document's own `redaction_set_hash` says which rule set was applied to THIS
 # document's facts (D01 §7's cache key: "a new pattern cannot clean values
 # already written"). Nothing is applied to them: 2K design §1 rules that the
@@ -52,7 +50,6 @@ def build_document(
         sextant_version=SEXTANT_VERSION,
         fact_schema_version=FACT_SCHEMA_VERSION,
         scanner_id=SCANNER_ID,
-        scanner_version=SCANNER_VERSION,
         content_hash="sha256:" + hashlib.sha256(content).hexdigest(),
         # The resource root this file was read from — the neutral analogue
         # of the classpath entry a scanner records here (D00 §2).

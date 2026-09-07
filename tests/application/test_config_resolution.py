@@ -30,7 +30,6 @@ def _document(relative_path: str) -> Document:
         sextant_version="0.1.0",
         fact_schema_version=2,
         scanner_id="sextant-config-reader",
-        scanner_version="0.1.0",
         content_hash="sha256:a",
         origin_entry="src/main/resources",
         origin_tier=OriginTier.MODULE_OUTPUT,
