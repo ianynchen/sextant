@@ -204,6 +204,42 @@ public final class ClassScanner {
             return new org.objectweb.asm.tree.MethodNode(
                     Opcodes.ASM9, access, name, descriptor, sig, ex) {
                 private int parameterIndex = 0;
+                // JVMS 4.7.18's `num_parameters`, per attribute — the VISIBLE and
+                // INVISIBLE parameter annotations are two separate attributes and
+                // may declare different counts, so one field for both would apply
+                // one attribute's shift to the other's entries. -1 means the
+                // attribute was absent, which is not the same as declaring 0.
+                private int annotableVisible = -1;
+                private int annotableInvisible = -1;
+
+                @Override
+                public void visitAnnotableParameterCount(int count, boolean visible) {
+                    if (visible) annotableVisible = count; else annotableInvisible = count;
+                }
+
+                /** The descriptor index the attribute's entry {@code parameter}
+                 *  belongs to.
+                 *
+                 *  <p>JVMS 4.7.18 lets the table be SHORTER than the descriptor's
+                 *  parameter list, because javac omits parameters it synthesised —
+                 *  the outer instance on an inner class, {@code $enum$name} and
+                 *  {@code $enum$ordinal} on an enum. The omitted ones are always
+                 *  LEADING, so entries align from the END and the shift is the
+                 *  difference between the two counts. Measured on the fixtures:
+                 *  0 for a top-level class, 1 for an inner class, 2 for an enum —
+                 *  it is not a constant, and indexing from zero put an enum
+                 *  constructor's annotation on {@code $enum$name}, which is also a
+                 *  String and so undetectable downstream by type.
+                 *
+                 *  <p>An absent or larger-than-descriptor count shifts by nothing:
+                 *  there is no evidence of synthesis to correct for, and inventing
+                 *  one would move an annotation that was already right. */
+                private int alignedParameter(int parameter, boolean visible) {
+                    int declared = parameterAnnotations.size();
+                    int annotable = visible ? annotableVisible : annotableInvisible;
+                    if (annotable < 0 || annotable > declared) return parameter;
+                    return parameter + (declared - annotable);
+                }
 
                 @Override
                 public void visitParameter(String parameterName, int parameterAccess) {
@@ -219,8 +255,9 @@ public final class ClassScanner {
                 @Override
                 public org.objectweb.asm.AnnotationVisitor visitParameterAnnotation(
                         int parameter, String d, boolean visible) {
-                    if (parameter < 0 || parameter >= parameterAnnotations.size()) return null;
-                    return parameterAnnotationVisitor(d, parameterAnnotations.get(parameter));
+                    int index = alignedParameter(parameter, visible);
+                    if (index < 0 || index >= parameterAnnotations.size()) return null;
+                    return parameterAnnotationVisitor(d, parameterAnnotations.get(index));
                 }
 
                 @Override

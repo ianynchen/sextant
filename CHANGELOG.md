@@ -12,6 +12,29 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A parameter annotation on an enum or inner-class constructor landed on the wrong
+  parameter** (Critical 6, JVMS 4.7.18). The parameter-annotation attribute may be SHORTER
+  than the descriptor's parameter list, because javac omits parameters it synthesised, and
+  the omitted ones are always LEADING — so entries align from the END. We never overrode
+  `visitAnnotableParameterCount` and indexed from zero.
+
+  Measured on a new fixture, and the shift is not a constant: **0** for a top-level class,
+  **1** for an inner class (the outer instance), **2** for an enum (`$enum$name` and
+  `$enum$ordinal`). All three are now pinned, including the shift-0 case — a fix that
+  aligned from the end unconditionally would have broken every ordinary constructor, and
+  one that hardcoded any single shift would pass one of the three tests.
+
+  **The enum case is the one that mattered and the reason the spec required it.** There the
+  hidden first parameter is also a `String`, so `@Labelled("display")` landed on
+  `$enum$name` and no downstream type check could tell. Before: `param 0` carried the
+  annotation and the real `display` at `param 2` carried none. After: it is on `param 2`.
+
+  Scope stated rather than oversold: this needs a constructor that is BOTH annotated AND on
+  an inner class or enum, so the real-world hit rate is low. It was a genuine fabrication
+  with a small blast radius, not a widespread one.
+
 ### Added
 
 - **`docs/COVERAGE.md` §3a — what we support, and at which versions**, so a user can see
