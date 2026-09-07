@@ -178,7 +178,8 @@ public final class Main {
                     // last one on disk.
                     writeFactFile(out.resolve(replaceSuffix(classRelative, ".class", ".jsonl")),
                                   relative, documentId, options, sha256Bytes(bytes), lines,
-                                  classMajor, partialReason, classReleaseOf(classRelative));
+                                  classMajor, partialReason, classReleaseOf(classRelative),
+                                  withoutVersionPrefix(classRelative));
                     documents++;
                     facts += lines.size();
                 }
@@ -313,8 +314,8 @@ public final class Main {
     private static void writeFactFile(Path target, String relative, String documentId,
                                       Map<String, String> options, String contentHash,
                                       List<String> factLines, int classMajor,
-                                      String partialReason, String classRelease)
-            throws IOException {
+                                      String partialReason, String classRelease,
+                                      String className) throws IOException {
         Files.createDirectories(target.getParent());
         TreeMap<String, String> document = new TreeMap<>();
         document.put("kind", JsonOut.string("document"));
@@ -378,6 +379,12 @@ public final class Main {
         // deciding in the extractor would force a re-scan per consumer and put
         // a config-derived judgement inside the fact layer.
         document.put("class_release", JsonOut.string(classRelease));
+        // The class-file's own name with any overlay prefix removed — the name
+        // the JVM knows the class BY, which is what makes two copies of one
+        // class recognisable as copies. `relative_path` cannot serve: it is the
+        // SOURCE path, and a nested class shares its outer's, so grouping on it
+        // would treat `A` and `A$B` as copies of each other.
+        document.put("class_name", JsonOut.string(className));
 
         List<String> all = new ArrayList<>();
         all.add(JsonOut.object(document));

@@ -523,6 +523,7 @@ def _write_module_fact(fact_root: Path, module: ModuleModel) -> None:
         output_dirs=[directory.as_posix() for directory in module.output_dirs],
         dependency_coordinates=list(module.dependency_coordinates),
         dependency_versions=dict(module.dependency_versions),
+        declared_release=module.declared_release,
     )
     write_fact_file(fact_root / f"{_MODULE_DOCUMENT}.jsonl", document, [fact])
 

@@ -34,9 +34,23 @@ SEXTANT_VERSION = version("sextant")
 # by the stamp gate and re-analysed. That is the designed behaviour, not a
 # migration — nothing is rewritten in place.
 #
-# Each increases by ONE for a change to the thing it stamps, and they move
-# independently: a fact-shape change forces re-extraction (D01 §7's table calls
-# it the expensive one), while a derived-table change costs only a re-derive.
+# They move independently: a fact-shape change forces re-extraction (D01 §7's
+# table calls it the expensive one), while a derived-table change costs only a
+# re-derive.
+#
+# **FROZEN UNTIL RELEASE (ruled by the user 2026-09-07).** *"Sextant is not in a
+# usable stage and nothing is released. So no version bump."* A stamp
+# discriminates for CONSUMERS of a published bundle, and there are none — so
+# every increment buys nothing and costs a full re-analysis of every developer
+# workspace, several times per wave. The rule resumes at release; until then a
+# fact-shape change lands WITHOUT an increment, deliberately.
+#
+# The consequence, stated rather than discovered: a workspace stamped 5 may
+# hold any of several shapes, so the stamp no longer says which one produced
+# it. That is the ambiguity Step 0 removed, accepted back on purpose and only
+# while nothing depends on it. Re-analysing is one `sextant module analyze`,
+# and the changes riding at 5 are additive or value-level — an older workspace
+# still VALIDATES, it simply answers with older facts.
 # An integer says WHICH generation and nothing about what changed, so each
 # increment is recorded here or the number means nothing to the next reader.
 #

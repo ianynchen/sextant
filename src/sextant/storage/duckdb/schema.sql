@@ -478,9 +478,78 @@ SELECT document_id,
        -- bundle would be laundered into module-observed evidence exactly where
        -- it travels furthest from the person who made it.
        payload ->> 'origin'          AS origin,
-       (payload ->> 'partial')::BOOLEAN AS partial
+       (payload ->> 'partial')::BOOLEAN AS partial,
+       -- JEP 238 (W3): which copy of an overlaid class this document holds, and
+       -- the name the JVM knows that class by. Projected so `selected_documents`
+       -- below can group copies without re-reading the payload, and so a reader
+       -- of the exported table can see that a selection happened at all.
+       coalesce(payload ->> 'class_release', 'base') AS class_release,
+       coalesce(payload ->> 'class_name', '')       AS class_name
 FROM raw_facts WHERE kind = 'document';
 
+-- MULTI-RELEASE SELECTION (W3c, Fork 4 rule 3). The JVM's own rule, applied to
+-- the copies W3 tagged: among documents holding the SAME class name, the
+-- highest release not exceeding the module's target wins, and base is the
+-- fallback. Without this the tag changed nothing — the duplicates were merely
+-- LABELLED duplicates, which is the caution Fork 4 attached to its own ruling.
+--
+-- **A name with exactly one candidate is ALWAYS kept**, whatever its release.
+-- The fallback must not be implemented as "base copies only": 626 names across
+-- the measured corpus exist ONLY under `META-INF/versions/`, and dropping them
+-- would assert they do not load — a stronger claim than keeping them, and a
+-- false one.
+--
+-- The target is the module's own declared release (W3b), and `2147483647` when
+-- it declares none: with no stated target nothing is out of reach, so the
+-- highest overlay wins rather than base. That is the JVM's behaviour on a
+-- modern runtime, and it beats silently preferring a base copy the build may
+-- have overlaid precisely because it does not work.
+CREATE OR REPLACE VIEW selected_documents AS
+WITH target AS (
+    SELECT coalesce(max((payload ->> 'declared_release')::BIGINT), 2147483647) AS release
+    FROM raw_facts WHERE kind = 'module'
+),
+candidates AS (
+    -- `base` sorts as -1: it is reachable on every runtime, so it is never
+    -- excluded by the target and always loses to a reachable overlay.
+    SELECT d.document_id,
+           d.class_name,
+           CASE WHEN d.class_release = 'base' THEN -1
+                ELSE TRY_CAST(d.class_release AS BIGINT) END AS release
+    FROM documents d
+),
+ranked AS (
+    SELECT c.document_id,
+           c.class_name,
+           row_number() OVER (
+               PARTITION BY c.class_name
+               ORDER BY
+                   -- 1. a copy the target can actually reach beats one it cannot
+                   (c.release <= t.release) DESC,
+                   -- 2. among reachable copies, the highest release wins (JEP 238)
+                   CASE WHEN c.release <= t.release THEN c.release END DESC,
+                   -- 3. among UNREACHABLE ones — every copy overlaid above the
+                   --    target and no base copy at all — the lowest wins. The
+                   --    spec does not cover this case; dropping the name would
+                   --    assert the class does not exist, which is false, and
+                   --    the lowest is the one this module reaches first as its
+                   --    target rises.
+                   c.release ASC,
+                   -- 4. a total order, so the view is deterministic (NFR-1)
+                   c.document_id ASC
+           ) AS rank
+    FROM candidates c, target t
+)
+SELECT document_id
+FROM ranked
+-- A document that is not a class file has no name to group on and is never a
+-- candidate for replacement: config, schema and module documents pass through.
+WHERE class_name = '' OR rank = 1;
+
+-- Multi-release selection is APPLIED here, not merely computed (W3c). Tagging
+-- alone left labelled duplicates; this is where a losing copy stops
+-- contributing rows, which is the difference between G-62 fixed and G-62
+-- renamed.
 CREATE OR REPLACE VIEW symbols AS
 -- `seq` is the load order of the fact within its file, and a fact file is
 -- written in declaration order (D00 §7). It is the only ordering that survives
@@ -511,8 +580,13 @@ SELECT rowid                        AS seq,
        -- them, so each reader supplies its own default rather than this view
        -- inventing one for constructs the modifier means nothing for.
        payload ->  'modifiers'      AS modifiers
-FROM raw_facts WHERE kind = 'symbol';
+FROM raw_facts WHERE kind = 'symbol'
+  AND document_id IN (SELECT document_id FROM selected_documents);
 
+-- Multi-release selection is APPLIED here, not merely computed (W3c). Tagging
+-- alone left labelled duplicates; this is where a losing copy stops
+-- contributing rows, which is the difference between G-62 fixed and G-62
+-- renamed.
 CREATE OR REPLACE VIEW annotations AS
 SELECT document_id,
        payload ->> 'target'              AS target,
@@ -523,7 +597,8 @@ SELECT document_id,
        -- for an annotation on a type argument (D00 §5a).
        payload ->> 'type_path'           AS type_path,
        payload ->> 'retention'           AS retention
-FROM raw_facts WHERE kind = 'annotation';
+FROM raw_facts WHERE kind = 'annotation'
+  AND document_id IN (SELECT document_id FROM selected_documents);
 
 CREATE OR REPLACE VIEW config_entries AS
 -- `seq` is declaration order within the entry's file: a config_entry fact
@@ -539,6 +614,10 @@ SELECT document_id,
        rowid                              AS seq
 FROM raw_facts WHERE kind = 'config_entry';
 
+-- Multi-release selection is APPLIED here, not merely computed (W3c). Tagging
+-- alone left labelled duplicates; this is where a losing copy stops
+-- contributing rows, which is the difference between G-62 fixed and G-62
+-- renamed.
 CREATE OR REPLACE VIEW call_sites AS
 SELECT document_id,
        payload ->> 'caller'                    AS caller,
@@ -555,8 +634,13 @@ SELECT document_id,
        (payload ->> 'receiver')::INTEGER       AS receiver,
        (payload ->> 'result')::INTEGER         AS result,
        payload ->  'arguments'                 AS arguments
-FROM raw_facts WHERE kind = 'call_site';
+FROM raw_facts WHERE kind = 'call_site'
+  AND document_id IN (SELECT document_id FROM selected_documents);
 
+-- Multi-release selection is APPLIED here, not merely computed (W3c). Tagging
+-- alone left labelled duplicates; this is where a losing copy stops
+-- contributing rows, which is the difference between G-62 fixed and G-62
+-- renamed.
 CREATE OR REPLACE VIEW method_returns AS
 -- D00 §5's method_return (capability 9.18): what a method hands back, one row
 -- per return instruction. `value` stays JSON rather than being flattened to a
@@ -568,8 +652,13 @@ SELECT document_id,
        payload ->> 'method'                    AS method,
        (payload ->> 'ordinal')::INTEGER        AS ordinal,
        payload ->  'value'                     AS value
-FROM raw_facts WHERE kind = 'method_return';
+FROM raw_facts WHERE kind = 'method_return'
+  AND document_id IN (SELECT document_id FROM selected_documents);
 
+-- Multi-release selection is APPLIED here, not merely computed (W3c). Tagging
+-- alone left labelled duplicates; this is where a losing copy stops
+-- contributing rows, which is the difference between G-62 fixed and G-62
+-- renamed.
 CREATE OR REPLACE VIEW field_writes AS
 -- D00 §5's field_write: a constructor assigning parameter N straight to
 -- field F, constructors only, direct traces only. The field resolution
@@ -577,4 +666,5 @@ CREATE OR REPLACE VIEW field_writes AS
 SELECT document_id,
        payload ->> 'field'                     AS field,
        (payload ->> 'from_parameter')::INTEGER AS from_parameter
-FROM raw_facts WHERE kind = 'field_write';
+FROM raw_facts WHERE kind = 'field_write'
+  AND document_id IN (SELECT document_id FROM selected_documents);

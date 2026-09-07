@@ -103,6 +103,12 @@ class Document(BaseModel):
     # serves modules that target different ones and the choice is made
     # downstream at resolve.
     class_release: str = "base"
+    # The class-file's own name with any `META-INF/versions/N/` prefix removed
+    # — the name the JVM knows the class BY. It is the key two copies of one
+    # class are recognised as copies on, which `relative_path` cannot be: that
+    # is the SOURCE path, and a nested class shares its outer's. Empty for a
+    # document that is not a class file.
+    class_name: str = ""
     content_hash: str
     origin_entry: str
     origin_tier: OriginTier
@@ -126,6 +132,14 @@ class ModuleFact(BaseModel):
     source_roots: list[str]
     output_dirs: list[str]
     classpath: list[ClasspathEntry] = Field(default_factory=list)
+    # The compiler target release this module's BUILD declares (W3b), and
+    # `None` where it declares none. Carried on the module fact because its
+    # consumer runs at RESOLVE: which overlay of a class in a multi-release
+    # dependency actually loads is a property of the module doing the
+    # depending, so the answer has to travel with the module rather than with
+    # the archive — one scan of a jar serves modules that target different
+    # releases.
+    declared_release: int | None = None
     # The `groupId:artifactId` coordinates the module's BUILD declares (2O
     # design §2a, ruling R9), sorted. Its own field rather than `classpath`
     # above, because the two answer different questions and only this one can

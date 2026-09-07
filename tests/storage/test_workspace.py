@@ -1223,3 +1223,191 @@ def test_module_dependencies_projects_the_versions_beside_the_coordinates(tmp_pa
     assert json.loads(str(row["dependency_versions"])) == {
         "org.springframework:spring-web": "6.1.6"
     }
+
+
+def _multi_release_workspace(tmp_path: Path, *, declared_release: int | None) -> DuckDbWorkspace:
+    """A jar holding one class twice — base and an overlay — plus a module fact
+    declaring the target. Built here so the test states its own inputs."""
+    facts = tmp_path / "facts"
+    facts.mkdir(parents=True, exist_ok=True)
+    for name, release in (("base", "base"), ("v21", "21"), ("v99", "99")):
+        write_fact_file(
+            facts / f"{name}.jsonl",
+            Document(
+                document_id=name,
+                relative_path="com/acme/Overlaid.java",
+                module_id="com.acme:m",
+                language="java",
+                sextant_version="0.1.0",
+                fact_schema_version=5,
+                scanner_id="sextant-jvm-extractor",
+                class_release=release,
+                class_name="com/acme/Overlaid.class",
+                content_hash=f"sha256:{name}",
+                origin_entry="target/classes",
+                origin_tier=OriginTier.MODULE_OUTPUT,
+                redaction_set_hash="sha256:none",
+            ),
+            [
+                SymbolFact(
+                    document_id=name,
+                    symbol="mod com/acme/Overlaid#",
+                    construct_kind="class",
+                    visibility="public",
+                )
+            ],
+        )
+    module_document = Document(
+        document_id="module",
+        relative_path="module",
+        module_id="com.acme:m",
+        language="module",
+        sextant_version="0.1.0",
+        fact_schema_version=5,
+        scanner_id="sextant-detector",
+        content_hash="sha256:module",
+        origin_entry="com.acme/m",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:none",
+    )
+    write_fact_file(
+        facts / "module.jsonl",
+        module_document,
+        [
+            ModuleFact(
+                document_id="module",
+                module_id="com.acme:m",
+                module_kind="service",
+                languages=["java"],
+                source_roots=[],
+                output_dirs=[],
+                declared_release=declared_release,
+            )
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    return workspace
+
+
+def test_only_the_selected_copy_of_an_overlaid_class_contributes_symbols(tmp_path: Path):
+    """W3c — the half that makes G-62 fixed rather than renamed.
+
+    W3 tagged every copy and dropped none, which by itself left LABELLED
+    duplicates: two documents minting the SAME type symbol, and no table
+    downstream has a uniqueness constraint. Measured on a jar holding one class
+    at base and at release 21: 12 symbols with 6 duplicated, becoming 6 with
+    none once the filter applies.
+
+    The JVM's own rule (JEP 238): the highest release not exceeding the target
+    wins. Release 99 is above a target of 21 and loses; base loses to the
+    reachable 21.
+    """
+    workspace = _multi_release_workspace(tmp_path, declared_release=21)
+    selected = {row["document_id"] for row in workspace.query("selected_documents")}
+    assert selected == {"module", "v21"}
+    duplicated = workspace._connection.execute(
+        "SELECT count(*) FROM (SELECT symbol FROM symbols GROUP BY symbol HAVING count(*) > 1)"
+    ).fetchone()
+    assert duplicated is not None and duplicated[0] == 0
+    workspace.close()
+
+
+def test_every_copy_is_still_kept_as_a_document(tmp_path: Path):
+    """Tag, do not drop, survives selection: the losing copies remain visible in
+    `documents` with their release, so a reader can see WHAT was selected
+    between rather than only the winner. Selection removes rows from the
+    derived tables, never the record that an overlay existed."""
+    workspace = _multi_release_workspace(tmp_path, declared_release=21)
+    releases = {
+        str(row["class_release"]) for row in workspace.query("documents") if row["class_name"]
+    }
+    assert releases == {"base", "21", "99"}
+    workspace.close()
+
+
+def test_a_module_declaring_no_release_still_reaches_the_highest_overlay(tmp_path: Path):
+    """With no stated target nothing is out of reach, so the highest overlay
+    wins rather than base. That is the JVM's behaviour on a modern runtime, and
+    it beats silently preferring a base copy the build may have overlaid
+    precisely because it does not work — `spring-core`'s own base
+    `VirtualThreadDelegate` throws from every method."""
+    workspace = _multi_release_workspace(tmp_path, declared_release=None)
+    selected = {row["document_id"] for row in workspace.query("selected_documents")}
+    assert selected == {"module", "v99"}
+    workspace.close()
+
+
+def test_a_class_overlaid_only_above_the_target_keeps_its_lowest_copy(tmp_path: Path):
+    """The case the spec does not cover, decided here and pinned so it is not
+    decided again by accident.
+
+    A class can exist ONLY under `META-INF/versions/`, at releases all ABOVE
+    the module's target — 626 such names were measured across the cached
+    corpus. Dropping the name would assert the class does not exist, which is
+    false. Keeping the LOWEST is the choice: it is the copy this module reaches
+    first as its target rises, and it makes the answer deterministic rather
+    than dependent on row order.
+    """
+    facts = tmp_path / "facts"
+    facts.mkdir(parents=True, exist_ok=True)
+    for name, release in (("v24", "24"), ("v25", "25")):
+        write_fact_file(
+            facts / f"{name}.jsonl",
+            Document(
+                document_id=name,
+                relative_path="com/acme/OnlyNew.java",
+                module_id="com.acme:m",
+                language="java",
+                sextant_version="0.1.0",
+                fact_schema_version=5,
+                scanner_id="sextant-jvm-extractor",
+                class_release=release,
+                class_name="com/acme/OnlyNew.class",
+                content_hash=f"sha256:{name}",
+                origin_entry="target/classes",
+                origin_tier=OriginTier.MODULE_OUTPUT,
+                redaction_set_hash="sha256:none",
+            ),
+            [
+                SymbolFact(
+                    document_id=name,
+                    symbol="mod com/acme/OnlyNew#",
+                    construct_kind="class",
+                    visibility="public",
+                )
+            ],
+        )
+    write_fact_file(
+        facts / "module.jsonl",
+        Document(
+            document_id="module",
+            relative_path="module",
+            module_id="com.acme:m",
+            language="module",
+            sextant_version="0.1.0",
+            fact_schema_version=5,
+            scanner_id="sextant-detector",
+            content_hash="sha256:module",
+            origin_entry="com.acme/m",
+            origin_tier=OriginTier.MODULE_OUTPUT,
+            redaction_set_hash="sha256:none",
+        ),
+        [
+            ModuleFact(
+                document_id="module",
+                module_id="com.acme:m",
+                module_kind="service",
+                languages=["java"],
+                source_roots=[],
+                output_dirs=[],
+                declared_release=21,
+            )
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    selected = {row["document_id"] for row in workspace.query("selected_documents")}
+    # Kept, not dropped — and exactly one of them, so the symbol is not doubled.
+    assert selected == {"module", "v24"}
+    workspace.close()

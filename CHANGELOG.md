@@ -12,6 +12,35 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Multi-release selection is applied, so G-62 is fixed rather than renamed** (W3c, Fork 4
+  rule 3). W3 tagged every copy and dropped none, which by itself left LABELLED duplicates —
+  two documents minting the SAME type symbol, and no table downstream has a uniqueness
+  constraint. That was the caution Fork 4 attached to its own ruling, and this is what
+  discharges it. Measured on a jar holding one class at base and at release 21: **12 symbols
+  with 6 duplicated, becoming 6 with none.**
+
+  The JVM's own rule (JEP 238): among copies of one class name, the highest release not
+  exceeding the module's target wins, else base. The target is W3b's declared release —
+  which until now had no consumer at all.
+
+  **Applied where the tables are built**, not merely computed: `symbols`, `annotations`,
+  `call_sites`, `method_returns` and `field_writes` each exclude documents that lost. A
+  selection nothing acts on would have renamed the bug.
+
+  **Nothing is deleted.** Every copy stays in `documents` with its release, so a reader can
+  see what was selected between rather than only the winner, and `selected_documents` travels
+  in the bundle so a consumer can tell which copy the derived rows came from.
+
+  Three branches, each pinned by a test and each mutation-checked. A class overlaid ONLY
+  above the target — 626 such names in the measured corpus — keeps its lowest copy rather
+  than vanishing: dropping it would assert the class does not exist, which is false. A module
+  declaring no target reaches the highest overlay rather than base, which is the JVM's
+  behaviour on a modern runtime and beats preferring a base copy the build may have overlaid
+  precisely because it does not work — `spring-core`'s own base `VirtualThreadDelegate`
+  throws from every method.
+
 ### Added
 
 - **The build's declared Java release is read** (W3b) — `maven.compiler.release` and its

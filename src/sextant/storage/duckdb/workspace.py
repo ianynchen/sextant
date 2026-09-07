@@ -529,6 +529,10 @@ _NAMED_QUERIES = {
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
     "facts": "SELECT count(*) AS facts FROM raw_facts",
+    # Which documents survived multi-release selection (W3c). Its own named
+    # query so the export and any reader ask the same question, ordered so the
+    # answer is stable between runs (NFR-1).
+    "selected_documents": "SELECT * FROM selected_documents ORDER BY document_id",
 }
 
 # What the export PROJECTION masks (2K design §1), each named where its own
@@ -704,6 +708,10 @@ _EXPORT_QUERIES = {
     # constant out of bytecode to be.
     "call_edges": _NAMED_QUERIES["call_edges"],
     "field_writes": "SELECT * FROM field_writes ORDER BY document_id, field, from_parameter",
+    # Worth carrying rather than recomputable: without it a consumer sees the
+    # tagged copies in `documents` and cannot tell which one the derived rows
+    # were built from.
+    "selected_documents": _NAMED_QUERIES["selected_documents"],
     # `value` is an entry of the ARGUMENT grammar — the same JSON shape
     # `call_sites.arguments` carries, produced from the same string constants
     # in bytecode — so it takes the same `redact_json` pass, over userinfo in
