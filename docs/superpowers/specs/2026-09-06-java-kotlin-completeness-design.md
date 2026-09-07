@@ -121,6 +121,59 @@ verified — a correct new value would be indistinguishable from a fourth wrong 
   the three stamps carry two different formats. That is a deliberate consequence, not an
   oversight, and `graph_schema_version` can follow later if it should.
 
+### 1.4 What "done" means — the field corpus
+
+**Ruled by the user 2026-09-07: the plan is proved on at least a dozen real open-source
+projects, not on tests.** *"You've been building shit with perfectly fine test cases."* The
+measurement in this analysis proves the point: 2,346 tests, 82 guards at 0 survived,
+byte-stable, contracts clean — and the suite notices **neither** of the two hardest Criticals,
+because `orders-service` and `mall-admin` both score 0 on the superclass-call shape while
+`spring-petclinic-rest` scores 96.
+
+**The machinery already exists and needs nothing new.** `scripts/field_check.py` validates
+Sextant's output against real upstream repositories at pinned commits, handling per-repo build
+quirks — module path, Maven launcher, and the required JDK (`macrozheng/mall` dies in Lombok
+on anything newer than 21). It is opt-in and outside the suite, which is how it satisfies the
+no-network-in-tests rule.
+
+**What it holds today, and both facts are damning.**
+
+| pin | inbound | outbound |
+|---|---|---|
+| `jhipster-sample-app` | `http: 38` | **`{}`** |
+| `mall-admin` | `http: 160` | **`{}`** |
+| `spring-petclinic-rest` | `http: 44` | **`{}`** |
+
+`verify: python3 -c "import json,glob;[print(f, json.load(open(f))['endpoints']) for f in sorted(glob.glob('scripts/field-expectations/*.json'))]"`
+
+1. **Three projects, all inbound-only HTTP CRUD, and zero outbound rows between them.** Every
+   messaging and RPC catalog we ship — Kafka, RabbitMQ, SQS, Pub/Sub, JMS, gRPC, GraphQL,
+   SOAP, WebSocket, STOMP, RSocket, Pulsar — is exercised by **no real project at all**. That
+   is a larger corpus hole than the superclass one, and it has been visible in these files the
+   whole time.
+2. **Two of the three pins are stale across a change that alters what they record.**
+   `spring-petclinic-rest` and `jhipster-sample-app` were recorded 2026-09-03 06:17; the
+   canonical-address gate — which exists to normalise a leading separator, *"an address that
+   omits its leading separator names the same thing as one that spells it"* — landed
+   2026-09-03 22:06. The petclinic pin still records 25 of 44 routes with no leading slash
+   (`GET api/pets` beside `GET /api/owners/{ownerId}`) and 8 bare `/` routes, one per HTTP
+   verb. So either the check has not been run since, or it failed and nothing happened.
+   `verify: git log -1 --format=%ci -- scripts/field-expectations/spring-petclinic-rest.json; git log -1 --format=%ci -S'THE CANONICAL-ADDRESS GATE' -- src/sextant/storage/duckdb/derive_endpoints.sql`
+
+**The requirement.**
+
+- **At least twelve projects, selected by what they exercise** — one per protocol we ship a
+  catalog for, plus Spring Boot 2, plus Kotlin, plus a genuine multi-module build. A surface
+  with no findable open-source example becomes a **stated boundary**, never a silent zero.
+- **Selection happens when the work is done**, not now. Naming repositories from memory is
+  how the six corrected claims in this document got written.
+- **It runs after every wave, not only at the end.** Petclinic is the argument: it scores 96
+  on a shape our other corpora score 0 on, and that was learned by looking. Discovering twelve
+  projects' worth of defects after 54 items is the same mistake at a larger scale.
+- **A pin freezes behaviour, so a defect visible in a pin is fixed before the pin is
+  refreshed.** Recording twelve projects against current output would make twelve projects'
+  worth of it permanent — which is exactly what the petclinic pin did.
+
 ---
 
 ## 2. F1 — the extractor reads the class file as a specified format

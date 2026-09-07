@@ -22,6 +22,25 @@ that produced it.** The first draft of this plan asserted that Wave 1 changed no
 output; it was false for two of eight items, and it told a reviewer not to look. The same rule
 the spec carries applies here: a claim about our own code is either verified or removed.
 
+### The gate — this plan is proved on real projects, not on tests
+
+**Ruled 2026-09-07.** The suite is 2,346 tests, 82 guards at 0 survived, byte-stable,
+contracts clean — and it notices neither of the two hardest Criticals, because our corpora do
+not contain the shape. `scripts/field_check.py` already validates output against real
+upstream repositories at pinned commits; it holds **three** projects, all inbound-only HTTP
+CRUD, with **zero outbound rows between them**. Every messaging and RPC catalog we ship is
+exercised by no real project.
+
+- **At least twelve projects**, chosen by the surfaces they exercise — one per protocol with a
+  shipped catalog, plus Boot 2, plus Kotlin, plus a real multi-module build. A surface with no
+  findable example becomes a stated boundary, never a silent zero.
+- **Selected when the work is done**, not now.
+- **Run after every wave**, not only at the end.
+- **A pin freezes behaviour**, so a defect visible in a pin is fixed before the pin is
+  refreshed.
+
+Spec §1.4 carries the evidence.
+
 ### Global constraints
 
 Carried into every item, from spec §15.
@@ -69,6 +88,8 @@ value.
 1. **Does it export?** Automatically, and the ratchet fails the build if it somehow does not.
 2. **Does analysis read its values?** Yes → keep the real value, redact at export. No → redact
    at origin. There is no third answer (§6.2).
+
+| **W0b** | **Re-run `field_check.py` against all three existing pins and establish the real baseline.** Two are stale: `spring-petclinic-rest` and `jhipster-sample-app` were recorded 2026-09-03 06:17, and the canonical-address gate — which normalises a leading separator — landed 2026-09-03 22:06. The petclinic pin still records 25 of 44 routes with no leading slash and 8 bare `/` routes, one per HTTP verb. Find what actually differs, fix what is a real defect, re-record deliberately | §1.4 | — | we learn whether the field check passes today. Every later pin is recorded against known-good behaviour instead of freezing whatever is there |
 
 **Wave 0 acceptance:** every producer stamps the same value; a deliberately divergent copy
 fails a test; a workspace written before Step 0 is refused with the stamp named, not silently
@@ -298,6 +319,9 @@ on W34 that did not exist: an export list has nothing to do with a resolve-time 
 *when* it is built are unrelated, and an earlier draft conflated them.
 Every RESTATE entry after the foundation whose claim it restates.
 *(F11's constraint is gone with F11 — it moved to phase L.)*
+
+**The gate runs after every wave.** A wave is not done because its items are done; it is done
+when the field corpus still produces what it should. See "The gate" above.
 
 **Where the visible value lands:** Wave 2 (new rows), Wave 3 (boundaries stop being false),
 **Wave 4** (100% of mall's response contracts go from empty to real — the largest single
