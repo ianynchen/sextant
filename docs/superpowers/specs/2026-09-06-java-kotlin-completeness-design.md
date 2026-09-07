@@ -143,9 +143,12 @@ ASM 9.10.1 was verified reading majors 52, 61, 65, 68, 69 and 70 from real jars.
   It is named here only so the record is complete; it is not remaining work.
 - **Pin the supported range as a test**, so the ceiling is a value a test asserts rather
   than a number that drifts.
-- **Record the observed major per document.** This is capability 9.19, extracted today with
-  no consumer; F1 gives it three (the ceiling test, the multi-release target fallback in
-  §2.4, and the Kotlin/language labelling in F8).
+- **Record the observed major per document.** This is a **new** capability — `_CAPABILITIES`
+  in `ingress/extract/jvm/scanner.py:8` holds fourteen entries ending at 9.18
+  (`method_returns`), so 9.19 is the next number to **allocate**, not one we already have.
+  `verify: python3 -c "import re;s=open('src/sextant/ingress/extract/jvm/scanner.py').read();b=re.search(r'_CAPABILITIES = \{(.*?)\n\}',s,re.S).group(1);print(len(re.findall(r'^\s+\"',b,re.M)),'capabilities; highest',max(re.findall(r'9\.\d+',b)))"`
+  It gains three consumers in this spec: the ceiling test above, the multi-release target
+  fallback in §2.4, and Kotlin/language labelling in F8.
 
 **What actually remains is the half that lasts, and none of it exists.** `Main.java:83` still
 wraps the entire scan loop in `catch (Exception failure)` and exits 1, so one unreadable class
@@ -196,6 +199,21 @@ stated reason (`StackMapTable`, correct) · 18 silently dropped.** Plus 11 acces
 
 **Partial and load-bearing:**
 
+- **Kotlin function metadata is unread, and it costs two things.**
+  `KotlinNullability.propertyNullability` reads only
+  `classMetadata.getKmClass().getProperties()` — it never touches `getFunctions()`.
+  `verify: grep -n 'getProperties\|getFunctions' extractor-jvm/src/main/java/dev/sextant/extractor/KotlinNullability.java`
+  Reading functions as well closes **G-63** (nullability applied to fields only, so `getId()`
+  reports `nullable: true, nullable_resolution: "resolved"` beside an `@NotNull` in the same
+  fact) **and** Q2's `suspend fun` obligation: a suspend function's declared return is erased
+  to `Object` in the descriptor, and `KmFunction.getReturnType()` is where the real one is
+  written down. Put it back and a `suspend fun` is an ordinary function with one extra
+  parameter — the trailing `Continuation` is symmetric, appearing identically in the
+  declaration and at every call site, so descriptor matching and resolution never see it.
+  **Still a verification, not an assumption** (Q2's own wording): a `suspend fun` with a real
+  suspension point has its body moved into a generated `invokeSuspend`, so the calls it makes
+  may be attributed to the synthetic rather than to the function — the same orphaning
+  capability 9.17 fixed for lambdas. That half is measured in F3, not assumed here.
 - **`Signature` is the largest single hole.** Read for field types, method *return* types,
   generic superclass and superinterfaces. **Not** read for method or constructor *parameter*
   types, nor for class and method formal type parameters and their bounds. F4 cannot do
@@ -209,6 +227,26 @@ methods emit identical modifiers) · `ACC_FINAL` · `ACC_VARARGS` (named at
 `MethodFlow.java:578` as the reason capability 9.15 cannot tell a varargs call from
 `new String[]{…}`) · `ACC_SYNCHRONIZED` · `ACC_NATIVE` · `ACC_VOLATILE` · `ACC_STRICT` ·
 `ACC_ANNOTATION` (so an `@interface` emits `construct_kind: "interface"`).
+
+**`ACC_ANNOTATION` is not a free addition, and this is the one place F1 changes derived
+output.** `construct_kind` is a **declared closed set** — `D00-fact-schema.md:168` lists
+fourteen values and **none of them is `annotation`** — and the derivation reads the field:
+`derive_endpoints.sql:1076` joins on `construct_kind IN ('method','function')` and `:1099`
+filters catalogs on `$declared_on`. So reading the flag has exactly two paths, and there is no
+third: emit a value outside the set, which fails NFR-5's test; or **add `annotation` to
+D00 §4**, which is a fact-schema change and therefore another increment under Step 0's rule.
+**Ruled: add it.** Q6 commits us to reading all of 4.7, and reading a flag then discarding its
+meaning is the *"declared, never read"* defect §2.3's ledger exists to catch; and §8.1 rule 5
+says that where the provider distinguishes two things — here, with a flag — we follow it
+rather than flattening them.
+Blast radius, measured: three catalogs use `declared_on: interface` — `retrofit.yml`,
+`spring-http-interface.yml`, `jakarta-jws-client.yml` — and all three match ordinary service
+interfaces, never annotation types. No shipped catalog changes behaviour.
+`verify: grep -rh 'declared_on:' src/sextant/catalogs/*.yml | sort | uniq -c`
+
+**`module-info.class` is the other one** (G-61): it currently emits a fabricated `class`
+symbol. `module` is **already** in D00's set, so that fix needs no schema change — but it
+removes a symbol from the graph, which is a derived-output change too.
 
 **Four already force an invented rule downstream**, which is why they are not merely absences:
 
@@ -660,6 +698,28 @@ There is nowhere to put any of this today, and it is what makes an outbound row 
 A side table keyed by endpoint, **each entry carrying its own resolution and evidence** — so
 a header whose value we could not resolve is visibly unresolved rather than absent.
 
+**Redacted at the origin, not at export.** Nothing in Sextant reads a header *value*, so the
+redacted value is the only one ever written down. There is no export query to add and nothing
+to forget. This matters because a compiled-in `Authorization: Bearer …` literal is realistic,
+and the bundle is the trust boundary. The rules need no change: `BUILTIN_KEY_PATTERNS` already
+contains `authorization`, `token`, `secret`, `apikey`, `credential`, `password`, `passphrase`
+and `privatekey`, and `redact_value(key, value)` replaces the value whole when the name
+matches — which is exactly this table's shape.
+`verify: sed -n '44,53p' src/sextant/domain/redaction.py`
+
+**The general rule, which this is an instance of:** *redact when the value is read; keep the
+real value only where analysis provably consumes it, and there redact at export.* The five
+columns redacted at export today are redacted late **because analysis reads them** —
+`resolved_config.value` is substituted into an address by the `resolved_peers` query, and
+`call_sites.arguments` is where topic names, URLs and paths come from. Redacting those at
+origin would be destructive rather than safe: the rules match on the **name**, deliberately
+loosely (`aws.secretsmanager.endpoint` contains `secret` and is replaced whole though the
+value is a hostname), so peer resolution would substitute the literal string `REDACTED` into
+an address and publish a **fabricated** peer, which NFR-2 rates worse than a missing one.
+
+Every new value column answers one question — *does analysis read this?* Yes, redact at
+export. No, redact at origin. There is no third answer.
+
 ### 6.3 Acceptance for F5
 
 - Two outbound calls to the same path from different callers are two rows.
@@ -754,9 +814,29 @@ Not a new mechanism. Two halves, both already decided:
    grounding per the K2 decision. That enriched output then feeds the next model doing the
    refactor or the optimisation.
 
-It does not need to be complete to be useful. **Spec work, not a decision:** the closed set
-of kinds (NFR-5) — `database`, `remote`, `queue`, `cache`, and whatever else measurement
-justifies. The list is derived from the corpora, not invented here.
+It does not need to be complete to be useful. **And the closed set is not ours to choose —
+it already exists.** `D00-fact-schema.md:205` declares it:
+
+```
+terminal_kind — outbound_call, returns, ends_silently, persistence,
+                throws, unresolved, async_handoff, cycle
+persistence carries target_kind: database, cache, file
+```
+
+`verify: sed -n '205,220p' docs/components/D00-fact-schema.md`
+
+So W30 **produces the specified set**; it does not derive a new one. NFR-5 gives a closed set
+exactly one definition and `tests/architecture/test_source_rules.py:158` enforces that by
+file, so a second definition fails the build rather than shipping.
+
+D00 also names the blocker, and it is exactly the user's ruling: *"three of its members —
+`persistence`, `async_handoff`, and `outbound_call` — need framework knowledge no pass has
+applied at a call site: a data-access call is `persistence` only to something that knows the
+callee is one."* That knowledge is catalog data.
+
+**`target_kind` (`database`, `cache`, `file`) is produced in v1.** `persistence` alone says a
+call reaches storage but not whether it is a database or a cache, and that distinction is the
+whole reason this was asked for.
 
 ### 8.3 FR-7 — divergent paths draw as `alt` (Fork 3, G-50)
 
@@ -864,8 +944,21 @@ without grepping a repository Sextant has already scanned.
 | 4 | **File digest** | per file: symbols declared, boundaries contributed, annotations present — so the agent decides whether to **open** a file at all. Cheapest win; most of an agent's budget goes on files opened and discarded. |
 | 5 | **Change-impact starting points** | "change `Order`" → shape, fields, endpoints carrying it, handlers, callers — as a list of `file:line` ready to open. |
 
+**Format, ruled:** the index is a **derived NDJSON projection**, not a table — generated at
+export from the tables and listed in the manifest exactly as `render/` already is. The bundle
+already has this shape: `graph/*.parquet` is the dataset, `render/…` is the projection for a
+human, and the index is a third projection for a machine reader. NDJSON because a grep hit
+returns one complete self-describing record, which is what matters when an agent opens the
+file cold with no schema.
+
 Ships as **files the agent loads once**, not a database it must learn. A compact index is
-itself greppable, and grepping 200KB instead of 50MB is the entire point.
+itself greppable, which a Parquet table is not. *(An earlier draft put a "200KB instead of
+50MB" figure here. That was illustration, never measured, and it is removed rather than
+dressed up as evidence.)*
+
+**Accepted cost:** the index cannot be joined against the tables in DuckDB. The index's job is
+to reach a `file:line` fast; after that the consumer opens the file, or queries the tables by
+the exact id the index just handed back.
 
 Also wanted, from the same framing: `repeated_terminals(root)` (the N+1 signal, computable
 today), `coupling(symbol)` fan-in and fan-out, and **`blind_spots(scope)`** — where the
@@ -923,8 +1016,10 @@ Evidence gathered for the rewrite:
 ```
 11 tables: raw_facts endpoints shapes shape_fields resolved_config open_questions
            scheduled_work error_handlers return_flows roots call_edges
-D01 named queries: 1 of 10  (trace_of only; impact_of / callers_of / dependents_of /
-                             blast_radius absent)
+D01 named queries: 1 of 10  — `trace_of` exists; callers_of, callees_of,
+                             implementations_of, uses_of, impact_of, paths_between,
+                             endpoint_for_address, who_uses_shape, who_reads_config do not.
+                             (D01:778 says so outright: "nine of the ten below do not exist")
 CLI verbs: 4
 present: detector scanner resolver renderer exporter query redaction ignorefile manifest
 absent:  overlay (M01/D03)  sync (M05)  stitcher (M06)  state.json (D05)
@@ -1005,7 +1100,8 @@ would fail if it broke.
 
 - **G-110** — rows that verify in code but have no test: an *active* lexicographic tie-break
   between two candidates, and the other cases named at `COVERAGE.md:846,848`.
-- **G-112** — `_NO_DECLINING_TEST_YET` lists 25 of the 55 catalogs, and it **over-states** the
+- **G-112** — `_NO_DECLINING_TEST_YET` lists **27** of the 55 catalogs (the gap analysis says
+  25; re-counted 2026-09-07 — `verify: sed -n '71,110p' tests/architecture/test_catalog_near_miss_coverage.py | grep -c '^\s*"'`), and it **over-states** the
   gap for `jakarta-websocket`. Correct the markers, then build the remaining tests.
 
 **Rule for the batch:** a row marked `supported` in COVERAGE has a test that names it. This
@@ -1053,7 +1149,25 @@ not cover its whole surface.
 
 ---
 
-## 12. F11 — the curation file
+## 12. F11 — the curation file · **NOT IN v1**
+
+**Ruled 2026-09-07: the curation file moves to phase L, designed together with the stitcher.**
+Its only consumer is M06, which does not exist — C11's own evidence reads *"absent: overlay
+(M01/D03), sync (M05), stitcher (M06), state.json (D05)"*. Building the format first would
+ship a schema, an evidence tier and a no-mutation test with nothing that reads any of them:
+the same capability-with-no-consumer defect this whole analysis keeps finding. The stitcher is
+the only thing that can say what the format needs.
+
+**What stays in v1:** FR-16's **wording**, corrected in F9 §10.4. The shipped text describes
+something we have now ruled we will never build, and correcting a false requirement is
+documentation work, not a build.
+
+**Accepted consequence:** the open questions this spec creates — C2's self-publish/self-consume,
+Fork 1's unresolvable starter, F4's unreachable type — have no *human* channel during v1. They
+still reach the enrichment seat at `evidence: llm`, so they are not silent; what is absent is
+a person's answer outranking a machine's.
+
+*The design below stands as the phase-L input. Nothing in it is built in v1.*
 
 **Closes:** G-120, and rewrites FR-16. **Not a Java/Kotlin gap** — it is here because this
 spec keeps producing links that cannot be derived, and gives them nowhere to go.
@@ -1121,7 +1235,18 @@ linked", is an assertion, not a correction.
 **Evidence tier.** `facts.py:422` is `Literal["compiler", "declared"]` and `enrichment.py:80`
 is `Literal[Evidence.LLM]`. Curation adds one more value, closed per NFR-5.
 
-### 12.4 Acceptance for F11
+### 12.4 Boundary identity is already specified
+
+A curation file needs a stable, human-writable name for each end. **D06 §5b already defines
+one**, and it is what the rendered document prints: `GET /v1/orders` for http and grpc,
+`pubsub order-events` verbless for kafka/pubsub/amqp/jms/sqs, `graphql query orders`. A person
+can copy those strings out of the document.
+`verify: sed -n '284,296p' docs/components/D06-bundle-format.md`
+
+Open for phase L: whether `module_id` is stable across re-analysis. It comes from a
+`--module-id` argument, so the key is only as stable as what the user supplied.
+
+### 12.5 Acceptance for F11 (phase L, not v1)
 
 - A curation file linking a named Pub/Sub topic to a named subscription produces a link
   carrying the curated evidence tier and its stated reason.
@@ -1148,7 +1273,7 @@ by silence.
 | **Kotlin-specific constructs** | Q2 = B. `suspend fun` contract shape, extension functions, `$default` synthetics, `DefaultImpls` — the **call edge across a `suspend fun` is in scope and must be verified**, only the contract shape is not. |
 | **Arbitrary third-party jar expansion** | Q7. Sibling modules and declared `extract_libraries` only. |
 | **Cross-service stitching** | Phase L. F5 deliberately records what stitching will need and refuses to pre-merge it. |
-| **Ten named queries** | Q8b reframed them into the index bundle. `impact_of`, `callers_of`, `dependents_of` and `blast_radius` are served by §9.3's indexes, not by named query verbs. |
+| **Ten named queries** | Q8b reframed them into the index bundle. D01's nine unbuilt queries — `callers_of`, `callees_of`, `implementations_of`, `uses_of`, `impact_of`, `paths_between`, `endpoint_for_address`, `who_uses_shape`, `who_reads_config` — are served by §9.3's indexes, not by named query verbs. |
 
 ---
 
@@ -1360,7 +1485,7 @@ boundary with a support level (F6), never dropped.
 | G-117 | Minor | FR-20 clause 2 | F9 §10.4 |
 | G-118 | Minor | `docs/components/M04-resolver.md:210` | F9 §10.4 |
 | G-119 | Minor | FR-18 | F9 §10.4 |
-| G-120 | Minor | FR-16 | F11 §12 |
+| G-120 | Minor | FR-16 | §12 (phase L) + F9 §10.4 wording |
 | G-121 | Minor | FR-7 | F7 §8.4 |
 | G-122 | Minor | measurement debt, as a standing item | F9 §10.5 |
 | G-123 | Minor | `tests/architecture/` | F2 §3.1 |

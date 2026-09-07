@@ -17,6 +17,11 @@ column is empty is a foundation, and the item that cashes it in is named.
 **Nothing here is optional.** Where an item looks skippable, §17 of the spec records why it
 is not.
 
+**Every factual claim here is checked against the repository, not against the conversation
+that produced it.** The first draft of this plan asserted that Wave 1 changed no derived
+output; it was false for two of eight items, and it told a reviewer not to look. The same rule
+the spec carries applies here: a claim about our own code is either verified or removed.
+
 ### Global constraints
 
 Carried into every item, from spec §15.
@@ -57,7 +62,13 @@ accepted.
 ## Wave 1 — F1: the extractor reads the class file as a specified format
 
 Six later items consume facts produced here, and three of them are impossible without it.
-Nothing in Wave 1 changes derived output on its own; Waves 3, 4, 6 and 7 cash it in.
+
+**Six of these eight items are purely additive. Two are not, and they need golden-file
+review:** W4 (`InnerClasses`/`EnclosingMethod`, which removes the downstream `$`-splitting)
+and W7 (`ACC_ANNOTATION` changes what an `@interface` reports, and `module-info.class` stops
+emitting a fabricated `class` symbol — `construct_kind` is read by `derive_endpoints.sql` at
+`:1076` and `:1099`). An earlier draft of this plan said Wave 1 changed no derived output.
+That was wrong for those two, and it told a reviewer not to look.
 
 | # | Item | Spec | Depends on | Delivers |
 |---|---|---|---|---|
@@ -140,7 +151,7 @@ and the shapes carry fields.
 |---|---|---|---|---|
 | **W27** | Outbound is never merged — one row per (caller, target); collapse only **within** one caller. Delete `merge_endpoints.sql`'s `both` merge; reserve `both` for the linking tier | §6.1 | — | two callers hitting the same path stop being reported as one call |
 | **W28** | Inbound duplicates become a **reported conflict**, not a dropped row — DR-6, mirroring Spring's own refusal of an ambiguous mapping. This is the documented-but-unimplemented routing-ambiguity detector | §6.1 | — | two handlers claiming one route surface as the error they are |
-| **W29** | Request metadata on every outbound protocol — HTTP headers and query parameters, Kafka record headers and partition key, AMQP routing key and properties, JMS properties, SQS attributes, Pub/Sub attributes. A side table keyed by endpoint, **each entry carrying its own resolution and evidence** | §6.2 | W9 | an outbound call becomes identifiable; a header we could not resolve is visibly unresolved rather than absent |
+| **W29** | Request metadata on every outbound protocol — HTTP headers and query parameters, Kafka record headers and partition key, AMQP routing key and properties, JMS properties, SQS attributes, Pub/Sub attributes. A side table keyed by endpoint, **each entry carrying its own resolution and evidence**. **Redacted at the origin** — nothing reads a header value, so only the redacted value is ever written; no export query, nothing to forget | §6.2 | W9 | an outbound call becomes identifiable; a header we could not resolve is visibly unresolved rather than absent; a compiled-in `Authorization: Bearer …` never reaches the bundle |
 
 **Wave 5 acceptance:** self-publish/self-consume produces two rows and one open question, never
 a merge.
@@ -154,7 +165,7 @@ PROJECT.md's.
 
 | # | Item | Spec | Depends on | Delivers |
 |---|---|---|---|---|
-| **W30** | `terminal_kind` gets a producer: known owners as ordinary **catalog data** (MyBatis mapper, Spring Data repository, JDBC driver, `EntityManager`), plus the closed set of kinds derived from the corpora — not invented. The residue goes to enrichment at `evidence: llm` | §8.2 | W19 | a performance query stops returning method names a human must classify by eye |
+| **W30** | `terminal_kind` gets a producer for **the set D00 §4 already declares** (`outbound_call`, `returns`, `ends_silently`, `persistence`, `throws`, `unresolved`, `async_handoff`, `cycle`) — not a new one; NFR-5 gives it exactly one definition and `test_source_rules.py:158` enforces that. Known owners as ordinary **catalog data** (MyBatis mapper, Spring Data repository, JDBC driver, `EntityManager`), which is the framework knowledge D00 names as the missing piece. **`target_kind` (`database`, `cache`, `file`) is produced too.** Residue goes to enrichment at `evidence: llm` | §8.2 | W19 | a performance query stops returning method names a human must classify by eye, and says whether a call hits a database or a cache |
 | **W31** | FR-6: the walk terminates at a terminal or a stated boundary. The **depth bound** goes; cycle and revisit refusal stay, because those are correctness | §8.1 | W22, W30 | a trace stops short only where the evidence stops |
 | **W32** | Fork 3: a `narrowed` step renders as a Mermaid `alt` when the alternatives are known, and as **one arrow labelled with them** when they are not. The caption stops claiming "nothing is filtered". Ships with a test that constructs the shape — `narrowed` has never fired on real code (four corpora, zero occurrences) | §8.3 | — | a diagram stops reading as "it calls all three, in order" when the truth is "exactly one of these three" |
 | **W33** | Class diagrams of inheritance: two arrow kinds (`<|--`, `<|..`) over `type_hierarchy`; an unscanned ancestor renders `<<open>>` rather than being omitted | §8.4 | W22 | FR-7's class-diagram clause is met |
@@ -207,15 +218,19 @@ already exist for the other direction.
 
 ---
 
-## Wave 10 — F11: the curation file
+## Wave 10 — F11: the curation file · **REMOVED FROM v1**
 
-Lands after the waves that produce open questions — building the schema first would ship a
-file with nothing to put in it.
+Ruled 2026-09-07. Its only consumer is the stitcher (M06), which does not exist — so W48 and
+W49 would ship a format, a schema, an evidence tier and a no-mutation test with nothing that
+reads any of them. It moves to phase L, designed together with M06, the only thing that can
+say what the format needs. Spec §12 stands as the phase-L input.
 
-| # | Item | Spec | Depends on | Delivers |
-|---|---|---|---|---|
-| **W48** | The curation file: schema, its own evidence tier ranked above derived and enriched, and a test that **no curation input can change a fact file or delete a derived row**. Where derived and curated disagree, both are kept and the disagreement is reported | §12 | W27, W29 | a human can state that a Pub/Sub publisher and its consumer are the same channel — which DR-5 structurally cannot derive, because a topic name is not a subscription name and the binding lives in GCP |
-| **W49** | Sextant emits the open question **in the curation file's own schema**, listing candidate pairs for the identifiable indirect-channel class (Pub/Sub and SNS→SQS never derivable, AMQP sometimes, Kafka always) | §12 | W48 | accepting a proposal is an edit, not an authoring job |
+**What stays in v1:** FR-16's *wording*, in W51. The shipped text describes something we have
+now ruled we will never build, and correcting a false requirement is documentation work.
+
+**Accepted:** the open questions this spec creates get no *human* channel in v1. They still
+reach enrichment at `evidence: llm`, so they are not silent — what is absent is a person's
+answer outranking a machine's.
 
 ---
 
@@ -227,10 +242,10 @@ moves the untruth. W50 and W51 can start once their subject waves land.
 | # | Item | Spec | Depends on | Delivers |
 |---|---|---|---|---|
 | **W50** | PROJECT.md rewritten to the evidence and kept as the delivery authority. Where it and the roadmap disagree, the **stricter** wins | §10.1 | Waves 1–10 | the registers stop disagreeing about what shipped |
-| **W51** | REQUIREMENTS.md: FR-11…FR-14 move out of the FR section and become **usage scenarios**, each naming the capability it depends on; FR-21…FR-24 fold in as **real FRs** with traceability rows; FR-16 is rewritten around the curation file; FR-20 clause 2 is restated to say approximate lookup happens against the index and commands take exact identifiers. `M04-resolver.md:213-215` and `D01:597` stop asserting the resolver computes findings | §10.2, §10.3, §10.4 | W48 | the requirements say what Sextant does, and what it merely enables |
+| **W51** | REQUIREMENTS.md: FR-11…FR-14 move out of the FR section and become **usage scenarios**, each naming the capability it depends on; FR-21…FR-24 fold in as **real FRs** with traceability rows; FR-16 is rewritten to describe a curation **file** that adds links and never edits a fact — the shipped text ("assert, correct, or delete a statement in the graph") describes something we have ruled we will never build; FR-20 clause 2 is restated to say approximate lookup happens against the index and commands take exact identifiers. `M04-resolver.md:213-215` and `D01:597` stop asserting the resolver computes findings | §10.2, §10.3, §10.4 | — | the requirements say what Sextant does, and what it merely enables |
 | **W52** | The RESTATE batch — 39 documentation claims that are untrue or untested, corrected as one batch. **Rule:** a sentence in the indicative describing untested behaviour is either given a test or rewritten to say what is true | §10.4 | the wave whose claim it restates | C7's *"Both must be matched"* was the template: a true-sounding sentence that stopped anyone looking |
 | **W53** | The MEASURE batch residue — G-22, G-46, G-88, G-91, G-122 and G-27. **Rule:** measurement means reading the framework's own class files at a named coordinate and version, recorded in `measured:` | §10.5 | — | *"it is just a rename"* stops being an argument |
-| **W54** | The test-debt batch: G-110's untested rows, and G-112's `_NO_DECLINING_TEST_YET` markers (25 of 55 catalogs, and it **over-states** the gap for `jakarta-websocket`). **Rule:** a row marked `supported` has a test naming it — the rule the mutation harness already enforces for guards, extended to coverage claims | §10.6 | W42 | a claim of support cannot stand with nothing that would fail if it broke |
+| **W54** | The test-debt batch: G-110's untested rows, and G-112's `_NO_DECLINING_TEST_YET` markers (**27** of 55 catalogs — the gap analysis says 25; re-counted 2026-09-07 — and it **over-states** the gap for `jakarta-websocket`). **Rule:** a row marked `supported` has a test naming it — the rule the mutation harness already enforces for guards, extended to coverage claims | §10.6 | W42 | a claim of support cannot stand with nothing that would fail if it broke |
 
 ---
 
@@ -242,20 +257,19 @@ W1 W2 W3 W4 W5 W6 W7 → W8            F1  extractor          (see the note belo
 W9 → W10 W12 W13 W15 W19 W29 W43-47  F2  vocabulary         (new rows appear)
 W11 W14 (measure, no dependency)
 W16 W17 W18 W20 W21 (independent)
-W21 → W22 → W23                      F3  identity           (21% of boundaries stop being false)
+W21 → W22 → W23 W23b                 F3  identity           (21% of boundaries stop being false)
 W5 W22 → W24 → W25 → W26             F4  module edge        (mall's contracts become real)
 W27 W28 W29                          F5  endpoint identity
 W19 → W30 → W31; W22 → W33; W32      F7  trace tier         (2Q becomes delivered)
 W34; W6 W22 → W35 → W36; W37 W38 W39 F8  export and index   (Sextant can say WHERE)
 W40; W41 → W42                       F6  the checklist
-W27 W29 → W48 → W49                  F11 curation
 W50 W51 W52 W53 W54                  F9  registers
 ```
 
 **Six hard constraints.** **W0 before W1** — a stamp that is already inconsistent cannot be
 verified when it is bumped. Then, from spec §14: F1 is first. F2 before Wave 9. W21 (the corpus)
-before W22, not after. F11 after the waves that produce open questions. Every RESTATE entry
-after the foundation whose claim it restates.
+before W22, not after. Every RESTATE entry after the foundation whose claim it restates.
+*(F11's constraint is gone with F11 — it moved to phase L.)*
 
 **Where the visible value lands:** Wave 2 (new rows), Wave 3 (boundaries stop being false),
 **Wave 4** (100% of mall's response contracts go from empty to real — the largest single
