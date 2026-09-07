@@ -306,12 +306,21 @@ implementation. Eight of its ten overlaid names have no base copy and are major 
    "base copies only": that silently deletes the 626 versioned-only classes and asserts they
    do not load, which is a stronger claim than keeping them labelled.
 4. **The target comes from code, never from a default.** In order: the build's declared
-   release (`maven.compiler.release`, `maven.compiler.target`, `java.version`, Gradle
+   release (`maven.compiler.release`, `maven.compiler.target`, `maven.compiler.source`,
+   `java.version`, maven-compiler-plugin's `<configuration><release>`; on Gradle,
    `targetCompatibility` / `release`) — a value in the pom or build script, so GUIDELINES
    §8.2 admits it; then the module's own class-file major (§2.1); then base, with an
    `open_question` naming every class where base and an overlay actually disagree.
-   `MavenDetector._inherited_model` already merges `<properties>` across parent inheritance —
-   we simply never look at the value.
+
+   **Reading it is a capability we do not have, and it is now its own work item.** Nothing
+   in the codebase reads any of those keys —
+   `verify: grep -rn "maven.compiler\|targetCompatibility\|sourceCompatibility" src/`
+   returns nothing. Both halves use machinery that exists:
+   `MavenDetector._inherited_model` (`maven.py:576-602`) already merges `<properties>` across
+   parent inheritance, so the Maven value is in a dict we build and never read; and the Gradle
+   detector already runs Gradle with an init script and reads JSON back, so Gradle itself can
+   be asked rather than its build file parsed. A module whose build declares none reports
+   absence, never a guess.
 5. **Fix `sourcePathOf`** to strip the `META-INF/versions/N/` prefix before deriving the
    source path.
 
@@ -321,9 +330,12 @@ scan can serve two modules declaring different releases, and deciding in the ext
 force a re-scan per consumer and put a config-derived judgement inside the fact layer, which
 records and never decides.
 
-**Caution:** the tag alone changes nothing. With no uniqueness constraint anywhere, the
-duplicates merely become labelled duplicates. The filter must be real wherever the type and
-method tables are built, or the bug has only been renamed.
+**Caution, and it decides the sequencing:** the tag alone changes nothing. With no uniqueness
+constraint anywhere, the duplicates merely become labelled duplicates. The filter must be real
+wherever the type and method tables are built, or the bug has only been renamed — **so the
+filter is built beside the tag, not later.** *Where* it runs (at resolve) and *when* it is
+built are unrelated questions; an earlier draft of the plan conflated them and parked the
+filter six waves away behind a dependency on the export work that does not exist.
 
 **Scope:** every one of the 351 measured jars is a library, so this lives entirely on the
 dependency tier and cannot perturb `module_output` byte-stability. **Unmeasured:** whether

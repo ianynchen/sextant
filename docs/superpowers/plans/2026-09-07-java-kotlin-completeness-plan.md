@@ -75,6 +75,8 @@ That was wrong for those two, and it told a reviewer not to look.
 | **W1** | The accepted major range becomes a test; the observed major is recorded per document (a **new** capability, not an existing one); `partial` / `partial_reason` get a code path that can set them; `Main.java:83`'s blanket `catch` stops taking the whole scan down with one unreadable class; **`scanner_version` stops naming a library version that does not exist** — it reads `"9.18"`, a capability number, while the pinned ASM is 9.10.1. *(The ASM bump itself is already done — commit `0674bfd`.)* | §2.1 | W0 | one unreadable class stops killing the scan; a skipped class says why, in the manifest and the document; a bundle's provenance names the scanner that actually produced it |
 | **W2** | Override `visitAnnotableParameterCount`; align parameter annotations from the end (JVMS 4.7.18). Test uses an **enum** constructor, not only an inner class | §2.2 | — | annotations on inner-class and enum constructors stop landing on the wrong parameter |
 | **W3** | Multi-release jars, extractor half: read `Multi-Release` once at `JarSource` open as a parsed attribute; absent → skip `META-INF/versions/` entirely; tag every document with `class_release`; strip the prefix in `sourcePathOf` | §2.4 | — | `testcontainers-2.0.5.jar` stops emitting 1,198 phantom documents; overlay documents stop naming impossible `.java` paths |
+| **W3b** | **Read the build's declared release.** `maven.compiler.release`, `maven.compiler.target`, `maven.compiler.source`, `java.version`, and maven-compiler-plugin's `<configuration><release>`; on Gradle, `targetCompatibility` / `release`. Nothing reads any of them today — `verify: grep -rn "maven.compiler\|targetCompatibility\|sourceCompatibility" src/` returns nothing. Both halves use machinery that exists: the Maven detector already merges `<properties>` across parent inheritance (`maven.py:576-602`), and the Gradle detector already runs Gradle with an init script and reads JSON back, so Gradle itself can be asked. A module whose build declares none reports absence, never a guess | §2.4 | — | the selection target in W3c gets its primary source; `class_release` selection stops depending on a capability nothing builds |
+| **W3c** | Multi-release **selection**, at resolve: highest `N ≤ target` among copies of one name, else base; a name with exactly one candidate is always kept, so the 626 versioned-only classes survive. Target from W3b's declared release, then the module's own class-file major (W1), then base with an `open_question` on every class where base and an overlay disagree | §2.4 | W3, W3b | the duplicates W3 labelled are actually filtered. **Without this, G-62 is renamed rather than fixed** — which is why it sits beside W3 rather than six waves away |
 | **W4** | JVMS 4.7, the four that already force an invented rule: `AnnotationDefault`, `InnerClasses` + `EnclosingMethod`, `StringConcatFactory`'s recipe, `ConstantValue` | §2.3 | — | catalogs stop hardcoding framework defaults; nesting stops being derived by splitting on `$`; the `constant` resolution gets a producer |
 | **W5** | `Signature` completed: method and constructor **parameter** types, and class/method formal type parameters with bounds | §2.3 | — | (foundation — **W25** cashes it in) |
 | **W6** | `LineNumberTable`, `SourceFile`, `LocalVariableTable` / `LocalVariableTypeTable` | §2.3 | — | (foundation — **W35** cashes it in; also fixes Kotlin's `.java` mislabel) |
@@ -184,7 +186,6 @@ these tests.
 | **W36** | The file digest and the change-impact starting points | §9.3 | W35 | an agent decides whether to open a file at all; "change `Order`" returns a list of `file:line` ready to open |
 | **W37** | Materialisation: `call_edges` ordered by caller **and** a second ordering by callee; a materialised reachability table (root → reachable symbol, depth, terminal flag) — **the trace walk already computes this and throws it away**; `roots` addressable by wire address | §9.4 | W31, W34 | traversal runs both directions at speed; blast radius stops being recomputed per question |
 | **W38** | FR-17 clause 3 — the resolution distribution, one `GROUP BY` on a column that already exists | §9.5 | W22 | `coverage` reports how much we **understood**, not only how many files we opened. The standing instrument against corpus blindness |
-| **W39** | Multi-release **selection** at resolve: highest `N ≤ target` among copies of one name, else base; a name with one candidate is always kept. Target from the build's declared release, then the module's class-file major, then base with an open question on disagreement | §2.4 | W3, W34 | the duplicates W3 labelled are actually filtered — without this the bug is only renamed |
 
 **Wave 7 acceptance:** a redacted bundle contains the same tables as an unredacted one;
 symbols carry real line numbers and openable paths on all four corpora.
@@ -253,7 +254,7 @@ moves the untruth. W50 and W51 can start once their subject waves land.
 
 ```
 W0                                   Step 0 the stamp        (before everything)
-W1 W2 W3 W4 W5 W6 W7 → W8            F1  extractor          (see the note below)
+W1 W2 W3 W3b → W3c; W4 W5 W6 W7 → W8 F1  extractor          (see the note below)
 W9 → W10 W12 W13 W15 W19 W29 W43-47  F2  vocabulary         (new rows appear)
 W11 W14 (measure, no dependency)
 W16 W17 W18 W20 W21 (independent)
@@ -261,14 +262,19 @@ W21 → W22 → W23 W23b                 F3  identity           (21% of boundari
 W5 W22 → W24 → W25 → W26             F4  module edge        (mall's contracts become real)
 W27 W28 W29                          F5  endpoint identity
 W19 → W30 → W31; W22 → W33; W32      F7  trace tier         (2Q becomes delivered)
-W34; W6 W22 → W35 → W36; W37 W38 W39 F8  export and index   (Sextant can say WHERE)
+W34; W6 W22 → W35 → W36; W37 W38     F8  export and index   (Sextant can say WHERE)
 W40; W41 → W42                       F6  the checklist
 W50 W51 W52 W53 W54                  F9  registers
 ```
 
 **Six hard constraints.** **W0 before W1** — a stamp that is already inconsistent cannot be
 verified when it is bumped. Then, from spec §14: F1 is first. F2 before Wave 9. W21 (the corpus)
-before W22, not after. Every RESTATE entry after the foundation whose claim it restates.
+before W22, not after. **W3c beside W3, not six waves later** — the tag alone renames G-62
+rather than fixing it, and the only thing that had held the filter in Wave 7 was a dependency
+on W34 that did not exist: an export list has nothing to do with a resolve-time filter.
+*Where* the filter runs (at resolve, because the target belongs to the depending module) and
+*when* it is built are unrelated, and an earlier draft conflated them.
+Every RESTATE entry after the foundation whose claim it restates.
 *(F11's constraint is gone with F11 — it moved to phase L.)*
 
 **Where the visible value lands:** Wave 2 (new rows), Wave 3 (boundaries stop being false),
