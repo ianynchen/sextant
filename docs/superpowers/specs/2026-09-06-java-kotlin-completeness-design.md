@@ -64,6 +64,63 @@ the bundle and the rendered document have nowhere to be recorded at all.
 commonest edge component, so it is flagged here rather than left to §13 alone. The ruling
 stands unless the user changes it.
 
+### 1.3 Step 0 — the precondition every wave depends on
+
+**Ruled by the user 2026-09-07: `fact_schema_version` becomes a single monotonically
+increasing integer, not semver, and it is set to `2` to begin with.**
+
+**Why it exists.** The stamp is maintained by hand in four places and they hold two values:
+
+| Copy | Value | Stamps |
+|---|---|---|
+| `domain/version.py:6` | **1.1.0** | `metadata.json`, and the comparison at `api.py:472` |
+| `ingress/read/__init__.py:15` | **1.0.0** | WSDL/XSD, proto, Avro and GraphQL SDL shape documents |
+| `application/stages/analyze.py:68` | **1.0.0** | module documents |
+| `extractor-jvm/Main.java:181` | **1.0.0** (a string literal) | every class document |
+
+The duplication is deliberate — `application` may not import `ingress` under the layering
+contract — and `analyze.py:64` states the invariant in its own comment: *"They must stay equal
+to that module's own copies — a document written with a different `fact_schema_version` than
+its siblings would claim a schema nobody shipped."* **That invariant is violated today.** The
+1.1.0 bump was for `DeclaredShapeFact` gaining `operation`; `DeclaredShapeFact` is produced by
+`ingress/read/*`, and commit `d91f3b7` touched `domain/version.py` **only**. So the one
+producer whose shape actually changed is the one copy that did not move, and a WSDL or proto
+document on disk today carries the `operation` field while stamping `1.0.0`.
+
+Nothing catches it: the staleness gate reads `metadata.json`, never the documents, and no test
+asserts the four agree.
+
+**What Step 0 does.**
+
+1. `fact_schema_version` becomes **an integer**, set to **2**, and increases by one for every
+   fact-shape change thereafter. No semver — the value is never parsed, ordered or compared
+   for compatibility anywhere; `api.py:472` compares it for equality and that is all it has
+   ever done, so three numbers were carrying one bit of meaning.
+2. **The Java copy is removed.** The extractor takes the value as a command-line option the
+   way it already takes its other version options, so Python owns the number and Java is
+   handed it. Nothing in `extractor-jvm` can see a Python constant, which is why that copy
+   drifted and why a test alone would not stop it happening again.
+3. **A test asserts the remaining copies are equal**, and fails the moment they are not.
+4. Existing workspaces stamped `"1.0.0"` or `"1.1.0"` mismatch, so the gate refuses them
+   naming the stamp and asks for a re-analysis. That is the designed behaviour, not a
+   migration, and nothing is rewritten in place.
+
+**It lands before Wave 1, not inside it.** Wave 1 makes the largest fact-shape change the
+project has had, and bumping a stamp that is already inconsistent means the bump cannot be
+verified — a correct new value would be indistinguishable from a fourth wrong one.
+
+**Two sub-decisions this raises, flagged rather than assumed.**
+
+- **JSON number or numeric string?** `facts.py:83` types the field `str`, and `Main.java`
+  writes it through `JsonOut.string`. A value that must always parse as an integer but is
+  typed as text is the weaker of the two, and nothing orders it — so a JSON number is the
+  honest shape. It changes the dataclass, the Java writer and every test fixture holding
+  `"1.0.0"`.
+- **The other two stamps keep semver.** `sextant_version` is `0.1.0` and
+  `graph_schema_version` is `1.2.0`. The ruling named the fact schema only, so after Step 0
+  the three stamps carry two different formats. That is a deliberate consequence, not an
+  oversight, and `graph_schema_version` can follow later if it should.
+
 ---
 
 ## 2. F1 — the extractor reads the class file as a specified format

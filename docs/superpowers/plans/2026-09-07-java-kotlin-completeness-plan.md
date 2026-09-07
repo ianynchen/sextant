@@ -38,6 +38,22 @@ Carried into every item, from spec §15.
 
 ---
 
+## Wave 0 — the precondition
+
+Lands **before** Wave 1. Wave 1 makes the largest fact-shape change the project has had, and
+bumping a stamp that is already inconsistent means the bump cannot be verified — a correct new
+value would be indistinguishable from a fourth wrong one.
+
+| # | Item | Spec | Depends on | Delivers |
+|---|---|---|---|---|
+| **W0** | `fact_schema_version` becomes a **single monotonically increasing integer, set to 2** — no semver, because the value is never parsed or ordered anywhere and `api.py:472` compares it for equality only. **Remove the Java copy**: the extractor takes it as a command-line option, so Python owns the number. **A test asserts the remaining copies are equal.** Existing workspaces stamped `1.0.0` / `1.1.0` are refused by the stamp gate and re-analysed — not migrated | §1.3 | — | a workspace's documents and its `metadata.json` stop disagreeing about which schema produced them. Measured today: four copies, two values, and the one producer whose shape actually changed (`ingress/read/*`, which gained `operation`) is the copy that was never bumped |
+
+**Wave 0 acceptance:** every producer stamps the same value; a deliberately divergent copy
+fails a test; a workspace written before Step 0 is refused with the stamp named, not silently
+accepted.
+
+---
+
 ## Wave 1 — F1: the extractor reads the class file as a specified format
 
 Six later items consume facts produced here, and three of them are impossible without it.
@@ -221,7 +237,8 @@ moves the untruth. W50 and W51 can start once their subject waves land.
 ## Sequencing summary
 
 ```
-W1 W2 W3 W4 W5 W6 W7 → W8            F1  extractor          (nothing derived changes yet)
+W0                                   Step 0 the stamp        (before everything)
+W1 W2 W3 W4 W5 W6 W7 → W8            F1  extractor          (see the note below)
 W9 → W10 W12 W13 W15 W19 W29 W43-47  F2  vocabulary         (new rows appear)
 W11 W14 (measure, no dependency)
 W16 W17 W18 W20 W21 (independent)
@@ -235,7 +252,8 @@ W27 W29 → W48 → W49                  F11 curation
 W50 W51 W52 W53 W54                  F9  registers
 ```
 
-**Five hard constraints, from spec §14.** F1 is first. F2 before Wave 9. W21 (the corpus)
+**Six hard constraints.** **W0 before W1** — a stamp that is already inconsistent cannot be
+verified when it is bumped. Then, from spec §14: F1 is first. F2 before Wave 9. W21 (the corpus)
 before W22, not after. F11 after the waves that produce open questions. Every RESTATE entry
 after the foundation whose claim it restates.
 
