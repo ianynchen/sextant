@@ -26,7 +26,7 @@ from sextant.application.resolve.shapes import (
     derive_shapes,
     root_type,
 )
-from sextant.application.resolve.shapes.contracts import _contracts_of, _owns
+from sextant.application.resolve.shapes.contracts import _body_type, _contracts_of, _owns
 from sextant.application.resolve.shapes.expansion import _rules_of
 from sextant.application.resolve.shapes.nullability import _scope_nullable
 from sextant.domain.closed_sets import OriginTier
@@ -34,6 +34,70 @@ from sextant.domain.facts import DeclaredFieldFact, DeclaredShapeFact, Document
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+
+def _body_catalog() -> Catalog:
+    """The smallest catalog `_body_type` reads: one `request_body` marker."""
+    return Catalog(
+        id="generic-body",
+        style="annotation_driven",
+        protocol="http",
+        direction="inbound",
+        requires=(),
+        matches={"request_body": {"annotation": "org.example.Body"}},
+        source=Path("tests/invented.yml"),
+    )
+
+
+def test_a_body_parameter_that_is_a_type_variable_roots_no_shape():
+    """W5: reading the `Signature` attribute makes `@RequestBody T body` on a
+    generic base controller report the symbol `T`.
+
+    A shape is identified BY its symbol, and a type variable's name means
+    something only inside the declaration that introduced it. Rooting here would
+    mint a shape whose id is `T`, and every unrelated `T` anywhere in the module
+    collides onto that one id — a single shape claiming to describe several
+    unrelated payloads, which is worse than describing none. §8.1 rule 2: no
+    answer beats a wrong one.
+    """
+    catalog = _body_catalog()
+    signature = {
+        "parameters": [
+            {
+                "annotations": [{"annotation": "org/example/Body#", "args": {}}],
+                "type": {"symbol": "T", "arguments": [], "wire_type": "object"},
+                "erased_symbol": "java/lang/Object#",
+            }
+        ]
+    }
+
+    assert _body_type(signature, catalog) is None
+
+
+def test_a_body_parameter_that_names_a_real_type_still_roots_its_shape():
+    """The paired positive, so the rule above cannot be satisfied by refusing
+    everything: the same shape with a real symbol still returns its reference,
+    type arguments included — which is the whole point of reading the signature."""
+    catalog = _body_catalog()
+    signature = {
+        "parameters": [
+            {
+                "annotations": [{"annotation": "org/example/Body#", "args": {}}],
+                "type": {
+                    "symbol": "java/util/List#",
+                    "arguments": [{"symbol": "com/acme/OrderEvent#", "arguments": []}],
+                    "wire_type": "array",
+                },
+                "erased_symbol": "java/util/List#",
+            }
+        ]
+    }
+
+    rooted = _body_type(signature, catalog)
+
+    assert rooted is not None
+    assert rooted["symbol"] == "java/util/List#"
+    assert rooted["arguments"][0]["symbol"] == "com/acme/OrderEvent#"
 
 
 def test_unwraps_recursively_to_the_payload_type():

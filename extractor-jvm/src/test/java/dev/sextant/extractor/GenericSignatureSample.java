@@ -53,7 +53,7 @@ public class GenericSignatureSample<T extends Comparable<T>> {
     public void capturingLocal(int limit) {
         final StringBuilder captured = new StringBuilder();
         class Local {
-            Local(List<String> tags) {
+            Local(@Labelled("real") @TypeUsed List<String> tags) {
                 captured.append(tags).append(limit);
             }
         }
@@ -67,7 +67,7 @@ public class GenericSignatureSample<T extends Comparable<T>> {
     public static void capturingStaticLocal(int limit) {
         final StringBuilder captured = new StringBuilder();
         class StaticLocal {
-            StaticLocal(List<String> tags) {
+            StaticLocal(@Labelled("real") @TypeUsed List<String> tags) {
                 captured.append(tags).append(limit);
             }
         }
@@ -98,6 +98,6 @@ public class GenericSignatureSample<T extends Comparable<T>> {
      *  parameters may be left out), which is the skew this fixture exists to
      *  measure rather than assume. */
     public class Inner {
-        public Inner(List<String> tags) {}
+        public Inner(@TypeUsed List<String> tags) {}
     }
 }

@@ -143,9 +143,14 @@ public final class TypeRefs {
      *  {@code (LGenericSignatureSample;Ljava/util/List;)V} and its signature is
      *  {@code (Ljava/util/List<Ljava/lang/String;>;)V} — the enclosing instance is in one
      *  and not the other. Aligning the two positionally would put {@code List<String>} on
-     *  the outer instance and leave the real parameter erased. {@link ClassScanner} does
-     *  the alignment, from the END, for the same reason and by the same rule the parameter
-     *  ANNOTATION tables are aligned: what a signature drops, it drops from the front.
+     *  the outer instance and leave the real parameter erased.
+     *
+     *  <p>{@link ClassScanner} does the alignment, and it does NOT do it by counting.
+     *  What a signature omits is not always omitted from the front — a local class that
+     *  captures gets its captures appended at the END (measured) — so the difference in
+     *  length says nothing about which entries are missing. `MethodParameters`
+     *  (JVMS 4.7.24) says which, and the same helper answers it for the parameter
+     *  ANNOTATION tables too.
      *
      *  <p>Walked by the same {@link NodeCollector} a field and a return type are, so a
      *  parameter's reference is the identical recursive shape — including a bare type

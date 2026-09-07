@@ -35,6 +35,21 @@ class GenericSignatureTest {
             .orElseThrow(() -> new AssertionError("no symbol fact matching " + named));
     }
 
+    /** The descriptor index of the parameter whose entry contains {@code needle},
+     *  counted by the {@code "annotations":} marker each parameter entry opens with —
+     *  the same positional read {@link ParameterAnnotationSkewTest} uses.
+     *
+     *  <p>Positional rather than a verbatim literal of the whole list: the literal
+     *  discriminated just as well but had to be regenerated whenever a fixture gained an
+     *  annotation, and a regenerated expectation is one nobody reads. This still fails on
+     *  every misalignment, because a misaligned parameter list is well formed and differs
+     *  only in WHICH entry holds the type argument. */
+    private static int parameterHolding(String fact, String needle) {
+        int at = fact.indexOf(needle);
+        assertTrue(at > 0, "not present in the fact at all: " + needle);
+        return fact.substring(0, at).split("\"annotations\":", -1).length - 2;
+    }
+
     @Test
     void a_parameterized_parameter_keeps_its_type_argument() throws Exception {
         // The descriptor says `Ljava/util/List;` and nothing else. Only the
@@ -85,20 +100,15 @@ class GenericSignatureTest {
         // erased, and both parameters are still well formed either way — which is why
         // this is asserted on the whole list verbatim rather than on a `contains`. The
         // output is byte-stable by NFR-1, so the literal is a fixed target.
-        String expected = "\"parameters\":[{\"annotations\":[],\"erased_symbol\":"
-            + "\"dev/sextant/extractor/GenericSignatureSample#\",\"name\":null,\"type\":"
-            + "{\"arguments\":[],\"nullable\":true,\"nullable_resolution\":\"resolved\","
-            + "\"symbol\":\"dev/sextant/extractor/GenericSignatureSample#\","
-            + "\"wire_format\":\"\",\"wire_type\":\"object\"},\"type_annotations\":[]},"
-            + "{\"annotations\":[],\"erased_symbol\":\"java/util/List#\",\"name\":null,"
-            + "\"type\":{\"arguments\":[{\"arguments\":[],\"nullable\":true,"
-            + "\"nullable_resolution\":\"resolved\",\"symbol\":\"java/lang/String#\","
-            + "\"wire_format\":\"\",\"wire_type\":\"string\"}],\"nullable\":true,"
-            + "\"nullable_resolution\":\"resolved\",\"symbol\":\"java/util/List#\","
-            + "\"wire_format\":\"\",\"wire_type\":\"array\"},\"type_annotations\":[]}]";
-        assertTrue(
-            symbol("GenericSignatureSample$Inner", "<init>").contains(expected),
-            "the enclosing instance and the declared parameter did not line up as measured");
+        String constructor = symbol("GenericSignatureSample$Inner", "<init>");
+        assertEquals(
+            1,
+            parameterHolding(constructor, "java/lang/String#"),
+            "the signature's type argument did not land on the declared parameter");
+        assertEquals(
+            0,
+            parameterHolding(constructor, "\"erased_symbol\":\"dev/sextant/extractor/GenericSignatureSample#\""),
+            "the enclosing instance is not the first descriptor parameter");
     }
 
     @Test
@@ -171,28 +181,15 @@ class GenericSignatureTest {
         // Asserted on the whole list verbatim, like the `Inner` case above and for
         // the same reason: every misalignment of these four produces four
         // well-formed parameters, so nothing narrower discriminates.
-        String expected = "\"parameters\":[{\"annotations\":[],\"erased_symbol\":"
-            + "\"dev/sextant/extractor/GenericSignatureSample#\",\"name\":null,\"type\":"
-            + "{\"arguments\":[],\"nullable\":true,\"nullable_resolution\":\"resolved\","
-            + "\"symbol\":\"dev/sextant/extractor/GenericSignatureSample#\","
-            + "\"wire_format\":\"\",\"wire_type\":\"object\"},\"type_annotations\":[]},"
-            + "{\"annotations\":[],\"erased_symbol\":\"java/util/List#\",\"name\":null,"
-            + "\"type\":{\"arguments\":[{\"arguments\":[],\"nullable\":true,"
-            + "\"nullable_resolution\":\"resolved\",\"symbol\":\"java/lang/String#\","
-            + "\"wire_format\":\"\",\"wire_type\":\"string\"}],\"nullable\":true,"
-            + "\"nullable_resolution\":\"resolved\",\"symbol\":\"java/util/List#\","
-            + "\"wire_format\":\"\",\"wire_type\":\"array\"},\"type_annotations\":[]},"
-            + "{\"annotations\":[],\"erased_symbol\":\"java/lang/StringBuilder#\","
-            + "\"name\":null,\"type\":{\"arguments\":[],\"nullable\":true,"
-            + "\"nullable_resolution\":\"resolved\",\"symbol\":\"java/lang/StringBuilder#\","
-            + "\"wire_format\":\"\",\"wire_type\":\"object\"},\"type_annotations\":[]},"
-            + "{\"annotations\":[],\"erased_symbol\":\"int#\",\"name\":null,\"type\":"
-            + "{\"arguments\":[],\"nullable\":false,\"nullable_resolution\":\"resolved\","
-            + "\"symbol\":\"int#\",\"wire_format\":\"int32\",\"wire_type\":\"integer\"},"
-            + "\"type_annotations\":[]}]";
-        assertTrue(
-            symbol("GenericSignatureSample$1Local", "<init>").contains(expected),
-            "the declared parameter and the captured values did not line up as measured");
+        String constructor = symbol("GenericSignatureSample$1Local", "<init>");
+        assertEquals(
+            1,
+            parameterHolding(constructor, "java/lang/String#"),
+            "the signature's type argument landed on a captured value, not the declared parameter");
+        assertEquals(
+            3,
+            parameterHolding(constructor, "\"erased_symbol\":\"int#\""),
+            "the captured int is not the last descriptor parameter");
     }
 
     @Test

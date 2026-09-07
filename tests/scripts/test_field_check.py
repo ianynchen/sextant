@@ -145,6 +145,45 @@ def test_ensure_compiled_builds_when_the_MODULE_is_not_built_and_the_root_is(
     assert calls, "an unbuilt module must be built even where the reactor root looks built"
 
 
+def test_an_already_built_module_is_not_refused_for_the_machines_jdk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The JDK check guards a BUILD, so it must not run when there is none.
+
+    It used to run before `_ensure_compiled` decided whether to build at all,
+    which refused `mall-admin` on a machine whose Maven reports 26 even though
+    `target/classes` was already compiled at the pinned commit by a 21. Nothing
+    was going to invoke Maven, so there was no wrong toolchain to prevent — and
+    the message said the pin could not be validated, which was untrue. The pin
+    was then verified by hand and matched exactly.
+    """
+    repo = tmp_path / "repo"
+    (repo / "target" / "classes").mkdir(parents=True)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(field_check, "_run", _stub_run(calls))
+
+    field_check._ensure_compiled(repo, force=False, jdk="21")
+
+    assert calls == [], "an already-built module must not shell out at all, `mvn -v` included"
+
+
+def test_a_build_that_does_run_is_still_refused_on_the_wrong_jdk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The other arm, so moving the check did not delete it: a module that is
+    NOT already built still verifies the toolchain before compiling, because
+    that is the case the refusal exists for — `macrozheng/mall` on a JDK newer
+    than 21 dies inside Lombok with nothing naming the toolchain."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(field_check, "_run", _stub_banner(_MAVEN_BANNER.format(version="26.0.2.1")))
+
+    with pytest.raises(field_check.FieldCheckFailure) as refused:
+        field_check._ensure_compiled(repo, force=False, jdk="21")
+
+    assert "pins JDK 21" in str(refused.value)
+
+
 def test_the_launcher_a_pin_names_is_the_one_that_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

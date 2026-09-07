@@ -171,8 +171,13 @@ def _refused_if_wrong_jdk(repo: Path, maven: str, required_major: str) -> None:
     build — `macrozheng/mall` on a JDK newer than 21 dies in Lombok's annotation
     processor, with nothing in the output naming the toolchain as the cause.
 
-    Called only for a pin that declares `jdk`; a pin that does not is unchanged and runs
-    on whatever the machine has."""
+    Called only for a pin that declares `jdk`, and only when a BUILD is actually about to
+    run — from inside `_ensure_compiled`, past its already-built shortcut. It was called
+    before that decision, which made it refuse a pin whose `target/classes` was already
+    compiled, at the pinned commit, by the right JDK: nothing was going to invoke Maven,
+    so there was no wrong toolchain to prevent, and the check reported a machine's missing
+    JDK as though the pin could not be validated. A pin that declares no `jdk` is
+    unchanged and runs on whatever the machine has."""
     banner = _run([maven, "-v"], cwd=repo)
     if banner.returncode != 0:
         raise FieldCheckFailure(
@@ -193,7 +198,11 @@ def _refused_if_wrong_jdk(repo: Path, maven: str, required_major: str) -> None:
 
 
 def _ensure_compiled(
-    repo: Path, force: bool, module: Path | None = None, maven: str = _DEFAULT_MAVEN
+    repo: Path,
+    force: bool,
+    module: Path | None = None,
+    maven: str = _DEFAULT_MAVEN,
+    jdk: str | None = None,
 ) -> None:
     """`target/classes` populated at the checked-out commit — the compiled-first reading
     `MavenDetector` requires (it never runs Maven itself). Skipped when `target/classes`
@@ -215,9 +224,17 @@ def _ensure_compiled(
     launcher is the reactor's and runs from the repository root — building the whole
     reactor rather than one module because a module's own compile needs its siblings
     installed, which a root build gives for free. Defaults to `repo`, which is every
-    single-module pin."""
+    single-module pin.
+
+    `jdk`, when the pin declares one, is verified HERE rather than before the shortcut
+    above. The check exists to stop a build running on the wrong toolchain, so it belongs
+    on the path that runs one: a module already compiled at the pinned commit needs no
+    JDK at all, and refusing it there turned "this machine cannot BUILD this pin" into
+    "this pin cannot be validated", which is a different and untrue statement."""
     if not force and ((module or repo) / "target" / "classes").is_dir():
         return
+    if jdk is not None:
+        _refused_if_wrong_jdk(repo, maven, jdk)
     offline = _run([maven, "-q", "-o", "compile"], cwd=repo)
     if offline.returncode == 0:
         return
@@ -316,10 +333,8 @@ def _check_one(name: str) -> list[str]:
 
     _ensure_repo_present(repo, expectation["remote"])
     maven = expectation.get("maven", _DEFAULT_MAVEN)
-    if "jdk" in expectation:
-        _refused_if_wrong_jdk(repo, maven, expectation["jdk"])
     moved_head = _checkout(repo, expectation["commit"])
-    _ensure_compiled(repo, force=moved_head, module=module, maven=maven)
+    _ensure_compiled(repo, force=moved_head, module=module, maven=maven, jdk=expectation.get("jdk"))
     _analyze_and_render(module)
 
     metadata = json.loads((module / ".sextant" / "metadata.json").read_text(encoding="utf-8"))

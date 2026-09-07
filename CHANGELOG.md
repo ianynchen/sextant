@@ -67,12 +67,29 @@ here would restate those documents rather than add anything.
   | `supertype_dispatch` selector | matched against a catalog-declared parameter type | a variable's name matches no declared type |
   | `single_call` payload lookup | reads annotations OFF the named type | `<T extends OrderEvent> handle(T)` resolved through `OrderEvent`; `T` resolves through nothing |
 
+  A second review found the sweep was short: there are **six** such consumers, not four.
+  `interface_implementation` compares an interface's parameter tuple against an
+  implementation's — a `Handler<E>` read `E`, matched neither the override nor its bridge, and
+  the subscription's handler attribution was lost outright. `error_advice` tests a parameter
+  against the set of throwable types the workspace declares — a generic advice base
+  (`handle(E ex)` where `E extends BusinessException`) matched nothing and its exception list
+  emptied. Two more compare against catalog-declared type names
+  (`shapes/contracts.py`'s `sole_unannotated` exclusions, `shapes/parse_binding.py`'s
+  `bytes_payloads`).
+
   So the fact carries both: `type` is the signature's answer, which is what a substitution
   binds and what closed the two gaps above, and `erased_symbol` is the descriptor's, which is
-  what can be compared between declarations. All four consumers read `erased_symbol` and are
-  back to exactly their previous answers — restored, not improved: `_is_bridge` keeps its
-  structural rule rather than switching to the `modifiers.synthetic` the fact already carries,
-  because that would also erase a documented over-exclusion, which is its own change (OI-47).
+  what can be compared between declarations. All six read `erased_symbol` and are back to
+  exactly their previous answers — restored, not improved: `_is_bridge` keeps its structural
+  rule rather than switching to the `modifiers.synthetic` the fact already carries, because
+  that would also erase a documented over-exclusion, which is its own change (OI-47).
+
+  **One place deliberately does NOT switch**, and gains a guard instead. `_body_type` roots a
+  request shape at the parameter's declared type — reading the signature there is what closed
+  the two gaps above — but a shape is identified BY its symbol, and `@RequestBody T body` on a
+  generic base controller would mint a shape whose id is `T`, which every unrelated `T` in the
+  module then collides onto. It now roots no shape at a type variable: no answer rather than
+  one shape claiming to describe several unrelated payloads.
 
   `erased_symbol` is written on **every** parameter, not only where the two differ: a JSON
   path wildcard drops elements whose key is absent (measured in DuckDB — three parameters,
@@ -80,9 +97,40 @@ here would restate those documents rather than add anything.
   parameters it describes. That is the same class of defect as the descriptor/signature skew
   above, reached a different way.
 
+  **`ACC_MANDATED` does not mean "omitted from the tables", and reading it that way deleted
+  a fact.** The first version of this fix stated that premise and acted on it, and a record's
+  COMPACT canonical constructor disproves it: javac flags EVERY slot mandated there — what is
+  implicit is the constructor, not its parameters — while the tables omit nothing (measured:
+  two parameters, both mandated, a full-length parameter-annotation table, a type annotation
+  at `param_index=1`). `Signature` and the parameter-annotation table each carry a count to
+  corroborate the flags against and were unaffected; `METHOD_FORMAL_PARAMETER` (4.7.20.1)
+  carries none, read the flags blind, concluded the method declares no parameters, and
+  **dropped every type annotation on a record component** — a type-use `@Nullable`, gone. An
+  empty flag result now means "the flags say nothing", never "there are no parameters".
+
+  **The parameter-ANNOTATION table was wrong the same way, and is fixed with it.** Three
+  attributes are indexed by declared parameters rather than by descriptor slots —
+  `Signature` (4.7.9.1), `Runtime[In]VisibleParameterAnnotations` (4.7.18) and
+  `METHOD_FORMAL_PARAMETER` type annotations (4.7.20.1) — and each was aligned by its own
+  arithmetic on counts. Measured: `@Labelled` written on a capturing local class's
+  `List<String>` parameter was landing on the captured `int`, in both the instance form and
+  the static form. All three now read one helper over the `MethodParameters` flags, so they
+  cannot disagree with each other. Where no flags exist the index is taken as the slot,
+  stated as measured rather than as a property of the format: every shape that omits from
+  the FRONT carries flags saying so, and the one measured shape that carries none — a local
+  class in a static method — appends its synthetics.
+
   Kotlin needs no alignment and is pinned saying so: kotlinc writes a full-length signature
   (a `suspend fun`'s trailing `Continuation` appears in both lists) and its `$default` bridge
   carries no signature at all, so neither path reaches the flag-based alignment.
+
+- **The field check stops refusing a pin it does not need to build** (`scripts/field_check.py`).
+  Its JDK guard ran before `_ensure_compiled` decided whether a build was needed at all, so
+  `mall-admin` — already compiled at the pinned commit by a JDK 21 — was refused on a machine
+  whose Maven reports 26. Nothing was going to invoke Maven, so there was no wrong toolchain
+  to prevent, and the message reported "this pin cannot be validated" for what was really
+  "this machine cannot BUILD this pin". The guard now runs on the build path, where it
+  belongs, and both arms are tested. The field baseline is 3/3 from the script again.
 
 - **Four JVMS 4.7 attributes that each stood in for an invented rule are now read** (W4).
   Every one was already in the class file, and one was being handed to us by ASM as a

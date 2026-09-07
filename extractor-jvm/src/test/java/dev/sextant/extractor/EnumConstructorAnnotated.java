@@ -20,7 +20,7 @@ public enum EnumConstructorAnnotated {
     private final String display;
     private final int rank;
 
-    EnumConstructorAnnotated(@Labelled("display") String display, int rank) {
+    EnumConstructorAnnotated(@Labelled("display") @TypeUsed String display, int rank) {
         this.display = display;
         this.rank = rank;
     }

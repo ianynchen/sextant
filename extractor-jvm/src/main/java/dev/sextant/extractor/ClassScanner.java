@@ -282,36 +282,57 @@ public final class ClassScanner {
                 }
 
                 /** The descriptor index the attribute's entry {@code parameter}
-                 *  belongs to.
+                 *  belongs to, or {@code -1} when nothing in the class file says.
                  *
                  *  <p>JVMS 4.7.18 lets the table be SHORTER than the descriptor's
-                 *  parameter list, because javac omits parameters it synthesised —
-                 *  the outer instance on an inner class, {@code $enum$name} and
-                 *  {@code $enum$ordinal} on an enum. Those are LEADING, so
-                 *  entries align from the END and the shift is the difference
-                 *  between the two counts.
+                 *  parameter list, because a compiler omits parameters it did not
+                 *  read from source. This used to shift by the difference between
+                 *  the two counts, on the rule that what is omitted is omitted from
+                 *  the FRONT — the outer instance on an inner class, {@code
+                 *  $enum$name} / {@code $enum$ordinal} on an enum.
                  *
-                 *  <p>That is JAVAC's rule, not the format's, and it was stated
-                 *  here as though it were the format's. Kotlin appends its
-                 *  synthetics at the END — a {@code Continuation} on a suspend
-                 *  fun — so a short table there would make aligning from the end
-                 *  WRONG. Measured rather than assumed: kotlinc writes one entry
-                 *  per descriptor parameter, empty for the synthetic ones, so the
-                 *  table is full length and the shift computes to 0.
-                 *  {@code KotlinParameterAnnotated} pins it. Measured on the fixtures:
-                 *  0 for a top-level class, 1 for an inner class, 2 for an enum —
-                 *  it is not a constant, and indexing from zero put an enum
-                 *  constructor's annotation on {@code $enum$name}, which is also a
-                 *  String and so undetectable downstream by type.
+                 *  <p>**That rule is javac's, and it is not even all of javac's.**
+                 *  Measured on javac 26: a LOCAL class that captures gets its
+                 *  captured values appended at the END, so
+                 *  {@code GenericSignatureSample$1Local}'s constructor is
+                 *  {@code (Outer, List, StringBuilder, int)} with one table entry —
+                 *  and shifting from the end put {@code @Labelled}, written on the
+                 *  {@code List}, onto the captured {@code int}. Both parameters
+                 *  exist, the fact is well formed, and nothing downstream can tell.
+                 *  The enum case this shift was built for is the same failure in the
+                 *  other direction, which is why it was built.
                  *
-                 *  <p>An absent or larger-than-descriptor count shifts by nothing:
-                 *  there is no evidence of synthesis to correct for, and inventing
-                 *  one would move an annotation that was already right. */
+                 *  <p>{@link #sourceDeclaredSlots} answers it from the class file
+                 *  instead: the i-th table entry belongs to the i-th slot flagged
+                 *  neither mandated nor synthetic.
+                 *
+                 *  <p>A FULL-LENGTH table needs none of that and is taken as it
+                 *  stands — kotlinc writes one entry per descriptor parameter, empty
+                 *  for the synthetic ones ({@code KotlinParameterAnnotated}), and so
+                 *  does javac for a method that synthesised nothing.
+                 *
+                 *  <p>With NO flags to read, the index is taken as the slot — the
+                 *  same fallback the type-annotation path takes, for the same
+                 *  measured reason. Every shape that omits a slot from the FRONT
+                 *  carries {@code MethodParameters} saying so (an enum's
+                 *  constructor, an inner class's), and the one measured shape that
+                 *  carries none — a local class declared in a STATIC method —
+                 *  appends its synthetics, so counting from zero is already right
+                 *  there. Stated as what was measured, not as a property of the
+                 *  format: a producer that omits from the front and writes no flags
+                 *  would defeat it, and no such producer is in evidence. */
                 private int alignedParameter(int parameter, boolean visible) {
                     int declared = parameterAnnotations.size();
                     int annotable = visible ? annotableVisible : annotableInvisible;
-                    if (annotable < 0 || annotable > declared) return parameter;
-                    return parameter + (declared - annotable);
+                    // An absent count attribute means ASM reports one entry per
+                    // descriptor parameter, so the index is already the slot.
+                    if (annotable < 0 || annotable == declared) return parameter;
+                    int[] slots = sourceDeclaredSlots(parameterFlags);
+                    if (slots == null) return parameter;
+                    // The flags are there but do not account for the difference.
+                    // Nothing invented on top of that.
+                    if (slots.length != annotable) return -1;
+                    return parameter < slots.length ? slots[parameter] : -1;
                 }
 
                 @Override
@@ -368,15 +389,35 @@ public final class ClassScanner {
                         case org.objectweb.asm.TypeReference.METHOD_FORMAL_PARAMETER -> {
                             // JVMS 4.7.20.1 indexes FORMAL PARAMETER DECLARATIONS,
                             // not descriptor slots — the same distinction 4.7.18
-                            // makes for parameter annotations, twenty lines up.
-                            // Aligned the same way, from the end, so a type-use
-                            // annotation on an enum or inner-class constructor
-                            // lands where it was written.
-                            int declared = parameterTypeAnnotations.size();
-                            int annotable = visible ? annotableVisible : annotableInvisible;
-                            int shift = (annotable < 0 || annotable > declared)
-                                ? 0 : declared - annotable;
-                            int index = reference.getFormalParameterIndex() + shift;
+                            // makes for parameter annotations above, and answered
+                            // by the same flags rather than by a second piece of
+                            // arithmetic that could disagree with the first.
+                            //
+                            // It used to borrow the ANNOTATION table's count as a
+                            // stand-in for a count this attribute does not carry,
+                            // and shift by it. That is two guesses stacked: the
+                            // borrowed number, and the direction to shift it in.
+                            int[] slots = sourceDeclaredSlots(parameterFlags);
+                            int formal = reference.getFormalParameterIndex();
+                            // Two ways this attribute gives no usable evidence, and
+                            // both mean "the index IS the slot".
+                            //
+                            // NULL — no `MethodParameters` at all. Measured: a local
+                            // class in a STATIC method, which appends its synthetics,
+                            // so counting from zero is already right there.
+                            //
+                            // EMPTY — flags present, and every slot flagged. That is
+                            // self-contradictory as evidence: it says the method
+                            // declares no formal parameters while this attribute is
+                            // indexing into them. A record's COMPACT canonical
+                            // constructor is exactly that shape (measured: `mandated,
+                            // mandated` on a two-parameter descriptor with
+                            // `param_index=1`), because what is implicit there is the
+                            // CONSTRUCTOR, not any parameter. Without this arm the
+                            // annotation is silently dropped — a `@Nullable` on a
+                            // record component, gone.
+                            int index = (slots == null || slots.length == 0) ? formal
+                                : (formal < slots.length ? slots[formal] : -1);
                             yield (index >= 0 && index < parameterTypeAnnotations.size())
                                 ? typeAnnotationEntryVisitor(
                                     typePath, d, visible, parameterTypeAnnotations.get(index))
@@ -854,6 +895,48 @@ public final class ClassScanner {
             return JsonOut.object(signature);
         }
 
+        /** The DESCRIPTOR indices of the parameters a source file actually declared, in
+         *  order — {@code slots[i]} is where the i-th declared parameter sits. Null when
+         *  {@code MethodParameters} (JVMS 4.7.24) is absent or does not cover every slot,
+         *  which is not the same as an empty result and must not be treated as one.
+         *
+         *  <p>`ACC_MANDATED` marks a parameter the language declares implicitly — an inner
+         *  class's enclosing instance; `ACC_SYNTHETIC` marks one the compiler invented — an
+         *  enum's name and ordinal, a local class's captured values.
+         *
+         *  <p>**They are not, however, "exactly the set the short tables omit", and this
+         *  javadoc said so until a record proved otherwise.** `ACC_MANDATED` means
+         *  IMPLICITLY DECLARED, which is not the same claim. A record's COMPACT canonical
+         *  constructor has every slot flagged mandated — the constructor is what is
+         *  implicit, not its parameters — while its tables omit nothing (measured: a
+         *  two-parameter descriptor, both mandated, a full-length parameter-annotation
+         *  table and a type annotation at `param_index=1`). So an EMPTY result here means
+         *  "the flags say nothing useful", never "this method declares no parameters", and
+         *  a caller must not read it as the latter. Each caller states which it does.
+         *
+         *  <p>ONE helper for every such table, and that is the point of it. Three
+         *  attributes are indexed by declared parameters rather than by descriptor slots —
+         *  {@code Signature} (4.7.9.1), {@code Runtime[In]VisibleParameterAnnotations}
+         *  (4.7.18) and {@code METHOD_FORMAL_PARAMETER} type annotations (4.7.20.1) — and
+         *  each of them was aligned by its own arithmetic on counts. Counting cannot answer
+         *  it: javac puts an inner class's enclosing instance and an enum's name/ordinal
+         *  FIRST but a local class's captures LAST, so the same difference-of-two-counts
+         *  means opposite things. The flags say which slots they are, once, for all three. */
+        private static int[] sourceDeclaredSlots(int[] parameterFlags) {
+            List<Integer> declared = new ArrayList<>();
+            for (int slot = 0; slot < parameterFlags.length; slot++) {
+                // -1 is the absent attribute, and it is not a flag value: with nothing
+                // written about a slot there is nothing to align by.
+                if (parameterFlags[slot] < 0) return null;
+                if ((parameterFlags[slot] & (Opcodes.ACC_MANDATED | Opcodes.ACC_SYNTHETIC)) == 0) {
+                    declared.add(slot);
+                }
+            }
+            int[] slots = new int[declared.size()];
+            for (int i = 0; i < slots.length; i++) slots[i] = declared.get(i);
+            return slots;
+        }
+
         /** Which entry of the {@code Signature} attribute's parameter list — if any —
          *  belongs to each DESCRIPTOR parameter. {@code -1} means "no answer": the caller
          *  keeps the erased type there.
@@ -899,18 +982,11 @@ public final class ClassScanner {
                 for (int i = 0; i < declared; i++) genericOf[i] = i;
                 return genericOf;
             }
-            List<Integer> sourceDeclared = new ArrayList<>();
-            for (int i = 0; i < declared; i++) {
-                // -1 is the absent attribute, and it is not a flag value: with no
-                // attribute there is nothing here to align by.
-                if (parameterFlags[i] < 0) return genericOf;
-                if ((parameterFlags[i] & (Opcodes.ACC_MANDATED | Opcodes.ACC_SYNTHETIC)) == 0) {
-                    sourceDeclared.add(i);
-                }
-            }
-            // A disagreement the flags do not explain. Nothing invented on top of it.
-            if (sourceDeclared.size() != generic) return genericOf;
-            for (int i = 0; i < generic; i++) genericOf[sourceDeclared.get(i)] = i;
+            int[] slots = sourceDeclaredSlots(parameterFlags);
+            // No attribute to align by, or a disagreement its flags do not explain.
+            // Nothing invented on top of either.
+            if (slots == null || slots.length != generic) return genericOf;
+            for (int i = 0; i < generic; i++) genericOf[slots[i]] = i;
             return genericOf;
         }
 

@@ -394,8 +394,12 @@ against a signature naming only what was written in source. Any rule based on th
 alone is right for two of those and wrong for the third — and wrong there in the worst way,
 putting a collection's element type onto an `int` in a fact that is perfectly well formed.
 
-`MethodParameters` (JVMS 4.7.24) is what distinguishes them: a parameter flagged
-`ACC_MANDATED` or `ACC_SYNTHETIC` is exactly one the signature may omit, wherever it sits.
+`MethodParameters` (JVMS 4.7.24) is what distinguishes them: the signature's entries go to
+the slots flagged neither `ACC_MANDATED` nor `ACC_SYNTHETIC`, in order. **The flags are
+evidence, not a definition** — `ACC_MANDATED` means *implicitly declared*, which is not the
+same as *omitted from the tables*: a record's COMPACT canonical constructor flags every slot
+mandated and omits nothing, so where the flags account for no slot at all they are saying
+nothing rather than saying the method has no parameters.
 The signature's entries are laid onto the slots flagged as neither, in order. **Where that
 attribute is absent, or where the flags do not account for the difference, every parameter
 keeps its erased type** — less specific, never wrong. A local class declared inside a static

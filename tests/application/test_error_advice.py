@@ -89,8 +89,14 @@ def _handler_method(
     *,
     owner: str = ADVICE,
     parameters: list[str] = (),
+    erasures: list[str] = (),
     returns: TypeRef | None = None,
 ) -> SymbolFact:
+    """`erasures`, where given, is what the DESCRIPTOR says each parameter is,
+    which differs from `parameters` only when the declaration is generic: a
+    parameter declared `E` reads `E` from the `Signature` attribute and its bound
+    from the descriptor (D00 §5a). Defaults to `parameters` — the two are the same
+    string for every non-generic declaration, which is nearly all of them."""
     return SymbolFact(
         document_id="doc_1",
         symbol=_MODULE + symbol,
@@ -98,7 +104,11 @@ def _handler_method(
         enclosing=_MODULE + owner,
         signature=Signature(
             parameters=[
-                Parameter(name=f"p{index}", type=TypeRef(symbol=parameter, wire_type="object"))
+                Parameter(
+                    name=f"p{index}",
+                    type=TypeRef(symbol=parameter, wire_type="object"),
+                    erased_symbol=(erasures[index] if index < len(erasures) else parameter),
+                )
                 for index, parameter in enumerate(parameters)
             ],
             returns=_returns() if returns is None else returns,
@@ -121,6 +131,7 @@ def _advice_module(
     container_args: dict[str, object] | None = None,
     handler_args: dict[str, object] | None = None,
     parameters: list[str] = (),
+    erasures: list[str] = (),
     returns: TypeRef | None = None,
     status_on_handler: bool = True,
 ) -> list[object]:
@@ -128,7 +139,7 @@ def _advice_module(
     on it, the handler annotation, and (optionally) a status."""
     facts: list[object] = [
         _type(ADVICE),
-        _handler_method(parameters=parameters, returns=returns),
+        _handler_method(parameters=parameters, erasures=erasures, returns=returns),
         _annotated(ADVICE, container, container_args),
         _annotated(
             HANDLE,
@@ -257,6 +268,30 @@ def test_the_parameter_type_answers_where_the_annotation_names_none(tmp_path: Pa
     catalog names, so nothing but a throwable can be read as one."""
     facts = [
         *_advice_module(handler_args={}, parameters=[NOT_FOUND_EXCEPTION]),
+        _type(NOT_FOUND_EXCEPTION, superclass=RUNTIME_EXCEPTION),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = workspace.query("error_handlers")
+    workspace.close()
+
+    assert [row["exception"] for row in rows] == [NOT_FOUND_EXCEPTION]
+
+
+def test_a_generic_advice_bases_parameter_is_read_through_its_erasure(tmp_path: Path):
+    """W5, and the regression it nearly shipped. An advice base declared
+    `abstract class BaseAdvice<E extends NotFoundException>` has a handler
+    `handle(E ex)`, and reading the `Signature` attribute makes that parameter's
+    type read `E`.
+
+    A type variable's name is scoped to the declaration that introduced it. It is
+    in no set of throwable types this workspace declares, so the membership test
+    that proves a parameter is an exception fails, the handler's exception list
+    empties, and the row vanishes — silently, with nothing saying a handler was
+    dropped. The descriptor's own answer is the BOUND, which is a real declared
+    type and is what this read before W5.
+    """
+    facts = [
+        *_advice_module(handler_args={}, parameters=["E"], erasures=[NOT_FOUND_EXCEPTION]),
         _type(NOT_FOUND_EXCEPTION, superclass=RUNTIME_EXCEPTION),
     ]
     workspace = _resolve(tmp_path, facts)

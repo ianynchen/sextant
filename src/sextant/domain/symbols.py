@@ -66,6 +66,28 @@ def is_type_descriptor(descriptor: str) -> bool:
     return descriptor.endswith(_TYPE_MARKER)
 
 
+def names_a_type(symbol: str) -> bool:
+    """Whether `symbol` names a real type at all, as against a TYPE VARIABLE
+    (D00 §5a).
+
+    A type reference read from a declared signature may carry a type variable
+    rather than a type: `T`, or `T[]` for an array of one. Every real type
+    carries the type marker somewhere — a type descriptor ends at it, and an
+    array's descriptor is its component's plus a suffix — while a variable is a
+    bare identifier the declaration invented, and never does.
+
+    Here rather than at the call site for `is_type_descriptor`'s reason: the
+    marker is the symbol grammar, and a second reading of it elsewhere is the ad
+    hoc parsing the seam exists to prevent. Distinct from `is_type_descriptor`,
+    which asks whether a descriptor names a type rather than a MEMBER of one —
+    `X#m().` fails that and passes this, correctly, because it does name
+    something real. The caller that needs this one roots a payload shape, and a
+    shape is identified by its symbol: rooting at a variable's name mints an id
+    that every unrelated variable of the same name collides onto.
+    """
+    return _TYPE_MARKER in symbol
+
+
 def outer_type_of(descriptor: str) -> str:
     """A nested type's own top-level enclosing type, bare, dollar-nesting
     stripped entirely — `A$B#` -> `A#` (D00 §5a: the JVM's own nested-class

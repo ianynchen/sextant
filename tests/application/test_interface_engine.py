@@ -687,12 +687,21 @@ def _symbol_fact_of_kind(type_symbol: str, kind: ConstructKind) -> SymbolFact:
 
 
 def _signed_method(
-    bare: str, parameter_types: list[str], enclosing: str | None = None
+    bare: str,
+    parameter_types: list[str],
+    enclosing: str | None = None,
+    erasures: list[str] = (),
 ) -> SymbolFact:
     """A method fact carrying its own parameter types — which is what makes a
     selector (JLS 8.4.2: name AND parameter types in order) readable at all.
     Every other method fact in this file omits the signature, and that is
-    deliberate: the rule below must keep answering for those too."""
+    deliberate: the rule below must keep answering for those too.
+
+    `erasures` is what the DESCRIPTOR says, which differs from `parameter_types`
+    only where the declaration is generic (D00 §5a): an interface declaring
+    `handle(E event)` reads `E` from its `Signature` attribute and its erasure
+    from the descriptor. Defaults to `parameter_types`, the two being one string
+    for every non-generic declaration."""
     return SymbolFact(
         document_id="doc_1",
         symbol=_MODULE + bare,
@@ -700,12 +709,61 @@ def _signed_method(
         enclosing=_MODULE + (enclosing or bare.partition("#")[0] + "#"),
         signature=Signature(
             parameters=[
-                Parameter(name=f"p{index}", type=TypeRef(symbol=symbol, wire_type="object"))
+                Parameter(
+                    name=f"p{index}",
+                    type=TypeRef(symbol=symbol, wire_type="object"),
+                    erased_symbol=(erasures[index] if index < len(erasures) else symbol),
+                )
                 for index, symbol in enumerate(parameter_types)
             ],
             returns=TypeRef(symbol="void#", wire_type=""),
         ),
     )
+
+
+def test_a_scanned_GENERIC_interface_still_names_which_overload_it_is(tmp_path: Path):
+    """W5, and the regression it nearly shipped. Same two candidates, and the
+    interface is scanned — but it declares `receiveMessage(E, Object)` on a type
+    parameter of its own, so reading the `Signature` attribute makes its first
+    parameter read `E`.
+
+    A type variable's name is scoped to the declaration that introduced it, and
+    this selector compares an INTERFACE's parameter tuple against an
+    IMPLEMENTATION's. `E` matches neither candidate, `matched` is empty, and the
+    handler goes back to NULL — the attribution lost silently, on evidence that is
+    right there. The descriptor's own answer is the erasure, which is what both
+    sides share and what this compared before W5.
+
+    (Which candidate it names for a generic interface — the real override or
+    javac's bridge — is the narrower, pre-existing question this engine's own
+    docstring records. This asserts it still names ONE.)"""
+    facts = [
+        _linked_of_site(CALLER, "raw-notify"),
+        _registration_site(
+            CALLER,
+            CallArgument(kind="unresolved", source=7),
+            CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
+        ),
+        _symbol_fact(RECEIVER_TYPE, [_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
+        _signed_method(
+            RECEIVER_HANDLER, ["com/google/pubsub/v1/PubsubMessage#", "java/lang/Object#"]
+        ),
+        _signed_method(_OVERLOAD_HANDLER, ["java/lang/String#", "java/lang/String#"]),
+        _symbol_fact_of_kind(
+            "com/google/cloud/pubsub/v1/MessageReceiver#", ConstructKind.INTERFACE
+        ),
+        _signed_method(
+            "com/google/cloud/pubsub/v1/MessageReceiver#receiveMessage(sig_if).",
+            ["E", "java/lang/Object#"],
+            enclosing="com/google/cloud/pubsub/v1/MessageReceiver#",
+            erasures=["com/google/pubsub/v1/PubsubMessage#", "java/lang/Object#"],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["handler"] == _MODULE + RECEIVER_HANDLER
 
 
 def test_an_ambiguous_handler_is_unread_rather_than_guessed_by_hash_order(tmp_path: Path):

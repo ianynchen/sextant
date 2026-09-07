@@ -299,8 +299,14 @@ class _Rules:
         parameters = self._signatures.get(method, {}).get("parameters")
         if not isinstance(parameters, list):
             return []
+        # `erased_symbol` first: these are tested for membership in the set of
+        # throwable types this workspace DECLARES, which is a comparison against other
+        # declarations. A generic advice base — `handle(E ex)` where
+        # `E extends BusinessException` — reads `E` from the signature and matches no
+        # declared type, so the handler's exception list silently empties. The erasure
+        # is the bound, which is a real declared type and is what this read before.
         return [
-            str(entry["type"]["symbol"])
+            str(entry.get("erased_symbol") or entry["type"]["symbol"])
             for entry in parameters
             if isinstance(entry, dict) and isinstance(entry.get("type"), dict)
         ]

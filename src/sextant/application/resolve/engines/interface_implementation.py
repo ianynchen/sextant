@@ -303,8 +303,19 @@ def _declarations(workspace: Workspace) -> _Declarations:
         signature = (
             json.loads(str(row["signature"])) if row["signature"] is not None else {}
         ) or {}
+        # `erased_symbol` — the DESCRIPTOR's own answer — because these tuples are
+        # compared BETWEEN declarations: `_handler_for_interface` tests an
+        # implementation's against the interface's. `type.symbol` is the signature's
+        # answer where there is one, so a `Handler<E>` reads `E` and the class
+        # implementing it reads the concrete type; a name scoped to one declaration
+        # matches nothing in the other, and the handler attribution is lost outright.
         types = tuple(
-            bare_descriptor(str((parameter.get("type") or {}).get("symbol", "")))
+            bare_descriptor(
+                str(
+                    parameter.get("erased_symbol")
+                    or (parameter.get("type") or {}).get("symbol", "")
+                )
+            )
             for parameter in signature.get("parameters") or []
         )
         parameters[symbol] = types

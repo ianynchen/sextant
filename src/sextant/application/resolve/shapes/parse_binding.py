@@ -356,7 +356,9 @@ def _bytes_parameter(
     if found is None:
         return None
     index, parameter = found
-    symbol = parameter["type"].get("symbol")
+    # The descriptor's answer: `bytes_payloads` is catalog-declared type names, and a
+    # type variable's name is scoped to its own declaration and matches none of them.
+    symbol = parameter.get("erased_symbol") or parameter["type"].get("symbol")
     return index if symbol in vocabulary.bytes_payloads else None
 
 

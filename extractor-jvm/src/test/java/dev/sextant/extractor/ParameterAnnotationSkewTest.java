@@ -9,14 +9,26 @@ import org.junit.jupiter.api.Test;
 
 /**
  * JVMS 4.7.18: the parameter-annotation table may be SHORTER than the
- * descriptor's parameter list, because javac omits synthesised leading
- * parameters — the outer instance on an inner class, and `$enum$name` /
- * `$enum$ordinal` on an enum. Entries align from the END, not from zero.
+ * descriptor's parameter list, because a compiler omits parameters it did not
+ * read from source. Which ones it omitted is read from `MethodParameters`
+ * (JVMS 4.7.24), never inferred from the difference in the two counts.
  *
- * <p>Measured on the fixture: the constructor's descriptor carries four
+ * <p>It WAS inferred from the counts, on the rule "what is omitted is omitted
+ * from the FRONT" — the outer instance on an inner class, `$enum$name` /
+ * `$enum$ordinal` on an enum. That is javac's rule for MANDATED parameters and
+ * it is not javac's rule for synthesised ones: a local class that captures gets
+ * its captures appended at the END (measured, javac 26), and shifting from the
+ * end then moved an annotation off the parameter that declared it and onto a
+ * captured value. `a_capturing_local_classs_annotation_stays_on_its_own_parameter`
+ * is that case; the enum below is the same failure in the other direction, which
+ * is why the shift existed at all. The flags distinguish them and the counts
+ * cannot.
+ *
+ * <p>Measured on the enum fixture: the constructor's descriptor carries four
  * parameters (String, int, String, int) while `RuntimeVisibleParameterAnnotations`
  * declares two, so the annotation at attribute index 0 belongs to descriptor
- * index 2. Indexing from zero put it on `$enum$name`.
+ * index 2 — which is what the flags say (synthetic, synthetic, declared,
+ * declared). Indexing from zero put it on `$enum$name`.
  *
  * <p>An ENUM rather than only an inner class, deliberately: the hidden first
  * parameter here is also a `String`, so the misalignment is invisible to every
@@ -98,6 +110,43 @@ class ParameterAnnotationSkewTest {
         assertEquals(0, annotatedParameter(suspending, "Tagged"),
             "a suspend fun's annotation belongs on its declared parameter, "
                 + "not on the trailing Continuation");
+    }
+
+    @Test
+    void a_capturing_local_classs_annotation_stays_on_its_own_parameter() throws Exception {
+        // The shape that makes counting WRONG, and in the direction the old rule
+        // could not see. javac appends a local class's captured values to the
+        // constructor descriptor, so `$1Local` is
+        // (Outer, List, StringBuilder, int) against a ONE-entry annotation table,
+        // and `MethodParameters` reads mandated, -, synthetic, synthetic.
+        //
+        // `@Labelled` is written on the `List`. Shifting by the difference in the
+        // counts (4 - 1 = 3) put it on the captured `int` — a parameter that
+        // exists, in a fact that is well formed, which is why nothing downstream
+        // ever noticed. The flags say slot 1 and slot 1 is where it belongs.
+        assertEquals(
+            1,
+            annotatedParameter(constructorSymbol(scan("GenericSignatureSample$1Local"))),
+            "the annotation was moved off the parameter that declares it");
+    }
+
+    @Test
+    void a_local_class_with_no_parameter_flags_counts_from_zero() throws Exception {
+        // The same capture in a STATIC method, where javac writes NO
+        // `MethodParameters` at all (measured) — so there are no flags to align by
+        // and the counts still disagree (3 against 1).
+        //
+        // The index is taken as the slot. Every shape measured that omits from the
+        // FRONT carries the flags saying so; this one, the only measured shape that
+        // carries none, appends its synthetics — so counting from zero is already
+        // right. Stated as measured rather than as a property of the format.
+        //
+        // The old shift produced 2 here, the captured `int`, for the third time in
+        // this file's three fixtures.
+        assertEquals(
+            0,
+            annotatedParameter(constructorSymbol(scan("GenericSignatureSample$1StaticLocal"))),
+            "the annotation was moved off the only parameter written in source");
     }
 
     @Test

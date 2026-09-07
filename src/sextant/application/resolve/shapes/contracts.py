@@ -13,6 +13,7 @@ from sextant.application.resolve.shapes.expansion import (
     derive_shapes,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, _matching_wrapper, root_type
+from sextant.domain.symbols import names_a_type
 
 
 def derive_endpoint_shapes(
@@ -210,9 +211,32 @@ def _owns(catalog: Catalog, endpoint: dict[str, object]) -> bool:
 
 def _body_type(signature: dict[str, Any], catalog: Catalog) -> dict[str, Any] | None:
     """The type of the parameter the catalog's body rule marks (D02 §2 as
-    amended)."""
+    amended).
+
+    This one reads `type`, NOT `erased_symbol` like the comparisons elsewhere in
+    this module — the declared type is the point of it, and reading the signature
+    is exactly what lets `List<OrderEvent>` keep its element here.
+
+    **But a type VARIABLE is not a type, and a shape is rooted by its symbol.**
+    `@RequestBody T body` on a generic base controller would root a shape whose id
+    is `T`, and every unrelated `T` anywhere in the module collides onto that one
+    id — one shape claiming to describe several unrelated payloads. A type
+    variable's name means something only inside the declaration that introduced
+    it, and a shape id is read from outside one.
+
+    So the answer is no shape, not a wrong one (§8.1 rule 2). The erasure is not
+    substituted in its place: `erased_symbol` is a symbol, while this returns a
+    full type REFERENCE carrying `wire_type` and `wire_format`, and those are the
+    variable's, not its erasure's. Deriving the erasure's would mean computing a
+    language's wire mapping in the application layer, which is the extractor's job
+    (NFR-2). Before W5 a parameter's `type` WAS the erasure, so this rooted at the
+    bound — a root that expands to nothing wherever the bound is the universal one.
+    """
     found = _body_parameter(signature, catalog)
-    return None if found is None else dict(found[1]["type"])
+    if found is None:
+        return None
+    reference = dict(found[1]["type"])
+    return None if not names_a_type(str(reference.get("symbol", ""))) else reference
 
 
 def _body_parameter(
@@ -243,7 +267,11 @@ def _body_parameter(
         bare = [
             (index, parameter)
             for index, parameter in enumerate(parameters)
-            if not parameter.get("annotations") and parameter["type"].get("symbol") not in excluded
+            # Compared against CATALOG-declared type names, so the descriptor's answer:
+            # a type variable's name matches nothing a catalog can write, and an
+            # excluded parameter would slip back in and be picked as the body.
+            if not parameter.get("annotations")
+            and (parameter.get("erased_symbol") or parameter["type"].get("symbol")) not in excluded
         ]
         if len(bare) == 1:
             return bare[0]
