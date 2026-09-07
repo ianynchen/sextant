@@ -1577,35 +1577,60 @@ should be a row in this register rather than a sentence in a code comment.
 **Closes by** W25 reading it. **Falsified by** W25 landing without needing it, in
 which case the question is whether to keep emitting it at all.
 
-### OI-47 — `_is_bridge` guesses structurally when the fact already states the answer
-**Minor · pre-existing, entered here 2026-09-07 ·
-`src/sextant/application/resolve/effective_annotations.py:503`**
+### OI-47 — `_is_bridge` guessed structurally when the fact already stated the answer
+**CLOSED 2026-09-07 · `src/sextant/application/resolve/effective_annotations.py`**
 
-`_is_bridge` recognises a compiler-generated bridge by shape: same class, same
-name, same parameter types, different return type. Its docstring says why —
-*"Bytecode carries no other marker — no `modifiers`, no `access`, identical
-`visibility` — so this is the only signal there is."*
+**This entry's own account of the consequence was wrong, and measuring it is
+what found the real defect.** As filed, it said reading `modifiers.synthetic`
+would recover the mappings finding I1 loses. It would have recovered nothing: a
+probe over the real function showed the bridge excluded either way, and the real
+override unable to resolve regardless, because the ancestor lookup joins by name
+AND descriptor and a covariant override's descriptor is not its ancestor's.
 
-**That sentence is no longer true, and has not been since the method `modifiers`
-slot shipped.** D00 §5a: a method fact carries `modifiers.synthetic`, and
-`ACC_BRIDGE` is folded into it because javac sets the two together. A bridge says
-outright that it is one. Measured on `GenericSignatureSample$Sub`: the bridge's
-fact carries `"synthetic":true` and the real override's does not.
+**The actual cause.** The bridge is the only method that can resolve — and it is
+the wrong target, because it names a method nobody wrote. Nothing carried the
+mapping across to the real one. Measured, both directions were wrong:
 
-**What the guess costs, in the code's own words.** The docstring records finding
-I1: the rule is per-class and blind to which ancestor produced a sibling, so a
-class carrying two bridges plus one real override excludes ALL THREE — the real
-override never gets to synthesize its mapping. Reading the flag has no such
-failure: it excludes exactly the methods that say they are synthetic.
+| Bridge differs from the real method in | Structural rule saw it? | Shipped result |
+|---|---|---|
+| return type (covariant override) | yes | both excluded — **mapping lost** |
+| parameter types (generic interface) | **no** | row published **naming the bridge** |
 
-**Nearly bit W5.** Reading parameter types from the `Signature` attribute made a
-generic override read `T` where its bridge still read the erasure, so the
-structural match broke and the synthetic bridge stopped being excluded. That was
-fixed by comparing `erased_symbol` — restoring the shape rule exactly rather than
-replacing it — because swapping the rule for the flag is a change to shipped
-derived output, and I1's over-exclusion disappearing IS such a change.
+The second was a fabrication, not an under-report: a class implementing
+`Api<String>` published its handler as `handle(Object)`, javac's forwarder.
 
-**Closes by** `_is_bridge` reading `modifiers.synthetic`, the I1 note being
-removed from both docstrings, and the COVERAGE boundary it records being deleted.
-**Falsified by** a scanner that reaches these facts without reporting the
-modifier — in which case the structural rule is the fallback, not the rule.
+**Fixed** by reading `modifiers.synthetic` (D00 §5a; `ACC_BRIDGE` folded in) and
+treating a bridge as EVIDENCE rather than a target — the resolved mapping is
+carried to the same-class, same-name, same-ARITY, non-synthetic method it
+forwards to. Exactly one, or nothing (§8). The structural rule stays as the
+fallback where nothing was reported about a method.
+
+**Proved end to end, on a compiled fixture, because the first attempt was not.**
+That attempt added `modifiers` to the `method_declarations` query and stopped
+there: `annotation_driven._method_declaration_rows` is the only producer of
+these rows and rebuilt them without it, so every real run still fell back to the
+structural rule while every assertion about the fix passed — they hand-build
+their own rows. The tell was already in the repository: `test_pipeline` asserted
+`GET /api/orders/{id}` ABSENT from the fixture, and that assertion did not
+budge. It derives now, its handler naming `OrdersApiController#find(sig_95a78dff)`
+— the covariant override, never the bridge (`sig_4cb6f523`) — and the fixture's
+endpoint count moves 122 to 123 with nothing else changing.
+
+**Two boundaries remain, both measured.** Two ancestors whose mappings DIFFER
+still derive nothing (identical ones now derive one row). And a bridge forwarding
+to a method its class INHERITS rather than declares resolves nothing: the arity
+guard refuses an unrelated same-named sibling there, which is the §8 direction —
+`class Sub extends Base implements IGet<String>` carrying an unrelated `get(int)`
+would otherwise have taken the mapping.
+
+**What did NOT change: finding I1's outcome.** A class overriding one method
+against two mapped ancestors grows two bridges that redirect to one method, and
+still derives nothing — now because two ancestors give one method two different
+answers and this pass does not read the framework's own annotation search order,
+which is the §8 rule, rather than because every bridge was discarded. Closing
+that is DR-6 work (mirror the framework's search exactly), not this.
+
+**Lesson recorded (§13.8).** An open-issue entry asserted a consequence nobody
+measured, and it was believed for two waves. The entry's `verify:` line proved
+the CAUSE and not the EFFECT. A row claiming "fixing X recovers Y" needs a probe
+that shows Y actually appearing.

@@ -1083,10 +1083,23 @@ read of the ambiguity, never rendered as one; inheritance folds attributes throu
 same-name-attribute subset of `@AliasFor` the meta-annotation pass already commits to, never
 its full cross-name aliasing or `@AliasFor(annotation=...)` re-targeting generality; and a
 class that inherits the SAME-named method from both a mapped interface AND a generic
-superclass together **loses that mapping entirely** — the compiler's bridge-exclusion rule
-(checkpoint item (4)) is purely structural, per class, and cannot tell which ancestor a given
-bridge belongs to, so every bridge AND the real override are excluded together rather than
-only the genuine bridge (Task 7 review, Important finding I1); and the **supertype edge
+superclass together still **derives no mapping for it** — but now because the two ancestors
+give one method two different answers and nothing here reads the framework's own annotation
+search order to choose (§8's ambiguous evidence), not because every bridge was discarded.
+*Until OI-47 closed, the bridge rule was structural — same class, same name, same
+parameters, different return — which excluded the real override alongside the bridge in the
+covariant case and did not recognise a generic-parameter bridge at all, publishing the
+compiler's forwarder as the handler. A method fact states `modifiers.synthetic`, so a bridge
+is now read rather than inferred, and its resolved mapping is carried across to the method it
+forwards to. Measured on the fixture, not asserted: `GET /api/orders/{id}` derives where it
+did not before, its handler naming `OrdersApiController#find(sig_95a78dff)` — the override
+returning the covariant `DetailedOrderResult` — and the module's endpoint count moves 122 to
+123 with nothing else changing.* **Two boundaries remain**: two ancestors mapping one method
+still derive nothing where their mappings DIFFER (identical ones now derive one row); and a
+bridge forwarding to a method its class INHERITS rather than declares resolves nothing, since
+the redirect reaches only the bridge's own class and a wrong-arity same-named sibling there is
+not the target (measured: `class Sub extends Base implements IGet<String>` with an unrelated
+`get(int)`). And the **supertype edge
 itself only exists for a generic superclass** — the extractor derives `supertype` solely
 from the class's generic `Signature` attribute, so a plain non-generic `class B extends A`
 carries no such edge and its mappings do not derive at all, even though the superclass

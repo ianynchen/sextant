@@ -14,6 +14,50 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A compiler-generated bridge is read from the fact, and its mapping now lands on the
+  method someone actually wrote** (OI-47, closed).
+
+  Spring's annotations are inherited from an interface or superclass, and Sextant walks that
+  hierarchy to work out a handler's effective mapping. The ancestor lookup joins by method
+  name AND descriptor — so for a covariant or generic override, whose descriptor is by
+  definition not its ancestor's, the only thing that can match is the forwarder javac
+  generates beside it. The bridge is therefore the only method that resolves, and it is the
+  wrong answer to publish.
+
+  Which method is the bridge was inferred from shape — same class, same name, same
+  parameters, different return — and that was wrong in **both** directions, measured:
+
+  | Bridge differs from the real method in | Rule saw it? | What shipped |
+  |---|---|---|
+  | return type (covariant override) | yes | both excluded — the mapping was **lost** |
+  | parameter types (generic interface) | **no** | the row named **the synthetic bridge** |
+
+  The second is a fabrication: a class implementing `Api<String>` published its handler as
+  `handle(Object)`, a method no source file contains.
+
+  A method fact has stated the answer since the `modifiers` slot shipped — `modifiers.synthetic`,
+  with `ACC_BRIDGE` folded in because javac sets the two together — and the rule's own comment
+  claimed the opposite (*"Bytecode carries no other marker — no `modifiers`"*). It is read now,
+  and a bridge is treated as **evidence rather than a target**: the mapping it resolves is
+  carried across to the same-class, same-name, non-synthetic method it forwards to. Exactly one
+  such method, or nothing at all — several same-named methods a human wrote leave nothing
+  saying which the bridge stands for (§8). The structural rule stays as the fallback for a fact
+  carrying no `modifiers` key at all.
+
+  **The wiring is the part that had to be proved.** The first attempt added the column to the
+  query and stopped: `annotation_driven._method_declaration_rows` is the only producer of these
+  rows and rebuilt them without it, so every real run kept the old behaviour while every test
+  about the new one passed — they hand-build their own rows. Measured on the fixture now:
+  `GET /api/orders/{id}` derives where it did not before, its handler naming the covariant
+  override rather than javac's bridge, and the module's endpoint count moves 122 to 123 with
+  nothing else moving.
+
+  **Finding I1's outcome is unchanged for DIFFERING mappings, and its reason is now honest.** A class overriding one
+  method against two mapped ancestors grows two bridges that redirect to one method; it still
+  derives nothing, but because two ancestors give one method two different answers and this
+  pass does not read the framework's own annotation search order — not because every bridge was
+  discarded. Closing that means mirroring the framework exactly (DR-6), which is its own work.
+
 - **The `Signature` attribute is read for the half of it that was being dropped** (W5).
   It was already read for field types, method RETURN types, the generic superclass and the
   generic superinterfaces. It was not read for method or constructor **parameter** types, nor

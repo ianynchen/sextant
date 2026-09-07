@@ -249,9 +249,11 @@ def _sole_handler(
     is what the selector names rather than the real override. That is a
     narrower error than the coin flip it replaces and it is unreachable for
     every shipped catalog (whose interfaces are all library types), and it
-    closes when the fact stream records `ACC_BRIDGE` — `methodModifiersJson`
-    records `static` and `synthetic` and neither reaches `method_declarations`
-    today.
+    closes when this function reads `ACC_BRIDGE`, and it is now one column
+    away: `methodModifiersJson` records `synthetic` with `ACC_BRIDGE` folded in,
+    and `method_declarations` carries `modifiers` since OI-47. *This engine
+    builds its own rows from that query and does not read the column yet* — the
+    same shape of gap OI-47 was filed for, recorded rather than left implied.
     """
     if len(candidates) == 1:
         return candidates[0]

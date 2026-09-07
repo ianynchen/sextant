@@ -271,8 +271,14 @@ _NAMED_QUERIES = {
     # has none — there is no hierarchy for it to inherit through, so
     # widening this query to `IN ('method', 'function')` would only ever add
     # rows this pass's own `enclosing IS NULL` guard immediately drops.
+    # `modifiers` carries D00 §5a's `synthetic`, which folds in `ACC_BRIDGE`
+    # because javac sets the two together. The effective-annotations walk needs
+    # it to tell a method a human wrote from the forwarder javac generates
+    # beside it — a distinction it used to infer from the two having the same
+    # name and different return types, which sees a covariant bridge and is
+    # blind to a generic-parameter one.
     "method_declarations": """
-        SELECT symbol, enclosing, signature FROM symbols
+        SELECT symbol, enclosing, signature, modifiers FROM symbols
         WHERE construct_kind = 'method' ORDER BY symbol
     """,
     # Every declared constructor's own enclosing type and signature JSON —

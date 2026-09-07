@@ -1261,17 +1261,31 @@ def _superclass_rows(workspace: Workspace) -> list[dict[str, object]]:
 
 
 def _method_declaration_rows(workspace: Workspace) -> list[dict[str, object]]:
-    """`method_declarations`'s rows, `signature` decoded — the one named
-    query 2E-prep's `method_symbols` cannot serve, since Task 7's bridge
-    exclusion (checkpoint item (4)) needs a candidate's own parameter/return
-    types, and its inheritance walk needs `enclosing` to place a method
-    within its declaring type at all."""
+    """`method_declarations`'s rows, `signature` and `modifiers` decoded — the
+    one named query 2E-prep's `method_symbols` cannot serve, since the
+    inheritance walk needs `enclosing` to place a method within its declaring
+    type at all, and needs a candidate's own parameter/return types.
+
+    `modifiers` carries D00 §5a's `synthetic`, which is how the walk tells a
+    method a human wrote from the bridge javac generates beside it (OI-47).
+    **This function is the only producer of `inherited_rows`' method rows**, so
+    a column added to the query and not rebuilt here reaches nothing: the walk
+    falls back to inferring a bridge from its shape, silently, and every
+    assertion about the fixed behaviour still passes because they hand-build
+    their own rows. That is exactly what happened.
+
+    Decoded, not passed through: DuckDB returns a JSON column as TEXT, and a
+    string answers `"synthetic" in modifiers` by SUBSTRING — True, and then
+    subscripting it raises. `signature` above is decoded for the same reason."""
     return [
         {
             "symbol": row["symbol"],
             "enclosing": row["enclosing"],
             "signature": (
                 json.loads(str(row["signature"])) if row["signature"] is not None else None
+            ),
+            "modifiers": (
+                json.loads(str(row["modifiers"])) if row["modifiers"] is not None else None
             ),
         }
         for row in workspace.query("method_declarations")

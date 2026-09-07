@@ -91,7 +91,11 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # fixture's OWN `Repository<T, ID>` stand-in, not a Spring Data
     # contract) each derive nothing — the live near-miss beside the live
     # match.
-    assert metadata["endpoints"]["inbound"]["http"] == 42
+    # + 1 (OI-47): `GET /api/orders/{id}`. The mapping is declared on the
+    # interface and reachable only through javac's bridge, since the covariant
+    # override's descriptor is not the interface's — it used to be discarded
+    # with the bridge, and is now carried across to the real override.
+    assert metadata["endpoints"]["inbound"]["http"] == 43
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 

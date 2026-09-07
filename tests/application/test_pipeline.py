@@ -183,14 +183,16 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `/api/composed`: the composed-AND-inherited case — `@ApiGet` on
         # `OrdersApi#composed` composes to a real `@RequestMapping` (Task 6)
         # BEFORE this task's own inheritance walk has anything to resolve.
-        # NOT here, and asserted absent below: `/api/orders/{id}` —
-        # `OrdersApiController#find` returns the covariant
-        # `DetailedOrderResult`, a different descriptor from the interface's
-        # `find`, so the real override misses the join honestly; the
-        # compiler's own bridge method DOES carry the interface's exact
-        # descriptor and would join if left alone, so its exclusion
-        # (checkpoint item (4)'s structural rule) is load-bearing here, not
-        # a nicety.
+        # `/api/orders/{id}`: the COVARIANT case, and it derives now (OI-47).
+        # `OrdersApiController#find` returns `DetailedOrderResult`, so its
+        # descriptor differs from the interface's `find` and it misses the
+        # name+descriptor join outright. javac's bridge carries the interface's
+        # exact descriptor and is the only thing that CAN match — so the mapping
+        # is reachable only through it, and it is not the method anyone wrote.
+        # The bridge used to be excluded and the mapping went with it; it is now
+        # read from `modifiers.synthetic` and its mapping carried across to the
+        # real override (handler asserted below).
+        ("GET", "/api/orders/{id}"),
         ("GET", "/api/orders"),
         ("GET", "/api/composed"),
         # Phase 2E Task 9 (the `combinator` engine — the WebFlux router tree,
@@ -815,8 +817,16 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # never loads (`resolved_fixture` runs no reader or interpret step —
     # `test_the_format_ladder_answers_every_live_row`'s own docstring) —
     # pinned instead in `tests/e2e/test_vertical_slice.py`, where the
-    # interpreter runs. 122 stands unmoved through this task.
-    assert len(report.endpoints) == 122
+    # interpreter runs. 122 stood unmoved through that task.
+    #
+    # OI-47 makes it 123. The one added row is `GET /api/orders/{id}` — a
+    # mapping the fixture always declared and this pass always lost, because a
+    # covariant override's descriptor cannot match its interface's and the only
+    # method that can, javac's bridge, was excluded outright. Reading
+    # `modifiers.synthetic` and carrying the bridge's mapping across to the
+    # method it forwards to recovers it. 122 -> 123 is the whole effect on this
+    # fixture, which is the measurement, not an estimate: nothing else moved.
+    assert len(report.endpoints) == 123
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -834,7 +844,6 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         "spring-data-rest",
         "spring-integration",
     ]
-    assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
 
     # Task 7: `handler_signature` comes from the IMPLEMENTING method (spec
     # §3's own boundary sentence), never the interface's — shapes and
@@ -843,13 +852,26 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     inherited_handlers = {
         (e["method"], e["path"]): e["handler"]
         for e in report.endpoints
-        if e["path"] in ("/api/orders", "/api/composed")
+        if e["path"] in ("/api/orders", "/api/composed", "/api/orders/{id}")
     }
     assert inherited_handlers[("GET", "/api/orders")].endswith(
         "OrdersApiController#list(sig_3f061508)."
     )
     assert inherited_handlers[("GET", "/api/composed")].endswith(
         "OrdersApiController#composed(sig_d5afb768)."
+    )
+    # OI-47: the covariant case, which used to derive nothing at all. The
+    # handler must be the method someone WROTE — `find` returning the covariant
+    # `DetailedOrderResult` — never javac's bridge, which carries the
+    # interface's own descriptor and is the only thing that can match the join.
+    # OI-47's end-to-end proof, on a really compiled class file. `sig_95a78dff`
+    # is `(J)Lcom/acme/orders/openapi/DetailedOrderResult;` — the override
+    # someone wrote. javac's bridge is `(J)Lcom/acme/orders/OrderResult;`,
+    # `sig_4cb6f523`, and it is the only method whose descriptor matches the
+    # interface's, so it is what the join finds and what would be published if
+    # the mapping were not carried across to the real one.
+    assert inherited_handlers[("GET", "/api/orders/{id}")].endswith(
+        "OrdersApiController#find(sig_95a78dff)."
     )
 
     directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
@@ -1576,7 +1598,10 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 54 + 2: the prefix-seam controllers, one route each. They ride the
         # same `spring-web.yml` `protocol_hint` every other http row does and
         # are equally untouched by it.
-        "http": 56,
+        # 57, not 56, since OI-47: `GET /api/orders/{id}` is the covariant
+        # inherited mapping this pass used to lose with the bridge it was
+        # reachable through. One row, and the only movement in this whole map.
+        "http": 57,
         "jms": 8,
         "kafka": 22,
         "pubsub": 6,
@@ -1593,7 +1618,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         "sse": 2,
         "websocket": 5,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 122
+    assert sum(counts.values()) == len(report.endpoints) == 123
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3001,7 +3026,9 @@ def test_the_format_ladder_answers_every_live_row(
     # is the fixture's own live proof they can disagree.
     # + 2: the two prefix-seam routes, which reach the same rung 5 default
     # every other json-bodied http row here does.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 50
+    # + 1 (OI-47): `GET /api/orders/{id}`, the recovered covariant mapping,
+    # which is a json-bodied http row like any other and reaches the same rung.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 51
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by

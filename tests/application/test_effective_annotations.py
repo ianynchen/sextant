@@ -640,15 +640,20 @@ def test_a_type_level_prefix_applies_to_both_an_inherited_and_an_own_mapped_meth
     ]
 
 
-def test_a_covariant_override_and_its_bridge_both_miss_honestly():
-    """(vi): checkpoint item (4)'s frozen bytecode shape — the bridge
-    (`find(sig_a)`, the interface's exact descriptor) and the real override
-    (`find(sig_b)`, the covariant `DetailedOrderResult` return) are BOTH
-    declared on `_C`. The bridge's descriptor is what the join actually
-    hits, so it is the one that would synthesize without the structural
-    exclusion; the real override's descriptor never matches the interface's
-    at all, so it was already missing honestly on its own. Neither may end
-    up with a row."""
+def test_a_covariant_override_and_its_bridge_both_miss_without_modifiers():
+    """The FALLBACK, and only the fallback (OI-47).
+
+    None of these method rows carries `modifiers`, which is true of every
+    hand-built fact in this file and of any scanner that reports none. With
+    nothing saying which method the compiler generated, the structural rule is
+    all there is — same class, same name, same parameters, different return —
+    and it cannot tell which of the pair is the bridge, so neither gets a row.
+
+    The bridge (`find(sig_a)`, the interface's exact descriptor) is what the join
+    actually hits; the real override (`find(sig_b)`, covariant return) never
+    matches the interface's descriptor at all. A REAL scanned fact says which is
+    which and the mapping lands on the real override — see
+    `test_a_covariant_overrides_mapping_lands_on_the_method_someone_wrote`."""
     interface_method = _I + "find(sig_a)."
     bridge_method = _C + "find(sig_a)."
     override_method = _C + "find(sig_b)."
@@ -745,6 +750,268 @@ def test_a_generic_covariant_override_and_its_bridge_still_match_as_a_pair():
         [_implements(_C, [_I])],
         [],
         method_rows,
+        _MAPPING_FQNS,
+        _REQUEST_MAPPING,
+    )
+
+    assert result == []
+
+
+_DECLARED = {"static": False, "synthetic": False}
+_GENERATED = {"static": False, "synthetic": True}
+
+
+def _scanned_method(
+    symbol: str, enclosing: str, signature: dict, *, generated: bool = False
+) -> dict:
+    """A method row as the JVM scanner really writes it — `modifiers` included.
+
+    `_method` above omits them, and every test predating OI-47 uses it: those
+    exercise the structural fallback, these exercise the shipped path."""
+    return {
+        "symbol": symbol,
+        "enclosing": enclosing,
+        "signature": signature,
+        "modifiers": _GENERATED if generated else _DECLARED,
+    }
+
+
+def _covariant_pair(*, generated_bridge: bool = True) -> list[dict]:
+    """`_C implements _I`, overriding `find(long)` with a covariant return.
+
+    javac emits TWO methods: the real override (`sig_b`, the narrowed return)
+    and a bridge (`sig_a`, the interface's exact descriptor) that forwards to it.
+    Only the bridge's descriptor matches the interface's, so only the bridge can
+    resolve the interface's mapping — and it is not the method anyone wrote."""
+    long_param = [{"type": {"symbol": "long#"}, "erased_symbol": "long#"}]
+    return [
+        _scanned_method(
+            _I + "find(sig_a).",
+            _I,
+            {"parameters": long_param, "returns": {"symbol": "com/acme/orders/OrderResult#"}},
+        ),
+        _scanned_method(
+            _C + "find(sig_a).",
+            _C,
+            {"parameters": long_param, "returns": {"symbol": "com/acme/orders/OrderResult#"}},
+            generated=generated_bridge,
+        ),
+        _scanned_method(
+            _C + "find(sig_b).",
+            _C,
+            {
+                "parameters": long_param,
+                "returns": {"symbol": "com/acme/orders/DetailedOrderResult#"},
+            },
+        ),
+    ]
+
+
+def _mapped_interface() -> list[dict]:
+    return [
+        {
+            "target": _I + "find(sig_a).",
+            "annotation": _GET_MAPPING,
+            "args": {"value": ["/orders/{id}"]},
+        }
+    ]
+
+
+def test_a_covariant_overrides_mapping_lands_on_the_method_someone_wrote():
+    """OI-47's first half: a mapping that used to be LOST.
+
+    The interface's `@GetMapping` is reachable only through the bridge, because
+    the ancestor join is by name AND descriptor and a covariant override's
+    descriptor is by definition not its ancestor's. Excluding the bridge
+    therefore threw the mapping away — and publishing it on the bridge would
+    name compiler machinery as the handler. It is carried across instead, to the
+    method the bridge forwards to."""
+    result = inherited_rows(
+        _mapped_interface(),
+        [_implements(_C, [_I])],
+        [],
+        _covariant_pair(),
+        _MAPPING_FQNS,
+        _REQUEST_MAPPING,
+    )
+
+    assert [row["target"] for row in result] == [_C + "find(sig_b)."]
+    assert result[0]["annotation"] == _GET_MAPPING
+
+
+def test_a_generic_overrides_mapping_stops_naming_the_bridge():
+    """OI-47's second half, and the one the structural rule could not see at all.
+
+    A class implementing `Api<String>` gets a bridge that differs from the real
+    method in its PARAMETER types, not its return type — so "same name, same
+    parameters, different return" never matched, the bridge was never excluded,
+    and the row was published naming a method nobody wrote. Publishing the
+    compiler's forwarder as the handler is a fabrication, not an under-report."""
+    obj = [{"type": {"symbol": "java/lang/Object#"}, "erased_symbol": "java/lang/Object#"}]
+    string = [{"type": {"symbol": "java/lang/String#"}, "erased_symbol": "java/lang/String#"}]
+    void = {"symbol": "void#"}
+    result = inherited_rows(
+        [{"target": _I + "find(sig_a).", "annotation": _GET_MAPPING, "args": {"value": ["/x"]}}],
+        [_implements(_C, [_I])],
+        [],
+        [
+            _scanned_method(_I + "find(sig_a).", _I, {"parameters": obj, "returns": void}),
+            _scanned_method(
+                _C + "find(sig_a).", _C, {"parameters": obj, "returns": void}, generated=True
+            ),
+            _scanned_method(_C + "find(sig_b).", _C, {"parameters": string, "returns": void}),
+        ],
+        _MAPPING_FQNS,
+        _REQUEST_MAPPING,
+    )
+
+    assert [row["target"] for row in result] == [_C + "find(sig_b)."]
+
+
+def test_a_bridge_with_two_same_named_real_overloads_resolves_nothing():
+    """The arm that stops the redirect from guessing. A bridge stands for ONE
+    method, and with two same-named methods a human wrote there is nothing in
+    the fact saying which — §8: produce nothing rather than pick one."""
+    string = [{"type": {"symbol": "java/lang/String#"}, "erased_symbol": "java/lang/String#"}]
+    result = inherited_rows(
+        _mapped_interface(),
+        [_implements(_C, [_I])],
+        [],
+        [
+            *_covariant_pair(),
+            # A second, unrelated `find` a human wrote.
+            _scanned_method(
+                _C + "find(sig_c).",
+                _C,
+                {"parameters": string, "returns": {"symbol": "com/acme/orders/OrderResult#"}},
+            ),
+        ],
+        _MAPPING_FQNS,
+        _REQUEST_MAPPING,
+    )
+
+    assert result == []
+
+
+def test_a_redirected_mapping_never_lands_on_a_method_declaring_its_own():
+    """The candidate loop skips a method that carries its own mapping, but the
+    BRIDGE forwarding to it carries none of its own to skip on. Without this the
+    real method would end up with two mappings — the one it declares and the one
+    inherited through its bridge."""
+    result = inherited_rows(
+        [
+            *_mapped_interface(),
+            {
+                "target": _C + "find(sig_b).",
+                "annotation": _GET_MAPPING,
+                "args": {"value": ["/its-own"]},
+            },
+        ],
+        [_implements(_C, [_I])],
+        [],
+        _covariant_pair(),
+        _MAPPING_FQNS,
+        _REQUEST_MAPPING,
+    )
+
+    assert result == []
+
+
+def test_two_ancestors_mapping_one_method_resolve_nothing_rather_than_one_of_them():
+    """Finding I1, restated as a rule instead of a side effect.
+
+    A class overriding one method covariantly against BOTH a mapped interface and
+    a mapped superclass grows two bridges, one matching each ancestor's
+    descriptor, and both now redirect to the same real method. Which mapping the
+    framework serves depends on its own annotation search order, which this pass
+    does not read — so a method with two different answers gets none.
+
+    The outcome matches what the old blanket exclusion produced. The difference
+    is that it is now the stated rule for an ambiguity, rather than a consequence
+    of discarding every bridge."""
+    long_param = [{"type": {"symbol": "long#"}, "erased_symbol": "long#"}]
+    result = inherited_rows(
+        [
+            *_mapped_interface(),
+            {
+                "target": _B + "find(sig_x).",
+                "annotation": _GET_MAPPING,
+                "args": {"value": ["/from-the-superclass"]},
+            },
+        ],
+        [_implements(_C, [_I])],
+        [_extends(_C, _B)],
+        [
+            *_covariant_pair(),
+            _scanned_method(
+                _B + "find(sig_x).",
+                _B,
+                {"parameters": long_param, "returns": {"symbol": "com/acme/orders/Base#"}},
+            ),
+            _scanned_method(
+                _C + "find(sig_x).",
+                _C,
+                {"parameters": long_param, "returns": {"symbol": "com/acme/orders/Base#"}},
+                generated=True,
+            ),
+        ],
+        _MAPPING_FQNS,
+        _REQUEST_MAPPING,
+    )
+
+    assert result == []
+
+
+def test_a_bridge_forwarding_into_a_superclass_redirects_to_nothing():
+    """A bridge does not always forward to a method in its OWN class, and the
+    redirect must not reach for the nearest same-named one when it does.
+
+    Measured, javac 26 — `class Sub extends Base implements IGet<String>` where
+    `Base` declares `get()` and `Sub` declares only an unrelated `get(int)`:
+
+        Sub:  public String get(int)   (I)Ljava/lang/String;   ACC_PUBLIC
+              public Object get()      ()Ljava/lang/Object;    ACC_BRIDGE, ACC_SYNTHETIC
+
+    The bridge forwards to `Base.get()`, which is not in this class at all. Its
+    only same-named sibling here is `get(int)`, which has nothing to do with the
+    mapping — publishing there swaps one fabrication for another, and a worse
+    one: the old code at least named a method of the right arity.
+
+    A bridge always carries its target's arity, so the arity is what refuses it.
+    The mapping is then lost rather than misplaced, which is the §8 direction —
+    a bridge whose target is inherited is a boundary, recorded in COVERAGE.
+    """
+    no_args: list[dict] = []
+    int_arg = [{"type": {"symbol": "int#"}, "erased_symbol": "int#"}]
+    result = inherited_rows(
+        [{"target": _I + "get(sig_a).", "annotation": _GET_MAPPING, "args": {"value": ["/thing"]}}],
+        [_implements(_C, [_I])],
+        [_extends(_C, _B)],
+        [
+            _scanned_method(
+                _I + "get(sig_a).",
+                _I,
+                {"parameters": no_args, "returns": {"symbol": "java/lang/Object#"}},
+            ),
+            # The bridge: arity 0, forwarding to `_B`'s method, not to anything here.
+            _scanned_method(
+                _C + "get(sig_a).",
+                _C,
+                {"parameters": no_args, "returns": {"symbol": "java/lang/Object#"}},
+                generated=True,
+            ),
+            # The only same-named method this class declares, and unrelated.
+            _scanned_method(
+                _C + "get(sig_int).",
+                _C,
+                {"parameters": int_arg, "returns": {"symbol": "java/lang/String#"}},
+            ),
+            _scanned_method(
+                _B + "get(sig_b).",
+                _B,
+                {"parameters": no_args, "returns": {"symbol": "java/lang/String#"}},
+            ),
+        ],
         _MAPPING_FQNS,
         _REQUEST_MAPPING,
     )

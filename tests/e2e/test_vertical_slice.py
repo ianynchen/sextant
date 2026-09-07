@@ -436,7 +436,11 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "grpc": 2,
         # + 8: 2O Task 6's Spring Data REST rows (`test_app.py`'s own note
         # carries the breakdown).
-        "http": 42,
+        # 43 since OI-47: the covariant inherited mapping
+        # (`GET /api/orders/{id}`) that used to be lost with the bridge it was
+        # reachable through. The bundle answers what the workspace answers, so
+        # this moves with `tests/cli/test_app.py`'s own count.
+        "http": 43,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -605,10 +609,12 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # annotation catalog implements either method here.
     # 2O Task 6 (`spring-data-rest.yml`): +8 inbound http — the CRUD and search
     # routes `CatalogRepository` earns, derived from a framework rule rather
-    # than from any declaration in this module — inbound 80 + 8 = 88 — the
-    # 135-endpoint total (6 + 88 + 41 = 135). Nothing merges: no controller in
-    # this fixture serves `/orderViews`.
-    assert rows == [("both", 6), ("inbound", 88), ("outbound", 41)]
+    # than from any declaration in this module — inbound 80 + 8 = 88. Nothing
+    # merges: no controller in this fixture serves `/orderViews`.
+    # OI-47: +1 inbound http — `GET /api/orders/{id}`, the covariant inherited
+    # mapping that used to be discarded along with the bridge it was reachable
+    # through — 88 + 1 = 89, for a 136-endpoint total (6 + 89 + 41 = 136).
+    assert rows == [("both", 6), ("inbound", 89), ("outbound", 41)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(

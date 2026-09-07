@@ -33,6 +33,7 @@ Left alone; a future phase widens that lookup the same way this one widens
 `mapping_annotations`.
 """
 
+import json
 from typing import Any
 
 from sextant.domain.symbols import bare_descriptor, member_name, method_name
@@ -267,29 +268,43 @@ def inherited_rows(
     is PRIMARY, not a fallback): the compiler's covariant-return bridge is
     an ordinary method symbol carrying the interface method's EXACT
     descriptor, with no distinguishing key at all — so it, not the real
-    override, is what the name+descriptor join actually finds. The only
-    available discriminator is structural: within one class, a candidate
-    whose name and parameter types match another of that class's own
-    methods but whose return type does not is a bridge, and neither method
-    in that pair is ever a synthesis target (`_is_bridge`). This is an
-    honest miss for the fixture's own single-ancestor case (the real
-    override's descriptor never matched the interface's anyway), but it is
-    a real, checkpoint-mandated boundary, not merely a defensive no-op: a
-    class that inherits the SAME-named method from both a mapped interface
-    AND a generic superclass can grow two bridges (one exact-matching each
-    ancestor's own descriptor) plus one real override, all three sharing
-    one name and one parameter list — `_is_bridge` cannot tell which
-    ancestor a given bridge belongs to, so it excludes all three, and BOTH
-    ancestors' mappings are silently lost, not just the honest single one.
-    See `_is_bridge`'s own docstring; documented as a COVERAGE boundary
-    (Task 7 review, Important finding I1), not fixed — the structural rule
-    is the only signal bytecode carries at all.
+    override, is what the name+descriptor join actually finds — because the
+    ancestor lookup is by name AND descriptor, and a covariant or generic
+    override's descriptor is by definition not its ancestor's.
+
+    So the bridge is the only thing that CAN resolve, and it is the wrong
+    target: it names a method nobody wrote. It is treated as evidence
+    instead, and the mapping is carried across to the method it forwards to
+    (`_synthesis_target`). Which method that is comes from the fact, not
+    from a guess: D00 §5a's `modifiers.synthetic` folds in `ACC_BRIDGE`.
+
+    *This was a structural guess until OI-47 — same class, same name, same
+    parameters, different return — and it was wrong in both directions. A
+    COVARIANT override matched it, so the real method was excluded along
+    with its bridge and the mapping was lost. A GENERIC-PARAMETER override
+    did not match it at all (the parameters differ, the return does not),
+    so the row was published naming the synthetic bridge as the handler.*
+
+    A class inheriting the SAME-named method from both a mapped interface
+    AND a mapped superclass grows two bridges that redirect to one method,
+    and still derives nothing — now because two ancestors give it two
+    different answers and the framework's own annotation search order is
+    not read here, so §8 says produce none. That is finding I1, restated as
+    a rule for an ambiguity rather than a consequence of discarding every
+    bridge.
     """
     methods_by_type: dict[str, dict[str, str]] = {}
     signature_by_symbol: dict[str, dict[str, Any] | None] = {}
+    # D00 §5a's method `modifiers`, which carry `synthetic` — `ACC_BRIDGE`
+    # folded in, since javac sets the two together. Absent for a fact from a
+    # scanner that reports no modifiers, which is what `_is_synthetic`'s
+    # fallback exists for; NOT defaulted to `{}` here, because "no modifiers
+    # reported" and "reported, and not synthetic" are different answers.
+    modifiers_by_symbol: dict[str, dict[str, Any] | None] = {}
     for row in method_rows:
         symbol = str(row["symbol"])
         signature_by_symbol[symbol] = row.get("signature")
+        modifiers_by_symbol[symbol] = row.get("modifiers")
         enclosing = row.get("enclosing")
         if enclosing is None:
             continue
@@ -329,10 +344,12 @@ def inherited_rows(
     rows: list[dict[str, Any]] = []
     for type_symbol in classes:
         methods = methods_by_type.get(type_symbol, {})
+        # Keyed by the method the mapping BELONGS to, which is not always the
+        # candidate that resolved it — see `_synthesis_target`. Insertion order
+        # follows `methods`, which follows the query's `ORDER BY symbol` (NFR-1).
+        resolved: dict[str, list[tuple[str, dict[str, Any]]]] = {}
         for key, candidate in methods.items():
             if _own_mapping(candidate, mapping_fqns, annotations_by_target) is not None:
-                continue
-            if _is_bridge(candidate, methods.values(), signature_by_symbol):
                 continue
             found = _resolve_method(
                 key,
@@ -345,9 +362,35 @@ def inherited_rows(
                 mapping_fqns,
                 {type_symbol},
             )
-            if found is not None:
-                annotation, args = found
-                rows.append({"target": candidate, "annotation": annotation, "args": args})
+            if found is None:
+                continue
+            target = _synthesis_target(
+                candidate, methods.values(), signature_by_symbol, modifiers_by_symbol
+            )
+            if target is None:
+                continue
+            # A redirected mapping must not land on a method that declares its
+            # own: the candidate loop skips a method with an own mapping, but
+            # the BRIDGE that forwards to it has none of its own to skip on.
+            if target != candidate and (
+                _own_mapping(target, mapping_fqns, annotations_by_target) is not None
+            ):
+                continue
+            resolved.setdefault(target, []).append(found)
+        for target, mappings in resolved.items():
+            # Two ancestors mapping one method — the shape a class carrying two
+            # bridges has (I1). Which one the framework serves depends on its own
+            # annotation search order, which is not read here, so a target with
+            # two DIFFERENT answers gets none: §8's ambiguous evidence, and the
+            # same nothing this shape produced before, now stated rather than a
+            # side effect of excluding every bridge.
+            distinct = {
+                (annotation, json.dumps(args, sort_keys=True)) for annotation, args in mappings
+            }
+            if len(distinct) != 1:
+                continue
+            annotation, args = mappings[0]
+            rows.append({"target": target, "annotation": annotation, "args": args})
         # Computed once per class, independent of the per-method loop above:
         # a class's inherited prefix applies to EVERY one of its methods
         # that ends up mapped, whether that mapping is itself inherited or
@@ -500,17 +543,112 @@ def _resolve_prefix(
     )
 
 
+def _is_synthetic(
+    symbol: str,
+    siblings: Any,
+    signature_by_symbol: dict[str, dict[str, Any] | None],
+    modifiers_by_symbol: dict[str, dict[str, Any] | None],
+) -> bool:
+    """Whether the compiler generated `symbol`, rather than a person writing it.
+
+    **The fact says so.** D00 §5a: a method carries `modifiers.synthetic`, with
+    `ACC_BRIDGE` folded in because javac sets the two together. This is read
+    rather than inferred, and reading it is the whole of OI-47.
+
+    `_is_bridge` below is the fallback, taken when nothing was reported about
+    this method — no `modifiers` key at all, or an EMPTY one, which is what
+    `SymbolFact.modifiers` defaults to and therefore what every hand-built fact
+    in the tests carries. `"synthetic" in modifiers` is the test rather than
+    `modifiers.get(...)` because "reported, and false" and "not reported" are
+    different answers and only the second may fall back; an empty dict reports
+    nothing and so falls back too.
+
+    A MIXED set — the bridge reporting modifiers and its sibling not — answers
+    incoherently: the sibling falls back, `_is_bridge` is symmetric, and it
+    reports the real method synthetic as well, so the redirect finds no target
+    and the mapping is dropped. Unreachable today, since siblings come from one
+    scan of one class file and this scanner writes both keys on every method.
+    """
+    modifiers = modifiers_by_symbol.get(symbol)
+    if modifiers is not None and "synthetic" in modifiers:
+        return bool(modifiers["synthetic"])
+    return _is_bridge(symbol, siblings, signature_by_symbol)
+
+
+def _synthesis_target(
+    candidate: str,
+    siblings: Any,
+    signature_by_symbol: dict[str, dict[str, Any] | None],
+    modifiers_by_symbol: dict[str, dict[str, Any] | None],
+) -> str | None:
+    """The method a mapping resolved through `candidate` actually belongs to.
+
+    Usually `candidate` itself. The exception is the whole of this fix.
+
+    **A bridge is the only thing that can resolve, and it is the wrong target.**
+    `_resolve_method` joins an ancestor's method by name AND descriptor, and a
+    covariant or generic override's descriptor is by definition not its
+    ancestor's — the forwarder javac generates beside it is. So the mapping is
+    reachable only through the bridge, and publishing it there names a method
+    nobody wrote as the handler.
+
+    Both directions of getting that wrong shipped, and they were one cause:
+
+    * a COVARIANT override (differs in return type) was recognised by the old
+      structural rule, and excluded together with the real method — so the
+      mapping was **lost**;
+    * a GENERIC-PARAMETER override (differs in parameter types, same return) was
+      not recognised at all, so the row was published **naming the bridge**.
+
+    So a bridge is evidence, not a target: the mapping is carried across to the
+    method it forwards to — the same class, the same plain name, not synthetic.
+    Exactly one, or nothing at all: several same-named real overloads leave no
+    way to say which one this bridge stands for, and §8 says produce nothing
+    rather than pick.
+    """
+    if not _is_synthetic(candidate, siblings, signature_by_symbol, modifiers_by_symbol):
+        return candidate
+    name = method_name(bare_descriptor(candidate))
+    # A bridge has its target's ARITY — it forwards the same argument list, only
+    # more weakly typed. Matching on the name alone picks an unrelated overload:
+    # measured on javac 26, `class Sub extends Base implements IGet<String>`
+    # where `Base` declares `get()` and `Sub` declares only an unrelated
+    # `get(int)` emits a bridge `get()` in `Sub` forwarding to `Base.get()`, and
+    # the one same-name method in `Sub` is the `get(int)` that has nothing to do
+    # with it. Publishing the mapping there swaps one fabrication for another.
+    #
+    # The arity guard also declines that case outright rather than reaching for
+    # the superclass: the method a bridge forwards to is not always in the same
+    # class, and this rule cannot see there. Nothing, per §8.
+    arity = len(_parameter_types(signature_by_symbol.get(candidate)))
+    declared = [
+        sibling
+        for sibling in siblings
+        if sibling != candidate
+        and method_name(bare_descriptor(sibling)) == name
+        and len(_parameter_types(signature_by_symbol.get(sibling))) == arity
+        and not _is_synthetic(sibling, siblings, signature_by_symbol, modifiers_by_symbol)
+    ]
+    return declared[0] if len(declared) == 1 else None
+
+
 def _is_bridge(
     candidate: str,
     siblings: Any,
     signature_by_symbol: dict[str, dict[str, Any] | None],
 ) -> bool:
-    """Checkpoint item (4)'s structural bridge rule: within the SAME class,
-    a same-name method whose parameter types match `candidate`'s exactly but
-    whose return type does not is the compiler-generated bridge (or, from
-    that method's own perspective, `candidate` is). Bytecode carries no
-    other marker — no `modifiers`, no `access`, identical `visibility` — so
-    this is the only signal there is.
+    """Checkpoint item (4)'s structural bridge rule, kept as the FALLBACK
+    (OI-47): within the SAME class, a same-name method whose parameter types
+    match `candidate`'s exactly but whose return type does not is the
+    compiler-generated bridge (or, from that method's own perspective,
+    `candidate` is).
+
+    It used to say bytecode carries no other marker — "no `modifiers`, no
+    `access`, identical `visibility` — so this is the only signal there is".
+    That stopped being true when the method `modifiers` slot shipped: D00 §5a
+    writes `synthetic` with `ACC_BRIDGE` folded in, and `_is_synthetic` reads
+    it. This runs only for a fact carrying no `modifiers` key at all, and
+    inherits the limits below wherever it does.
 
     Boundary (Task 7 review, Important finding I1 — NOT "this only ever
     suppresses the bridge itself"): the rule is purely structural and
