@@ -142,6 +142,32 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-42 — a class file above the ceiling is refused, and the refusal kills the whole scan
+**Critical · pre-existing, entered here 2026-09-06 · `docs/java-gap-analysis-2026-09-06.md`
+`G-3` (audit 4 `F1`), root cause `RC-6`**
+
+Two defects in one line of build configuration, and they need two different fixes.
+
+**The ceiling.** `org.ow2.asm:asm:9.7` refuses `major_version` above **67** (JDK 23).
+`major = JDK + 44`, so a module compiled by JDK 24, by the current LTS 25, or by 26 could not
+be scanned at all. **8 of 1,792 locally cached jars already carry a major above 67.**
+
+**The fatality.** One refused entry propagates to `Main`'s catch-all: exit 1, **zero fact
+files**, for a jar of which every other class was readable. Measured on
+`byte-buddy-1.18.11.jar`: `Unsupported class file major version 68`, 0 documents.
+`Main.java`'s own stated rule — a finding ABOUT the input rides `uncovered` rather than
+failing the request — was already the answer and was not applied here.
+
+**Half closed 2026-09-06** by the approved bump to `asm`/`asm-tree`/`asm-analysis` 9.10.1,
+which reads majors 45-71 (measured; 72 throws). `byte-buddy-1.18.11.jar` now yields 3,074
+documents and 114,805 facts.
+
+**Still open: the fatality.** A bump moves the wall to JDK 27; it does not remove it, and the
+next JDK arrives on a schedule. **Closes by** an unreadable class being skipped with its
+reason stated — `uncovered` plus a `partial` document — so a scan reports what it read
+instead of nothing. **Falsified by** a jar with one unreadable class producing facts for
+every other class in it.
+
 ### OI-3 — the multi-path WebSocket rule is documentation, not measurement
 **Minor · introduced 2026-09-06 by 2O Task 13 (`2a1c918`)**
 

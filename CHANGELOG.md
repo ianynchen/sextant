@@ -637,6 +637,39 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **The extractor could not read a class file built by the current LTS JDK at all** (`OI-42`,
+  the gap analysis's `G-3`). `org.ow2.asm:asm`, `asm-tree` and `asm-analysis` move **9.7 ->
+  9.10.1** — the one dependency change in this group, approved by the user for exactly this
+  reason (GUIDELINES §7 otherwise forbids it), with no other version touched.
+
+  ASM's version *is* the class-file ceiling: 9.7 refuses `major_version` above **67** (JDK
+  23), so a module compiled by JDK 24, 25 or 26 was refused outright — and the refusal took
+  the whole scan with it, exit 1 with zero fact files. Measured before, on
+  `byte-buddy-1.18.11.jar` from the local repository: `Unsupported class file major version
+  68`, 0 documents. Measured after, same jar: **3,074 documents, 114,805 facts**. Eight of
+  1,792 locally cached jars already carry a major above 67.
+
+  **Measured, not assumed:** 9.10.1 parses majors **45 through 71** (`major = JDK + 44`, so
+  Java 1.1 through JDK 27) and throws at 72 — measured by rewriting the two `major_version`
+  bytes JVMS 4.1 fixes at offset 6 on a real class file and scanning it, at every major from
+  45 to 72. The range is pinned as a test by the change below, so a later bump that moves the
+  ceiling is caught rather than silently skipping class files ASM could have read.
+
+  **The visitor API level is deliberately unchanged.** `Opcodes.ASM9` says which visitor
+  callbacks this code is written against; it is a different concept from the class-file
+  ceiling and raising it is not a side effect of reading newer bytecode. 9.10.1 offers no
+  higher *stable* level: the only constant above `ASM9` is the deprecated
+  `ASM10_EXPERIMENTAL`, and constructing a visitor with it throws — measured, this jar —
+  `IllegalStateException: ASM10_EXPERIMENTAL can only be used by classes compiled with
+  --enable-preview`. Taking it would therefore cost a `--enable-preview` compile and runtime
+  for the whole extractor, on an API ASM itself marks unstable and deprecated, in exchange for
+  callbacks describing JDK *preview* constructs this codebase reads nothing of. Not taken.
+
+  **This moves the wall; it does not remove it.** The next JDK arrives on a schedule. The
+  durable half — a class file above the ceiling is skipped rather than fatal — is `OI-42`'s
+  remaining half and ships separately, so that this dependency change can be reverted on its
+  own.
+
 - **Four catalogs adopt the three new words, and three register rows close.**
   `spring-kafka.yml`, `spring-jms.yml` and `spring-rabbit.yml` each name their
   repeatable container, so a method carrying two listeners now exports both
