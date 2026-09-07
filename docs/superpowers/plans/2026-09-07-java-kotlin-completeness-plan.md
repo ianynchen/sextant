@@ -91,10 +91,42 @@ value.
 
 | **W0b** | **Re-run `field_check.py` against all three existing pins and establish the real baseline.** Two are stale: `spring-petclinic-rest` and `jhipster-sample-app` were recorded 2026-09-03 06:17, and the canonical-address gate — which normalises a leading separator — landed 2026-09-03 22:06. The petclinic pin still records 25 of 44 routes with no leading slash and 8 bare `/` routes, one per HTTP verb. Find what actually differs, fix what is a real defect, re-record deliberately | §1.4 | — | we learn whether the field check passes today. Every later pin is recorded against known-good behaviour instead of freezing whatever is there |
 
-**Wave 0 acceptance:** every producer stamps the same value; a deliberately divergent copy
-fails a test; a workspace written before Step 0 is refused with the stamp named, not silently
-accepted. Every table and view in the schema is exported with a deterministic order, and a
-table absent from the export fails a test.
+**Wave 0 acceptance:** every producer stamps the same value; a workspace written before
+Step 0 is refused with the stamp named, not silently accepted. Every table and view in the
+schema is exported with a deterministic order, and a table absent from the export fails a
+test.
+
+### Wave 0 — DONE 2026-09-07. Four rulings taken during execution, all by the user.
+
+1. **The stamp is a JSON number**, not a numeric string. `Document.fact_schema_version` is
+   `int`; the extractor parses its option and refuses a non-integer rather than emitting an
+   unparseable fact file.
+2. **`graph_schema_version` becomes an integer too, also `2`.** Same three properties as the
+   fact stamp — never parsed, never ordered, compared for equality at `api.py:470` and
+   nowhere else — so the spec's "the ruling named the fact schema only" was drawing a line
+   its own reasoning did not support.
+3. **There are no remaining Python copies to test for equality**, so the planned equality
+   test does not exist and is not owed. The spec assumed the two restatements had to stay;
+   they did not. `domain` sits at the bottom of the import-linter layering with both
+   restating modules above it, and only `application` importing `ingress` was ever forbidden.
+   Both now import `sextant.domain.version`, which makes drift **structurally impossible**
+   rather than merely detected — the same argument that chose C over B for the Java copy,
+   applied consistently. `SEXTANT_VERSION` moves the same way and is read from the installed
+   distribution, so `pyproject.toml` owns it.
+4. **`raw_facts` exports as parquet as well as travelling as the fact stream**, so the
+   ratchet has no exclusion class at all. Both join the same redaction map, so the two shapes
+   of one table cannot disagree.
+
+**W34's redaction, which the plan did not enumerate and the schema demanded:** `roots.path`
+joins the address map its value is carried from; `return_flows.value` and
+`method_returns.value` join the JSON map (all four columns of that grammar come from the same
+string constants); `config_entries.value` takes the same `redact_value` keyed on the same
+`key_path` that masks it in the fact stream. Each answers §6.2's one question — *does analysis
+read this?* — and each new guard was mutation-checked to confirm it discriminates.
+
+**W0b's baseline is three of three green**, and it corrected two claims rather than merely
+confirming them — see spec §1.4. `OI-32` is closed; its own count was wrong (13 recorded, 25
+measured) and repeated in `docs/RUNBOOK.md`, both corrected.
 
 ---
 

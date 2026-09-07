@@ -676,12 +676,12 @@ there for exactly this reason.
 `scripts/field_check.py` is the only always-available evidence for §5's
 beyond-fixture claims. Adding a third pin to it meant running the other two for
 the first time in a while, and one of them — `spring-petclinic-rest` — **had
-been failing since 2O's identity migration**: 13 of its 44 recorded inbound
+been failing since 2O's identity migration**: 25 of its 44 recorded inbound
 routes are spelled without the leading separator that migration added to every
 one. The counts still matched, so nothing about the failure was subtle; it was
-simply never observed. It is now `OI-32`.
+simply never observed. It is now `OI-32`, closed by Wave 0's W0b.
 
-Two things to do differently:
+Three things to do differently:
 
 - **When you add an entry to an opt-in suite, run the whole suite, not your
   entry.** The marginal cost is minutes and it is the only moment anyone has a
@@ -693,6 +693,20 @@ Two things to do differently:
   re-recorded. Enumerate the artifacts a migration invalidates and fix or file
   each; a correct prose warning that reaches no file is §8.3's failure in
   miniature.
+- **A refusal a reader cannot act on is a hole in the check, not a safe
+  default.** `mall-admin` pins `jdk: "21"` and this machine's default JDK is 26,
+  so `field_check.py` refuses before building and says so — correctly, and with
+  nothing anyone could DO about it written down anywhere. Running the full
+  suite needs the toolchain named:
+
+  ```bash
+  JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH \
+      .venv/bin/python scripts/field_check.py
+  ```
+
+  W0b found the count in `OI-32` was wrong (13, actually 25) and the claim
+  *"`mall-admin` is clean"* recorded without that gate ever having been passed —
+  both because the previous round read the entry instead of re-running it.
 
 ## A grammar gap is cheaper to close in a batch than in a dispatch (the `annotation_driven` vocabulary pass)
 

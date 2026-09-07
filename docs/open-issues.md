@@ -775,6 +775,20 @@ review, in a commit that says the migration is why. **Falsified by** the new
 spelling being wrong, which would make this a renderer defect rather than a
 stale pin.
 
+**CLOSED 2026-09-07 by Wave 0 / W0b.** The rows were looked at and the new
+spelling agreed: the two sets are **identical once the leading separator is
+normalised** — 44 either way, no route gained or lost, and every difference is
+the separator alone. Re-recorded deliberately.
+
+**Two corrections to this entry's own numbers, found by measuring rather than
+re-reading it.** It says **13** routes; the count is **25** of 44
+(`verify: python3 -c "import json,subprocess;r=json.loads(subprocess.run(['git','show','89a35a5:scripts/field-expectations/spring-petclinic-rest.json'],capture_output=True,text=True).stdout)['routes']['inbound'];print(sum(1 for x in r if not x.split(' ',1)[1].startswith('/')))"`).
+The same wrong number is repeated four times in this entry and once in
+`docs/RUNBOOK.md`; both are corrected. And *"`mall-admin` is clean"* was recorded
+without the pin's own `jdk: "21"` gate having been satisfied — on this machine
+the default JDK is 26, so the check refuses before it builds. It IS clean, but
+that had not been observed when the sentence was written.
+
 ### OI-33 — `enrich`'s brief now carries the complete document, and nothing has measured that
 **Minor · introduced 2026-09-06 by inverting the trace default (GUIDELINES
 §8.4) · `src/sextant/api.py::_enrich`, `src/sextant/api.py::_assembled_sections`**

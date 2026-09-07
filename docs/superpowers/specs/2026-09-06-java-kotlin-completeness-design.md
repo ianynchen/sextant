@@ -180,6 +180,34 @@ no-network-in-tests rule.
    verb. So either the check has not been run since, or it failed and nothing happened.
    `verify: git log -1 --format=%ci -- scripts/field-expectations/spring-petclinic-rest.json; git log -1 --format=%ci -S'THE CANONICAL-ADDRESS GATE' -- src/sextant/storage/duckdb/derive_endpoints.sql`
 
+**MEASURED 2026-09-07, running Wave 0's W0b. The baseline is now green, and two of the four
+claims above needed correcting.**
+
+`verify: JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH python3 scripts/field_check.py`
+
+1. **`spring-petclinic-rest` was stale, exactly as predicted, and it was ONLY staleness.**
+   25 of its 44 recorded routes had no leading slash. Current output spells all 44 with one,
+   and the two sets are **identical once the leading separator is normalised** — no route
+   gained, none lost, the count unchanged at 44. So the canonical-address gate had done its
+   job and the pin had frozen the behaviour from before it. Re-recorded deliberately.
+2. **`jhipster-sample-app` was NOT stale**, though it was recorded in the same minute. Its
+   controllers already spell `@RequestMapping("/api/...")` with the separator, so the gate
+   changed nothing for it. The claim above — *"two of the three pins are stale across a
+   change that alters what they record"* — was true about recording TIME and false about
+   effect; only one pin actually differed. Corrected here rather than left standing.
+3. **The 8 bare `/` routes are correct, not a defect.** `RootRestControllerV1` carries
+   `@RequestMapping(value = "/")` with **no `method` attribute**, which Spring matches
+   against every verb; `spring-mvc.yml:34`'s `all_methods` is Spring's own `RequestMethod`
+   enum, all eight values. One row per verb mirrors the framework (§8.1 rule 5) rather than
+   inventing a ninth meaning for "any".
+4. **`mall-admin` needs `JAVA_HOME` on a JDK 21**, or its own `jdk` check refuses before the
+   build — which is the check working, not a failure. The invocation is in the verify line
+   above and in `RUNBOOK.md`; it was undiscoverable before, and "run the field check" gave a
+   refusal with no way to act on it.
+
+So the honest baseline is **three of three green**, and every later pin is now recorded
+against known-good behaviour rather than against whatever happened to be there.
+
 **The requirement.**
 
 - **At least twelve projects, selected by what they exercise** — one per protocol we ship a
