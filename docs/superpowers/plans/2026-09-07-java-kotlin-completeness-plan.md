@@ -53,9 +53,27 @@ value would be indistinguishable from a fourth wrong one.
 |---|---|---|---|---|
 | **W0** | `fact_schema_version` becomes a **single monotonically increasing integer, set to 2** — no semver, because the value is never parsed or ordered anywhere and `api.py:472` compares it for equality only. **Remove the Java copy**: the extractor takes it as a command-line option, so Python owns the number. **A test asserts the remaining copies are equal.** Existing workspaces stamped `1.0.0` / `1.1.0` are refused by the stamp gate and re-analysed — not migrated | §1.3 | — | a workspace's documents and its `metadata.json` stop disagreeing about which schema produced them. Measured today: four copies, two values, and the one producer whose shape actually changed (`ingress/read/*`, which gained `operation`) is the copy that was never bumped |
 
+| **W34** | `_EXPORTED_TABLES` becomes **every table and view in the schema**, each with a deterministic order. **The ratchet inverts:** a table in the schema and absent from the export is a **test failure**. Redaction is unaffected — it replaces values, it never drops a table | §9.1 | — | the 1,916 rows G-8 silently dropped (`call_edges` 1,393 · `return_flows` 444 · `roots` 79) travel, so a consumer can recompute and check what the pictures assert |
+
+**Why W34 is here and not in Wave 7.** Its dependency column is `—`: nothing blocks it. It was
+in Wave 7 because it is thematically "export", grouped by subject rather than by need — and
+two later items add tables (**W22** in Wave 3: `type_hierarchy`, `method_resolution`; **W29**
+in Wave 5: request metadata). A safety net installed after the things it protects is not a
+safety net, and for four waves we would have been recreating G-8 exactly. Moving it first also
+delivers the 1,916 rows on day one, which is one of the few items here with immediate visible
+value.
+
+**Adding a table now asks two questions at once**, both answered by whoever writes the
+`CREATE TABLE`:
+
+1. **Does it export?** Automatically, and the ratchet fails the build if it somehow does not.
+2. **Does analysis read its values?** Yes → keep the real value, redact at export. No → redact
+   at origin. There is no third answer (§6.2).
+
 **Wave 0 acceptance:** every producer stamps the same value; a deliberately divergent copy
 fails a test; a workspace written before Step 0 is refused with the stamp named, not silently
-accepted.
+accepted. Every table and view in the schema is exported with a deterministic order, and a
+table absent from the export fails a test.
 
 ---
 
@@ -177,18 +195,21 @@ these tests.
 
 ---
 
-## Wave 7 — F8: the bundle carries everything, and an index an agent can use
+## Wave 7 — F8: the index an agent can use
+
+*(F8's other half, W34, moved to Wave 0 — see there for why.)*
 
 | # | Item | Spec | Depends on | Delivers |
 |---|---|---|---|---|
-| **W34** | `_EXPORTED_TABLES` becomes every table and view in the schema, each with a deterministic order. **The ratchet inverts:** a table in the schema and absent from the export is a test failure | §9.1 | — | the 1,916 dropped rows travel; a consumer can recompute and check what the pictures assert |
 | **W35** | The symbol index (symbol → file path, line range, kind, enclosing), the reverse indexes (callers, implementors, endpoints-carrying-shape, annotation holders) and the address index (`GET /order/list` → root → handler → `file:line`) | §9.3 | W6, W22 | Sextant can finally say **where**, not only **what** |
 | **W36** | The file digest and the change-impact starting points | §9.3 | W35 | an agent decides whether to open a file at all; "change `Order`" returns a list of `file:line` ready to open |
 | **W37** | Materialisation: `call_edges` ordered by caller **and** a second ordering by callee; a materialised reachability table (root → reachable symbol, depth, terminal flag) — **the trace walk already computes this and throws it away**; `roots` addressable by wire address | §9.4 | W31, W34 | traversal runs both directions at speed; blast radius stops being recomputed per question |
 | **W38** | FR-17 clause 3 — the resolution distribution, one `GROUP BY` on a column that already exists | §9.5 | W22 | `coverage` reports how much we **understood**, not only how many files we opened. The standing instrument against corpus blindness |
 
-**Wave 7 acceptance:** a redacted bundle contains the same tables as an unredacted one;
-symbols carry real line numbers and openable paths on all four corpora.
+**Wave 7 acceptance:** symbols carry real line numbers and openable paths on all four corpora;
+an agent reaches a handler's `file:line` from `GET /order/list` without reading source.
+*(The "a redacted bundle contains the same tables as an unredacted one" check moved to Wave 0
+with W34.)*
 
 ---
 
@@ -253,7 +274,7 @@ moves the untruth. W50 and W51 can start once their subject waves land.
 ## Sequencing summary
 
 ```
-W0                                   Step 0 the stamp        (before everything)
+W0 W34                               Step 0 stamp + export   (before everything)
 W1 W2 W3 W3b → W3c; W4 W5 W6 W7 → W8 F1  extractor          (see the note below)
 W9 → W10 W12 W13 W15 W19 W29 W43-47  F2  vocabulary         (new rows appear)
 W11 W14 (measure, no dependency)
@@ -262,12 +283,13 @@ W21 → W22 → W23 W23b                 F3  identity           (21% of boundari
 W5 W22 → W24 → W25 → W26             F4  module edge        (mall's contracts become real)
 W27 W28 W29                          F5  endpoint identity
 W19 → W30 → W31; W22 → W33; W32      F7  trace tier         (2Q becomes delivered)
-W34; W6 W22 → W35 → W36; W37 W38     F8  export and index   (Sextant can say WHERE)
+W6 W22 → W35 → W36; W37 W38          F8  the index          (Sextant can say WHERE)
 W40; W41 → W42                       F6  the checklist
 W50 W51 W52 W53 W54                  F9  registers
 ```
 
-**Six hard constraints.** **W0 before W1** — a stamp that is already inconsistent cannot be
+**Seven hard constraints.** **W34 before any item that adds a table** — W22 and W29 both do,
+and the ratchet has to exist before them or it protects nothing. **W0 before W1** — a stamp that is already inconsistent cannot be
 verified when it is bumped. Then, from spec §14: F1 is first. F2 before Wave 9. W21 (the corpus)
 before W22, not after. **W3c beside W3, not six waves later** — the tag alone renames G-62
 rather than fixing it, and the only thing that had held the filter in Wave 7 was a dependency

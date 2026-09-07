@@ -926,6 +926,16 @@ dropped.
 - **The ratchet inverts:** a table in the schema and absent from the export is a **test
   failure**. There is no exclusion class, so there is nothing to relitigate.
 
+**This lands first, before anything that adds a table.** It depends on nothing, and two later
+items add tables — F3's `type_hierarchy` and `method_resolution`, and F5's request-metadata
+side table. A ratchet installed after the things it protects is not a ratchet, and building it
+late would have recreated G-8 for four waves in a row.
+
+**Adding a table therefore asks two questions at once**, both answered by whoever writes the
+`CREATE TABLE`: *does it export?* — automatically, and the ratchet fails the build otherwise;
+and *does analysis read its values?* — yes keeps the real value and redacts at export, no
+redacts at origin (§6.2). There is no third answer to either.
+
 Two corrections kept on the record, because they shaped the wrong argument first: the
 rendered document and the queryable dataset are two different things and the bundle carries
 both; and linking is **not** blocked without the trace tables — DR-5 matches on `endpoints`
