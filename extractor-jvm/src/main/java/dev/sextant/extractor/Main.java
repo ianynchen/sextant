@@ -253,7 +253,12 @@ public final class Main {
             // would make the jar hide its own overlays and pick for us, and
             // the selection is a property of the module doing the depending,
             // decided downstream at resolve (Fork 4) — not of the jar.
-            this.zip = new java.util.jar.JarFile(jar.toFile());
+            // `verify = false`: `JarFile(File)` alone turns ON signature
+            // verification, which digests every entry read and throws
+            // SecurityException on a stale signature — common in shaded jars.
+            // The manifest is all this needs; verifying is a cost and a failure
+            // mode it never asked for.
+            this.zip = new java.util.jar.JarFile(jar.toFile(), false);
             this.multiRelease = declaresMultiRelease(zip);
         }
 
@@ -265,12 +270,25 @@ public final class Main {
          *  FOLD at 72 bytes with a leading-space continuation, so a text search
          *  can match half a value or miss a folded one. No manifest at all
          *  takes the same branch as an absent attribute. */
-        private static boolean declaresMultiRelease(java.util.jar.JarFile jar)
-                throws IOException {
-            var manifest = jar.getManifest();
-            if (manifest == null) return false;
-            String declared = manifest.getMainAttributes().getValue("Multi-Release");
-            return declared != null && declared.trim().equalsIgnoreCase("true");
+        private static boolean declaresMultiRelease(java.util.jar.JarFile jar) {
+            // A manifest this cannot PARSE is not a jar we cannot read. `Manifest`
+            // throws on a header line without a colon, a duplicate name, or a
+            // stray continuation — all of which occur in real jars — and this ran
+            // from the constructor, so one such dependency exited the whole scan
+            // with zero fact files. That is the exact failure "an unreadable class
+            // is skipped, not fatal" exists to prevent, reintroduced one level up.
+            //
+            // Unparseable answers `false`, which is the same branch as absent: the
+            // JVM only searches `META-INF/versions/` when the manifest SAYS so,
+            // and a manifest nobody can parse says nothing.
+            try {
+                var manifest = jar.getManifest();
+                if (manifest == null) return false;
+                String declared = manifest.getMainAttributes().getValue("Multi-Release");
+                return declared != null && declared.trim().equalsIgnoreCase("true");
+            } catch (IOException unparseable) {
+                return false;
+            }
         }
 
         @Override public List<String> names() {
@@ -550,7 +568,19 @@ public final class Main {
      *  loss as a fact. */
     private static List<String> scannerLibraries() throws IOException {
         java.net.URL source = Main.class.getProtectionDomain().getCodeSource().getLocation();
-        try (var jar = new java.util.jar.JarFile(new java.io.File(source.getPath()))) {
+        // `toURI`, never `getPath()`: a URL's path is URL-ENCODED, so an install
+        // under `/Users/me/My Projects/` arrives as `My%20Projects` and names a
+        // file that does not exist. That failed EVERY scan on such a machine —
+        // and did it from `report()`, after every fact file had been written, so
+        // the whole extraction was thrown away with a FileNotFoundException
+        // pointing nowhere near the cause.
+        java.io.File located;
+        try {
+            located = new java.io.File(source.toURI());
+        } catch (java.net.URISyntaxException notAUri) {
+            throw new IOException("cannot locate this jar from " + source, notAUri);
+        }
+        try (var jar = new java.util.jar.JarFile(located)) {
             var manifest = jar.getManifest();
             String value = manifest == null
                 ? null

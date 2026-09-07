@@ -765,6 +765,7 @@ recovered later. Kinds:
 | `parameter` | a load of the caller's own parameter | `value` is the parameter's **index**, never the local slot holding it |
 | `array` | an array construction reaching the slot (JVM: `ANEWARRAY`/`NEWARRAY` plus its `xASTORE`s) | `elements` carries one entry per element, each an argument of this same grammar. **One slot, not N** — a varargs call passes one array |
 | `null` | ACONST_NULL | |
+| `concat` | invokedynamic via `StringConcatFactory` | **an address the code ASSEMBLES rather than states.** `"/api/" + version + "/orders"` is not built in the bytecode: javac emits one instruction plus a RECIPE holding the literal parts with a marker per runtime value. `value` is the template — `/api/{}/orders` — and the hole is deliberately UNNAMED: a path variable's name was never part of the address (a server routes `/api/owners/42` to `/api/owners/{ownerId}` by POSITION and may rename the variable freely), so `{}` is what both sides share and naming it would invent one the class file often does not carry. What FILLS the hole is the concat site's own call-site fact, reached by `source` → `result` |
 | `unresolved` | anything else | a first-class honest answer, never an omission |
 
 **`<init>` is the canonical constructor call-site name every extractor normalizes to** —

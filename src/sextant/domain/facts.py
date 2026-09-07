@@ -186,6 +186,20 @@ class SymbolFact(BaseModel):
     # rather than an instance, and a declaration the language marks as not
     # serialized. Defaults empty for constructs that carry no modifiers.
     modifiers: dict[str, bool] = Field(default_factory=dict)
+    # JVMS 4.7.22 `AnnotationDefault` (W4): the value an ANNOTATION TYPE's
+    # element takes when a use omits it. Present only on such an element and
+    # only where it has a default; absent everywhere else.
+    #
+    # Its consumer is the catalogs, which currently HARDCODE these — a
+    # prediction §8.1 forbids, because it states what a framework does at a
+    # version nobody measured. Reading it means a catalog can ask the jar
+    # instead of asserting.
+    #
+    # A `LiteralValue`, the SAME grammar an annotation's arguments already use
+    # at a use site — a default can be an array, an enum constant or a nested
+    # annotation, and re-spelling that here would be a second vocabulary for
+    # one thing.
+    annotation_default: LiteralValue | None = None
     # D00 §5a's PTR carrier: a class symbol's generic supertype reference,
     # when the superclass signature is generic.
     supertype: TypeRef | None = None
@@ -240,6 +254,18 @@ class CallArgument(BaseModel):
         # own element arguments in `elements`. Never N arguments — unpacking
         # would renumber every slot after it and make arity unreadable.
         "array",
+        # W4: an address the code ASSEMBLES rather than states. javac does not
+        # build `"/api/" + version + "/orders"` in the bytecode — it emits one
+        # `invokedynamic` plus a recipe holding the literal parts — so `value`
+        # is the TEMPLATE, `/api/{}/orders`, with a hole per runtime value.
+        #
+        # The hole is unnamed on purpose: a path variable's name was never part
+        # of the address (a server routes `/api/owners/42` to
+        # `/api/owners/{ownerId}` by POSITION and may rename it freely), so `{}`
+        # is exactly what both sides share and naming it would invent one the
+        # class file often does not carry. What FILLS the hole is the concat
+        # site's own call-site fact, reached by `source` -> `result`.
+        "concat",
         "null",
         "unresolved",
     ]
@@ -337,6 +363,38 @@ class FieldWriteFact(BaseModel):
     document_id: str
     field: str
     from_parameter: int
+
+
+class ConstantFact(BaseModel):
+    """D00 §5's `constant`: a compile-time constant field and the value the
+    class file records for it.
+
+    **A declared fact kind that had no producer until W4.** Its stated consumer
+    is topic and URL resolution — `static final String TOPIC = "orders"` is how
+    a great many real listeners name their destination, and without this the
+    address resolves to nothing readable and the endpoint carries an
+    unresolved reference instead of a wire identity.
+
+    The value comes from JVMS 4.7.2's `ConstantValue`, which the class file
+    carries only for a `static final` field of a primitive or `String` type —
+    exactly the shape that can be a constant expression. A field initialised in
+    `<clinit>` has no such attribute and produces no fact here: that is a
+    different question (what a static initialiser computes) and answering it
+    from this attribute would be a guess.
+    """
+
+    model_config = {"frozen": True}
+    kind: Literal["constant"] = "constant"
+    document_id: str
+    # The field's own symbol, exactly as the `symbol` fact spells it, so the
+    # two join without a transformation in between.
+    symbol: str
+    # The literal the class file records. Kept as its JSON-native type — a
+    # string, integer, float or boolean — rather than stringified, because a
+    # consumer resolving an address needs the string and a consumer reading a
+    # port needs the number, and re-parsing text would put a guess between
+    # them and the class file.
+    value: str | int | float | bool
 
 
 class ConfigEntryFact(BaseModel):
@@ -481,6 +539,7 @@ Fact = Annotated[
     | MethodReturnFact
     | FieldWriteFact
     | ConfigEntryFact
+    | ConstantFact
     | EmbeddedDescriptorFact
     | DeclaredShapeFact,
     Field(discriminator="kind"),

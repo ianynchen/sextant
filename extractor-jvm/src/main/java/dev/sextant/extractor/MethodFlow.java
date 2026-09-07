@@ -607,6 +607,27 @@ public final class MethodFlow {
             if (elements != null) return argument("array", null, null, null, elements);
         }
         if (producer instanceof InvokeDynamicInsnNode indy) {
+            // A string built by joining pieces. javac does not assemble it in the
+            // bytecode: it emits one `invokedynamic` plus a RECIPE holding the
+            // literal parts, with a marker where each runtime value goes. The
+            // literals are right there in the class file and were being thrown
+            // away, so `"/api/" + version + "/orders"` reached a catalog as
+            // `unresolved` — an outbound call naming nothing at all.
+            //
+            // What is recorded is the template: `/api/{}/orders`. The hole is
+            // left unnamed on purpose. The class file carries a parameter's name
+            // only when the build asked for it (`-parameters`), and the filler is
+            // often not a parameter at all — `"/api/" + getVersion() + "/orders"`
+            // has no name anywhere — so naming it would be invented half the
+            // time. A template with a visible hole is the whole truth the class
+            // file states.
+            String template = concatTemplate(indy);
+            if (template != null) {
+                // JSON-encoded, like every other `value` in this grammar: the
+                // helper writes what it is handed verbatim.
+                return argument("concat", JsonOut.string(template), null,
+                                String.valueOf(instructions.indexOf(producer)));
+            }
             // A lambda's code is not here: javac lifted the body into a
             // synthetic method and the call site only names it, in the
             // bootstrap's second argument. A method reference bootstraps
@@ -774,6 +795,40 @@ public final class MethodFlow {
             if (singleSource(frame.getStack(top - k)) == creation) return true;
         }
         return false;
+    }
+
+    /** The template a {@code StringConcatFactory} site composes, or null for any
+     *  other bootstrap.
+     *
+     *  <p>The recipe is the first bootstrap argument: literal text with
+     *  {@code \u0001} where a runtime value is spliced in and {@code \u0002}
+     *  where one of the bootstrap's own constants is. The second marker is
+     *  substituted — that constant IS known — while the first becomes {@code {}},
+     *  a hole this analysis can see and cannot fill. */
+    private static String concatTemplate(InvokeDynamicInsnNode indy) {
+        if (indy.bsm == null
+                || !"java/lang/invoke/StringConcatFactory".equals(indy.bsm.getOwner())
+                || !"makeConcatWithConstants".equals(indy.bsm.getName())
+                || indy.bsmArgs == null
+                || indy.bsmArgs.length == 0
+                || !(indy.bsmArgs[0] instanceof String recipe)) {
+            return null;
+        }
+        StringBuilder out = new StringBuilder();
+        int constant = 1;
+        for (int i = 0; i < recipe.length(); i++) {
+            char c = recipe.charAt(i);
+            if (c == '\u0001') {
+                out.append("{}");
+            } else if (c == '\u0002') {
+                out.append(constant < indy.bsmArgs.length
+                    ? String.valueOf(indy.bsmArgs[constant++])
+                    : "{}");
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
     }
 
     /** The symbol of the method a {@code LambdaMetafactory} call site will

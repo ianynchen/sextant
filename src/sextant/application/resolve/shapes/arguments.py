@@ -135,6 +135,13 @@ def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
 
 
 # The D00 §5 argument kinds that name no value a capture could have read:
+# `concat` joins them (W4): it carries a TEMPLATE with a hole, not a
+# value, so a capture cannot read one. Leaving it out let a body argument
+# built by concatenation flip a row to `resolved` over a NULL payload —
+# which is the exact thing `_capture_resolved` exists to prevent. Every
+# kind added before it carried this rule explicitly in D00: an engine
+# that does not consult the kind treats it as it always treated
+# `unresolved`.
 # the compiler's own honest read failure, a field read whose value lives
 # wherever the field was assigned (2F design §4's ladder is the only thing
 # that can answer it), and a parameter, whose value lives in whatever called
@@ -142,7 +149,7 @@ def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
 # is the same fact `unresolved` used to state less precisely, so a row it
 # feeds must keep the resolution it has always had rather than start claiming
 # `resolved` over a NULL payload column.
-_UNREAD_KINDS = ("unresolved", "field", "parameter")
+_UNREAD_KINDS = ("unresolved", "field", "parameter", "concat")
 
 
 def channel_of(argument: dict[str, Any] | None) -> tuple[None, str | None, str]:

@@ -489,6 +489,11 @@ gate_ancestry AS (
         SELECT payload ->> 'symbol' AS symbol, payload ->> 'superclass' AS superclass
         FROM raw_facts
         WHERE kind = 'symbol' AND (payload ->> 'superclass') IS NOT NULL
+          -- Multi-release selection (W3c). This walk builds the type
+          -- hierarchy, which is exactly where a losing overlay copy does
+          -- the most damage: it contributes a superclass under the SAME
+          -- symbol as the copy that wins.
+          AND document_id IN (SELECT document_id FROM selected_documents)
     ) sc ON sc.symbol = a.owner_symbol
     WHERE NOT list_contains(a.walked, sc.superclass)
 ),

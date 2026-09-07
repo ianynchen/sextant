@@ -1060,3 +1060,36 @@ def test_a_multi_release_jar_tags_every_copy_and_drops_none(tmp_path: Path):
     # any repository: an overlay is a different COMPILATION of the same source,
     # not a different source.
     assert releases["META-INF/versions/21/com/acme/A.jsonl"][1] == "com/acme/A.java"
+
+
+def test_every_fact_line_is_strict_json(tmp_path: Path):
+    """A bundle is published FOR other consumers, so their parser is the one
+    that matters — not ours.
+
+    Found by review, not by a test: a `double` constant that is `NaN` or an
+    infinity was written as a BARE TOKEN (`"value":NaN`), which RFC 8259 has no
+    literal for. Nothing caught it because Python's `json` accepts those by
+    default and DuckDB tolerates them, so the whole pipeline stayed green while
+    emitting a fact file a conforming reader refuses.
+
+    `parse_constant` is what makes this strict: it fires on exactly those three
+    tokens, so the assertion is about JSON validity rather than about whether
+    our own stack happens to cope.
+    """
+
+    def strict(line: str) -> None:
+        json.loads(line, parse_constant=lambda token: pytest.fail(f"bare {token} is not JSON"))
+
+    report = AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=CLASSES,
+            out_dir=tmp_path,
+        )
+    )
+    assert report.documents > 0
+    for written in tmp_path.rglob("*.jsonl"):
+        for line in written.read_text(encoding="utf-8").splitlines():
+            strict(line)

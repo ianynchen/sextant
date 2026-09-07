@@ -14,6 +14,43 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Four JVMS 4.7 attributes that each stood in for an invented rule are now read** (W4).
+  Every one was already in the class file, and one was being handed to us by ASM as a
+  parameter we ignored.
+
+  **`ConstantValue` (4.7.2)** gives D00 §5's `constant` fact its first producer — a declared
+  fact kind with nothing emitting it. `static final String TOPIC = "orders"` is how a great
+  many real listeners name their destination. 19 such facts from the fixture; a field
+  initialised in `<clinit>` correctly yields none, because what a static initialiser computes
+  is a different question.
+
+  **`InnerClasses` (4.7.6) and `EnclosingMethod` (4.7.7)** give a nested class the enclosing
+  symbol it reported as `null`. `OrderResult$Detail` → `OrderResult#`, and — the half that
+  splitting a binary name on `$` can never recover — `BillingRestTemplate$1` → its enclosing
+  METHOD. The class symbol is now emitted at `visitEnd` and re-inserted at index 0, because
+  ASM fires `visit` before those attributes arrive; the fact stream's order is unchanged.
+
+  **`AnnotationDefault` (4.7.22)** reads what an annotation element falls back to, which
+  catalogs currently hardcode — a claim about a framework at a version nobody measured.
+  All four value shapes verified: string, int, array, boolean.
+
+  **`StringConcatFactory`'s recipe** turns an assembled address into a template. Before this,
+  `"/api/" + version + "/orders"` reached a catalog as `{"kind": "unresolved"}` — an outbound
+  call naming nothing at all. It now reads `/api/{}/orders`.
+
+  **The hole stays unnamed deliberately.** A path variable's name was never part of the
+  address — a server routes `/api/owners/42` to `/api/owners/{ownerId}` by POSITION and could
+  rename the variable without changing the wire — so `{}` is exactly what both sides share.
+  Normalising the name away lines a client template up with a server route
+  (`/api/owners/{ownerId}` ↔ `/api/owners/{}`), which is what makes the recorded address
+  matchable at all. Naming it would also invent a name: the class file carries a parameter's
+  name only when the build asked for it, and the filler is often not a parameter.
+
+  **The matching itself is phase L, not this.** Whether a template is ambiguous depends on
+  the set of routes it is compared against, and those live in another service's bundle. What
+  W4 delivers is an address recorded in a shape that will match, instead of one lost entirely.
+
+
 - **Multi-release selection is applied, so G-62 is fixed rather than renamed** (W3c, Fork 4
   rule 3). W3 tagged every copy and dropped none, which by itself left LABELLED duplicates —
   two documents minting the SAME type symbol, and no table downstream has a uniqueness

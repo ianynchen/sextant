@@ -116,6 +116,7 @@ _NAMED_QUERIES = {
         SELECT payload ->> 'symbol' AS symbol, payload -> 'supertype' AS supertype
         FROM raw_facts
         WHERE kind = 'symbol' AND json_type(payload -> 'supertype') NOT IN ('NULL')
+          AND document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
     """,
     # `implemented_interfaces`: every class symbol's own declared interfaces,
@@ -132,6 +133,7 @@ _NAMED_QUERIES = {
         SELECT payload ->> 'symbol' AS symbol, payload -> 'interfaces' AS interfaces
         FROM raw_facts
         WHERE kind = 'symbol' AND json_array_length(payload -> 'interfaces') > 0
+          AND document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
     """,
     # Capability 9.13's own erased-superclass carrier (2O design §1b, Task 5):
@@ -159,6 +161,7 @@ _NAMED_QUERIES = {
         SELECT payload ->> 'symbol' AS symbol, payload ->> 'superclass' AS superclass
         FROM raw_facts
         WHERE kind = 'symbol' AND (payload ->> 'superclass') IS NOT NULL
+          AND document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
     """,
     # Every declared method's own enclosing type and visibility (2O design
@@ -315,6 +318,7 @@ _NAMED_QUERIES = {
                payload -> 'generic_interfaces' AS generic_interfaces
         FROM raw_facts
         WHERE kind = 'symbol' AND (payload ->> 'construct_kind') = 'interface'
+          AND document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
     """,
     # D00 §5's `module` fact, as the one question a catalog asks of it today
@@ -533,6 +537,9 @@ _NAMED_QUERIES = {
     # query so the export and any reader ask the same question, ordered so the
     # answer is stable between runs (NFR-1).
     "selected_documents": "SELECT * FROM selected_documents ORDER BY document_id",
+    # D00 §5's `constant` (W4), which had no producer until `ConstantValue` was
+    # read. Ordered on the symbol, which is unique per field.
+    "constants": "SELECT * FROM constants ORDER BY symbol",
 }
 
 # What the export PROJECTION masks (2K design §1), each named where its own
@@ -712,6 +719,11 @@ _EXPORT_QUERIES = {
     # tagged copies in `documents` and cannot tell which one the derived rows
     # were built from.
     "selected_documents": _NAMED_QUERIES["selected_documents"],
+    # No masked column: a constant is a compile-time literal from the class
+    # file, and the value patterns that would catch a secret in one apply to
+    # `resolved_config`, not here. Stated rather than left to inference, the
+    # same way `scheduled_work` and `error_handlers` are.
+    "constants": _NAMED_QUERIES["constants"],
     # `value` is an entry of the ARGUMENT grammar — the same JSON shape
     # `call_sites.arguments` carries, produced from the same string constants
     # in bytecode — so it takes the same `redact_json` pass, over userinfo in

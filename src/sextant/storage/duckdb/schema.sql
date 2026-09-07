@@ -506,7 +506,23 @@ FROM raw_facts WHERE kind = 'document';
 -- have overlaid precisely because it does not work.
 CREATE OR REPLACE VIEW selected_documents AS
 WITH target AS (
-    SELECT coalesce(max((payload ->> 'declared_release')::BIGINT), 2147483647) AS release
+    -- Spec §2.4 rule 4, in the order it states. The build's DECLARED release
+    -- first (W3b) — §8.2 admits it, because it is written in the pom or build
+    -- script. Then the module's OWN class-file major, which W1 records on every
+    -- document: a module compiled at 21 cannot load an overlay built for 24,
+    -- whatever its build forgot to declare. Then base, which is what -1 selects
+    -- for, since every real release exceeds it.
+    --
+    -- `TRY_CAST`, not `::BIGINT`: a malformed pom property reaching this cast
+    -- would take down this view and therefore EVERY view that filters on it.
+    -- An unusable value is an absent one, which falls to the next tier.
+    SELECT coalesce(
+               max(TRY_CAST(payload ->> 'declared_release' AS BIGINT)),
+               (SELECT max(TRY_CAST(payload ->> 'class_major' AS BIGINT)) - 44
+                FROM raw_facts WHERE kind = 'document'
+                  AND TRY_CAST(payload ->> 'class_major' AS BIGINT) >= 45),
+               -1
+           ) AS release
     FROM raw_facts WHERE kind = 'module'
 ),
 candidates AS (
@@ -514,6 +530,7 @@ candidates AS (
     -- excluded by the target and always loses to a reachable overlay.
     SELECT d.document_id,
            d.class_name,
+           d.origin,
            CASE WHEN d.class_release = 'base' THEN -1
                 ELSE TRY_CAST(d.class_release AS BIGINT) END AS release
     FROM documents d
@@ -522,7 +539,15 @@ ranked AS (
     SELECT c.document_id,
            c.class_name,
            row_number() OVER (
-               PARTITION BY c.class_name
+               -- Scoped BY ARCHIVE as well as by name. JEP 238 lets a jar
+               -- overlay ITS OWN classes, never another jar's — and `class_name`
+               -- carries no archive identity, so partitioning on it alone put
+               -- library A's `com/x/Foo.class` and library B's overlay of the
+               -- same name in one group and threw one away. Real for shaded
+               -- jars and for two versions of one library in a build.
+               -- `origin` is the library coordinate, NULL for the module's own
+               -- output, which is its own group.
+               PARTITION BY c.origin, c.class_name
                ORDER BY
                    -- 1. a copy the target can actually reach beats one it cannot
                    (c.release <= t.release) DESC,
@@ -534,8 +559,11 @@ ranked AS (
                    --    assert the class does not exist, which is false, and
                    --    the lowest is the one this module reaches first as its
                    --    target rises.
-                   c.release ASC,
-                   -- 4. a total order, so the view is deterministic (NFR-1)
+                   c.release ASC NULLS LAST,
+                   -- 4. a total order, so the view is deterministic (NFR-1).
+                   --    `NULLS LAST` is stated rather than left to the session's
+                   --    `default_null_order`: a claim of determinism that rests
+                   --    on a setting is not one.
                    c.document_id ASC
            ) AS rank
     FROM candidates c, target t
@@ -653,6 +681,22 @@ SELECT document_id,
        (payload ->> 'ordinal')::INTEGER        AS ordinal,
        payload ->  'value'                     AS value
 FROM raw_facts WHERE kind = 'method_return'
+  AND document_id IN (SELECT document_id FROM selected_documents);
+
+-- D00 §5's `constant` (W4): a compile-time constant field and its value, from
+-- JVMS 4.7.2's `ConstantValue`. Its stated consumer is topic and URL
+-- resolution — `static final String TOPIC = "orders"` is how a great many real
+-- listeners name their destination.
+--
+-- `value` stays JSON rather than being cast to text: the attribute admits a
+-- String or a numeric, a consumer resolving an address needs the one and a
+-- consumer reading a port needs the other, and flattening here would put a
+-- re-parse between them and the class file.
+CREATE OR REPLACE VIEW constants AS
+SELECT document_id,
+       payload ->> 'symbol' AS symbol,
+       payload ->  'value'  AS value
+FROM raw_facts WHERE kind = 'constant'
   AND document_id IN (SELECT document_id FROM selected_documents);
 
 -- Multi-release selection is APPLIED here, not merely computed (W3c). Tagging

@@ -1326,15 +1326,21 @@ def test_every_copy_is_still_kept_as_a_document(tmp_path: Path):
     workspace.close()
 
 
-def test_a_module_declaring_no_release_still_reaches_the_highest_overlay(tmp_path: Path):
-    """With no stated target nothing is out of reach, so the highest overlay
-    wins rather than base. That is the JVM's behaviour on a modern runtime, and
-    it beats silently preferring a base copy the build may have overlaid
-    precisely because it does not work — `spring-core`'s own base
-    `VirtualThreadDelegate` throws from every method."""
+def test_a_module_declaring_no_release_falls_back_to_base(tmp_path: Path):
+    """Spec §2.4 rule 4's order, ending where the spec ends it: the build's
+    declared release, then the module's own class-file major, then BASE.
+
+    This asserted "the highest overlay wins" until review. That was a
+    deviation decided in a commit message rather than a spec amendment, which
+    GUIDELINES §1.1 forbids, and it was overturned: base is what the spec
+    states, and base is the copy every runtime can load.
+
+    These fixture documents carry no `class_major`, so tier 2 finds nothing and
+    the fallback is reached directly.
+    """
     workspace = _multi_release_workspace(tmp_path, declared_release=None)
     selected = {row["document_id"] for row in workspace.query("selected_documents")}
-    assert selected == {"module", "v99"}
+    assert selected == {"module", "base"}
     workspace.close()
 
 

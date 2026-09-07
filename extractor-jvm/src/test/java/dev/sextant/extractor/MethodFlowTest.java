@@ -447,16 +447,25 @@ class MethodFlowTest {
         assertTrue(Integer.parseInt(field(line, "result")) >= 0, line);
     }
 
-    /** The chain join across an indy: the concatenated string is unresolved as
-     *  a value and still names the site that produced it. Before the indy
-     *  itself was a fact, that source id pointed at nothing. */
+    /** The chain join across an indy, and W4's change to what the value itself
+     *  says.
+     *
+     *  <p>This asserted `unresolved` until W4: the concatenation's literal parts
+     *  were in the class file, in the bootstrap's recipe, and were thrown away —
+     *  so an address assembled from pieces reached a catalog naming nothing.
+     *  The value is now the TEMPLATE, `order-{}`, with a hole where the runtime
+     *  value goes.
+     *
+     *  <p>The join is unchanged and still asserted here, because the template
+     *  says only WHERE the hole is: what fills it is the concat site's own
+     *  call-site fact, reached by `source` -> `result`. */
     @Test
     void names_the_producing_invokedynamic_when_an_argument_is_its_result() throws Exception {
         List<String> lines = callSites("concatenated");
         assertEquals(2, lines.size());
         assertTrue(lines.get(1).contains("\"name\":\"sink\""), lines.get(1));
-        assertTrue(lines.get(1).contains("\"arguments\":[{\"kind\":\"unresolved\",\"source\":"
-            + field(lines.get(0), "result") + "}]"), lines.get(1));
+        assertTrue(lines.get(1).contains("\"arguments\":[{\"kind\":\"concat\",\"source\":"
+            + field(lines.get(0), "result") + ",\"value\":\"order-{}\"}]"), lines.get(1));
     }
 
     /** The join Task 12's terminal needs on honest code. Nobody writes

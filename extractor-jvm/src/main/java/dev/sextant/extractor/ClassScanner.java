@@ -74,7 +74,7 @@ public final class ClassScanner {
     }
 
     private final class Visitor extends ClassVisitor {
-        private final List<String> lines;
+        private List<String> lines;
         private final String documentId;
         private final Consumer<String> onKotlinMetadataUnsupported;
         private String typeSymbol;
@@ -83,6 +83,16 @@ public final class ClassScanner {
         // what tells a generated Avro record apart from any other class whose
         // <clinit> parses a schema (DescriptorHarvest).
         private String superName;
+        // Held from `visit` until `visitEnd`, so the class symbol can carry the
+        // enclosing relationship the InnerClasses/EnclosingMethod attributes
+        // state (W4). Before this, every nested class reported `enclosing: null`
+        // — measured on the fixture: OrderResult$Detail and 4 others.
+        private String internalName;
+        private int classAccess;
+        private String classSignature;
+        private String[] classInterfaces;
+        private String enclosingSymbol;
+        private Integer nestedAccess;
         // Populated from @Metadata before any field is visited (ASM visits class-level
         // annotations before fields — see visitAnnotation below); empty for every
         // non-Kotlin class, which leaves Java's rule as the only source.
@@ -104,9 +114,45 @@ public final class ClassScanner {
             // place its argument is written down, and for an anonymous subclass
             // — which is the shape a real one takes — the class declares
             // nothing else that names the payload at all.
-            emit(typeSymbol, constructKindOf(access), null, null, access, null, null,
-                 TypeRefs.genericSuperclassFromSignature(sig), interfaceSymbolsJson(ifaces),
-                 genericInterfacesJson(sig), erasedSuperclassJson(superName));
+            // DEFERRED to visitEnd, and re-inserted at index 0 so the fact
+            // stream's order is byte-for-byte what it was (NFR-1 — `symbols.seq`
+            // IS this order). ASM fires `visit` first but `visitOuterClass` and
+            // `visitInnerClass` only afterwards, and those two carry the
+            // enclosing relationship: emitting here would mean emitting before
+            // the attribute that answers the question.
+            this.internalName = name;
+            this.classAccess = access;
+            this.classSignature = sig;
+            this.classInterfaces = ifaces;
+        }
+
+        /** JVMS 4.7.7 `EnclosingMethod`, for a LOCAL or ANONYMOUS class: the
+         *  method it was declared inside. The class file states this; nothing
+         *  else does, and splitting the binary name on `$` recovers the outer
+         *  TYPE at best and never the method. */
+        @Override
+        public void visitOuterClass(String owner, String name, String descriptor) {
+            enclosingSymbol = name == null
+                ? symbolOf(owner + "#")
+                : symbolOf(owner + "#" + name + "(" + disambiguatorOf(descriptor) + ").");
+        }
+
+        /** JVMS 4.7.6 `InnerClasses`. The table lists every nested class this
+         *  one MENTIONS, so the entry that matters is the one naming this class
+         *  itself; `outerName` is null for a local or anonymous class, which is
+         *  the case `visitOuterClass` above answers instead.
+         *
+         *  <p>`EnclosingMethod` wins where both are present: it names the method,
+         *  which is strictly more than the type, and a local class has both. */
+        @Override
+        public void visitInnerClass(String name, String outerName, String innerName, int access) {
+            if (!name.equals(internalName) || outerName == null) return;
+            if (enclosingSymbol == null) enclosingSymbol = symbolOf(outerName + "#");
+            // The nested class's own access flags live HERE, not on the class
+            // file's own `access` (JVMS 4.7.6): a nested `private` class reports
+            // ACC_PUBLIC at the top level, because the JVM has no other place to
+            // put it. This is the only place the source's own modifier survives.
+            nestedAccess = access;
         }
 
         /** Capability 9.14: the parameterized superinterface references
@@ -204,6 +250,7 @@ public final class ClassScanner {
             return new org.objectweb.asm.tree.MethodNode(
                     Opcodes.ASM9, access, name, descriptor, sig, ex) {
                 private int parameterIndex = 0;
+                private String annotationDefault;
                 // JVMS 4.7.18's `num_parameters`, per attribute — the VISIBLE and
                 // INVISIBLE parameter annotations are two separate attributes and
                 // may declare different counts, so one field for both would apply
@@ -252,6 +299,18 @@ public final class ClassScanner {
                     return annotationVisitor(methodSymbol, d, visible);
                 }
 
+                /** JVMS 4.7.22 `AnnotationDefault` (W4): what an ANNOTATION
+                 *  TYPE's element evaluates to when a use omits it.
+                 *
+                 *  <p>Until now the catalogs carried these as hardcoded
+                 *  constants — a claim about what a framework does at a version
+                 *  nobody measured, which is the prediction §8.1 forbids. The
+                 *  jar states it; this reads it. */
+                @Override
+                public org.objectweb.asm.AnnotationVisitor visitAnnotationDefault() {
+                    return defaultValueVisitor(value -> annotationDefault = value);
+                }
+
                 @Override
                 public org.objectweb.asm.AnnotationVisitor visitParameterAnnotation(
                         int parameter, String d, boolean visible) {
@@ -294,7 +353,8 @@ public final class ClassScanner {
                     emit(methodSymbol, constructKind, typeSymbol,
                          signatureJson(descriptor, sig, parameterNames, parameterAnnotations,
                                        parameterTypeAnnotations, returnTypeAnnotations), methodAccess,
-                         null, methodModifiersJson(methodAccess));
+                         null, methodModifiersJson(methodAccess), null, null, null, null,
+                         annotationDefault);
                     // After the method's own symbol, never before: a call site
                     // names its caller, and a fact file reads top-down.
                     lines.addAll(MethodFlow.callSites(documentId, methodSymbol, this));
@@ -352,6 +412,30 @@ public final class ClassScanner {
                 public void visitEnd() {
                     emit(fieldSymbol, "field", typeSymbol, fieldSignatureJson(type, sig, kotlinNullable), access,
                          kotlinNullable == null ? null : kotlinExt(kotlinNullable), modifiersJson(access));
+                    // D00 §5's `constant`, which had no producer until now. JVMS
+                    // 4.7.2's `ConstantValue` is what ASM hands over as the
+                    // `value` parameter above, and it was being ignored.
+                    //
+                    // Its stated consumer is topic and URL resolution:
+                    // `static final String TOPIC = "orders"` is how a great many
+                    // real listeners name their destination, and without this the
+                    // address resolves to an unresolved reference instead of a
+                    // wire identity.
+                    //
+                    // The class file carries the attribute ONLY for a static final
+                    // field of a primitive or String type — the shape that can be a
+                    // constant expression. A field initialised in `<clinit>` has no
+                    // such attribute and produces nothing here: what a static
+                    // initialiser computes is a different question, and answering
+                    // it from this attribute would be a guess.
+                    if (value != null) {
+                        TreeMap<String, String> constant = new TreeMap<>();
+                        constant.put("kind", JsonOut.string("constant"));
+                        constant.put("document_id", JsonOut.string(documentId));
+                        constant.put("symbol", JsonOut.string(fieldSymbol));
+                        constant.put("value", constantJson(value));
+                        lines.add(JsonOut.object(constant));
+                    }
                 }
             };
         }
@@ -366,6 +450,47 @@ public final class ClassScanner {
                     decoded -> kotlinNullability = decoded, onKotlinMetadataUnsupported);
             }
             return annotationVisitor(typeSymbol, descriptor, visible);
+        }
+
+        /** A `ConstantValue` as JSON, in its own native type.
+         *
+         *  <p>ASM hands back an Integer, Long, Float, Double or String — the only
+         *  types JVMS 4.7.2 admits. Kept as a JSON number or string rather than
+         *  stringified, because a consumer resolving an address needs the string
+         *  and one reading a port needs the number; re-parsing text downstream
+         *  would put a guess between the reader and the class file.
+         *
+         *  <p>`boolean`, `byte`, `short` and `char` constants are stored as
+         *  Integer by the format itself — the class file does not distinguish
+         *  them here, and the field's own descriptor is where that lives. This
+         *  reports what the attribute holds and does not reconstruct a type the
+         *  attribute did not record. */
+        private static String constantJson(Object value) {
+            if (value instanceof String text) return JsonOut.string(text);
+            // NaN and the infinities are NOT JSON. RFC 8259 has no such
+            // literals, and `String.valueOf` writes them as bare tokens —
+            // `"value":NaN` — which a conforming parser rejects outright. It
+            // went unnoticed because Python's `json` accepts them by default
+            // and DuckDB tolerates them, so the whole pipeline stays green
+            // while emitting a fact file somebody else's reader refuses. A
+            // bundle is published FOR other consumers, so their parser is the
+            // one that matters.
+            //
+            // Written as their Java spelling in a STRING, which is what the
+            // field genuinely holds and is the only representation JSON has
+            // for it. The field's own descriptor says it is a double, so a
+            // reader can tell this apart from a String constant that happens
+            // to read "NaN".
+            if (value instanceof Double d && (d.isNaN() || d.isInfinite())) {
+                return JsonOut.string(String.valueOf(d));
+            }
+            if (value instanceof Float f && (f.isNaN() || f.isInfinite())) {
+                return JsonOut.string(String.valueOf(f));
+            }
+            // Long and Double are otherwise written plainly: JSON has one
+            // number type, and a reader that needs the width has the
+            // field's descriptor.
+            return String.valueOf(value);
         }
 
         /** A type- or method-level annotation is a fact of its own (D00 §5, "annotation"). */
@@ -522,6 +647,48 @@ public final class ClassScanner {
             };
         }
 
+        /** A single UNNAMED annotation value — what `AnnotationDefault` carries.
+         *
+         *  <p>The same grammar an annotation ARGUMENT already uses (scalar, enum
+         *  reference, nested use, or an array of those), reached through the
+         *  same helpers, because a default and an argument are the same kind of
+         *  value written in two places. ASM delivers it with a null name, which
+         *  is why this cannot simply reuse `useCollectingVisitor`: that one is
+         *  built around a whole annotation USE and its named arguments. */
+        private org.objectweb.asm.AnnotationVisitor defaultValueVisitor(
+                java.util.function.Consumer<String> onValue) {
+            return new org.objectweb.asm.AnnotationVisitor(Opcodes.ASM9) {
+                @Override public void visit(String ignored, Object value) {
+                    onValue.accept(literal(value));
+                }
+                @Override public void visitEnum(String ignored, String descriptor, String constant) {
+                    onValue.accept(enumReference(descriptor, constant));
+                }
+                @Override public org.objectweb.asm.AnnotationVisitor visitAnnotation(
+                        String ignored, String descriptor) {
+                    return nestedUseVisitor(descriptor, 0, onValue);
+                }
+                @Override public org.objectweb.asm.AnnotationVisitor visitArray(String ignored) {
+                    List<String> items = new ArrayList<>();
+                    return new org.objectweb.asm.AnnotationVisitor(Opcodes.ASM9) {
+                        @Override public void visit(String i2, Object value) {
+                            items.add(literal(value));
+                        }
+                        @Override public void visitEnum(String i2, String d, String constant) {
+                            items.add(enumReference(d, constant));
+                        }
+                        @Override public org.objectweb.asm.AnnotationVisitor visitAnnotation(
+                                String i2, String d) {
+                            return nestedUseVisitor(d, 0, items::add);
+                        }
+                        @Override public void visitEnd() {
+                            onValue.accept(JsonOut.array(items));
+                        }
+                    };
+                }
+            };
+        }
+
         /** One nested annotation value, at {@code parentDepth + 1}. Returning
          *  {@code null} at the bound is ASM's own "skip this sub-tree" contract —
          *  the value is already recorded as unresolved by then, so nothing is lost
@@ -552,8 +719,33 @@ public final class ClassScanner {
 
         private String literal(Object value) {
             if (value instanceof String text) return JsonOut.string(text);
+            // NaN and the infinities are NOT JSON (RFC 8259 has no such
+            // literals), so `String.valueOf` would write a bare token that a
+            // conforming reader refuses. Quoted, as `constantJson` does — the
+            // descriptor says the field is a double, so this cannot be confused
+            // with a String that happens to read "NaN".
+            if (value instanceof Double d && (d.isNaN() || d.isInfinite())) {
+                return JsonOut.string(String.valueOf(d));
+            }
+            if (value instanceof Float f && (f.isNaN() || f.isInfinite())) {
+                return JsonOut.string(String.valueOf(f));
+            }
             if (value instanceof Boolean || value instanceof Number) return String.valueOf(value);
             if (value instanceof Type type) return JsonOut.string(type.getInternalName() + "#");
+            // A PRIMITIVE array. ASM does not call `visitArray` for one — it
+            // hands over the whole `int[]`/`long[]`/`char[]`/`boolean[]` here —
+            // and the fallthrough below stringified it, producing `[I@2a70a3d8`:
+            // an identity hash that DIFFERS ON EVERY RUN. That is a byte-stability
+            // violation (NFR-1), and it is already committed in a golden fixture.
+            // Expanded into the array grammar the annotation's own values use.
+            if (value != null && value.getClass().isArray()) {
+                List<String> items = new ArrayList<>();
+                int length = java.lang.reflect.Array.getLength(value);
+                for (int i = 0; i < length; i++) {
+                    items.add(literal(java.lang.reflect.Array.get(value, i)));
+                }
+                return JsonOut.array(items);
+            }
             return JsonOut.string(String.valueOf(value));
         }
 
@@ -660,6 +852,27 @@ public final class ClassScanner {
             emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, null, null);
         }
 
+        /** The deferred class symbol, inserted at index 0 so the fact stream is
+         *  byte-for-byte the order it always was (`symbols.seq` IS that order).
+         *  It is emitted HERE rather than in `visit` because the attributes that
+         *  answer "what encloses this class" — `EnclosingMethod` and
+         *  `InnerClasses` — only arrive afterwards. */
+        @Override
+        public void visitEnd() {
+            int access = nestedAccess != null ? nestedAccess : classAccess;
+            emit(typeSymbol, constructKindOf(access), enclosingSymbol, null, access, null, null,
+                 TypeRefs.genericSuperclassFromSignature(classSignature),
+                 interfaceSymbolsJson(classInterfaces),
+                 genericInterfacesJson(classSignature), erasedSuperclassJson(superName));
+            // `emit` appends, and this one belongs FIRST — a class's own symbol
+            // precedes its members in every fact file, and `symbols.seq` is that
+            // order. Moving the appended line is simpler than redirecting where
+            // `emit` writes: swapping the destination field left a window where
+            // anything else appending during the call would have landed in the
+            // wrong list.
+            lines.add(0, lines.remove(lines.size() - 1));
+        }
+
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
                            String ext, String modifiers, String supertype) {
             emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, supertype, null);
@@ -674,6 +887,13 @@ public final class ClassScanner {
         private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
                            String ext, String modifiers, String supertype, String interfaces,
                            String genericInterfaces, String superclass) {
+            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, supertype,
+                 interfaces, genericInterfaces, superclass, null);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext, String modifiers, String supertype, String interfaces,
+                           String genericInterfaces, String superclass, String annotationDefault) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -690,6 +910,7 @@ public final class ClassScanner {
             if (interfaces != null) fact.put("interfaces", interfaces);
             if (genericInterfaces != null) fact.put("generic_interfaces", genericInterfaces);
             if (superclass != null) fact.put("superclass", superclass);
+            if (annotationDefault != null) fact.put("annotation_default", annotationDefault);
             lines.add(JsonOut.object(fact));
         }
     }
