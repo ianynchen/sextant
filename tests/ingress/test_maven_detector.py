@@ -1069,3 +1069,60 @@ def test_the_fixture_resolves_a_version_for_every_coordinate_it_declares():
     assert set(module.dependency_versions) == set(module.dependency_coordinates)
     assert module.dependencies_not_resolved == ()
     assert module.dependency_versions["org.springframework:spring-web"] == "6.1.6"
+
+
+def _pom(tmp_path: Path, body: str) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "pom.xml").write_text(
+        '<project xmlns="http://maven.apache.org/POM/4.0.0">'
+        "<groupId>com.acme</groupId><artifactId>m</artifactId><version>1.0.0</version>"
+        f"{body}</project>",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        # The modern spelling, and the one a reader should reach for.
+        ("<properties><maven.compiler.release>21</maven.compiler.release></properties>", 21),
+        # The legacy `1.x` spelling is still what older builds carry on
+        # `<target>`/`<source>`, and reading only the bare form would miss half
+        # the estate.
+        ("<properties><maven.compiler.target>1.8</maven.compiler.target></properties>", 8),
+        ("<properties><maven.compiler.source>11</maven.compiler.source></properties>", 11),
+        # Spring Boot's parent sets this one and nothing else.
+        ("<properties><java.version>17</java.version></properties>", 17),
+        # Plugin configuration WINS over the property, because
+        # `maven.compiler.release` is only the default expression for that
+        # parameter — an explicit `<release>` overrides it, and reading the
+        # property first would report a release the build does not use.
+        (
+            (
+                "<properties><maven.compiler.release>11</maven.compiler.release></properties>"
+                "<build><plugins><plugin>"
+                "<artifactId>maven-compiler-plugin</artifactId>"
+                "<configuration><release>21</release></configuration>"
+                "</plugin></plugins></build>"
+            ),
+            21,
+        ),
+        # A property nothing defines is not a release. Refusing to guess is the
+        # point: `None` sends multi-release selection to its next source
+        # (the module's own class-file major) rather than to a wrong answer.
+        ("<properties><maven.compiler.release>${jdk}</maven.compiler.release></properties>", None),
+        # A build declaring none reports absence, never a default.
+        ("", None),
+    ],
+)
+def test_the_declared_release_is_read_where_the_build_states_it(
+    tmp_path: Path, body: str, expected: int | None
+):
+    """W3b. §8.2 admits this value: it is written in the pom, so it is code
+    rather than a deployment possibility. Its consumer is multi-release
+    selection — which overlay of a dependency's class actually loads is a
+    property of the module doing the depending, and this is where that module
+    says so. Nothing read any of these keys before."""
+    [module] = MavenDetector().detect(_pom(tmp_path / "m", body)).modules
+    assert module.declared_release == expected

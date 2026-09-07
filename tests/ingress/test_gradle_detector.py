@@ -854,3 +854,27 @@ def test_every_recorded_coordinate_carries_a_version_on_the_capture():
 
     assert set(module.dependency_versions) == set(module.dependency_coordinates)
     assert list(module.dependency_versions) == sorted(module.dependency_versions)
+
+
+def test_the_declared_release_comes_from_gradles_own_evaluated_model():
+    """W3b, Gradle half. Asked of GRADLE rather than parsed out of a build
+    script, because the value can come from a convention plugin, a toolchain or
+    a property, and only the evaluated model knows which one won.
+
+    The capture's values were recorded from a live run of the init script
+    against `fixtures/gradle-orders`, whose two Java projects set
+    `options.release.set(21)`. The root project applies no Java plugin and
+    reports absence — not a default, and not the 21 its children declare.
+    """
+    model = _repository_model(_load_capture())
+    assert {module.declared_release for module in model.modules} == {21}
+
+
+def test_a_project_record_predating_the_release_field_reads_as_absence(tmp_path: Path):
+    """A capture taken by an OLDER init script has no such key at all, and a
+    missing key is the same absence as a project declaring nothing — never a
+    crash, and never a default standing in for a value the build never
+    stated."""
+    project = _minimal_project(dir_=str(tmp_path))
+    project.pop("declaredRelease", None)
+    assert GradleDetector._module_of(tmp_path, project).declared_release is None

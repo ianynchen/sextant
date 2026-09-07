@@ -384,6 +384,13 @@ class GradleDetector:
             output_dirs=tuple(Path(entry) for entry in project["classesDirs"]),
             resource_roots=resource_roots,
             schema_roots=GradleDetector._schema_roots(project),
+            # Asked of Gradle rather than parsed out of a build script (W3b):
+            # the value can come from a convention plugin, a toolchain or a
+            # property, and only the evaluated model knows which one won.
+            # `.get(...)` rather than `[...]`: a workspace analysed by an
+            # OLDER init script has no such key, and a missing key is the same
+            # absence as a project that declares nothing.
+            declared_release=project.get("declaredRelease"),
             # The RESOLVED compile classpath's own coordinates, transitives
             # included — sorted and deduplicated (NFR-1). Only entries Gradle
             # gave a component id: an inter-project dependency and a

@@ -12,6 +12,33 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Added
+
+- **The build's declared Java release is read** (W3b) — `maven.compiler.release` and its
+  siblings on Maven, Gradle's own evaluated model on Gradle. **Nothing read any of them
+  before**: `grep -rn "maven.compiler\|targetCompatibility\|sourceCompatibility" src/`
+  returned nothing. §8.2 admits the value — it is written in the pom or build script, so it
+  is code rather than a deployment possibility.
+
+  **Maven** reads it from the `<properties>` already merged across parent inheritance, so no
+  second walk of the ancestor chain is needed. maven-compiler-plugin's
+  `<configuration><release>` is read FIRST, because `maven.compiler.release` is only the
+  default expression for that parameter and an explicit configuration overrides it — then
+  `release`, `target`, `source`, and `java.version`, which is the one Spring Boot's parent
+  sets. `1.8` and `8` both reduce to 8; the legacy spelling is still what older builds carry
+  and reading one form only would miss half the estate. A `${property}` nothing defines
+  yields absence, not a guess.
+
+  **Gradle is ASKED rather than parsed**: the value can come from a convention plugin, a
+  toolchain or a property, and only the evaluated model knows which won. The init script
+  reports `options.release`, falling back to `targetCompatibility`. Verified by a live run
+  against `fixtures/gradle-orders` — both Java projects report 21, the root project (no Java
+  plugin) reports absence — and the committed capture was brought in step with those
+  measured values.
+
+  A module whose build declares none reports `None`, which sends multi-release selection to
+  its next source rather than to a wrong answer. **Its consumer is W3c**, still to come.
+
 ### Fixed
 
 - **Multi-release jars stopped being scanned whole** (Fork 4, G-62), `fact_schema_version`

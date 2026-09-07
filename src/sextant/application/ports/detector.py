@@ -104,6 +104,17 @@ class ModuleModel:
     # resolved report carries a version for every entry, so on Gradle this maps
     # the whole set.
     dependency_versions: dict[str, str] = field(default_factory=dict)
+    # The compiler target release this module's BUILD declares — and `None`
+    # where it declares
+    # none, which is an absence rather than a default. §8.2 admits it: a value
+    # written in the pom or build script is code, not a deployment possibility.
+    #
+    # Its consumer is multi-release SELECTION: which overlay of a class in a
+    # dependency actually loads is a property of the module doing the
+    # depending, and this is where that module says so. Nothing else may read
+    # it as "the JDK this was built with" — a build can declare a release its
+    # toolchain does not match, which is the whole point of `--release`.
+    declared_release: int | None = None
     # Why a coordinate above has no version, and which ancestor or BOM could
     # not be opened — one sentence each, sorted (NFR-1). Carried rather than
     # raised, exactly as `libraries_not_resolved` is: a version nobody could

@@ -10,7 +10,8 @@
       "resourceRoots": [],
       "classesDirs": [],
       "publishing": false,
-      "classpath": []
+      "classpath": [],
+      "declaredRelease": null
     },
     {
       "path": ":pricing-lib",
@@ -28,7 +29,8 @@
         "{root}/pricing-lib/build/classes/java/main"
       ],
       "publishing": true,
-      "classpath": []
+      "classpath": [],
+      "declaredRelease": 21
     },
     {
       "path": ":service-app",
@@ -105,7 +107,8 @@
           "path": "{root}/pricing-lib/build/classes/java/main",
           "internal": true
         }
-      ]
+      ],
+      "declaredRelease": 21
     }
   ],
   "includedBuilds": []

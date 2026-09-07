@@ -302,8 +302,8 @@ class MavenDetector:
         source_roots = MavenDetector._source_roots(path, pom)
         resources = path / "src" / "main" / "resources"
         library_roots, libraries_not_resolved = MavenDetector._library_roots(path, pom)
-        coordinates, versions, not_resolved = MavenDetector._resolved_dependencies(
-            path, pom, group, artifact, version
+        coordinates, versions, not_resolved, declared_release = (
+            MavenDetector._resolved_dependencies(path, pom, group, artifact, version)
         )
         return ModuleModel(
             module_id=f"{group}:{artifact}",
@@ -341,6 +341,7 @@ class MavenDetector:
             # comment is where that distinction is stated for readers.
             dependency_coordinates=coordinates,
             dependency_versions=versions,
+            declared_release=declared_release,
             dependencies_not_resolved=not_resolved,
             library_roots=library_roots,
             libraries_not_resolved=libraries_not_resolved,
@@ -509,8 +510,13 @@ class MavenDetector:
     @staticmethod
     def _resolved_dependencies(
         path: Path, pom: ElementTree.Element, group: str, artifact: str, version: str
-    ) -> tuple[tuple[str, ...], dict[str, str], tuple[str, ...]]:
-        """`(coordinates, versions, not_resolved)` for one module.
+    ) -> tuple[tuple[str, ...], dict[str, str], tuple[str, ...], int | None]:
+        """`(coordinates, versions, not_resolved, declared_release)` for one module.
+
+        The release rides along rather than taking a walk of its own: it is read
+        from the SAME `<properties>` merged across parent inheritance that the
+        versions are, and walking the ancestor chain twice per module to answer
+        two questions about one merge would be I/O for nothing.
 
         `coordinates` is every `groupId:artifactId` this module declares or
         inherits, sorted (NFR-1). `versions` maps the subset whose version
@@ -556,7 +562,12 @@ class MavenDetector:
                 )
                 continue
             versions[coordinate] = resolved
-        return tuple(sorted(declared)), versions, tuple(sorted(set(not_resolved)))
+        return (
+            tuple(sorted(declared)),
+            versions,
+            tuple(sorted(set(not_resolved))),
+            MavenDetector._declared_release(pom, properties),
+        )
 
     @staticmethod
     def _inherited_model(
@@ -699,6 +710,61 @@ class MavenDetector:
                     imported.setdefault(managed_coordinate, settled)
         imported.update(own)
         return imported, unreadable
+
+    @staticmethod
+    def _declared_release(pom: ElementTree.Element, properties: dict[str, str]) -> int | None:
+        """The compiler target release this module's BUILD declares, or `None`.
+
+        §8.2 admits it: a value written in the pom is code, not a deployment
+        possibility. It is the primary source for multi-release SELECTION —
+        which overlay of a class actually loads is a property of the module
+        doing the depending, and this is where that module says so.
+
+        **Order, and it is Maven's own rather than the spec's listing order.**
+        maven-compiler-plugin's `<configuration><release>` is read FIRST because
+        `maven.compiler.release` is merely the default EXPRESSION for that
+        parameter, so an explicit configuration overrides the property. Then the
+        properties in decreasing specificity: `release`, `target`, `source`, and
+        finally the version property the Spring Boot parent sets and nothing else.
+
+        `1.8` and `8` both mean 8 — the legacy `1.x` spelling is still what
+        `<source>`/`<target>` carry in older builds, and reading only one of the
+        two would silently miss half the estate. A value that is neither is
+        ignored rather than guessed at: a `${property}` nothing defines, or a
+        toolchain expression, is not a release this detector can honestly claim.
+        """
+        for element in pom.iterfind(".//m:plugin", _POM_NS):
+            artifact = element.find("m:artifactId", _POM_NS)
+            if artifact is None or (artifact.text or "").strip() != "maven-compiler-plugin":
+                continue
+            release = element.find("m:configuration/m:release", _POM_NS)
+            if release is not None:
+                parsed = MavenDetector._release_number(
+                    _interpolated((release.text or "").strip(), properties)
+                )
+                if parsed is not None:
+                    return parsed
+        for key in (
+            "maven.compiler.release",
+            "maven.compiler.target",
+            "maven.compiler.source",
+            "java.version",
+        ):
+            if key in properties:
+                parsed = MavenDetector._release_number(_interpolated(properties[key], properties))
+                if parsed is not None:
+                    return parsed
+        return None
+
+    @staticmethod
+    def _release_number(declared: str | None) -> int | None:
+        """`17` and `1.8` both parse; anything else is None rather than a guess."""
+        if not declared:
+            return None
+        text = declared.strip()
+        if text.startswith("1.") and text[2:].isdigit():
+            text = text[2:]
+        return int(text) if text.isdigit() else None
 
     @staticmethod
     def _properties(pom: ElementTree.Element) -> dict[str, str]:
