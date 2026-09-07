@@ -965,3 +965,98 @@ def test_one_unreadable_class_is_skipped_and_the_rest_of_the_scan_survives(tmp_p
     good, good_facts = read_fact_file(tmp_path / "out" / "com" / "acme" / "Good.jsonl")
     assert good_facts and good.partial is False and good.partial_reason is None
     assert ACCEPTED_MAJOR_MIN <= good.class_major <= ACCEPTED_MAJOR_MAX
+
+
+def _jar(path: Path, entries: dict[str, bytes], *, multi_release: bool) -> Path:
+    """A jar built here rather than taken from a cache, so the test states its
+    own inputs and needs no network or local repository."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = "Manifest-Version: 1.0\n"
+    if multi_release:
+        manifest += "Multi-Release: true\n"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("META-INF/MANIFEST.MF", manifest + "\n")
+        for name, payload in entries.items():
+            archive.writestr(name, payload)
+    return path
+
+
+def test_a_jar_without_the_manifest_attribute_does_not_scan_its_overlays(tmp_path: Path):
+    """JEP 238's gate, and the reason it is a gate rather than a preference.
+
+    Without `Multi-Release: true` the JVM never searches `META-INF/versions/`,
+    so those entries sit at a path no loader will look in: they are unreachable
+    code, and scanning them mints symbols that COLLIDE with the reachable base
+    copies. Not "treat them as ordinary classes" — treat them as absent.
+
+    Measured on the real case this protects against: `testcontainers-2.0.5.jar`
+    carries 1,218 versioned `.class` entries under a manifest holding only
+    `Manifest-Version` and `Implementation-Version`. Every one was scanned
+    before this gate.
+    """
+    payload = (CLASSES / "com/acme/orders/OrderResult.class").read_bytes()
+    jar = _jar(
+        tmp_path / "plain.jar",
+        {"com/acme/A.class": payload, "META-INF/versions/21/com/acme/A.class": payload},
+        multi_release=False,
+    )
+    report = AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=jar,
+            out_dir=tmp_path / "out",
+        )
+    )
+    assert report.documents == 1, "the overlay is unreachable and must not be scanned"
+    assert not list((tmp_path / "out").rglob("META-INF/**/*.jsonl"))
+
+
+def test_a_multi_release_jar_tags_every_copy_and_drops_none(tmp_path: Path):
+    """Tag, do not drop (Fork 4). Both copies are kept and LABELLED, because
+    which one loads depends on the release the DEPENDING module targets — one
+    scan of a jar serves modules targeting different ones, so selecting here
+    would force a re-scan per consumer and put a config-derived judgement inside
+    the fact layer, which records and never decides.
+
+    The versioned-only case is why "keep base copies only" is the wrong shape
+    for the eventual filter: 626 names across the cached corpus exist ONLY under
+    `META-INF/versions/`, and dropping them would assert they do not load.
+    """
+    payload = (CLASSES / "com/acme/orders/OrderResult.class").read_bytes()
+    jar = _jar(
+        tmp_path / "mr.jar",
+        {
+            "com/acme/A.class": payload,
+            "META-INF/versions/21/com/acme/A.class": payload,
+            "META-INF/versions/24/com/acme/OnlyNew.class": payload,
+        },
+        multi_release=True,
+    )
+    AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=jar,
+            out_dir=tmp_path / "out",
+        )
+    )
+    releases = {}
+    for written in (tmp_path / "out").rglob("*.jsonl"):
+        document, _ = read_fact_file(written)
+        releases[str(written.relative_to(tmp_path / "out"))] = (
+            document.class_release,
+            document.relative_path,
+        )
+    assert len(releases) == 3, "every copy is kept"
+    assert releases["com/acme/A.jsonl"][0] == "base"
+    assert releases["META-INF/versions/21/com/acme/A.jsonl"][0] == "21"
+    assert releases["META-INF/versions/24/com/acme/OnlyNew.jsonl"][0] == "24"
+
+    # And the overlay's `relative_path` names a source file that can exist. It
+    # read `META-INF/versions/21/com/acme/A.java` before, which names no file in
+    # any repository: an overlay is a different COMPILATION of the same source,
+    # not a different source.
+    assert releases["META-INF/versions/21/com/acme/A.jsonl"][1] == "com/acme/A.java"

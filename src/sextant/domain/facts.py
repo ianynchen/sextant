@@ -95,6 +95,14 @@ class Document(BaseModel):
     # config or schema document has no such version, and 0 is outside every
     # real range (the format starts at 45) so it cannot be mistaken for one.
     class_major: int = 0
+    # WHICH COPY of an overlaid class this is (JEP 238): `base` for the archive
+    # root — and for every document that is not a class in a multi-release jar
+    # at all — or the release its `META-INF/versions/N/` prefix declares, as a
+    # decimal string. A TAG, never a selection: which copy actually loads
+    # depends on the release the DEPENDING module targets, so one scan of a jar
+    # serves modules that target different ones and the choice is made
+    # downstream at resolve.
+    class_release: str = "base"
     content_hash: str
     origin_entry: str
     origin_tier: OriginTier

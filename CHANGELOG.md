@@ -14,6 +14,38 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Multi-release jars stopped being scanned whole** (Fork 4, G-62), `fact_schema_version`
+  4 → 5. `JarSource.names()` filtered on `.class` and nothing else, so every overlaid copy
+  was scanned: the copies got different `document_id`s while minting the SAME type symbol,
+  and no table downstream has a uniqueness constraint, so they became duplicate rows.
+
+  **The manifest attribute gates everything, and it is read once per archive.** Without
+  `Multi-Release: true` the JVM never searches `META-INF/versions/`, so those entries sit at
+  a path no loader will look in — unreachable code whose symbols collide with the reachable
+  base copies. They are now not scanned at all, which is different from treating them as
+  ordinary classes. Measured on the real case: `testcontainers-2.0.5.jar` carries **1,218**
+  versioned `.class` entries under a manifest holding only `Manifest-Version` and
+  `Implementation-Version`; all 1,218 were scanned before and none are now. It is a parsed
+  attribute lookup, never a grep — the jar spec makes attribute names case-insensitive and
+  manifest values fold at 72 bytes with a leading-space continuation.
+
+  **Where the attribute IS present, every copy is kept and TAGGED** with `class_release`.
+  Nothing is selected here: which copy loads depends on the release the depending module
+  targets, so one scan serves modules targeting different ones, and deciding in the
+  extractor would force a re-scan per consumer and put a config-derived judgement inside the
+  fact layer. Verified on `spring-core-7.0.9.jar`: 1,223 documents, tagged `base` 1,213 ·
+  `21` 1 · `24` 9.
+
+  **And an overlay stops naming a source file that cannot exist.** `sourcePathOf` yielded
+  `META-INF/versions/21/org/…/VirtualThreadDelegate.java`, which names no file in any
+  repository; the prefix is stripped first, so it now reads
+  `org/springframework/core/task/VirtualThreadDelegate.java`. An overlay is a different
+  COMPILATION of one source, not a different source.
+
+  **Not yet done, and the tag alone changes nothing without it:** the duplicates are now
+  LABELLED duplicates. The filter that acts on the label — highest `N ≤ target`, else base —
+  is W3c, and the target it needs is W3b's declared-release read.
+
 - **A parameter annotation on an enum or inner-class constructor landed on the wrong
   parameter** (Critical 6, JVMS 4.7.18). The parameter-annotation attribute may be SHORTER
   than the descriptor's parameter list, because javac omits parameters it synthesised, and

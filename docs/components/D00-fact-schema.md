@@ -65,6 +65,7 @@ Written once per class file. Every fact points at one.
 | `sextant_version` | **The tool that produced these facts** |
 | `fact_schema_version` | **The version of this document's schema** — a single monotonically increasing INTEGER, not semver (Step 0). Compared for equality and nothing else; it is never parsed or ordered, so the dotted form carried two extra numbers that meant nothing and let four producers of the stamp disagree unnoticed |
 | `scanner_id` | **Which FACILITY produced these facts** — never the library it used. There is no `scanner_version` beside it: a facility Sextant ships moves with `sextant_version` above, and the third-party libraries that CAN move on their own (ASM, kotlin-metadata-jvm) are recorded once per workspace in `metadata.json`, not repeated on every document one scanner wrote |
+| `class_release` | **Which COPY of an overlaid class this is** (JEP 238): `base` for the archive root — and for anything that is not a class in a multi-release jar — or the release its `META-INF/versions/N/` prefix declares. A TAG, never a selection: which copy actually loads depends on the release the DEPENDING module targets, so one scan of a jar serves modules targeting different ones and the choice is made downstream |
 | `content_hash` | Of the source of truth this was read from |
 | `origin_entry` | **The classpath entry this was read from** — the module's own output directory, or a library archive |
 | `origin_tier` | That entry's tier (§4) — module output, a declared dependency, first-party, third-party, platform |

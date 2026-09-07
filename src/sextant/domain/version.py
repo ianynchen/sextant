@@ -71,5 +71,5 @@ SEXTANT_VERSION = version("sextant")
 #             additive: a query against the older rows fails rather than
 #             answering empty, which is what comparing a stamp is for.
 #     2       the integer scheme. No table change.
-FACT_SCHEMA_VERSION = 4
+FACT_SCHEMA_VERSION = 5
 GRAPH_SCHEMA_VERSION = 2

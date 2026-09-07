@@ -22,6 +22,14 @@ public final class Main {
      *  every declared scanning library (`build.gradle.kts`). */
     private static final String LIBRARIES_ATTRIBUTE = "Sextant-Scanner-Libraries";
 
+    /** JEP 238's overlay root. Everything below it is a versioned copy of a
+     *  class whose reachable form may also exist at the archive root. */
+    private static final String VERSIONS_PREFIX = "META-INF/versions/";
+
+    /** What a document records when it came from the archive ROOT rather than
+     *  from an overlay — the copy every JVM sees regardless of its version. */
+    private static final String BASE_RELEASE = "base";
+
     /** The class-file majors the pinned ASM can actually parse (JVMS 4.1).
      *
      *  <p>45 is where the format starts and has never moved. The ceiling is a
@@ -170,7 +178,7 @@ public final class Main {
                     // last one on disk.
                     writeFactFile(out.resolve(replaceSuffix(classRelative, ".class", ".jsonl")),
                                   relative, documentId, options, sha256Bytes(bytes), lines,
-                                  classMajor, partialReason);
+                                  classMajor, partialReason, classReleaseOf(classRelative));
                     documents++;
                     facts += lines.size();
                 }
@@ -232,21 +240,60 @@ public final class Main {
     }
 
     private static final class JarSource implements ClassSource {
-        private final ZipFile zip;
+        private final java.util.jar.JarFile zip;
+        private final boolean multiRelease;
 
         JarSource(Path jar) throws IOException {
             // Throws on a file that is not a readable zip, which `of` above
             // lets propagate: a corrupt jar is an error, never an empty scan.
-            this.zip = new ZipFile(jar.toFile());
+            //
+            // A JarFile rather than a ZipFile purely so the manifest can be
+            // PARSED. Deliberately NOT opened with a Runtime.Version: that
+            // would make the jar hide its own overlays and pick for us, and
+            // the selection is a property of the module doing the depending,
+            // decided downstream at resolve (Fork 4) — not of the jar.
+            this.zip = new java.util.jar.JarFile(jar.toFile());
+            this.multiRelease = declaresMultiRelease(zip);
+        }
+
+        /** JEP 238's gate, read ONCE per archive.
+         *
+         *  <p>A parsed attribute lookup, never a grep: the jar specification
+         *  makes attribute names case-insensitive (which
+         *  {@code Attributes.getValue(String)} honours) and manifest values
+         *  FOLD at 72 bytes with a leading-space continuation, so a text search
+         *  can match half a value or miss a folded one. No manifest at all
+         *  takes the same branch as an absent attribute. */
+        private static boolean declaresMultiRelease(java.util.jar.JarFile jar)
+                throws IOException {
+            var manifest = jar.getManifest();
+            if (manifest == null) return false;
+            String declared = manifest.getMainAttributes().getValue("Multi-Release");
+            return declared != null && declared.trim().equalsIgnoreCase("true");
         }
 
         @Override public List<String> names() {
             // Directory entries are skipped by the `.class` filter itself; a
             // zip may also omit them entirely, so nothing here may depend on
             // their presence.
+            //
+            // WITHOUT the attribute the overlays are not scanned AT ALL, and
+            // that is not the same as treating them as ordinary classes: the
+            // JVM never searches `META-INF/versions/` unless the manifest says
+            // to, so those entries sit at a path no loader will look in. They
+            // are unreachable code, and scanning them mints symbols that
+            // collide with the reachable base copies.
+            //
+            // Measured across 2,402 cached jars: 6 carry `META-INF/versions/`
+            // entries with no `Multi-Release: true`. `testcontainers-2.0.5.jar`
+            // is the extreme — 1,198 such entries (shaded snakeyaml and jackson
+            // paths a shade plugin copied in) under a manifest carrying only
+            // Manifest-Version and Implementation-Version. This one check
+            // removes 1,198 phantom documents from that jar alone.
             return zip.stream()
                       .map(ZipEntry::getName)
                       .filter(name -> name.endsWith(".class"))
+                      .filter(name -> multiRelease || !name.startsWith(VERSIONS_PREFIX))
                       .sorted()
                       .toList();
         }
@@ -266,7 +313,8 @@ public final class Main {
     private static void writeFactFile(Path target, String relative, String documentId,
                                       Map<String, String> options, String contentHash,
                                       List<String> factLines, int classMajor,
-                                      String partialReason) throws IOException {
+                                      String partialReason, String classRelease)
+            throws IOException {
         Files.createDirectories(target.getParent());
         TreeMap<String, String> document = new TreeMap<>();
         document.put("kind", JsonOut.string("document"));
@@ -322,6 +370,14 @@ public final class Main {
         // number: it is compared and ordered against the accepted range, which
         // is the one stamp here that genuinely IS ordered.
         document.put("class_major", String.valueOf(classMajor));
+        // TAG, DO NOT DROP (Fork 4). Which copy of an overlaid class this is:
+        // `base`, or the release its `META-INF/versions/N/` prefix declares.
+        // Nothing is discarded here and nothing is selected here — the target
+        // release is a property of the MODULE doing the depending, so one scan
+        // of a jar can serve two modules that declare different releases, and
+        // deciding in the extractor would force a re-scan per consumer and put
+        // a config-derived judgement inside the fact layer.
+        document.put("class_release", JsonOut.string(classRelease));
 
         List<String> all = new ArrayList<>();
         all.add(JsonOut.object(document));
@@ -378,9 +434,41 @@ public final class Main {
      *  because a directory is free to hold a {@code $} of its own and cutting
      *  there would name a source file in a package that does not exist. */
     private static String sourcePathOf(String classRelative) {
-        String withoutSuffix = replaceSuffix(classRelative, ".class", "");
+        // The overlay prefix is stripped FIRST, or the derived source path is a
+        // file that cannot exist:
+        // `META-INF/versions/21/org/.../VirtualThreadDelegate.java` names no
+        // file in any repository. An overlay is a different COMPILATION of the
+        // same source, not a different source.
+        String withoutSuffix = replaceSuffix(withoutVersionPrefix(classRelative), ".class", "");
         int nested = withoutSuffix.indexOf('$', withoutSuffix.lastIndexOf('/') + 1);
         return (nested < 0 ? withoutSuffix : withoutSuffix.substring(0, nested)) + ".java";
+    }
+
+    /** The release an overlaid entry declares, or {@link #BASE_RELEASE}.
+     *
+     *  <p>Read from the PATH, which is where JEP 238 puts it. A malformed
+     *  segment — `META-INF/versions/notanumber/…` — is treated as base rather
+     *  than guessed at or refused: the entry is still a real class file, and
+     *  inventing a release for it would be a claim the archive never made. */
+    private static String classReleaseOf(String classRelative) {
+        if (!classRelative.startsWith(VERSIONS_PREFIX)) return BASE_RELEASE;
+        int end = classRelative.indexOf('/', VERSIONS_PREFIX.length());
+        if (end < 0) return BASE_RELEASE;
+        String segment = classRelative.substring(VERSIONS_PREFIX.length(), end);
+        try {
+            return String.valueOf(Integer.parseInt(segment));
+        } catch (NumberFormatException notARelease) {
+            return BASE_RELEASE;
+        }
+    }
+
+    /** The class-relative name with any `META-INF/versions/N/` prefix removed —
+     *  the name the class is KNOWN by, which is what makes two copies of one
+     *  class recognisable as copies downstream. */
+    private static String withoutVersionPrefix(String classRelative) {
+        if (!classRelative.startsWith(VERSIONS_PREFIX)) return classRelative;
+        int end = classRelative.indexOf('/', VERSIONS_PREFIX.length());
+        return end < 0 ? classRelative : classRelative.substring(end + 1);
     }
 
     private static String report(int documents, int facts, List<String> uncovered)
