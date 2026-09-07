@@ -12,6 +12,7 @@ from sextant.domain.facts import (
     CallSiteFact,
     CallTarget,
     ConfigEntryFact,
+    ConstantFact,
     Document,
     Fact,
     FieldWriteFact,
@@ -590,3 +591,48 @@ def test_call_site_fact_kind_literal_serialises_as_call_site():
         ordinal=0,
     )
     assert json.loads(call_site.model_dump_json())["kind"] == "call_site"
+
+
+def test_a_constant_fact_keeps_its_value_in_the_type_the_class_file_recorded():
+    """D00 §5's `constant` gained its first producer in W4 and had no model test.
+
+    `value` is a union on purpose: a consumer resolving an address needs the
+    string and one reading a port needs the number, so flattening either into
+    text would put a re-parse between the reader and the class file.
+    """
+    assert ConstantFact(document_id="d", symbol="s", value="orders").value == "orders"
+    assert ConstantFact(document_id="d", symbol="s", value=3).value == 3
+    assert ConstantFact(document_id="d", symbol="s", value=True).value is True
+    # Non-finite doubles arrive as their Java spelling in a STRING, because RFC
+    # 8259 has no NaN or Infinity literal — writing one unquoted made the whole
+    # fact file invalid for a conforming reader.
+    assert ConstantFact(document_id="d", symbol="s", value="NaN").value == "NaN"
+
+
+def test_an_annotation_element_carries_its_declared_default():
+    """W4's `annotation_default`, which had no model test. It is a
+    `LiteralValue` — the same grammar an annotation's arguments use — because a
+    default can be an array, an enum reference or a nested annotation, and a
+    second vocabulary for one thing is what closed sets exist to prevent."""
+    scalar = SymbolFact(
+        document_id="d",
+        symbol="mod com/acme/A#value(sig_1).",
+        construct_kind=ConstructKind.METHOD,
+        annotation_default="orders",
+    )
+    assert scalar.annotation_default == "orders"
+    listed = SymbolFact(
+        document_id="d",
+        symbol="mod com/acme/A#topics(sig_1).",
+        construct_kind=ConstructKind.METHOD,
+        annotation_default=["a", "b"],
+    )
+    assert listed.annotation_default == ["a", "b"]
+    # Absent everywhere else — an ordinary method has no default, and an
+    # absent key must not read as "defaults to nothing".
+    assert (
+        SymbolFact(
+            document_id="d", symbol="mod com/acme/A#go(sig_1).", construct_kind=ConstructKind.METHOD
+        ).annotation_default
+        is None
+    )

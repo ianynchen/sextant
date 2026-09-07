@@ -67,10 +67,37 @@ class ParameterAnnotationSkewTest {
 
     /** The index of the parameter carrying the first annotation, counted the way
      *  the emitted signature orders them. */
-    private static int annotatedParameter(String constructorSymbol) {
-        int labelled = constructorSymbol.indexOf("Labelled");
-        assertTrue(labelled > 0, "the annotation was dropped entirely");
-        return constructorSymbol.substring(0, labelled).split("\"annotations\":", -1).length - 2;
+    private static int annotatedParameter(String symbol) {
+        return annotatedParameter(symbol, "Labelled");
+    }
+
+    private static int annotatedParameter(String symbol, String annotation) {
+        int at = symbol.indexOf(annotation);
+        assertTrue(at > 0, "the annotation was dropped entirely: " + symbol);
+        return symbol.substring(0, at).split("\"annotations\":", -1).length - 2;
+    }
+
+    @Test
+    void kotlins_trailing_synthetics_do_not_move_a_parameter_annotation()
+            throws Exception {
+        // The assumption this test exists to REPLACE: "synthesised parameters
+        // are always LEADING" is javac's rule, not the class file's, and Kotlin
+        // appends its synthetics at the END — a `Continuation` on a suspend
+        // fun. If kotlinc wrote a SHORT annotation table, aligning from the end
+        // would move an annotation that indexing from zero had right.
+        //
+        // Measured, not assumed: kotlinc writes one entry per DESCRIPTOR
+        // parameter, empty for the synthetic ones, so the table is full length
+        // and the shift is 0. `suspending` takes (String, Continuation) and its
+        // table declares two entries; the annotation stays on parameter 0.
+        String suspending = scan("KotlinParameterAnnotated").stream()
+            .filter(line -> line.contains("suspending("))
+            .filter(line -> line.contains("Tagged"))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("no annotated suspend fun symbol"));
+        assertEquals(0, annotatedParameter(suspending, "Tagged"),
+            "a suspend fun's annotation belongs on its declared parameter, "
+                + "not on the trailing Continuation");
     }
 
     @Test
@@ -80,6 +107,24 @@ class ParameterAnnotationSkewTest {
         // every ordinary constructor, so this is the arm that says it does not.
         assertEquals(
             0, annotatedParameter(constructorSymbol(scan("ConstructorAnnotationShapes$TopLevel"))));
+    }
+
+    @Test
+    void a_class_retention_annotation_uses_its_own_attributes_count() throws Exception {
+        // Every other fixture uses a RUNTIME annotation, so nothing exercised
+        // `RuntimeInvisibleParameterAnnotations` at all — a CLASS-retention
+        // parameter annotation could have been dropped entirely and the suite
+        // would not have noticed. This drives that attribute.
+        //
+        // What it does NOT prove, stated so the next reader does not assume it:
+        // that holding the two counts separately is load-bearing. javac writes
+        // the same count in both attributes, so collapsing them passes — I
+        // checked. The separation is defensive against a producer that differs,
+        // which javac is not.
+        assertEquals(
+            0,
+            annotatedParameter(
+                constructorSymbol(scan("ConstructorAnnotationShapes$Invisible")), "Retained"));
     }
 
     @Test

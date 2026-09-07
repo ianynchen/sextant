@@ -251,11 +251,18 @@ public final class ClassScanner {
                     Opcodes.ASM9, access, name, descriptor, sig, ex) {
                 private int parameterIndex = 0;
                 private String annotationDefault;
-                // JVMS 4.7.18's `num_parameters`, per attribute — the VISIBLE and
-                // INVISIBLE parameter annotations are two separate attributes and
-                // may declare different counts, so one field for both would apply
-                // one attribute's shift to the other's entries. -1 means the
-                // attribute was absent, which is not the same as declaring 0.
+                // JVMS 4.7.18's `num_parameters`, held PER ATTRIBUTE. The visible
+                // and invisible parameter annotations are two separate attributes
+                // and the format permits different counts.
+                //
+                // Honest scope, measured: javac writes the SAME count in both, so
+                // collapsing these into one field changes no output javac
+                // produces — a mutation test confirmed the whole suite still
+                // passes. They stay separate because the FORMAT allows the
+                // counts to differ and reading one attribute's count against the
+                // other's entries would be wrong for any producer that does; not
+                // because a javac-built class file can tell the difference.
+                // -1 means the attribute was absent, which is not 0.
                 private int annotableVisible = -1;
                 private int annotableInvisible = -1;
 
@@ -270,9 +277,18 @@ public final class ClassScanner {
                  *  <p>JVMS 4.7.18 lets the table be SHORTER than the descriptor's
                  *  parameter list, because javac omits parameters it synthesised —
                  *  the outer instance on an inner class, {@code $enum$name} and
-                 *  {@code $enum$ordinal} on an enum. The omitted ones are always
-                 *  LEADING, so entries align from the END and the shift is the
-                 *  difference between the two counts. Measured on the fixtures:
+                 *  {@code $enum$ordinal} on an enum. Those are LEADING, so
+                 *  entries align from the END and the shift is the difference
+                 *  between the two counts.
+                 *
+                 *  <p>That is JAVAC's rule, not the format's, and it was stated
+                 *  here as though it were the format's. Kotlin appends its
+                 *  synthetics at the END — a {@code Continuation} on a suspend
+                 *  fun — so a short table there would make aligning from the end
+                 *  WRONG. Measured rather than assumed: kotlinc writes one entry
+                 *  per descriptor parameter, empty for the synthetic ones, so the
+                 *  table is full length and the shift computes to 0.
+                 *  {@code KotlinParameterAnnotated} pins it. Measured on the fixtures:
                  *  0 for a top-level class, 1 for an inner class, 2 for an enum —
                  *  it is not a constant, and indexing from zero put an enum
                  *  constructor's annotation on {@code $enum$name}, which is also a
@@ -333,7 +349,17 @@ public final class ClassScanner {
                         case org.objectweb.asm.TypeReference.METHOD_RETURN ->
                             typeAnnotationEntryVisitor(typePath, d, visible, returnTypeAnnotations);
                         case org.objectweb.asm.TypeReference.METHOD_FORMAL_PARAMETER -> {
-                            int index = reference.getFormalParameterIndex();
+                            // JVMS 4.7.20.1 indexes FORMAL PARAMETER DECLARATIONS,
+                            // not descriptor slots — the same distinction 4.7.18
+                            // makes for parameter annotations, twenty lines up.
+                            // Aligned the same way, from the end, so a type-use
+                            // annotation on an enum or inner-class constructor
+                            // lands where it was written.
+                            int declared = parameterTypeAnnotations.size();
+                            int annotable = visible ? annotableVisible : annotableInvisible;
+                            int shift = (annotable < 0 || annotable > declared)
+                                ? 0 : declared - annotable;
+                            int index = reference.getFormalParameterIndex() + shift;
                             yield (index >= 0 && index < parameterTypeAnnotations.size())
                                 ? typeAnnotationEntryVisitor(
                                     typePath, d, visible, parameterTypeAnnotations.get(index))
@@ -859,8 +885,20 @@ public final class ClassScanner {
          *  `InnerClasses` — only arrive afterwards. */
         @Override
         public void visitEnd() {
-            int access = nestedAccess != null ? nestedAccess : classAccess;
-            emit(typeSymbol, constructKindOf(access), enclosingSymbol, null, access, null, null,
+            // `InnerClasses` supplies the NESTING flags only. It was replacing the
+            // class-file flags wholesale, and `emit` derives `visibility` from
+            // ACC_PUBLIC — so a PROTECTED nested type, which javac writes as
+            // ACC_PUBLIC in the ClassFile and ACC_PROTECTED in this table,
+            // flipped from `public` to `other`. Nesting is what this attribute
+            // knows; visibility is not its question.
+            //
+            // (The comment that used to sit here had the mechanism backwards:
+            // a PRIVATE nested class is written package-private at the top
+            // level, so it is `protected` where the two disagree in the
+            // ACC_PUBLIC direction.)
+            int access = classAccess;
+            int constructFlags = nestedAccess != null ? nestedAccess : classAccess;
+            emit(typeSymbol, constructKindOf(constructFlags), enclosingSymbol, null, access, null, null,
                  TypeRefs.genericSuperclassFromSignature(classSignature),
                  interfaceSymbolsJson(classInterfaces),
                  genericInterfacesJson(classSignature), erasedSuperclassJson(superName));

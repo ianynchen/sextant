@@ -48,6 +48,12 @@ class ScanReport:
     # the backend's business and is named only inside its own adapter
     # (ARCHITECTURE §10).
     scanner_libraries: tuple[str, ...] = ()
+    # What the jar says it can read, reported back on every scan. The same list
+    # `--capabilities` answers, so a workspace's record and the set its catalogs
+    # were gated on cannot disagree — and it is READ (`AsmScanner.scan`), not
+    # merely emitted, because a field nothing consumes is the defect this
+    # project keeps finding.
+    capabilities: tuple[str, ...] = ()
     uncovered: tuple[str, ...] = ()
 
 

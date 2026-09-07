@@ -66,9 +66,12 @@ finding fewer endpoints.
 | `class_file_version` | The class-file major each document was read from (JVMS 4.1), taken from the bytes rather than from ASM's constants so it is available even for a class the reader refused. Consumers: the accepted-range test, multi-release selection's target fallback, and language labelling |
 | `method_returns` | Capability 9.18 — a `method_return` fact per return instruction, naming the value the method hands back ([D00](D00-fact-schema.md) §5). The last link in a round trip: a returned call result joins by `source` to the site that produced it |
 
-**Fourteen of the scanner's now-seventeen designed capabilities are shipped**, and the shipped
-set is `ingress/extract/jvm/scanner.py`'s `_CAPABILITIES`, which is what a catalog's
-`requires:` is actually checked against. `annotation_args`, `typed_signatures`,
+**Fifteen of the scanner's now-eighteen designed capabilities are shipped**, and the shipped
+set is **`Capabilities.ALL` in the extractor jar** — the scanner DECLARES what it can read,
+and the caller asks it (`--capabilities`), which is what a catalog's `requires:` is checked
+against. *It was `ingress/extract/jvm/scanner.py`'s `_CAPABILITIES`, a Python-side list
+making an unverified claim about a subprocess built by a separate step; that constant is
+gone (W1).* `annotation_args`, `typed_signatures`,
 `type_annotations` and `kotlin_metadata` since Phase 2A/2B; `call_site`, `string_constants`
 and `chain_reconstruction` from Phase 2C's dataflow pass (below); `implemented_interfaces`
 from a class symbol fact's own `interfaces` list, in declaration order
@@ -108,10 +111,12 @@ exists to make visible while it lasts.*
 
 **`chain_reconstruction` means exactly this: receiver and result value ids are present on
 `call_site` facts** ([D00](D00-fact-schema.md) §5) — a `fluent` catalog's steps are a join
-over those links, nothing more. `invokedynamic` stays undeclared: an indy call site is
-still recorded — a `call_site` fact exists for it — but its arguments are honestly
-`unresolved` rather than decompiled (Java 9+ string concatenation compiles to indy, and
-refusing to guess it is the point); a lambda's own bootstrap handle is captured separately,
+over those links, nothing more. `invokedynamic` stays undeclared as a general capability, but **string
+concatenation is no longer among its unread cases** (W4): a `StringConcatFactory` site
+carries a RECIPE holding the literal parts, so `"/api/" + version + "/orders"` reads as the
+template `/api/{}/orders` rather than as `unresolved`. That is reading what the class file
+states, not decompiling — the hole stays a hole. Every other bootstrap's arguments remain
+honestly `unresolved`; a lambda's own bootstrap handle is captured separately,
 through the `lambda` argument kind ([D00](D00-fact-schema.md) §5) wherever a lambda or
 method reference is passed as an argument, and — since 9.17 — through the site's own
 `implementation`, which does not need the lambda to reach an argument slot at all.
@@ -322,7 +327,11 @@ One decision formerly here was closed by Phase 2C's approved design (2026-08-29)
 answers `--capabilities` with `{"capabilities": [...]}` on stdout, the same
 channel it answers a scan on, and repeats the list inside every scan report so
 what a workspace records and what its catalogs were gated on cannot disagree.
-It is asked once per scanner instance, before any scan, because capabilities
+It is asked once per scanner instance and cached. *This said "before any scan"
+until a review checked it: `analyze` asks at the point it needs the answer, which is when
+it hands the set to `resolve` — after the module scan and every library scan. Nothing turns
+on the order, because the jar's answer does not depend on having scanned; the claim was
+simply not true.* Capabilities
 decide which catalogs run. Measured at 0.02s — the JVM starts and exits without
 opening a class file.
 

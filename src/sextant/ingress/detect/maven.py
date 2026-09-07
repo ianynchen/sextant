@@ -733,7 +733,16 @@ class MavenDetector:
         ignored rather than guessed at: a `${property}` nothing defines, or a
         toolchain expression, is not a release this detector can honestly claim.
         """
-        for element in pom.iterfind(".//m:plugin", _POM_NS):
+        # `build/plugins` ONLY — not `.//plugin`, which also matches
+        # `build/pluginManagement/plugins`, `reporting/plugins` and every
+        # `profile`. Measured: with pluginManagement pinning 11 and
+        # build/plugins overriding to 21, a document-order search answers 11
+        # where Maven uses 21. pluginManagement declares a DEFAULT for plugins
+        # a module chooses to use; it is not itself a use. And a profile is a
+        # §8.2 possibility — active in some invocations, not others — so
+        # reading one as though it were the declared release states a value
+        # this analysis cannot know applies.
+        for element in pom.iterfind("m:build/m:plugins/m:plugin", _POM_NS):
             artifact = element.find("m:artifactId", _POM_NS)
             if artifact is None or (artifact.text or "").strip() != "maven-compiler-plugin":
                 continue
@@ -762,9 +771,19 @@ class MavenDetector:
         if not declared:
             return None
         text = declared.strip()
-        if text.startswith("1.") and text[2:].isdigit():
+        if text.startswith("1.") and text[2:].isascii() and text[2:].isdigit():
             text = text[2:]
-        return int(text) if text.isdigit() else None
+        # `isascii()` as well as `isdigit()`: the latter is TRUE for superscript
+        # `²` (which `int()` then refuses, crashing the detector) and for
+        # Arabic-Indic digits (which `int()` silently accepts as a release
+        # nobody wrote). Measured both.
+        if not (text.isascii() and text.isdigit()):
+            return None
+        release = int(text)
+        # A release below 1 is not a release, and the upper bound is what keeps
+        # an unbounded value out of a `::BIGINT` cast downstream — measured:
+        # `str.isdigit()` accepted a 21-digit number that reached it.
+        return release if 1 <= release <= 1000 else None
 
     @staticmethod
     def _properties(pom: ElementTree.Element) -> dict[str, str]:

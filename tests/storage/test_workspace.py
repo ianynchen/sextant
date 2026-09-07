@@ -14,6 +14,7 @@ from sextant.domain.facts import (
     CallTarget,
     ConfigEntryFact,
     Document,
+    FieldWriteFact,
     MethodReturnFact,
     ModuleFact,
     SymbolFact,
@@ -1254,7 +1255,35 @@ def _multi_release_workspace(tmp_path: Path, *, declared_release: int | None) ->
                     symbol="mod com/acme/Overlaid#",
                     construct_kind="class",
                     visibility="public",
-                )
+                ),
+                # One fact of EVERY class-derived kind, so each filtered view
+                # actually has a row to exclude. Without these the views are
+                # empty whether or not the filter is applied, and the assertion
+                # cannot fail — which is how four of the five went unpinned.
+                AnnotationFact(
+                    document_id=name,
+                    target="mod com/acme/Overlaid#",
+                    use=AnnotationUse(annotation="com/acme/Marker#"),
+                    retention="runtime",
+                ),
+                CallSiteFact(
+                    document_id=name,
+                    caller="mod com/acme/Overlaid#go(sig_1).",
+                    target=CallTarget(owner="x/C#", name="m", descriptor="()V"),
+                    invoke_kind="virtual",
+                    ordinal=0,
+                ),
+                MethodReturnFact(
+                    document_id=name,
+                    method="mod com/acme/Overlaid#go(sig_1).",
+                    ordinal=0,
+                    value=CallArgument(kind="unresolved"),
+                ),
+                FieldWriteFact(
+                    document_id=name,
+                    field="mod com/acme/Overlaid#f.",
+                    from_parameter=0,
+                ),
             ],
         )
     module_document = Document(
@@ -1416,4 +1445,158 @@ def test_a_class_overlaid_only_above_the_target_keeps_its_lowest_copy(tmp_path: 
     selected = {row["document_id"] for row in workspace.query("selected_documents")}
     # Kept, not dropped — and exactly one of them, so the symbol is not doubled.
     assert selected == {"module", "v24"}
+    workspace.close()
+
+
+def test_no_exported_table_ships_a_credential_another_one_masks(tmp_path: Path):
+    """The leak review found: the bundle masked `call_sites.arguments` and then
+    shipped `raw_facts` — which CONTAINS those same call-site facts — verbatim
+    in the same directory. A consumer recomputing a derived table from the fact
+    stream got different values and could not tell a redaction from a defect.
+
+    Asserted over EVERY exported table rather than the two that were wrong, so
+    a table added later cannot reintroduce it quietly: this is the ratchet's
+    shape applied to redaction.
+    """
+    facts = tmp_path / "facts"
+    facts.mkdir(parents=True, exist_ok=True)
+    document = Document(
+        document_id="doc",
+        relative_path="com/acme/A.java",
+        module_id="com.acme:m",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=5,
+        scanner_id="sextant-jvm-extractor",
+        class_name="com/acme/A.class",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:none",
+    )
+    secret = "https://user:hunter2@billing.internal/pay"
+    write_fact_file(
+        facts / "A.jsonl",
+        document,
+        [
+            CallSiteFact(
+                document_id="doc",
+                caller="mod com/acme/A#go(sig_1).",
+                target=CallTarget(
+                    owner="x/Client#", name="post", descriptor="(Ljava/lang/String;)V"
+                ),
+                invoke_kind="virtual",
+                ordinal=0,
+                arguments=[CallArgument(kind="string", value=secret)],
+            ),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    bundle = tmp_path / "bundle"
+    exported = workspace.export_tables(bundle, Redactor.from_rules())
+    workspace.export_facts(bundle, Redactor.from_rules())
+
+    leaked = []
+    for parquet in sorted((bundle / "graph").glob("*.parquet")):
+        rows = duckdb.sql(f"SELECT * FROM read_parquet('{parquet}')").fetchall()
+        if any("hunter2" in str(cell) for row in rows for cell in row):
+            leaked.append(parquet.name)
+    for parquet in sorted((bundle / "facts").glob("*.parquet")):
+        rows = duckdb.sql(f"SELECT * FROM read_parquet('{parquet}')").fetchall()
+        if any("hunter2" in str(cell) for row in rows for cell in row):
+            leaked.append(f"facts/{parquet.name}")
+
+    assert exported, "nothing was exported, so this proves nothing"
+    assert leaked == [], f"a credential left in the clear in: {leaked}"
+    # The workspace keeps it verbatim — the analyst's own disk is not the
+    # trust boundary, the bundle is.
+    assert any("hunter2" in str(row.get("arguments")) for row in workspace.query("call_sites"))
+    workspace.close()
+
+
+def test_every_view_that_reads_class_facts_applies_multi_release_selection(tmp_path: Path):
+    """Only ONE of the filtered views was pinned, so reverting the filter on
+    `annotations`, `call_sites`, `method_returns` or `field_writes` left the
+    suite green — and the review found five MORE readers that had no filter at
+    all, including the type-hierarchy queries where a losing overlay does the
+    most damage.
+
+    Asserted over the readers as a set rather than one at a time, so a view
+    added later that reads class facts and forgets the filter fails here.
+    """
+    workspace = _multi_release_workspace(tmp_path, declared_release=21)
+    losing = {"base", "v99"}
+    for view in ("symbols", "annotations", "call_sites", "method_returns", "field_writes"):
+        rows = workspace._connection.execute(f"SELECT DISTINCT document_id FROM {view}").fetchall()
+        seen = {row[0] for row in rows}
+        assert not (seen & losing), f"{view} still reads a copy selection rejected: {seen & losing}"
+    # And the named queries that read symbol facts straight from raw_facts.
+    for named in ("supertypes", "implementations", "superclasses", "interface_declarations"):
+        symbols = {str(row["symbol"]) for row in workspace.query(named)}
+        assert len(symbols) == len(list(workspace.query(named))), (
+            f"{named} returns a symbol more than once, so a losing copy still contributes"
+        )
+    workspace.close()
+
+
+def test_the_three_unpinned_redaction_joins_actually_mask(tmp_path: Path):
+    """`roots.path`, `return_flows.value` and `method_returns.value` each gained
+    a redaction join in W34, and none was tested — delete any one of the three
+    and the suite stayed green. They are the columns most likely to carry an
+    address or a bytecode string constant into a published bundle.
+    """
+    facts = tmp_path / "facts"
+    facts.mkdir(parents=True, exist_ok=True)
+    document = Document(
+        document_id="doc",
+        relative_path="com/acme/A.java",
+        module_id="com.acme:m",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=5,
+        scanner_id="sextant-jvm-extractor",
+        class_name="com/acme/A.class",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:none",
+    )
+    secret = "https://user:hunter2@billing.internal/pay"
+    write_fact_file(
+        facts / "A.jsonl",
+        document,
+        [
+            MethodReturnFact(
+                document_id="doc",
+                method="mod com/acme/A#go(sig_1).",
+                ordinal=0,
+                value=CallArgument(kind="string", value=secret),
+            )
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    workspace._connection.execute(
+        "INSERT INTO roots VALUES (?, 'inbound_endpoint', 'http', 'GET', ?)",
+        ["mod com/acme/A#go(sig_1).", secret],
+    )
+    workspace._connection.execute(
+        "INSERT INTO return_flows VALUES (?, 0, 1, ?, 0, ?::JSON, 'resolved', 'compiler')",
+        [
+            "mod com/acme/A#c(sig_1).",
+            "mod com/acme/A#go(sig_1).",
+            f'{{"kind":"string","value":"{secret}"}}',
+        ],
+    )
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules())
+    for table in ("roots", "return_flows", "method_returns"):
+        rows = duckdb.sql(
+            f"SELECT * FROM read_parquet('{bundle / 'graph' / (table + '.parquet')}')"
+        ).fetchall()
+        assert rows, f"{table} exported no row, so this proves nothing"
+        assert not any("hunter2" in str(cell) for row in rows for cell in row), (
+            f"{table} shipped a credential in the clear"
+        )
     workspace.close()

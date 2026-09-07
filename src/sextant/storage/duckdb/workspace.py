@@ -719,11 +719,16 @@ _EXPORT_QUERIES = {
     # tagged copies in `documents` and cannot tell which one the derived rows
     # were built from.
     "selected_documents": _NAMED_QUERIES["selected_documents"],
-    # No masked column: a constant is a compile-time literal from the class
-    # file, and the value patterns that would catch a secret in one apply to
-    # `resolved_config`, not here. Stated rather than left to inference, the
-    # same way `scheduled_work` and `error_handlers` are.
-    "constants": _NAMED_QUERIES["constants"],
+    # A constant IS a string read out of bytecode, which is the exact
+    # population `_REDACTED_JSON`'s userinfo rule exists for — the same rule
+    # `call_sites.arguments` takes. Exporting it clear while `raw_facts` ships
+    # the same literal masked would put both spellings in one bundle.
+    "constants": f"""
+        SELECT c.document_id, c.symbol, coalesce(j.masked::JSON, c.value) AS value
+        FROM constants c
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = c.value::VARCHAR
+        ORDER BY c.symbol
+    """,
     # `value` is an entry of the ARGUMENT grammar — the same JSON shape
     # `call_sites.arguments` carries, produced from the same string constants
     # in bytecode — so it takes the same `redact_json` pass, over userinfo in
@@ -964,7 +969,8 @@ class DuckDbWorkspace:
             "WHERE arguments IS NOT NULL "
             "UNION SELECT DISTINCT args::VARCHAR FROM annotations WHERE args IS NOT NULL "
             "UNION SELECT DISTINCT value::VARCHAR FROM return_flows WHERE value IS NOT NULL "
-            "UNION SELECT DISTINCT value::VARCHAR FROM method_returns WHERE value IS NOT NULL"
+            "UNION SELECT DISTINCT value::VARCHAR FROM method_returns WHERE value IS NOT NULL "
+            "UNION SELECT DISTINCT value::VARCHAR FROM constants WHERE value IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_JSON,
@@ -1050,6 +1056,26 @@ class DuckDbWorkspace:
         matches, and that is not a URL with userinfo — survives into the
         bundle. Closing that means value patterns, which is what `.sextant.yml`
         gives a repository that knows the shape of its own secrets."""
+        # EVERY fact payload, not only `config_entry`. The bundle masks
+        # `call_sites.arguments`, `annotations.args`, `return_flows.value` and
+        # `method_returns.value` — and then shipped `raw_facts`, which contains
+        # those very facts, verbatim in the same directory. A consumer
+        # recomputing a derived table from the fact stream got different values
+        # and could not tell a redaction from a defect.
+        #
+        # Two rules, applied in order, because they answer different questions:
+        # a `config_entry`'s value is masked by its own KEY (the pattern rule),
+        # and every payload's string leaves then pass the userinfo strip that
+        # `call_sites` and the rest already take.
+        grammar = self._connection.execute(
+            "SELECT DISTINCT payload::VARCHAR AS original FROM raw_facts "
+            "WHERE kind <> 'config_entry'"
+        ).fetchall()
+        staged_grammar: list[tuple[str, ...]] = [
+            (str(original), masked)
+            for (original,) in grammar
+            if (masked := redactor.redact_json(str(original))) != str(original)
+        ]
         entries = self._connection.execute(
             "SELECT DISTINCT payload::VARCHAR AS original FROM raw_facts "
             "WHERE kind = 'config_entry' "
@@ -1061,9 +1087,12 @@ class DuckDbWorkspace:
         staged: list[tuple[str, ...]] = [
             (str(original), masked)
             for (original,) in entries
-            if (masked := redact_config_entry_line(str(original), redactor)) != str(original)
+            if (masked := redactor.redact_json(redact_config_entry_line(str(original), redactor)))
+            != str(original)
         ]
-        self._stage_map(_REDACTED_PAYLOADS, "original VARCHAR, masked VARCHAR", staged)
+        self._stage_map(
+            _REDACTED_PAYLOADS, "original VARCHAR, masked VARCHAR", staged + staged_grammar
+        )
 
     def close(self) -> None:
         self._connection.close()

@@ -286,7 +286,16 @@ def analyze(
             libraries_not_scanned.append(f"{library.coordinate}: {reason}")
             continue
         scanned_facts += library_report.facts
-        uncovered.extend(library_report.uncovered)
+        # The SAME substitution the failure branch above makes, for the same
+        # reason: these strings travel into metadata.json, the rendered gaps
+        # list and a published bundle, where an absolute path under someone's
+        # home directory identifies nothing. The success path grew its own
+        # path-carrying channel when a skipped class began reporting the
+        # exception's own text, and the rule was applied to one branch only.
+        uncovered.extend(
+            note.replace(str(library.archive), library.coordinate)
+            for note in library_report.uncovered
+        )
     progress.finish("scan", f"{scanned_facts} facts")
 
     # Ingress stays model-blind (design §1): every parseable config file

@@ -91,10 +91,22 @@ class AsmScanner:
         if completed.returncode != 0:
             raise ScanError(f"extractor failed: {completed.stderr.strip()}")
         report = json.loads(completed.stdout)
+        # The scan's own answer becomes the cache. Two consequences, both
+        # wanted: a later `capabilities()` needs no second subprocess, and the
+        # two answers cannot drift apart — a jar replaced mid-run is refused
+        # rather than silently gating catalogs on a set it no longer reports.
+        reported = tuple(report["capabilities"])
+        if self._capabilities is not None and self._capabilities != frozenset(reported):
+            raise ScanError(
+                f"the extractor reported {sorted(reported)} on this scan but "
+                f"{sorted(self._capabilities)} when asked — the jar changed mid-run"
+            )
+        self._capabilities = frozenset(reported)
         return ScanReport(
             documents=report["documents"],
             facts=report["facts"],
             scanner_id=report["scanner_id"],
             scanner_libraries=tuple(report["scanner_libraries"]),
+            capabilities=reported,
             uncovered=tuple(report["uncovered"]),
         )

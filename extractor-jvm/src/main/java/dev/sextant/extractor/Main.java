@@ -163,7 +163,19 @@ public final class Main {
                         try {
                             lines = scanner.scan(bytes, documentId, reason ->
                                 reasons.add("kotlin metadata unreadable (" + reason + ")"));
-                        } catch (Exception unreadable) {
+                        } catch (IllegalArgumentException | IndexOutOfBoundsException unreadable) {
+                            // Narrowed by TYPE, not only by scope. `catch (Exception)`
+                            // swallowed OUR OWN defects too — an NPE in a visitor, a
+                            // bad substring in signature parsing — and reported them
+                            // as "class unreadable" at exit 0, so a regression in this
+                            // extractor degraded a module to zero facts for the
+                            // affected classes instead of failing loudly (§13.6).
+                            //
+                            // These two are what a class file this build cannot read
+                            // actually throws: ASM refuses an unsupported major with
+                            // IllegalArgumentException, and a truncated or malformed
+                            // constant pool surfaces as an index error. Anything else
+                            // is ours, and propagates.
                             lines = List.of();
                             reasons.add("class unreadable (" + unreadable + ")");
                         }
@@ -176,8 +188,18 @@ public final class Main {
                     // nested class and its outer share a source path, and two
                     // documents writing to one file would leave only the
                     // last one on disk.
+                    // D00 §2 defines `content_hash` as "of the source of truth
+                    // this was read from". When the archive entry could not be
+                    // read there IS no source of truth here, and hashing the
+                    // empty array wrote sha256:e3b0c442… — the well-known hash
+                    // of nothing — as though it were a measurement, and made
+                    // two different corrupt entries hash-identical. A stated
+                    // sentinel instead: absence, not a default (NFR-2).
+                    String contentHash = bytes.length == 0 && partialReason != null
+                        ? "unread"
+                        : "sha256:" + sha256Bytes(bytes);
                     writeFactFile(out.resolve(replaceSuffix(classRelative, ".class", ".jsonl")),
-                                  relative, documentId, options, sha256Bytes(bytes), lines,
+                                  relative, documentId, options, contentHash, lines,
                                   classMajor, partialReason, classReleaseOf(classRelative),
                                   withoutVersionPrefix(classRelative));
                     documents++;
@@ -305,10 +327,10 @@ public final class Main {
             //
             // Measured across 2,402 cached jars: 6 carry `META-INF/versions/`
             // entries with no `Multi-Release: true`. `testcontainers-2.0.5.jar`
-            // is the extreme — 1,198 such entries (shaded snakeyaml and jackson
+            // is the extreme — 1,218 such entries (shaded snakeyaml and jackson
             // paths a shade plugin copied in) under a manifest carrying only
             // Manifest-Version and Implementation-Version. This one check
-            // removes 1,198 phantom documents from that jar alone.
+            // removes 1,218 phantom documents from that jar alone.
             return zip.stream()
                       .map(ZipEntry::getName)
                       .filter(name -> name.endsWith(".class"))
@@ -356,7 +378,7 @@ public final class Main {
         // third-party and are recorded ONCE per workspace in metadata.json
         // rather than repeated on every one of a module's documents.
         document.put("scanner_id", JsonOut.string(SCANNER_ID));
-        document.put("content_hash", JsonOut.string("sha256:" + contentHash));
+        document.put("content_hash", JsonOut.string(contentHash));
         document.put("origin_entry", JsonOut.string(options.get("classes")));
         // The library this document was extracted FROM, as its coordinate —
         // written only when `--origin` names one (D00 §2). Omitted entirely
@@ -476,14 +498,38 @@ public final class Main {
      *  than guessed at or refused: the entry is still a real class file, and
      *  inventing a release for it would be a claim the archive never made. */
     private static String classReleaseOf(String classRelative) {
-        if (!classRelative.startsWith(VERSIONS_PREFIX)) return BASE_RELEASE;
+        int release = versionOf(classRelative);
+        return release < 0 ? BASE_RELEASE : String.valueOf(release);
+    }
+
+    /** The release an overlay path declares, or -1 when the path is not a valid
+     *  overlay at all.
+     *
+     *  <p>ONE decision, shared with {@link #withoutVersionPrefix}, because the
+     *  two used to disagree: this validated the segment and fell back to `base`,
+     *  while the other stripped the prefix unconditionally. A path like
+     *  `META-INF/versions/notanumber/com/x/Y.class` was then simultaneously NOT
+     *  an overlay (tagged `base`) and one (named `com/x/Y.class`) — so it shared
+     *  a name and a release with the genuine base copy, and which survived
+     *  selection was decided by a sha256.
+     *
+     *  <p>JEP 238 requires a positive integer of at least 9 — versioned entries
+     *  did not exist before Java 9 — so `-1`, `+21` and `8` are not releases,
+     *  and `Integer.parseInt` alone accepted all three. */
+    private static int versionOf(String classRelative) {
+        if (!classRelative.startsWith(VERSIONS_PREFIX)) return -1;
         int end = classRelative.indexOf('/', VERSIONS_PREFIX.length());
-        if (end < 0) return BASE_RELEASE;
+        if (end < 0) return -1;
         String segment = classRelative.substring(VERSIONS_PREFIX.length(), end);
+        if (segment.isEmpty()) return -1;
+        for (int i = 0; i < segment.length(); i++) {
+            if (segment.charAt(i) < '0' || segment.charAt(i) > '9') return -1;
+        }
         try {
-            return String.valueOf(Integer.parseInt(segment));
-        } catch (NumberFormatException notARelease) {
-            return BASE_RELEASE;
+            int release = Integer.parseInt(segment);
+            return release >= 9 ? release : -1;
+        } catch (NumberFormatException tooLarge) {
+            return -1;
         }
     }
 
@@ -491,9 +537,10 @@ public final class Main {
      *  the name the class is KNOWN by, which is what makes two copies of one
      *  class recognisable as copies downstream. */
     private static String withoutVersionPrefix(String classRelative) {
-        if (!classRelative.startsWith(VERSIONS_PREFIX)) return classRelative;
-        int end = classRelative.indexOf('/', VERSIONS_PREFIX.length());
-        return end < 0 ? classRelative : classRelative.substring(end + 1);
+        // Strips only where {@link #versionOf} agrees this IS an overlay, so the
+        // two helpers cannot answer differently about one path.
+        if (versionOf(classRelative) < 0) return classRelative;
+        return classRelative.substring(classRelative.indexOf('/', VERSIONS_PREFIX.length()) + 1);
     }
 
     private static String report(int documents, int facts, List<String> uncovered)

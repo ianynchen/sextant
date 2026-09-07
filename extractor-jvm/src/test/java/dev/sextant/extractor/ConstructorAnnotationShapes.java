@@ -23,6 +23,15 @@ public final class ConstructorAnnotationShapes {
         public TopLevel(@Labelled("first") String first, int second) {}
     }
 
+    /** A CLASS-retention parameter annotation on the same shape. The visible and
+     *  invisible parameter-annotation tables are TWO attributes with independent
+     *  counts, and the code holds a count per attribute for that reason — but
+     *  every fixture used a RUNTIME annotation, so collapsing the two into one
+     *  field passed the whole suite. This drives the invisible table. */
+    public static final class Invisible {
+        public Invisible(@Retained("first") String first, int second) {}
+    }
+
     /** Shift 1 — the hidden leading parameter is the outer instance. Its type
      *  differs from the annotated parameter's, so this misalignment at least
      *  COULD be noticed downstream; the enum's cannot. */
