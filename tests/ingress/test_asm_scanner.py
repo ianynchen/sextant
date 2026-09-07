@@ -1093,3 +1093,20 @@ def test_every_fact_line_is_strict_json(tmp_path: Path):
     for written in tmp_path.rglob("*.jsonl"):
         for line in written.read_text(encoding="utf-8").splitlines():
             strict(line)
+
+
+@pytest.mark.parametrize(
+    "capability",
+    ["annotation_default", "constant_value", "enclosing_class", "concat_template"],
+)
+def test_the_scanner_declares_each_capability_w4_added(capability: str):
+    """A catalog cannot ask for a fact it has no NAME for — `requires:` matches
+    on these strings — so reading an attribute without declaring one leaves it
+    unreachable however correctly it was read.
+
+    W4 read four new things and named none of them, which meant no catalog could
+    ever require any of them. Every capability from 9.13 onwards has an
+    assertion like this; these four had none, so deleting one from the jar
+    failed nothing.
+    """
+    assert capability in AsmScanner(JAR).capabilities()

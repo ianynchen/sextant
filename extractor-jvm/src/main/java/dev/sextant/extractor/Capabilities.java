@@ -25,6 +25,15 @@ public final class Capabilities {
     public static final List<String> ALL = List.of(
         // Phase 1: read straight from declarations.
         "annotation_args",
+        // W4. A catalog cannot ask for a fact it has no name for — `requires:`
+        // matches on these strings — so reading an attribute without declaring
+        // one leaves it unreachable however correctly it was read.
+        //
+        // `annotation_default` (JVMS 4.7.22): what an annotation element falls
+        // back to when a use omits it. Its consumer is a catalog that today
+        // hardcodes the same number from documentation, where a framework
+        // version change makes the hardcoded answer silently wrong.
+        "annotation_default",
         // Capability 9.15: an `ANEWARRAY`/`AASTORE` construction reads as an
         // array of elements rather than one opaque `unresolved`.
         "array_arguments",
@@ -36,6 +45,17 @@ public final class Capabilities {
         // the accepted-range test, multi-release selection's target fallback,
         // and language labelling.
         "class_file_version",
+        // A StringConcatFactory site's recipe, so an address the code assembles
+        // reads as a template rather than as `unresolved`.
+        "concat_template",
+        // JVMS 4.7.2's `ConstantValue`: `static final String TOPIC = "orders"`
+        // is how a great many real listeners name their destination, and the
+        // address is unresolvable without it.
+        "constant_value",
+        // JVMS 4.7.6/4.7.7: the class file's own statement of what encloses a
+        // nested class — including, for an anonymous one, the enclosing METHOD,
+        // which splitting a binary name on `$` cannot reach.
+        "enclosing_class",
         // Capability 9.14: parameterized superinterface references, kept as
         // full type references where `implemented_interfaces` erases them.
         "generic_interfaces",

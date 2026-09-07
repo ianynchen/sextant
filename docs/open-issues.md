@@ -1498,3 +1498,61 @@ verbatim-workspace consequence stated where a reader deciding what to do with a
 workspace will see it. **Falsified by** a decision to actually redact at
 production for all five existing columns, which 2K considered and rejected on
 the grounds that it breaks peer resolution.
+
+### OI-44 — a catalog still hardcodes a framework default that the jar now states (W4a)
+**Major · found 2026-09-07 by code review of W4 · `src/sextant/catalogs/*.yml`,
+`src/sextant/application/resolve/`, `docs/components/D02-catalog-schema.md:634`**
+
+A catalog that needs a framework's default — *"an unspecified `@KafkaListener`
+concurrency is 1"* — carries the number typed in from documentation. W4 made the
+real value readable: `AnnotationDefault` (JVMS 4.7.22) is now extracted and
+declared as the `annotation_default` capability. **Nothing reads it.**
+`verify: grep -rn "annotation_default" src/sextant/application/resolve/ | wc -l`
+
+**Why it is Major rather than tidy-up.** A hardcoded default is a prediction
+about a framework at a version nobody measured, which GUIDELINES §8.1 forbids
+for exactly this reason: when a framework changes a default in a new release,
+every row derived from it is **silently wrong** — no gap, no open question, no
+signal. The jar states the truth and we ignore it.
+
+**Not a catalog edit, which is why it is its own item.** There is no vocabulary
+for it: a catalog cannot say "take this element's declared default". That is
+catalog-grammar work in the resolve engines. And `D02:634` currently states the
+rule as *"a declared default is not written into the class file, so …"* — a
+sentence **W4 made false** — so the amendment lands with the grammar.
+
+**Closes by** a catalog reading `annotation_default` for at least one element
+that is hardcoded today, D02 §2 gaining the vocabulary, and `D02:634` corrected.
+**Falsified by** measuring that no shipped catalog actually hardcodes a default
+an annotation declares — in which case the capability has no consumer and the
+question becomes whether to keep it.
+
+### OI-45 — nesting is still derived by splitting a class name on `$` (W4b)
+**Major · found 2026-09-07 by code review of W4 · `src/sextant/domain/symbols.py:69`,
+`src/sextant/application/resolve/shapes/identity_calls.py:72`**
+
+`outer_type_of` finds a nested type's enclosing type by splitting its name at the
+first `$`. W4 made the class file's own statement available — `InnerClasses` and
+`EnclosingMethod`, declared as the `enclosing_class` capability — and the split
+is still what runs.
+
+**Two things the split gets wrong.** `$` is legal in a Java identifier, so a
+top-level class genuinely named `Foo$Bar` is reported as nested inside `Foo`,
+which does not exist. And the split can only ever name a TYPE: for an anonymous
+class it cannot reach the enclosing METHOD, which the class file states and
+which W4 demonstrated reading (`BillingRestTemplate$1` →
+`BillingRestTemplate#batchSettlements(sig_a3660822).`).
+
+**Not a swap, which is why it is its own item.** The two do not answer the same
+question: `outer_type_of("A$B$C#")` returns `A#`, the TOP-LEVEL type, while the
+fact gives `A$B#`, the immediate encloser — reaching top-level is a walk of
+repeated joins. And `outer_type_of` lives in `domain/`, which the import-linter
+layering contract forbids from querying the workspace, so the consumer
+(`identity_calls`) has to do the join and the domain helper has to lose its
+guessing half.
+
+**Closes by** `identity_calls` reading the `enclosing` fact, with `outer_type_of`
+either deleted or reduced to a string helper nothing derives nesting from.
+**Falsified by** the `$` split being provably correct for every symbol the one
+consumer sees — it reads gRPC generated classes, where the shape is regular — in
+which case this is a stated boundary rather than a defect.
