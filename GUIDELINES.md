@@ -185,6 +185,12 @@ Every catalog, engine, detector and rule that claims to know what a framework do
 
 4. **Never add behaviour the framework does not have under the exact circumstances.** The test is not "would this be reasonable" but "does the framework do this, here, under these conditions". A class implementing an `@HttpExchange` interface is served only when it is a controller bean; deriving an inbound route for a plain `@Service` implementation invents an endpoint nothing serves.  
 
+5. **When two things look identical to us, the provider has a way to tell them apart. Go and find it; never invent one.** If a framework serves two protocols, two dispatch paths, two lifecycles, it must itself distinguish them or it could not run — so the discriminator EXISTS, and the work is locating it rather than reasoning about which signal seems most likely. Reasoning produces a plausible rule; the provider's own mechanism produces the right one.
+
+   *The worked example.* Spring RSocket and Spring STOMP both use `@MessageMapping` on a `@Controller`, and a catalog published every RSocket route as `websocket`. The candidate discriminators — return types, configuration keys, dependency coordinates — were all guesses. **Measured:** `SimpAnnotationMethodMessageHandler.isHandler` is `hasAnnotation(beanType, Controller.class)` and RSocket's own chain sets an equivalent predicate, so **Spring does not distinguish them on the class at all** — the discriminator is which handler bean auto-configuration registered, i.e. a dependency fact, plus RSocket's own `@ConnectMapping` as a positive marker.
+   
+   **And following the path answered a question we had framed wrongly.** Because both handlers scan the same beans, a module carrying both starters really does serve one `@MessageMapping` over both protocols — so `both` is a correct answer, not an ambiguity to resolve. Every option drafted from reasoning had assumed we must pick one. **An invented discriminator does not merely risk being wrong; it can force a false choice the provider never makes.**
+
 **A language's rules bind exactly as a framework's do.** The four rules above say "framework" throughout; a language is the same discipline with a stricter source. Java identifies a method by **name and parameter types in order** — arity is a consequence of that list, never the rule — so a catalog matching a call by name and argument COUNT has invented a rule the language does not use, and two overloads sharing a count are then indistinguishable. That is not a framework quirk to be probed; it is in the language specification, and mirroring it is not optional. The same holds for any language construct we key on: read the rule, encode the rule.  
 
 **Operationally:** the framework's rule must be **measured before it is built on** (§5.4) — a rule taken from memory, from a reviewer's citation, or from documentation is a *prediction*, and two of Phase 2O's checkpoints falsified exactly such predictions. State the versions measured, because a framework's rule is version-scoped, and a rule verified on one version is evidence about that version only.  
@@ -258,6 +264,16 @@ The list is short and honestly so: the pipeline derives everything it can see an
 
 
 ---  
+
+### 8.5 Design an output from what a consumer will DO with it, never from the tables we happen to hold  
+
+An export, an index, a query surface, a rendered document — each is a thing somebody uses, and its shape is settled by the use, not by what is convenient to emit. The failure looks like competence: an interface designed outward from the schema is complete, consistent, and answers questions nobody asked.  
+
+**Ask what the consumer is trying to do, then work backwards.** A developer refactoring for performance wants to know which endpoints touch the most remote things, whether one trace hits a terminal twice, and — the question nobody thinks to offer — *how much of this answer to trust*. An agent avoiding a `grep` wants `symbol → file:line`, reverse indexes for the questions text search cannot answer, and a per-file digest so it can decide not to open a file at all. Neither list falls out of reading the schema.  
+
+**The tell that this rule is being broken:** the design is being argued in terms of our own internals — which tables travel, which queries the graph document once listed — rather than in terms of a task somebody performs.  
+
+**Its §8.3 audit list, and every entry cost something.** `_EXPORTED_TABLES` was a hand-curated list of eleven names, and three tables the trace tier exists to produce were absent because nobody asked what a consumer would need to recompute a diagram we shipped them. D01's ten named queries were drawn up before anything consumed them, and were about to be built as a set of ten. `COVERAGE.md` §5 has one axis, protocol, because it was designed as a checklist of frameworks rather than as an answer to "is this supported" — which is why twelve committed items are enumerated nowhere, and why the document cannot express a support level for a language construct.  
 
 ## 9. Coding Standards  
 
