@@ -57,7 +57,7 @@ messaging) both exist.
 | **2O** | Spring surface | **delivered** — [spec](../specs/2026-09-03-phase-2o-spring-surface-design.md) · [plan](2026-09-03-phase-2o-spring-surface.md) | gRPC both halves (descriptor + bytecode, both starters); Spring Data REST's controller-less API; `@RabbitListener`/`@PulsarListener`, legacy `@SqsListener`, Actuator `@Endpoint`; servlets; `@Scheduled` and `@ControllerAdvice` as their own non-wire tables; Spring Integration channels; the `@HttpExchange` direction flip; the served-path identity migration — **details below the table** | **NOT catalogs-only** — that prediction was wrong. Five new engine styles, two extractor capabilities (9.15 varargs, 9.16 nested annotations), and three closed-set amendments |
 | **2P** | Spring Cloud + Meridian contract + docs-honesty backlog | planned | Spring Cloud Gateway's config-declared proxy routes (today invisible — a live gateway analysis showed four `lb://` routes the tables cannot see); `lb://` discovery URIs; the Config Server honesty story; **the Meridian integration** ([docs/meridian-integration.md](../../meridian-integration.md), ruled into 2P 2026-09-03): boundary vocabulary (FR-21), derivation diff (FR-22), observability map (FR-23) — FR-24's library embedding largely delivered by 2N's `sextant.api` facade | config-declared endpoints — routes that exist in YAML, not code — plus the typed diff/observability contract a consumer can gate PRs on |
 | **2J** | Second frameworks | planned | Micronaut, Quarkus/JAX-RS, MicroProfile REST Client — **zero engine changes is the acceptance test**; then the typed-Catalog refactor | none — that is the point |
-| **2Q** | Call graph and traces | **delivered 2026-09-06** — scope and evidence below | `call_edges` and a bounded, cycle-refusing traversal from every ROOT kind; `return_flows` linking a callee's returned value to its caller's result, so a trace runs request → handler → service → terminal → back through the composition → **response**; lambda bodies (9.17) and return values (9.18) as extractor capabilities; a `roots` table carrying wire identity; a rendered trace and a Mermaid sequence diagram per root with machine-stated elision | the graph itself — and it came in AHEAD of 2J rather than after it, because the sweep's fixes made the boundary set trustworthy enough to trace from |
+| **2Q** | Call graph and traces | **in progress** — the traversal, `return_flows`, `roots` and the diagrams shipped 2026-09-06, but FR-6 and FR-7 are not met (see 2026-09-07 below). Scope and evidence below | `call_edges` and a bounded, cycle-refusing traversal from every ROOT kind; `return_flows` linking a callee's returned value to its caller's result, so a trace runs request → handler → service → terminal → back through the composition → **response**; lambda bodies (9.17) and return values (9.18) as extractor capabilities; a `roots` table carrying wire identity; a rendered trace and a Mermaid sequence diagram per root with machine-stated elision | the graph itself — and it came in AHEAD of 2J rather than after it, because the sweep's fixes made the boundary set trustworthy enough to trace from |
 | **2R** | Catalog measurement + near-miss coverage | **in progress** — **36 of 55 catalogs carry a `measured:` block, 19 on the unmeasured allowlist** (an earlier "10 of 55" here was wrong: 10 is what Stage 4's own batches measured, not the total, and the two numbers were reported as one) | one pass per catalog answering two questions with one reading: is the encoded rule what the framework ACTUALLY does (a `measured:` block naming coordinate, version and probe), and does a test prove the catalog DECLINES. Batch 1 found a disabled cron reported as live work and a wrong GraphQL address; batch 2 found `@PulsarReader`, an entire inbound surface named nowhere | the `annotation_driven` vocabulary pass — `container`, `path_from_siblings`, direction-aware accessor fallback — each key forced by a measurement, after §13.8's third-occurrence rule fired |
 | **2S** | Documentation debt + the open-issue sweep | planned | ~34 rows answered built / designed / retired, every retirement recorded; then `docs/open-issues.md` worked top to bottom — every Major, plus every Minor whose fix is cheaper than the row describing it, and a stated reason on any that is not | nothing new — this is the phase that makes the documents true |
 | **2T** | Multi-version | planned | Boot 2.x and Boot 4.x acceptance runs (only 3.x has ever been run), then the Jackson 2 vs Jackson 3 shape catalogs F2 made a two-file change instead of 84 | selecting a shape model by resolved dependency coordinate — `tools.jackson.core` vs `com.fasterxml.jackson.core` |
@@ -334,9 +334,38 @@ and analysed; `mall-portal` (15 more service implementations) was not reached by
 the build and is the natural second module. **The "several implementers →
 narrowed branch" rule has never run on real code and must not ship unexercised.**
 
-### Where we actually are — 2026-09-06
+### Where we actually are — 2026-09-07
 
-**The operative plan is [the Java completion plan](2026-09-05-java-completion-plan.md).**
+**The operative documents are now the gap analysis, the spec and the sequenced plan:**
+
+| | |
+|---|---|
+| **Gap analysis** | [`docs/java-gap-analysis-2026-09-06.md`](../../java-gap-analysis-2026-09-06.md) — 123 gaps consolidated from five read-only audits, grouped into nine root causes |
+| **Spec** | [`2026-09-06-java-kotlin-completeness-design.md`](../specs/2026-09-06-java-kotlin-completeness-design.md) — eleven foundations; every one of the 123 gaps placed exactly once |
+| **Plan** | [`2026-09-07-java-kotlin-completeness-plan.md`](2026-09-07-java-kotlin-completeness-plan.md) — 54 work items in 11 waves, with dependencies |
+
+They replace the stage list below, which is kept for its record of what the sweep cost and
+bought. The work is now organised **by root cause, not by symptom**: fixing an instance
+without fixing the cause underneath it is how four javax/jakarta misses accumulated one at a
+time, and it is why this consolidation exists.
+
+**Three findings from the analysis that change what "next" means:**
+
+1. **2Q is not delivered.** PROJECT.md said `in-progress` and gave its reason — FR-6 requires
+   a trace bounded only by a terminal and ours stops at a depth bound; FR-7's diagrams draw no
+   `alt`/`opt`/`loop`. The roadmap said "delivered". The stale document was the right one, so
+   **the roadmap row is what changes**. Wave 6 closes it.
+2. **The suite is corpus-blind.** 2,346 tests, 82 guards at 0 survived, byte-stable, contracts
+   clean — and it notices neither of the analysis's two hardest Criticals. `orders-service`
+   and `mall-admin` both score **0** for the superclass-call shape; `spring-petclinic-rest`
+   scores **96**. Adding that corpus (W21) is part of the fix, not an extra.
+3. **The response side of every contract is empty on real code.** mall-admin: 160 of 160
+   endpoints carry a response shape, **one** distinct shape, **zero** fields. DR-5 gates
+   linking on payload compatibility, so stitching could not have worked there at all.
+   Wave 4 is the largest single improvement in the plan.
+
+**Superseded — the stage list as of 2026-09-06.** The operative plan was
+[the Java completion plan](2026-09-05-java-completion-plan.md).
 It was written after the principles sweep, it carries every outstanding item with
 its evidence, and this roadmap's phase table records the *phases* it completes.
 Read that document for the work; read this one for the shape.
@@ -385,18 +414,23 @@ thirteen `◐`, and **"one feature fully done" is literally unrepresentable in t
 document we use to judge whether anything is done.** That is a defect in the
 scorecard, not only in the coverage.
 
-Measured 2026-09-06 over §5's Java rows:
+Re-measured 2026-09-07 over §5's 170 Java and Kotlin rows. **This corrects an earlier count
+on this page that read "59 shipped" — that figure was a regex artefact, not a census:**
 
 | | count |
 |---|---|
-| ✅ shipped | **59** |
-| **stated boundaries** — deliberate limits, documented with what falsifies them | **55** |
-| **pending** — A/B/C tier work not built | **29** |
-| unclassified | 27 |
+| ✅ shipped | **86** |
+| ◐ partial | **3** |
+| stated boundaries and pending work | **81** (roughly 50 / 31, split by a prose match that is not exact — the verdict column is prose, not a closed set, which is itself part of what F6 fixes) |
 
-So the shape is not "111 things half done". It is **59 shipped, 55 deliberate
-limits, and 29 real gaps** — and `5.5 WebSocket` is already 3 shipped, 0
-boundaries, 0 pending, which is a complete cell the matrix cannot mark complete.
+So the shape is not "111 things half done": it is **86 shipped**, 3 partial, and 81 rows that
+are either a deliberate documented limit or real remaining work. The imprecision in that last
+split is the finding — a verdict column a script cannot classify exactly is why §2's generator
+and §5's prose can drift apart, and why F6 gives §5 axes and closed verdicts.
+
+*The earlier claim that `5.5 WebSocket` is "a complete cell" was also wrong: §5.5 states its
+boundaries as prose bullets and the generator counts rows, so the two disagree by
+construction.*
 
 **And the one `✅` in the Java row is the least defensible mark on it.** `✅ ASM`
 means "implemented, tested, verified against a real project", and the scanner
@@ -408,6 +442,28 @@ that mark, and it is the prerequisite every other cell in the row depends on.
 
 ### What is next, in order
 
+**Superseded 2026-09-07 by the wave sequence** in
+[the completeness plan](2026-09-07-java-kotlin-completeness-plan.md). In short:
+
+```
+Wave 1  F1  the extractor reads JVMS 4.7 as a specification   W1-W8    (nothing derived changes yet)
+Wave 2  F2  a catalog may spell a type more than once         W9-W19   (new rows appear)
+Wave 3  F3  method identity and JVMS 5.4.3.3/5.4.3.4          W20-W23  (21% of boundaries stop being false)
+Wave 4  F4  the module edge — generic substitution            W24-W26  (mall's contracts go empty → real)
+Wave 5  F5  endpoint identity; never merge the unobservable   W27-W29
+Wave 6  F7  the trace tier meets FR-6 and FR-7                W30-W33  (2Q becomes delivered)
+Wave 7  F8  the bundle carries everything, plus the index     W34-W39  (Sextant can say WHERE)
+Wave 8  F6  the checklist gains axes beyond protocol          W40-W42
+Wave 9  F10 the five asymmetries                              W43-W47
+Wave 10 F11 the curation file                                 W48-W49
+Wave 11 F9  the registers tell the truth                      W50-W54
+```
+
+The stage-4 batch work below is **absorbed into Wave 2**: W19 is the per-catalog enumeration
+pass, and W11 and W14 are its measurement obligations. The probe backlog's ranks 3-5, which
+need a live framework rather than `javap` alone, are W53.
+
+*Historical, superseded:*
 
 1. **Stage 4 batch 3** — the jar-enumeration sweep across the 20
    `annotation_driven` catalogs (list the framework's annotation package and diff
