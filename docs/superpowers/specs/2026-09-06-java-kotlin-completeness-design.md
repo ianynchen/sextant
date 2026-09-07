@@ -61,7 +61,7 @@ the bundle and the rendered document have nowhere to be recorded at all.
 ### 1.2 One thing flagged, not open
 
 **Spring Cloud Gateway (G-30) is out of v1 under Q3.** It is the largest single hole and the
-commonest edge component, so it is flagged here rather than left to §12 alone. The ruling
+commonest edge component, so it is flagged here rather than left to §13 alone. The ruling
 stands unless the user changes it.
 
 ---
@@ -706,7 +706,27 @@ Whichever form is drawn, **the caption stops claiming "nothing is filtered."**
 occurrences in mall, orders-service, petclinic and jhipster. It ships with a test that
 constructs the shape rather than one that waits for a corpus to produce it.
 
-### 8.4 Acceptance for F7
+### 8.4 Class diagrams of inheritance (G-121)
+
+FR-7 commits to *"sequence diagrams at module and system level, **and class diagrams**"*. We
+already emit class diagrams — `egress/render/diagrams.py:31 class_diagram()` writes
+`classDiagram` with fields and edges, tested against a hand-written view model. What is
+missing is **inheritance**, and only two things are missing for it:
+
+1. The only edge the emitter knows is `source --> target` — an *association* between shape
+   types. Inheritance needs `<|--` (extends) and `<|..` (implements).
+2. Nothing records who extends whom. That is **`type_hierarchy`, which F3 builds** — child,
+   ancestor, kind, search position, and whether the ancestor was scanned.
+
+So this is a projection over a table F3 creates plus two arrow kinds in an emitter that
+already works, and it is **sequenced after F3**. The honesty machinery is also already
+present: the `<<open>>` stereotype means *"the expansion stopped here"*, which is exactly what
+an unscanned ancestor is — F3's `scanned` column feeds it directly.
+
+**FR-7's inline note is now false regardless.** It still says module-scope diagrams ship flat,
+*"no `alt`/`opt`/`loop`"*. Fork 3 overturned that, so F9's RESTATE batch corrects it.
+
+### 8.5 Acceptance for F7
 
 - A trace terminates at a terminal or a stated boundary; no depth counter bounds it. Cycles
   and revisits are still refused.
@@ -717,6 +737,8 @@ constructs the shape rather than one that waits for a corpus to produce it.
 - No caption asserts "nothing is filtered" where something was.
 - PROJECT.md and the roadmap agree on 2Q's status, and the status is derived from these
   tests.
+- A class carrying a scanned superclass and an interface renders `<|--` and `<|..` edges; an
+  unscanned ancestor renders with the `<<open>>` stereotype rather than being omitted.
 
 ---
 
@@ -959,7 +981,88 @@ not cover its whole surface.
 
 ---
 
-## 12. Non-goals for v1
+## 12. F11 — the curation file
+
+**Closes:** G-120, and rewrites FR-16. **Not a Java/Kotlin gap** — it is here because this
+spec keeps producing links that cannot be derived, and gives them nowhere to go.
+
+### 12.1 Why DR-5 structurally cannot link some channels
+
+Measured in our own catalogs:
+
+| | reads | wire identity |
+|---|---|---|
+| `google-pubsub-publisher.yml` | `TopicName.of(project, topic)` arg 1 | a **topic** |
+| `google-pubsub-subscriber.yml` | `ProjectSubscriptionName.of(project, subscription)` arg 1 | a **subscription** |
+
+DR-5 links only when *protocol, wire identity and payload compatibility all agree*. A topic
+name and a subscription name are **different strings**, and the binding between them is
+created in GCP — gcloud, Terraform, the console — never in the code. Even the project id is
+usually `spring.cloud.gcp.project-id`, which §8.2 classes as a deployment possibility.
+
+**No better analysis fixes this.** It is not a knowledge gap; it is a channel whose two ends
+are named differently and bound elsewhere.
+
+### 12.2 The scope curation gets
+
+A precise class, not an escape hatch — **indirect channels, where producer and consumer name
+different ends of a binding made outside the code**:
+
+| Protocol | Producer names | Consumer names | Derivable? |
+|---|---|---|---|
+| Kafka | topic | the same topic | **Yes** — DR-5 links it. No curation. |
+| Pub/Sub | topic | subscription | **Never** |
+| SNS → SQS | topic ARN | queue URL | **Never** |
+| AMQP | exchange + routing key | queue | **Sometimes** — declared in code via `@QueueBinding`, or only in the broker. We can tell which. |
+
+Because the class is identifiable, **Sextant emits the open question itself**, listing
+candidate pairs, **in the curation file's own schema**. That makes FR-16's second paragraph
+nearly free: we already write `open_questions`.
+
+### 12.3 The rewritten FR-16
+
+FR-16 currently says *"A person may assert, correct, or delete a statement in the graph."*
+**A human cannot change a fact file.** Facts are derived deterministically from bytecode; a
+hand-edit breaks NFR-1 and the evidence chain that makes every row defensible.
+
+> A person may supply a **curation file** stating what Sextant cannot derive — chiefly that an
+> outbound boundary in one module and an inbound boundary in another are the same channel,
+> where the binding between them is created outside the code.
+>
+> Curation is an additional **input**, never a mutation. It never edits, overrides or deletes
+> a fact file or a derived row. A curated statement enters at its own evidence tier, ranked
+> above derived and enriched claims, and is presented to consumers as curated, carrying what
+> it linked and why.
+>
+> Where a derived statement and a curated statement disagree, **both are kept** and the
+> disagreement is reported.
+>
+> Where Sextant finds a link it cannot derive, it writes the open question in the curation
+> file's own schema, so accepting it requires review rather than transcription.
+
+**Two verbs are deliberately dropped.** "Correct" and "delete" are gone because a wrong
+derived row is a **bug in the derivation**, not something curation papers over. Letting
+curation overwrite a derived row would let derivation defects hide behind a human edit — the
+opposite of the ratchet. A human answering an open question, *including* answering it "not
+linked", is an assertion, not a correction.
+
+**Evidence tier.** `facts.py:422` is `Literal["compiler", "declared"]` and `enrichment.py:80`
+is `Literal[Evidence.LLM]`. Curation adds one more value, closed per NFR-5.
+
+### 12.4 Acceptance for F11
+
+- A curation file linking a named Pub/Sub topic to a named subscription produces a link
+  carrying the curated evidence tier and its stated reason.
+- No curation input can change a fact file or delete a derived row; a test asserts it.
+- A derived link and a curated link that disagree both survive, and the disagreement is
+  reported.
+- An unlinkable Pub/Sub publisher/consumer pair emits an open question **in the curation
+  file's schema**, so answering it is an edit rather than an authoring job.
+- REQUIREMENTS.md carries the rewritten FR-16.
+
+---
+
+## 13. Non-goals for v1
 
 Stated here and recorded in COVERAGE with a support level (§7), so none of them is answered
 by silence.
@@ -977,15 +1080,17 @@ by silence.
 
 ---
 
-## 13. Dependency edges a plan must respect
+## 14. Dependency edges a plan must respect
 
 Not an ordering — the constraints an ordering has to satisfy.
 
 ```
 F1  extractor completeness ──┬─→ F3  method identity & resolution ──┬─→ F4  module edge
                              │                                      ├─→ F7  trace tier
-                             ├─→ F4  (Signature parameter types,    └─→ F8  export & index
-                             │        formal type parameters)
+                             ├─→ F4  (Signature parameter types,    │      (incl. §8.4 class
+                             │        formal type parameters)       │       diagrams, which
+                             │                                      │       ARE type_hierarchy)
+                             │                                      └─→ F8  export & index
                              ├─→ F7  (LineNumberTable, SourceFile, InnerClasses)
                              └─→ F8  (the same three — §9.2)
 
@@ -993,6 +1098,9 @@ F2  catalog vocabulary ──────┬─→ F10 the five asymmetries
                              └─→ F5  endpoint identity (metadata needs the vocabulary)
 
 F7  terminal_kind ───────────→ F8  (blind_spots, repeated_terminals)
+
+F11 curation file ───────────→ consumes the open questions F2 §3.9, F4 §5.2, F5 §6.1 and
+                               Fork 1 emit; independent of F1's chain otherwise
 
 F6  COVERAGE axes ───────────→ every foundation reports into it
 F9  register truth ──────────→ runs alongside; its RESTATE batch lands after the
@@ -1008,13 +1116,16 @@ F9  register truth ──────────→ runs alongside; its RESTATE
 3. **F3 before F4.** Generic substitution across the module edge needs `type_hierarchy`.
 4. **F9's RESTATE entries follow their foundations.** Restating a claim before the code makes
    it true just moves the untruth.
-5. **`spring-petclinic-rest` enters the corpus with F3, not after it.** The current suite
+5. **F11 lands after the foundations that produce open questions**, not before — its value is
+   answering questions this spec creates, and building the file first would ship a schema
+   with nothing to put in it.
+6. **`spring-petclinic-rest` enters the corpus with F3, not after it.** The current suite
    passes and notices neither of F3's Criticals; without the corpus the acceptance tests
    cannot fail for the right reason.
 
 ---
 
-## 14. Global constraints
+## 15. Global constraints
 
 Carried verbatim into every task the plan derives.
 
@@ -1036,23 +1147,23 @@ Carried verbatim into every task the plan derives.
 
 ---
 
-## 15. Rulings still needed
+## 16. Rulings still needed
 
-Three items reach a fork this document cannot settle, because each would descope or extend a
-committed requirement. They are listed rather than decided by default.
+One item reaches a fork this document cannot settle.
 
 | | The question |
 |---|---|
-| **G-117** — FR-20 clause 2 | Approximate subject naming, and *listing* ambiguity rather than choosing, has no implementation and no gap row. Build it in v1, or descope FR-20 clause 2 to a stated boundary? |
-| **G-120** — FR-16 | Curation and proposals: **no verb asserts, corrects or deletes a graph statement.** Build the curation verbs in v1, or descope FR-16? |
-| **G-121** — FR-7 | 68 Mermaid sequence diagrams render; there is **no class diagram of inheritance**. F7 §8.3 closes FR-7's `alt` gap. Does FR-7 also owe a class diagram in v1? |
+| **G-117** — FR-20 clause 2 | Approximate subject naming, and *listing* ambiguity rather than choosing, has no implementation and no gap row. Build it in v1, or descope FR-20 clause 2 to a stated boundary? My recommendation is build: F8 §9.3 is already constructing the symbol index a fuzzy lookup would search, so this is a lookup over an index we are building anyway. |
+
+G-120 and G-121 were on this list and are now ruled: **F11** rewrites FR-16 around a curation
+file, and **F7 §8.4** builds class diagrams of inheritance on top of F3's `type_hierarchy`.
 
 Plus §1.2's flag: Spring Cloud Gateway is out of v1 under Q3, and it is the biggest hole we
 are choosing to leave.
 
 ---
 
-## 16. Traceability — every gap, placed
+## 17. Traceability — every gap, placed
 
 All 123 gaps from the analysis. A gap that is not built is recorded as a stated
 boundary with a support level (F6), never dropped.
@@ -1088,17 +1199,17 @@ boundary with a support level (F6), never dropped.
 | G-27 | Major | `COVERAGE.md:2255-2258`, `open-issues.md` OI-10 body | F9 §10.4 |
 | G-28 | Major | `COVERAGE.md:1828` | F9 §10.4 |
 | G-29 | Major | Spring MVC functional routing | F10 §11 |
-| G-30 | Major | Spring Cloud Gateway | §12 |
-| G-31 | Major | Kafka Streams | §12 |
+| G-30 | Major | Spring Cloud Gateway | §13 |
+| G-31 | Major | Kafka Streams | §13 |
 | G-32 | Major | the WebSocket client direction | F10 §11 |
 | G-33 | Major | `SimpMessagingTemplate.convertAndSend` | F10 §11 |
-| G-34 | Major | programmatic Jakarta WebSocket registration | §12 |
+| G-34 | Major | programmatic Jakarta WebSocket registration | §13 |
 | G-35 | Major | `@MessageExceptionHandler` | F10 §11 |
 | G-36 | Major | `spring-ws.yml` | F2 §3.1 |
 | G-37 | Major | `spring-webflux-router.yml` | F2 §3.8 |
 | G-38 | Major | `spring-mvc.yml` / `spring-web.yml` | F2 §3.7 |
 | G-39 | Major | `netflix-dgs.yml` | F2 §3.1 |
-| G-40 | Major | `netflix-dgs.yml` | §12 |
+| G-40 | Major | `netflix-dgs.yml` | §13 |
 | G-41 | Major | `netflix-dgs.yml` | F2 §3.8 |
 | G-42 | Major | `spring-websocket.yml` | F10 §11 |
 | G-43 | Major | `aws-sqs-sdk.yml` | F2 §3.8 |
@@ -1175,10 +1286,10 @@ boundary with a support level (F6), never dropped.
 | G-114 | Minor | `roadmap.md:554-556` | F9 §10.4 |
 | G-115 | Minor | batch-listener generics | F9 §10.4 |
 | G-116 | Minor | `COVERAGE.md` §8 | F9 §10.4 |
-| G-117 | Minor | FR-20 clause 2 | §15 (ruling needed) |
+| G-117 | Minor | FR-20 clause 2 | §16 (ruling needed) |
 | G-118 | Minor | `docs/components/M04-resolver.md:210` | F9 §10.4 |
 | G-119 | Minor | FR-18 | F9 §10.4 |
-| G-120 | Minor | FR-16 | §15 (ruling needed) |
+| G-120 | Minor | FR-16 | F11 §12 |
 | G-121 | Minor | FR-7 | F7 §8.4 |
 | G-122 | Minor | measurement debt, as a standing item | F9 §10.5 |
 | G-123 | Minor | `tests/architecture/` | F2 §3.1 |
