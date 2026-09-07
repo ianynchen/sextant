@@ -21,6 +21,7 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.detector import LibraryRoot, ModuleModel, RepositoryModel
 from sextant.application.ports.progress import NullProgress
 from sextant.application.stages.analyze import AnalyzeResult, analyze
+from sextant.domain.factfile import read_fact_file
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.resources import extractor_jar
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -268,18 +269,29 @@ def test_a_library_that_could_not_be_scanned_names_no_absolute_path(
     assert str(tmp_path) not in reported
 
 
-def test_a_library_that_fails_mid_archive_leaves_no_partial_subtree(
+def test_a_library_that_fails_mid_archive_keeps_every_class_it_could_read(
     tmp_path: Path, library: LibraryRoot
 ):
-    """A backend writes each document as it reaches it, so a failure on the
-    SECOND entry of an archive leaves the first one's facts on disk. A fraction
-    of a library is indistinguishable, once loaded, from all of a smaller one —
-    the rows it derives look complete and are not. Discarding that coordinate's
-    subtree is what makes the failure total rather than partial.
+    """**This rule inverted, and the reason it existed is gone.**
+
+    It used to discard the coordinate's whole subtree, because "a fraction of a
+    library is indistinguishable, once loaded, from all of a smaller one". That
+    was true when a mid-archive failure meant the extractor DIED: what survived
+    on disk was an arbitrary prefix — measured on a three-entry jar as exit 1
+    with ONE document written and nothing recording that two more were never
+    attempted.
+
+    The discard was never implemented; it was a side effect of that death.
+    Critical 1 removed the death, and closing the archive-read hole beside it
+    made the scan COMPLETE: every entry now yields either facts or a document
+    marked `partial` with its own reason. Nothing is indistinguishable, so
+    there is nothing left for a discard to protect — and discarding would
+    maximise the very gap it claimed to prevent, throwing away every readable
+    class to hide one labelled one.
 
     The corrupt entry is real: valid zip framing around bytes that are not a
     class file, which is what gets the extractor past `names()` and into the
-    walk before it fails."""
+    walk before the parse fails."""
     broken = tmp_path / "repository" / "broken-1.0.0.jar"
     with zipfile.ZipFile(broken, "w") as archive:
         archive.writestr(
@@ -291,9 +303,25 @@ def test_a_library_that_fails_mid_archive_leaves_no_partial_subtree(
 
     result = _analyzed(tmp_path / "run", (corrupt,))
 
-    assert not (tmp_path / "run" / "facts" / "lib" / "com.example" / "broken").exists()
-    [reported] = result.libraries_not_scanned
-    assert reported.startswith("com.example:broken: ")
+    # The library is KEPT — it is not a failed library, it is a library with one
+    # class we could not read.
+    assert result.libraries_not_scanned == ()
+    subtree = tmp_path / "run" / "facts" / "lib" / "com.example" / "broken"
+    assert subtree.exists()
+    written = {path.stem for path in subtree.rglob("*.jsonl")}
+    assert written == {"OrderResult", "Zzz"}, "every entry is accounted for, readable or not"
+
+    # And the one it could not read says so, by name, on the channel FR-17
+    # already defines — rather than vanishing with the rest of the jar.
+    [named] = result.uncovered
+    assert named.startswith("com/acme/orders/Zzz.class: ")
+
+    document, facts = read_fact_file(subtree / "com" / "acme" / "orders" / "Zzz.jsonl")
+    assert facts == [] and document.partial is True
+    assert document.partial_reason is not None
+
+    good, good_facts = read_fact_file(subtree / "com" / "acme" / "orders" / "OrderResult.jsonl")
+    assert good_facts and good.partial is False
 
 
 def test_a_library_that_cannot_be_scanned_does_not_take_the_module_with_it(

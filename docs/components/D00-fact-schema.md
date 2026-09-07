@@ -70,7 +70,8 @@ Written once per class file. Every fact points at one.
 | `origin_tier` | That entry's tier (§4) — module output, a declared dependency, first-party, third-party, platform |
 | `origin` | The **library** this document was extracted from, as its coordinate (`com.example:orders-soap-client`). Absent for the module's own output |
 | `redaction_set_hash` | From [D04](D04-config-and-exclusion.md) |
-| `partial` | True when the file was analysed incompletely, with a reason |
+| `partial` | True when the file was analysed incompletely, with a reason. **Real since Step 1** — the JVM extractor wrote the literal strings `false`/`null` with no code path able to set either, so every class document claimed a complete analysis whether or not it had one. Two producers now: a class this build cannot parse at all, and a Kotlin class whose metadata a newer compiler wrote in a form it cannot decode (scanned, facts emitted, nullability missing) |
+| `class_major` | **The class-file format version this document was read from** (JVMS 4.1's `major_version`, bytes 6-7). Read from the FILE, never from ASM's constant set — that set runs ahead of the reader shipped beside it, so it would answer for a class this build cannot parse, which is the one case this field exists to describe. `0` where the source is not a class file: the format starts at 45, so 0 cannot be mistaken for a real version |
 
 **One class file is one document — a nested or anonymous class's own `.class` file
 included.** `document_id` stays the sha256 of the **class-relative path**

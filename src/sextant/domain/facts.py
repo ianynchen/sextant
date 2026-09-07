@@ -90,6 +90,11 @@ class Document(BaseModel):
     # once per workspace in `metadata.json` rather than repeated on every
     # document that one scanner wrote.
     scanner_id: str
+    # The class-file format version this document was read from (JVMS 4.1's
+    # `major_version`), or 0 where the source is not a class file at all — a
+    # config or schema document has no such version, and 0 is outside every
+    # real range (the format starts at 45) so it cannot be mistaken for one.
+    class_major: int = 0
     content_hash: str
     origin_entry: str
     origin_tier: OriginTier

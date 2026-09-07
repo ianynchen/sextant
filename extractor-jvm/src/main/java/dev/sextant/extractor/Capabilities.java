@@ -31,6 +31,11 @@ public final class Capabilities {
         // Phase 2C's per-method dataflow pass over every invoke.
         "call_site",
         "chain_reconstruction",
+        // The class-file major each document was read from (JVMS 4.1), taken
+        // from the bytes rather than from ASM's constants. Its consumers are
+        // the accepted-range test, multi-release selection's target fallback,
+        // and language labelling.
+        "class_file_version",
         // Capability 9.14: parameterized superinterface references, kept as
         // full type references where `implemented_interfaces` erases them.
         "generic_interfaces",

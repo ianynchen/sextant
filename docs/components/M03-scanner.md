@@ -63,6 +63,7 @@ finding fewer endpoints.
 | `array_arguments` | Capability 9.15 — a call-site argument produced by an array construction reads as `{kind: array, elements: […]}` rather than one opaque `unresolved`. Every `String...` API in the estate depends on it |
 | `nested_annotation_args` | Capability 9.16 — an annotation-valued annotation argument reads as a nested `{annotation, args}` use of its own, recursively, rather than being dropped with no key at all ([D00](D00-fact-schema.md) §5) |
 | `lambda_body` | Capability 9.17 — a `dynamic` call site carries `implementation`, the symbol of the lambda body its dispatch will run, where `target` names only the bootstrap factory. A traversal that follows call targets reaches a lambda's statements instead of stopping at `LambdaMetafactory` |
+| `class_file_version` | The class-file major each document was read from (JVMS 4.1), taken from the bytes rather than from ASM's constants so it is available even for a class the reader refused. Consumers: the accepted-range test, multi-release selection's target fallback, and language labelling |
 | `method_returns` | Capability 9.18 — a `method_return` fact per return instruction, naming the value the method hands back ([D00](D00-fact-schema.md) §5). The last link in a round trip: a returned call result joins by `source` to the site that produced it |
 
 **Fourteen of the scanner's now-seventeen designed capabilities are shipped**, and the shipped

@@ -5,12 +5,19 @@ from pathlib import Path
 import pytest
 
 from sextant.application.ports.scanner import ScanRequest
+from sextant.domain.factfile import read_fact_file
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.resources import extractor_jar
 
 REPO = Path(__file__).parents[2]
 JAR = extractor_jar()
 CLASSES = REPO / "fixtures" / "orders-service" / "target" / "classes"
+# Mirrored from `Main.ACCEPTED_MAJOR_MIN`/`MAX`, which
+# `extractor-jvm/src/test/java/dev/sextant/extractor/ClassFileVersionTest.java`
+# asserts against real bytes — so the range is measured in one place and this
+# side only has to agree with it.
+ACCEPTED_MAJOR_MIN = 45
+ACCEPTED_MAJOR_MAX = 71
 
 
 def test_scanner_accepts_java_and_kotlin_but_not_python():
@@ -902,3 +909,59 @@ def test_scanner_declares_the_nested_annotation_args_capability():
     against `NestedAnnotated`, and the real-bytecode arm is
     `fixtures/spring-integration-probe/…/NestedAnnotationShapes.java`."""
     assert "nested_annotation_args" in AsmScanner(JAR).capabilities()
+
+
+def test_one_unreadable_class_is_skipped_and_the_rest_of_the_scan_survives(tmp_path: Path):
+    """Critical 1's half that lasts. `Main`'s scan loop was wrapped whole in
+    `catch (Exception)` and exited 1, so a SINGLE class file from a JDK ahead of
+    our ASM destroyed every other class in the module — measured on
+    `byte-buddy-1.18.11.jar`: exit 1 and zero fact files.
+
+    A newer ASM raises the ceiling; it does not make a refusal visible. Both
+    halves had to ship or the next ceiling is silent again, which is why this
+    test rewrites the two `major_version` bytes JVMS 4.1 fixes at offset 6
+    rather than waiting for a JDK we cannot read yet: the ceiling is reachable
+    on demand, at any ASM version, forever.
+    """
+    classes = tmp_path / "classes" / "com" / "acme"
+    classes.mkdir(parents=True)
+    (classes / "Good.class").write_bytes(
+        (CLASSES / "com/acme/orders/OrderService.class").read_bytes()
+    )
+    refused = bytearray((CLASSES / "com/acme/orders/OrderResult.class").read_bytes())
+    refused[6], refused[7] = 0, ACCEPTED_MAJOR_MAX + 1
+    (classes / "TooNew.class").write_bytes(bytes(refused))
+
+    report = AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=tmp_path / "classes",
+            out_dir=tmp_path / "out",
+        )
+    )
+
+    # The scan SURVIVES, and the good class is fully read.
+    assert report.documents == 2
+    assert report.facts > 0
+    # The refusal is a finding about ONE class, named on the channel findings
+    # already ride (FR-17), carrying ASM's own words rather than a message of
+    # ours predicting them.
+    assert len(report.uncovered) == 1
+    assert "TooNew.class" in report.uncovered[0]
+    assert "major version" in report.uncovered[0]
+
+    # And the document is still WRITTEN. A class that vanishes silently is the
+    # failure FR-17 exists to prevent: its id, path, hash and class-file major
+    # are all knowable without parsing it.
+    document, facts = read_fact_file(tmp_path / "out" / "com" / "acme" / "TooNew.jsonl")
+    assert facts == []
+    assert document.partial is True
+    assert document.partial_reason is not None and "major version" in document.partial_reason
+    # Read off the BYTES, which is why it is available for a class ASM refused.
+    assert document.class_major == ACCEPTED_MAJOR_MAX + 1
+
+    good, good_facts = read_fact_file(tmp_path / "out" / "com" / "acme" / "Good.jsonl")
+    assert good_facts and good.partial is False and good.partial_reason is None
+    assert ACCEPTED_MAJOR_MIN <= good.class_major <= ACCEPTED_MAJOR_MAX

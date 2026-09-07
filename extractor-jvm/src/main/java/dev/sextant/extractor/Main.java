@@ -22,6 +22,19 @@ public final class Main {
      *  every declared scanning library (`build.gradle.kts`). */
     private static final String LIBRARIES_ATTRIBUTE = "Sextant-Scanner-Libraries";
 
+    /** The class-file majors the pinned ASM can actually parse (JVMS 4.1).
+     *
+     *  <p>45 is where the format starts and has never moved. The ceiling is a
+     *  property of the ASM version this jar bundles, so it is asserted by
+     *  {@code ClassFileVersionTest} against real bytes rather than trusted:
+     *  `build.gradle.kts` already claimed "that range is pinned by a test in
+     *  this same source tree" and no such test existed, which is how a ceiling
+     *  drifts silently — a newer JDK's classes are refused and the refusal is
+     *  the only thing that says so. */
+    static final int ACCEPTED_MAJOR_MIN = 45;
+
+    static final int ACCEPTED_MAJOR_MAX = 71;
+
     public static void main(String[] args) {
         try {
             Map<String, String> options = parse(args);
@@ -72,7 +85,32 @@ public final class Main {
                     uncovered.add(named + ": no class files found");
                 }
                 for (String classRelative : classFiles) {
-                    byte[] bytes = source.read(classRelative);
+                    // READ INSIDE the guard, not before it. A corrupt archive
+                    // entry — a bad CRC, a truncated deflate stream — throws
+                    // here rather than in the parse, and while this sat outside
+                    // the guard that threw straight out of the loop: measured
+                    // on a three-entry jar with one corrupt entry, exit 1 with
+                    // ONE document on disk and nothing recording that two more
+                    // were never attempted. An arbitrary unlabelled prefix is
+                    // the one shape that is genuinely indistinguishable from a
+                    // complete scan of a smaller archive.
+                    byte[] bytes;
+                    List<String> reasons = new ArrayList<>();
+                    try {
+                        bytes = source.read(classRelative);
+                    } catch (Exception unreadable) {
+                        bytes = new byte[0];
+                        reasons.add("archive entry unreadable (" + unreadable + ")");
+                    }
+                    // JVMS 4.1 fixes `major_version` at offset 6, big-endian,
+                    // and it is read from the BYTES rather than from ASM's own
+                    // constant set — that set runs ahead of the reader, so it
+                    // would answer for a class file this build cannot parse.
+                    // Recorded on every document, readable or not: it is the
+                    // one thing a refusal can still say about the class it
+                    // refused, and it is what tells a reader whether a gap is
+                    // "too new for this scanner" or something else.
+                    int classMajor = majorVersionOf(bytes);
                     // D00 §2: one class file is one document, a nested or
                     // anonymous class's own file included. The id is the sha256
                     // of the **class**-relative path, so `OrderResult` and its
@@ -88,14 +126,51 @@ public final class Main {
                     // scanned and its fact file still written (with Java's own
                     // rule standing in for the field), but the gap itself is an
                     // honesty obligation the same as a nested class's (FR-17).
-                    List<String> lines = scanner.scan(bytes, documentId, reason ->
-                        uncovered.add(classRelative + ": kotlin metadata unreadable (" + reason + ")"));
+                    // SKIPPED, NOT FATAL (Critical 1). One class this build
+                    // cannot parse used to take the whole scan with it —
+                    // `catch (Exception)` around this loop, exit 1, zero fact
+                    // files — so a single class file from a JDK ahead of our
+                    // ASM lost every other class in the module. It is now a
+                    // finding ABOUT one class, on the channel findings already
+                    // ride, and the document is still WRITTEN: its id, path,
+                    // content hash and class-file major are all knowable
+                    // without parsing it, and a class that vanishes silently is
+                    // the failure FR-17 exists to prevent.
+                    //
+                    // `partial_reason` carries the exception's own text rather
+                    // than a message of ours: what ASM refused is the fact, and
+                    // predicting its wording would be a claim about a library
+                    // we did not measure (§8.1).
+                    // One `partial` flag, THREE ways to earn it, and D00 §2's
+                    // definition covers all: "analysed incompletely, with a
+                    // reason". An archive entry we could not read, a class we
+                    // could not parse, and a Kotlin class whose metadata a
+                    // newer compiler wrote in a form this build cannot decode —
+                    // the last is still scanned and still yields facts, but its
+                    // nullability is missing, which is exactly an incomplete
+                    // analysis.
+                    List<String> lines = List.of();
+                    String partialReason = null;
+                    if (reasons.isEmpty()) {
+                        try {
+                            lines = scanner.scan(bytes, documentId, reason ->
+                                reasons.add("kotlin metadata unreadable (" + reason + ")"));
+                        } catch (Exception unreadable) {
+                            lines = List.of();
+                            reasons.add("class unreadable (" + unreadable + ")");
+                        }
+                    }
+                    if (!reasons.isEmpty()) {
+                        partialReason = String.join("; ", reasons);
+                        uncovered.add(classRelative + ": " + partialReason);
+                    }
                     // Named after the class file, not after `relative`: a
                     // nested class and its outer share a source path, and two
                     // documents writing to one file would leave only the
                     // last one on disk.
                     writeFactFile(out.resolve(replaceSuffix(classRelative, ".class", ".jsonl")),
-                                  relative, documentId, options, sha256Bytes(bytes), lines);
+                                  relative, documentId, options, sha256Bytes(bytes), lines,
+                                  classMajor, partialReason);
                     documents++;
                     facts += lines.size();
                 }
@@ -190,7 +265,8 @@ public final class Main {
 
     private static void writeFactFile(Path target, String relative, String documentId,
                                       Map<String, String> options, String contentHash,
-                                      List<String> factLines) throws IOException {
+                                      List<String> factLines, int classMajor,
+                                      String partialReason) throws IOException {
         Files.createDirectories(target.getParent());
         TreeMap<String, String> document = new TreeMap<>();
         document.put("kind", JsonOut.string("document"));
@@ -234,13 +310,40 @@ public final class Main {
             document.put("origin_tier", JsonOut.string("module_output"));
         }
         document.put("redaction_set_hash", JsonOut.string(options.getOrDefault("redaction-hash", "sha256:none")));
-        document.put("partial", "false");
-        document.put("partial_reason", "null");
+        // REAL, at last. Both were the literal strings "false" and "null" with
+        // no code path able to set either, so every document claimed a complete
+        // analysis whether or not it had one — and `partial_documents` reached
+        // the rendered gaps list and the bundle's `coverage.partial` as a
+        // number that could only ever be zero.
+        document.put("partial", partialReason == null ? "false" : "true");
+        document.put("partial_reason",
+                     partialReason == null ? "null" : JsonOut.string(partialReason));
+        // The class-file major this document was read from (JVMS 4.1). A JSON
+        // number: it is compared and ordered against the accepted range, which
+        // is the one stamp here that genuinely IS ordered.
+        document.put("class_major", String.valueOf(classMajor));
 
         List<String> all = new ArrayList<>();
         all.add(JsonOut.object(document));
         all.addAll(factLines);
         Files.write(target, String.join("\n", all).concat("\n").getBytes("UTF-8"));
+    }
+
+    /** The class-file format version at JVMS 4.1's fixed offset: bytes 6-7,
+     *  big-endian, immediately after the 4-byte magic and the 2-byte minor.
+     *
+     *  <p>Read from the FILE and never from ASM's constant set, which runs
+     *  ahead of the reader that ships with it — asking ASM would answer for a
+     *  class file this build cannot actually parse, which is the one case this
+     *  value exists to describe.
+     *
+     *  <p>A file too short to hold a header cannot state a version, and
+     *  {@link #ACCEPTED_MAJOR_MIN} - 1 would be a guess; it answers 0, which is
+     *  outside every real range (JVMS 4.1 starts at 45) and so reads as
+     *  "unknown" without colliding with any true value. */
+    static int majorVersionOf(byte[] bytes) {
+        if (bytes.length < 8) return 0;
+        return ((bytes[6] & 0xFF) << 8) | (bytes[7] & 0xFF);
     }
 
     /** Forward slashes whatever the platform. `relative_path` is hashed into

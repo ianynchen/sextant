@@ -14,6 +14,57 @@ here would restate those documents rather than add anything.
 
 ### Changed
 
+- **One unreadable class no longer takes the whole scan with it** (Critical 1's half that
+  lasts). `Main`'s scan loop was wrapped whole in `catch (Exception)` and exited 1, so a
+  single class file from a JDK ahead of our ASM destroyed every other class in the module —
+  measured on `byte-buddy-1.18.11.jar`: exit 1, zero fact files. It is now a finding about
+  ONE class, on the channel findings already ride (FR-17), carrying ASM's own words rather
+  than a message of ours predicting them. **The document is still written**: its id, path,
+  content hash and class-file major are all knowable without parsing it, and a class that
+  vanishes silently is what FR-17 exists to prevent.
+
+  The bump alone would have hidden this. A newer ASM raises the ceiling; it does not make a
+  refusal visible.
+
+- **A library no longer loses every readable class because one entry is bad, and the
+  "discard the whole subtree" rule is GONE.** It existed because "a fraction of a library is
+  indistinguishable, once loaded, from all of a smaller one" — true when a mid-archive
+  failure meant the extractor died, leaving an arbitrary prefix. Measured on a three-entry
+  jar with one corrupt entry: **exit 1, one document on disk**, nothing recording that two
+  more were never attempted.
+
+  The rule was never implemented; it was a side effect of that death. Removing the death
+  without closing the hole beside it would have left the prefix silent, so **the archive read
+  moved inside the per-entry guard**: a bad CRC or truncated deflate stream now yields a
+  labelled `partial` document like any other failure. Same jar, re-measured: **exit 0, three
+  of three documents**, the corrupt entry named in `uncovered`.
+
+  With the scan complete, nothing is indistinguishable and the discard has nothing to
+  protect — while discarding would MAXIMISE the gap it claimed to prevent, throwing away
+  every readable class to hide one labelled one. A consumer resolving a type gets "not
+  found" either way; the discard made that true for the whole jar instead of one class.
+
+- **`partial` and `partial_reason` have a producer.** They were the literal strings `false`
+  and `null` in every class document, with no code path able to set either — so
+  `partial_documents` reached the rendered gaps list and a bundle's `coverage.partial` as a
+  number that could only ever be zero. Two producers now, both matching D00's definition
+  ("analysed incompletely, with a reason"): a class this build cannot parse, and a Kotlin
+  class whose metadata a newer compiler wrote in a form it cannot decode.
+
+- **A document records the class-file version it was read from** — `class_major`, a new
+  `class_file_version` capability, `fact_schema_version` 3 → 4. Read from JVMS 4.1's fixed
+  offset rather than from ASM's constant set, which runs ahead of the reader beside it: that
+  is what makes the value available for a class the reader REFUSED, which is the case it
+  exists to describe.
+
+- **The accepted class-file range is a test, against real bytes.** `build.gradle.kts` has
+  claimed since the ASM bump that the range "is pinned by a test in this same source tree"
+  and **no such test existed** — the same class of unchecked claim about our own code this
+  plan keeps finding. `ClassFileVersionTest` now rewrites the two `major_version` bytes of a
+  real class file and asks the pinned ASM to read it, asserting both ends and deliberately
+  probing past the ceiling so a library bump that moves it fails here instead of passing
+  untested. Measured independently: **ASM 9.10.1 accepts majors 45–71 and refuses 72+.**
+
 - **A version is recorded only where the thing can move independently of Sextant** (Step 1
   of Wave 1, ruled by the user). `scanner_version` is REMOVED from a document, and
   `fact_schema_version` goes to `3`. It named a version for facilities that ship inside the
