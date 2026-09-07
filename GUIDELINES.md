@@ -275,6 +275,23 @@ An export, an index, a query surface, a rendered document — each is a thing so
 
 **Its §8.3 audit list, and every entry cost something.** `_EXPORTED_TABLES` was a hand-curated list of eleven names, and three tables the trace tier exists to produce were absent because nobody asked what a consumer would need to recompute a diagram we shipped them. D01's ten named queries were drawn up before anything consumed them, and were about to be built as a set of ten. `COVERAGE.md` §5 has one axis, protocol, because it was designed as a checklist of frameworks rather than as an answer to "is this supported" — which is why twelve committed items are enumerated nowhere, and why the document cannot express a support level for a language construct.  
 
+### 8.6 A boundary is real when a chain of evidence reaches the point where it provably happens  
+
+Not when a method with the right name appears. **Follow the call to the place the thing actually occurs; if nothing reaches it, there is no boundary.**  
+
+Every link in that chain is either **a traced call** or **a measured framework rule** — never an assumption. A framework-rule link is what makes the chain reach past our own code, and it is exactly the link that must be measured (§8.1), because assuming it fabricates the whole trace rather than one step of it.  
+
+*The worked example.* Google Pub/Sub is consumed three ways, and each is the same rule:  
+- `pull(…)`, `pullAndAck(…)`, `pullNext(…)` — **the call IS the consumption.** A trace reaching it is the whole chain.  
+- `Subscriber.newBuilder(…).build()` — construction alone subscribes to nothing. Real only if a trace reaches `startAsync`.  
+- a `@Bean` method returning a `Subscriber` — no call in this module starts it, and it is still traced: the bean declaration is a fact, *Spring starts a `Subscriber` bean* is a measured rule, and together they reach the consumption point.  
+
+**What this replaces.** `google-pubsub-subscriber.yml` named `.startAsync()` as a required conjunct and never read it, so a `Subscriber` built and never started derived a live inbound endpoint; and `spring-pubsub.yml` read **1 of the 10** inbound methods `PubSubTemplate` declares, so every pull-based consumer derived nothing at all. A name-shaped rule over-reported one path and missed a whole other one, from the same file.  
+
+**It generalises to every builder-then-act shape** — a `KafkaConsumer.subscribe(…)` whose `poll()` is never reached, a client constructed and never called. Today we would claim all of them.  
+
+**This rule is only expressible because the call graph shipped.** Before 2Q, "follow the call to where it happens" was not something a catalog could ask for, and name-matching was the only available approximation. It is the first place the trace tier pays for itself inside derivation rather than in a document.  
+
 ## 9. Coding Standards  
 
 ### Documentation  
