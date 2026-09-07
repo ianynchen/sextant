@@ -581,6 +581,135 @@ Per-language essays — toolchain detail, payload handling, structural oddities:
 
 ---
 
+## 3a. What we support, and at which versions
+
+**Read this before accepting anything below.** A row elsewhere in this document says a
+surface is covered. This section says *what we actually opened to find that out* — the
+language versions the scanner can read at all, and the exact framework and library versions
+each catalog's rules were measured against.
+
+### The language gate
+
+| | Range | Bounded by | How it fails outside the range |
+|---|---|---|---|
+| **Java** | class-file majors **45–71** — Java 1.1 through **JDK 27** | the pinned ASM (`org.ow2.asm:asm:9.10.1`) | **JDK 28** (major 72) and later: the class is skipped, its document marked `partial` with ASM's own refusal, and the scan continues |
+| **Kotlin** | the same bytecode range for structure; **Kotlin ≤ 2.2** for nullability | `kotlin-metadata-jvm:2.2.0` — its `LATEST_STABLE_SUPPORTED` | a newer compiler's metadata cannot be decoded: the class is still scanned and still yields facts, nullability falls back to Java's rule, and the document is marked `partial` |
+
+`verify: java -jar src/sextant/extractor-jvm/sextant-extractor.jar --capabilities` ·
+the range itself is asserted against real bytes by
+`extractor-jvm/src/test/java/dev/sextant/extractor/ClassFileVersionTest.java`.
+
+**The mapping is `major = JDK release + 44`**, measured at six release targets (8→52, 11→55,
+17→61, 21→65, 25→69, 26→70). Nothing here is taken from ASM's own constant set, which runs
+ahead of the reader shipped beside it.
+
+**Neither ceiling is a cliff.** Both degrade to a named gap on one document rather than a
+failed run — which has only been true since Wave 1; before it, one class from a too-new JDK
+ended the whole scan with exit 1 and zero facts.
+
+### The frameworks and libraries
+
+**Measured points, not ranges.** Every version below is one we READ the framework's bytecode
+at. A version in between — spring-kafka 3.5, say, sitting between the measured 3.1.4 and
+4.1.1 — is **unverified, not unsupported**: it very likely works, and we have not looked.
+Stating a range would be a prediction about bytecode nobody opened, which is the move
+[GUIDELINES](../GUIDELINES.md) §8.1 forbids.
+
+*Generated from the catalogs by `scripts/coverage_versions.py`, and asserted current by
+`tests/architecture/test_coverage_versions.py`. Do not edit the block below by hand.*
+
+<!-- BEGIN GENERATED: coverage_versions -->
+
+**36 of 55 catalogs name the artifact and versions their rules were read from. 19 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+
+| Catalog | Artifact | Versions read |
+|---|---|---|
+| `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
+| `jakarta-jms` | `jakarta.jms:jakarta.jms-api` | 3.1.0 |
+| `jakarta-jws` | `com.sun.xml.ws:jaxws-rt` | 4.0.2 |
+| `jakarta-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 10.1.50, 11.0.24 |
+| `jakarta-websocket` | `jakarta.websocket:jakarta.websocket-api` | 2.2.0 |
+|  | `jakarta.websocket:jakarta.websocket-client-api` | 2.2.0 |
+| `javax-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 |
+| `kafka-clients` | `org.apache.kafka:kafka-clients` | 3.6.2 |
+| `kafka-consumer` | `org.apache.kafka:kafka-clients` | 3.6.2 |
+| `microprofile-graphql` | `io.smallrye:smallrye-graphql-schema-builder` | 2.0.0, 2.18.5 |
+| `okhttp` | `com.squareup.okhttp3:okhttp` | 4.12.0 |
+| `retrofit` | `com.squareup.retrofit2:retrofit` | 2.11.0 |
+| `spring-actuator` | `org.springframework.boot:spring-boot-actuator` | 3.5.10, 4.1.1 |
+| `spring-data-rest` | `org.springframework.data:spring-data-commons` | 3.2.5, 4.1.1 |
+| `spring-http-interface` | `org.springframework:spring-aop` | 6.1.6 |
+|  | `org.springframework:spring-core` | 6.2.15 |
+|  | `org.springframework:spring-web` | 6.1.6, 6.2.15 |
+|  | `org.springframework:spring-webmvc` | 6.1.6, 6.2.15, 7.0.2, 7.0.9 |
+| `spring-jms-template` | `org.springframework:spring-jms` | 6.1.6 |
+| `spring-jms` | `org.springframework:spring-jms` | 6.1.6, 7.0.9 |
+| `spring-kafka-replying` | `org.springframework.kafka:spring-kafka` | 3.1.4 |
+| `spring-kafka-template` | `org.springframework.kafka:spring-kafka` | 3.1.4 |
+| `spring-kafka` | `org.springframework.kafka:spring-kafka` | 3.1.4, 4.1.1 |
+| `spring-mvc` | `org.springframework:spring-webmvc` | 6.1.6, 6.2.15, 7.0.2, 7.0.9 |
+| `spring-pubsub` | `com.google.cloud:spring-cloud-gcp-pubsub` | 5.1.2 |
+| `spring-pulsar` | `org.springframework.pulsar:spring-pulsar` | 1.2.11, 2.0.7 |
+| `spring-rabbit-template` | `org.springframework.amqp:spring-rabbit` | 3.1.4 |
+| `spring-rabbit` | `org.springframework.amqp:spring-rabbit` | 3.1.4, 4.1.1 |
+| `spring-restclient` | `org.springframework:spring-web` | 6.1.6, 7.0.2 |
+| `spring-resttemplate` | `org.springframework:spring-web` | 6.1.6 |
+| `spring-scheduling` | `org.springframework:spring-context` | 6.1.6, 6.2.19, 7.0.9 |
+| `spring-sqs-legacy` | `io.awspring.cloud:spring-cloud-aws-messaging` | 2.4.4 |
+|  | `org.springframework.cloud:spring-cloud-aws-messaging` | 2.2.6.RELEASE |
+| `spring-sqs-template` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1 |
+| `spring-sqs` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1, 4.1.1 |
+| `spring-stomp` | `org.springframework:spring-messaging` | 6.1.6 |
+| `spring-web` | `org.springframework:spring-webmvc` | 6.1.6, 6.2.15, 7.0.2, 7.0.9 |
+| `spring-webclient` | `org.springframework:spring-webflux` | 6.1.6, 7.0.2 |
+| `spring-webflux-router` | `org.springframework:spring-webflux` | 6.1.6, 7.0.2 |
+| `spring-websocket` | `org.springframework:spring-websocket` | 6.1.6 |
+| `spring-ws-template` | `org.springframework.ws:spring-ws-core` | 4.1.4 |
+
+**No `measured:` block.** Not the same as unbounded, and not a claim that these do not work. Some are bounded by a library SEXTANT ITSELF ships — `grpc-schema` and `grpc-java` by `grpcio-tools>=1.83.1` and `protobuf>=7.36.1`, `graphql-schema` by `graphql-core>=3.2.6`, all declared in `pyproject.toml` — so their version bound is already determinable and merely unrecorded. Others rest on framework knowledge taken from documentation or source. **Telling those two apart per catalog is deferred, not impossible**: there is always a way to find the real version if we want it.
+
+| Catalog |
+|---|
+| `aws-sqs-sdk` |
+| `google-pubsub-publisher` |
+| `google-pubsub-subscriber` |
+| `graphql-schema` |
+| `grpc-java` |
+| `grpc-net-devh` |
+| `grpc-schema` |
+| `grpc-spring` |
+| `jakarta-jws-client` |
+| `netflix-dgs` |
+| `spring-advice` |
+| `spring-cloud-openfeign` |
+| `spring-cloud-stream` |
+| `spring-graphql` |
+| `spring-integration` |
+| `spring-kafka-media` |
+| `spring-kafka-message` |
+| `spring-ws` |
+| `wsdl-schema` |
+
+<!-- END GENERATED: coverage_versions -->
+
+### What this does not tell you
+
+- **A measured version means the RULES were read at it, not that a project on it was
+  analysed end to end.** The field corpus (`scripts/field_check.py`) is where that is
+  proved, and it currently holds three projects, all inbound HTTP.
+- **Spring Boot 2 / Spring Framework 5 is ruled in scope and is measured almost nowhere.**
+  The only pre-Jakarta evidence in the table is Tomcat 9 for `javax-servlet`. Everything
+  else Spring is 6.1.6 and later.
+- **A catalog with no `measured:` block is not a catalog without a version bound.** Some of
+  them are bounded by a library Sextant itself ships and declares in `pyproject.toml` —
+  protobuf through `grpcio-tools`, GraphQL SDL through `graphql-core` — so the bound exists
+  and is findable; it has just never been written into the catalog. Others genuinely rest on
+  framework knowledge read from documentation. **Separating the two per catalog is deferred
+  work, not unknowable work**, and until it is done this table reports what we have
+  RECORDED rather than what could be determined.
+
+---
+
 ## 4. Wire format — a separate concern from protocol
 
 Format is not a protocol and not a coverage cell. It is a **property of a channel that has to
