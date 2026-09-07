@@ -911,6 +911,9 @@ batch, not one at a time, because each is a sentence and the risk is in the aggr
   G-16, G-20, G-21, G-27, G-49, G-64.
 - **Minor:** G-85, G-87, G-92, G-94, G-95, G-97…G-102, G-105…G-109, G-113…G-116, G-118,
   G-119.
+- **G-117 — FR-20 clause 2.** Rewrite it to say that approximate lookup happens against the
+  index bundle (§9.3), and that commands take exact identifiers. Clause 3 already holds:
+  symbols are minted as exact ids that can be given straight back.
 
 **Rule for the batch:** a sentence in the indicative that describes behaviour we have not
 tested is either given a test or rewritten to say what is true. C7's *"Both must be
@@ -1147,16 +1150,15 @@ Carried verbatim into every task the plan derives.
 
 ---
 
-## 16. Rulings still needed
+## 16. Rulings needed — none
 
-One item reaches a fork this document cannot settle.
+All three items that reached a fork are now ruled.
 
-| | The question |
+| | Ruling |
 |---|---|
-| **G-117** — FR-20 clause 2 | Approximate subject naming, and *listing* ambiguity rather than choosing, has no implementation and no gap row. Build it in v1, or descope FR-20 clause 2 to a stated boundary? My recommendation is build: F8 §9.3 is already constructing the symbol index a fuzzy lookup would search, so this is a lookup over an index we are building anyway. |
-
-G-120 and G-121 were on this list and are now ruled: **F11** rewrites FR-16 around a curation
-file, and **F7 §8.4** builds class diagrams of inheritance on top of F3's `type_hierarchy`.
+| **G-117** — FR-20 clause 2 | **Do not build.** Nothing in the derivation ever picks between candidates by name — call edges, endpoints and resolution are keyed on FQN plus descriptor. FR-20's ambiguity is a property of a string a human types, and today no command takes a name at all. Q8b already settles it: the index ships as greppable files, so approximate lookup happens against the index and commands take exact identifiers. Restated in F9 §10.4, not built. |
+| **G-120** — FR-16 | **F11 §12** — curation is a file that adds links, never verbs that edit the graph. |
+| **G-121** — FR-7 | **F7 §8.4** — class diagrams of inheritance, on top of F3's `type_hierarchy`. |
 
 Plus §1.2's flag: Spring Cloud Gateway is out of v1 under Q3, and it is the biggest hole we
 are choosing to leave.
@@ -1286,7 +1288,7 @@ boundary with a support level (F6), never dropped.
 | G-114 | Minor | `roadmap.md:554-556` | F9 §10.4 |
 | G-115 | Minor | batch-listener generics | F9 §10.4 |
 | G-116 | Minor | `COVERAGE.md` §8 | F9 §10.4 |
-| G-117 | Minor | FR-20 clause 2 | §16 (ruling needed) |
+| G-117 | Minor | FR-20 clause 2 | F9 §10.4 |
 | G-118 | Minor | `docs/components/M04-resolver.md:210` | F9 §10.4 |
 | G-119 | Minor | FR-18 | F9 §10.4 |
 | G-120 | Minor | FR-16 | F11 §12 |
