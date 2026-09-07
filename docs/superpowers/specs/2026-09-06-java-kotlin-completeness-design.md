@@ -138,17 +138,29 @@ scanner that reads 4 of 30 attributes fully.
 Measured: ASM 9.7 accepts class-file majors 45–67 and **refuses 68+** — JDK 24, 25 and 26.
 ASM 9.10.1 was verified reading majors 52, 61, 65, 68, 69 and 70 from real jars.
 
-- **Bump** `asm`, `asm-tree`, `asm-analysis` 9.7 → 9.10.1. This is the one approved
-  exception to the standing no-version-bumps-before-2J rule.
+- **The bump is already done** — `build.gradle.kts:28-34` pins 9.10.1, landed in commit
+  `0674bfd` as the one approved exception to the standing no-version-bumps-before-2J rule.
+  It is named here only so the record is complete; it is not remaining work.
 - **Pin the supported range as a test**, so the ceiling is a value a test asserts rather
   than a number that drifts.
 - **Record the observed major per document.** This is capability 9.19, extracted today with
   no consumer; F1 gives it three (the ceiling test, the multi-release target fallback in
   §2.4, and the Kotlin/language labelling in F8).
 
-An unreadable class is **skipped, not fatal**. The reason reaches both the manifest and the
-document. `partial` / `partial_reason` are hardcoded `false` / `null` today with no code
-path able to set them; they become real.
+**What actually remains is the half that lasts, and none of it exists.** `Main.java:83` still
+wraps the entire scan loop in `catch (Exception failure)` and exits 1, so one unreadable class
+still takes the whole scan with it. An unreadable class becomes **skipped, not fatal**, with
+its reason reaching both the manifest and the document. `partial` / `partial_reason`
+(`Main.java:205-206`) are the literal strings `"false"` and `"null"` with no code path able to
+set either; they become real.
+
+**And `scanner_version` stops lying** (folded here on the user's ruling). `Main.java:182-183`
+writes `scanner_id: "asm"`, `scanner_version: "9.18"`. ASM 9.18 does not exist — the pinned
+library is 9.10.1 — because commit `2cda8a2` set the field to 9.18 when *capability* 9.18
+(`method_returns`) landed. A third value, `"9.7"`, sits in `tests/egress/test_manifest.py:14`.
+Every fact document therefore names a scanner version that is neither the library in use nor
+anything a reader can resolve, and it looks exactly like a library version, which is why it
+went unnoticed. This is provenance: a consumer deciding whether to trust a bundle reads it.
 
 *Honest note:* the bump alone would have hidden the second half. A newer ASM raises the
 ceiling; it does not make a refusal visible. Both halves ship together or the next ceiling
