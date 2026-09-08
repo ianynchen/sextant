@@ -10,6 +10,52 @@ which found **zero endpoints on the first attempt** because the catalog matched
 `@RestController` and petclinic uses `@Controller`. Coverage gaps are invisible until
 something real is pointed at the tool.
 
+## The matrices
+
+**Rows are languages; cells count libraries.** `Scanner` is the prerequisite — without one,
+nothing else in that row is reachable at any tier. Two tables because the address shapes
+differ and one eleven-column table is unreadable.
+
+| cell | means |
+|---|---|
+| `✅` | shipped, nothing outstanding |
+| `◐ (2 limited)` | every library catalogued, 2 of them narrower than the framework's rule |
+| `◐ (4A 3B 4C)` | 4 + 3 + 4 libraries not catalogued at all |
+| `◐ (2 limited, 4A 3B 4C)` | both |
+| `4A 3B` | nothing shipped here; these are what it would take |
+| `—` | not applicable to that language |
+| `·` | not enumerated in §5 yet |
+
+A tier is what a gap COSTS: **A** needs only a catalog file, **B** needs a scanner
+capability, **C** is not in the code at all (§1). `◐` never appears alone — the bracket
+always names what is missing.
+
+### 2a. Application protocols over HTTP
+
+| Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
+|---|---|---|---|---|---|---|---|
+| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 4A 3B 4C) | ◐ (2A 2B) | ✅ | ✅ | ✅ | ◐ (1A) |
+| **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
+| **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
+| **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
+| **Python** | none | 4A 1B 1C | 1A | 1B | 2A | 2A 1B | 2B |
+| **Rust** | none | 1A 2B 1C | 1B | — | 1A | 1A 1B | 1B |
+| **Swift** | none | 1A | 1A 1B | — | 1A | 1B | — |
+
+### 2b. Messaging and RPC
+
+| Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
+|---|---|---|---|---|---|---|
+| **Java / Kotlin** | ◐ (1A) | ◐ (1A 2B) | ◐ (1A) | ◐ (1B) | ◐ (1A 1B) | ◐ (1 limited, 2A 1B 1C) |
+| **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
+| **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
+| **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
+| **Python** | 1A | 2A | 1A | 1C | 1B | 2A |
+| **Rust** | 1A | 1A | 1A | 1B | 1B | 2A 1B |
+| **Swift** | 1A | 1A | — | 1B | — | 1B |
+
+Everything below is the detail behind these two tables: how to read them (§1), what a run produces today (§2), the language and version gate (§3), wire formats (§4), and the per-protocol work list they are generated from (§5).
+
 ---
 
 ## 1. How to read this
@@ -113,11 +159,12 @@ marks a claim that has not been. A wrong annotation name does not fail loudly; i
 matches nothing, which is exactly how petclinic returned zero endpoints.
 
 ---
-## 2. The matrices
+## 2. Behind the matrices
 
-Rows are languages. **Scanner** is the prerequisite: without it, nothing else in the row is
-reachable regardless of tier. Split in two because the address shapes differ (§1) and one
-eleven-column table is unreadable.
+The two tables are at the top of this file, where a reader meets them before anything else.
+This section is what stands behind them: what a run actually produces today, what the
+`✅ ASM` in the Scanner column claims, what the messaging table leaves out, and how the
+cells are generated.
 
 ### What ships today
 
@@ -427,7 +474,7 @@ the gap list:
   `spring.config.import`-shaped value resolves `unresolved_reason: remote_source`,
   naming where the value lives, never what it is.
 
-### 2a. Application protocols over HTTP
+### 2c. What `✅ ASM` in the Scanner column claims
 
 **What `✅ ASM` claims, and what backs it (W8).** Every attribute JVMS 4.7 defines is in
 `AttributeLedger` in exactly one of two states — read, naming the callback that reads it, or
@@ -449,31 +496,9 @@ against JVMS's own list, refuses a reason that is a deferral in disguise, and re
 "read" claim against the source so a renamed callback cannot leave a stale claim behind. It
 has already earned that — it caught `ACC_RECORD`, which ASM synthesises from the `Record`
 attribute and which replaced two approximations of the same question with the one signal.
-
-| Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
-|---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ 4A 3B 4C | ◐ 2A 2B | ◐ — | ◐ — | ◐ — | ◐ 1A |
-| **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
-| **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
-| **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
-| **Python** | none | 4A 1B 1C | 1A | 1B | 2A | 2A 1B | 2B |
-| **Rust** | none | 1A 2B 1C | 1B | — | 1A | 1A 1B | 1B |
-| **Swift** | none | 1A | 1A 1B | — | 1A | 1B | — |
-
-### 2b. Messaging and RPC
+### 2d. What the messaging table leaves out
 
 SNS and Redis are **out of scope by decision**, not oversight — each would be a new column.
-
-| Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
-|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ 1A | ◐ 1A 2B | ◐ 1A | ◐ 1B | ◐ 1A 1B | ◐ 2A 1B 1C |
-| **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
-| **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
-| **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
-| **Python** | 1A | 2A | 1A | 1C | 1B | 2A |
-| **Rust** | 1A | 1A | 1A | 1B | 1B | 2A 1B |
-| **Swift** | 1A | 1A | — | 1B | — | 1B |
-
 **Wire format is not in these tables at all** — see §4. Format is a property of a channel to
 be *inferred*, not a protocol to be supported: Avro-over-Kafka, Protobuf-over-gRPC,
 Protobuf-over-REST and JSON-over-anything are all real, and the detection job is nearly
@@ -481,17 +506,27 @@ identical in every language.
 ### Reading the matrices
 
 **Every cell is generated from §5** by `scripts/coverage_matrix.py`, so the summary cannot
-drift from the checklist it summarises. **Three Java cells moved in Phase 2I and only one
-of them is a coverage change**: SOAP went from `2A` to `◐ —` because its rows shipped,
-while GraphQL and WebSocket went from a hand-written `✅` to the generated `◐ —`. Those two
-are a **correction, not a downgrade** — the generator never emits a bare `✅` for a protocol
-cell, and `◐ —` is what it writes for a cell whose rows are all shipped and whose gap
-spread is therefore empty. The matrices had simply been left stale since 2H. Anyone
-comparing against an older copy of this file should read `◐ —` as the stronger of the two
-markings, not the weaker. A cell counts libraries at each tier — `4A 3B 2C`
+drift from the checklist it summarises. A cell counts libraries at each tier — `4A 3B 2C`
 means four need only a catalog, three need a scanner capability, and two are not in the code
 at all. **The spread is the point**: a single headline tier hides the gap, which is the thing
 worth seeing.
+
+**The notation was changed after a reader took `◐ —` to mean half-done.** It had meant
+"shipped, and nothing outstanding" — the strongest a protocol cell could be — because the
+generator emitted `◐` for shipped OR partial and wrote `—` when the gap list was empty. Two
+different states rendered identically, and this paragraph used to instruct readers to take
+the pair as "the stronger of the two markings, not the weaker".
+
+That instruction was a defect report written as a legend. `◐` is a half-filled circle and
+reads as half-done to anyone; `—` reads as not-applicable to anyone; the pair read as
+neither of the things it meant. SOAP, GraphQL and WebSocket are 7/7, 5/5 and 3/3 shipped
+with no gaps at any tier, and all three displayed `◐ —`. They read `✅` now, which is what
+they were.
+
+`◐` also **can no longer appear alone**, which was incoherent — a partial cell is one with
+something missing, so the bracket names what. A library that is shipped but narrower than
+the framework's rule counts as `limited`, and those were invisible before: REST inbound hid
+two and Async hid one.
 
 **Java + Kafka shows why.** Several ways of using Kafka from Java cost a YAML file each;
 several more need real work, including `KafkaProducer.send(new ProducerRecord("t", …))`, where

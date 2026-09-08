@@ -94,14 +94,52 @@ def parse(md: str) -> tuple[dict, dict]:
 
 
 def cell(c: Counter | None) -> str:
+    """One matrix cell, in a notation a reader can take at face value.
+
+        ✅                        shipped, nothing outstanding
+        ◐ (2 limited)             every library catalogued, 2 with stated limits
+        ◐ (4A 3B 4C)              4+3+4 libraries not catalogued at all
+        ◐ (2 limited, 4A 3B 4C)   both
+        4A 3B                     nothing shipped, these outstanding
+        —                         not applicable to this language
+        ·                         not enumerated in §5 yet
+
+    **`◐` can never appear alone**, and that is a rule rather than an accident of
+    the data: a partial cell is one with something missing, so the bracket carries
+    whichever kind of incompleteness caused the glyph. A row that is itself
+    partial — "shipped, narrower than the framework's rule" — counts as `limited`;
+    a library nobody has catalogued counts in its tier.
+
+    **What this replaces, and why it was wrong.** The lead used to be
+    `"◐ " if c["partial"] or c["shipped"]`, which collapsed two different states
+    into one glyph: a cell with every row shipped rendered `◐ —` exactly like a
+    cell with partial rows. Three Java cells — SOAP, GraphQL, WebSocket — are
+    7/7, 5/5 and 3/3 shipped with no gaps at any tier, and all three read `◐ —`.
+    The file then carried a paragraph telling readers to take `◐ —` as "the
+    stronger of the two markings, not the weaker", which is a defect report
+    written as a legend: `◐` is a half-filled circle and reads as half-done to
+    anyone, and `—` reads as not-applicable to anyone, so the pair read as
+    neither of the things it meant.
+
+    The information needed to write `✅` was in the counter the whole time and
+    was thrown away one line before it was used.
+    """
     if not c:
         return "·"  # no rows in section 5 at all: not yet enumerated, not known-absent
     if not (c - Counter({"na": c["na"], "unknown": c["unknown"]})):
         return "⚠️" if c["unknown"] else "—"
-    lead = "◐ " if c["partial"] or c["shipped"] else ""
-    gaps = " ".join(f"{c[t]}{t}" for t in "ABC" if c[t])
     tail = " ⚠️" if c["unknown"] else ""
-    return f"{lead}{gaps or '—'}{tail}"
+    gaps = " ".join(f"{c[t]}{t}" for t in "ABC" if c[t])
+    if not (c["partial"] or c["shipped"]):
+        # Nothing shipped: the tiers stand alone, unbracketed, because there is
+        # no shipped half for them to qualify.
+        return f"{gaps}{tail}"
+    if not c["partial"] and not gaps:
+        return f"✅{tail}"
+    missing = [f"{c['partial']} limited"] if c["partial"] else []
+    if gaps:
+        missing.append(gaps)
+    return f"◐ ({', '.join(missing)}){tail}"
 
 
 def render(counts, numbers, columns, first_col=None) -> str:
