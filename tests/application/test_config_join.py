@@ -2009,7 +2009,7 @@ def test_a_channel_rule_missing_its_attribute_is_refused_by_name():
             _channel_catalog(_channel_address(binding={"channels": [{"annotation": ACTIVATOR}]})),
         )
 
-    assert "must be `{annotation: <type>, arg: <attribute>" in str(raised.value)
+    assert "must be `{annotation: <type>|[<type>, ...], arg: <attribute>" in str(raised.value)
 
 
 def test_a_channel_rule_declaring_a_direction_outside_the_closed_set_is_refused():

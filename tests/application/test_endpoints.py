@@ -1,9 +1,11 @@
+import copy
 import json
 from pathlib import Path
 
 import pytest
 import yaml
 
+from conftest import FIXTURE_CAPABILITIES
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 from sextant.domain.closed_sets import ConstructKind, OriginTier
@@ -6578,10 +6580,15 @@ def test_a_type_annotation_written_as_a_list_gates_on_every_spelling(tmp_path: P
     }
 
 
-def test_a_field_annotation_written_as_a_list_matches_either_spelling(tmp_path: Path):
-    """The same question at a Python-level key, with the two halves separated: one
-    field carries the first spelling and one carries the second, so a check that
-    read only one end of the list would drop a row rather than all of them."""
+def test_catalog_symbols_returns_every_name_a_list_declares(tmp_path: Path):
+    """`catalog_symbols` returns ALL of them, in order, and a one-element list is
+    the same tuple as the bare scalar.
+
+    This does NOT exercise any engine — it names no catalog and derives no row. It
+    was called `..._a_field_annotation_written_as_a_list_matches_either_spelling`,
+    which claimed coverage of `injected_client`'s key that it does not have; the
+    end-to-end coverage each widened key does or does not have is OI-55.
+    """
     from sextant.application.resolve.shapes.rooting import catalog_symbols
 
     both = catalog_symbols(["com.acme.First", "com.acme.Second"], "test: field_annotation")
@@ -6589,3 +6596,131 @@ def test_a_field_annotation_written_as_a_list_matches_either_spelling(tmp_path: 
     # A one-element list and the bare scalar are the same tuple: the widening adds
     # a spelling, never a second behaviour for the singular case.
     assert catalog_symbols(["com.acme.First"], "test") == catalog_symbols("com.acme.First", "test")
+
+
+def test_a_prefix_annotation_written_as_a_list_gates_on_every_spelling(tmp_path: Path):
+    """The second widened key that reaches SQL rather than Python.
+
+    `$prefix_annotation` is compared with `list_contains` in
+    `derive_endpoints.sql` exactly as `$type_annotation` is, and had no test:
+    changing that one comparison back to `a.annotation = $prefix_annotation[1]`
+    left 1,423 tests passing. The real annotation goes SECOND for the same reason
+    as in the test above — a comparison reading the parameter as one string, or
+    reading only its first element, matches nothing.
+
+    The prefix is what makes these paths `/v1/orders` rather than `/orders`, so
+    the assertion is on the composed path and not merely on the row's existence.
+    """
+    _controller_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+    scalar = spring.matches["mapping"]["prefix_annotation"]
+    listed = Catalog(
+        **{
+            **vars(spring),
+            "matches": {
+                **spring.matches,
+                "mapping": {
+                    **spring.matches["mapping"],
+                    "prefix_annotation": ["com.acme.rest.NoSuchMapping", scalar],
+                },
+            },
+        }
+    )
+
+    derive_endpoints(workspace, [listed], capabilities={"annotation_args", "type_annotations"})
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert {(r["method"], r["path"]) for r in rows} == {
+        ("POST", "/v1/orders"),
+        ("GET", "/v1/orders/{id}"),
+        ("GET", "/v1/orders"),
+    }
+
+
+def test_every_widened_key_a_shipped_catalog_declares_honours_a_second_spelling(
+    tmp_path: Path, fixture_facts: Path
+):
+    """§3.1 across every key at once, on the real fixture and the real catalogs.
+
+    Sixteen of the twenty widened keys had no test that would fail if the
+    widening were reverted at the CONSUMER: mutating `catalog_symbols` to return
+    only its first element failed four tests out of 2,407, and two of those four
+    were unit tests of `catalog_symbols` itself. Writing sixteen near-identical
+    end-to-end tests would test one mechanism sixteen times; this drives the
+    mechanism once, over whatever the shipped catalogs actually declare.
+
+    Every widened key in every shipped catalog is rewritten from `X` to
+    `[<a name nothing declares>, X]` — the real name SECOND, so a consumer that
+    reads one element, or reads the first, matches nothing — and the fixture is
+    resolved twice. The endpoint rows must be identical.
+
+    `_WIDENED_KEYS` is `endpoints.py`'s own list, the same one the pre-flight
+    walks, so a key added there without a consumer that iterates lands here
+    automatically rather than needing this test to be remembered.
+    """
+    from sextant.application.resolve.endpoints import _WIDENED_KEYS, _at
+
+    # A DISTINCT absent name per occurrence. One shared name made two `fluent`
+    # steps that previously had distinct owners collide, and `_validate_steps`
+    # refused the catalog — its overlap rule working exactly as intended, and
+    # not the question this test asks.
+    minted = iter(f"com.acme.no.such.Type{n}" for n in range(10_000))
+
+    def widened(value: object) -> object:
+        return [next(minted), value]
+
+    def rewrite(holder: object, path: tuple[str, ...]) -> None:
+        """Rewrites in place, mirroring `_at`'s own walk so the two cannot drift."""
+        if not path:
+            return
+        key, rest = path[0], path[1:]
+        if key == "[]":
+            if isinstance(holder, list):
+                for element in holder:
+                    rewrite(element, rest)
+            return
+        if not isinstance(holder, dict) or key not in holder:
+            return
+        if rest:
+            rewrite(holder[key], rest)
+        elif holder[key] is not None and not isinstance(holder[key], list):
+            holder[key] = widened(holder[key])
+
+    shipped = YamlCatalogSource(CATALOGS).load()
+    listed = []
+    touched = 0
+    for original in shipped:
+        matches = copy.deepcopy(original.matches)
+        for path in _WIDENED_KEYS:
+            before = len(_at(matches, path))
+            rewrite(matches, path)
+            touched += before
+        listed.append(Catalog(**{**vars(original), "matches": matches}))
+
+    # The test is worthless if it rewrote nothing — which is what a renamed key
+    # would silently produce.
+    # 19 of the 20 keys in `_WIDENED_KEYS`, measured: `media_values.owner` is
+    # declared by NO shipped catalog and so cannot be reached from here — the one
+    # key whose consumer this test does not drive (OI-55). The floor is on
+    # occurrences, not keys, and is deliberately well under the ~55 the shipped
+    # catalogs currently hold: it fails a rename that silently rewrites nothing
+    # without failing every time a catalog is added or removed.
+    assert touched >= 40, f"only {touched} widened key occurrences found across the catalogs"
+
+    def rows(catalogs: list[Catalog]) -> set:
+        workspace = DuckDbWorkspace(tmp_path / f"ws{len(catalogs)}{id(catalogs)}.duckdb")
+        workspace.load_facts(fixture_facts)
+        derive_endpoints(workspace, catalogs, capabilities=FIXTURE_CAPABILITIES)
+        found = {
+            (r["catalog_id"], r["protocol"], r["direction"], r["method"], r["path"], r["peer"])
+            for r in workspace.query("endpoints")
+        }
+        workspace.close()
+        return found
+
+    scalar_rows = rows(shipped)
+    assert scalar_rows, "the fixture derived nothing; this test would pass on any change"
+    assert rows(listed) == scalar_rows

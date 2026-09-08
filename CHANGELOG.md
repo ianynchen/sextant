@@ -21,7 +21,7 @@ here would restate those documents rather than add anything.
   Spring's own guides show, and what autowiring by interface produces — named a type no
   catalog listed, so it derived **nothing at all**: not a wrong row, no row, silently.
 
-  Nineteen catalog keys now accept a list of dotted names as well as one, across every
+  Twenty catalog keys now accept a list of dotted names as well as one, across every
   engine that reads a type name (`docs/components/D02-catalog-schema.md` lists them). A
   scalar stays valid and is what almost every shipped catalog writes. Seven catalogs gained
   an alternate — `JmsOperations`, `AmqpTemplate`, `SqsOperations`, `RestOperations`,
@@ -30,13 +30,28 @@ here would restate those documents rather than add anything.
   alternate separately because an interface declaring a SUBSET of the class's methods would
   match some call sites and miss the rest. All 53 alternate rows come back `declared`.
 
-  Two of the design's 21 named sites are **not** in the nineteen: `identity_marker` and
+  Nineteen of the twenty are the design's own list, and `matches.steps[].owner` is the
+  twentieth, widened with the `roots[].owner` it sits beside. Two of the design's 21 named
+  sites are **not** widened: `identity_marker` and
   `supertype_marker` hold a mapping of call specs rather than a type name, so the type sits
   one level below the key the design named (OI-54).
 
   Where a widened value reaches its consumer the variable is now PLURAL (`owners`,
   `handler_fqns`, `supertypes`). The rename is the mechanism: a consumer still comparing
   with `==` fails loudly instead of comparing a string against a tuple and matching nothing.
+
+  *Its own review found two of the twenty keys widened at the READ site and still refused
+  at LOAD — `config_join`'s validators required a string, so the list branch and its helper
+  were dead for every catalog that could have used them. It also measured the coverage:
+  reverting `catalog_symbols` to return only its first element failed **4 tests out of
+  2,407**, and two of those four were unit tests of `catalog_symbols` itself. One test now
+  drives every widened key at once — each key in every shipped catalog rewritten from `X`
+  to `[<an absent name>, X]`, the fixture resolved twice, the rows required to be identical
+  — which fails on exactly that mutation and covers 19 of the 20 keys, all but the one no
+  shipped catalog declares (OI-55). The pre-flight that keeps a broken catalog from
+  half-emptying the endpoints table checked one key and its docstring claimed the whole
+  failure class was closed; it walks all twenty now, and setting `registration.owner` to a
+  number in `google-pubsub-subscriber.yml` no longer takes the previous run's rows with it.*
 
 - **Every NESTED record reported `class`** — 73% of all records, introduced by W8 and
   caught by its own review.

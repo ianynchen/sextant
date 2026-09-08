@@ -138,7 +138,7 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
     # catalogs, §3.3), but a base renamed between major versions of one library is.
     supertypes = catalog_symbols(matches["supertype"], f"{catalog.source}: matches.supertype")
     address = matches["address"]
-    annotation = type_descriptor(str(address["annotation"]))
+    annotation = type_descriptor(address["annotation"])
     keys = [str(key) for key in address["args"]]
     dispatch = {_selector(entry): str(entry["method"]) for entry in matches["dispatch"]}
     bypass = {_selector(entry) for entry in matches["bypassed_by"]}
@@ -366,7 +366,7 @@ def _members(workspace: Workspace) -> dict[str, dict[_Selector, str]]:
 def _selector(entry: dict[str, Any]) -> _Selector:
     return (
         str(entry["name"]),
-        tuple(type_descriptor(str(parameter)) for parameter in entry["parameters"]),
+        tuple(type_descriptor(parameter) for parameter in entry["parameters"]),
     )
 
 

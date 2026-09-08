@@ -914,11 +914,14 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
         # THE CLASS GATE. A member rule enumerates the members OF something,
         # so something has to gate the class — and where nothing does, the
         # rule is not inert, it is catastrophic: every public method in the
-        # module becomes an endpoint. The gate may be the single
-        # `type_annotation`, or — for a framework whose gate has two spellings,
-        # which `type_annotation` cannot carry (it is one fqn) — one of this
-        # catalog's own `mapping.annotations` found on a TYPE, the same
+        # module becomes an endpoint. The gate may be `type_annotation` — one
+        # name or, since §3.1, a list of spellings — or one of this catalog's
+        # own `mapping.annotations` found on a TYPE, which is how a framework
+        # that gates on the mapping annotation itself and declares no separate
+        # type-level annotation still names a class. That is the same
         # type-level join `qualifier_scopes` reads a class-level scope through.
+        # (The reason recorded here used to be that `type_annotation` was one
+        # fqn and could not carry two spellings; it carries a list now.)
         # A catalog declaring neither names no class at all.
         if catalog.matches.get("type_annotation") is None and not mapping["annotations"]:
             raise CatalogError(

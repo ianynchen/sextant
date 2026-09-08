@@ -489,7 +489,7 @@ def _vocabulary(catalogs: list[Catalog]) -> _Vocabulary:
                 f"loading catalog {catalog.source}: `parse_calls` must be a mapping of "
                 f"`bytes_payloads` and `calls`, got {declared!r}"
             )
-        payloads.update(type_descriptor(str(name)) for name in declared.get("bytes_payloads") or [])
+        payloads.update(type_descriptor(name) for name in declared.get("bytes_payloads") or [])
         for entry in declared.get("calls") or []:
             calls.append(_parse_call(entry, catalog))
     return _Vocabulary(bytes_payloads=frozenset(payloads), calls=tuple(calls))
@@ -520,7 +520,7 @@ def _parse_call(entry: Any, catalog: Catalog) -> _ParseCall:
         )
     return _ParseCall(
         owner=type_descriptor(owner) if isinstance(owner, str) else None,
-        hierarchy=tuple(type_descriptor(str(name)) for name in hierarchy or []),
+        hierarchy=tuple(type_descriptor(name) for name in hierarchy or []),
         method=str(entry["method"]),
         # An entry with no declared bytes position names a parse whose payload
         # TYPE is readable and whose BYTES arrive somewhere else entirely (a

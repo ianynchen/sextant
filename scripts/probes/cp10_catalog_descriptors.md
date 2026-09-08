@@ -257,13 +257,16 @@ uncheckable.
 
 ## What this probe deliberately did not measure
 
-- **Whether the owner is the type a real call records.** A call made through an
-  interface or supertype records THAT type — `SqsOperations`, `AmqpTemplate`,
-  `JmsOperations`, `Consumer` — and matches no shipped catalog, whose
-  `matches.owner` is single-valued. The descriptors are identical either way
-  (verified while auditing), so this is an **owner** problem a descriptor cannot
-  fix; it is a stated boundary in `docs/COVERAGE.md` and engine work, not a
-  catalog edit.
+- **Whether the owner is the type a real call records — no longer a gap, and this
+  entry is kept as the record of one.** A call made through an interface records
+  THAT type, and this paragraph used to say those names "match no shipped catalog,
+  whose `matches.owner` is single-valued". Both halves are now false: §3.1 widened
+  `matches.owner` to a list, seven catalogs declare an alternate, and 53 of the rows
+  in the table above are those very owners — `SqsOperations`, `AmqpTemplate`,
+  `JmsOperations`, `RestOperations`, `KafkaOperations`, `Consumer`, `Producer` —
+  every one `declared`. What the probe still does not measure is whether some FURTHER
+  interface or supertype exists that no catalog names; the harness answers "is this
+  owner real", never "is this the complete set of names this library is held under".
 - **Whether an overload the catalogs do NOT declare exists.** The table answers
   "is this string real", never "is this the complete overload set". The catalogs'
   own comments carry the overload lists, and each names `javap` as its check.

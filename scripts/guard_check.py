@@ -296,7 +296,7 @@ GUARDS: dict[str, Guard] = {
             ),
             Edit(
                 path=_SUPERTYPE_DISPATCH,
-                find="        tuple(type_descriptor(str(parameter)) for parameter in "
+                find="        tuple(type_descriptor(parameter) for parameter in "
                 'entry["parameters"]),',
                 replace="        (),  # guard disabled by scripts/guard_check.py",
             ),

@@ -1854,7 +1854,8 @@ catalog, which would make it a live defect rather than a message-quality one.
 `docs/superpowers/specs/2026-09-06-java-kotlin-completeness-design.md` §3.1**
 
 F2 §3.1 lists 21 scalar sites to widen. Nineteen hold a dotted type name and are
-widened. The other two do not hold a type name at all: each is a mapping of CALL
+widened (`matches.steps[].owner` is widened too and is a twentieth key the design
+did not list). The other two do not hold a type name at all: each is a mapping of CALL
 specs, and the type sits one level below.
 
 ```yaml
@@ -1872,10 +1873,58 @@ catalogs that declare either key.
 
 **Consequence:** none. gRPC's descriptor classes have one spelling each, so no
 alternate is wanted today. The defect is in the design's own list, which is why
-`docs/components/D02-catalog-schema.md` states nineteen and says why, rather than
+`docs/components/D02-catalog-schema.md` states twenty — nineteen of §3.1's plus one it
+did not list — and says why, rather than
 matching the design's count and being wrong.
 
 **Closes by** correcting F2 §3.1's list to name `identity_marker.*.owner` and
 `supertype_marker.*.owner`, or recording that a nested call spec's owner is out of
 scope. **Falsified by** a gRPC descriptor class shipping under a second name, which
 would make this a live gap.
+
+### OI-55 — `media_values.owner` is widened and no shipped catalog declares it
+**Minor · found 2026-09-08 in the W9 review ·
+`src/sextant/application/resolve/engines/combinator.py`**
+
+`test_every_widened_key_a_shipped_catalog_declares_honours_a_second_spelling`
+drives each widened key by rewriting it, in every shipped catalog, from `X` to
+`[<an absent name>, X]` and asserting the fixture's endpoint rows are unchanged.
+Measured: 19 of the 20 keys in `endpoints._WIDENED_KEYS` are declared by at least
+one shipped catalog and are therefore driven. **`media_values.owner` is declared
+by none**, so nothing reaches `combinator.py`'s `media_owners` membership test.
+
+That test is the only mechanism covering the widening — before it, mutating
+`catalog_symbols` to return only its first element failed 4 tests out of 2,407,
+and two of those were unit tests of `catalog_symbols` itself.
+
+**Consequence:** if `media_owners` were reverted to a single comparison, nothing
+would fail. The key has no consumer in the shipped estate either, so no derived
+fact is wrong today.
+
+**Closes by** a catalog declaring `media_values.owner` (which would make it
+covered automatically, the test reading `_WIDENED_KEYS` rather than a list of its
+own), or a hand-built `combinator` catalog in the suite that declares one.
+**Falsified by** finding a shipped catalog that does declare it, which would mean
+the measurement above is wrong.
+
+### OI-56 — `scheduled_work` pairs `annotation` and `container` as independent lists
+**Minor · found 2026-09-08 in the W9 review ·
+`src/sextant/application/resolve/engines/scheduled_work.py`**
+
+A repeatable annotation and the container javac folds its repeats into are ONE
+declaration read two ways: `@Scheduled` and `@Schedules`. §3.1 widened both keys
+independently, so `annotations` and `containers` are now two unrelated tuples and
+a container from one list may fold an entry named in the other.
+
+Under §3.1's own reading — a list is several spellings of ONE thing — every
+element of each list denotes the same annotation, so a cross-match is not wrong.
+It is only unenforced: a catalog author writing `annotation: [A, B]` and
+`container: [As, Bs]` might reasonably expect `As` to fold only `A`.
+
+**Consequence:** none today. `spring-scheduling.yml` is the only catalog
+declaring either key and it writes one scalar at each.
+
+**Closes by** a paired grammar (`repeatable: [{annotation, container}, ...]`) if a
+second framework ever needs one, or by a comment stating that the two lists are
+deliberately independent. **Falsified by** a framework whose two spellings fold
+into DIFFERENT containers, which would make the cross-match a live defect.

@@ -322,7 +322,7 @@ def _repositories(workspace: Workspace, catalog: Catalog) -> list[_Repository]:
         return []
     matches = catalog.matches
     contracts = {
-        type_descriptor(str(fqn)): frozenset(str(op) for op in operations)
+        type_descriptor(fqn): frozenset(str(op) for op in operations)
         for fqn, operations in dict(matches["repositories"]).items()
     }
     # LISTS or scalars (§3.1). Plural names, so a consumer left doing a single

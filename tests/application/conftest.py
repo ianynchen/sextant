@@ -23,6 +23,43 @@ FIXTURE = REPO / "fixtures" / "orders-service"
 CATALOGS = catalogs_dir()
 
 
+FIXTURE_CAPABILITIES = {
+    "annotation_args",
+    "typed_signatures",
+    "type_annotations",
+    "call_site",
+    "string_constants",
+    "chain_reconstruction",
+    "implemented_interfaces",
+    "superclass",
+    "generic_interfaces",
+    "nested_annotation_args",
+}
+
+
+@pytest.fixture(scope="session")
+def fixture_facts(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The fixture module compiled and scanned once, as a FACT DIRECTORY.
+
+    Separate from `resolved_fixture` because a test that resolves the same facts
+    twice under two catalog sets cannot use a workspace someone already resolved
+    — and compiling the fixture a second time for it would double the slowest
+    step in the suite for no new evidence."""
+    facts = tmp_path_factory.mktemp("fixture_facts") / "facts"
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders-service",
+            coordinates="com.acme/orders-service",
+            version="1.0.0",
+            classes_dir=FIXTURE / "target" / "classes",
+            out_dir=facts,
+        )
+    )
+    write_fixture_module_fact(facts)
+    return facts
+
+
 @pytest.fixture(scope="session")
 def resolved_fixture(
     tmp_path_factory: pytest.TempPathFactory,

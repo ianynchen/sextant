@@ -110,7 +110,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # and the `JmsOperations` interface a codebase more often declares its field
     # as, or a type under its old package. A scalar stays valid and every shipped
     # catalog still writes one, so this is a widening rather than a migration.
-    owners = catalog_symbols(matches["owner"])
+    owners = catalog_symbols(matches["owner"], f"{catalog.source}: matches.owner")
     # A list, not a dict-by-name (Task 6): `arity` lets two rows share a
     # `name` — `send(topic, payload)` and `send(topic, key, payload)` — and a
     # dict keyed by name would let the second overwrite the first.

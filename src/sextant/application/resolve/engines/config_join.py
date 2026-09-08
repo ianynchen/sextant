@@ -346,12 +346,17 @@ def _candidates(workspace: Workspace, suffix_rules: list[dict[str, Any]]) -> dic
 
 
 def _declared_names(declared: object) -> tuple[str, ...]:
-    """The dotted names a `when.implements` writes, in the order it wrote them —
-    the dotted half of what `catalog_symbols` converts, kept beside it because the
-    suffix search below matches on the DOTTED name and the symbol both.
+    """The dotted names a `when.implements` writes, in the order it wrote them.
 
-    Any other shape falls through to `catalog_symbols`, which is the one place that
-    refuses it, naming the file and the key."""
+    Paired with `catalog_symbols`'s output one-for-one so a list produces one
+    `declared` entry per name. The dotted half of each pair is NOT read — the
+    search below unpacks `for _, symbol, rule in declared` — and it predates
+    §3.1; it is carried here rather than dropped because dropping an unread
+    element of a shipped tuple is a separate change from widening the key, and
+    is recorded as such.
+
+    Any other shape falls through to `catalog_symbols`, which is the one place
+    that refuses it, naming the file and the key."""
     if isinstance(declared, str):
         return (declared,)
     if isinstance(declared, list):
@@ -949,13 +954,14 @@ def _validate_channel_rule(catalog: Catalog, rule: Any) -> None:
     suite (§10)."""
     valid = (
         isinstance(rule, dict)
-        and isinstance(rule.get("annotation"), str)
+        and _names_a_type(rule.get("annotation"))
         and isinstance(rule.get("arg"), str)
     )
     if not valid:
         raise CatalogError(
             f"loading catalog {catalog.source}: every `{_ADDRESS}.binding.{_CHANNELS}` "
-            f"entry must be `{{annotation: <type>, arg: <attribute>, direction: <direction>}}`, "
+            f"entry must be `{{annotation: <type>|[<type>, ...], arg: <attribute>, "
+            f"direction: <direction>}}`, "
             f"got {rule!r}"
         )
     _closed(
@@ -966,17 +972,37 @@ def _validate_channel_rule(catalog: Catalog, rule: Any) -> None:
     )
 
 
+def _names_a_type(declared: Any) -> bool:
+    """Whether a validator's type-name slot holds a name or a list of them (§3.1).
+
+    A list means one type reachable under several spellings. Checked HERE and not
+    only where it is converted: `_validate_matches` runs before the engine reads
+    anything, so a slot this refuses can never reach `catalog_symbols` — which is
+    how both of this file's widened keys came to accept a list at the read site
+    while still being refused at load, with the list branch and `_declared_names`
+    dead for every catalog that could have used them.
+    """
+    if isinstance(declared, str):
+        return True
+    return (
+        isinstance(declared, list)
+        and bool(declared)
+        and all(isinstance(name, str) for name in declared)
+    )
+
+
 def _validate_suffix_rule(catalog: Catalog, rule: Any) -> None:
     valid = (
         isinstance(rule, dict)
         and isinstance(rule.get("when"), dict)
-        and isinstance(rule["when"].get("implements"), str)
+        and _names_a_type(rule["when"].get("implements"))
         and "then" in rule
     )
     if not valid:
         raise CatalogError(
             f"loading catalog {catalog.source}: every `{_ADDRESS}.binding.suffix` "
-            f"entry must be `{{when: {{implements: <type>}}, then: <suffix>|[<suffix>...]}}`, "
+            f"entry must be `{{when: {{implements: <type>|[<type>, ...]}}, "
+            f"then: <suffix>|[<suffix>...]}}`, "
             f"got {rule!r}"
         )
     count = len(rule["then"]) if isinstance(rule["then"], list) else 1

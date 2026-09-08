@@ -308,7 +308,7 @@ def _checked(block: Any, catalog: Catalog) -> tuple[str, frozenset[str], frozens
     return (
         str(target),
         frozenset(str(mime) for mime in media),
-        frozenset(type_descriptor(str(name)) for name in returns),
+        frozenset(type_descriptor(name) for name in returns),
     )
 
 

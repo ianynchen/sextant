@@ -429,11 +429,18 @@ declared AS (
 -- carrying one of this catalog's own mapping annotations ON THE TYPE ITSELF.
 --
 -- The same type-level join `qualifier_scopes` performs, and deliberately the
--- same one rather than `controllers`: `$type_annotation` is one annotation (under
--- one or more spellings, §3.1), and
--- a framework whose gate has TWO spellings (one library renamed, both still in
--- the wild) cannot be named by it — `mapping.annotations` is a list, so it
--- can. Where a catalog declares `$type_annotation` as well, `derived`'s own
+-- same one rather than `controllers`: a framework may gate on a MAPPING
+-- annotation written on the type itself, with no separate type-level gate
+-- declared at all, and `controllers` is empty for such a catalog because it
+-- reads `$type_annotation`.
+--
+-- (This comment used to give a different reason — that `$type_annotation` was
+-- one fqn and so could not name a gate with two spellings, which
+-- `mapping.annotations` could because it is a list. §3.1 widened
+-- `$type_annotation` to a list too, so that reason no longer holds and the
+-- sentence was half-rewritten rather than replaced. The join is still right;
+-- the reason above is the one that survives.)
+-- Where a catalog declares `$type_annotation` as well, `derived`'s own
 -- existing gate filter applies to these rows exactly as it does to every
 -- other, so the narrower gate still wins with no second rule here.
 --

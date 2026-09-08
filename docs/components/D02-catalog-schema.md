@@ -67,7 +67,7 @@ specifically: the conversion (`domain/symbols.type_descriptor`) becomes scheme-a
 the first non-JVM catalog arrives, so this notation is documented as JVM sugar now rather
 than ossifying as a universal one.
 
-**Nineteen type-name keys may name a LIST of dotted types instead of one** (§3.1). A list
+**Twenty type-name keys may name a LIST of dotted types instead of one** (§3.1). A list
 means ONE library or annotation reachable under more than one name — held by its interface
 (`JmsOperations` beside `JmsTemplate`, `RestOperations` beside `RestTemplate`), or under an
 older package. A call site's owner is the DECLARED type, so a codebase writing the interface
@@ -101,6 +101,11 @@ Neither holds a type name: each is a mapping of CALL specs
 `owner`. Widening the key itself would be widening a mapping. The nested `owner` is a
 candidate, and no shipped catalog needs one — the two that declare these keys name gRPC's own
 descriptor classes, which have no second spelling.
+
+Nineteen of these are F2 §3.1's own list; `matches.steps[].owner` is the twentieth and is
+not in it, widened because it sits in the same file and the same shape as
+`matches.roots[].owner` and leaving one of the pair scalar would have been the
+inconsistency, not the fix.
 
 The scalar form stays valid and is what almost every shipped catalog writes; this is a
 widening, not a migration. `application/resolve/shapes/rooting.catalog_symbols` is the one

@@ -188,26 +188,87 @@ def _derives_endpoint_rows(catalog: Catalog) -> bool:
     return declared is None or declared(catalog)
 
 
+# Every key §3.1 widened, as the path to it inside `matches`. A tuple element is
+# a nested mapping; a `[]` element is a LIST of mappings, each of which carries
+# the key. Written down here rather than derived, because the engines read them
+# through their own local names and there is nowhere else all twenty meet.
+_WIDENED_KEYS: tuple[tuple[str, ...], ...] = (
+    ("owner",),
+    ("interface",),
+    ("supertype",),
+    ("type_annotation",),
+    ("field_annotation",),
+    ("annotation",),
+    ("container",),
+    ("handler_annotation",),
+    ("status_annotation",),
+    ("no_repository_bean",),
+    ("resource_annotation",),
+    ("member_annotation",),
+    ("registration", "owner"),
+    ("mapping", "prefix_annotation"),
+    ("reply", "annotation"),
+    ("media_values", "owner"),
+    ("roots", "[]", "owner"),
+    ("steps", "[]", "owner"),
+    ("address_from_config", "binding", "suffix", "[]", "when", "implements"),
+    ("address_from_config", "binding", "channels", "[]", "annotation"),
+)
+
+
+def _at(holder: object, path: tuple[str, ...]) -> list[tuple[str, object]]:
+    """Every `(label, value)` a widened key's path reaches, or nothing where the
+    catalog does not declare it. A `[]` step fans out over a list of mappings, so
+    `roots[].owner` yields one pair per root."""
+    if not path:
+        return []
+    key, rest = path[0], path[1:]
+    if key == "[]":
+        if not isinstance(holder, list):
+            return []
+        found = []
+        for index, element in enumerate(holder):
+            found += [(f"[{index}].{label}", value) for label, value in _at(element, rest)]
+        return found
+    if not isinstance(holder, dict) or key not in holder:
+        return []
+    if not rest:
+        return [(key, holder[key])]
+    return [(f"{key}.{label}", value) for label, value in _at(holder[key], rest)]
+
+
 def _owner_form_checked(catalog: Catalog) -> Catalog:
-    """Refuses a catalog whose `matches.owner` is neither a type nor a list of
-    them, and returns it otherwise.
+    """Refuses a catalog whose widened type-name keys hold neither a type nor a
+    list of them, and returns it otherwise.
 
-    Here, in the pre-flight, for the reason stated above `endpoints_reset`: the
-    conversion itself lives in the call-site engine and runs once the table has
-    already been emptied, so a malformed `owner` raised there left every previous
-    run's endpoint gone and no new rows written — a broken file half-emptying the
-    table, which is exactly what resolving every style up front exists to
-    prevent. Converting here as well costs one pass over the catalogs and turns
-    the failure back into a refusal before anything is written.
+    Here, in the pre-flight, for the reason stated above `endpoints_reset`: each
+    conversion otherwise happens inside an engine, which runs once the table has
+    already been emptied — so a malformed key raised there left every previous
+    run's endpoint gone and no new rows written. A broken file half-emptying the
+    table is exactly what resolving every style up front exists to prevent.
 
-    Only `matches.owner`. The other `owner` keys — `channel_via`'s, the wrappers'
-    — still name one type each and are converted where they are read; §3.1
-    widened this key alone, and a check for a form nothing writes yet is a
-    mechanism with no consumer.
+    ALL of §3.1's widened keys, not `matches.owner` alone. The first version
+    checked that one key and its docstring said the failure class was closed;
+    it was reachable at all nineteen others, and reproducing it took setting
+    `registration.owner` to `7` in `google-pubsub-subscriber.yml` — the refusal
+    fired from inside `interface_implementation` with the previous run's rows
+    already gone.
+
+    Keys NOT listed are the ones §3.1 did not widen: their refusal still comes
+    from `type_descriptor` at the read site, and a pre-flight for a form nothing
+    may write is a check with no consumer (OI-53).
     """
     matches = getattr(catalog, "matches", None)
-    if isinstance(matches, dict) and "owner" in matches:
-        catalog_symbols(matches["owner"], f"{catalog.source}: matches.owner")
+    for path in _WIDENED_KEYS:
+        for label, declared in _at(matches, path):
+            # An explicit `None` is "this catalog declares no such gate", which
+            # several optional keys spell by writing the key with no value —
+            # `jakarta-jws-client.yml` writes `prefix_annotation:` bare. The
+            # engines already read that as absence; refusing it here would
+            # refuse shipped catalogs for saying nothing.
+            if declared is None:
+                continue
+            catalog_symbols(declared, f"{catalog.source}: matches.{label}")
     return catalog
 
 
