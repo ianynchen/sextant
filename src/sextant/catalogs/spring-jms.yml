@@ -20,9 +20,25 @@ matches:
   # compile-time-typed payload this catalog's rules can pull a real
   # contract out of — leaving it eligible for `sole_unannotated` would
   # describe the opaque envelope itself as if it were the payload.
+  #
+  # BOTH SPELLINGS, and this list is why F2 §3.3's two failure modes are not the
+  # whole story (W11, `scripts/probes/w11_javax_jakarta.md` finding 4). `excludes`
+  # is a NEGATIVE list: a missing spelling stops the REFUSAL rather than stopping
+  # the match. Measured before the fix — a Spring Boot 2 `@JmsListener` taking a
+  # `javax.jms.Message` had `sole_unannotated` pick that envelope and publish it
+  # AS the message contract. Not the silence a missing positive match produces,
+  # and not the hole a missing identity read produces: a wrong contract, at
+  # `resolved`. Every rule that names a type in order to REFUSE it inverts the
+  # javax/jakarta failure this way, which is why W12 swept the negative lists
+  # separately from `matches`.
+  #
+  # `@JmsListener` itself is a SPRING annotation and never moved packages; only
+  # the payload types it excludes did. So this file needs no twin, unlike
+  # `jakarta-jms.yml`, whose owner is the moved API itself.
   request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
                   fallback: sole_unannotated,
-                  excludes: [jakarta.jms.Session, jakarta.jms.Message] }
+                  excludes: [jakarta.jms.Session, jakarta.jms.Message,
+                             javax.jms.Session, javax.jms.Message] }
   mapping:
     # CHECKPOINT FACT: `@JmsListener.destination` is genuinely scalar in
     # bytecode (unlike Kafka's `topics`).

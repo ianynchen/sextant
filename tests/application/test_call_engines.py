@@ -6501,6 +6501,23 @@ _CLAIMED_ARITIES = [
         [CallArgument(kind="instance", symbol="jakarta/jms/Queue#")],
         id="Session.createProducer — hypothetical arity-1 sibling",
     ),
+    # W12's twin, and its near-miss is the mistake the twin could have made: the
+    # `javax` owner carrying the JAKARTA descriptor. Every conjunct of
+    # `javax-jms.yml`'s row holds — owner, name, argument count, argument kind —
+    # and only the descriptor differs, which is exactly what would have been left
+    # behind by copying `jakarta-jms.yml` and changing the owner. Measured over
+    # javax.jms-api 2.0.1: all four compared descriptors differ between the
+    # spellings, because `Session`'s own parameter and return types moved with the
+    # API (`scripts/probes/w11_javax_jakarta.md`, finding 2).
+    pytest.param(
+        "javax-jms",
+        "javax/jms/Session#",
+        "createProducer",
+        "(Ljavax/jms/Destination;)Ljavax/jms/MessageProducer;",
+        "(Ljakarta/jms/Destination;)Ljakarta/jms/MessageProducer;",
+        [CallArgument(kind="instance", symbol="javax/jms/Queue#")],
+        id="javax Session.createProducer — the jakarta descriptor at the same arity",
+    ),
     pytest.param(
         "jakarta-jms",
         "jakarta/jms/Session#",
@@ -7056,6 +7073,7 @@ _CLAIMED_ARITIES = [
 
 @pytest.mark.declines("google-pubsub-client")
 @pytest.mark.declines("jakarta-jms")
+@pytest.mark.declines("javax-jms")
 @pytest.mark.declines("kafka-clients")
 @pytest.mark.declines("kafka-consumer")
 @pytest.mark.declines("spring-pubsub")

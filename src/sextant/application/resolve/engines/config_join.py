@@ -50,7 +50,7 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
-from sextant.application.resolve.shapes.rooting import catalog_symbols
+from sextant.application.resolve.shapes.rooting import catalog_symbols, names_a_type
 from sextant.domain.closed_sets import Direction, Protocol
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import bare_descriptor, method_name
@@ -954,7 +954,7 @@ def _validate_channel_rule(catalog: Catalog, rule: Any) -> None:
     suite (§10)."""
     valid = (
         isinstance(rule, dict)
-        and _names_a_type(rule.get("annotation"))
+        and names_a_type(rule.get("annotation"))
         and isinstance(rule.get("arg"), str)
     )
     if not valid:
@@ -972,30 +972,11 @@ def _validate_channel_rule(catalog: Catalog, rule: Any) -> None:
     )
 
 
-def _names_a_type(declared: Any) -> bool:
-    """Whether a validator's type-name slot holds a name or a list of them (§3.1).
-
-    A list means one type reachable under several spellings. Checked HERE and not
-    only where it is converted: `_validate_matches` runs before the engine reads
-    anything, so a slot this refuses can never reach `catalog_symbols` — which is
-    how both of this file's widened keys came to accept a list at the read site
-    while still being refused at load, with the list branch and `_declared_names`
-    dead for every catalog that could have used them.
-    """
-    if isinstance(declared, str):
-        return True
-    return (
-        isinstance(declared, list)
-        and bool(declared)
-        and all(isinstance(name, str) for name in declared)
-    )
-
-
 def _validate_suffix_rule(catalog: Catalog, rule: Any) -> None:
     valid = (
         isinstance(rule, dict)
         and isinstance(rule.get("when"), dict)
-        and _names_a_type(rule["when"].get("implements"))
+        and names_a_type(rule["when"].get("implements"))
         and "then" in rule
     )
     if not valid:

@@ -646,7 +646,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**36 of 55 catalogs name the artifact and versions their rules were read from. 19 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**37 of 56 catalogs name the artifact and versions their rules were read from. 19 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -656,6 +656,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `jakarta-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 10.1.50, 11.0.24 |
 | `jakarta-websocket` | `jakarta.websocket:jakarta.websocket-api` | 2.2.0 |
 |  | `jakarta.websocket:jakarta.websocket-client-api` | 2.2.0 |
+| `javax-jms` | `javax.jms:javax.jms-api` | 2.0.1 |
 | `javax-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 |
 | `kafka-clients` | `org.apache.kafka:kafka-clients` | 3.6.2 |
 | `kafka-consumer` | `org.apache.kafka:kafka-clients` | 3.6.2 |
@@ -2011,7 +2012,7 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 | Java | `RabbitTemplate.convertAndSend(exchange, routingKey, message)` | the wire identity is the exchange+routing-key PAIR, rendered `exchange/routingKey`; the two-argument overload targets the default exchange and is the routing key alone | `registration_call` | ✅ **shipped** (2O Task 7), via `single_call`'s new `address_arg_2` |
 | Java | `RabbitTemplate` / `JmsTemplate` — every form no row declares: `send(…)` (four arities), `convertSendAndReceive(…)`, every `convertAndSend` carrying a `CorrelationData`, Rabbit's `MessagePostProcessor` forms, and JMS's `(Object, MessagePostProcessor)` and `(Destination, Object, MessagePostProcessor)` | pre-converted `Message`, request/reply, and the correlation / post-processor forms | `registration_call` | **Boundary — derives NOTHING, and this is silence rather than an `unresolved` row.** Once any row for a name+arity declares a `descriptor` that arity is claimed, so an undeclared sibling falls through to no row at all — deliberately, because falling through to a descriptor-less row is the fabrication the key exists to stop. **Narrowed by the descriptor sweep (R5)**: `JmsTemplate.convertAndSend(Destination, Object)` was in this row by accident — it can never fabricate a destination, since its argument 0 is an instance rather than a string constant — and has its own row again; `convertAndSend(String, Object, MessagePostProcessor)` was never declared at any arity and now is, which is recall this row never admitted losing. **Falsified by** a module that publishes only through the forms still listed: its AMQP/JMS surface is absent from the export entirely. Closes by declaring a row per overload, one descriptor each |
 | Java | `RabbitTemplate` / `JmsTemplate` — overloads that COLLIDE on arity | **arity 2 is exposed as well as arity 3**, on both classes (javap -s, spring-rabbit 3.1.4 / spring-jms 6.1.6): Rabbit arity 2 is `(String, Object)` and `(Object, MessagePostProcessor)`, arity 3 is four overloads; JMS arity 2 is `(String, Object)`, `(Destination, Object)` and `(Object, MessagePostProcessor)` | `registration_call` | ✅ **CLOSED** (2O Task 7 fix round). Was a live fabrication in both shipped catalogs — a `MessagePostProcessor` overload published its message PAYLOAD as the wire destination at `resolved`/`compiler`. Each address-carrying row now declares its own erased JVM `descriptor`, matched verbatim against the call's `target.descriptor` (`storage/duckdb/schema.sql:243`). **The residual boundary is the under-report in the row above** |
-| Java | EVERY `single_call` client catalog — a call made through an INTERFACE or supertype rather than the concrete class | a call site records the **compile-time qualifying type** javac emitted, so `SqsOperations.send(...)`, `AmqpTemplate.convertAndSend(...)`, `JmsOperations`, `KafkaOperations`, `RestOperations`, `WebServiceOperations`, `PubSubOperations`, `org.apache.kafka.clients.consumer.Consumer` and `jakarta.jms.QueueSession`/`TopicSession` each record THEIR own owner | `registration_call` | **Boundary — derives NOTHING for any of them.** `matches.owner` is single-valued, so a catalog naming the concrete class sees no call made through its interface. **The highest-risk row is `spring-sqs-template.yml`**: `SqsTemplate.newSyncTemplate(...)` **returns `SqsOperations`** (javap -p -s, spring-cloud-aws-sqs 3.1.1), so the idiomatic construction misses entirely — and both its `send` arities are inherited from `AbstractMessagingTemplate`, so nothing anchors them to the class. Spring Boot autowiring `AmqpTemplate` and the documented Kafka idiom `Consumer<K,V> c = new KafkaConsumer<>(props)` are the same shape. This is an **owner** problem and a `descriptor` cannot fix it: the descriptors are IDENTICAL through either type (verified), so the strings already shipped carry over. **Falsified by** a module that only ever holds these clients by their interface: its whole messaging or HTTP client surface is absent from the export. Closes by making `matches.owner` multi-valued, which is engine work and was out of scope for the descriptor sweep that raised it (§8.1 rule 3: raised, not dropped) |
+| Java | EVERY `single_call` client catalog — a call made through an INTERFACE or supertype rather than the concrete class | a call site records the **compile-time qualifying type** javac emitted, so `SqsOperations.send(...)`, `AmqpTemplate.convertAndSend(...)`, `JmsOperations`, `KafkaOperations`, `RestOperations`, `WebServiceOperations`, `PubSubOperations`, `org.apache.kafka.clients.consumer.Consumer` and `jakarta.jms.QueueSession`/`TopicSession` each record THEIR own owner | `registration_call` | ✅ **CLOSED for seven of them** (W9/W10). `matches.owner` accepts a LIST of names, and `JmsOperations`, `AmqpTemplate`, `SqsOperations`, `RestOperations`, `KafkaOperations` and Kafka's own `Consumer` and `Producer` are declared beside their concrete classes — each checked against the library's own bytecode by `scripts/probes/cp10_catalog_descriptors.md`, which asks its question of every alternate separately because an interface declaring a SUBSET of the class's methods would match some call sites and miss the rest. All 53 alternate rows come back `declared`. The highest-risk case was `spring-sqs-template.yml`, whose `SqsTemplate.newSyncTemplate(...)` **returns `SqsOperations`** (javap -p -s, spring-cloud-aws-sqs 3.1.1), so the idiomatic construction missed entirely. **The residual boundary is `WebServiceOperations`, `PubSubOperations` and `jakarta.jms.QueueSession`/`TopicSession`**, which are named here and are not declared as alternates: nothing measured them, and an unmeasured alternate is the one thing the list form must not carry. **Falsified by** a module holding one of those three by its interface: that part of its surface is still absent from the export. Closes by measuring each and adding it, which is now a catalog edit rather than engine work |
 | Go | `rabbitmq/amqp091-go` (was `streadway/amqp`) `ch.Publish(exchange, key, …)` | — | `registration_call` | A |
 | TS | `amqplib` `ch.publish(exchange, key, …)`, `ch.consume(queue, cb)` | — | `registration_call` | A |
 | Python | `pika`, `kombu` `channel.basic_publish(exchange, routing_key, …)` | — | `registration_call` | A |
@@ -2019,7 +2020,24 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 | Rust | `lapin` `channel.basic_publish(…)` | — | `registration_call` | A |
 
 **Package change:** `javax.jms` (Spring ≤5 / Boot ≤2) → `jakarta.jms` (Spring 6 / Boot 3+).
-Both must be matched.
+**Both are matched, and the sentence that stood here — "Both must be matched" in the
+indicative — was false for as long as it stood** (W11/W12,
+`scripts/probes/w11_javax_jakarta.md`). It read as a description of the catalogs and was a
+requirement nobody had checked, which is why nobody looked: a mechanical sweep of every
+`jakarta.*` type any catalog names found three families in one spelling only.
+
+The sweep also found that the gap fails in **three** different ways, not the two that were
+expected, and that the third is the worst:
+
+| what named one spelling | what a Boot 2 codebase got | closed by |
+|---|---|---|
+| `jakarta-jms.yml`'s `matches.owner` (a POSITIVE match) | nothing at all — the whole route invisible | `javax-jms.yml`, its own descriptors measured against `javax.jms-api 2.0.1` |
+| `spring-ws-template.yml`'s `@XmlRootElement` read (an IDENTITY rule) | a SOAP endpoint at the right peer with `path` NULL at `unresolved` — reads as "the operation was unreadable" when it was never looked for | both spellings on all three rules (§3.1) |
+| `spring-jms.yml`'s `request_body.excludes` (a NEGATIVE list) | the opaque `javax.jms.Message` envelope published AS the payload contract — a wrong contract, not silence and not a hole | both spellings in the list |
+
+The third is the one no one would have predicted: every rule that names a type in order to
+REFUSE it inverts the failure, because a missing spelling stops the refusal rather than
+stopping the match. A sweep that only reads `matches` will keep missing that class.
 
 **Queue versus topic is invisible here by construction.** Kind is configured on the container
 factory, not written beside the destination expression the code actually carries, so identity is

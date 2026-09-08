@@ -43,6 +43,13 @@ ARTIFACTS=(
   "com.google.cloud|spring-cloud-gcp-pubsub|5.1.2|pom.properties|version"
   "io.awspring.cloud|spring-cloud-aws-sqs|3.1.1|pom.properties|version"
   "jakarta.jms|jakarta.jms-api|3.1.0|pom.properties|version"
+  # W12's twin. `javax.jms-api 2.0.1` is the LAST release under that coordinate —
+  # the line does not ship again — so it is the only version a Spring Boot 2
+  # codebase can be on. Its descriptors are not `jakarta`'s with the package
+  # swapped as a matter of faith: `Session`'s own parameter and return types moved
+  # with the API, so all four differ, and this harness is what checks each one
+  # against the jar rather than against that expectation.
+  "javax.jms|javax.jms-api|2.0.1|pom.properties|version"
   "org.apache.kafka|kafka-clients|3.6.2|kafka/kafka-version.properties|version"
   "org.springframework|spring-jms|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-web|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"

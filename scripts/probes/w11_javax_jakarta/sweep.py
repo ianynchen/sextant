@@ -203,13 +203,23 @@ def catalog(catalog_id: str) -> Catalog:
     return next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == catalog_id)
 
 
-def derived(facts: list, catalog_id: str) -> list[dict]:
+def derived(facts: list, catalog_ids: tuple[str, ...]) -> list[dict]:
+    """The rows a fact set derives under a SET of catalogs.
+
+    A set rather than one, because a twin is a second FILE: `javax-jms.yml` is
+    what answers the `javax` spelling and `jakarta-jms.yml` is what answers the
+    other, and running only one of them would show the twin's own gap as if it
+    were the estate's."""
     with tempfile.TemporaryDirectory() as into:
         root = Path(into)
         write_fact_file(root / "facts" / "Client.jsonl", _DOC, facts)
         workspace = DuckDbWorkspace(root / "ws.duckdb")
         workspace.load_facts(root / "facts")
-        derive_endpoints(workspace, [catalog(catalog_id)], capabilities=CAPABILITIES)
+        derive_endpoints(
+            workspace,
+            [catalog(catalog_id) for catalog_id in catalog_ids],
+            capabilities=CAPABILITIES,
+        )
         rows = workspace.query("endpoints")
         workspace.close()
     return rows
@@ -444,20 +454,20 @@ def main() -> None:
             )
 
     print("\n### 3. What each unhandled spelling actually derives\n")
-    print("| catalog | spelling written | rows | protocol | path | peer | resolution |")
+    print("| catalogs run | spelling written | rows | derived by | path | peer | resolution |")
     print("|---|---|---|---|---|---|---|")
-    for label, catalog_id, build in (
-        ("jakarta-jms", "jakarta-jms", jms_facts),
-        ("spring-ws-template", "spring-ws-template", soap_facts),
+    for label, catalog_ids, build in (
+        ("jakarta-jms + javax-jms", ("jakarta-jms", "javax-jms"), jms_facts),
+        ("spring-ws-template", ("spring-ws-template",), soap_facts),
     ):
         for family in ("jakarta", "javax"):
-            rows = derived(build(family), catalog_id)
+            rows = derived(build(family), catalog_ids)
             if not rows:
                 print(f"| `{label}` | `{family}` | **0** | — | — | — | — |")
                 continue
             for row in rows:
                 print(
-                    f"| `{label}` | `{family}` | {len(rows)} | {row['protocol']} "
+                    f"| `{label}` | `{family}` | {len(rows)} | {row['catalog_id']} "
                     f"| `{row['path']}` | {row['peer']} | {row['resolution']} |"
                 )
 

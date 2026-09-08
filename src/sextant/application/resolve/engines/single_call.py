@@ -40,7 +40,11 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
-from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
+from sextant.application.resolve.shapes.rooting import (
+    _catalog_symbol,
+    catalog_symbols,
+    names_a_type,
+)
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
@@ -139,7 +143,19 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             **row,
             _IDENTITY: {
                 **row[_IDENTITY],
-                "annotation": _catalog_symbol(row[_IDENTITY]["annotation"]),
+                # A LIST or a scalar (§3.1). `annotations` plural, so a consumer
+                # still doing a single dict lookup fails rather than looking up a
+                # tuple and finding nothing. This key is NOT one of F2 §3.1's
+                # twenty-one — the design's list missed it, the same way it missed
+                # `matches.steps[].owner` — and it is the one the javax/jakarta
+                # SOAP gap needed: `spring-ws-template.yml` reads the operation
+                # off `@XmlRootElement`, which moved packages, and a codebase on
+                # the old spelling got a SOAP endpoint with no operation on it
+                # (W11, `scripts/probes/w11_javax_jakarta.md` finding 3).
+                "annotations": catalog_symbols(
+                    row[_IDENTITY]["annotation"],
+                    f"{catalog.source}: {_IDENTITY}.annotation",
+                ),
             },
         }
         if _IDENTITY in row
@@ -764,7 +780,17 @@ def _argument_type_identity(
     if not symbol:
         return None, None
     payload_type = bare_descriptor(str(symbol))
-    args = facts.annotations.get((payload_type, str(rule["annotation"])))
+    # FIRST match, not a merge: a list is several spellings of ONE annotation
+    # (§3.1), so at most one is ever written on a given type, and merging two
+    # would invent a declaration nobody made.
+    args = next(
+        (
+            found
+            for name in rule["annotations"]
+            if (found := facts.annotations.get((payload_type, name))) is not None
+        ),
+        None,
+    )
     if args is None:
         return None, None
     name = _attribute(args, str(rule["name_from"]))
@@ -1003,14 +1029,15 @@ def _validate_identity(row: dict[str, Any], catalog: Catalog) -> None:
         and _IDENTITY_REQUIRED <= keys <= (_IDENTITY_REQUIRED | _IDENTITY_OPTIONAL)
         and isinstance(rule.get("arg"), int)
         and not isinstance(rule.get("arg"), bool)
-        and isinstance(rule.get("annotation"), str)
+        and names_a_type(rule.get("annotation"))
         and isinstance(rule.get("name_from"), str)
         and isinstance(rule.get("qualifier_from", ""), str)
     )
     if not valid:
         raise CatalogError(
             f"loading catalog {catalog.source}: `{row['name']}` declares `{_IDENTITY}` that "
-            f"must name `arg` (int), `annotation` and `name_from`, optionally "
+            f"must name `arg` (int), `annotation` (a type or a list of them) and "
+            f"`name_from`, optionally "
             f"`qualifier_from` and `format`, got {rule!r} (2I design §4)"
         )
     fmt = rule.get("format")

@@ -23,20 +23,6 @@ FIXTURE = REPO / "fixtures" / "orders-service"
 CATALOGS = catalogs_dir()
 
 
-FIXTURE_CAPABILITIES = {
-    "annotation_args",
-    "typed_signatures",
-    "type_annotations",
-    "call_site",
-    "string_constants",
-    "chain_reconstruction",
-    "implemented_interfaces",
-    "superclass",
-    "generic_interfaces",
-    "nested_annotation_args",
-}
-
-
 @pytest.fixture(scope="session")
 def fixture_facts(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """The fixture module compiled and scanned once, as a FACT DIRECTORY.

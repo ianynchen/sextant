@@ -1,0 +1,162 @@
+id: javax-jms
+displayName: Java EE JMS (raw Session, pre-Jakarta spelling)
+style: single_call
+protocol: jms
+direction: outbound
+
+detect:
+  coordinates: ["javax.jms:javax.jms-api"]
+
+measured:
+  - { artifact: javax.jms:javax.jms-api, versions: ["2.0.1"],
+      identity: reported, by: scripts/probes/w11_javax_jakarta.md }
+
+requires: [call_site, string_constants]
+
+# THE TWIN OF `jakarta-jms.yml`, and a separate FILE rather than a second owner
+# name on that one.
+#
+# F2 §3.1 widened `matches.owner` to a list of alternate names, and this is
+# deliberately not that: a list means ONE library reachable under several names,
+# and these are two different jars at two different versions, each needing its
+# own measurement. `javax.jms-api 2.0.1` is the last release under that
+# coordinate — the line does not ship again — so a Spring Boot 2 codebase is on
+# it permanently, and `detect.coordinates` is what tells the two apart in a
+# module that somehow holds both.
+#
+# WHY THE DESCRIPTORS ARE NOT COPIES. `Session`'s parameters and returns are
+# themselves JMS types, and they moved packages with the API, so every descriptor
+# here differs from its `jakarta` counterpart —
+# `(Ljavax/jms/Destination;)Ljavax/jms/MessageProducer;` against
+# `(Ljakarta/jms/Destination;)Ljakarta/jms/MessageProducer;`. Measured over the
+# 2.0.1 jar (`scripts/probes/w11_javax_jakarta.md`, finding 2): all four compared
+# JMS descriptors differ, while NEITHER of JAXB's does, because an annotation
+# attribute returns a `java.lang.*` type that never moved. A sweep that only
+# asked "does the counterpart type exist" would have priced the two the same.
+#
+# WHAT WAS MEASURED, AND WHAT WAS NOT. `javax.jms.Session` at 2.0.1 declares the
+# same eleven destination-opening factories `jakarta.jms.Session` does at 3.1.0,
+# at the same arities, each taking its destination at argument 0 — so this file
+# is a mirror of `jakarta-jms.yml`'s rows and not a fresh modelling decision.
+# Every descriptor below was checked against the jar; none is hand-typed. What
+# was NOT measured is whether some overload exists here that 3.1.0 dropped: the
+# probe answers "is this descriptor real", never "is this the complete set".
+#
+# `createBrowser` is absent for the reason `jakarta-jms.yml` states at length: a
+# `QueueBrowser` enumerates a queue without consuming from it, and publishing it
+# as an inbound endpoint would say the module receives messages the broker never
+# delivers to it.
+#
+# The `channel_via` pairs, the `Topic`-typed rows' inert `createQueue` half, and
+# the reason both are spelled on every row are all `jakarta-jms.yml`'s, unchanged
+# — see that file rather than a second copy of the argument here.
+
+matches:
+  owner: javax.jms.Session
+  methods:
+    - name: createProducer
+      arity: 1
+      descriptor: "(Ljavax/jms/Destination;)Ljavax/jms/MessageProducer;"
+      direction: outbound
+      channel_arg: 0
+      channel_via:
+        - { owner: javax.jms.Session, method: createQueue, arg: 0 }
+        - { owner: javax.jms.Session, method: createTopic, arg: 0 }
+    - name: createConsumer
+      arity: 1
+      descriptor: "(Ljavax/jms/Destination;)Ljavax/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: javax.jms.Session, method: createQueue, arg: 0 }
+        - { owner: javax.jms.Session, method: createTopic, arg: 0 }
+    - name: createConsumer
+      arity: 2
+      descriptor: "(Ljavax/jms/Destination;Ljava/lang/String;)Ljavax/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: javax.jms.Session, method: createQueue, arg: 0 }
+        - { owner: javax.jms.Session, method: createTopic, arg: 0 }
+    - name: createConsumer
+      arity: 3
+      descriptor: "(Ljavax/jms/Destination;Ljava/lang/String;Z)Ljavax/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: javax.jms.Session, method: createQueue, arg: 0 }
+        - { owner: javax.jms.Session, method: createTopic, arg: 0 }
+    - name: createSharedConsumer
+      arity: 2
+      descriptor: "(Ljavax/jms/Topic;Ljava/lang/String;)Ljavax/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: javax.jms.Session, method: createQueue, arg: 0 }
+        - { owner: javax.jms.Session, method: createTopic, arg: 0 }
+    - name: createSharedConsumer
+      arity: 3
+      descriptor: "(Ljavax/jms/Topic;Ljava/lang/String;Ljava/lang/String;)Ljavax/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: javax.jms.Session, method: createQueue, arg: 0 }
+        - { owner: javax.jms.Session, method: createTopic, arg: 0 }
+    - name: createDurableSubscriber
+      arity: 2
+      descriptor: "(Ljavax/jms/Topic;Ljava/lang/String;)Ljavax/jms/TopicSubscriber;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: javax.jms.Session, method: createQueue, arg: 0 }
+        - { owner: javax.jms.Session, method: createTopic, arg: 0 }
+    - name: createDurableSubscriber
+      arity: 4
+      descriptor: "(Ljavax/jms/Topic;Ljava/lang/String;Ljava/lang/String;Z)Ljavax/jms/TopicSubscriber;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: javax.jms.Session, method: createQueue, arg: 0 }
+        - { owner: javax.jms.Session, method: createTopic, arg: 0 }
+    - name: createDurableConsumer
+      arity: 2
+      descriptor: "(Ljavax/jms/Topic;Ljava/lang/String;)Ljavax/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: javax.jms.Session, method: createQueue, arg: 0 }
+        - { owner: javax.jms.Session, method: createTopic, arg: 0 }
+    - name: createDurableConsumer
+      arity: 4
+      descriptor: "(Ljavax/jms/Topic;Ljava/lang/String;Ljava/lang/String;Z)Ljavax/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: javax.jms.Session, method: createQueue, arg: 0 }
+        - { owner: javax.jms.Session, method: createTopic, arg: 0 }
+    - name: createSharedDurableConsumer
+      arity: 2
+      descriptor: "(Ljavax/jms/Topic;Ljava/lang/String;)Ljavax/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: javax.jms.Session, method: createQueue, arg: 0 }
+        - { owner: javax.jms.Session, method: createTopic, arg: 0 }
+    - name: createSharedDurableConsumer
+      arity: 3
+      descriptor: "(Ljavax/jms/Topic;Ljava/lang/String;Ljava/lang/String;)Ljavax/jms/MessageConsumer;"
+      direction: inbound
+      channel_arg: 0
+      channel_via:
+        - { owner: javax.jms.Session, method: createQueue, arg: 0 }
+        - { owner: javax.jms.Session, method: createTopic, arg: 0 }
+
+# Copied verbatim from spring-resttemplate.yml, the same way `jakarta-jms.yml`
+# copies them and for the same stated reason.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

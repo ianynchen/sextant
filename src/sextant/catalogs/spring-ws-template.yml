@@ -70,6 +70,21 @@ matches:
     # is the point: a caller and a handler of one operation meet on one
     # identity string.
     #
+    # BOTH JAXB SPELLINGS (§3.1, W12). `@XmlRootElement` moved from `javax.xml.bind`
+    # to `jakarta.xml.bind`, and a Spring Boot 2 codebase is on the old one
+    # permanently — `jaxb-api 2.3.1` is the last release under that coordinate.
+    # This read is the whole identity, so the missing spelling did not produce
+    # silence: measured (`scripts/probes/w11_javax_jakarta.md` finding 3), the SOAP
+    # row was still minted, addressed to the right peer, with `path` NULL at
+    # `unresolved` — which reads as "the operation was unreadable" when it was
+    # never looked for in that spelling. That is F2 §3.3's *partial data published*
+    # mode, and it is worse than the silence the JMS gap produced.
+    #
+    # Two names, not two catalogs: this is ONE annotation under two spellings, and
+    # `spring-ws-core` itself never moved. The descriptors are identical either way
+    # — an annotation attribute returns `java.lang.String` in both — so unlike
+    # `javax-jms.yml` nothing here needed re-measuring beyond the name.
+    #
     # ABSENT ATTRIBUTES DERIVE NOTHING. JAXB defaults `name` to the
     # decapitalized class name and `namespace` to the schema's own — neither is
     # written into the class file (Phase 2I Task 2, checkpoint item 4), and the
@@ -90,7 +105,8 @@ matches:
     - { name: marshalSendAndReceive, arity: 1,
         descriptor: "(Ljava/lang/Object;)Ljava/lang/Object;",
         path_from_argument_type: { arg: 0,
-                                   annotation: jakarta.xml.bind.annotation.XmlRootElement,
+                                   annotation: [jakarta.xml.bind.annotation.XmlRootElement,
+                                                 javax.xml.bind.annotation.XmlRootElement],
                                    name_from: name, qualifier_from: namespace,
                                    format: qname } }
     # `marshalSendAndReceive(String uri, Object payload)` — the URI-literal
@@ -141,7 +157,8 @@ matches:
         descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;",
         url_arg: 0,
         path_from_argument_type: { arg: 1,
-                                   annotation: jakarta.xml.bind.annotation.XmlRootElement,
+                                   annotation: [jakarta.xml.bind.annotation.XmlRootElement,
+                                                 javax.xml.bind.annotation.XmlRootElement],
                                    name_from: name, qualifier_from: namespace,
                                    format: qname } }
     # Arity 3 is `(String, Object, WebServiceMessageCallback)` and nothing else,
@@ -152,7 +169,8 @@ matches:
         descriptor: "(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;",
         url_arg: 0,
         path_from_argument_type: { arg: 1,
-                                   annotation: jakarta.xml.bind.annotation.XmlRootElement,
+                                   annotation: [jakarta.xml.bind.annotation.XmlRootElement,
+                                                 javax.xml.bind.annotation.XmlRootElement],
                                    name_from: name, qualifier_from: namespace,
                                    format: qname } }
   # DELIBERATELY NOT CLAIMED: `sendAndReceive`'s four callback overloads

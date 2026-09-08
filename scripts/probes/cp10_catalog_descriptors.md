@@ -17,21 +17,27 @@ three rows gained a descriptor in one sweep; a check that each opens with `(`
 would have waved all twenty-three through.
 
 **Version scope (§5.4).** Read against **google-cloud-pubsub 1.129.3,
-jakarta.jms-api 3.1.0, spring-cloud-aws-sqs 3.1.1, spring-kafka 3.1.4,
+jakarta.jms-api 3.1.0, javax.jms-api 2.0.1, spring-cloud-aws-sqs 3.1.1, spring-kafka 3.1.4,
 spring-rabbit 3.1.4, kafka-clients 3.6.2, spring-ws-core 4.1.4,
 spring-cloud-gcp-pubsub 5.1.2, spring-jms 6.1.6, spring-web 6.1.6 and
-spring-websocket 6.1.6**. A descriptor is version-scoped in the strongest sense:
+spring-websocket 6.1.6**. `javax.jms-api 2.0.1` is the LAST release under that
+coordinate — the line does not ship again — so it is the only version a Spring Boot 2
+codebase can be on, and W12's `javax-jms.yml` is measured against it here rather than
+being trusted as `jakarta-jms.yml` with the package swapped. A descriptor is
+version-scoped in the strongest sense:
 an overload added or a parameter re-typed in a later release is a different
-answer, and every verdict below is evidence about those eleven artifacts and no
+answer, and every verdict below is evidence about those twelve artifacts and no
 other. Widening it means adding a coordinate to `ARTIFACTS` in
 `scripts/probes/cp10_catalog_descriptors/run.sh` and re-running, never assuming.
 
-Ten of the eleven are the versions a fixture pom already pins. **`spring-websocket`
-is the exception and is a stated assumption rather than a measurement**: no
-fixture, and no pom anywhere in this repository, depends on it at all, so 6.1.6
-was chosen to match the Spring Framework version the fixtures do pin. If a
-WebSocket fixture is ever built at a different Spring version, that row is
-re-measured, not carried over.
+Ten of the twelve are the versions a fixture pom already pins. **Two are not, and
+each says why rather than being carried silently.** `spring-websocket` is a stated
+assumption rather than a measurement: no fixture, and no pom anywhere in this
+repository, depends on it at all, so 6.1.6 was chosen to match the Spring Framework
+version the fixtures do pin, and if a WebSocket fixture is ever built at a different
+Spring version that row is re-measured rather than carried over. `javax.jms-api
+2.0.1` is not a choice at all: it is the last release under that coordinate, so
+there is no other version for a row to be measured at.
 
 **How to run.** `bash scripts/probes/cp10_catalog_descriptors/run.sh`. It
 resolves each artifact above through Maven (network on the first run only,
@@ -75,12 +81,12 @@ the run found the owner class in, discovered by indexing the archives rather tha
 by a hand-written owner→artifact map.
 
 
-| what the run read | 1.129.3 | 3.1.0 | 3.1.1 | 3.1.4 | 3.6.2 | 4.1.4 | 5.1.2 | 6.1.6 |
-|---|---|---|---|---|---|---|---|---|
-| artifacts reporting this version | google-cloud-pubsub | jakarta.jms-api | spring-cloud-aws-sqs | spring-amqp, spring-kafka, spring-rabbit | kafka-clients | spring-ws-core | spring-cloud-gcp-pubsub | spring-jms, spring-web, spring-websocket |
-| owner classes resolved out of them | 1 | 1 | 2 | 5 | 4 | 1 | 1 | 5 |
-| catalog descriptors checked against them | 1 | 12 | 8 | 28 | 12 | 3 | 3 | 61 |
-| of those, NOT declared by the jar | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| what the run read | 1.129.3 | 2.0.1 | 3.1.0 | 3.1.1 | 3.1.4 | 3.6.2 | 4.1.4 | 5.1.2 | 6.1.6 |
+|---|---|---|---|---|---|---|---|---|---|
+| artifacts reporting this version | google-cloud-pubsub | javax.jms-api | jakarta.jms-api | spring-cloud-aws-sqs | spring-amqp, spring-kafka, spring-rabbit | kafka-clients | spring-ws-core | spring-cloud-gcp-pubsub | spring-jms, spring-web, spring-websocket |
+| owner classes resolved out of them | 1 | 1 | 1 | 2 | 5 | 4 | 1 | 1 | 5 |
+| catalog descriptors checked against them | 1 | 12 | 12 | 8 | 28 | 12 | 3 | 3 | 61 |
+| of those, NOT declared by the jar | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 | # | catalog | owner | method | arity | descriptor | artifact | version | verdict |
 |---|---|---|---|---|---|---|---|---|
@@ -97,121 +103,133 @@ by a hand-written owner→artifact map.
 | 11 | `jakarta-jms` | `jakarta.jms.Session` | `createDurableConsumer` | 4 | `(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;Z)Ljakarta/jms/MessageConsumer;` | `jakarta.jms-api` | 3.1.0 | declared |
 | 12 | `jakarta-jms` | `jakarta.jms.Session` | `createSharedDurableConsumer` | 2 | `(Ljakarta/jms/Topic;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;` | `jakarta.jms-api` | 3.1.0 | declared |
 | 13 | `jakarta-jms` | `jakarta.jms.Session` | `createSharedDurableConsumer` | 3 | `(Ljakarta/jms/Topic;Ljava/lang/String;Ljava/lang/String;)Ljakarta/jms/MessageConsumer;` | `jakarta.jms-api` | 3.1.0 | declared |
-| 14 | `kafka-clients` | `org.apache.kafka.clients.producer.KafkaProducer` | `send` | 1 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/Future;` | `kafka-clients` | 3.6.2 | declared |
-| 15 | `kafka-clients` | `org.apache.kafka.clients.producer.Producer` | `send` | 1 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/Future;` | `kafka-clients` | 3.6.2 | declared |
-| 16 | `kafka-clients` | `org.apache.kafka.clients.producer.KafkaProducer` | `send` | 2 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;Lorg/apache/kafka/clients/producer/Callback;)Ljava/util/concurrent/Future;` | `kafka-clients` | 3.6.2 | declared |
-| 17 | `kafka-clients` | `org.apache.kafka.clients.producer.Producer` | `send` | 2 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;Lorg/apache/kafka/clients/producer/Callback;)Ljava/util/concurrent/Future;` | `kafka-clients` | 3.6.2 | declared |
-| 18 | `kafka-consumer` | `org.apache.kafka.clients.consumer.KafkaConsumer` | `subscribe` | 1 | `(Ljava/util/Collection;)V` | `kafka-clients` | 3.6.2 | declared |
-| 19 | `kafka-consumer` | `org.apache.kafka.clients.consumer.Consumer` | `subscribe` | 1 | `(Ljava/util/Collection;)V` | `kafka-clients` | 3.6.2 | declared |
-| 20 | `kafka-consumer` | `org.apache.kafka.clients.consumer.KafkaConsumer` | `subscribe` | 1 | `(Ljava/util/regex/Pattern;)V` | `kafka-clients` | 3.6.2 | declared |
-| 21 | `kafka-consumer` | `org.apache.kafka.clients.consumer.Consumer` | `subscribe` | 1 | `(Ljava/util/regex/Pattern;)V` | `kafka-clients` | 3.6.2 | declared |
-| 22 | `kafka-consumer` | `org.apache.kafka.clients.consumer.KafkaConsumer` | `subscribe` | 2 | `(Ljava/util/Collection;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V` | `kafka-clients` | 3.6.2 | declared |
-| 23 | `kafka-consumer` | `org.apache.kafka.clients.consumer.Consumer` | `subscribe` | 2 | `(Ljava/util/Collection;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V` | `kafka-clients` | 3.6.2 | declared |
-| 24 | `kafka-consumer` | `org.apache.kafka.clients.consumer.KafkaConsumer` | `subscribe` | 2 | `(Ljava/util/regex/Pattern;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V` | `kafka-clients` | 3.6.2 | declared |
-| 25 | `kafka-consumer` | `org.apache.kafka.clients.consumer.Consumer` | `subscribe` | 2 | `(Ljava/util/regex/Pattern;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V` | `kafka-clients` | 3.6.2 | declared |
-| 26 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `convertAndSend` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/jms/core/MessagePostProcessor;)V` | `spring-jms` | 6.1.6 | declared |
-| 27 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `convertAndSend` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/jms/core/MessagePostProcessor;)V` | `spring-jms` | 6.1.6 | declared |
-| 28 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
-| 29 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
-| 30 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `convertAndSend` | 2 | `(Ljakarta/jms/Destination;Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
-| 31 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `convertAndSend` | 2 | `(Ljakarta/jms/Destination;Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
-| 32 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `convertAndSend` | 1 | `(Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
-| 33 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `convertAndSend` | 1 | `(Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
-| 34 | `spring-kafka-replying` | `org.springframework.kafka.requestreply.ReplyingKafkaTemplate` | `sendAndReceive` | 1 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;)Lorg/springframework/kafka/requestreply/RequestReplyFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 35 | `spring-kafka-replying` | `org.springframework.kafka.requestreply.ReplyingKafkaTemplate` | `sendAndReceive` | 1 | `(Lorg/springframework/messaging/Message;)Lorg/springframework/kafka/requestreply/RequestReplyMessageFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 36 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `send` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 37 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `send` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 38 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `send` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 39 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `send` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 40 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `send` | 1 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 41 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `send` | 1 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 42 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `send` | 1 | `(Lorg/springframework/messaging/Message;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 43 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `send` | 1 | `(Lorg/springframework/messaging/Message;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 44 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `send` | 4 | `(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 45 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `send` | 4 | `(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 46 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `send` | 5 | `(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 47 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `send` | 5 | `(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 48 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `sendDefault` | 1 | `(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 49 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `sendDefault` | 1 | `(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 50 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `sendDefault` | 2 | `(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 51 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `sendDefault` | 2 | `(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 52 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `sendDefault` | 3 | `(Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 53 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `sendDefault` | 3 | `(Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 54 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `sendDefault` | 4 | `(Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 55 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `sendDefault` | 4 | `(Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
-| 56 | `spring-pubsub` | `com.google.cloud.spring.pubsub.core.PubSubTemplate` | `publish` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-cloud-gcp-pubsub` | 5.1.2 | declared |
-| 57 | `spring-pubsub` | `com.google.cloud.spring.pubsub.core.PubSubTemplate` | `publish` | 2 | `(Ljava/lang/String;Lcom/google/pubsub/v1/PubsubMessage;)Ljava/util/concurrent/CompletableFuture;` | `spring-cloud-gcp-pubsub` | 5.1.2 | declared |
-| 58 | `spring-pubsub` | `com.google.cloud.spring.pubsub.core.PubSubTemplate` | `subscribeAndConvert` | 3 | `(Ljava/lang/String;Ljava/util/function/Consumer;Ljava/lang/Class;)Lcom/google/cloud/pubsub/v1/Subscriber;` | `spring-cloud-gcp-pubsub` | 5.1.2 | declared |
-| 59 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 3 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
-| 60 | `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `convertAndSend` | 3 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V` | `spring-amqp` | 3.1.4 | declared |
-| 61 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
-| 62 | `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-amqp` | 3.1.4 | declared |
-| 63 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 1 | `(Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
-| 64 | `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `convertAndSend` | 1 | `(Ljava/lang/Object;)V` | `spring-amqp` | 3.1.4 | declared |
-| 65 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForObject` | 3 | `(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
-| 66 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `getForObject` | 3 | `(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
-| 67 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForObject` | 3 | `(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
-| 68 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `getForObject` | 3 | `(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
-| 69 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForObject` | 2 | `(Ljava/net/URI;Ljava/lang/Class;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
-| 70 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `getForObject` | 2 | `(Ljava/net/URI;Ljava/lang/Class;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
-| 71 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForEntity` | 3 | `(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 72 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `getForEntity` | 3 | `(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 73 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForEntity` | 3 | `(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 74 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `getForEntity` | 3 | `(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 75 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForEntity` | 2 | `(Ljava/net/URI;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 76 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `getForEntity` | 2 | `(Ljava/net/URI;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 77 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForObject` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
-| 78 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `postForObject` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
-| 79 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForObject` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
-| 80 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `postForObject` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
-| 81 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForObject` | 3 | `(Ljava/net/URI;Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
-| 82 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `postForObject` | 3 | `(Ljava/net/URI;Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
-| 83 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForEntity` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 84 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `postForEntity` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 85 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForEntity` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 86 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `postForEntity` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 87 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForEntity` | 3 | `(Ljava/net/URI;Ljava/lang/Object;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 88 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `postForEntity` | 3 | `(Ljava/net/URI;Ljava/lang/Object;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 89 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `put` | 3 | `(Ljava/lang/String;Ljava/lang/Object;[Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
-| 90 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `put` | 3 | `(Ljava/lang/String;Ljava/lang/Object;[Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
-| 91 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `put` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/util/Map;)V` | `spring-web` | 6.1.6 | declared |
-| 92 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `put` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/util/Map;)V` | `spring-web` | 6.1.6 | declared |
-| 93 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `put` | 2 | `(Ljava/net/URI;Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
-| 94 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `put` | 2 | `(Ljava/net/URI;Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
-| 95 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `delete` | 2 | `(Ljava/lang/String;[Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
-| 96 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `delete` | 2 | `(Ljava/lang/String;[Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
-| 97 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `delete` | 2 | `(Ljava/lang/String;Ljava/util/Map;)V` | `spring-web` | 6.1.6 | declared |
-| 98 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `delete` | 2 | `(Ljava/lang/String;Ljava/util/Map;)V` | `spring-web` | 6.1.6 | declared |
-| 99 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `delete` | 1 | `(Ljava/net/URI;)V` | `spring-web` | 6.1.6 | declared |
-| 100 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `delete` | 1 | `(Ljava/net/URI;)V` | `spring-web` | 6.1.6 | declared |
-| 101 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 102 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 103 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 104 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 105 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 4 | `(Ljava/net/URI;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 106 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 4 | `(Ljava/net/URI;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 107 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 108 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 109 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 110 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 111 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 4 | `(Ljava/net/URI;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 112 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 4 | `(Ljava/net/URI;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 113 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 2 | `(Lorg/springframework/http/RequestEntity;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 114 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 2 | `(Lorg/springframework/http/RequestEntity;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 115 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 2 | `(Lorg/springframework/http/RequestEntity;Lorg/springframework/core/ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 116 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 2 | `(Lorg/springframework/http/RequestEntity;Lorg/springframework/core/ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
-| 117 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 118 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `send` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 119 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 2 | `(Ljava/lang/String;Lorg/springframework/messaging/Message;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 120 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `send` | 2 | `(Ljava/lang/String;Lorg/springframework/messaging/Message;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 121 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 1 | `(Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 122 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `send` | 1 | `(Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 123 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 1 | `(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 124 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `send` | 1 | `(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 125 | `spring-websocket` | `org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry` | `addHandler` | 2 | `(Lorg/springframework/web/socket/WebSocketHandler;[Ljava/lang/String;)Lorg/springframework/web/socket/config/annotation/WebSocketHandlerRegistration;` | `spring-websocket` | 6.1.6 | declared |
-| 126 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 1 | `(Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
-| 127 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
-| 128 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 14 | `javax-jms` | `javax.jms.Session` | `createProducer` | 1 | `(Ljavax/jms/Destination;)Ljavax/jms/MessageProducer;` | `javax.jms-api` | 2.0.1 | declared |
+| 15 | `javax-jms` | `javax.jms.Session` | `createConsumer` | 1 | `(Ljavax/jms/Destination;)Ljavax/jms/MessageConsumer;` | `javax.jms-api` | 2.0.1 | declared |
+| 16 | `javax-jms` | `javax.jms.Session` | `createConsumer` | 2 | `(Ljavax/jms/Destination;Ljava/lang/String;)Ljavax/jms/MessageConsumer;` | `javax.jms-api` | 2.0.1 | declared |
+| 17 | `javax-jms` | `javax.jms.Session` | `createConsumer` | 3 | `(Ljavax/jms/Destination;Ljava/lang/String;Z)Ljavax/jms/MessageConsumer;` | `javax.jms-api` | 2.0.1 | declared |
+| 18 | `javax-jms` | `javax.jms.Session` | `createSharedConsumer` | 2 | `(Ljavax/jms/Topic;Ljava/lang/String;)Ljavax/jms/MessageConsumer;` | `javax.jms-api` | 2.0.1 | declared |
+| 19 | `javax-jms` | `javax.jms.Session` | `createSharedConsumer` | 3 | `(Ljavax/jms/Topic;Ljava/lang/String;Ljava/lang/String;)Ljavax/jms/MessageConsumer;` | `javax.jms-api` | 2.0.1 | declared |
+| 20 | `javax-jms` | `javax.jms.Session` | `createDurableSubscriber` | 2 | `(Ljavax/jms/Topic;Ljava/lang/String;)Ljavax/jms/TopicSubscriber;` | `javax.jms-api` | 2.0.1 | declared |
+| 21 | `javax-jms` | `javax.jms.Session` | `createDurableSubscriber` | 4 | `(Ljavax/jms/Topic;Ljava/lang/String;Ljava/lang/String;Z)Ljavax/jms/TopicSubscriber;` | `javax.jms-api` | 2.0.1 | declared |
+| 22 | `javax-jms` | `javax.jms.Session` | `createDurableConsumer` | 2 | `(Ljavax/jms/Topic;Ljava/lang/String;)Ljavax/jms/MessageConsumer;` | `javax.jms-api` | 2.0.1 | declared |
+| 23 | `javax-jms` | `javax.jms.Session` | `createDurableConsumer` | 4 | `(Ljavax/jms/Topic;Ljava/lang/String;Ljava/lang/String;Z)Ljavax/jms/MessageConsumer;` | `javax.jms-api` | 2.0.1 | declared |
+| 24 | `javax-jms` | `javax.jms.Session` | `createSharedDurableConsumer` | 2 | `(Ljavax/jms/Topic;Ljava/lang/String;)Ljavax/jms/MessageConsumer;` | `javax.jms-api` | 2.0.1 | declared |
+| 25 | `javax-jms` | `javax.jms.Session` | `createSharedDurableConsumer` | 3 | `(Ljavax/jms/Topic;Ljava/lang/String;Ljava/lang/String;)Ljavax/jms/MessageConsumer;` | `javax.jms-api` | 2.0.1 | declared |
+| 26 | `kafka-clients` | `org.apache.kafka.clients.producer.KafkaProducer` | `send` | 1 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/Future;` | `kafka-clients` | 3.6.2 | declared |
+| 27 | `kafka-clients` | `org.apache.kafka.clients.producer.Producer` | `send` | 1 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/Future;` | `kafka-clients` | 3.6.2 | declared |
+| 28 | `kafka-clients` | `org.apache.kafka.clients.producer.KafkaProducer` | `send` | 2 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;Lorg/apache/kafka/clients/producer/Callback;)Ljava/util/concurrent/Future;` | `kafka-clients` | 3.6.2 | declared |
+| 29 | `kafka-clients` | `org.apache.kafka.clients.producer.Producer` | `send` | 2 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;Lorg/apache/kafka/clients/producer/Callback;)Ljava/util/concurrent/Future;` | `kafka-clients` | 3.6.2 | declared |
+| 30 | `kafka-consumer` | `org.apache.kafka.clients.consumer.KafkaConsumer` | `subscribe` | 1 | `(Ljava/util/Collection;)V` | `kafka-clients` | 3.6.2 | declared |
+| 31 | `kafka-consumer` | `org.apache.kafka.clients.consumer.Consumer` | `subscribe` | 1 | `(Ljava/util/Collection;)V` | `kafka-clients` | 3.6.2 | declared |
+| 32 | `kafka-consumer` | `org.apache.kafka.clients.consumer.KafkaConsumer` | `subscribe` | 1 | `(Ljava/util/regex/Pattern;)V` | `kafka-clients` | 3.6.2 | declared |
+| 33 | `kafka-consumer` | `org.apache.kafka.clients.consumer.Consumer` | `subscribe` | 1 | `(Ljava/util/regex/Pattern;)V` | `kafka-clients` | 3.6.2 | declared |
+| 34 | `kafka-consumer` | `org.apache.kafka.clients.consumer.KafkaConsumer` | `subscribe` | 2 | `(Ljava/util/Collection;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V` | `kafka-clients` | 3.6.2 | declared |
+| 35 | `kafka-consumer` | `org.apache.kafka.clients.consumer.Consumer` | `subscribe` | 2 | `(Ljava/util/Collection;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V` | `kafka-clients` | 3.6.2 | declared |
+| 36 | `kafka-consumer` | `org.apache.kafka.clients.consumer.KafkaConsumer` | `subscribe` | 2 | `(Ljava/util/regex/Pattern;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V` | `kafka-clients` | 3.6.2 | declared |
+| 37 | `kafka-consumer` | `org.apache.kafka.clients.consumer.Consumer` | `subscribe` | 2 | `(Ljava/util/regex/Pattern;Lorg/apache/kafka/clients/consumer/ConsumerRebalanceListener;)V` | `kafka-clients` | 3.6.2 | declared |
+| 38 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `convertAndSend` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/jms/core/MessagePostProcessor;)V` | `spring-jms` | 6.1.6 | declared |
+| 39 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `convertAndSend` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/jms/core/MessagePostProcessor;)V` | `spring-jms` | 6.1.6 | declared |
+| 40 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
+| 41 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
+| 42 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `convertAndSend` | 2 | `(Ljakarta/jms/Destination;Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
+| 43 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `convertAndSend` | 2 | `(Ljakarta/jms/Destination;Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
+| 44 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `convertAndSend` | 1 | `(Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
+| 45 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `convertAndSend` | 1 | `(Ljava/lang/Object;)V` | `spring-jms` | 6.1.6 | declared |
+| 46 | `spring-kafka-replying` | `org.springframework.kafka.requestreply.ReplyingKafkaTemplate` | `sendAndReceive` | 1 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;)Lorg/springframework/kafka/requestreply/RequestReplyFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 47 | `spring-kafka-replying` | `org.springframework.kafka.requestreply.ReplyingKafkaTemplate` | `sendAndReceive` | 1 | `(Lorg/springframework/messaging/Message;)Lorg/springframework/kafka/requestreply/RequestReplyMessageFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 48 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `send` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 49 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `send` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 50 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `send` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 51 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `send` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 52 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `send` | 1 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 53 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `send` | 1 | `(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 54 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `send` | 1 | `(Lorg/springframework/messaging/Message;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 55 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `send` | 1 | `(Lorg/springframework/messaging/Message;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 56 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `send` | 4 | `(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 57 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `send` | 4 | `(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 58 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `send` | 5 | `(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 59 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `send` | 5 | `(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 60 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `sendDefault` | 1 | `(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 61 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `sendDefault` | 1 | `(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 62 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `sendDefault` | 2 | `(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 63 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `sendDefault` | 2 | `(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 64 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `sendDefault` | 3 | `(Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 65 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `sendDefault` | 3 | `(Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 66 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaTemplate` | `sendDefault` | 4 | `(Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 67 | `spring-kafka-template` | `org.springframework.kafka.core.KafkaOperations` | `sendDefault` | 4 | `(Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-kafka` | 3.1.4 | declared |
+| 68 | `spring-pubsub` | `com.google.cloud.spring.pubsub.core.PubSubTemplate` | `publish` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;` | `spring-cloud-gcp-pubsub` | 5.1.2 | declared |
+| 69 | `spring-pubsub` | `com.google.cloud.spring.pubsub.core.PubSubTemplate` | `publish` | 2 | `(Ljava/lang/String;Lcom/google/pubsub/v1/PubsubMessage;)Ljava/util/concurrent/CompletableFuture;` | `spring-cloud-gcp-pubsub` | 5.1.2 | declared |
+| 70 | `spring-pubsub` | `com.google.cloud.spring.pubsub.core.PubSubTemplate` | `subscribeAndConvert` | 3 | `(Ljava/lang/String;Ljava/util/function/Consumer;Ljava/lang/Class;)Lcom/google/cloud/pubsub/v1/Subscriber;` | `spring-cloud-gcp-pubsub` | 5.1.2 | declared |
+| 71 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 3 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
+| 72 | `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `convertAndSend` | 3 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V` | `spring-amqp` | 3.1.4 | declared |
+| 73 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
+| 74 | `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `convertAndSend` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)V` | `spring-amqp` | 3.1.4 | declared |
+| 75 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertAndSend` | 1 | `(Ljava/lang/Object;)V` | `spring-rabbit` | 3.1.4 | declared |
+| 76 | `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `convertAndSend` | 1 | `(Ljava/lang/Object;)V` | `spring-amqp` | 3.1.4 | declared |
+| 77 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForObject` | 3 | `(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 78 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `getForObject` | 3 | `(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 79 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForObject` | 3 | `(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 80 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `getForObject` | 3 | `(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 81 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForObject` | 2 | `(Ljava/net/URI;Ljava/lang/Class;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 82 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `getForObject` | 2 | `(Ljava/net/URI;Ljava/lang/Class;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 83 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForEntity` | 3 | `(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 84 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `getForEntity` | 3 | `(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 85 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForEntity` | 3 | `(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 86 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `getForEntity` | 3 | `(Ljava/lang/String;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 87 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `getForEntity` | 2 | `(Ljava/net/URI;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 88 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `getForEntity` | 2 | `(Ljava/net/URI;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 89 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForObject` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 90 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `postForObject` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 91 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForObject` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 92 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `postForObject` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 93 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForObject` | 3 | `(Ljava/net/URI;Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 94 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `postForObject` | 3 | `(Ljava/net/URI;Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;` | `spring-web` | 6.1.6 | declared |
+| 95 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForEntity` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 96 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `postForEntity` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 97 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForEntity` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 98 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `postForEntity` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 99 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `postForEntity` | 3 | `(Ljava/net/URI;Ljava/lang/Object;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 100 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `postForEntity` | 3 | `(Ljava/net/URI;Ljava/lang/Object;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 101 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `put` | 3 | `(Ljava/lang/String;Ljava/lang/Object;[Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
+| 102 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `put` | 3 | `(Ljava/lang/String;Ljava/lang/Object;[Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
+| 103 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `put` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/util/Map;)V` | `spring-web` | 6.1.6 | declared |
+| 104 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `put` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Ljava/util/Map;)V` | `spring-web` | 6.1.6 | declared |
+| 105 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `put` | 2 | `(Ljava/net/URI;Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
+| 106 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `put` | 2 | `(Ljava/net/URI;Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
+| 107 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `delete` | 2 | `(Ljava/lang/String;[Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
+| 108 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `delete` | 2 | `(Ljava/lang/String;[Ljava/lang/Object;)V` | `spring-web` | 6.1.6 | declared |
+| 109 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `delete` | 2 | `(Ljava/lang/String;Ljava/util/Map;)V` | `spring-web` | 6.1.6 | declared |
+| 110 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `delete` | 2 | `(Ljava/lang/String;Ljava/util/Map;)V` | `spring-web` | 6.1.6 | declared |
+| 111 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `delete` | 1 | `(Ljava/net/URI;)V` | `spring-web` | 6.1.6 | declared |
+| 112 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `delete` | 1 | `(Ljava/net/URI;)V` | `spring-web` | 6.1.6 | declared |
+| 113 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 114 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 115 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 116 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 117 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 4 | `(Ljava/net/URI;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 118 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 4 | `(Ljava/net/URI;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 119 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 120 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 121 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 122 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 5 | `(Ljava/lang/String;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;Ljava/util/Map;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 123 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 4 | `(Ljava/net/URI;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 124 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 4 | `(Ljava/net/URI;Lorg/springframework/http/HttpMethod;Lorg/springframework/http/HttpEntity;Lorg/springframework/core/ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 125 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 2 | `(Lorg/springframework/http/RequestEntity;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 126 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 2 | `(Lorg/springframework/http/RequestEntity;Ljava/lang/Class;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 127 | `spring-resttemplate` | `org.springframework.web.client.RestTemplate` | `exchange` | 2 | `(Lorg/springframework/http/RequestEntity;Lorg/springframework/core/ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 128 | `spring-resttemplate` | `org.springframework.web.client.RestOperations` | `exchange` | 2 | `(Lorg/springframework/http/RequestEntity;Lorg/springframework/core/ParameterizedTypeReference;)Lorg/springframework/http/ResponseEntity;` | `spring-web` | 6.1.6 | declared |
+| 129 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
+| 130 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `send` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
+| 131 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 2 | `(Ljava/lang/String;Lorg/springframework/messaging/Message;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
+| 132 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `send` | 2 | `(Ljava/lang/String;Lorg/springframework/messaging/Message;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
+| 133 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 1 | `(Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
+| 134 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `send` | 1 | `(Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
+| 135 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 1 | `(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
+| 136 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `send` | 1 | `(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
+| 137 | `spring-websocket` | `org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry` | `addHandler` | 2 | `(Lorg/springframework/web/socket/WebSocketHandler;[Ljava/lang/String;)Lorg/springframework/web/socket/config/annotation/WebSocketHandlerRegistration;` | `spring-websocket` | 6.1.6 | declared |
+| 138 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 1 | `(Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 139 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 140 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
 
 ## Verdict
 
@@ -220,6 +238,12 @@ under the class name and under the interface a codebase more often declares its 
 (§3.1) — and this harness asks its question of each name separately, because an interface
 declaring a SUBSET of the class's methods would match some call sites and silently miss the
 rest. 53 of the rows above are alternate owners, and every one is `declared`.
+
+`javax-jms.yml` is measured here too, and is NOT an alternate: an alternate is one library
+under several names, while `javax.jms-api 2.0.1` and `jakarta.jms-api 3.1.0` are two jars at
+two versions, each needing its own measurement (W12). All twelve of its rows come back
+`declared`, and none of its descriptors is its `jakarta` counterpart with the package
+swapped — `Session`'s own parameter and return types moved with the API.
 
 Three alternates were applied after the first W10 run and are measured here for the first
 time: `KafkaOperations` on `spring-kafka-template`, and Kafka's own `Consumer` and

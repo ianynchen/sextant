@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 import yaml
+from fixture_module import FIXTURE_CAPABILITIES
 
-from conftest import FIXTURE_CAPABILITIES
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 from sextant.domain.closed_sets import ConstructKind, OriginTier

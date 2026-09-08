@@ -62,6 +62,25 @@ def catalog_symbols(declared: object, where: str = "a catalog site") -> tuple[st
     )
 
 
+def names_a_type(declared: object) -> bool:
+    """Whether a slot holds a type name or a list of them (§3.1), WITHOUT
+    converting it.
+
+    For the load-time validators, which run before any engine reads anything: a
+    validator that still required a string kept its key scalar however widely the
+    read site was widened, which is how `config_join`'s two keys came to have a
+    live list branch nothing could reach. Beside `catalog_symbols` and agreeing
+    with it by construction — a value this accepts is exactly one that converts.
+    """
+    if isinstance(declared, str):
+        return True
+    return (
+        isinstance(declared, list)
+        and bool(declared)
+        and all(isinstance(name, str) for name in declared)
+    )
+
+
 @dataclass(frozen=True)
 class RootedType:
     # The whole reference unwrapping stopped at, not only its symbol: what the

@@ -14,6 +14,41 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Spring Boot 2's JMS surface was invisible, its SOAP operations were nameless, and its
+  JMS envelope was published as a payload contract** — one package rename, three different
+  failure modes (W11/W12).
+
+  Jakarta EE renamed `javax.*` to `jakarta.*`; a catalog names types by their fully
+  qualified name and compares them exactly, so a catalog naming one spelling does not match
+  the other. `docs/COVERAGE.md` asserted *"Both must be matched"* in the indicative — a
+  requirement written as a description of what the catalogs did, which is why nobody
+  checked. A mechanical sweep of every Jakarta EE type any of the 42 catalogs names found
+  **three families in one spelling only**: `jms` and JAXB's `XmlRootElement`.
+
+  The failure modes were measured by running the derivation, not by reading catalogs, and
+  they are not the same:
+
+  | the rule that named one spelling | what a Boot 2 codebase got |
+  |---|---|
+  | `jakarta-jms.yml`'s `matches.owner` — a POSITIVE match | **0 rows.** The whole route invisible, which at least reads as absence |
+  | `spring-ws-template.yml`'s `@XmlRootElement` read — an IDENTITY rule | **1 row**, right peer, `path` NULL at `unresolved`. Reads as "we looked and the operation was unreadable" when it was never looked for |
+  | `spring-jms.yml`'s `request_body.excludes` — a NEGATIVE list | the opaque `javax.jms.Message` envelope published **as** the payload contract |
+
+  **The third is the one nobody would have predicted, and it is worse than either of the
+  two the design anticipated.** `excludes` names types in order to REFUSE them, so a missing
+  spelling stops the refusal rather than stopping the match: not silence, not a hole, a
+  wrong contract at `resolved`. Any rule that names a type to reject it inverts the failure
+  this way, and a sweep reading only `matches` will keep missing that class.
+
+  All three are closed. `javax-jms.yml` is a separate FILE, not a second name on the
+  jakarta one — those are two jars at two versions needing two measurements, and every one
+  of its twelve descriptors was checked against `javax.jms-api 2.0.1` rather than copied,
+  because `Session`'s own parameter and return types moved with the API and all four
+  compared descriptors differ. The SOAP fix is two names on three rules, since an
+  annotation attribute returns `java.lang.String` in either spelling and nothing needed
+  re-measuring; it required widening `path_from_argument_type.annotation`, a type-name key
+  F2 §3.1's list of twenty-one missed. The `excludes` fix is two more entries in a list.
+
 - **A catalog may spell one type under several names** (F2 §3.1, W9/W10).
 
   `matches.owner` was one string compared with `==`, and a call site's owner is the

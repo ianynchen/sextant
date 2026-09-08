@@ -177,11 +177,25 @@ row 5 because the design did not consider this direction.
 
 ## How the verdict is consumed
 
-W12 writes `javax-jms.yml` beside `jakarta-jms.yml` with its own measured descriptors,
-adds the `javax` JAXB spelling to `spring-ws-template.yml`'s three identity rules, and
-adds both `javax` envelope spellings to `spring-jms.yml`'s `excludes`. Finding 2 says
-the first cannot be a copy; finding 4 says the third is a distinct kind of fix from the
-other two and would have been missed by a sweep that only looked at `matches`.
+**W12 acted on all three findings, and the tables above are the post-fix run** — which is
+why sections 3 and 4 now show every spelling resolving. That is deliberate: a probe whose
+generated table shows the broken state stops being re-runnable the moment the break is
+fixed, and a verdict quoting numbers no current run produces is the CP-5 shape this
+harness exists to avoid. What the tables prove today is that the fix HOLDS; what they
+proved before it is recorded in `CHANGELOG.md` beside the change that made them agree.
 
-`docs/COVERAGE.md`'s prose asserts *"Both must be matched"* in the indicative. Findings
-1, 3 and 4 are what make that sentence false today; F8 corrects it.
+- `javax-jms.yml` sits beside `jakarta-jms.yml` with its own descriptors, every one
+  checked against the 2.0.1 jar by `scripts/probes/cp10_catalog_descriptors.md` (which
+  gained the coordinate) rather than copied. Finding 2 is why a copy would have been
+  wrong: all four compared JMS descriptors differ.
+- `spring-ws-template.yml`'s three identity rules name both JAXB spellings. That key —
+  `path_from_argument_type.annotation` — was NOT one of F2 §3.1's twenty-one; the design
+  missed it, the same way it missed `matches.steps[].owner`, and widening it is what let
+  this be two names rather than a second catalog.
+- `spring-jms.yml`'s `excludes` names both envelope spellings. Finding 4 is a distinct
+  KIND of fix from the other two, and a sweep that only read `matches` would have missed
+  it entirely.
+
+`docs/COVERAGE.md` asserted *"Both must be matched"* in the indicative — a requirement
+written as a description, which is why nobody checked it. It now carries the three-way
+table above instead.

@@ -11,6 +11,28 @@ precedent for a uniquely-named shared helper here.
 
 from pathlib import Path
 
+# The capabilities the fixture harnesses grant, in one place for the same reason
+# this module exists: `tests/application/conftest.py` defines the set that
+# `resolved_fixture` uses, and a test importing it as `from conftest import ...`
+# resolves to whichever `conftest` pytest put on `sys.path` first — which is
+# `tests/architecture/conftest.py` whenever the two directories are collected in
+# one run, and an `ImportError` only then.
+#
+# A real subset of what `AsmScanner.capabilities()` declares; `conftest` explains
+# at length which gate each one opens and why two are granted rather than withheld.
+FIXTURE_CAPABILITIES = {
+    "annotation_args",
+    "typed_signatures",
+    "type_annotations",
+    "call_site",
+    "string_constants",
+    "chain_reconstruction",
+    "implemented_interfaces",
+    "superclass",
+    "generic_interfaces",
+    "nested_annotation_args",
+}
+
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import Document, ModuleFact
