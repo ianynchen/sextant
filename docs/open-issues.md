@@ -2122,3 +2122,61 @@ deriving reactive WebFlux routes.
 **Closes by** either giving it a consumer (the rendered document names catalogs by id
 today) or removing it from all 57 files and from D02. **Falsified by** finding a consumer
 this grep missed.
+
+### OI-64 — a `Subscriber` built and never started derives a live inbound endpoint
+
+**Found by** W18, while implementing F2 §3.9's other half.
+
+`google-pubsub-subscriber.yml` derives an inbound row from
+`Subscriber.newBuilder(subscription, receiver)`. That call is CONSTRUCTION, and
+construction subscribes to nothing: the messages arrive only once something calls
+`startAsync()`, or once Spring starts a `Subscriber` returned from a `@Bean` method.
+GUIDELINES §8.6 states the rule and names this catalog as the example that breaks it.
+
+**The design's description of the defect does not match the file.** §8.6 and F2 §3.9
+both say the catalog "named `.startAsync()` as a required conjunct and never read
+it". It names no such conjunct, and its comment states the opposite position
+outright — "the registration is the evidence, so this style needs no
+execute-terminal". The over-report is real; the mechanism recorded for it is not, and
+W18 declined to fix a conjunct that is not there.
+
+**Consequence:** any module that builds a `Subscriber` without starting it publishes
+an inbound `pubsub` endpoint that receives nothing. Unlike the pull-side gap W18
+closed, this one over-reports rather than under-reports, so it is visible to a reader
+as a claim rather than as silence.
+
+**Closes by** giving `interface_implementation` a terminal conjunct — the style has no
+way to require one today, while `fluent`/`single_call` catalogs have used `terminal`
+since 2E — and then declaring `startAsync` on this catalog, with the `@Bean`-returning
+case as the measured framework-rule link §8.6 describes. **Falsified by** measuring
+that `Subscriber.newBuilder(...)` itself begins delivery, which would make the current
+rule right.
+
+### OI-65 — nothing detects a release that moves `Subscriber.startAsync` out of the template
+
+**Found by** the W18 review (MAJ-6), while correcting the §8.6 chain recorded for
+`PubSubTemplate.subscribe`.
+
+`spring-pubsub.yml`'s `subscribe` and `subscribeAndConvert` rows are boundaries because
+of a two-link chain: the traced call, plus the measured rule that
+`PubSubSubscriberTemplate.subscribe` calls `Subscriber.startAsync()` itself before
+returning (`javap -c`, spring-cloud-gcp-pubsub 5.1.2, offset 26). That second link is a
+claim about the library's INTERNALS, and it is the only thing separating these two rows
+from the over-report recorded as `OI-64`.
+
+**Nothing re-checks it.** `scripts/probes/w18_pubsub_inbound/run.sh` reads descriptors
+and runs the derivation; it never opens `PubSubSubscriberTemplate`'s bytecode.
+`cp10_catalog_descriptors` checks that a declared descriptor names a real method, which
+would still pass. So a release that moved the start into the caller — a plausible change,
+since it would let callers configure the subscriber before starting it — would turn both
+rows into fabrications, and every gate in the tree would stay green.
+
+**Consequence today: none.** The rule holds at 5.1.2, measured. The exposure is the next
+version anyone measures against.
+
+**Closes by** adding the instruction-sequence read to
+`scripts/probes/w18_pubsub_inbound/sweep.py` — the shape
+`scripts/probes/w17_webflux_controller/sweep.py` already uses for `isHandler`, aborting
+when the expected call is absent — so that re-running the probe against a new version is
+what answers the question. **Falsified by** showing the two rows would still be correct
+with the start moved, which they would not be.

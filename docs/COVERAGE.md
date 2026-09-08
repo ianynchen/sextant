@@ -200,7 +200,7 @@ across runs.
 — joined in 2O Task 7 by `@RabbitListener` (with `@RabbitHandler`), `@PulsarListener`, the
 two legacy `@SqsListener` spellings and `RabbitTemplate.convertAndSend`;
 `KafkaTemplate`, `ReplyingKafkaTemplate`, the raw `KafkaProducer`, `JmsTemplate`, `SqsTemplate`
-and `PubSubTemplate` (publish, and typed `subscribeAndConvert` inbound) are read outbound by the
+and `PubSubTemplate` (publish, plus all ten of its consuming methods inbound since F2 §3.9) are read outbound by the
 same `single_call` engine 2C shipped, pointed at `send`-shaped methods; a `@KafkaListener` method
 returning a value under `@SendTo` derives its reply as a second, outbound row. None of these carry
 a method in their wire identity — D01's verbless case, rendered as `protocol path` alone.
@@ -2190,16 +2190,17 @@ same shape `KafkaTemplate.send(Message)` carries in §5.8.
 ### 5.11 Google Cloud Pub/Sub
 
 The hardest protocol in the table: **B in every language**, because only Micronaut ships a
-first-party annotation — Java's own `PubSubTemplate.publish`/`subscribeAndConvert` calls are now
-the exception, read directly with no annotation at all.
+first-party annotation — Java's own `PubSubTemplate` calls are now the exception, publish and all
+ten consuming methods alike, read directly with no annotation at all.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
 | Java | **Micronaut `@PubSubClient` / `@PubSubListener` + `@Subscription`** | the only first-party annotation surveyed | `annotation` | A |
-| Java | Spring Cloud GCP `PubSubTemplate.publish(…)`, `.subscribeAndConvert(…, Class<T>)` | typed direct calls, not the channel-adapter indirection below | `registration_call` | ✅ shipped |
+| Java | Spring Cloud GCP `PubSubTemplate.publish(…)` | typed direct calls, not the channel-adapter indirection below | `registration_call` | ✅ shipped |
+| Java | Spring Cloud GCP `PubSubTemplate` INBOUND — `subscribe`, `subscribeAndConvert`, `pull`, `pullAsync`, `pullAndConvert`, `pullAndConvertAsync`, `pullAndAck`, `pullAndAckAsync`, `pullNext`, `pullNextAsync` | all ten consuming methods the class declares, enumerated from the 5.1.2 jar's own declared methods, then split into consuming and publishing by a name-prefix test the probe states (`scripts/probes/w18_pubsub_inbound.md` §1); each takes the subscription name at argument 0. **Two different §8.6 chains**: for the eight `pull*` methods the call IS the consumption, so a trace reaching it is the whole chain; for `subscribe`/`subscribeAndConvert`, which return a `Subscriber`, the chain is the call PLUS the measured rule that `PubSubSubscriberTemplate.subscribe` calls `Subscriber.startAsync()` itself before returning (`javap -c`, 5.1.2, offset 26) | `registration_call` | ✅ shipped since F2 §3.9. **This row read ONE of the ten until W18**, so every PULL-based consumer derived nothing at all — not a partial row, not a question, but the same silence a module consuming no Pub/Sub produces. Payload shape is stated by the THREE overloads that take a `Class<T>` — `subscribeAndConvert` at argument 2, `pullAndConvert` and `pullAndConvertAsync` at argument 3; the other seven derive an address with `request_shape` NULL, because their return type is an untyped envelope and deriving a shape from it would be invention. **The `handler` recorded is the calling method, not the lambda that receives** — true of `subscribeAndConvert` before W18 and now of `subscribe` too |
 | Java | `Publisher.newBuilder(TopicName.of(p, t)).build()`, `.publish(…)` | co-located build+publish chains resolve; a config-built/field-held `Publisher` derives an honest unresolved row instead of vanishing | `fluent_chain` | ✅ shipped |
-| Java | `Subscriber` + `MessageReceiver`, `.startAsync()` | named implementers and lambda receivers both resolve; direct implementers only, and the registration is the evidence | `interface_implementation` | ✅ shipped |
-| Java | Spring Cloud GCP `PubSubTemplate.subscribe(…)`, or `PubSubInboundChannelAdapter` + `@ServiceActivator` | channel indirection | `config_join` | B — rides 2F's `config_join` once catalogued |
+| Java | `Subscriber` + `MessageReceiver`, `.startAsync()` | named implementers and lambda receivers both resolve; direct implementers only, and the registration is the evidence | `interface_implementation` | **Over-reports, and knowingly.** `Subscriber.newBuilder(subscription, receiver)` is CONSTRUCTION, and construction subscribes to nothing — GUIDELINES §8.6 requires a trace reaching `startAsync` (or the measured rule that Spring starts a `Subscriber` bean), and this catalog requires neither. So a `Subscriber` built and never started derives a live inbound endpoint. §8.6 describes this as an unread `.startAsync()` CONJUNCT in the catalog; there is no such conjunct in the file, which states the opposite position outright. Closing it is engine work — `interface_implementation` has no way to require a terminal — and is `OI-64`. **Falsified by** any module that builds a `Subscriber` it never starts |
+| Java | `PubSubInboundChannelAdapter` + `@ServiceActivator` | channel indirection | `config_join` | B — rides 2F's `config_join` once catalogued. *This row named `PubSubTemplate.subscribe(…)` as well, and stopped being true at W18, which derives it directly three rows above — leaving the page answering "is `subscribe` supported" both ways.* |
 | Go | `client.Topic("n").Publish(ctx, m)`, `client.Subscription("s").Receive(ctx, fn)` | — | `fluent_chain` | B |
 | TS | `pubsub.topic("n").publishMessage(…)`, `subscription.on("message", cb)` | — | `fluent_chain` | B |
 | Python | `publisher.publish(topic_path, data)`, path built by `publisher.topic_path(proj, t)` | topic assembled from a helper call | `fluent_chain` | B |

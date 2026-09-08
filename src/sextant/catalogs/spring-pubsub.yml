@@ -10,6 +10,12 @@ detect:
 measured:
   - { artifact: com.google.cloud:spring-cloud-gcp-pubsub, versions: ["5.1.2"],
       identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+  # The same artifact and version, cited a second time because a second probe read
+  # it: CP-10 measured the `publish` descriptors, W18 enumerated the class's own
+  # ten CONSUMING methods and their descriptors. Two rows rather than one edited
+  # row, so each block of methods names the run that opened it.
+  - { artifact: com.google.cloud:spring-cloud-gcp-pubsub, versions: ["5.1.2"],
+      identity: reported, by: scripts/probes/w18_pubsub_inbound.md }
 
 requires: [call_site, string_constants]
 
@@ -54,9 +60,12 @@ matches:
   # own inbound rows (verified live). `direction: inbound` also means this
   # row's deriving method lands in `handler`, not `caller`
   # (`single_call.py`'s own inbound/outbound split, applied per row rather
-  # than per catalog). The untyped `subscribe(String,
-  # Consumer<BasicAcknowledgeablePubsubMessage>)` overload is not declared:
-  # no fixture call reaches it, and it carries no payload capture at all.
+  # than per catalog). *This paragraph ended by saying the untyped
+  # `subscribe(String, Consumer<BasicAcknowledgeablePubsubMessage>)` overload
+  # "is not declared: no fixture call reaches it, and it carries no payload
+  # capture at all". W18 declares it, and the reasoning is rebutted where the
+  # new rows are — a fixture is not the estate, and a missing payload shape is a
+  # NULL column rather than a missing row.*
   methods:
     - { name: publish, arity: 2,
         descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
@@ -71,6 +80,90 @@ matches:
     - { name: subscribeAndConvert, arity: 3,
         descriptor: "(Ljava/lang/String;Ljava/util/function/Consumer;Ljava/lang/Class;)Lcom/google/cloud/pubsub/v1/Subscriber;",
         channel_arg: 0, body_arg: 2, direction: inbound }
+
+    # F2 §3.9 (W18). `PubSubTemplate` declares TEN inbound methods and this file
+    # read ONE, so every PULL-based consumer in the estate derived nothing at all
+    # — not a partial row, not a question: silence, which reads as "this module
+    # consumes no Pub/Sub".
+    #
+    # All ten descriptors measured at 5.1.2 by
+    # `scripts/probes/w18_pubsub_inbound/run.sh`, and all ten put the
+    # subscription name at argument 0 — the position this file already read for
+    # `publish` and `subscribeAndConvert`, which is why nine methods are nine
+    # lines and no engine change.
+    #
+    # **Why these are boundaries at all, per GUIDELINES §8.6 — and the two
+    # families answer differently.**
+    #
+    # A `pull*` call IS the consumption: the chain of evidence ends at the call
+    # itself, so a trace reaching it is the whole chain and there is no later
+    # terminal to require.
+    #
+    # `subscribe`/`subscribeAndConvert` are NOT that shape and it would be wrong
+    # to justify them the same way — they return a `Subscriber`, which is exactly
+    # the object that is not a boundary until something starts it (`OI-64`). Their
+    # chain is TWO links, and the second is a measured framework rule rather than
+    # an assumption: `PubSubSubscriberTemplate.subscribe` calls
+    # `Subscriber.startAsync()` ITSELF before returning — `javap -c` on
+    # spring-cloud-gcp-pubsub 5.1.2 shows `createSubscriber` at offset 19 and
+    # `invokevirtual com/google/cloud/pubsub/v1/Subscriber.startAsync` at offset
+    # 26, then `areturn`. So the caller receives an already-started subscriber and
+    # the boundary is real at the call. **This stops being true if a release moves
+    # the start out of the template**, which re-running
+    # `scripts/probes/w18_pubsub_inbound/run.sh` will not detect — that check is
+    # the one thing this rule needs and does not have (`OI-65`).
+    #
+    # Both differ from `Subscriber.newBuilder(...).build()`, where construction
+    # subscribes to nothing and nothing starts it
+    # (`google-pubsub-subscriber.yml`, `OI-64`).
+    #
+    # **`body_arg` is declared only where the call CAPTURES a payload type.** Of
+    # the ten consuming methods THREE do — `subscribeAndConvert` at argument 2,
+    # declared above, and the two `pullAndConvert*` overloads at argument 3 — and
+    # the remaining seven do not: `pull`
+    # hands back `AcknowledgeablePubsubMessage`, `pullAndAck` and `pullNext` hand
+    # back a raw `PubsubMessage`, and `subscribe`'s `Consumer` is typed on the
+    # untyped envelope. A row with no `body_arg` derives its ADDRESS with no
+    # payload shape, which is the honest answer — the subscription is real and
+    # the message type is not stated at the call. Inventing a shape from the
+    # return type would be D01 §3's fabrication, and the address is what makes
+    # the row a boundary.
+    #
+    # `subscribe` was previously left undeclared on the reasoning that "no fixture
+    # call reaches it, and it carries no payload capture at all". Neither is a
+    # reason to omit a real boundary: a fixture is not the estate, and a missing
+    # payload shape is a NULL column rather than a missing row.
+    - { name: subscribe, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/util/function/Consumer;)Lcom/google/cloud/pubsub/v1/Subscriber;",
+        channel_arg: 0, direction: inbound }
+    - { name: pull, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Boolean;)Ljava/util/List;",
+        channel_arg: 0, direction: inbound }
+    - { name: pullAsync, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Boolean;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, direction: inbound }
+    - { name: pullAndConvert, arity: 4,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Boolean;Ljava/lang/Class;)Ljava/util/List;",
+        channel_arg: 0, body_arg: 3, direction: inbound }
+    - { name: pullAndConvertAsync, arity: 4,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Boolean;Ljava/lang/Class;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, body_arg: 3, direction: inbound }
+    # `pullAndAck` and `pull` share a descriptor and differ only by NAME, as do
+    # `pullAndAckAsync` and `pullAsync`. Both pairs are declared in full: the
+    # engine matches on name first, so a descriptor collision across two names is
+    # not an ambiguity, and dropping either would drop a real method.
+    - { name: pullAndAck, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Boolean;)Ljava/util/List;",
+        channel_arg: 0, direction: inbound }
+    - { name: pullAndAckAsync, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Boolean;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, direction: inbound }
+    - { name: pullNext, arity: 1,
+        descriptor: "(Ljava/lang/String;)Lcom/google/pubsub/v1/PubsubMessage;",
+        channel_arg: 0, direction: inbound }
+    - { name: pullNextAsync, arity: 1,
+        descriptor: "(Ljava/lang/String;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, direction: inbound }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full

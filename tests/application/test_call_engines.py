@@ -7669,3 +7669,203 @@ def test_a_jms_queue_browser_is_not_a_subscription(tmp_path: Path):
     workspace.close()
 
     assert rows == []
+
+
+# --- F2 §3.9 (W18): `PubSubTemplate`'s nine unread inbound methods. -----------
+_PUBSUB_TEMPLATE = "com/google/cloud/spring/pubsub/core/PubSubTemplate#"
+
+# Every consuming method the class declares, with the descriptor
+# `scripts/probes/w18_pubsub_inbound.md` section 1 read out of the 5.1.2 jar and
+# the argument that carries a payload TYPE where the overload takes one. Written
+# as data rather than nine near-identical tests, because the finding is about the
+# SET: reading one of ten was the defect, and a list is what a reader counts.
+_PUBSUB_INBOUND = [
+    ("pull", "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Boolean;)Ljava/util/List;", 3, None),
+    (
+        "pullAsync",
+        "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Boolean;)Ljava/util/concurrent/CompletableFuture;",
+        3,
+        None,
+    ),
+    (
+        "pullAndConvert",
+        "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Boolean;Ljava/lang/Class;)Ljava/util/List;",
+        4,
+        3,
+    ),
+    (
+        "pullAndConvertAsync",
+        "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Boolean;Ljava/lang/Class;)Ljava/util/concurrent/CompletableFuture;",
+        4,
+        3,
+    ),
+    (
+        "pullAndAck",
+        "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Boolean;)Ljava/util/List;",
+        3,
+        None,
+    ),
+    (
+        "pullAndAckAsync",
+        "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Boolean;)Ljava/util/concurrent/CompletableFuture;",
+        3,
+        None,
+    ),
+    ("pullNext", "(Ljava/lang/String;)Lcom/google/pubsub/v1/PubsubMessage;", 1, None),
+    ("pullNextAsync", "(Ljava/lang/String;)Ljava/util/concurrent/CompletableFuture;", 1, None),
+    (
+        "subscribe",
+        "(Ljava/lang/String;Ljava/util/function/Consumer;)Lcom/google/cloud/pubsub/v1/Subscriber;",
+        2,
+        None,
+    ),
+]
+
+
+def _pubsub_inbound_call(
+    name: str, descriptor: str, arity: int, payload_arg: int | None = None
+) -> CallSiteFact:
+    """One call to a `PubSubTemplate` consuming method, subscription name at
+    argument 0 — the position all ten share.
+
+    Where the overload takes a `Class<T>`, `payload_arg` puts a real class
+    LITERAL in that position rather than an opaque parameter, because the two
+    derive different rows and a test that always passed a parameter could not
+    tell them apart."""
+    arguments: list = [CallArgument(kind="string", value="orders-subscription")]
+    for position in range(1, arity):
+        if position == payload_arg:
+            arguments.append(CallArgument(kind="class", symbol=ORDER_VIEW))
+        else:
+            arguments.append(CallArgument(kind="parameter", value=position))
+    return _call_to(_PUBSUB_TEMPLATE, name, descriptor, arguments)
+
+
+@pytest.mark.parametrize(
+    ("name", "descriptor", "arity", "payload_arg"),
+    [pytest.param(*row, id=row[0]) for row in _PUBSUB_INBOUND],
+)
+def test_every_pubsub_consuming_method_derives_an_inbound_row(
+    tmp_path: Path, name: str, descriptor: str, arity: int, payload_arg: int | None
+):
+    """F2 §3.9's acceptance: pull-based Pub/Sub consumers stop deriving nothing.
+
+    Each of these nine derived NOTHING before W18 — not a partial row and not a
+    question, but silence, which is the output a module consuming no Pub/Sub
+    produces. `spring-pubsub.yml` read one of the ten consuming methods the class
+    declares (`scripts/probes/w18_pubsub_inbound.md` section 1 enumerates them
+    from the jar), and the one it read is the only one a batch job would not use.
+
+    GUIDELINES §8.6 is why each is a boundary on its own evidence: the call IS the
+    consumption, so a trace reaching it is the whole chain and there is no later
+    terminal to require.
+    """
+    workspace = _resolve_shipped(
+        tmp_path, [_pubsub_inbound_call(name, descriptor, arity)], "spring-pubsub"
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+    assert len(rows) == 1
+    assert (str(rows[0]["protocol"]), str(rows[0]["direction"]), str(rows[0]["path"])) == (
+        "pubsub",
+        "inbound",
+        "orders-subscription",
+    )
+    # The deriving method lands in `handler`, not `caller`: this row is inbound.
+    assert rows[0]["handler"] == _CLAIM_CALLER
+    assert rows[0]["caller"] is None
+
+
+@pytest.mark.parametrize(
+    ("name", "descriptor", "arity", "payload_arg"),
+    [pytest.param(*row, id=row[0]) for row in _PUBSUB_INBOUND],
+)
+def test_a_pubsub_consuming_method_states_a_payload_shape_only_where_it_captures_one(
+    tmp_path: Path, name: str, descriptor: str, arity: int, payload_arg: int | None
+):
+    """The other half, and the one a reader has to be able to trust.
+
+    Only the two `*AndConvert*` overloads take a `Class<T>`; the rest hand back an
+    untyped envelope. Given a real class LITERAL in that position, those two must
+    state the payload shape — and the other seven must state NULL, because
+    deriving a shape for them from the return type would be fabrication.
+
+    **Both arms put a class LITERAL in the call**, which is what makes the NULL
+    arm mean anything. An earlier version passed an opaque parameter to every
+    overload that declares no `body_arg`, so its seven NULL assertions held
+    whether or not the row declared one — measured: adding `body_arg: 2` to the
+    `pull` row left that version green, while the same mutated row given a class
+    literal at position 2 derives a `request_shape` from a `Boolean` argument.
+    That is exactly the fabrication these seven cases exist to forbid, and the
+    test could not see it. Here the literal sits at the LAST argument position of
+    every overload, so a row that declares a `body_arg` it should not have has
+    something to read and the assertion fails.
+    """
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + ORDER_VIEW, construct_kind="class"),
+        _pubsub_inbound_call(
+            name, descriptor, arity, arity - 1 if payload_arg is None else payload_arg
+        ),
+    ]
+    workspace = _resolve_shipped(tmp_path, facts, "spring-pubsub")
+    rows = workspace.query("endpoints")
+    workspace.close()
+    assert str(rows[0]["path"]) == "orders-subscription"
+    if payload_arg is None:
+        assert rows[0]["request_shape"] is None
+    else:
+        assert rows[0]["request_shape"] is not None
+
+
+@pytest.mark.declines("spring-pubsub")
+@pytest.mark.pins("single_call.claimed-arity")
+@pytest.mark.parametrize(
+    ("name", "descriptor", "arity", "payload_arg"),
+    [pytest.param(*row, id=row[0]) for row in _PUBSUB_INBOUND],
+)
+def test_a_pubsub_overload_no_row_declares_derives_nothing(
+    tmp_path: Path, name: str, descriptor: str, arity: int, payload_arg: int | None
+):
+    """§10's near-miss, once per descriptor W18 claimed — and the reason this file
+    already carries `_CLAIMED_ARITIES`.
+
+    A `descriptor:` is checked only for opening with `(`. A wrong one still CLAIMS
+    its candidate set in `_matching_method`, and every overload of that name then
+    derives nothing at all, silently. So each of these nine rows makes a claim
+    about the release that adds a sibling overload, and a test is the only thing
+    that holds it.
+
+    Every conjunct of the shipped row holds here — the owner, the name, the
+    argument count and the argument kinds — and only `target.descriptor` differs,
+    so this measures the descriptor and nothing else. Nothing at all is the
+    required answer, not "something different": falling through to the declared
+    row would read this overload's own argument 0 as whatever that row says it is.
+    """
+    # A sibling at the same arity that no row declares: the last parameter
+    # re-typed, which is how a real release adds an overload.
+    last = _last_parameter(descriptor)
+    assert last, f"no parameter to re-type in {name}'s descriptor"
+    sibling = descriptor.replace(last, "Lcom/acme/Unknown;", 1)
+    assert sibling != descriptor, f"could not build a sibling descriptor for {name}"
+    arguments = [CallArgument(kind="string", value="orders-subscription")]
+    arguments += [CallArgument(kind="parameter", value=position) for position in range(1, arity)]
+    workspace = _resolve_shipped(
+        tmp_path, [_call_to(_PUBSUB_TEMPLATE, name, sibling, arguments)], "spring-pubsub"
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+    assert rows == []
+
+
+def _last_parameter(descriptor: str) -> str:
+    """The descriptor's final parameter type, verbatim — the one an added
+    overload would most plausibly re-type."""
+    arguments = descriptor[1 : descriptor.index(")")]
+    positions, index = [], 0
+    while index < len(arguments):
+        start = index
+        while arguments[index] == "[":
+            index += 1
+        index = arguments.index(";", index) + 1 if arguments[index] == "L" else index + 1
+        positions.append(arguments[start:index])
+    return positions[-1] if positions else ""
