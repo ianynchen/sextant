@@ -265,6 +265,19 @@ class SymbolFact(BaseModel):
     # rather than approximated by whatever the scan happened to see. Empty for
     # every type that is not sealed.
     permits: list[str] = Field(default_factory=list)
+    # W7: the top-level type whose nest this one belongs to (JVMS 4.7.28). Distinct
+    # from `enclosing`, which names the IMMEDIATE encloser — for `A$B$C` that is
+    # `A$B` where the nest host is `A`. The top-level answer is the one OI-45
+    # records `outer_type_of` guessing at by splitting a name on `$`.
+    nest_host: str | None = None
+    # The same relationship from the host's side (JVMS 4.7.29): every type sharing
+    # this one's nest. Only a host carries it.
+    nest_members: list[str] = Field(default_factory=list)
+    # Attributes this scanner SAW and did not read — a vendor's, or one from a
+    # class-file version newer than the build. By name only: reading the bytes
+    # would mean guessing at a layout nobody published. Recorded so §2.3's ledger
+    # can say "seen, not read", which is a different claim from "not present".
+    unread_attributes: list[str] = Field(default_factory=list)
     # `type_parameters` (W5): the formal type parameters this class or method
     # declares, in declaration order. Empty for the great majority of
     # declarations, which have none — the same "nothing generic, nothing

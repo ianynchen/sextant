@@ -58,6 +58,21 @@ public final class ClassScanner {
         // legitimate, "declared, never read" is the defect, and this is a third thing —
         // read by nobody because it duplicates what is already read).
         //
+        // CLASS-LEVEL TYPE ANNOTATIONS (JVMS 4.7.20, sorts `CLASS_EXTENDS`,
+        // `CLASS_IMPLEMENTS`, `CLASS_TYPE_PARAMETER`). W7's row names them; they are
+        // not read, and the reason is a consumer rather than a difficulty.
+        //
+        // Measured: `class TA extends Base<@Marked String>` really does emit
+        // `CLASS_EXTENDS, type_index=65535, location=[TYPE_ARGUMENT(0)]`, so the
+        // information is there. But every consumer of a type annotation reaches it
+        // through the `annotations` view targeting a FIELD — `shapes/nullability.py`
+        // is the only reader, and it matches on a field's `type_path`. Nothing asks
+        // what a SUPERTYPE's type argument is annotated with, and emitting facts for
+        // it would be reading an attribute because a list says to.
+        //
+        // The rule this follows, learned the expensive way on `module-info`: ask
+        // whether the consumer exists before asking whether the attribute does.
+        //
         // `LocalVariableTypeTable` (JVMS 4.7.14). W6's plan row names it beside
         // `LocalVariableTable`, and it holds a local's GENERIC signature where the plain
         // table holds the erased descriptor. Measured on `generic(List<T>, Map<String,
@@ -119,6 +134,9 @@ public final class ClassScanner {
         private int classAccess;
         private String classSignature;
         private boolean isRecord;
+        private String nestHost;
+        private final List<String> nestMembers = new ArrayList<>();
+        private final java.util.TreeSet<String> unreadAttributes = new java.util.TreeSet<>();
         private final List<String> permittedSubclasses = new ArrayList<>();
         private String[] classInterfaces;
         private String enclosingSymbol;
@@ -135,6 +153,41 @@ public final class ClassScanner {
             this.documentId = documentId;
             this.onKotlinMetadataUnsupported = onKotlinMetadataUnsupported;
             this.onSourceFile = onSourceFile;
+        }
+
+        /** JVMS 4.7.28 `NestHost`: the top-level class whose nest this one belongs to.
+         *
+         *  <p>Distinct from `enclosing` (W4), which names the IMMEDIATE encloser — for
+         *  `A$B$C` that is `A$B`, where the nest host is `A`. Both are real answers to
+         *  different questions, and the top-level one is what OI-45 records
+         *  `outer_type_of` guessing at by splitting a binary name on `$` — a split that
+         *  mis-reads a top-level class genuinely named `Foo$Bar`. This is the class file
+         *  stating it. */
+        @Override
+        public void visitNestHost(String host) {
+            nestHost = symbolOf(host + "#");
+        }
+
+        /** JVMS 4.7.29 `NestMembers`, the same relationship read from the host's side:
+         *  every class sharing this one's nest, which is what gives private access
+         *  between them. Only a nest HOST carries it. */
+        @Override
+        public void visitNestMember(String member) {
+            nestMembers.add(JsonOut.string(symbolOf(member + "#")));
+        }
+
+        /** Any attribute this reader does not understand — a vendor's, or one from a
+         *  class-file version newer than this build.
+         *
+         *  <p>Recorded by NAME only, and deliberately: the point is that §2.3's ledger
+         *  can say what was SEEN and not read, which is a different claim from "not
+         *  present". Reading the bytes would mean guessing at a layout nobody
+         *  published. */
+        @Override
+        public void visitAttribute(org.objectweb.asm.Attribute attribute) {
+            if (attribute != null && attribute.type != null) {
+                unreadAttributes.add(JsonOut.string(attribute.type));
+            }
         }
 
         /** JVMS 4.7.31 `PermittedSubclasses`: the COMPLETE set of types allowed to
@@ -275,6 +328,17 @@ public final class ClassScanner {
             List<String> symbols = new ArrayList<>();
             for (String iface : ifaces) symbols.add(JsonOut.string(symbolOf(iface + "#")));
             return JsonOut.array(symbols);
+        }
+
+        /** Whether a `construct_kind` names a TYPE rather than one of its members.
+         *  Spelled once because three class-level attributes ride on the type's fact
+         *  and `emit` is shared with fields and methods. */
+        private static boolean isType(String constructKind) {
+            return "class".equals(constructKind)
+                || "interface".equals(constructKind)
+                || "annotation".equals(constructKind)
+                || "enum".equals(constructKind)
+                || "record".equals(constructKind);
         }
 
         /** D00 §4's construct kinds carry `enum` beside `class` and `interface`, and
@@ -1359,6 +1423,12 @@ public final class ClassScanner {
             // a PRIVATE nested class is written package-private at the top
             // level, so it is `protected` where the two disagree in the
             // ACC_PUBLIC direction.)
+            // A `package-info.class` is not a type either: it is the reserved file
+            // class javac compiles a package's ANNOTATIONS onto, and emitting a `class`
+            // symbol for it put a type into the graph that no source declares. Its
+            // annotation facts stay — `shapes/nullability.py` reads a package-level
+            // scope through exactly this target — and only the invented symbol goes.
+            if (typeSymbol != null && typeSymbol.endsWith("/package-info#")) return;
             int access = classAccess;
             int constructFlags = nestedAccess != null ? nestedAccess : classAccess;
             emit(typeSymbol, constructKindOf(constructFlags), enclosingSymbol, null, access, null,
@@ -1452,6 +1522,17 @@ public final class ClassScanner {
             // empty list on all of them says nothing with a key on every fact (the same
             // rule `supertype` and `generic_interfaces` follow).
             if (permits != null) fact.put("permits", permits);
+            // On the TYPE's own fact, never on its members — these are class-level
+            // attributes, and `emit` is shared with fields and methods. Gated on the
+            // construct being a type rather than on `class` specifically: a nested
+            // interface, record, enum or annotation has a nest host just the same.
+            if (isType(constructKind)) {
+                if (nestHost != null) fact.put("nest_host", JsonOut.string(nestHost));
+                if (!nestMembers.isEmpty()) fact.put("nest_members", JsonOut.array(nestMembers));
+                if (!unreadAttributes.isEmpty()) {
+                    fact.put("unread_attributes", JsonOut.array(List.copyOf(unreadAttributes)));
+                }
+            }
             lines.add(JsonOut.object(fact));
         }
     }

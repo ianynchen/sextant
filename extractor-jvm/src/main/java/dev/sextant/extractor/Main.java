@@ -102,6 +102,15 @@ public final class Main {
                     // were never attempted. An arbitrary unlabelled prefix is
                     // the one shape that is genuinely indistinguishable from a
                     // complete scan of a smaller archive.
+                    // `module-info.class` is not a class. It has a class file's shape
+                    // and its `this_class` reads `module-info`, so scanning it minted a
+                    // `class` symbol by that name — a type no source declares and that a
+                    // consumer could look for forever (G-61). Nothing here reads a module
+                    // descriptor: module identity comes from the build's own coordinates,
+                    // and `requires`/`exports` say less about dependencies than the build
+                    // file already does. So it is not read at all, which is cheaper than
+                    // reading it and discarding the result.
+                    if (classRelative.endsWith("module-info.class")) continue;
                     byte[] bytes;
                     List<String> reasons = new ArrayList<>();
                     try {

@@ -1634,3 +1634,44 @@ that is DR-6 work (mirror the framework's search exactly), not this.
 measured, and it was believed for two waves. The entry's `verify:` line proved
 the CAUSE and not the EFFECT. A row claiming "fixing X recovers Y" needs a probe
 that shows Y actually appearing.
+
+### OI-48 — package-level nullability is read and thrown away
+**Major · found 2026-09-07 while asking what `package-info` contributes ·
+`src/sextant/catalogs/*.yml`, `src/sextant/application/resolve/shapes/nullability.py`**
+
+`nullability.py` implements D02 §2e's SCOPE rule: a `@NullMarked` or
+`@NonNullApi` declared on a package or a class makes every field under it
+not-null by default, inverting Java's permissive one. The extractor emits the
+annotation, the resolver strips the trailing `package-info#` to recover the
+package it claims, and `tests/application/test_shapes.py` proves the whole path.
+
+**No shipped catalog declares one.** `rules.scope_annotations` is fed from a
+catalog's `nullability.scope` block; every `scope` in `src/sextant/catalogs/` is
+the word in a comment or the unrelated `scope_from`. So `_scope_prefixes` returns
+`[]` on the first line and the declaration is discarded.
+`verify: grep -rn "scope:" src/sextant/catalogs/*.yml`
+
+**It is not a rare shape.** Measured on `spring-web-6.1.6`: **58**
+`package-info.class` files, carrying `org.springframework.lang.NonNullApi` and
+`NonNullFields`. JSpecify's entire design is package-level `@NullMarked`. Our own
+fixture declares one — `com/acme/orders/scoped/package-info.java` — and
+`ScopedRequest#code` is still reported `nullable: true`, the ordinary Java
+default, which is the OPPOSITE of what the package says.
+
+**Why this is a wrong answer rather than a missing one.** `nullable` has no
+`unknown`: D00 §5a says Java's type system settles it outright, so an unannotated
+reference field is `nullable: true` at `resolution: resolved` — a CERTAIN claim.
+A package that says otherwise makes that certainty false, and nothing downstream
+can tell, because the fact is well formed and carries full confidence.
+
+**Closes by** a catalog declaring the scope annotations — jspecify's
+`@NullMarked`/`@NullUnmarked` and Spring's `@NonNullApi`/`@NonNullFields`/
+`@Nullable` — with a `measured:` row like any other, and the fixture's
+`ScopedRequest#code` reporting `nullable: false`. **Falsified by** measuring that
+the shape does not occur in a module Sextant is meant to read, which spring-web
+already contradicts.
+
+**Consequence for `package-info.class` itself:** it is worth scanning ONLY for
+this. Its own symbol is a phantom and is no longer emitted (W7); the annotation
+it carries is the entire reason the file is read at all, and until this closes,
+that reason is unrealised.

@@ -457,6 +457,25 @@ ordinary, non-generic superclass carries no such field — there is nothing gene
 capture, and the relationship is still stated once, at `relationship_kind: extends` (§4).
 This also pre-feeds `inherits` edges ([D01](D01-graph-schema.md)).
 
+**A nested type carries `nest_host`, and a nest host carries `nest_members`** (JVMS
+4.7.28/4.7.29). `nest_host` is not `enclosing`: for `A$B$C` the immediate encloser is `A$B`
+and the nest host is `A`, and both are real answers to different questions. The top-level one
+matters because `$` is a legal identifier character, so splitting a binary name on it reports
+a top-level class genuinely named `Foo$Bar` as nested inside a `Foo` that does not exist.
+
+**A type carries `unread_attributes`** — the names of attributes this scanner SAW and did not
+read, a vendor's or one from a newer class-file version. By name only: reading the bytes would
+mean guessing at a layout nobody published. It exists so "seen and not read" can be
+distinguished from "not present", which is the distinction §2.3's ledger is built on.
+
+**Two reserved file classes produce no type symbol.** `module-info.class` and
+`package-info.class` have a class file's shape and a `this_class` naming no type any source
+declares, so emitting a symbol for either put a phantom into the graph. `module-info` is not
+read at all — module identity comes from the build's own coordinates, and `requires`/`exports`
+say less than the build file already does. `package-info` IS still read, because it is where a
+compiler puts a package's ANNOTATIONS and a package-level nullability scope (D02 §2e) is
+declared through exactly that target; only its invented symbol is dropped.
+
 **A SEALED type carries `permits`** — the complete set of types the language allows to
 extend it (JVMS 4.7.31), emitted only where the declaration is sealed. It is the one place
 "every implementation of this" is a closed answer rather than whatever a scan happened to

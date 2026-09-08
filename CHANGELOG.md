@@ -14,6 +14,31 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Two reserved file classes stop putting phantom types into the graph** (W7).
+
+  `module-info.class` and `package-info.class` have a class file's shape and a `this_class`
+  naming no type any source declares — `module-info`, `com/acme/orders/package-info` — so
+  scanning them minted `class` symbols by those names. A consumer could look for either
+  forever (G-61).
+
+  **`module-info` is not read at all.** The first attempt at this read `Module`,
+  `ModulePackages` and `ModuleMainClass` and emitted a `module` symbol carrying the module's
+  declared name, version and entry point. That was the wrong shape of fix: the phantom
+  existed *because* the file was parsed, and nothing here wants a module descriptor. Module
+  identity comes from the build's own coordinates, and `requires`/`exports` say less about
+  dependencies than the build file already does. Skipping is one line and loses nothing.
+
+  *`ModuleMainClass` would have given OI-22's `entry_point` a producer that is a declaration
+  rather than a guess. Measured before deciding: of 52 jars here carrying a module descriptor,
+  NONE declares a main class — it is set for an executable module, not a library — so the
+  producer would have been correct and fired on nothing. OI-22 stays open.*
+
+  **`package-info` IS still read**, and only its invented symbol is dropped. It is where a
+  compiler puts a package's ANNOTATIONS, and a package-level nullability scope (D02 §2e) is
+  declared through exactly that target — `shapes/nullability.py` strips the trailing
+  `package-info#` to recover the package it claims. Skipping the file would take the scope
+  with it, so the two files are treated differently on purpose.
+
 - **Four more JVMS 4.7 attributes, and `construct_kind: record` gets its first producer**
   (W7, second part).
 

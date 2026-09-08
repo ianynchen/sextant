@@ -1190,3 +1190,52 @@ def test_the_scanner_declares_each_capability_w6_added(capability: str):
     consumer that wants `file:line` has to be able to ask whether this scanner
     states lines or reports 0 for everything — which is what it did."""
     assert capability in AsmScanner(JAR).capabilities()
+
+
+def test_a_module_descriptor_is_not_scanned_at_all(tmp_path: Path):
+    """`module-info.class` is not a class (W7).
+
+    It has a class file's shape and its `this_class` reads `module-info`, so
+    scanning it minted a `class` symbol by that name — a type no source file
+    declares and that a consumer could look for forever (G-61).
+
+    Skipped rather than read-and-filtered, because nothing here wants a module
+    descriptor: module identity comes from the build's own coordinates, and
+    `requires`/`exports` say less about dependencies than the build file already
+    does. Not reading it is cheaper than reading it and discarding the result.
+    """
+    writer = _module_info_bytes()
+    (tmp_path / "in").mkdir()
+    (tmp_path / "in" / "module-info.class").write_bytes(writer)
+
+    report = AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=tmp_path / "in",
+            out_dir=tmp_path / "out",
+        )
+    )
+
+    assert report.documents == 0, "a module descriptor produced a document"
+    assert not list((tmp_path / "out").rglob("*.jsonl")), "a module descriptor produced facts"
+
+
+def _module_info_bytes() -> bytes:
+    """A minimal `module-info.class`, built because compiling one needs a whole
+    module and no fixture here is modular."""
+    # A hand-built class file is more trouble than it is worth; borrow one from a
+    # cached jar instead, and skip the test when the corpus has none.
+    import zipfile
+    from pathlib import Path as _Path
+
+    for jar in sorted(_Path.home().glob(".m2/repository/**/*.jar"))[:400]:
+        try:
+            with zipfile.ZipFile(jar) as archive:
+                if "module-info.class" in archive.namelist():
+                    return archive.read("module-info.class")
+        except (zipfile.BadZipFile, OSError):
+            continue
+    pytest.skip("no cached jar carries a module-info.class")
+    raise AssertionError("unreachable")  # pragma: no cover - satisfies the type checker
