@@ -361,13 +361,33 @@ public final class ClassScanner {
             // the flag exists precisely to tell them apart.
             if ((access & Opcodes.ACC_ANNOTATION) != 0) return "annotation";
             if ((access & Opcodes.ACC_INTERFACE) != 0) return "interface";
-            if ((access & Opcodes.ACC_ENUM) != 0) return "enum";
+            // `ACC_ENUM` alone is not "is an enum type". javac sets it on the
+            // ANONYMOUS class it generates for an enum constant with a body, whose
+            // superclass is the enum rather than `java/lang/Enum` — and
+            // `Class.isEnum()` refuses to call those enums for exactly that reason.
+            // Measured across 1,681 cached jars: 16,563 real enum types and 5,895
+            // classes carrying the flag that are not one, a quarter of every row the
+            // `enum_types` query returns. kotlinc does not set the bit on its
+            // equivalent at all, so the two compilers already disagree and reading
+            // the flag alone follows one of them.
+            if ((access & Opcodes.ACC_ENUM) != 0 && "java/lang/Enum".equals(superName)) {
+                return "enum";
+            }
             // W7. There is no ACC_RECORD: JVMS 4.7.30's `Record` attribute is what
             // says so, and its presence is the whole signal. `record` has been in
             // D00 §4's closed set since it was written and had NO producer — every
             // record in the estate reported `class` — which is the "declared, never
             // read" shape §2.3's ledger exists to catch, reached from the other side.
-            if (isRecord) return "record";
+            // TWO signals, because the first is a count and a count can be zero.
+            // `visitRecordComponent` fires once per component, so `record Empty() {}`
+            // never fires it at all while carrying the `Record` attribute — measured,
+            // and `Class.isRecord()` says true. 16 such classes in the local
+            // dependency cache, in Hibernate and Spring Boot, and the marker record is
+            // the shape a sealed hierarchy uses most.
+            //
+            // A record's superclass is `java/lang/Record` and JLS 8.1.4 makes writing
+            // that by hand a compile-time error, so it identifies one outright.
+            if (isRecord || "java/lang/Record".equals(superName)) return "record";
             return "class";
         }
 
@@ -1428,7 +1448,31 @@ public final class ClassScanner {
             // symbol for it put a type into the graph that no source declares. Its
             // annotation facts stay — `shapes/nullability.py` reads a package-level
             // scope through exactly this target — and only the invented symbol goes.
-            if (typeSymbol != null && typeSymbol.endsWith("/package-info#")) return;
+            // The NAME is not the evidence — a legitimate class can be called
+            // `package-info` (Kotlin backticks allow it, and a hyphen is a legal JVM
+            // unqualified name). What javac's file class STATES is
+            // `ACC_INTERFACE | ACC_SYNTHETIC` with no members at all, and requiring
+            // that matters twice over: suppressing the type of a real class would
+            // leave its methods behind with an `enclosing` naming a symbol that does
+            // not exist, because this runs at `visitEnd` and they are already emitted.
+            //
+            // Both spellings of the name, so the default package is not a hole — and
+            // it is the dangerous one: `shapes/nullability.py` strips `package-info#`
+            // to recover the package a scope claims, and in the default package that
+            // leaves the module prefix, a prefix of EVERY symbol in the module.
+            boolean isPackageFileClass = typeSymbol != null
+                && (typeSymbol.endsWith("/package-info#") || typeSymbol.endsWith(" package-info#"))
+                && (classAccess & (Opcodes.ACC_INTERFACE | Opcodes.ACC_SYNTHETIC))
+                    == (Opcodes.ACC_INTERFACE | Opcodes.ACC_SYNTHETIC);
+            if (isPackageFileClass) return;
+            // A module descriptor states `ACC_MODULE`, and states it in the bytes
+            // rather than in the file name. Matching the name instead silently
+            // deleted any class whose file happened to end that way — measured, a
+            // Kotlin class named `Xmodule-info` produced zero documents, zero facts
+            // and an EMPTY `uncovered`, which is the silent-success hole `Main`'s own
+            // comment says was closed. Suppressed here rather than skipped there, so
+            // the document is still written and counted.
+            if ((classAccess & Opcodes.ACC_MODULE) != 0) return;
             int access = classAccess;
             int constructFlags = nestedAccess != null ? nestedAccess : classAccess;
             emit(typeSymbol, constructKindOf(constructFlags), enclosingSymbol, null, access, null,

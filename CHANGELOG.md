@@ -14,6 +14,35 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Four W7 kinds read a flag, a name or a callback count where the class file states the
+  answer** — the same defect class three earlier reviews caught, found again by review.
+
+  **A record with no components read `class`.** `visitRecordComponent` fires once per
+  component, so `record Empty() {}` never fires it while carrying the `Record` attribute, and
+  `Class.isRecord()` returns true. Measured: 16 such classes in the local dependency cache, in
+  Hibernate and Spring Boot — and a marker record is the shape a sealed hierarchy uses most.
+  A record's superclass is `java/lang/Record`, which JLS 8.1.4 makes a compile-time error to
+  write by hand, so it identifies one outright.
+
+  **An enum constant with a BODY read `enum`.** javac compiles each into an anonymous class
+  carrying `ACC_ENUM` whose superclass is the enum, not `java/lang/Enum`; `Class.isEnum()`
+  refuses to call those enums for that reason, and kotlinc does not set the bit at all.
+  Measured across 1,681 cached jars: 16,563 real enum types and **5,895 classes carrying the
+  flag that are not one** — a quarter of every row the `enum_types` query returns.
+
+  **`module-info` and `package-info` were matched by FILE NAME.** A real module descriptor
+  states `ACC_MODULE` and a real package file class states `ACC_INTERFACE | ACC_SYNTHETIC`
+  with no members. Measured: a legitimate Kotlin class named `` `Xmodule-info` `` produced
+  zero documents, zero facts and an EMPTY `uncovered` — a silent total loss through the exact
+  hole `Main`'s own comment says was closed. And suppressing a same-named class's TYPE left
+  its methods behind with an `enclosing` naming a symbol that no longer existed, because the
+  suppression runs after they are emitted. Both now read the flags, and a module descriptor's
+  document is written and counted rather than skipped.
+
+  Also closed: `deprecated` on a type and on a field, and the guard keeping class-level keys
+  off member facts, were asserted nowhere — deleting any of the three left the whole suite
+  green.
+
 - **Two reserved file classes stop putting phantom types into the graph** (W7).
 
   `module-info.class` and `package-info.class` have a class file's shape and a `this_class`

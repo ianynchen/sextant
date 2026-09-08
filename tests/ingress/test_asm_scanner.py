@@ -1218,8 +1218,20 @@ def test_a_module_descriptor_is_not_scanned_at_all(tmp_path: Path):
         )
     )
 
-    assert report.documents == 0, "a module descriptor produced a document"
-    assert not list((tmp_path / "out").rglob("*.jsonl")), "a module descriptor produced facts"
+    # The document IS written and counted — the skip is not a deletion. Matching by
+    # FILE NAME was, and it silently dropped any class whose file ended that way with
+    # nothing in `uncovered` to say so. A real descriptor states `ACC_MODULE`, which
+    # is what the scanner reads now, so the file is seen, counted, and yields no
+    # symbol because it declares no type.
+    assert report.documents == 1, "a module descriptor should still be seen and counted"
+    written = [
+        line
+        for path in (tmp_path / "out").rglob("*.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert all('"kind":"document"' in line for line in written), (
+        f"a module descriptor produced a symbol: {written}"
+    )
 
 
 def _module_info_bytes() -> bytes:

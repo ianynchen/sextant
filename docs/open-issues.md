@@ -1675,3 +1675,41 @@ already contradicts.
 this. Its own symbol is a phantom and is no longer emitted (W7); the annotation
 it carries is the entire reason the file is read at all, and until this closes,
 that reason is unrealised.
+
+### OI-49 — twelve W7 fields are read and nothing reads them back
+**Minor · found 2026-09-07 by code review of W7 · `src/sextant/domain/facts.py`,
+`extractor-jvm/.../ClassScanner.java`**
+
+Counted across `src/`, excluding the declarations themselves, the readers are:
+
+| field | readers |
+|---|---|
+| `nest_host`, `nest_members`, `unread_attributes` | 0 |
+| `permits`, `signature.throws` | 0 |
+| `modifiers.abstract`, `varargs`, `final`, `native`, `synchronized`, `volatile`, `deprecated` | 0 |
+
+Every apparent hit is prose in a docstring or a SQL comment. The only W7 output
+with a live consumer is `construct_kind: annotation`, through `interface_symbols`.
+
+**The rule was applied to three items and not to twelve.** `Module`,
+`LocalVariableTypeTable` and class-level type annotations were dropped for having
+no consumer; these were kept on justifications that are capability-shaped —
+*"`varargs` unblocks capability 9.15"*, *"`abstract` tells a `default` method from
+a declared one"* — which is the same "somebody could want this" argument the rule
+exists to refuse. §2.3's "read, no consumer yet" is legitimate; asserting a
+consumer that does not exist is not, and the CHANGELOG entries for W7 read as
+though these were delivered capabilities.
+
+**And no capability string was declared for any of them.** W5 and W6 each added
+one (`type_parameters`, `line_numbers`, `local_variable_names`, `source_file`);
+W7 added none, so `--capabilities` returns what it did before the wave. A catalog
+cannot `requires:` any of this even once a consumer appears — which is exactly the
+gap E3 was raised to close for W4.
+
+**Closes by** either a consumer for each, or a capability name plus a row in W8's
+ledger marking it read-with-no-consumer, or removal. **Falsified by** finding a
+reader this count missed — the count is a grep and greps under-report.
+
+**Not proposed for removal here.** Several are one line and obviously correct, and
+`varargs` in particular is the recorded blocker for capability 9.15. What is wrong
+is the claim, not the code.

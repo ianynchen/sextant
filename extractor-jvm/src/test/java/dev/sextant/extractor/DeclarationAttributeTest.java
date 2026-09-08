@@ -172,8 +172,11 @@ class DeclarationAttributeTest {
         // package it claims. Dropping the file would take the scope with it.
         org.objectweb.asm.ClassWriter writer =
             new org.objectweb.asm.ClassWriter(org.objectweb.asm.ClassWriter.COMPUTE_MAXS);
+        // The flags javac really emits for one, measured: 0x1600.
         writer.visit(org.objectweb.asm.Opcodes.V17,
-                     org.objectweb.asm.Opcodes.ACC_INTERFACE | org.objectweb.asm.Opcodes.ACC_ABSTRACT,
+                     org.objectweb.asm.Opcodes.ACC_INTERFACE
+                         | org.objectweb.asm.Opcodes.ACC_ABSTRACT
+                         | org.objectweb.asm.Opcodes.ACC_SYNTHETIC,
                      "com/acme/orders/package-info", null, "java/lang/Object", null);
         writer.visitAnnotation("Lorg/jspecify/annotations/NullMarked;", true).visitEnd();
         writer.visitEnd();
@@ -187,5 +190,84 @@ class DeclarationAttributeTest {
             facts.stream().anyMatch(line ->
                 line.contains("\"kind\":\"annotation\"") && line.contains("NullMarked")),
             "the package's own annotation was lost with it: " + facts);
+    }
+
+    @Test
+    void a_record_with_no_components_is_still_a_record() throws Exception {
+        // `visitRecordComponent` fires once per component, so a marker record never
+        // fires it — while the `Record` attribute is present and `Class.isRecord()`
+        // returns true. Inferring the kind from a COUNT OF CALLBACKS is the same
+        // mistake as inferring a parameter list from a count: the class file states
+        // it, in the superclass `java/lang/Record`, which JLS 8.1.4 makes a
+        // compile-time error to write by hand.
+        assertTrue(
+            symbol("EmptyRecord", "EmptyRecord#").contains("\"construct_kind\":\"record\""),
+            "a record with no components read as a class");
+    }
+
+    @Test
+    void an_enum_constant_with_a_body_is_a_class_not_an_enum() throws Exception {
+        // javac compiles each such constant into an ANONYMOUS class carrying
+        // `ACC_ENUM`, whose superclass is the enum and not `java/lang/Enum` —
+        // `Class.isEnum()` refuses to call it an enum for exactly that reason, and
+        // kotlinc does not set the bit at all. Reading the flag alone followed one
+        // compiler's convention and put 5,895 non-enums into `enum_types`, a quarter
+        // of everything that query returns.
+        assertTrue(
+            symbol("ConstantsWithBodies$1", "ConstantsWithBodies$1#")
+                .contains("\"construct_kind\":\"class\""),
+            "a constant body still reads as an enum");
+        assertTrue(
+            symbol("ConstantsWithBodies", "ConstantsWithBodies#")
+                .contains("\"construct_kind\":\"enum\""),
+            "the enum itself must still be an enum");
+    }
+
+    @Test
+    void deprecated_is_reported_on_a_type_and_on_a_field_too() throws Exception {
+        // Neither was asserted anywhere: deleting the `deprecated` line from the type
+        // writer AND from the field writer left the entire suite green, because the
+        // only assertion was on two methods.
+        assertTrue(symbol("DeprecatedType", "DeprecatedType#").contains("\"deprecated\":true"));
+        assertTrue(symbol("DeprecatedType", "#obsolete.").contains("\"deprecated\":true"));
+        assertTrue(symbol("DeprecatedType", "#current.").contains("\"deprecated\":false"));
+    }
+
+    @Test
+    void class_level_attributes_never_ride_on_a_member_fact() throws Exception {
+        // `emit` is shared by types, fields and methods, and the three class-level
+        // keys are gated on the construct being a TYPE. Deleting that gate left the
+        // suite green, so a method could have claimed its class's nest membership.
+        String member = symbol("GenericSignatureSample$Inner", "<init>");
+        assertTrue(!member.contains("nest_host"), "a constructor claimed a nest host");
+        assertTrue(!member.contains("nest_members"), "a constructor listed nest members");
+        assertTrue(!member.contains("unread_attributes"), "a constructor claimed attributes");
+    }
+
+    @Test
+    void a_class_merely_named_like_a_reserved_file_class_is_kept() throws Exception {
+        // The NAME is not the evidence. A real `package-info` states
+        // `ACC_INTERFACE | ACC_SYNTHETIC` and has no members; a real module descriptor
+        // states `ACC_MODULE`. Matching the name alone deleted a legitimate class —
+        // and for `package-info`, deleted only its TYPE, leaving its methods behind
+        // with an `enclosing` naming a symbol that no longer exists.
+        org.objectweb.asm.ClassWriter writer =
+            new org.objectweb.asm.ClassWriter(org.objectweb.asm.ClassWriter.COMPUTE_MAXS);
+        writer.visit(org.objectweb.asm.Opcodes.V17, org.objectweb.asm.Opcodes.ACC_PUBLIC,
+                     "com/acme/orders/package-info", null, "java/lang/Object", null);
+        org.objectweb.asm.MethodVisitor method = writer.visitMethod(
+            org.objectweb.asm.Opcodes.ACC_PUBLIC, "real", "()V", null, null);
+        method.visitCode();
+        method.visitInsn(org.objectweb.asm.Opcodes.RETURN);
+        method.visitMaxs(0, 0);
+        method.visitEnd();
+        writer.visitEnd();
+
+        List<String> facts = new ClassScanner("com.acme/orders", "1.0.0")
+            .scan(writer.toByteArray(), "doc-impostor");
+        assertTrue(
+            facts.stream().anyMatch(line ->
+                line.contains("\"construct_kind\":\"class\"") && line.contains("package-info#")),
+            "a real class named package-info lost its type symbol: " + facts);
     }
 }
