@@ -14,6 +14,45 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Sextant can say WHERE, not only what** (W6). Three JVMS 4.7 attributes that were being
+  dropped, and one derived answer that was wrong rather than absent.
+
+  **`LineNumberTable` (4.7.12) — §9.2's keystone finding.** Every line number in the estate
+  was `0`: measured on mall-admin, 1,428 symbols, `line_start: 0` and `line_end: 0` on all of
+  them. An index that cannot produce `file:line` saves nobody a grep. Methods and constructors
+  now carry their real extent — 707 of the fixture's 766, and 7,525 of 8,320 across spring-web
+  6.1.6's 1,117 classes, the remainder being abstract or native methods that carry no `Code`
+  attribute to hold a table. It is the extent of the CODE: a signature compiles to no bytecode, so the first
+  line a method can state is its first statement, and subtracting to reach the declaration
+  would be a guess about formatting. `0` still means "not stated" and cannot collide with a
+  real answer, since source lines are numbered from 1.
+
+  **`SourceFile` (4.7.10) — a fact that was WRONG, not missing.** `relative_path` was derived
+  from the class's own path: `.class` swapped for `.java`, everything from the first `$` cut
+  off. That is javac's conventions written into the scanner, and every other JVM compiler
+  defeats it — measured on this repository's own fixtures, `KotlinOrder.class` was reported as
+  `com/acme/orders/contracts/KotlinOrder.java`, naming a file that exists in no module, and
+  every `KotlinOrderRoutes$…` lambda class named the same non-existent file. The class file
+  states the name outright; only the directory is ours to supply. Blast radius measured: the
+  fixture's 79 distinct source paths, the 2 Kotlin ones gain `.kt` and the other 77 are
+  unchanged. A value carrying a path
+  separator is refused and the derivation stands in — what a class file says about itself is
+  evidence, not an instruction.
+
+  **`LocalVariableTable` (4.7.13) — parameter names nothing else supplies.** It fills a name
+  only where `MethodParameters` stated none, that attribute being the specific one. Measured
+  on spring-web 6.1.6: 1,048 of 9,164 names come from here and from nowhere else — established
+  by turning the fill off and re-running, not by counting what ended up named. A slot is not
+  a parameter index — a `long` or `double` takes two (JVMS 2.6.1), and an instance method's
+  slot 0 is the receiver — so the slots are walked with the descriptor rather than counted;
+  and a slot is reused once a variable leaves scope, so the entry taken is the one scoped from
+  the method's first instruction, which only a parameter's is.
+
+  **Also caught, in passing:** `Capabilities.ALL` states in its own javadoc that it is sorted
+  for byte-stability (NFR-1), and nothing checked it. W6's own additions broke it. It now has
+  a guard, along with one for duplicates — which would read as one name to every consumer
+  (they all take a set) and as two in the report.
+
 - **A compiler-generated bridge is read from the fact, and its mapping now lands on the
   method someone actually wrote** (OI-47, closed).
 

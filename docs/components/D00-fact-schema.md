@@ -363,6 +363,25 @@ knowledge, so unwrapping is catalog data ([D02](D02-catalog-schema.md)) applied 
 deliberately small role set — `read`, `write`, `import`, `generated`, `type_use` — for
 body-level uses only; signature-level type uses come from the structured signatures.
 
+**A symbol fact's `line_start` and `line_end` are the extent of its CODE, and `0` means the
+class file states no line.** They come from `LineNumberTable` (JVMS 4.7.12), which maps
+bytecode offsets to source lines — so the first line a method can state is its first
+STATEMENT, with its signature and any annotations above it. A construct with no code states
+nothing: a class carries no such table, an abstract or native method has no `Code` attribute
+to hold one, and a field has neither. Source lines are numbered from 1, so `0` can never
+collide with a real answer. Deriving a class's line from the minimum over its members would
+land on whichever member sorts first rather than on the declaration, and is not done — though
+a compiler that maps a class's IMPLICIT constructor to its declaration line, as javac does,
+makes the answer reachable through that constructor.
+
+**A parameter's `name` is whatever the class file states, and absent when nothing does.** Two
+attributes can state it and they are not equals: `MethodParameters` (JVMS 4.7.24) describes
+PARAMETERS and wins, while `LocalVariableTable` (4.7.13) describes every local and happens to
+cover them, so it fills only what the first left empty. A local's slot is not a parameter
+index — a `long` or `double` takes two slots (JVMS 2.6.1) and an instance method's slot 0 is
+the receiver — and a slot is reused once a variable leaves scope, so the entry taken is the
+one whose scope begins at the method's first instruction, which only a parameter's does.
+
 **A parameter's type reference comes from the `Signature` attribute wherever the
 declaration has one**, exactly as a return type's and a field's already did. The erased
 descriptor has lost every type argument and every type variable by the time it is read:

@@ -1059,7 +1059,17 @@ def test_a_multi_release_jar_tags_every_copy_and_drops_none(tmp_path: Path):
     # read `META-INF/versions/21/com/acme/A.java` before, which names no file in
     # any repository: an overlay is a different COMPILATION of the same source,
     # not a different source.
-    assert releases["META-INF/versions/21/com/acme/A.jsonl"][1] == "com/acme/A.java"
+    #
+    # The FILE NAME is the class file's own `SourceFile` (W6), no longer the
+    # entry name with `.java` stuck on it — and this jar is built by copying one
+    # real class under three invented entry names, so all three state the donor's
+    # source. That is the scanner reporting what the class says rather than what
+    # the archive implies, which is the point of reading the attribute; a jar any
+    # compiler actually produces has the two agreeing. What this row asserts is
+    # the version prefix, which is what it was written for.
+    overlay = releases["META-INF/versions/21/com/acme/A.jsonl"][1]
+    assert not overlay.startswith("META-INF/versions/")
+    assert overlay == "com/acme/OrderResult.java"
 
 
 def test_every_fact_line_is_strict_json(tmp_path: Path):
@@ -1124,3 +1134,59 @@ def test_the_scanner_declares_the_type_parameters_capability_w5_added():
     name has to exist first or a catalog could never ask.
     """
     assert "type_parameters" in AsmScanner(JAR).capabilities()
+
+
+def test_a_kotlin_class_names_its_own_kt_source_file(tmp_path: Path):
+    """W6, and a fact that was WRONG rather than absent.
+
+    `relative_path` was derived from the class's own path: `.class` swapped for
+    `.java`, everything from the first `$` cut off. That is javac's own
+    conventions written into the scanner, and every other compiler on the JVM
+    defeats it — measured on this repository's fixtures, `KotlinOrder.class` was
+    reported as `com/acme/orders/contracts/KotlinOrder.java`, naming a file that
+    exists in no module, and every `KotlinOrderRoutes$…` lambda class named the
+    same non-existent file.
+
+    JVMS 4.7.10 `SourceFile` states the name outright. Only the directory is
+    ours to supply, and it is the class's own.
+    """
+    report = AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=CLASSES,
+            out_dir=tmp_path,
+        )
+    )
+    assert report.documents > 0
+    paths = {
+        json.loads(line)["relative_path"]
+        for written in tmp_path.rglob("*.jsonl")
+        for line in written.read_text(encoding="utf-8").splitlines()
+        if '"kind":"document"' in line
+    }
+
+    assert "com/acme/orders/contracts/KotlinOrder.kt" in paths
+    assert "com/acme/orders/routes/KotlinOrderRoutes.kt" in paths
+    # And nothing gained a `.kt` that is not Kotlin: the Java half of the module
+    # states `.java` in the very same attribute, so this is not a rename rule.
+    assert "com/acme/orders/OrderResult.java" in paths
+    assert not any(
+        path.endswith("Kotlin") or path.endswith(".java") and "Kotlin" in path for path in paths
+    )
+
+
+def test_the_scanner_declares_the_source_file_capability_w6_added():
+    """W6's own name. `relative_path` is what an index hands a reader who wants
+    to OPEN a declaration, so a catalog or a consumer has to be able to ask
+    whether the scanner states it or derives it."""
+    assert "source_file" in AsmScanner(JAR).capabilities()
+
+
+@pytest.mark.parametrize("capability", ["line_numbers", "local_variable_names"])
+def test_the_scanner_declares_each_capability_w6_added(capability: str):
+    """W6's other two names. A catalog reaches a fact kind by NAME, and a
+    consumer that wants `file:line` has to be able to ask whether this scanner
+    states lines or reports 0 for everything — which is what it did."""
+    assert capability in AsmScanner(JAR).capabilities()

@@ -36,9 +36,36 @@ public final class ClassScanner {
      *  the class-file level M03/FR-17 requires). */
     public List<String> scan(byte[] classBytes, String documentId,
                               Consumer<String> onKotlinMetadataUnsupported) {
+        return scan(classBytes, documentId, onKotlinMetadataUnsupported, sourceFile -> {});
+    }
+
+    /** {@code onSourceFile} receives the {@code SourceFile} attribute (JVMS 4.7.10) — the
+     *  NAME of the file this class was compiled from, with no directory part.
+     *
+     *  <p>Reported out rather than turned into a fact here, because the caller is what
+     *  knows the class's location on disk and therefore the only place the two halves of
+     *  a source PATH can be joined. Absent for a class compiled with debug information
+     *  stripped, in which case the caller keeps deriving what it can. */
+    public List<String> scan(byte[] classBytes, String documentId,
+                              Consumer<String> onKotlinMetadataUnsupported,
+                              Consumer<String> onSourceFile) {
         List<String> lines = new ArrayList<>();
         new ClassReader(classBytes)
-            .accept(new Visitor(lines, documentId, onKotlinMetadataUnsupported), ClassReader.SKIP_FRAMES);
+            .accept(new Visitor(lines, documentId, onKotlinMetadataUnsupported, onSourceFile),
+                    ClassReader.SKIP_FRAMES);
+        // DELIBERATELY NOT READ, with the reason stated here so W8's ledger can collect
+        // it rather than rediscover it (§2.3's distinction: "read, no consumer yet" is
+        // legitimate, "declared, never read" is the defect, and this is a third thing —
+        // read by nobody because it duplicates what is already read).
+        //
+        // `LocalVariableTypeTable` (JVMS 4.7.14). W6's plan row names it beside
+        // `LocalVariableTable`, and it holds a local's GENERIC signature where the plain
+        // table holds the erased descriptor. Measured on `generic(List<T>, Map<String,
+        // List<T>>)`: the type table adds `Ljava/util/List<TT;>;` and the NAMES — which
+        // is all W6 wants — are in the plain table either way. The generic parameter
+        // types are already read, from the method's own `Signature` attribute (W5), and
+        // Sextant emits no body locals at all. So there is nothing here a fact would
+        // carry that another attribute does not already state.
         return lines;
     }
 
@@ -77,6 +104,7 @@ public final class ClassScanner {
         private List<String> lines;
         private final String documentId;
         private final Consumer<String> onKotlinMetadataUnsupported;
+        private final Consumer<String> onSourceFile;
         private String typeSymbol;
         // ASM's internal name for the class's own direct supertype, kept from
         // `visit` because a method visitor sees no class-level context: it is
@@ -98,12 +126,36 @@ public final class ClassScanner {
         // non-Kotlin class, which leaves Java's rule as the only source.
         private java.util.Map<String, Boolean> kotlinNullability = KotlinNullability.NONE;
 
-        Visitor(List<String> lines, String documentId, Consumer<String> onKotlinMetadataUnsupported) {
+        Visitor(List<String> lines, String documentId, Consumer<String> onKotlinMetadataUnsupported,
+                 Consumer<String> onSourceFile) {
             super(Opcodes.ASM9);
             this.lines = lines;
             this.documentId = documentId;
             this.onKotlinMetadataUnsupported = onKotlinMetadataUnsupported;
+            this.onSourceFile = onSourceFile;
         }
+
+        /** JVMS 4.7.10 `SourceFile`: the NAME of the file this class was compiled from.
+         *
+         *  <p>It was being derived instead — the class's own path with `.class` swapped
+         *  for `.java` and everything from the first `$` cut off — which is a guess that
+         *  is right for javac and wrong for every other compiler on the JVM. Measured on
+         *  this repository's own fixtures: `KotlinOrder.class` was reported as
+         *  `KotlinOrder.java`, a file that does not exist in the module, and every
+         *  `KotlinOrderRoutes$…` lambda class named the same non-existent file.
+         *
+         *  <p>`debug` (the second parameter, `SourceDebugExtension`) is deliberately not
+         *  read here: it is a SEPARATE attribute with its own entry in §2.3's ledger. */
+        @Override
+        public void visitSource(String source, String debug) {
+            if (source != null) onSourceFile.accept(source);
+            ownLines = SourceMap.outputLinesOf(source, debug);
+        }
+
+        /** The output lines that belong to this class's OWN source file, or null when
+         *  every line does. Set from `SourceDebugExtension` before any method is
+         *  visited — ASM delivers `visitSource` ahead of `visitMethod`. */
+        private int[][] ownLines;
 
         @Override
         public void visit(int v, int access, String name, String sig, String superName, String[] ifaces) {
@@ -260,6 +312,11 @@ public final class ClassScanner {
             return new org.objectweb.asm.tree.MethodNode(
                     Opcodes.ASM9, access, name, descriptor, sig, ex) {
                 private int parameterIndex = 0;
+                // 0 is "no line stated", never line 0: JVMS numbers source lines
+                // from 1, and a method with no `Code` attribute — abstract, native,
+                // or on an interface — has no table to read.
+                private int lineStart = 0;
+                private int lineEnd = 0;
                 private String annotationDefault;
                 // JVMS 4.7.18's `num_parameters`, held PER ATTRIBUTE. The visible
                 // and invisible parameter annotations are two separate attributes
@@ -333,6 +390,50 @@ public final class ClassScanner {
                     // Nothing invented on top of that.
                     if (slots.length != annotable) return -1;
                     return parameter < slots.length ? slots[parameter] : -1;
+                }
+
+                /** JVMS 4.7.12 `LineNumberTable`: which source line each bytecode
+                 *  offset came from. Kept as the smallest and largest, which is the
+                 *  method's own extent in the file.
+                 *
+                 *  <p>Every line number in the estate was 0 — measured on mall-admin,
+                 *  1,428 symbols, `line_start: 0` and `line_end: 0` on all of them — so
+                 *  Sextant could say WHAT exists and never WHERE. An index that cannot
+                 *  produce `file:line` saves nobody a grep.
+                 *
+                 *  <p>It is the extent of the CODE, not of the declaration: the first
+                 *  line is the body's first statement, so annotations and the signature
+                 *  sit above it. The class file states no declaration line, and
+                 *  inventing one by subtracting would be a guess about formatting.
+                 *
+                 *  <p>Not sorted, not assumed ordered: the table's entries are in
+                 *  bytecode-offset order, and a compiler is free to emit a later source
+                 *  line at an earlier offset — a loop condition compiled after the body
+                 *  is the ordinary case. Min and max over all entries is the only read
+                 *  that survives that. */
+                @Override
+                public void visitLineNumber(int line, org.objectweb.asm.Label start) {
+                    // Delegated FIRST and unconditionally. This visitor is a
+                    // MethodNode, and MethodNode.visitLineNumber appends a
+                    // LineNumberNode to the very instruction list MethodFlow
+                    // numbers positions in — a call-site argument's `source`, a
+                    // `receiver` and a `result` are all `instructions.indexOf(…)`.
+                    // Swallowing the callback silently renumbered every one of
+                    // them: internally consistent, so no fact is false and no
+                    // test noticed, but every id in the estate moved for a change
+                    // whose scope is three read-only attributes.
+                    super.visitLineNumber(line, start);
+                    // A line in this table is not necessarily a line in THIS file.
+                    // Kotlin inlines a function by remapping its body's lines into a
+                    // synthetic range past the end of the file and recording the real
+                    // mapping in `SourceDebugExtension` — so a method calling `let` or
+                    // `forEach` carries lines belonging to the Kotlin standard library,
+                    // or to a file the compiler invented. Measured on kotlinc 2.4.10: a
+                    // 13-line `Std.kt` reported `useForEach` as 9-17, where 16 and 17
+                    // are `_Collections.kt` 2068-2069.
+                    if (!SourceMap.contains(ownLines, line)) return;
+                    if (lineStart == 0 || line < lineStart) lineStart = line;
+                    if (line > lineEnd) lineEnd = line;
                 }
 
                 @Override
@@ -431,15 +532,72 @@ public final class ClassScanner {
                     };
                 }
 
+                /** JVMS 4.7.13 `LocalVariableTable`: the name a source file gave each
+                 *  local, including the parameters, which occupy the first slots.
+                 *
+                 *  <p>Only fills a name nothing else stated. `MethodParameters` (4.7.24)
+                 *  is the more specific attribute — it describes PARAMETERS, where this
+                 *  one describes every local and happens to cover them — so where both
+                 *  are present the first one wins and this changes nothing.
+                 *
+                 *  <p>A slot is not a parameter index: `this` takes slot 0 on an
+                 *  instance method, and a `long` or `double` takes TWO slots (JVMS
+                 *  2.6.1), so the fourth parameter of `(JDLjava/lang/String;)` sits at
+                 *  slot 5. The slots are walked with the descriptor rather than counted.
+                 *
+                 *  <p>And a slot is REUSED: a local declared after a parameter goes out
+                 *  of scope can take its number, so slot alone names two variables in
+                 *  one method. The entry taken is the one whose scope begins at the
+                 *  method's first instruction, which a parameter's always does and a
+                 *  body local's never can. That is why this runs at `visitEnd` over the
+                 *  parsed node rather than from a streaming callback: the labels only
+                 *  become comparable once the whole method has been read. */
+                private void fillParameterNamesFromLocals() {
+                    if (localVariables == null || localVariables.isEmpty()) return;
+                    org.objectweb.asm.tree.LabelNode first = null;
+                    for (org.objectweb.asm.tree.AbstractInsnNode node : instructions) {
+                        if (node instanceof org.objectweb.asm.tree.LabelNode label) {
+                            first = label;
+                            break;
+                        }
+                    }
+                    if (first == null) return;
+                    java.util.Map<Integer, org.objectweb.asm.tree.LocalVariableNode> bySlot =
+                        new java.util.HashMap<>();
+                    for (org.objectweb.asm.tree.LocalVariableNode local : localVariables) {
+                        if (local.start == first && local.name != null) {
+                            bySlot.putIfAbsent(local.index, local);
+                        }
+                    }
+                    Type[] argumentTypes = Type.getArgumentTypes(descriptor);
+                    int slot = (methodAccess & Opcodes.ACC_STATIC) != 0 ? 0 : 1;
+                    for (int i = 0; i < argumentTypes.length && i < parameterNames.length; i++) {
+                        org.objectweb.asm.tree.LocalVariableNode local = bySlot.get(slot);
+                        // The DESCRIPTOR has to agree too. "Scoped from the first
+                        // instruction, in this slot" is strong evidence and not proof: no
+                        // compiler measured here puts anything else there, but the format
+                        // permits it, and the failure mode without this check is a WRONG
+                        // name rather than a missing one — well formed, and undetectable.
+                        // Matching the erased type turns that back into no answer.
+                        if (parameterNames[i] == null
+                                && local != null
+                                && argumentTypes[i].getDescriptor().equals(local.desc)) {
+                            parameterNames[i] = local.name;
+                        }
+                        slot += argumentTypes[i].getSize();
+                    }
+                }
+
                 @Override
                 public void visitEnd() {
                     super.visitEnd();
+                    fillParameterNamesFromLocals();
                     emit(methodSymbol, constructKind, typeSymbol,
                          signatureJson(descriptor, sig, parameterNames, parameterFlags,
                                        parameterAnnotations,
                                        parameterTypeAnnotations, returnTypeAnnotations), methodAccess,
                          null, methodModifiersJson(methodAccess), null, null, null, null,
-                         annotationDefault, typeParametersJson(sig));
+                         annotationDefault, typeParametersJson(sig), lineStart, lineEnd);
                     // After the method's own symbol, never before: a call site
                     // names its caller, and a fact file reads top-down.
                     lines.addAll(MethodFlow.callSites(documentId, methodSymbol, this));
@@ -1144,6 +1302,17 @@ public final class ClassScanner {
                            String ext, String modifiers, String supertype, String interfaces,
                            String genericInterfaces, String superclass, String annotationDefault,
                            String typeParameters) {
+            // 0/0 — no lines stated. Every construct but a method reaches here:
+            // a class carries no `LineNumberTable` of its own (JVMS 4.7.12 lives
+            // inside `Code`), and neither does a field.
+            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, supertype,
+                 interfaces, genericInterfaces, superclass, annotationDefault, typeParameters, 0, 0);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext, String modifiers, String supertype, String interfaces,
+                           String genericInterfaces, String superclass, String annotationDefault,
+                           String typeParameters, int lineStart, int lineEnd) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -1152,8 +1321,8 @@ public final class ClassScanner {
             fact.put("enclosing", enclosing == null ? "null" : JsonOut.string(enclosing));
             fact.put("signature", signature == null ? "null" : signature);
             fact.put("visibility", JsonOut.string((access & Opcodes.ACC_PUBLIC) != 0 ? "public" : "other"));
-            fact.put("line_start", "0");
-            fact.put("line_end", "0");
+            fact.put("line_start", String.valueOf(lineStart));
+            fact.put("line_end", String.valueOf(lineEnd));
             if (ext != null) fact.put("ext", ext);
             if (modifiers != null) fact.put("modifiers", modifiers);
             if (supertype != null) fact.put("supertype", supertype);

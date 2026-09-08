@@ -778,3 +778,48 @@ applied to claims and not to QUESTIONS:
 - **The tell was in the finding itself.** "Nothing verifies X, and X gates
   behaviour" almost always means a contract exists and is unimplemented, not
   that nobody thought about it. Search for the contract before drafting options.
+
+## One compiler's conventions written down as the format's rules (§13.8, third occurrence)
+
+Three times in one wave, a rule was read off whichever class files happened to be
+compiled to hand and then stated in the indicative as a property of the class-file
+**format**. Every one produced a WELL-FORMED fact that was false, so nothing
+downstream could notice, and every one was caught by review rather than by a test.
+
+| # | The rule as written | Right for | Wrong for | What shipped |
+|---|---|---|---|---|
+| 1 | a `Signature`'s parameters align with the descriptor's by the difference in the two counts | an inner class, an enum | a local class that captures (javac appends captures at the END) | `List<String>` stamped onto an `int` |
+| 2 | `ACC_MANDATED`/`ACC_SYNTHETIC` are "exactly the set the short tables omit" | four measured shapes | a record's COMPACT canonical constructor — every slot mandated, nothing omitted | every type annotation on a record component silently dropped |
+| 3 | every `LineNumberTable` entry is a line in this class's own `SourceFile` | javac | any Kotlin method calling an `inline` function | a 13-line file reporting a method that ends at line 17 — a line in the standard library's `_Collections.kt` |
+
+**The cause is one thing, and it is not carelessness.** Each rule was *measured* —
+that is what made it feel finished. What was measured was a sample of compilers,
+and the conclusion was written about the format. **The format permits more than
+any one compiler emits**, so "I compiled four shapes and they all agreed" is
+evidence about javac and silence about everything else. §8.1 already forbids
+exactly this ("never predict — measure"), and §8.1 rule 5 says to follow the
+provider where it makes a distinction; the provider stated the answer in all
+three cases (`MethodParameters`, `MethodParameters` again, `SourceDebugExtension`)
+and the code inferred instead.
+
+**§13.8 step 3 applies: a rule already written, already agreed and broken three
+times is not an implementer's slip.** Prose has been tried on this cause and lost,
+so the correction is a mechanism.
+
+**The mechanism: `FactInvariantTest` — invariants over the FACTS, across every
+compiler that produced a fixture.** Not another per-case pin, because a pin only
+ever covers the compiler somebody remembered to compile. *"No symbol claims a line
+its own source file does not have"* catches occurrence 3 without anyone thinking
+about Kotlin inlining, and would catch the same defect from ECJ, Groovy or Scala
+the day such a fixture lands. Each per-case fix also keeps its own test; what was
+missing was the layer above them.
+
+**And the fixture that cannot see the bug is half the cause** — the entry above on
+coordinate spaces says the same thing about a different defect. No class under
+`fixtures/` carried a `SourceDebugExtension` at all, so the whole suite was blind
+to occurrence 3 by construction. `KotlinInlined.kt` exists now for that reason.
+
+**The reading to carry forward:** when a comment is about to say *"X is exactly
+the set that Y"* about a class file, ask which compilers were in the sample and
+write that instead — or find the attribute where the provider states it, which in
+all three cases existed.

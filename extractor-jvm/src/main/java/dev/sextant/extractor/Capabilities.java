@@ -64,11 +64,30 @@ public final class Capabilities {
         // Capability 9.17: the lambda body a `dynamic` call site dispatches
         // into, which is what stops those calls being orphaned.
         "lambda_body",
+        // W6. JVMS 4.7.12 `LineNumberTable`: which source line a method's code
+        // came from. Every line number in the estate was 0 — measured on
+        // mall-admin, 1,428 symbols, all of them — so Sextant could say WHAT
+        // exists and never WHERE. Its consumer is the index (W35): an address
+        // that cannot produce `file:line` saves nobody a grep.
+        "line_numbers",
+        // W6. JVMS 4.7.13 `LocalVariableTable`: the name a source file gave each
+        // local, which covers the parameters. It fills a name only where
+        // `MethodParameters` stated none — measured on spring-web 6.1.6, 1,048 of
+        // 9,164 parameter names come from here and from nowhere else.
+        "local_variable_names",
         // Capability 9.18: the value each return instruction hands back.
         "method_returns",
         // Capability 9.16: an annotation-valued annotation argument, read
         // recursively rather than dropped with no key at all.
         "nested_annotation_args",
+        // W6. JVMS 4.7.10: the NAME of the file a class was compiled from, as
+        // the class file states it rather than as the class's own path implies.
+        // The derivation it replaces was javac's conventions in code — `.java`,
+        // and everything from the first `$` cut off — so every Kotlin class in
+        // a module named a `.java` file that does not exist. Its consumer is
+        // `relative_path`, which is what an index has to hand a reader who
+        // wants to OPEN the declaration.
+        "source_file",
         "string_constants",
         // Capability 9.13: a class symbol's erased direct superclass.
         "superclass",

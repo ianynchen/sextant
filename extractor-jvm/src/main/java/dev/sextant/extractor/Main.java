@@ -126,8 +126,13 @@ public final class Main {
                     // instead names the outer **source** file, because that is
                     // the file a human edited. The two fields answer different
                     // questions on purpose.
-                    String relative = sourcePathOf(classRelative);
                     String documentId = sha256(classRelative);
+                    // Filled by the scan below, from the class file's own
+                    // `SourceFile` attribute. A one-element array rather than a
+                    // field on the scanner, which is reused across every entry
+                    // in this loop and would carry the previous class's answer
+                    // into a class that states none.
+                    String[] sourceFile = {null};
                     // A Kotlin class compiled by a newer compiler than
                     // kotlin-metadata-jvm supports is not a corrupt class file —
                     // its nullability just cannot be read. The class is still
@@ -161,8 +166,9 @@ public final class Main {
                     String partialReason = null;
                     if (reasons.isEmpty()) {
                         try {
-                            lines = scanner.scan(bytes, documentId, reason ->
-                                reasons.add("kotlin metadata unreadable (" + reason + ")"));
+                            lines = scanner.scan(bytes, documentId,
+                                reason -> reasons.add("kotlin metadata unreadable (" + reason + ")"),
+                                stated -> sourceFile[0] = stated);
                         } catch (IllegalArgumentException | IndexOutOfBoundsException unreadable) {
                             // Narrowed by TYPE, not only by scope. `catch (Exception)`
                             // swallowed OUR OWN defects too — an NPE in a visitor, a
@@ -198,6 +204,10 @@ public final class Main {
                     String contentHash = bytes.length == 0 && partialReason != null
                         ? "unread"
                         : "sha256:" + sha256Bytes(bytes);
+                    // AFTER the scan, because the class file is what names its own
+                    // source. A class this build could not parse states nothing, and
+                    // falls back to the derivation.
+                    String relative = sourcePathOf(classRelative, sourceFile[0]);
                     writeFactFile(out.resolve(replaceSuffix(classRelative, ".class", ".jsonl")),
                                   relative, documentId, options, contentHash, lines,
                                   classMajor, partialReason, classReleaseOf(classRelative),
@@ -480,15 +490,45 @@ public final class Main {
      *  <p>Searched from the last separator rather than across the whole path,
      *  because a directory is free to hold a {@code $} of its own and cutting
      *  there would name a source file in a package that does not exist. */
-    private static String sourcePathOf(String classRelative) {
+    private static String sourcePathOf(String classRelative, String sourceFile) {
         // The overlay prefix is stripped FIRST, or the derived source path is a
         // file that cannot exist:
         // `META-INF/versions/21/org/.../VirtualThreadDelegate.java` names no
         // file in any repository. An overlay is a different COMPILATION of the
         // same source, not a different source.
         String withoutSuffix = replaceSuffix(withoutVersionPrefix(classRelative), ".class", "");
-        int nested = withoutSuffix.indexOf('$', withoutSuffix.lastIndexOf('/') + 1);
+        int lastSlash = withoutSuffix.lastIndexOf('/');
+        if (namesAFile(sourceFile)) {
+            // The class file STATES its source file's name (JVMS 4.7.10). Only the
+            // directory is ours to supply, and it is the class's own — which is the
+            // package path for every language whose files live in package directories.
+            return lastSlash < 0 ? sourceFile : withoutSuffix.substring(0, lastSlash + 1) + sourceFile;
+        }
+        // Nothing stated it — a class compiled with debug information stripped. The
+        // derivation below is what this always did, and it is a guess in the shape of
+        // javac's own conventions: `.java`, and everything from the first `$` cut off
+        // because that is the compiler's nesting notation rather than part of a name.
+        int nested = withoutSuffix.indexOf('$', lastSlash + 1);
         return (nested < 0 ? withoutSuffix : withoutSuffix.substring(0, nested)) + ".java";
+    }
+
+    /** Whether a {@code SourceFile} value can be joined to a directory as a file name.
+     *
+     *  <p>It is a free-form constant-pool string, not a validated path, and it reaches
+     *  `relative_path` — which is hashed into artifact names and read by anything that
+     *  opens a file. A value carrying a separator or naming a directory is refused and
+     *  the derivation stands in: what a class file says about itself is evidence, not
+     *  an instruction. */
+    private static boolean namesAFile(String sourceFile) {
+        return sourceFile != null
+            && !sourceFile.isEmpty()
+            && sourceFile.indexOf('/') < 0
+            && sourceFile.indexOf('\\') < 0
+            // A drive-relative name — `C:Weird.java` — carries no separator and still
+            // names no file once a directory is joined in front of it.
+            && sourceFile.indexOf(':') < 0
+            && !sourceFile.equals(".")
+            && !sourceFile.equals("..");
     }
 
     /** The release an overlaid entry declares, or {@link #BASE_RELEASE}.

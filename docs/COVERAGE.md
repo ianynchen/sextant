@@ -133,14 +133,15 @@ same `annotation_driven` engine also reads REST outbound — Feign `@FeignClient
 more engines read REST outbound from method calls rather than annotations, both fed by the
 same linked `call_site` facts: `single_call` reads `RestTemplate`, and `fluent` reconstructs
 builder chains for `RestClient`, `WebClient` and OkHttp, calls made inside lambdas included.
-A module's full analysis exports as a self-describing D06 bundle. Twenty of the twenty-three designed
+A module's full analysis exports as a self-describing D06 bundle. Twenty-three of the twenty-six designed
 scanner capabilities are implemented: `annotation_args`, `typed_signatures`,
 `type_annotations`, `kotlin_metadata`, `call_site`, `string_constants`, `chain_reconstruction`,
 `implemented_interfaces`, from Phase 2O `superclass` (9.13), `generic_interfaces`
 (9.14), `array_arguments` (9.15) and `nested_annotation_args` (9.16), from 2Q
 `lambda_body` (9.17) and `method_returns` (9.18), from W4 `annotation_default`,
-`class_file_version`, `concat_template`, `constant_value` and `enclosing_class`, and from
-W5 `type_parameters`. The three unshipped are
+`class_file_version`, `concat_template`, `constant_value` and `enclosing_class`, from
+W5 `type_parameters`, and from W6 `source_file`, `line_numbers` and
+`local_variable_names`. The three unshipped are
 `invokedynamic`, `constant_propagation` and `control_flow` ([M03](components/M03-scanner.md)).
 The count is of `Capabilities.ALL` in the extractor jar, which is the authority — this
 sentence is a copy of it and was stale by five for the whole of W4.
