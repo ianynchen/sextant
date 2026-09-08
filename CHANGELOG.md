@@ -14,6 +14,51 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A binder nobody mapped was published on the catalog's default protocol** — the one
+  defect in this analysis that leaves the bundle and lands in someone else's data (W13).
+
+  `spring-cloud-stream.yml` mapped binder names to protocols and, for a name the map did
+  not carry, fell back to its own declared `protocol: kafka`. Measured
+  (`scripts/probes/w13_stream_binding.md`): a module bound to `rocketmq` derived a row on
+  **`kafka`** — complete, confident, with no open question anywhere saying the protocol
+  had not been read. The catalog described this in place as "a gap to grow this map from,
+  never a guessed protocol", and a test pinned it under a name that stated the fallback
+  outright.
+
+  `protocol` is IDENTITY. DR-5 gates linking on protocol equality, so that row links into
+  another consumer's graph against endpoints this module never speaks to, and fails to
+  link to the ones it does — in a graph assembled from bundles this analysis never sees.
+  No row now, and a new `binder_protocol` question carrying the binding and the configured
+  name. The question's own `protocol` is NULL: one that named a protocol would assert the
+  very thing it reports as unread.
+
+- **Two function beans and no `spring.cloud.function.definition` derived two endpoints for
+  an application that binds neither.**
+
+  The catalog said "absent — every candidate binds, **the framework's own default**". Read
+  verbatim out of the framework's own selection code, `normalizeFunctionDefinition` opens
+  its guard with `eligibleFunction.size() == 1`: it defaults the definition to a bean only
+  where there is exactly one, and with two the definition stays empty and nothing binds. A
+  sentence naming the framework as its authority, saying what the framework does not do —
+  and nothing had compared it to the code.
+
+  `mapping.unselected_binds` declares the cardinality: `all` (the default, the old
+  behaviour) or `sole`. Three utility methods returning functional interfaces no longer
+  derive four boundaries — which an existing test recorded as "the honest half" the
+  dependency gate does not close.
+
+  **Only the binder case files a question, and the asymmetry is deliberate.** With two or
+  more candidates the framework binds nothing, so no row is the complete answer and there
+  is nothing unanswered to ask. With an unmapped binder the module does bind something and
+  the wire is unread. The first is knowledge; the second is a question.
+
+  The ratchet hole §3.4 names in the same breath is closed by two guards, not by
+  `test_defaulted_identity_values.py`: that audit reads shipped CATALOGS offline, and
+  nothing in the data was wrong — `protocol: kafka` is a correct declaration and
+  `binder_protocols` a correct map. The default lived in the engine's fallback. That
+  file's docstring now records the blind spot so the next reader does not conclude the
+  offline audit covers every defaulted identity value.
+
 - **A class-level and a method-level listener were glued into one address that
   addresses nothing** — `@KafkaListener(topics="orders")` on the class and
   `@KafkaListener(topics="payments")` on a method published **`orderspayments`**, a

@@ -31,6 +31,19 @@ matches:
       # The key that narrows the candidate set. Absent from configuration,
       # every candidate binds (the framework's own default); present, only
       # the beans it names do.
+        # F2 §3.4's cardinality conjunct. MEASURED against the framework's own
+      # selection code (`scripts/probes/w13_stream_binding.md`, section 1):
+      # `SimpleFunctionRegistry.normalizeFunctionDefinition` defaults the
+      # definition to a bean only when `eligibleFunction.size() == 1`. With two
+      # eligible functions and no `spring.cloud.function.definition`, the
+      # definition stays empty and NOTHING binds.
+      #
+      # This file used to say the opposite in prose — "absent, every candidate
+      # binds, the framework's own default" — and derived one endpoint per bean
+      # for an application that serves none of them. Naming the framework as the
+      # authority for a rule the framework contradicts is the shape §8.1 exists to
+      # refuse, and it survived because nothing compared the sentence to the code.
+      unselected_binds: sole
       selected_by: spring.cloud.function.definition
       # `definition` lists bindings separated by `;`, and ONE entry may
       # itself compose several functions with `|`. A composed entry derives

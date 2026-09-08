@@ -44,6 +44,27 @@ wrong (§9).
 
 It is OFFLINE and deterministic (NFR-1): it reads the shipped catalogs and runs
 nothing.
+
+## The class of default this file could not see, and where it is guarded instead
+
+A defaulted identity value need not live in a `fluent` capture. `spring-cloud-stream.yml`
+declared `protocol: kafka`, and `config_join`'s binder resolution returned that whenever a
+configured binder name was absent from `binder_protocols` — so a module bound to
+`rocketmq` published a row on `kafka` at `resolved`, which is this rule's own definition of
+the defect, in the one column D01 uses as identity.
+
+This file could not have caught it. It reads catalog DATA, and nothing in the data is
+wrong: `protocol: kafka` is a correct declaration for the catalog's ordinary case, and
+`binder_protocols` is a correct map. The default was in the ENGINE's fallback, which is
+exactly the ratchet hole F2 §3.4 names in the same breath as the defect — "the
+defaulted-value rule watches engines, and this default lives in catalog data" reads the
+right way round once you see that the two halves have to meet somewhere neither of them is.
+
+It is guarded by `scripts/guard_check.py`'s `config_join.unmapped-binder-derives-no-row`
+instead: that harness breaks the line and requires a named test to fail, which is the
+mechanism for a rule about what an engine DOES rather than what a catalog SAYS. Recorded
+here so the next reader of this file does not conclude that the offline audit covers every
+defaulted identity value — it covers the ones visible in catalog data, and says so.
 """
 
 import re

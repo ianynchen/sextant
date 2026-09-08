@@ -1009,6 +1009,45 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "config_join.unmapped-binder-derives-no-row": Guard(
+        what="a binding whose configured binder name the catalog maps to no protocol derives "
+        "NO ROW — never one on the catalog's own declared `protocol:`",
+        why="F2 §3.4, and the one defect in this analysis that leaves the bundle. `protocol` "
+        "is IDENTITY and DR-5 gates linking on protocol equality, so a row published on a "
+        "protocol nobody read links into ANOTHER consumer's graph against endpoints this "
+        "module never speaks to, and fails to link to the ones it does. Measured before the "
+        "fix (`scripts/probes/w13_stream_binding.md`): a module bound to `rocketmq` derived a "
+        "row on `kafka`, complete and confident, with no question anywhere. The catalog "
+        "called that 'a gap to grow this map from, never a guessed protocol' and a test "
+        "pinned it. "
+        "It is guarded HERE rather than in `test_defaulted_identity_values.py` because that "
+        "audit reads shipped CATALOGS offline and this default lived in an engine's fallback "
+        "— the ratchet hole §3.4 names in the same breath as the defect",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="            if protocol is None:\n                # The configured binder maps to no protocol",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n                # The configured binder maps to no protocol",
+            ),
+        ),
+    ),
+    "config_join.unselected-cardinality": Guard(
+        what="where the selection key names nobody and the catalog declares "
+        "`unselected_binds: sole`, two or more candidates bind NOTHING",
+        why="F2 §3.4's cardinality conjunct, mirrored from the framework's own selection code: "
+        "`SimpleFunctionRegistry.normalizeFunctionDefinition` opens its guard with "
+        "`eligibleFunction.size() == 1`, so with two eligible functions the definition stays "
+        "empty and nothing binds. The catalog claimed the opposite in prose — 'every "
+        "candidate binds, the framework's own default' — and derived one endpoint per bean "
+        "for an application that serves neither",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="    if declared == _ALL or len(candidates) == 1:",
+                replace="    if True:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "jakarta-servlet.every-type-is-spelled-jakarta": Guard(
         what="every type `jakarta-servlet.yml` names is spelled `jakarta`, the API it describes",
         why="the mirror leak: a `javax` name kept in the jakarta catalog would match legacy "

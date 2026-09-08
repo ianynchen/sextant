@@ -766,13 +766,29 @@ def test_the_module_default_binder_answers_a_binding_that_declares_none(
     assert row["protocol"] == "jms"
 
 
-def test_a_binder_name_the_catalog_does_not_map_falls_back_to_its_protocol(
-    tmp_path: Path,
-):
-    """An unmapped name is a gap to grow the catalog from, not a guess: the
-    row keeps the catalog's own declared protocol rather than inventing one
-    or dropping to NULL — the same discipline the media half keeps for a
-    serializer class absent from `values`."""
+@pytest.mark.pins("config_join.unmapped-binder-derives-no-row")
+def test_a_binder_name_the_catalog_does_not_map_derives_no_row(tmp_path: Path):
+    """F2 §3.4. This test pinned the opposite until W13, and its own name said
+    so: `..._falls_back_to_its_protocol`, on the stated grounds that "an
+    unmapped name is a gap to grow the catalog from, not a guess".
+
+    It was a guess. The row it asserted carried the catalog's declared
+    `protocol` — a value the matched evidence says nothing about — at
+    `resolved`, which is the defaulted-identity rule's own definition of the
+    defect (`tests/architecture/test_defaulted_identity_values.py`). That rule
+    audits `fluent` captures and could not see this one, because this default
+    lives in catalog data rather than in an engine.
+
+    It is the one defect in this analysis that leaves the bundle: `protocol` is
+    identity, DR-5 gates linking on protocol equality, and a row published on a
+    protocol nobody read links into another consumer's graph against endpoints
+    this module never speaks to.
+
+    No row now. The `binder_protocol` question that replaces it is asserted by
+    `test_an_unmapped_binder_derives_no_row_and_files_a_question` against the
+    SHIPPED catalog; this one keeps the invented-catalog half, where the map is
+    `{queues: jms}` and the configured name is `unheard-of`.
+    """
     workspace = _workspace(
         tmp_path,
         [_bean("handle", SINK, EVENT)],
@@ -785,10 +801,32 @@ def test_a_binder_name_the_catalog_does_not_map_falls_back_to_its_protocol(
     )
     address = _address(binder_key=BINDER_KEY, binder_protocols={"queues": "jms"})
     config_join.run(workspace, _catalog({"address_from_config": address}))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
+def test_a_binder_name_the_catalog_DOES_map_keeps_that_protocol(tmp_path: Path):
+    """The paired positive the test above needs: a change that dropped every
+    row whatever the binder said would pass it. `queues` is in the map, so the
+    row derives on `jms` — the mapped protocol, not the catalog's `kafka`."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("handle", SINK, EVENT)],
+        _selection("handle")
+        + _destination("handle-in-0", "events")
+        + [
+            (BINDER_KEY.replace("{binding}", "handle-in-0"), "default", "queues"),
+            (BINDER_KEY.replace("{binding}", "handle-in-0"), "prod", "queues"),
+        ],
+    )
+    address = _address(binder_key=BINDER_KEY, binder_protocols={"queues": "jms"})
+    config_join.run(workspace, _catalog({"address_from_config": address}))
     [row] = _rows(workspace)
     workspace.close()
 
-    assert row["protocol"] == "kafka"
+    assert row["protocol"] == "jms"
 
 
 # --- job 2: serializer media stamping ------------------------------------
@@ -1571,13 +1609,35 @@ def test_spring_cloud_stream_still_derives_for_a_module_that_does_declare_it(
     and look correct all the way down (§10).
 
     It also records what the gate does NOT close, which is the honest half:
-    with the dependency present these same three utility methods still derive
-    four boundaries, because `_candidates` reads every declared method and
-    filters on the return type alone. Narrowing that needs a `@Bean` conjunct,
-    and whether Spring Cloud Stream actually requires `@Bean` is a framework
-    question no probe in this repository has answered — §8.1 forbids inventing
-    the conjunct, so it is stated in `docs/COVERAGE.md` instead."""
-    workspace = _workspace(tmp_path, _helpers_facts(), coordinates=(_STREAM,))
+    `_candidates` reads every declared method and filters on the return type
+    alone, so a utility method that merely RETURNS a functional interface is a
+    candidate. Narrowing that needs a `@Bean` conjunct, and whether Spring Cloud
+    Stream actually requires `@Bean` is a framework question no probe in this
+    repository has answered — §8.1 forbids inventing the conjunct, so it is
+    stated in `docs/COVERAGE.md` instead.
+
+    **The selection is now load-bearing here, and was not before W13.** These
+    three helpers used to derive four boundaries with no
+    `spring.cloud.function.definition` at all. F2 §3.4's cardinality rule ends
+    that — three candidates and no selection bind NOTHING, because the framework
+    binds nothing (`eligibleFunction.size() == 1`) — so this test names one, and
+    what it proves is unchanged: the gate is what the near-miss above measures,
+    not some other conjunct silencing everything.
+
+    Selecting `auditSink` rather than asserting on all three is also the smaller
+    claim: one selected bean is enough to show rows derive at all."""
+    workspace = _workspace(
+        tmp_path,
+        _helpers_facts(),
+        # The SHIPPED catalog's own keys, not `_selection`/`_destination` — those
+        # spell the invented framework's (`acme.function.definition`), and this
+        # test drives `spring-cloud-stream.yml`.
+        _bindings(
+            ("spring.cloud.function.definition", "auditSink"),
+            ("spring.cloud.stream.bindings.auditSink-in-0.destination", "audit.events"),
+        ),
+        coordinates=(_STREAM,),
+    )
     skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
     rows = _rows(workspace)
     workspace.close()
@@ -2563,3 +2623,154 @@ def test_the_shipped_media_catalog_declares_no_wire_identity():
     )
     assert (catalog.protocol, catalog.direction) == ("", "")
     assert config_join.derives_rows(catalog) is False
+
+
+# --- F2 §3.4: cardinality, and the protocol that is never defaulted ---------
+#
+# Built on this file's own `_workspace`/`_bean` helpers rather than a second
+# harness: they already write the module fact the dependency gate reads, and a
+# private copy would be a second thing to keep in step with the catalog.
+
+
+def _stream_questions(workspace: DuckDbWorkspace) -> list[dict]:
+    """The questions the pipeline's own seam files, not `derive_endpoints`.
+
+    The ledger is emptied once per resolve and every `gaps` writer runs AFTER
+    that reset, from `service_identity` — so a test that called only
+    `derive_endpoints` would read zero questions for every shape, including the
+    one whose entire subject is a question.
+    """
+    reset_open_questions(workspace)
+    record_service_identity_gaps(workspace, [_stream_catalog()])
+    return workspace.query("open_questions")
+
+
+def _bindings(*pairs: tuple[str, str]) -> list[tuple[str, str, str | None]]:
+    """Configuration in the `(key, environment, value)` shape `_workspace` takes,
+    stated for one environment because none of these questions is per-profile."""
+    return [(key, "default", value) for key, value in pairs]
+
+
+# `_workspace(coordinates=None)` writes NO module fact, which is right for the
+# tests that call an engine directly. These four go through `derive_endpoints`,
+# whose dependency gate would skip the catalog and make every assertion below
+# hold for the wrong reason.
+_STREAM_COORDINATE = "org.springframework.cloud:spring-cloud-stream"
+
+
+@pytest.mark.pins("config_join.unselected-cardinality")
+def test_two_function_beans_and_no_definition_bind_nothing(tmp_path: Path):
+    """F2 §3.4's cardinality rule, mirrored from the framework's own code.
+
+    `SimpleFunctionRegistry.normalizeFunctionDefinition` opens its guard with
+    `eligibleFunction.size() == 1` — it defaults the definition to a bean only
+    where there is exactly one. With two eligible functions and no
+    `spring.cloud.function.definition` the definition stays empty and NOTHING
+    binds (`scripts/probes/w13_stream_binding.md`).
+
+    The catalog said the opposite in prose — "every candidate binds, the
+    framework's own default" — and derived one endpoint per bean for an
+    application that serves neither. A sentence naming the framework as its
+    authority, saying what the framework does not do.
+    """
+    workspace = _workspace(
+        tmp_path,
+        [
+            _bean("orders", "java.util.function.Consumer", "java/lang/String#"),
+            _bean("payments", "java.util.function.Consumer", "java/lang/String#"),
+        ],
+        _bindings(
+            ("spring.cloud.stream.default-binder", "kafka"),
+            ("spring.cloud.stream.bindings.orders-in-0.destination", "orders.topic"),
+            ("spring.cloud.stream.bindings.payments-in-0.destination", "payments.topic"),
+        ),
+        coordinates=(_STREAM_COORDINATE,),
+    )
+    skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert skipped == [], f"skipped, so this test measures nothing: {skipped}"
+    assert rows == []
+
+
+def test_one_function_bean_and_no_definition_still_binds(tmp_path: Path):
+    """The paired positive: the framework DOES default to a lone function, so a
+    rule that silenced both counts would pass the test above while losing every
+    single-function Stream application in the estate."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("orders", "java.util.function.Consumer", "java/lang/String#")],
+        _bindings(
+            ("spring.cloud.stream.default-binder", "kafka"),
+            ("spring.cloud.stream.bindings.orders-in-0.destination", "orders.topic"),
+        ),
+        coordinates=(_STREAM_COORDINATE,),
+    )
+    skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = [(r["protocol"], r["path"]) for r in _rows(workspace)]
+    workspace.close()
+
+    assert skipped == []
+    assert rows == [("kafka", "orders.topic")]
+
+
+@pytest.mark.pins("config_join.unmapped-binder-derives-no-row")
+def test_an_unmapped_binder_derives_no_row_and_files_a_question(tmp_path: Path):
+    """F2 §3.4's second half, and the one defect in this analysis that leaves
+    the bundle.
+
+    A binder name absent from `binder_protocols` used to fall back to the
+    catalog's declared `protocol:`, so a module bound to `rocketmq` published a
+    row on `kafka` — complete, confident, with nothing saying the protocol had
+    not been read. `protocol` is IDENTITY and DR-5 gates linking on protocol
+    equality, so that row links into another consumer's graph against endpoints
+    this module never speaks to, and misses the ones it does.
+
+    No row now, and a `binder_protocol` question carrying the binding and the
+    configured name — the two things a reader needs to close it. The question's
+    own `protocol` is NULL: one that named a protocol would assert the very
+    thing it reports as unread.
+    """
+    workspace = _workspace(
+        tmp_path,
+        [_bean("orders", "java.util.function.Consumer", "java/lang/String#")],
+        _bindings(
+            ("spring.cloud.stream.default-binder", "rocketmq"),
+            ("spring.cloud.stream.bindings.orders-in-0.destination", "orders.topic"),
+        ),
+        coordinates=(_STREAM_COORDINATE,),
+    )
+    derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = _rows(workspace)
+    questions = _stream_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert [(q["question"], q["path"], q["protocol"]) for q in questions] == [
+        ("binder_protocol", "orders-in-0", None)
+    ]
+    assert "rocketmq" in str(questions[0]["candidates"])
+
+
+def test_a_mapped_binder_resolves_to_its_own_protocol_not_the_catalogs(tmp_path: Path):
+    """The paired positive for the protocol half. `rabbit` maps to `amqp`, so
+    this proves the map is READ rather than the file's `protocol: kafka` being
+    returned for everything — a change that made every unmapped name silent
+    could otherwise pass the test above by making every name silent."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("orders", "java.util.function.Consumer", "java/lang/String#")],
+        _bindings(
+            ("spring.cloud.stream.default-binder", "rabbit"),
+            ("spring.cloud.stream.bindings.orders-in-0.destination", "orders.queue"),
+        ),
+        coordinates=(_STREAM_COORDINATE,),
+    )
+    derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = [(r["protocol"], r["path"]) for r in _rows(workspace)]
+    questions = _stream_questions(workspace)
+    workspace.close()
+
+    assert rows == [("amqp", "orders.queue")]
+    assert questions == []

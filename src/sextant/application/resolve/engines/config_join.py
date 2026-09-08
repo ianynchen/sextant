@@ -93,6 +93,11 @@ _COMPOSITION_SEPARATOR = "|"
 # design §0 — `resolve/open_questions.py` is where the set lives and where a
 # value outside it is refused).
 _CHANNEL_DESTINATION = "channel_destination"
+_BINDER_PROTOCOL = "binder_protocol"
+_UNMAPPED_BINDER = (
+    "the configured binder `{binder}` is absent from this catalog's `binder_protocols`, "
+    "so the protocol this binding speaks was not read"
+)
 # The two REASONS a channel's destination went unanswered, kept apart because
 # they are different facts and the trail is what a reader acts on: nobody was
 # asked, versus somebody was asked and configuration did not answer with one
@@ -250,6 +255,13 @@ def _derive_bindings(workspace: Workspace, catalog: Catalog) -> None:
         for suffix, direction, payload_arg in _rule_bindings(candidate.rule, catalog):
             name = entry + suffix
             protocol = _protocol_of(config, address, name, catalog)
+            if protocol is None:
+                # The configured binder maps to no protocol, so the WIRE is
+                # unread. No row: `gaps` files a `binder_protocol` question
+                # instead, which says the binding exists and its protocol did
+                # not resolve — where a row would have asserted a wire nobody
+                # read (F2 §3.4).
+                continue
             resolved = _agreed(config, key_template.replace(_BINDING, name))
             destination = None if resolved is None else _addressed(resolved, protocol, direction)
             if destination is not None:
@@ -378,6 +390,46 @@ def _implemented_interfaces(workspace: Workspace) -> dict[str, list[str]]:
     }
 
 
+# F2 §3.4's cardinality conjunct: what binds when the selection key names
+# nobody. `all` is every candidate; `sole` is the one candidate where there is
+# exactly one, and NOTHING where there are several.
+_UNSELECTED = "unselected_binds"
+_ALL = "all"
+_SOLE = "sole"
+_UNSELECTED_VALUES = (_ALL, _SOLE)
+
+
+def _unselected(binding: dict[str, Any], candidates: dict[str, _Candidate]) -> list[str]:
+    """Which candidates bind when the selection key names nobody.
+
+    Defaults to `all`, which is what this engine did before the conjunct existed
+    — the default is the old behaviour, so declaring the key is what changes a
+    catalog rather than the reverse.
+
+    `sole` mirrors a framework that binds a lone candidate implicitly and refuses
+    to choose between several. That is not a policy this engine invents: Spring
+    Cloud Function's own selection code opens its guard with
+    `eligibleFunction.size() == 1`, and with two eligible functions the
+    definition stays empty and no binding happens
+    (`scripts/probes/w13_stream_binding.md`).
+
+    **Two or more under `sole` derives NOTHING, and that is the whole point.**
+    Picking one would be a guess about which bean the application runs; binding
+    both fabricates an endpoint the application does not serve. The open question
+    the caller files is what carries the fact that candidates were found.
+    """
+    declared = binding.get(_UNSELECTED, _ALL)
+    if declared not in _UNSELECTED_VALUES:
+        raise CatalogError(
+            f"`{_UNSELECTED}: {declared!r}` is not one of {list(_UNSELECTED_VALUES)} "
+            f"(F2 §3.4). `all` binds every candidate when the selection key names nobody; "
+            f"`sole` binds one candidate only where there is exactly one."
+        )
+    if declared == _ALL or len(candidates) == 1:
+        return list(candidates)
+    return []
+
+
 def _selected_entries(
     config: dict[str, dict[str, str | None]],
     binding: dict[str, Any],
@@ -386,12 +438,21 @@ def _selected_entries(
     """D02 §2d's `selected_by`: the configuration key that narrows the
     candidate set, read through `resolved_config`.
 
-    **Absent — or declared but resolvable in no environment — every
-    candidate binds**, the framework's own default, in the candidates'
-    deterministic order. Present, the value's separator-split entries are
-    the answer, in the order the value lists them, and a candidate the value
-    never names derives nothing at all: selection is the only thing that can
-    exclude a bean whose facts are otherwise identical to a selected one's.
+    **Absent — or declared but resolvable in no environment — the CARDINALITY
+    rule decides** (F2 §3.4, `unselected` below), and the two values it can take
+    are the only two a framework has been observed to use. Present, the value's
+    separator-split entries are the answer, in the order the value lists them,
+    and a candidate the value never names derives nothing at all: selection is
+    the only thing that can exclude a bean whose facts are otherwise identical
+    to a selected one's.
+
+    This used to read "absent — every candidate binds, **the framework's own
+    default**", and that sentence named a framework as its authority while
+    saying the opposite of what the framework does. Measured
+    (`scripts/probes/w13_stream_binding.md`): Spring Cloud Function's
+    `normalizeFunctionDefinition` defaults the definition only when
+    `eligibleFunction.size() == 1`, so two beans and no definition bind NOTHING
+    — while this bound both, one fabricated endpoint each.
 
     **An EXPLICITLY EMPTY selection selects nothing** (fix round 1, I-2) —
     an empty value, or separators alone, is a statement, not an absence, and
@@ -406,7 +467,7 @@ def _selected_entries(
     key = binding.get("selected_by")
     per_environment = config.get(str(key)) if key is not None else None
     if per_environment is None:
-        return list(candidates)
+        return _unselected(binding, candidates)
     separator = str(binding.get("selection_separator", _SELECTION_SEPARATOR))
     entries: list[str] = []
     # Whether ANY environment resolved this key to a value at all — the
@@ -499,17 +560,32 @@ def _protocol_of(
     address: dict[str, Any],
     name: str,
     catalog: Catalog,
-) -> str:
+) -> str | None:
     """The protocol a binding speaks: read from configuration where the
     catalog declares where to look AND maps the configured name to a
     protocol, else the catalog's own declared default (D02 §2c — a match may
     resolve `protocol` differently from the file's default).
 
     Two declared keys, most specific first: the binding's own, then the
-    module-wide default. A configured name absent from `binder_protocols`
-    falls back to the catalog's default rather than inventing a protocol —
-    an unmapped name is a gap to grow the catalog from, exactly as an
-    unmapped serializer class is for the media half.
+    module-wide default.
+
+    **A configured name absent from `binder_protocols` returns None**, and the
+    caller drops the row and files a `binder_protocol` question (F2 §3.4). It
+    used to fall back to the catalog's declared `protocol:`, described in place
+    as "a gap to grow the catalog from, never a guessed protocol" — the
+    parenthetical was false. Measured (`scripts/probes/w13_stream_binding.md`): a
+    module whose binder is `rocketmq` derived a row on `kafka`, complete and
+    confident, with no question anywhere saying the protocol had not been read.
+
+    That is the one defect in this analysis that leaves the bundle. Protocol is
+    IDENTITY and DR-5 gates linking on protocol equality, so the row links to
+    Kafka endpoints in a service this module never speaks to, and fails to link
+    to the ones it does — in a graph assembled from bundles this analysis never
+    sees.
+
+    NO configured name at all is a different answer and keeps the catalog's
+    default: nothing was configured, so the catalog's own declaration is the
+    only statement there is, which is D02 §2c's rule and not a fallback.
     """
     protocols = address.get("binder_protocols") or {}
     template = address.get("binder_key")
@@ -520,7 +596,8 @@ def _protocol_of(
         configured = _agreed(config, str(address["default_binder_key"]))
     if configured is None:
         return catalog.protocol
-    return str(protocols.get(configured, catalog.protocol))
+    mapped = protocols.get(configured)
+    return None if mapped is None else str(mapped)
 
 
 def _addressed(raw: str, protocol: str, direction: str) -> str:
@@ -641,6 +718,19 @@ def _derive_channels(workspace: Workspace, catalog: Catalog) -> None:
         if template is None:
             continue
         protocol = _protocol_of(config, address, channel.name, catalog)
+        if protocol is None:
+            # The same rule as the `bean_name` loop's, and reached the same way:
+            # a configured binder the catalog maps to no protocol leaves the WIRE
+            # unread, so no row. `gaps` files the question — its
+            # `channel_destination` arm already runs for this shape, and
+            # `_unmapped_binder_questions` covers the other.
+            #
+            # Unreachable for every shipped catalog of this shape today (none
+            # declares `binder_protocols`), and written rather than asserted
+            # away: the type says it can happen, and a shape that silently
+            # published `None` as a protocol is exactly what this change exists
+            # to stop.
+            continue
         resolved = _agreed(config, str(template).replace(_BINDING, channel.name))
         if resolved is None:
             continue
@@ -717,11 +807,22 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     anything read it, silently. Every shipped writer sits after the reset, and
     this one rides the same seam (`resolve/service_identity.py`).
 
-    Inert for both other shapes, by construction rather than by an id list: a
-    `media_from_config`-only catalog has no address block, and a `bean_name`
-    catalog already answers its own unresolved bindings with a row (D02 §2d)
-    — a question there would be a second record of a fact the endpoint table
-    already carries.
+    Inert for a `media_from_config`-only catalog by construction: it has no
+    address block.
+
+    A `bean_name` catalog answers most of its unresolved bindings with a row
+    (D02 §2d), so a question there would duplicate what the endpoint table
+    already carries — with ONE exception, which is why this function no longer
+    returns early for that shape: a binding whose configured binder maps to no
+    protocol produces NO row (F2 §3.4), because the wire it speaks is unread.
+    That one earns a question, and without it the binding vanishes silently.
+
+    A binding that binds nothing for CARDINALITY reasons earns none, and the
+    distinction is worth stating because both produce no row. Where two or more
+    candidates exist and the selection names nobody, the framework binds nothing
+    — so "no row" is the complete and correct answer, not a gap. Where the
+    binder maps to no protocol, the module DOES bind something and we cannot say
+    on what wire. The first is knowledge; the second is a question.
 
     Called for every catalog of this style whatever the two gates said — the
     `service_identity` seam re-checks neither `requires` nor the dependency
@@ -730,8 +831,10 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     finds nothing here either.
     """
     _validate_matches(catalog)
-    if _ADDRESS not in catalog.matches or _binding_source(catalog) != _ANNOTATION_VALUE:
+    if _ADDRESS not in catalog.matches:
         return []
+    if _binding_source(catalog) != _ANNOTATION_VALUE:
+        return _unmapped_binder_questions(workspace, catalog)
     address = catalog.matches[_ADDRESS]
     template = address.get("key")
     config = _config_values(workspace)
@@ -750,6 +853,8 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
         seen.add((channel.name, channel.handler))
         rows.append(
             {
+                # NULL where the binder maps to no protocol: a question that
+                # named one would assert the very thing it reports as unread.
                 "protocol": _protocol_of(config, address, channel.name, catalog),
                 "method": None,
                 # The channel name IS the identity this question is about;
@@ -766,6 +871,64 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
                 "evidence": _NO_KEY_TEMPLATE if key is None else _NO_AGREED_VALUE.format(key=key),
             }
         )
+    return rows
+
+
+def _unmapped_binder_questions(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
+    """One `binder_protocol` question per binding whose configured binder name
+    the catalog maps to no protocol (F2 §3.4).
+
+    Reached only for the `bean_name` shape, where `run` skipped the row because
+    `_protocol_of` returned None. The question carries the BINDING and the
+    configured NAME, which are the two things a reader needs to close it: add
+    the name to `binder_protocols` if that binder speaks a protocol D00 declares,
+    or record why it does not.
+
+    `protocol` on the question row itself is NULL, and that is the point of the
+    whole change — a question that named a protocol would assert the very thing
+    it says was unread.
+    """
+    address = catalog.matches[_ADDRESS]
+    binding = address.get("binding") or {}
+    config = _config_values(workspace)
+    rules = binding.get("suffix") or []
+    candidates = _candidates(workspace, rules)
+    entries = _selected_entries(config, binding, candidates)
+    protocols = address.get("binder_protocols") or {}
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    composition = str(binding.get("composition_separator", _COMPOSITION_SEPARATOR))
+    for entry in entries:
+        candidate = None if composition in entry else candidates.get(entry)
+        if candidate is None:
+            continue
+        for suffix, _direction, _payload in _rule_bindings(candidate.rule, catalog):
+            name = entry + suffix
+            configured = None
+            template = address.get("binder_key")
+            if template is not None:
+                configured = _agreed(config, str(template).replace(_BINDING, name))
+            if configured is None and address.get("default_binder_key") is not None:
+                configured = _agreed(config, str(address["default_binder_key"]))
+            if configured is None or configured in protocols:
+                continue
+            if (name, configured) in seen:
+                continue
+            seen.add((name, configured))
+            rows.append(
+                {
+                    "protocol": None,
+                    "method": None,
+                    "path": name,
+                    "question": _BINDER_PROTOCOL,
+                    "candidates": json.dumps(
+                        [{"binding": name, "binder": configured}],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    "evidence": _UNMAPPED_BINDER.format(binder=configured),
+                }
+            )
     return rows
 
 

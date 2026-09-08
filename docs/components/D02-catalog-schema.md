@@ -1486,6 +1486,7 @@ matches:
     key: "spring.cloud.stream.bindings.{binding}.destination"
     binding:
       from: bean_name
+      unselected_binds: sole      # or `all`; `all` is the default
       selected_by: spring.cloud.function.definition
       selection_separator: ";"
       composition_separator: "|"
@@ -1644,11 +1645,42 @@ like every other protocol a catalog writes.
   declared — the class name is in `resolved_config` either way.
 - **An explicitly EMPTY selection selects nothing.** "Nobody said anything" and "somebody
   said: nothing" are opposite statements. A `selected_by` key absent from configuration —
-  or declared but resolvable in no environment — takes the framework default and binds
-  every candidate; a key that RESOLVED, to an empty value or to separators alone, is a
-  select-nothing statement and derives no row. Collapsing the two would bind every bean in
-  the module against a configuration that said the opposite: the one place this style
-  could fabricate a boundary rather than degrade.
+  or declared but resolvable in no environment — falls to `unselected_binds` below; a key
+  that RESOLVED, to an empty value or to separators alone, is a select-nothing statement
+  and derives no row. Collapsing the two would bind every bean in the module against a
+  configuration that said the opposite: the one place this style could fabricate a
+  boundary rather than degrade.
+- **`unselected_binds` says what binds when the selection key names nobody**, and it is a
+  CARDINALITY rule (F2 §3.4). Two values: `all` (the default — every candidate binds) and
+  `sole` (one candidate binds where there is exactly one; two or more bind **nothing**).
+
+  This exists because a framework may refuse to choose. Measured
+  (`scripts/probes/w13_stream_binding.md`): Spring Cloud Function's
+  `normalizeFunctionDefinition` opens its guard with `eligibleFunction.size() == 1`, so
+  with two eligible functions and no definition configured the definition stays empty and
+  nothing binds. `spring-cloud-stream.yml` said the opposite in prose — "absent, every
+  candidate binds, **the framework's own default**" — and derived one endpoint per bean
+  for an application that serves neither. A sentence naming the framework as its
+  authority, saying what the framework does not do; nothing had compared it to the code.
+
+  **Two or more under `sole` files no open question**, and the asymmetry with the binder
+  rule below is deliberate. The framework binds nothing, so "no row" is the complete and
+  correct answer rather than a gap — there is nothing unanswered to ask about. An unmapped
+  binder is the opposite: the module DOES bind something and the wire is unread.
+- **A configured binder name absent from `binder_protocols` derives NO ROW and files a
+  `binder_protocol` question** (F2 §3.4). It used to take the catalog's own declared
+  `protocol:`, described in place as "a gap to grow this map from, never a guessed
+  protocol" — the parenthetical was false, and a test pinned the fallback under a name
+  that stated it (`..._falls_back_to_its_protocol`).
+
+  **This is the one defect in the analysis that leaves the bundle.** `protocol` is
+  identity and DR-5 gates linking on protocol equality, so a row published on a protocol
+  nobody read links into another consumer's graph against endpoints this module never
+  speaks to, and fails to link to the ones it does. Measured before the fix: a module
+  bound to `rocketmq` derived a row on `kafka`, complete, confident, with no question
+  anywhere. NO configured name at all is a different answer and still takes the catalog's
+  declared protocol — nothing was configured, so the catalog's own declaration is the only
+  statement there is (§2c), which is a declaration rather than a fallback.
 
 The SELECTION key is the one place environments are unioned rather than required to
 agree, because it decides which rows EXIST rather than what a single-valued column holds:

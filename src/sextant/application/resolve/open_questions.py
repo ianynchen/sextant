@@ -39,6 +39,17 @@ QUESTIONS = (
     # 2O §2b: a config key whose value differs between environments where one
     # identity needs one value. Candidates: the key and the per-environment values.
     "environment_divergence",
+    # F2 §3.4: a configured binder name the catalog's `binder_protocols` does not
+    # map, so the wire this binding speaks is UNREAD. Candidates: the binding and
+    # the configured name.
+    #
+    # It earns a kind of its own rather than joining `channel_destination`
+    # because the two ask different questions of the same row: that one asks
+    # WHERE a known wire addresses, this one asks WHICH WIRE. Before it, an
+    # unmapped name silently took the catalog's declared `protocol:` — and
+    # protocol is identity, so DR-5 linked the row into another consumer's graph
+    # against endpoints this module never speaks to.
+    "binder_protocol",
 )
 
 
