@@ -76,7 +76,12 @@ _NO_DECLINING_TEST_YET = frozenset(
         "google-pubsub-publisher",
         "google-pubsub-subscriber",
         "spring-cloud-stream",
-        "spring-stomp",
+        # `spring-stomp` left this list in W16. Its near-miss is the RSocket
+        # discriminator: every conjunct of the rule holds — `@Controller`,
+        # `@MessageMapping`, and a class Spring's own STOMP handler would scan —
+        # and only the module's BUILD differs. That is the one shape that can
+        # decline it, because no fact about the class separates a STOMP
+        # controller from an RSocket one.
         "jakarta-websocket",
         "spring-web",
         "spring-mvc",

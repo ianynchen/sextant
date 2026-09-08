@@ -90,6 +90,21 @@ class Protocol(StrEnum):
     # (`spring-cloud-stream.yml` now maps `rabbit: amqp`).
     AMQP = "amqp"
     PULSAR = "pulsar"
+    # F2 §3.6. Its own protocol on the same DR-5 argument: an RSocket route can
+    # never be answered by a STOMP destination — different framing over a
+    # different transport — and publishing one as the other is the wrong-PROTOCOL
+    # fabrication this member exists to end.
+    #
+    # It arrives alone rather than beside a sibling, which the comment above says
+    # costs a schema change; this is that change. `docs/COVERAGE.md` had stated
+    # the defect in place since `A-C1`, with the reason it stayed open: "separating
+    # them needs a fact that tells an RSocket registration from a STOMP one, and
+    # neither catalog reads one". Measured
+    # (`scripts/probes/w16_rsocket_versus_stomp.md`): Spring does not distinguish
+    # them ON THE CLASS at all — both handler predicates test `@Controller`
+    # identically — and the fact that does is which handler auto-configuration
+    # would register, gated on a library being present.
+    RSOCKET = "rsocket"
 
 
 class Direction(StrEnum):

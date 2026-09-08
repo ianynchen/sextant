@@ -61,6 +61,22 @@ class Catalog:
     # covers; the activation gate needs a resolved classpath first, and the
     # register entry stays open until it has one.
     detect_coordinates: tuple[str, ...] = ()
+    # Whether `detect_coordinates` is a CONJUNCT for this catalog rather than an
+    # unread hint (F2 §3.6). False for every catalog but the two that need it,
+    # which is what keeps the paragraph above true: this is not the module-wide
+    # activation gate D02 §12 describes, and it deactivates nothing that was
+    # deriving before.
+    #
+    # It exists because `DEPENDENCY_GATED` is keyed on STYLE, and style turned
+    # out to be a proxy for the real question — "is this catalog's evidence
+    # enough to name its framework". For 20 of the 22 `annotation_driven`
+    # catalogs it is: `@GetMapping` is Spring MVC's and nobody else's. For
+    # `spring-stomp` and `spring-rsocket` it is NOT, because `@MessageMapping`
+    # belongs to both and Spring's own handlers do not distinguish them on the
+    # class either (`scripts/probes/w16_rsocket_versus_stomp.md`). Those two are
+    # the first catalogs whose framework rule is conditional on a library while
+    # their style's is not.
+    detect_required: bool = False
     # D02 §2a, §2e, §2f, §2g. Default to empty so a catalog that declares none
     # of them — every catalog before Task 8, and the invented catalogs tests
     # construct by hand — still loads. **All four are read today**:

@@ -1,0 +1,121 @@
+id: spring-rsocket
+displayName: Spring RSocket (@MessageMapping over RSocket)
+style: annotation_driven
+protocol: rsocket
+direction: inbound
+
+# THE SIBLING OF `spring-stomp.yml`, and the gate is the whole point of the file
+# (F2 §3.6, W16).
+#
+# `@MessageMapping` is the routing annotation for BOTH Spring RSocket and Spring
+# STOMP. Until this file existed, `spring-stomp.yml` claimed it alone and every
+# RSocket controller in a scanned module was published as `websocket` — a
+# wrong-PROTOCOL fabrication, stated in `docs/COVERAGE.md` since `A-C1` with the
+# reason it stayed open: "separating them needs a fact that tells an RSocket
+# registration from a STOMP one, and neither catalog reads one".
+#
+# **Spring does not distinguish them on the class at all**, which is why no type
+# gate could close it. Measured (`scripts/probes/w16_rsocket_versus_stomp.md`,
+# section 1): STOMP's `SimpAnnotationMethodMessageHandler.isHandler` tests
+# `@Controller`, and the reactive `MessageMappingMessageHandler` RSocket builds on
+# defaults its bean predicate to a lambda testing `@Controller`. The same
+# stereotype, byte for byte.
+#
+# The fact that DOES separate them is which handler auto-configuration would
+# register (section 3): RSocket's is
+# `@ConditionalOnClass({io.rsocket.RSocket, io.rsocket.transport.netty.server.TcpServerTransport, ...})`.
+# Those types ship in `io.rsocket:rsocket-core` and `io.rsocket:rsocket-transport-netty`
+# (section 4), so the discriminator is a dependency fact and `detect.coordinates`
+# already reads one.
+#
+# BOTH STARTERS PRESENT DERIVES TWO ROWS, and that is a correct answer rather than
+# an ambiguity (§3.6). Both handlers scan the same `@Controller` beans with the
+# same predicate, so a `@MessageMapping` method in such a module really does serve
+# both wires. The two catalogs are independently gated and each derives its own
+# row; nothing here suppresses the other.
+#
+# THE STARTER IS NAMED BESIDE THE LIBRARIES, for the reason F1 makes necessary:
+# transitives are not resolved, so a module declaring `spring-boot-starter-rsocket`
+# records the STARTER and neither `rsocket-core` nor `rsocket-transport-netty`.
+# Gating on the libraries alone would decline exactly the applications this file
+# exists for. Where NEITHER this nor `spring-stomp.yml`'s coordinates are
+# recorded, both decline and the module earns an open question (§3.6).
+detect:
+  required: true
+  coordinates:
+    - "io.rsocket:rsocket-core"
+    - "io.rsocket:rsocket-transport-netty"
+    - "org.springframework.boot:spring-boot-starter-rsocket"
+
+measured:
+  - { artifact: org.springframework:spring-messaging, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/w16_rsocket_versus_stomp.md }
+  - { artifact: org.springframework.boot:spring-boot-autoconfigure, versions: ["3.2.5"],
+      identity: reported, by: scripts/probes/w16_rsocket_versus_stomp.md }
+  # `identity: assumed`, and `retrofit.yml`'s own row is the precedent word for
+  # word: `rsocket-core` writes no version into its manifest and ships no
+  # `pom.properties`, so the bytecode was read and the version string beside it
+  # is the coordinate that resolved the jar rather than anything the jar said.
+  # The probe prints "states no version" in that cell for the same reason.
+  #
+  # `unreported` was written here first — a third value invented for a case the
+  # vocabulary already had a word for, which the closed-set test caught.
+  - { artifact: io.rsocket:rsocket-core, versions: ["1.1.4"],
+      identity: assumed, by: scripts/probes/w16_rsocket_versus_stomp.md }
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # `@Payload` is the same `org.springframework.messaging.handler.annotation`
+  # attribute every other messaging catalog here reads — one library, one
+  # attribute, regardless of which transport carries it.
+  request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
+                  fallback: sole_unannotated }
+  # The same type gate `spring-stomp.yml` carries, and for the same measured
+  # reason: RSocket's handler predicate tests `@Controller`. It does not separate
+  # the two frameworks — nothing on the class does — it stops a lone
+  # `@MessageMapping` method on an unannotated class from minting a declaration
+  # at the empty destination (`A-C1`).
+  type_annotation: org.springframework.stereotype.Controller
+  mapping:
+    path_from: [value]
+    prefix_from: [value]
+    # An RSocket ROUTE is segmented the way a STOMP destination is — Spring
+    # composes class-level and method-level `@MessageMapping` through the same
+    # `AntPathMatcher` — so the seam takes the same separator for the same
+    # reason, and NOT because both are "messaging". `path_separator` is declared
+    # per catalog because composition is the framework's convention.
+    path_separator: "/"
+    # A class-level `@MessageMapping` is a PREFIX here, not a sibling
+    # registration: unlike a broker listener it names a route segment rather than
+    # a destination, and a method under it serves the composed route. This is the
+    # `prefix` half of F2 §3.5's conjunct, which is the default and is written out
+    # rather than left implicit because the file beside it declares `sibling`.
+    class_level: prefix
+    method_from: method
+    # Verbless: an RSocket route declares no HTTP-style verb.
+    all_methods: []
+    prefix_annotation: org.springframework.messaging.handler.annotation.MessageMapping
+    annotations:
+      - { fqn: org.springframework.messaging.handler.annotation.MessageMapping }
+      # `@ConnectMapping` is RSocket-ONLY and has no STOMP counterpart — measured
+      # (section 2): it lives in `messaging/rsocket/`, targets METHOD, and
+      # `spring-stomp.yml` cannot claim it. §3.6 names it as positive RSocket
+      # evidence, and here it is exactly that: a module carrying one derives an
+      # RSocket row from THIS file and no `websocket` row from the other, whatever
+      # the build declares.
+      #
+      # It addresses the CONNECTION rather than a route, and its `value` is
+      # optional — a bare `@ConnectMapping` names no route at all and derives the
+      # class-level prefix alone, or an unresolved row where the class declares
+      # none. That is the honest answer for a handler whose address is "this
+      # connection".
+      - { fqn: org.springframework.messaging.rsocket.annotation.ConnectMapping }
+
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

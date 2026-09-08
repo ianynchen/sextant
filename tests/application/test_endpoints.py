@@ -4,10 +4,12 @@ from pathlib import Path
 
 import pytest
 import yaml
-from fixture_module import FIXTURE_CAPABILITIES
+from fixture_module import FIXTURE_CAPABILITIES, write_fixture_module_fact_with
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
+from sextant.application.resolve.open_questions import reset_open_questions
+from sextant.application.resolve.service_identity import record_service_identity_gaps
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -4159,6 +4161,11 @@ def test_an_sendtouser_handler_derives_the_same_honest_unresolved_reply_row_as_n
     tmp_path: Path,
 ):
     _sendtouser_facts(tmp_path / "facts")
+    # `spring-stomp` carries `detect.required` since F2 §3.6 — `@MessageMapping`
+    # cannot say whether a `@Controller` serves STOMP or RSocket, so the build is
+    # the only thing that can. This test is about `@SendToUser`, not about the
+    # gate, so it declares the coordinate and moves on.
+    write_fixture_module_fact_with(tmp_path / "facts", ("org.springframework:spring-websocket",))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     skipped = derive_endpoints(
@@ -5756,6 +5763,14 @@ def _gate_facts(
 def _gate_rows(tmp_path: Path, catalog_id: str, **facts) -> list[tuple]:
     _gate_facts(tmp_path / "facts", **facts)
     catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == catalog_id)
+    # A catalog carrying `detect.required` needs the module fact its gate reads
+    # (F2 §3.6). These tests are about a catalog's own MATCHING rules, so the
+    # coordinate is written from the catalog's own declaration rather than
+    # hard-coded — a test asserting what `spring-stomp` matches should not also
+    # be asserting which coordinate gates it, and the test that IS about the gate
+    # varies it explicitly.
+    if catalog.detect_required:
+        write_fixture_module_fact_with(tmp_path / "facts", catalog.detect_coordinates[:1])
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     derive_endpoints(
@@ -6899,3 +6914,156 @@ def test_a_catalog_declaring_an_unknown_class_level_value_is_refused(tmp_path: P
         assert [row["path"] for row in workspace.query("endpoints")] == ["/prior"]
     finally:
         workspace.close()
+
+
+# --- F2 §3.6: RSocket versus STOMP, told apart by the build ------------------
+
+_MESSAGE_MAPPING = "org/springframework/messaging/handler/annotation/MessageMapping#"
+_SPRING_CONTROLLER = "org/springframework/stereotype/Controller#"
+
+
+def _messaging_controller_facts(root: Path) -> None:
+    """A `@Controller` with one `@MessageMapping("/place")` method — the shape
+    BOTH frameworks scan, with the same predicate, and which therefore says
+    nothing about which of them serves it."""
+    owner = "com/acme/orders/LiveController#"
+    method = f"{owner}place(sig_p)."
+    document = Document(
+        document_id="doc_ws",
+        relative_path="com/acme/orders/LiveController.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    write_fact_file(
+        root / "LiveController.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_ws", symbol=owner, construct_kind=ConstructKind.CLASS),
+            SymbolFact(
+                document_id="doc_ws",
+                symbol=method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="V")),
+            ),
+            AnnotationFact(
+                document_id="doc_ws",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(annotation=_SPRING_CONTROLLER, args={}),
+            ),
+            AnnotationFact(
+                document_id="doc_ws",
+                target=method,
+                retention="runtime",
+                use=AnnotationUse(annotation=_MESSAGE_MAPPING, args={"value": ["/place"]}),
+            ),
+        ],
+    )
+
+
+def _messaging_rows(tmp_path: Path, coordinates: tuple[str, ...]) -> set:
+    root = tmp_path / "facts"
+    _messaging_controller_facts(root)
+    write_fixture_module_fact_with(root, coordinates)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    catalogs = [
+        c for c in YamlCatalogSource(CATALOGS).load() if c.id in ("spring-stomp", "spring-rsocket")
+    ]
+    derive_endpoints(workspace, catalogs, capabilities={"annotation_args", "typed_signatures"})
+    found = {(str(row["protocol"]), str(row["path"])) for row in workspace.query("endpoints")}
+    workspace.close()
+    return found
+
+
+@pytest.mark.declines("spring-rsocket")
+@pytest.mark.pins("dependencies.detect-required-is-a-conjunct")
+def test_a_message_mapping_controller_in_a_websocket_module_is_not_an_rsocket_row(
+    tmp_path: Path,
+):
+    """F2 §3.6's near-miss, and it is the discriminator itself.
+
+    EVERY conjunct of `spring-rsocket.yml`'s rule holds — the class carries
+    `@Controller`, the method carries `@MessageMapping`, and Spring's own RSocket
+    handler would scan exactly this class, because its bean predicate is
+    `hasAnnotation(beanType, Controller.class)`, byte for byte STOMP's
+    (`scripts/probes/w16_rsocket_versus_stomp.md`, section 1).
+
+    Only the BUILD differs. That is the whole finding: no fact about the class
+    separates an RSocket controller from a STOMP one, so the rule cannot be a
+    conjunct over evidence and has to be a conjunct over the module's
+    dependencies.
+    """
+    assert _messaging_rows(tmp_path, ("org.springframework:spring-websocket",)) == {
+        ("websocket", "/place")
+    }
+
+
+@pytest.mark.declines("spring-stomp")
+@pytest.mark.pins("dependencies.detect-required-is-a-conjunct")
+def test_the_same_controller_in_an_rsocket_module_is_not_a_websocket_row(tmp_path: Path):
+    """The mirror, and the row this wave exists to stop. Before W16 this module
+    derived `websocket` — a wrong-PROTOCOL fabrication, and `protocol` is identity,
+    so DR-5 linked it in another consumer's graph to endpoints this module never
+    speaks to."""
+    assert _messaging_rows(tmp_path, ("io.rsocket:rsocket-core",)) == {("rsocket", "/place")}
+
+
+def test_both_starters_present_derives_both_rows(tmp_path: Path):
+    """§3.6: "Both present → two rows. Both handlers scan the same beans; the
+    method really does serve both. This is a correct answer, not an ambiguity."
+
+    Nothing implements it — the two catalogs are independently gated and neither
+    suppresses the other — which is why it is asserted rather than assumed."""
+    assert _messaging_rows(
+        tmp_path,
+        ("org.springframework:spring-websocket", "io.rsocket:rsocket-core"),
+    ) == {("websocket", "/place"), ("rsocket", "/place")}
+
+
+def test_a_build_that_records_nothing_earns_a_question_rather_than_a_guess(tmp_path: Path):
+    """§3.6's last clause: "Neither resolvable (parent-POM inheritance, a stated
+    refusal that survives F1) → open question, not a guess."
+
+    A module whose build records NO coordinates cannot be asked whether it
+    declares `spring-websocket` or `rsocket-core` — and F1 does not resolve
+    transitives, so a starter would not settle it either. Both catalogs decline,
+    so no row is derived on either protocol; without a question the module's
+    messaging surface would vanish silently, which is the same absence a module
+    with no handlers at all produces.
+
+    The guess this refuses is the one that stood until W16: whichever catalog
+    claimed `@MessageMapping` first published the class on ITS protocol, and
+    `spring-stomp` claimed it, so every RSocket controller in the estate read as
+    `websocket`.
+    """
+    root = tmp_path / "facts"
+    _messaging_controller_facts(root)
+    # No module fact at all — the case the gate calls unanswerable, as distinct
+    # from a build that records coordinates and names neither library.
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    catalogs = [
+        c for c in YamlCatalogSource(CATALOGS).load() if c.id in ("spring-stomp", "spring-rsocket")
+    ]
+    derive_endpoints(workspace, catalogs, capabilities={"annotation_args", "typed_signatures"})
+    reset_open_questions(workspace)
+    record_service_identity_gaps(workspace, catalogs)
+    rows = workspace.query("endpoints")
+    questions = workspace.query("open_questions")
+    workspace.close()
+
+    assert rows == []
+    # One per catalog: each says its own framework could not be confirmed, and a
+    # reader closing either closes the question for both.
+    assert {q["question"] for q in questions} == {"handler_protocol"}
+    assert {str(q["path"]) for q in questions} == {"com/acme/orders/LiveController#"}
+    assert all(q["protocol"] is None for q in questions)

@@ -333,7 +333,7 @@ the row's `protocol` — never by the catalog that derived it.
 | Row | Renders | Why |
 |---|---|---|
 | `http` / `grpc` | `GET /v1/orders` | the verb implies its own protocol |
-| `kafka` / `jms` / `sqs` / `pubsub` / `amqp` / `pulsar` / `websocket` / `soap` | `kafka order-events`, `amqp orders.created`, `websocket /orders/place`, `soap {http://orders.example.com/ws}placeOrderRequest` | verbless: the protocol defines no verb, so there is none to print |
+| `kafka` / `jms` / `sqs` / `pubsub` / `amqp` / `pulsar` / `websocket` / `rsocket` / `soap` | `kafka order-events`, `amqp orders.created`, `websocket /orders/place`, `soap {http://orders.example.com/ws}placeOrderRequest` | verbless: the protocol defines no verb, so there is none to print |
 | `graphql` root operation | `graphql query orders` | verbed, and PREFIXED — a bare `query orders` names nothing in particular |
 | `graphql` resolver (`method` NULL) | `graphql Order.lines` | the NULL is an absence by design, not an unread verb |
 | `sse` | `sse GET /events/stream` | verbed with a real HTTP verb, and prefixed so it does not read as an ordinary REST route |

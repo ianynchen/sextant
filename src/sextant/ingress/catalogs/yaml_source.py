@@ -71,6 +71,7 @@ class YamlCatalogSource:
                     matches=_required(raw, "matches", path),
                     source=path,
                     detect_coordinates=_coordinates(raw, path),
+                    detect_required=_detect_required(raw, path),
                     # D02 §2a — optional, and framework-specific: an envelope
                     # type a payload sits inside belongs to the framework that
                     # defines it, so `wrappers` stays on the catalog while the
@@ -165,6 +166,27 @@ def _required(raw: dict[str, Any], key: str, path: Path) -> Any:
             f"loading catalog {path}: no `{key}` — every catalog declares one (D02 §1)"
         )
     return raw[key]
+
+
+def _detect_required(raw: dict[str, object], path: Path) -> bool:
+    """`detect.required` — whether the coordinates are a conjunct (F2 §3.6).
+
+    Refused unless the catalog also declares coordinates: a catalog requiring a
+    dependency it does not name would gate on nothing and derive nothing, which
+    is the silent-disable shape rather than a strict one.
+    """
+    detect = raw.get("detect") or {}
+    if not isinstance(detect, dict):
+        return False
+    required = detect.get("required", False)
+    if not isinstance(required, bool):
+        raise CatalogError(f"loading catalog {path}: `detect.required` must be true or false")
+    if required and not detect.get("coordinates"):
+        raise CatalogError(
+            f"loading catalog {path}: `detect.required: true` with no `detect.coordinates` "
+            f"gates on nothing and would derive nothing at all"
+        )
+    return required
 
 
 def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:

@@ -14,6 +14,51 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Every Spring RSocket controller was published as `websocket`** — a wrong-PROTOCOL
+  fabrication, and `protocol` is the column DR-5 links on, so those rows reached other
+  consumers' graphs (W16).
+
+  `@MessageMapping` is the routing annotation for Spring RSocket and Spring STOMP alike, and
+  `spring-stomp.yml` claimed it. `docs/COVERAGE.md` had stated the defect in place since
+  `A-C1` together with the reason it stayed open: "separating them needs a fact that tells an
+  RSocket registration from a STOMP one, and neither catalog reads one."
+
+  **Measured (`scripts/probes/w16_rsocket_versus_stomp.md`): Spring does not distinguish them
+  on the class at all.** STOMP's `SimpAnnotationMethodMessageHandler.isHandler` tests
+  `@Controller`; the reactive handler RSocket builds on defaults its bean predicate to a
+  lambda testing `@Controller` — the same stereotype through the same
+  `AnnotatedElementUtils.hasAnnotation` call. So `A-C1`'s type gate could never have separated
+  them, and no fact about the class can. What does is which handler auto-configuration would
+  REGISTER, which is a dependency fact.
+
+  `spring-rsocket.yml` ships gated on the RSocket libraries, `spring-stomp.yml` is re-gated on
+  `spring-websocket`, and both name the STARTERS beside the libraries — F1 does not resolve
+  transitives, so a module declaring `spring-boot-starter-rsocket` records only the starter,
+  and gating on the library alone would decline exactly the applications the catalog is for.
+  `rsocket` joined D00's protocol set in the same change.
+
+  **`detect.coordinates` was read by NO `annotation_driven` catalog**, so both gates were inert
+  when first written and the new catalog derived a SECOND row for the same controller — the
+  fabrication doubled rather than fixed. Only `derived_resource` and `config_join` are
+  `DEPENDENCY_GATED`, and gating the whole style would have been wrong: 20 of the 22 need no
+  gate because their evidence NAMES their framework (D02 ruling R9). `detect.required` marks
+  the two whose evidence does not.
+
+  The fixture was itself the ambiguous case: its POM declared `spring-messaging` and nothing
+  saying which wire `OrderStompController` served, so its five rows were `websocket` on no
+  evidence. It declares `spring-websocket` now, as a real STOMP application does — nothing in
+  the sources needed it to compile, which is why it was missing.
+
+  A module whose build records NO coordinates earns a new `handler_protocol` question rather
+  than a row. That is a different finding from a build that records coordinates and names
+  neither library: the second has said something, the first has said nothing, and parent-POM
+  inheritance is the real case F1 cannot settle. Both libraries present derives TWO rows,
+  which §3.6 calls a correct answer rather than an ambiguity — nothing implements it, so it is
+  asserted rather than assumed.
+
+  `spring-stomp` also left `_NO_DECLINING_TEST_YET`: its near-miss is the discriminator
+  itself, where every conjunct of the rule holds and only the build differs.
+
 - **A binder nobody mapped was published on the catalog's default protocol** — the one
   defect in this analysis that leaves the bundle and lands in someone else's data (W13).
 

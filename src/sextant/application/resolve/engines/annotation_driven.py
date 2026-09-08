@@ -12,6 +12,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.dependencies import unmet_dependency
 from sextant.application.resolve.effective_annotations import (
     composed_mapping_rows,
     folded_rows,
@@ -217,6 +218,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 # naming what it serves (2O design §1b, fix round 2's I-2). Absent on every
 # catalog written before it, and inert while absent — `gaps` returns an empty
 # list and `run` is untouched.
+_HANDLER_PROTOCOL = "handler_protocol"
+_UNRESOLVABLE_FRAMEWORK = (
+    "this module's build records no dependency coordinates, so whether it declares one of "
+    "{coordinates} could not be answered — and the annotation this class carries is claimed "
+    "by more than one framework, so which wire it serves is unread"
+)
 _CORROBORATES = "corroborates"
 _CLASS_ANNOTATIONS = "class_annotations"
 
@@ -256,9 +263,10 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     engine's own walk. `resolve/service_identity.py` runs this after
     `derive_endpoints`, so the table is complete when it is read.
     """
+    unresolvable = _unresolvable_framework_questions(workspace, catalog)
     declared = _corroboration(catalog)
     if declared is None:
-        return []
+        return unresolvable
     flagged = {_catalog_symbol(fqn) for fqn in declared}
     served = [
         str(row["handler"])
@@ -296,6 +304,71 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def _unresolvable_framework_questions(
+    workspace: Workspace, catalog: Catalog
+) -> list[dict[str, Any]]:
+    """One `handler_protocol` question per class carrying this catalog's mapping
+    annotation, where the module's build cannot say whether this catalog's
+    framework is the one serving it (F2 §3.6).
+
+    Only for a catalog declaring `detect.required`, and only where the gate came
+    back UNANSWERABLE rather than answered-no. Those are different findings: a
+    build that records coordinates and names neither library has said something,
+    while a build that records none — parent-POM inheritance, a workspace whose
+    facts predate the module fact — has said nothing, and F1 does not resolve
+    transitives to settle it.
+
+    §3.6's own words: "Neither resolvable ... → open question, not a guess." The
+    guess it refuses is the one that stood before W16, where a `@MessageMapping`
+    class was published as `websocket` because one catalog happened to claim the
+    annotation first.
+
+    The question's `protocol` is NULL. Naming one would answer the question the
+    row exists to ask.
+    """
+    if not catalog.detect_required:
+        return []
+    unmet = unmet_dependency(workspace, catalog)
+    if unmet is None or "recorded no dependency coordinates" not in unmet:
+        return []
+    mapping = catalog.matches.get("mapping") or {}
+    wanted = {_catalog_symbol(str(entry["fqn"])) for entry in mapping.get("annotations") or []}
+    if not wanted:
+        return []
+    # `method_declarations`, not `method_symbols`: the latter selects the symbol
+    # alone, and the enclosing TYPE is what a question about a handler class has
+    # to name.
+    enclosing = {
+        str(row["symbol"]): str(row["enclosing"] or "")
+        for row in workspace.query("method_declarations")
+    }
+    found: dict[str, str] = {}
+    for row in workspace.query("annotations"):
+        annotation = str(row["annotation"])
+        if annotation not in wanted:
+            continue
+        target = str(row["target"])
+        owner = enclosing.get(target) or target
+        found.setdefault(owner, annotation)
+    return [
+        {
+            "protocol": None,
+            "method": None,
+            "path": owner,
+            "question": _HANDLER_PROTOCOL,
+            "candidates": json.dumps(
+                [{"class": owner, "annotation": annotation}],
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "evidence": _UNRESOLVABLE_FRAMEWORK.format(
+                coordinates=", ".join(catalog.detect_coordinates)
+            ),
+        }
+        for owner, annotation in sorted(found.items())
+    ]
 
 
 def _corroboration(catalog: Catalog) -> list[str] | None:

@@ -130,7 +130,11 @@ def unmet_dependency(workspace: Workspace, catalog: Catalog) -> str | None:
     fabrication this gate exists to prevent, and silence about it is the worst
     way to find out.
     """
-    if catalog.style not in DEPENDENCY_GATED:
+    # Per-CATALOG as well as per-style (F2 §3.6). Style was a proxy for "is this
+    # catalog's evidence enough to name its framework", and `spring-stomp` /
+    # `spring-rsocket` are the first pair where the proxy fails: they share
+    # `@MessageMapping`, so neither can be told from the other by evidence at all.
+    if catalog.style not in DEPENDENCY_GATED and not catalog.detect_required:
         return None
     if not catalog.detect_coordinates:
         raise CatalogError(

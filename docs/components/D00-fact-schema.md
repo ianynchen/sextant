@@ -240,7 +240,7 @@ exactly as the other two do the day something writes one.
 splitting it later is a rendering choice rather than a re-index.
 
 **`protocol`** — `http`, `soap`, `grpc`, `kafka`, `jms`, `sqs`, `pubsub`, `graphql`,
-`websocket`, `sse`, `amqp`, `pulsar`. `message` is
+`websocket`, `sse`, `amqp`, `pulsar`, `rsocket`. `message` is
 retired: it was reserved and never declared by any shipped catalog, so nothing migrates.
 The broker family is the protocol because linking gates on protocol equality (DR-5), and
 a Kafka topic can never be answered by an SQS queue.
@@ -265,6 +265,18 @@ stopgap migrated to `rabbit: amqp` in the same phase. Both are live: `amqp` from
 both from Task 1 until the 2O documentation sweep — a §5.1 violation, recorded rather than
 quietly corrected, because the code shipped the members and the schema document did not say
 so.*
+
+**`rsocket` was added alone** (F2 §3.6), which the paragraph above says costs a schema
+change: this is it, and the member, this list, [D06](D06-bundle-format.md)'s verbless table
+and `docs/COVERAGE.md` moved in one edit. Its DR-5 argument is the same — an RSocket route
+can never be answered by a STOMP destination — and until it existed, an RSocket controller
+was published as `websocket`, a wrong-PROTOCOL fabrication `docs/COVERAGE.md` had stated in
+place since `A-C1`. What kept it open was that **Spring does not distinguish the two on the
+class at all**: measured
+(`scripts/probes/w16_rsocket_versus_stomp.md`), `SimpAnnotationMethodMessageHandler.isHandler`
+and the reactive handler's default bean predicate both test `@Controller`, so no fact about
+the class could ever separate them. The fact that does is which handler auto-configuration
+would register, which is a dependency fact.
 
 **`control_flow_kind`** — `sequential`, `conditional`, `alternative`, `loop`, `handler`
 

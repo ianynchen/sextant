@@ -711,3 +711,34 @@ def test_an_unselected_binding_question_renders_the_candidate_and_the_key():
     assert (
         "- `orders` — unselected_binding: orders (set `spring.cloud.function.definition` to choose)"
     ) in text
+
+
+def test_a_handler_protocol_question_renders_the_class_and_annotation():
+    """F2 §3.6's kind. Added with its arm test in the same change, because the
+    review one wave earlier found the two preceding kinds shipping arms that
+    nothing exercised — the whole suite passed with each disabled, and a wrong
+    key would raise `KeyError` on the first real module to file one."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "",
+            "method": None,
+            "path": "com/acme/orders/LiveController#",
+            "question": "handler_protocol",
+            "candidates": json.dumps(
+                [
+                    {
+                        "class": "com/acme/orders/LiveController#",
+                        "annotation": "org/springframework/messaging/handler/annotation/MessageMapping#",
+                    }
+                ]
+            ),
+            "evidence": "this module's build records no dependency coordinates",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `com/acme/orders/LiveController#` — handler_protocol: "
+        "com/acme/orders/LiveController# carries "
+        "org/springframework/messaging/handler/annotation/MessageMapping#"
+    ) in text

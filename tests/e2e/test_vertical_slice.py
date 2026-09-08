@@ -1051,8 +1051,19 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
     # emptily, since 2O Task 9: this fixture's build declares no Spring
     # Integration, so the dependency gate skips that catalog by name — which
     # is the gate working and leaves every claim below unaffected.
+    #
+    # `spring-rsocket` joins it in F2 §3.6, for the same reason one framework
+    # over: this fixture's POM declares `spring-websocket` and no RSocket
+    # library, so the catalog that would publish its `@MessageMapping` methods on
+    # `rsocket` is skipped and the one that publishes them on `websocket` runs.
+    # Before W16 neither was gated on anything that could tell them apart — the
+    # annotation belongs to both frameworks, and Spring's own handlers scan for
+    # it with the same predicate — so these rows were `websocket` on no evidence.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
-    assert [entry["catalog_id"] for entry in metadata["skipped_catalogs"]] == ["spring-integration"]
+    assert [entry["catalog_id"] for entry in metadata["skipped_catalogs"]] == [
+        "spring-rsocket",
+        "spring-integration",
+    ]
 
     workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
     try:

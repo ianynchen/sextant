@@ -3297,16 +3297,28 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
     catalog declares is granted, because a catalog gated out never reaches
     its engine and so would never be validated at all.
 
-    **Four catalogs ARE skipped here, and that is the behaviour rather than a
-    hole in it** (2O design §2a, ruling R9; `A-C5`): the two dependency-gated
-    styles derive from evidence that names no framework — `spring-data-rest`
-    from an interface that names no HTTP, the three `config_join` files from a
-    method's return type, a configuration key and an annotation argument — so
-    all four are gated on the module's build declaring the framework. This workspace has no module
-    fact at all, which is the unanswerable case, and the skip carried into the
-    manifest with its reason is exactly the visible degradation the gate exists
-    to produce. Every other catalog reaches its engine, which is what makes
-    this a validation check rather than a gating one."""
+    **Six catalogs ARE skipped here, and that is the behaviour rather than a
+    hole in it** (2O design §2a, ruling R9; `A-C5`; F2 §3.6): the two
+    dependency-gated STYLES derive from evidence that names no framework —
+    `spring-data-rest` from an interface that names no HTTP, the three
+    `config_join` files from a method's return type, a configuration key and an
+    annotation argument — so all four are gated on the module's build declaring
+    the framework.
+
+    `spring-rsocket` and `spring-stomp` are the fifth and sixth, and they are
+    gated per-CATALOG rather than by style (`detect.required`). Their evidence
+    names a framework — `@MessageMapping` — but names TWO of them: it is Spring
+    RSocket's routing annotation and Spring STOMP's alike, and Spring's own
+    handlers scan for it with the same `@Controller` predicate, byte for byte
+    (`scripts/probes/w16_rsocket_versus_stomp.md`). Evidence that names two
+    frameworks names neither, which is the same unanswerable shape the four above
+    are in and the reason ruling R9's style list needed a per-catalog escape.
+
+    This workspace has no module fact at all, which is the unanswerable case, and
+    the skip carried into the manifest with its reason is exactly the visible
+    degradation the gate exists to produce. Every other catalog reaches its
+    engine, which is what makes this a validation check rather than a gating
+    one."""
     catalogs = YamlCatalogSource(CATALOGS_DIR).load()
     granted = {capability for catalog in catalogs for capability in catalog.requires}
     write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
@@ -3323,6 +3335,8 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
         "spring-data-rest",
         "spring-integration",
         "spring-kafka-media",
+        "spring-rsocket",
+        "spring-stomp",
     ]
     assert all(
         "recorded no dependency coordinates" in entry.missing_capabilities[0] for entry in skipped

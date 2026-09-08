@@ -34,6 +34,17 @@ M2 = Path.home() / ".m2" / "repository"
 # `coordinate`, and the classes read out of it.
 MESSAGING = "org.springframework:spring-messaging:6.1.6"
 AUTOCONFIGURE = "org.springframework.boot:spring-boot-autoconfigure:3.2.5"
+# The artifacts that CARRY each `@ConditionalOnClass` type. The condition names a
+# type; a gate needs the coordinate that ships it, and the two are not the same
+# question.
+CARRIERS = (
+    (
+        "org.springframework:spring-websocket:6.1.6",
+        "org/springframework/web/socket/config/annotation/WebSocketMessageBrokerConfigurer",
+        "STOMP",
+    ),
+    ("io.rsocket:rsocket-core:1.1.4", "io/rsocket/RSocket", "RSocket"),
+)
 
 STOMP_HANDLER = (
     "org/springframework/messaging/simp/annotation/support/SimpAnnotationMethodMessageHandler"
@@ -106,6 +117,30 @@ def checked(artifact: str) -> tuple[Path, str, str]:
             f"run did not read."
         )
     return jar, reported, source
+
+
+def reported_or_silent(artifact: str) -> tuple[Path, str]:
+    """The jar, and either the version IT reports or an explicit statement that it
+    reports none.
+
+    `checked` aborts when a jar states no version, and that is right where a
+    version LABELS measurements — CP-5's failure was a column header naming a
+    version the process never read. This table's claim is different: that a
+    coordinate carries a class, which is true or false whatever the jar says about
+    its own version. So the version is context here, and the honest cell for an
+    artifact that states none is "states no version", never the coordinate's
+    number printed as though the jar had confirmed it.
+
+    Measured, and the reason this function exists: `rsocket-core-1.1.4.jar` carries
+    no `META-INF/maven/*/pom.properties` and no `Implementation-Version` in its
+    manifest.
+    """
+    jar = resolve(artifact)
+    try:
+        version, source = self_reported_version(jar)
+    except ProbeError:
+        return jar, "**states no version**"
+    return jar, f"{version} (from its {source})"
 
 
 def _javap(jar: Path, internal: str, *flags: str) -> str:
@@ -222,6 +257,24 @@ def main() -> None:
     ):
         named = conditional_classes(boot, internal)
         print(f"| {label} | {', '.join(f'`{n}`' for n in named) or '—'} |")
+
+    print("\n### 4. Which ARTIFACT carries the type each condition names\n")
+    print(
+        "A `@ConditionalOnClass` names a TYPE; a catalog gate names a COORDINATE, and the "
+        "two are different questions. Each row is the jar checked for the class.\n"
+    )
+    print("| for | coordinate | carries the class |")
+    print("|---|---|---|")
+    for artifact, internal, which in CARRIERS:
+        jar, version = reported_or_silent(artifact)
+        with zipfile.ZipFile(jar) as archive:
+            present = f"{internal}.class" in archive.namelist()
+        coordinate = ":".join(artifact.split(":")[:2])
+        asked = artifact.split(":")[2]
+        print(
+            f"| {which} | `{coordinate}`, asked for {asked}, jar says {version} "
+            f"| {'yes' if present else '**NO**'} |"
+        )
 
 
 if __name__ == "__main__":

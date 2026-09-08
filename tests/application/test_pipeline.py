@@ -845,7 +845,22 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # skipped rather than silently finding nothing. The count above does not
     # move for it either — that catalog declares no `key` and mints no endpoint
     # row at all, by design (2O design §5).
+    #
+    # F2 §3.6 adds the third, and it is the gate doing the job it was extended
+    # for: this fixture declares `spring-websocket` and no RSocket coordinate, so
+    # `spring-rsocket.yml` is skipped while `spring-stomp.yml` runs. Before W16
+    # neither was gated on anything that could tell them apart — `@MessageMapping`
+    # is both frameworks' routing annotation, and Spring's own handlers scan for
+    # it with the same `@Controller` predicate — so this fixture's five STOMP rows
+    # were published on `websocket` with no evidence distinguishing them from
+    # RSocket, and adding the RSocket catalog ungated derived five more on
+    # `rsocket`. The count above does not move: the skip is what keeps it still.
+    # ORDER is the engine ordering `derive_endpoints` sorts by, not the catalog
+    # id: `spring-rsocket` is `annotation_driven` and runs before the two
+    # dependency-gated styles, which is why it heads the list rather than
+    # trailing it alphabetically.
     assert [entry.catalog_id for entry in report.skipped_catalogs] == [
+        "spring-rsocket",
         "spring-data-rest",
         "spring-integration",
     ]

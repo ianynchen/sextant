@@ -646,7 +646,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**37 of 56 catalogs name the artifact and versions their rules were read from. 19 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**38 of 57 catalogs name the artifact and versions their rules were read from. 19 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -682,12 +682,16 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `spring-rabbit` | `org.springframework.amqp:spring-rabbit` | 3.1.4, 4.1.1 |
 | `spring-restclient` | `org.springframework:spring-web` | 6.1.6, 7.0.2 |
 | `spring-resttemplate` | `org.springframework:spring-web` | 6.1.6 |
+| `spring-rsocket` | `io.rsocket:rsocket-core` | 1.1.4 |
+|  | `org.springframework.boot:spring-boot-autoconfigure` | 3.2.5 |
+|  | `org.springframework:spring-messaging` | 6.1.6 |
 | `spring-scheduling` | `org.springframework:spring-context` | 6.1.6, 6.2.19, 7.0.9 |
 | `spring-sqs-legacy` | `io.awspring.cloud:spring-cloud-aws-messaging` | 2.4.4 |
 |  | `org.springframework.cloud:spring-cloud-aws-messaging` | 2.2.6.RELEASE |
 | `spring-sqs-template` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1 |
 | `spring-sqs` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1, 4.1.1 |
 | `spring-stomp` | `org.springframework:spring-messaging` | 6.1.6 |
+|  | `org.springframework:spring-websocket` | 6.1.6 |
 | `spring-web` | `org.springframework:spring-webmvc` | 6.1.6, 6.2.15, 7.0.2, 7.0.9 |
 | `spring-webclient` | `org.springframework:spring-webflux` | 6.1.6, 7.0.2 |
 | `spring-webflux-router` | `org.springframework:spring-webflux` | 6.1.6, 7.0.2 |
@@ -1604,14 +1608,41 @@ Boundaries, each verified against the shipped code:
   export entirely. Silent before `A-C1`, stated here now. **Falsified by** any
   `@ServerEndpoint` class with no `@OnMessage`; closes by listing the lifecycle annotations
   beside it, which needs a probe of what the container serves for each.
-- **`spring-stomp.yml` claims `org.springframework.messaging.handler.annotation.MessageMapping`,
-  and that annotation is also THE routing annotation for Spring RSocket controllers.** An
-  RSocket handler in a scanned module would be published by this catalog as a `websocket`
-  endpoint — a wrong-PROTOCOL fabrication rather than an empty-address one. The FQN identity is
-  certain; what a real RSocket controller derives is **unverified**, and the `@Controller` gate
-  `A-C1` added does not separate the two (an RSocket controller is a `@Controller` too).
-  Raised, not closed: separating them needs a fact that tells an RSocket registration from a
-  STOMP one, and neither catalog reads one.
+- **RSocket and STOMP are told apart by the build** ✅ **CLOSED** (W16). This entry read
+  "raised, not closed: separating them needs a fact that tells an RSocket registration from a
+  STOMP one, and neither catalog reads one" — `@MessageMapping` is the routing annotation for
+  BOTH, so every RSocket controller in a scanned module was published as `websocket`, a
+  wrong-PROTOCOL fabrication rather than an empty-address one.
+
+  Measured (`scripts/probes/w16_rsocket_versus_stomp.md`): **Spring does not distinguish them
+  on the class at all.** STOMP's `SimpAnnotationMethodMessageHandler.isHandler` tests
+  `@Controller`, and the reactive handler RSocket builds on defaults its bean predicate to a
+  lambda testing `@Controller` — the same stereotype through the same
+  `AnnotatedElementUtils.hasAnnotation` call. So the `@Controller` gate `A-C1` added could
+  never have separated them, and no other fact about the class can either.
+
+  The fact that does is which handler auto-configuration would REGISTER:
+  `@ConditionalOnClass(io.rsocket.RSocket, …)` against
+  `@ConditionalOnClass(WebSocketMessageBrokerConfigurer)`. Both catalogs gate on the
+  coordinates that ship those types, and on the STARTERS beside them — F1 does not resolve
+  transitives, so a module declaring `spring-boot-starter-rsocket` records the starter alone.
+  `rsocket` joined D00's protocol set in the same change.
+
+  **Three residuals, each stated rather than closed:**
+  - **A module whose build records NO coordinates earns a `handler_protocol` question**, not a
+    row. Parent-POM inheritance is the real case; F1 cannot settle it. A build that records
+    coordinates and names neither library has said something and is declined outright — the
+    two absences are different findings.
+  - **Both libraries present derives TWO rows**, which §3.6 calls a correct answer rather than
+    an ambiguity: both handlers scan the same beans with the same predicate. A module carrying
+    RSocket over its WebSocket transport for ONE framework gets a deliberate over-report, and
+    how common that is was not measured.
+  - **`detect.required` is what makes the gate real for these two**, and only these two.
+    `detect.coordinates` had been read by no `annotation_driven` catalog — only
+    `derived_resource` and `config_join` are `DEPENDENCY_GATED` — so both gates were inert when
+    first written and the RSocket catalog derived a SECOND row for the same controller. Gating
+    the whole style would have been wrong: 20 of the 22 need no gate because their evidence
+    names their framework (D02 ruling R9).
 - **A raw WebSocket frame is untyped, and the row says so.** `jakarta-websocket.yml`
   deliberately declares no `request_body` block: `@OnMessage(String frame)`'s parameter is
   an opaque frame, not a declared contract, and the protocol offers no `@Payload`-shaped

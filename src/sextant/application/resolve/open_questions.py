@@ -59,6 +59,15 @@ QUESTIONS = (
     # declared method returning one of the declared interfaces. Suppressing without
     # this question turned a known over-report into a silent under-report.
     "unselected_binding",
+    # F2 §3.6: a class carrying a messaging handler annotation two frameworks
+    # share, in a module whose build names neither framework's library. WHICH
+    # wire it serves is unread. Candidates: the class and the annotation.
+    #
+    # It is not `service_identity`: that asks what a service is CALLED, this asks
+    # what PROTOCOL it speaks — and protocol is the column DR-5 links on, so
+    # answering it wrongly reaches other people's graphs while a wrong name does
+    # not.
+    "handler_protocol",
 )
 
 

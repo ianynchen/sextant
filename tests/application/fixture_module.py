@@ -54,12 +54,34 @@ from sextant.domain.facts import Document, ModuleFact
 FIXTURE_GATED_COORDINATES = (
     "org.springframework.cloud:spring-cloud-stream",
     "org.springframework.kafka:spring-kafka",
+    # F2 §3.6. `spring-stomp.yml` gates on this now, because `@MessageMapping`
+    # alone cannot say whether a `@Controller` serves STOMP or RSocket — Spring's
+    # own handlers do not distinguish them either. Omitting it here would leave
+    # this harness deriving no STOMP rows while the e2e suite (which runs the real
+    # detector over a POM that DOES declare it) derives five, and the difference
+    # would read as a resolver bug rather than as a missing line in this tuple.
+    "org.springframework:spring-websocket",
 )
+
+
+def write_fixture_module_fact_with(facts: Path, coordinates: tuple[str, ...]) -> None:
+    """The module fact, with the coordinates the caller names.
+
+    Separate from `write_fixture_module_fact` because a test about a DEPENDENCY
+    GATE has to vary the one thing that function fixes. F2 §3.6's pair is the
+    first such test: `spring-stomp` and `spring-rsocket` are told apart by the
+    build and by nothing else, so a harness that always writes the same
+    coordinates cannot express either side of the question."""
+    _write_module_fact(facts, coordinates)
 
 
 def write_fixture_module_fact(facts: Path) -> None:
     """The module fact `resolve/dependencies.py` reads, written beside the
     scanner's own fact files."""
+    _write_module_fact(facts, FIXTURE_GATED_COORDINATES)
+
+
+def _write_module_fact(facts: Path, coordinates: tuple[str, ...]) -> None:
     write_fact_file(
         facts / "module.jsonl",
         Document(
@@ -83,7 +105,7 @@ def write_fixture_module_fact(facts: Path) -> None:
                 languages=["java"],
                 source_roots=["src/main/java"],
                 output_dirs=["target/classes"],
-                dependency_coordinates=list(FIXTURE_GATED_COORDINATES),
+                dependency_coordinates=list(coordinates),
             )
         ],
     )

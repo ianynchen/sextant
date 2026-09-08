@@ -1009,6 +1009,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "dependencies.detect-required-is-a-conjunct": Guard(
+        what="a catalog declaring `detect.required` derives NOTHING in a module whose build "
+        "does not name one of its coordinates",
+        why="F2 §3.6. `spring-stomp` and `spring-rsocket` both claim `@MessageMapping`, and "
+        "Spring's own handlers scan for it with the SAME `@Controller` predicate — measured, "
+        "byte for byte — so no fact about the class separates a STOMP controller from an "
+        "RSocket one. The build is the only discriminator there is. Without this conjunct "
+        "whichever catalog claims the annotation first publishes the class on ITS protocol, "
+        "which is how every RSocket controller in the estate read as `websocket` — and "
+        "`protocol` is identity, so DR-5 linked those rows into other consumers' graphs",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/dependencies.py",
+                find="    if catalog.style not in DEPENDENCY_GATED and not catalog.detect_required:",
+                replace="    if catalog.style not in DEPENDENCY_GATED:  # guard disabled",
+            ),
+        ),
+    ),
     "config_join.unmapped-binder-derives-no-row": Guard(
         what="a binding whose configured binder name the catalog maps to no protocol derives "
         "NO ROW — never one on the catalog's own declared `protocol:`",

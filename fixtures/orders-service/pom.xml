@@ -210,6 +210,21 @@
       <artifactId>spring-messaging</artifactId>
       <version>6.1.6</version>
     </dependency>
+    <!-- `spring-messaging` alone does not say WHICH wire `OrderStompController`'s
+         `@MessageMapping` methods serve: the annotation is Spring RSocket's
+         routing annotation as much as STOMP's, and Spring's own handlers do not
+         distinguish the two on the class (both bean predicates test
+         `@Controller` — `scripts/probes/w16_rsocket_versus_stomp.md`). A real
+         Spring STOMP application declares `spring-websocket`, which is what
+         registers the broker and what `spring-stomp.yml` now gates on; without
+         it this fixture was an ambiguous module whose rows were published as
+         `websocket` on no evidence at all. Nothing in the sources needed it to
+         compile, which is exactly why it was missing. -->
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-websocket</artifactId>
+      <version>6.1.6</version>
+    </dependency>
     <!-- Not in the brief's dependency list either: OrderEventsController's
          SseEmitter (spec Step 5) is org.springframework.web.servlet.mvc.
          method.annotation.SseEmitter, which lives in spring-webmvc — absent

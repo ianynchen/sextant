@@ -4,12 +4,57 @@ style: annotation_driven
 protocol: websocket
 direction: inbound
 
+# THE GATE THAT SEPARATES THIS FROM RSOCKET (F2 §3.6, W16).
+#
+# `spring-messaging` is the WRONG coordinate to gate on and was the only one here
+# until W16: RSocket needs it too, and `@MessageMapping` is RSocket's routing
+# annotation as much as STOMP's — so every RSocket controller in a scanned module
+# was published by this file as `websocket`, a wrong-PROTOCOL fabrication
+# `docs/COVERAGE.md` had stated in place since `A-C1`.
+#
+# What kept it open is that **Spring does not distinguish the two on the class at
+# all**. Measured (`scripts/probes/w16_rsocket_versus_stomp.md`, section 1):
+# `SimpAnnotationMethodMessageHandler.isHandler` tests `@Controller`, and the
+# reactive handler RSocket builds on defaults its bean predicate to a lambda
+# testing `@Controller`. Identical. No fact about the class could ever separate
+# them, which is why `A-C1`'s type gate did not.
+#
+# The fact that DOES separate them is which handler auto-configuration would
+# register (section 3): STOMP's is `@ConditionalOnClass(WebSocketMessageBrokerConfigurer)`,
+# which ships in `spring-websocket` (section 4). That is a dependency fact, and
+# `detect.coordinates` already reads one — the mechanism existed, and this file
+# simply named a coordinate both frameworks carry.
+#
+# `spring-websocket` ALONE, and `spring-messaging` is deliberately gone from this
+# list. The gate is satisfied by ANY declared coordinate
+# (`resolve/dependencies.py` tests `isdisjoint`), so listing both would admit a
+# module carrying only `spring-messaging` — the RSocket case — exactly as before.
+# Naming the one coordinate RSocket does not carry is what makes the gate
+# discriminate.
+#
+# A module holding `spring-websocket` for plain WebSocket and no STOMP passes the
+# gate and finds no `@MessageMapping`, deriving nothing. That is the right failure
+# direction: a gate that admits and finds nothing costs a scan, while one that
+# declines wrongly loses a real boundary.
+#
+# THE STARTER IS NAMED BESIDE THE LIBRARY, and that is not belt-and-braces. F1
+# does not resolve transitives, so a module declaring `spring-boot-starter-websocket`
+# records the STARTER and not `spring-websocket` — the exact trap
+# `Catalog.detect_coordinates`'s own comment names for `spring-boot-starter-web`
+# and `spring-mvc.yml`. A gate gated on the library alone would decline real STOMP
+# applications. Where NEITHER is recorded, this catalog and its RSocket sibling
+# both decline and the module earns an open question rather than a guess (§3.6).
 detect:
-  coordinates: ["org.springframework:spring-messaging"]
+  required: true
+  coordinates:
+    - "org.springframework:spring-websocket"
+    - "org.springframework.boot:spring-boot-starter-websocket"
 
 measured:
   - { artifact: org.springframework:spring-messaging, versions: ["6.1.6"],
       identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+  - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/w16_rsocket_versus_stomp.md }
 
 requires: [annotation_args, typed_signatures]
 
