@@ -22,8 +22,19 @@ here would restate those documents rather than add anything.
   qualified name and compares them exactly, so a catalog naming one spelling does not match
   the other. `docs/COVERAGE.md` asserted *"Both must be matched"* in the indicative — a
   requirement written as a description of what the catalogs did, which is why nobody
-  checked. A mechanical sweep of every Jakarta EE type any of the 42 catalogs names found
-  **three families in one spelling only**: `jms` and JAXB's `XmlRootElement`.
+  checked. A mechanical sweep of every Jakarta EE type any of the 56 catalogs names found
+  **three families in one spelling only**: `jms`, JAXB's `XmlRootElement`, and `websocket`.
+
+  The third was found only after the sweep itself was corrected, and how it hid is the more
+  useful half. The sweep read raw catalog TEXT, so a type named in a COMMENT counted as
+  named — and `jakarta-websocket.yml` names both `javax` spellings inside a comment saying,
+  in as many words, that they derive no endpoint. It reported websocket as carrying both
+  spellings while `docs/COVERAGE.md` said "javax.websocket is detection-only". **A sweep
+  that reads prose reports a gap as closed because somebody wrote about it.** It parses the
+  YAML and reads rule-bearing values now, and counts a Maven coordinate as detection rather
+  than as a matched type — which removed four more families from the table that named no
+  type at all. That boundary had also outlived its own reason: it rested on
+  `mapping.prefix_annotation` being single-valued, which W9 had already widened.
 
   The failure modes were measured by running the derivation, not by reading catalogs, and
   they are not the same:
@@ -56,7 +67,7 @@ here would restate those documents rather than add anything.
   Spring's own guides show, and what autowiring by interface produces — named a type no
   catalog listed, so it derived **nothing at all**: not a wrong row, no row, silently.
 
-  Twenty catalog keys now accept a list of dotted names as well as one, across every
+  Twenty-one catalog keys now accept a list of dotted names as well as one, across every
   engine that reads a type name (`docs/components/D02-catalog-schema.md` lists them). A
   scalar stays valid and is what almost every shipped catalog writes. Seven catalogs gained
   an alternate — `JmsOperations`, `AmqpTemplate`, `SqsOperations`, `RestOperations`,
@@ -65,8 +76,9 @@ here would restate those documents rather than add anything.
   alternate separately because an interface declaring a SUBSET of the class's methods would
   match some call sites and miss the rest. All 53 alternate rows come back `declared`.
 
-  Nineteen of the twenty are the design's own list, and `matches.steps[].owner` is the
-  twentieth, widened with the `roots[].owner` it sits beside. Two of the design's 21 named
+  Nineteen of the twenty-one are the design's own list. It missed two: `matches.steps[].owner`,
+  widened with the `roots[].owner` it sits beside, and
+  `matches.methods[].path_from_argument_type.annotation`, which W12 needed. Two of the design's 21 named
   sites are **not** widened: `identity_marker` and
   `supertype_marker` hold a mapping of call specs rather than a type name, so the type sits
   one level below the key the design named (OI-54).

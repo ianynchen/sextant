@@ -1560,7 +1560,7 @@ matchable exactly like a Kafka topic; `/ws` on its own tells us nothing.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
-| Java | Jakarta WebSocket `jakarta.websocket.server.ServerEndpoint("/ws")` (was `javax.websocket.*` — **match both**) | annotation on the class; the value is a URI template | `annotation` | ✅ shipped for the **jakarta** spelling; javax is detection-only (below) |
+| Java | Jakarta WebSocket `jakarta.websocket.server.ServerEndpoint("/ws")` (was `javax.websocket.*` — **match both**) | annotation on the class; the value is a URI template | `annotation` | ✅ shipped for **both** spellings (W12) |
 | Java | Spring STOMP `@MessageMapping("/topic/x")`, `@SubscribeMapping` | annotation | `annotation` | ✅ shipped — class-level prefix composition, `@SubscribeMapping`, and `@SendTo` reply rows |
 | Java | Spring `registerWebSocketHandlers(registry).addHandler(h, "/ws")` | programmatic — the path is a literal argument, not a chain | `registration_call` | ✅ shipped as a catalog, with **no live fixture surface** (below) |
 | Go | `gorilla/websocket` `upgrader.Upgrade(w, r, nil)` | **the protocol is decided by a call *inside* the HTTP handler**, not by the route registration | `registration_call` in a body | B |
@@ -1618,14 +1618,19 @@ Boundaries, each verified against the shipped code:
   marker to tell one from the other. Shapes stay NULL and the format reads `unresolved`.
 - **A negotiated subprotocol is not read** in any form, so nothing narrows that
   `unresolved`.
-- **`javax.websocket` is detection-only.** The pre-Jakarta-EE-9 spelling is a package
-  rename and nothing else, but `mapping.prefix_annotation` is SINGLE-valued and widening it
-  is an engine change. `detect.coordinates` still names the javax artifact, so such a module
-  is recognised as WebSocket-shaped; a `javax.websocket.server.ServerEndpoint` class in it
-  derives no endpoint. Naming the javax `@OnMessage` without a matching javax prefix would
-  not fail honestly — it would derive a *wrong* address, an empty prefix on a resolved row.
-- **`@SendToUser` is not read as a reply destination.** The `reply` block's `annotation` is
-  single-valued for the same reason. A `@SendToUser`-only handler falls into the branch an
+- **`javax.websocket` is matched** (W12, second pass). It was detection-only, on the stated
+  grounds that `mapping.prefix_annotation` is single-valued and widening it is an engine
+  change — W9 widened it, along with `matches.type_annotation`, and the boundary outlived
+  its reason by a wave. Measured before adding the names: at javax.websocket-api 1.1 against
+  jakarta.websocket-api 2.2.0, both `ServerEndpoint`s declare the same five attributes and
+  target `TYPE`, and both `OnMessage`s declare `maxMessageSize` and target `METHOD`.
+  It was also invisible to W11's own sweep, which read catalog TEXT — so the `javax` names
+  written in the comment recording this very boundary counted as "named", and the sweep
+  reported websocket as carrying both spellings while this bullet said the opposite. The
+  sweep reads rule-bearing values now.
+- **`@SendToUser` is not read as a reply destination.** The `reply` block's `annotation` used
+  to be single-valued and no longer is (W9 widened it), so the stated reason is gone and the
+  work is a catalog edit plus a measurement — OI-57. Until then the behaviour is unchanged: A `@SendToUser`-only handler falls into the branch an
   unannotated value-returning handler already takes — the honest `path` NULL, `unresolved`
   reply row — never a wrong destination. Proved over synthetic facts; no fixture surface.
 - **A class-level array-valued prefix contributes element 0 only.** `@MessageMapping({"/a",
@@ -2024,7 +2029,10 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 indicative — was false for as long as it stood** (W11/W12,
 `scripts/probes/w11_javax_jakarta.md`). It read as a description of the catalogs and was a
 requirement nobody had checked, which is why nobody looked: a mechanical sweep of every
-`jakarta.*` type any catalog names found three families in one spelling only.
+`jakarta.*` type any catalog names found three families in one spelling only — `jms`,
+JAXB's `XmlRootElement`, and `websocket`. The third was found only after the sweep was
+corrected to read rule-bearing values rather than file text: it had been reading the `javax`
+names written in a COMMENT recording the boundary, and reporting the boundary as closed.
 
 The sweep also found that the gap fails in **three** different ways, not the two that were
 expected, and that the third is the worst:

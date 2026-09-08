@@ -139,13 +139,22 @@ def test_the_websocket_gate_is_the_annotation_that_marks_a_SERVED_endpoint():
 
     `@ServerEndpoint` is the annotation that makes a class served, it is
     `@Target(TYPE)`, and the catalog's gate must name it — never `@OnMessage`,
-    and never nothing."""
+    and never nothing.
+
+    EVERY spelling the gate lists, not just the first. W12 added the `javax` one
+    beside the `jakarta` one (§3.1's list form), and this assertion used to pin
+    the scalar — which would have passed a list whose second element was
+    `@OnMessage`, the exact thing it exists to refuse."""
     observed = probe_rows()["3"]["observed"]
     assert "OnMessage in jakarta.websocket-client-api @Target(METHOD)" in observed
     assert "ServerEndpoint in jakarta.websocket-api @Target(TYPE)" in observed
     matches = catalog("jakarta-websocket")["matches"]
-    assert matches["type_annotation"] == "jakarta.websocket.server.ServerEndpoint"
+    declared = matches["type_annotation"]
+    gates = [declared] if isinstance(declared, str) else declared
+    assert gates, "the websocket catalog declares no type gate at all"
+    assert all(name.endswith(".websocket.server.ServerEndpoint") for name in gates), gates
     assert "jakarta.websocket.ClientEndpoint" not in yaml.dump(matches)
+    assert "javax.websocket.ClientEndpoint" not in yaml.dump(matches)
 
 
 def test_the_stomp_gate_is_the_predicate_spring_stomp_itself_runs():

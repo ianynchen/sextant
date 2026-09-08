@@ -25,6 +25,8 @@ import zipfile
 from collections import defaultdict
 from pathlib import Path
 
+import yaml
+
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "src"))
 
@@ -53,19 +55,73 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 CATALOGS = REPO / "src" / "sextant" / "catalogs"
 M2 = Path.home() / ".m2" / "repository"
 _TYPE = re.compile(r"\b(jakarta|javax)((?:\.[a-zA-Z0-9_]+)+)")
+# `group:artifact`, optionally `:version` — what `detect.coordinates` and
+# `measured.artifact` hold. Anchored, so a sentence merely containing a colon is
+# not mistaken for one.
+_COORDINATE = re.compile(r"^[\w.\-]+:[\w.\-]+(?::[\w.\-]+)?$")
 
 
 # --- 1. which spellings the catalogs name --------------------------------
 
 
-def spellings() -> dict[str, dict[str, list[str]]]:
-    named: dict[tuple[str, str], set[str]] = defaultdict(set)
+def _values(node: object, path: tuple[str, ...] = ()) -> list[tuple[tuple[str, ...], str]]:
+    """Every string VALUE in a parsed catalog, with the key path that reaches it.
+
+    Values, not file text. The first version scanned raw YAML, so a type named in
+    a COMMENT counted as named — and that is not a hypothetical: `jakarta-websocket.yml`
+    names `javax.websocket.OnMessage` only inside a comment that says, in as many
+    words, that the javax spelling derives no endpoint. The sweep reported the
+    family as `both` and the verdict concluded websocket "already carries both
+    spellings", while `docs/COVERAGE.md` said the opposite. A sweep that reads
+    prose reports a gap as closed because someone wrote about it.
+    """
+    if isinstance(node, str):
+        return [(path, node)]
+    if isinstance(node, list):
+        return [pair for item in node for pair in _values(item, path)]
+    if isinstance(node, dict):
+        return [pair for key, value in node.items() for pair in _values(value, (*path, str(key)))]
+    return []
+
+
+def spellings() -> dict[str, dict[str, dict[str, list[str]]]]:
+    """Per type tail, which catalogs name each spelling, split by whether the name
+    sits in a RULE or only in `detect.coordinates`.
+
+    `detect.coordinates` names ARTIFACTS, not types — `javax.websocket:javax.websocket-api`
+    is a jar to recognise, and recognising a module says nothing about matching a
+    type inside it. Keeping it in a column of its own is what stops "we detect this
+    library" from reading as "we handle this spelling"."""
+    named: dict[tuple[str, str], dict[str, set[str]]] = defaultdict(
+        lambda: {"rule": set(), "detect": set()}
+    )
     for path in sorted(CATALOGS.rglob("*.yml")):
-        for found in _TYPE.finditer(path.read_text(encoding="utf-8")):
-            named[(found.group(1), found.group(2))].add(path.name)
-    by_tail: dict[str, dict[str, list[str]]] = defaultdict(dict)
-    for (family, tail), files in named.items():
-        by_tail[tail][family] = sorted(files)
+        # The path UNDER the catalogs directory, not the bare filename: the
+        # nullability block lives in `shape-models/json.yml`, and a table citing
+        # `json.yml` sends a reader to a path that does not exist. Two catalogs
+        # sharing a basename would also have merged into one cell.
+        label = str(path.relative_to(CATALOGS))
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as broken:
+            raise ProbeError(f"{path.name} does not parse: {broken}") from broken
+        for keys, value in _values(loaded, ()):
+            # A Maven COORDINATE is never a type name. `jakarta.websocket:jakarta.
+            # websocket-api` is a jar to recognise, and the group half of it looks
+            # exactly like a package — which put four rows in this table
+            # (`jms`, `jws`, `servlet`, `websocket`) that name no type at all.
+            # Coordinates live in `detect.coordinates` and in `measured.artifact`,
+            # and are counted as DETECTION rather than as a rule: recognising a
+            # library says nothing about matching a type inside it.
+            if _COORDINATE.match(value.strip()):
+                for found in _TYPE.finditer(value):
+                    named[(found.group(1), found.group(2))]["detect"].add(label)
+                continue
+            for found in _TYPE.finditer(value):
+                named[(found.group(1), found.group(2))]["rule"].add(label)
+    by_tail: dict[str, dict[str, dict[str, list[str]]]] = defaultdict(dict)
+    for (family, tail), places in named.items():
+        by_tail[tail][family] = {where: sorted(files) for where, files in places.items() if files}
     return dict(by_tail)
 
 
@@ -200,7 +256,15 @@ CAPABILITIES = {
 
 
 def catalog(catalog_id: str) -> Catalog:
-    return next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == catalog_id)
+    """One shipped catalog by id, ABORTING like every other failure here rather
+    than raising `StopIteration` as a bare traceback."""
+    found = next((c for c in YamlCatalogSource(CATALOGS).load() if c.id == catalog_id), None)
+    if found is None:
+        raise ProbeError(
+            f"no shipped catalog has id {catalog_id!r}. This probe measures the "
+            f"catalogs as shipped; add it or fix the id rather than skipping the row."
+        )
+    return found
 
 
 def derived(facts: list, catalog_ids: tuple[str, ...]) -> list[dict]:
@@ -418,18 +482,39 @@ def main() -> None:
     print()
 
     print("### 1. Every Jakarta EE type a shipped catalog names\n")
-    print("| type | jakarta | javax | state |")
+    print(
+        "Read from parsed catalog VALUES, never from file text — a type named in a comment "
+        "is not a type a catalog matches. DOTTED names only: a type named solely inside a "
+        "`descriptor:` (`Ljakarta/jms/Queue;`) is invisible here, and today nothing is "
+        "slash-named without also being dotted somewhere, so this under-reports nothing "
+        "yet. A Maven coordinate is not a type; its column is `detected only`.\n"
+    )
+    print("| type | named in a RULE by | detected only, by | state |")
     print("|---|---|---|---|")
     gaps = []
     for tail, families in sorted(spellings().items()):
-        jakarta = families.get("jakarta")
-        javax = families.get("javax")
-        state = "both" if jakarta and javax else ("**JAKARTA ONLY**" if jakarta else "javax only")
-        if jakarta and not javax:
-            gaps.append((tail, jakarta))
+        jakarta = families.get("jakarta", {})
+        javax = families.get("javax", {})
+        rules = {"jakarta": jakarta.get("rule", []), "javax": javax.get("rule", [])}
+        detect_only = sorted(
+            set(jakarta.get("detect", []) + javax.get("detect", []))
+            - set(rules["jakarta"] + rules["javax"])
+        )
+        if rules["jakarta"] and rules["javax"]:
+            state = "both"
+        elif rules["jakarta"]:
+            state = "**JAKARTA ONLY**"
+            gaps.append((tail, rules["jakarta"]))
+        elif rules["javax"]:
+            state = "javax only"
+        else:
+            state = "detected, never matched"
+        named = ", ".join(
+            f"`{f}` ({family})" for family in ("jakarta", "javax") for f in rules[family]
+        )
         print(
-            f"| `{tail.lstrip('.')}` | {', '.join(f'`{f}`' for f in jakarta) if jakarta else '—'} "
-            f"| {', '.join(f'`{f}`' for f in javax) if javax else '—'} | {state} |"
+            f"| `{tail.lstrip('.')}` | {named or '—'} "
+            f"| {', '.join(f'`{f}`' for f in detect_only) or '—'} | {state} |"
         )
 
     print("\n### 2. Does the unhandled counterpart exist, and declare the same methods?\n")

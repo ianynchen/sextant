@@ -1822,7 +1822,7 @@ wrapper's `type`, a `known_types` entry's `type`, `channel_via`'s `owner`, a
 combinator step's `owner`, `parse_binding`'s hierarchy names.
 
 **Consequence:** none to the derived facts. A list written at any of these is
-refused either way; the cost is what a reader holding 42 catalogs is told.
+refused either way; the cost is what a reader holding 56 catalogs is told.
 
 **Closes by**, for each file below, either routing its sites through
 `catalog_symbols` with a `where` string or recording why that key's refusal needs
@@ -1928,3 +1928,73 @@ declaring either key and it writes one scalar at each.
 second framework ever needs one, or by a comment stating that the two lists are
 deliberately independent. **Falsified by** a framework whose two spellings fold
 into DIFFERENT containers, which would make the cross-match a live defect.
+
+### OI-57 — three boundaries were justified by "this key is single-valued", and W9 widened them all
+**Minor · found 2026-09-08 in the W11/W12 review ·
+`docs/COVERAGE.md`, `src/sextant/catalogs/`**
+
+W9 widened twenty-one type-name keys from a scalar to "a name or a list of them".
+Several recorded boundaries existed *because* a key was scalar, and none of them
+was revisited when that stopped being true. One is now closed and one remains:
+
+* **`javax.websocket`** was detection-only because `mapping.prefix_annotation` was
+  single-valued. Closed in W12's second pass — a pure catalog edit once the reason
+  was gone, and the annotations were measured before the names were added.
+* **`@SendToUser` is not read as a reply destination**, because `reply.annotation`
+  was single-valued. Still open. It is a Spring annotation and not a javax/jakarta
+  twin, so it was outside W12's scope; adding it is a catalog edit plus a
+  measurement of what `@SendToUser` declares against `@SendTo`.
+* **A class-level array-valued prefix contributes element 0 only.** NOT the same
+  shape and not unblocked: that is one annotation with several VALUES, which §3.1
+  says nothing about — a list of alternate NAMES is a different thing from a list
+  of addresses. Recorded here so the next reader does not group it with the other
+  two.
+
+**Consequence:** none wrong today; each boundary describes behaviour accurately.
+What was wrong is the stated reason, which is what a reader uses to decide whether
+the work is cheap. The websocket one cost a wave: W11's sweep would have found it
+had the sweep read values rather than prose.
+
+**Closes by** measuring `@SendToUser` and adding it to `spring-stomp.yml`'s `reply`
+block, or recording a reason that is still true. **Falsified by** finding a fourth
+boundary of this shape, which would make it Major — a mechanism, not a list.
+
+### OI-58 — `resolved_config.parquet` differed between two runs, once, and I could not reproduce it
+**Major · found 2026-09-08 during the W12 gate ·
+`src/sextant/storage/duckdb/workspace.py` (export), `tests/e2e/test_vertical_slice.py`**
+
+`test_output_is_byte_identical_when_the_pipeline_runs_twice` failed one full-gate
+run. The differing file was `graph/resolved_config.parquet` (and at least one more
+the assertion truncated); 265 other files were identical. **It has not reproduced
+since**, and it is recorded rather than closed because a green re-run is not
+evidence that a determinism defect is absent — it is one sample.
+
+**What was measured, and what it rules out:**
+
+| tried | result |
+|---|---|
+| the test alone | passes |
+| the two-run comparison in a loop, 6 attempts | byte-identical every time |
+| the whole `tests/e2e` directory, 6 consecutive runs | 26 passed each time |
+| the whole suite again after the failure | 2,411 passed |
+| `PYTHONHASHSEED` 0-5 on the test | passes at every seed — and the two runs share a process, so a per-process seed cannot differ between them anyway |
+| is the export's `ORDER BY environment, key` a TOTAL order? | yes — 0 duplicate `(environment, key)` pairs across all 26 rows, so row sequence is fixed |
+| does DuckDB's thread count change parquet BYTES for an ordered query? | no — `threads` 1/2/4/8 over a 2,000-row table shaped like this one produced one identical digest |
+
+So it is not hash ordering, not row ordering, and not the parquet writer reacting to
+parallelism — the three explanations that fit "only under full-suite load". The
+redaction map the export left-joins (`redacted_config_values`) is built by a
+`SELECT DISTINCT key, value` with no `ORDER BY`, which makes the STAGED table's row
+order unstable; that should not reach the output, since the join is keyed on a pair
+`DISTINCT` makes unique, but it is the only unordered read on this path and is the
+first place to look next.
+
+**Consequence if real:** two runs of the same analysis over the same input produce
+bundles that differ byte for byte, which NFR-1 exists to forbid and which a
+consumer diffing two bundles would read as a change in the module.
+
+**Closes by** a reproduction — run the full suite in a loop and capture the two
+workspaces when it next fails, then diff the parquet CONTENT (not bytes) to see
+whether a value or only the encoding moved. **Falsified by** showing the one
+observed failure was environmental (a truncated write, a full disk), which the
+captured workspaces would also settle.

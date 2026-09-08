@@ -5,10 +5,14 @@
 # dependencies of anything here) and runs the sweep, which prints the
 # `## Observations` tables of `scripts/probes/w11_javax_jakarta.md` verbatim.
 #
-# The counterpart versions are the LAST release under each `javax` coordinate,
-# which is the only version a Boot 2 codebase can be on: neither line ships
-# again. They are named here rather than in the Python so a re-run states which
-# artifact answered, the way every other probe's coordinate list does.
+# The counterpart versions, named here rather than in the Python so a re-run
+# states which artifact answered, the way every other probe's coordinate list
+# does.
+#
+# `javax.jms-api 2.0.1` IS the last release under its coordinate — Maven Central
+# reports it as both `latest` and `release`. `jaxb-api 2.3.1` is NOT: the metadata
+# reports `2.4.0-b180830.0359`, a beta build. 2.3.1 is the last GA and what Boot 2
+# manages, which is the claim that survives checking.
 set -euo pipefail
 cd "$(dirname "$0")"
 REPO="$(cd ../../.. && pwd)"

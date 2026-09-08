@@ -67,7 +67,7 @@ specifically: the conversion (`domain/symbols.type_descriptor`) becomes scheme-a
 the first non-JVM catalog arrives, so this notation is documented as JVM sugar now rather
 than ossifying as a universal one.
 
-**Twenty type-name keys may name a LIST of dotted types instead of one** (§3.1). A list
+**Twenty-one type-name keys may name a LIST of dotted types instead of one** (§3.1). A list
 means ONE library or annotation reachable under more than one name — held by its interface
 (`JmsOperations` beside `JmsTemplate`, `RestOperations` beside `RestTemplate`), or under an
 older package. A call site's owner is the DECLARED type, so a codebase writing the interface
@@ -83,7 +83,7 @@ The keys, by the engine that reads them:
 
 | engine | keys |
 |---|---|
-| `single_call` | `matches.owner` |
+| `single_call` | `matches.owner`, `matches.methods[].path_from_argument_type.annotation` |
 | `fluent` | `matches.roots[].owner`, `matches.steps[].owner` |
 | `annotation_driven` | `matches.type_annotation`, `mapping.prefix_annotation`, `reply.annotation` |
 | `interface_implementation` | `matches.interface`, `registration.owner` |
@@ -102,10 +102,11 @@ Neither holds a type name: each is a mapping of CALL specs
 candidate, and no shipped catalog needs one — the two that declare these keys name gRPC's own
 descriptor classes, which have no second spelling.
 
-Nineteen of these are F2 §3.1's own list; `matches.steps[].owner` is the twentieth and is
-not in it, widened because it sits in the same file and the same shape as
-`matches.roots[].owner` and leaving one of the pair scalar would have been the
-inconsistency, not the fix.
+Nineteen of these are F2 §3.1's own list. Two are not, and the design missed both:
+`matches.steps[].owner`, widened because it sits in the same file and the same shape as
+`matches.roots[].owner` and leaving one of a pair scalar would have been the inconsistency;
+and `matches.methods[].path_from_argument_type.annotation`, which is what let
+`spring-ws-template.yml` name both JAXB spellings rather than needing a twin catalog (W12).
 
 The scalar form stays valid and is what almost every shipped catalog writes; this is a
 widening, not a migration. `application/resolve/shapes/rooting.catalog_symbols` is the one

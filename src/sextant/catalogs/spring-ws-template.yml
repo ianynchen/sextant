@@ -71,8 +71,11 @@ matches:
     # identity string.
     #
     # BOTH JAXB SPELLINGS (§3.1, W12). `@XmlRootElement` moved from `javax.xml.bind`
-    # to `jakarta.xml.bind`, and a Spring Boot 2 codebase is on the old one
-    # permanently — `jaxb-api 2.3.1` is the last release under that coordinate.
+    # to `jakarta.xml.bind`, and a Spring Boot 2 codebase is on the old one.
+    # `jaxb-api 2.3.1` is the last GA release under that coordinate — Maven
+    # Central's own metadata reports `2.4.0-b180830.0359` as the latest, a beta
+    # build, and it is not what Boot 2 manages. (This comment first said 2.3.1
+    # was the last release outright, which the metadata contradicts.)
     # This read is the whole identity, so the missing spelling did not produce
     # silence: measured (`scripts/probes/w11_javax_jakarta.md` finding 3), the SOAP
     # row was still minted, addressed to the right peer, with `path` NULL at

@@ -781,8 +781,16 @@ def _argument_type_identity(
         return None, None
     payload_type = bare_descriptor(str(symbol))
     # FIRST match, not a merge: a list is several spellings of ONE annotation
-    # (§3.1), so at most one is ever written on a given type, and merging two
-    # would invent a declaration nobody made.
+    # (§3.1), and merging two would invent a declaration nobody made.
+    #
+    # "At most one is ever written" is the ordinary case, not an invariant — a
+    # half-migrated Boot 2-to-3 module can legally carry both
+    # `@jakarta.xml.bind.annotation.XmlRootElement` and its `javax` spelling on
+    # one type, with different `name`s. This takes the one the catalog lists
+    # first, so the answer is deterministic and the catalog's order decides it.
+    # Deliberate rather than accidental: the alternative is refusing the type
+    # outright, which loses a readable operation over a shape that is itself a
+    # migration artefact.
     args = next(
         (
             found

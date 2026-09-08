@@ -213,6 +213,14 @@ _WIDENED_KEYS: tuple[tuple[str, ...], ...] = (
     ("steps", "[]", "owner"),
     ("address_from_config", "binding", "suffix", "[]", "when", "implements"),
     ("address_from_config", "binding", "channels", "[]", "annotation"),
+    # W12's twenty-first. Added a wave after the other twenty and MISSED here,
+    # which cost exactly what this list exists to prevent: a malformed value at
+    # this key raised from inside the engine, after `endpoints_reset`, and took
+    # the previous run's rows with it. It also kept the key out of
+    # `test_every_widened_key_a_shipped_catalog_declares_honours_a_second_spelling`,
+    # which iterates this tuple — so the SOAP half of W12 had no coverage in the
+    # suite at all, only in a probe, and `scripts/check.sh` runs no probes.
+    ("methods", "[]", "path_from_argument_type", "annotation"),
 )
 
 

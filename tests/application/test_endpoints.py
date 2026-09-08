@@ -6670,7 +6670,13 @@ def test_every_widened_key_a_shipped_catalog_declares_honours_a_second_spelling(
     minted = iter(f"com.acme.no.such.Type{n}" for n in range(10_000))
 
     def widened(value: object) -> object:
-        return [next(minted), value]
+        """The real name in the MIDDLE, absent names either side.
+
+        Prepending alone left the real name last, so a consumer reading only the
+        LAST element still passed; appending alone has the mirror hole. Wrapping
+        it catches both ends, which is what "reads every element" actually means.
+        """
+        return [next(minted), value, next(minted)]
 
     def rewrite(holder: object, path: tuple[str, ...]) -> None:
         """Rewrites in place, mirroring `_at`'s own walk so the two cannot drift."""
@@ -6686,7 +6692,13 @@ def test_every_widened_key_a_shipped_catalog_declares_honours_a_second_spelling(
             return
         if rest:
             rewrite(holder[key], rest)
-        elif holder[key] is not None and not isinstance(holder[key], list):
+        elif isinstance(holder[key], list):
+            # WRAP, never skip. Seven shipped catalogs already write a list at
+            # `matches.owner`, and `spring-ws-template.yml` writes one at the SOAP
+            # identity key — skipping those left the very keys §3.1 was applied to
+            # as the ones this test did not drive.
+            holder[key] = [next(minted), *holder[key], next(minted)]
+        elif holder[key] is not None:
             holder[key] = widened(holder[key])
 
     shipped = YamlCatalogSource(CATALOGS).load()

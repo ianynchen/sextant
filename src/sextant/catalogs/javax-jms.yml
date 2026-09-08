@@ -20,9 +20,10 @@ requires: [call_site, string_constants]
 # deliberately not that: a list means ONE library reachable under several names,
 # and these are two different jars at two different versions, each needing its
 # own measurement. `javax.jms-api 2.0.1` is the last release under that
-# coordinate — the line does not ship again — so a Spring Boot 2 codebase is on
-# it permanently, and `detect.coordinates` is what tells the two apart in a
-# module that somehow holds both.
+# coordinate — Maven Central's own metadata reports it as both `latest` and
+# `release`, so this is checkable rather than remembered — and a Spring Boot 2
+# codebase is therefore on it permanently. `detect.coordinates` is what tells the
+# two apart in a module that somehow holds both.
 #
 # WHY THE DESCRIPTORS ARE NOT COPIES. `Session`'s parameters and returns are
 # themselves JMS types, and they moved packages with the API, so every descriptor

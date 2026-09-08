@@ -49,27 +49,29 @@ Verbatim from `scripts/probes/w11_javax_jakarta/run.sh`, which runs `sweep.py`. 
 
 ### 1. Every Jakarta EE type a shipped catalog names
 
-| type | jakarta | javax | state |
+Read from parsed catalog VALUES, never from file text — a type named in a comment is not a type a catalog matches. DOTTED names only: a type named solely inside a `descriptor:` (`Ljakarta/jms/Queue;`) is invisible here, and today nothing is slash-named without also being dotted somewhere, so this under-reports nothing yet. A Maven coordinate is not a type; its column is `detected only`.
+
+| type | named in a RULE by | detected only, by | state |
 |---|---|---|---|
-| `annotation.Nullable` | `json.yml` | `json.yml` | both |
-| `jms` | `jakarta-jms.yml` | — | **JAKARTA ONLY** |
-| `jms.Message` | `google-pubsub-publisher.yml`, `jakarta-jms.yml`, `spring-jms.yml` | — | **JAKARTA ONLY** |
-| `jms.Session` | `jakarta-jms.yml`, `spring-jms.yml` | — | **JAKARTA ONLY** |
-| `json.bind.annotation.JsonbProperty` | `microprofile-graphql.yml` | `microprofile-graphql.yml` | both |
-| `jws` | `jakarta-jws-client.yml`, `jakarta-jws.yml`, `spring-ws.yml` | `jakarta-jws-client.yml`, `jakarta-jws.yml` | both |
-| `jws.WebMethod` | `jakarta-jws-client.yml`, `jakarta-jws.yml` | `jakarta-jws-client.yml`, `jakarta-jws.yml` | both |
-| `jws.WebService` | `jakarta-jws-client.yml`, `jakarta-jws.yml` | `jakarta-jws-client.yml`, `jakarta-jws.yml` | both |
-| `servlet` | `jakarta-servlet.yml` | `javax-servlet.yml` | both |
-| `servlet.ServletRequest` | `jakarta-servlet.yml` | `javax-servlet.yml` | both |
-| `servlet.ServletResponse` | `jakarta-servlet.yml` | `javax-servlet.yml` | both |
-| `servlet.annotation.WebServlet` | `jakarta-servlet.yml` | `javax-servlet.yml` | both |
-| `servlet.http.HttpServlet` | `jakarta-servlet.yml` | `javax-servlet.yml` | both |
-| `servlet.http.HttpServletRequest` | `jakarta-servlet.yml` | `javax-servlet.yml` | both |
-| `servlet.http.HttpServletResponse` | `jakarta-servlet.yml` | `javax-servlet.yml` | both |
-| `websocket` | `jakarta-websocket.yml` | `jakarta-websocket.yml` | both |
-| `websocket.OnMessage` | `jakarta-websocket.yml` | `jakarta-websocket.yml` | both |
-| `websocket.server.ServerEndpoint` | `jakarta-websocket.yml` | `jakarta-websocket.yml` | both |
-| `xml.bind.annotation.XmlRootElement` | `spring-ws-template.yml` | — | **JAKARTA ONLY** |
+| `annotation.Nullable` | `shape-models/json.yml` (jakarta), `shape-models/json.yml` (javax) | — | both |
+| `jms` | — | `jakarta-jms.yml`, `javax-jms.yml` | detected, never matched |
+| `jms.Message` | `spring-jms.yml` (jakarta), `spring-jms.yml` (javax) | — | both |
+| `jms.Session` | `jakarta-jms.yml` (jakarta), `spring-jms.yml` (jakarta), `javax-jms.yml` (javax), `spring-jms.yml` (javax) | — | both |
+| `json.bind.annotation.JsonbProperty` | `microprofile-graphql.yml` (jakarta), `microprofile-graphql.yml` (javax) | — | both |
+| `jws` | — | `jakarta-jws-client.yml`, `jakarta-jws.yml` | detected, never matched |
+| `jws.WebMethod` | `jakarta-jws-client.yml` (jakarta), `jakarta-jws.yml` (jakarta), `jakarta-jws-client.yml` (javax), `jakarta-jws.yml` (javax) | — | both |
+| `jws.WebService` | `jakarta-jws-client.yml` (jakarta), `jakarta-jws.yml` (jakarta), `jakarta-jws-client.yml` (javax), `jakarta-jws.yml` (javax) | — | both |
+| `servlet` | — | `jakarta-servlet.yml`, `javax-servlet.yml` | detected, never matched |
+| `servlet.ServletRequest` | `jakarta-servlet.yml` (jakarta), `javax-servlet.yml` (javax) | — | both |
+| `servlet.ServletResponse` | `jakarta-servlet.yml` (jakarta), `javax-servlet.yml` (javax) | — | both |
+| `servlet.annotation.WebServlet` | `jakarta-servlet.yml` (jakarta), `javax-servlet.yml` (javax) | — | both |
+| `servlet.http.HttpServlet` | `jakarta-servlet.yml` (jakarta), `javax-servlet.yml` (javax) | — | both |
+| `servlet.http.HttpServletRequest` | `jakarta-servlet.yml` (jakarta), `javax-servlet.yml` (javax) | — | both |
+| `servlet.http.HttpServletResponse` | `jakarta-servlet.yml` (jakarta), `javax-servlet.yml` (javax) | — | both |
+| `websocket` | — | `jakarta-websocket.yml` | detected, never matched |
+| `websocket.OnMessage` | `jakarta-websocket.yml` (jakarta), `jakarta-websocket.yml` (javax) | — | both |
+| `websocket.server.ServerEndpoint` | `jakarta-websocket.yml` (jakarta), `jakarta-websocket.yml` (javax) | — | both |
+| `xml.bind.annotation.XmlRootElement` | `spring-ws-template.yml` (jakarta), `spring-ws-template.yml` (javax) | — | both |
 
 ### 2. Does the unhandled counterpart exist, and declare the same methods?
 
@@ -84,31 +86,50 @@ Verbatim from `scripts/probes/w11_javax_jakarta/run.sh`, which runs `sweep.py`. 
 
 ### 3. What each unhandled spelling actually derives
 
-| catalog | spelling written | rows | protocol | path | peer | resolution |
+| catalogs run | spelling written | rows | derived by | path | peer | resolution |
 |---|---|---|---|---|---|---|
-| `jakarta-jms` | `jakarta` | 1 | jms | `raw-audit` | None | resolved |
-| `jakarta-jms` | `javax` | **0** | — | — | — | — |
-| `spring-ws-template` | `jakarta` | 1 | soap | `{http://acme.example/orders}placeOrderRequest` | http://billing.internal/ws | resolved |
-| `spring-ws-template` | `javax` | 1 | soap | `None` | http://billing.internal/ws | unresolved |
+| `jakarta-jms + javax-jms` | `jakarta` | 1 | jakarta-jms | `raw-audit` | None | resolved |
+| `jakarta-jms + javax-jms` | `javax` | 1 | javax-jms | `raw-audit` | None | resolved |
+| `spring-ws-template` | `jakarta` | 1 | spring-ws-template | `{http://acme.example/orders}placeOrderRequest` | http://billing.internal/ws | resolved |
+| `spring-ws-template` | `javax` | 1 | spring-ws-template | `{http://acme.example/orders}placeOrderRequest` | http://billing.internal/ws | resolved |
 
 ### 4. An `excludes` list that names one spelling
 
 | catalog | rule | spelling written | what becomes the payload |
 |---|---|---|---|
 | `spring-jms` | `request_body.excludes` | `jakarta` | `nothing (excluded)` |
-| `spring-jms` | `request_body.excludes` | `javax` | `javax/jms/Message#` |
+| `spring-jms` | `request_body.excludes` | `javax` | `nothing (excluded)` |
 
-<!-- gaps found: [".jms", ".jms.Message", ".jms.Session", ".xml.bind.annotation.XmlRootElement"] -->
+<!-- gaps found: [] -->
 
 ## Verdict
 
-**1. Three type families are named in `jakarta` only.** `jms` (in `jakarta-jms.yml`,
-`spring-jms.yml` and `google-pubsub-publisher.yml`), and
-`xml.bind.annotation.XmlRootElement` (in `spring-ws-template.yml`). Everything else
-a catalog names — servlet, jws, websocket, json.bind, annotation.Nullable — already
-carries both spellings. The sweep is mechanical and re-runnable, which is the point:
-the four instances F2 §3.3 counted accumulated one at a time because nobody asked
-the question of every catalog at once.
+**1. THREE type families were named in `jakarta` only** — `jms` (in `jakarta-jms.yml`
+and `spring-jms.yml`), `xml.bind.annotation.XmlRootElement` (in
+`spring-ws-template.yml`) and `websocket` (in `jakarta-websocket.yml`). All three are
+closed now, which is why section 1 shows no `JAKARTA ONLY` row today.
+
+**The third was found only after the sweep was corrected, and how it hid is the more
+useful half of this probe.** The first version scanned raw catalog TEXT, so a type
+named in a COMMENT counted as named — and `jakarta-websocket.yml` names both `javax`
+spellings inside a comment that says, in as many words, that they derive no endpoint.
+The sweep reported websocket as carrying both spellings, this verdict said so, and
+`docs/COVERAGE.md` said the opposite three lines from the row that contradicted it.
+**A sweep that reads prose reports a gap as closed because somebody wrote about it.**
+It parses the YAML and reads rule-bearing values now.
+
+Two further distinctions the corrected sweep makes, each of which was a wrong row
+before:
+
+- **A Maven coordinate is not a type.** `detect.coordinates` holds
+  `javax.websocket:javax.websocket-api`, whose group half looks exactly like a
+  package — which put four families in the table (`jms`, `jws`, `servlet`,
+  `websocket`) that name no type at all. They sit under `detected only` now, which
+  is the honest state: the module is recognised as WebSocket-shaped while nothing
+  inside it is matched.
+- **Detection is not handling.** Those two used to be one column, so "we detect this
+  library" read as "we handle this spelling" — which is precisely the confusion that
+  let the websocket gap stand.
 
 **2. Both counterparts exist and declare the same method names.** `javax.jms.Session`
 declares `createProducer`, `createConsumer`, `createQueue` and `createTopic` exactly
@@ -130,35 +151,38 @@ exist" would have priced the two the same.
 
 **3. The two failure modes F2 §3.3 names are both real, and they are different.**
 
-| | jakarta spelling | javax spelling |
-|---|---|---|
-| `jakarta-jms`, a producer on a queue | 1 row, `path: raw-audit`, `resolved` | **0 rows** |
-| `spring-ws-template`, a SOAP call | 1 row, `path: {http://acme.example/orders}placeOrderRequest`, `resolved` | 1 row, **`path: NULL`**, `unresolved`, `peer` still published |
+Sections 3 and 4 above show every spelling resolving, because W12 closed all three
+gaps. What each gap DID is recorded here, and each is one revert away from being
+shown again — which is the check that this probe still measures something:
 
-*Renamed, nothing published* for JMS: the whole route is invisible. *Renamed, partial
-data published* for SOAP: the endpoint is there, addressed to the right peer, with no
-operation on it — which reads as "we tried and the operation was unreadable", not as
-"we never looked in this spelling". The second is worse, and the measurement is what
-separates them rather than the reasoning.
+| revert | the row that changes |
+|---|---|
+| remove `javax-jms.yml` | §1 `jms.Session` → `JAKARTA ONLY`; §3's `javax` row → **0 rows** |
+| drop the `javax` spelling from `spring-ws-template.yml`'s arity-2 rule | §3's SOAP `javax` row → `path` NULL, `unresolved` |
+| drop the two `javax` entries from `spring-jms.yml`'s `excludes` | §4's `javax` row → `javax/jms/Message#` |
+
+*Renamed, nothing published* is the JMS shape: the whole route invisible, which at
+least reads as absence. *Renamed, partial data published* is the SOAP shape: the
+endpoint present, addressed to the right peer, with no operation on it — which reads
+as "we tried and the operation was unreadable", not as "we never looked in this
+spelling". The second is worse, and running the derivation is what separates them;
+reading the catalogs would not have.
 
 **4. A third mode, which §3.3 does not name and which is worse than both.**
-`spring-jms.yml` declares
-`request_body: { fallback: sole_unannotated, excludes: [jakarta.jms.Session, jakarta.jms.Message] }`.
-`excludes` is a NEGATIVE list: it names the opaque envelope types so the fallback will
-not mistake one for the payload. Naming only the `jakarta` spelling means the `javax`
-one is **not** excluded — so on Boot 2 the fallback picks it, and the raw envelope is
-described AS the message contract:
+`spring-jms.yml`'s `request_body` declares
+`{ fallback: sole_unannotated, excludes: [...] }`. `excludes` is a NEGATIVE list: it
+names the opaque envelope types so the fallback will not mistake one for the payload.
+Naming only the `jakarta` spelling meant the `javax` one was **not** excluded — so on
+Boot 2 the fallback picked it, and the raw envelope was described AS the message
+contract. Section 4's third row is where that shows; today both spellings read
+`nothing (excluded)`, and the revert above puts `javax/jms/Message#` back.
 
-| `@JmsListener void onOrder(… Message m)` | what becomes the payload |
-|---|---|
-| `jakarta.jms.Message` | nothing (excluded) |
-| `javax.jms.Message` | **`javax/jms/Message#`** |
-
-Not silence, and not a hole — a **wrong contract, published**. Every rule that names a
-type to REFUSE it inverts the failure: the missing spelling stops the refusal rather
-than stopping the match. W12 must therefore sweep `excludes` and every other negative
-list separately from the positive `matches`, and the expectation table above has no
-row 5 because the design did not consider this direction.
+Not silence, and not a hole — a **wrong contract, published**. Every rule that names
+a type in order to REFUSE it inverts the failure: the missing spelling stops the
+refusal rather than stopping the match. A sweep that reads only `matches` will keep
+missing that class, which is why the expectation table above has no row 5 — the
+design did not consider this direction, and neither did the first version of this
+probe.
 
 ## What this probe deliberately did not measure
 

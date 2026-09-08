@@ -39,7 +39,8 @@ matches:
   # Naming the same annotation here and as `prefix_annotation` below is the
   # spring-cloud-openfeign shape, not a new one: the two CTEs join it on
   # different roles.
-  type_annotation: jakarta.websocket.server.ServerEndpoint
+  type_annotation: [jakarta.websocket.server.ServerEndpoint,
+                    javax.websocket.server.ServerEndpoint]
   #
   # Deliberately NO `request_body` block (unlike every other catalog here):
   # checkpoint answer 5 (Phase 2H Task 2) rules that a WebSocket frame is
@@ -79,31 +80,45 @@ matches:
     # Verbless (D02 §2, amended): a WebSocket frame handler declares no
     # HTTP-style verb.
     all_methods: []
-    prefix_annotation: jakarta.websocket.server.ServerEndpoint
+    prefix_annotation: [jakarta.websocket.server.ServerEndpoint,
+                        javax.websocket.server.ServerEndpoint]
     annotations:
       - { fqn: jakarta.websocket.OnMessage }
+      - { fqn: javax.websocket.OnMessage }
 
-# COVERAGE boundary (Task 5, carried to Task 7's docs pass): `javax.websocket.
-# server.ServerEndpoint`/`javax.websocket.OnMessage` are the pre-Jakarta-EE-9
-# spelling of the exact same annotations — a package rename and nothing else,
-# the Jackson-2/3 precedent spring-web.yml's `json_default_markers` keeps
-# ("two rows here, zero code"). Unlike that vocabulary, though,
-# `mapping.prefix_annotation` above is SINGLE-valued
-# (`annotation_driven.py::run` reads `mapping["prefix_annotation"]` as one
-# fqn, never a list) and this task's own acceptance rule refuses an engine
-# change that would widen it — so only the jakarta spelling is wired into
-# `mapping` above. `detect.coordinates` still names the javax artifact, so a
-# javax-only module is still recognised as WebSocket-shaped, but a
-# `javax.websocket.server.ServerEndpoint` class in that module derives no
-# endpoint from this catalog today: adding `javax.websocket.OnMessage` to
-# `mapping.annotations` without a matching javax `prefix_annotation` would
-# not fail honestly, it would derive a *wrong* one — `coalesce(prefix, '')`
-# reading '' for the unmatched class, publishing a resolved-but-addressless
-# row (exactly the failure `annotation_driven.py::_validate_naming` and
-# `derive_endpoints.sql`'s own `path_fallback` comment both call out: "wrong
-# output rather than a missing one"). Only jakarta is fixture-exercised
-# (Task 1's `LiveEndpoint`); the javax gap is catalog data, not shipped
-# behaviour.
+# BOTH SPELLINGS (W12, second pass). `javax.websocket.server.ServerEndpoint` and
+# `javax.websocket.OnMessage` are the pre-Jakarta-EE-9 spelling of the exact same
+# annotations — a package rename and nothing else. Measured rather than assumed
+# (`scripts/probes/w11_javax_jakarta.md`): at javax.websocket-api 1.1 against
+# jakarta.websocket-api 2.2.0 and jakarta.websocket-client-api 2.2.0, both
+# `ServerEndpoint`s declare the same five attributes (`value`, `subprotocols`,
+# `decoders`, `encoders`, `configurator`) and target `TYPE`; both `OnMessage`s
+# declare `maxMessageSize` and target `METHOD`. Nothing needed re-measuring beyond
+# the names, so unlike `javax-jms.yml` this is two names rather than a twin file.
+#
+# THE COMMENT THAT STOOD HERE was a boundary that had stopped being one.
+# It said `mapping.prefix_annotation` "is SINGLE-valued (`annotation_driven.py::
+# run` reads it as one fqn, never a list) and this task's own acceptance rule
+# refuses an engine change that would widen it". W9 widened it, along with
+# `matches.type_annotation` — both are in D02's list of widened keys — so the
+# stated blocker was gone and the gap stayed open for want of anyone re-reading
+# the reason.
+#
+# It was also invisible to W11's own sweep, which is the more useful half of the
+# lesson. That sweep read raw catalog TEXT, so the `javax` names written in this
+# very comment counted as "named" and it reported websocket as carrying both
+# spellings — while `docs/COVERAGE.md` said "javax.websocket is detection-only".
+# A sweep that reads prose reports a gap as closed because somebody wrote about
+# it. It parses the YAML and looks at rule-bearing VALUES now, and
+# `detect.coordinates` — which still names the javax artifact, and which made a
+# javax-only module recognisable as WebSocket-shaped while nothing matched inside
+# it — is counted as detection rather than as a rule.
+#
+# The gate still names `@ServerEndpoint` in every spelling it lists and never
+# `@OnMessage` or `@ClientEndpoint` — `tests/architecture/
+# test_sweep_round1_framework_rules.py` asserts that of EVERY element now, not
+# only of a scalar, because a list whose second element was `@OnMessage` would
+# have slipped past the assertion this widening replaced.
 
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
