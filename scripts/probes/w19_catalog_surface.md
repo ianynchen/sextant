@@ -1,0 +1,306 @@
+# W19 — the per-catalog enumeration pass (F2 §3.8)
+
+Run: `scripts/probes/w19_catalog_surface/run.sh`. Everything below the rule is that
+script's own output, pasted verbatim.
+
+**Version scope (§5.4).** Read against **spring-jms 6.1.6**, **spring-amqp 3.1.4**,
+**spring-rabbit 3.1.4**, **spring-cloud-aws-sqs 3.1.1**, **spring-cloud-gcp-pubsub
+5.1.2**, **spring-webflux 6.1.6** and **sqs 2.25.31** — each self-reported by the
+archive, from `Implementation-Version:` where the publisher writes one and from
+Maven's `pom.properties` where it does not (the AWS SDK writes no manifest version at
+all). The run ABORTS when a jar's self-report disagrees with the coordinate that
+resolved it. Every version here is one the catalog it measures already names in its
+own `measured:` block, except the three that had none — so a surface counted here is
+bounded by the same evidence as the rules it is counted against. A release between
+any two of these is unverified: a class gaining a method changes the denominator.
+
+## The question, and why a slice needs a run to answer it
+
+§3.8 ships six catalogs with a declared slice and says the cost is part of the work:
+*"you cannot write a slice without enumerating the framework's surface."* This is that
+enumeration for every slice that is a question about **methods on an owner type**.
+
+A catalog with no slice claims its framework entire. A catalog with a slice written
+from memory claims whatever its author last looked at. **Both read identically to a
+consumer**, which is the whole reason presence has to stop meaning completeness. Both
+halves of every ratio below come from the run — the surface out of the jar's bytecode,
+the coverage out of the catalog as LOADED — so "reads 1 of 37" is measured rather than
+maintained.
+
+## The two things this probe got wrong before it got them right
+
+Both are recorded because each would have shipped a confident number that was false,
+and both are the shape this wave keeps finding.
+
+**A silent filter that shrank both sides of the ratio.** The first signature pattern
+did not allow for a `throws` clause. Every `JmsTemplate` method declares `throws
+JmsException`, so none of them parsed — and the probe printed *"reads 0 of 27"* for a
+catalog that plainly reads `convertAndSend`, because the method it reads had been
+dropped from the denominator too. A skipped line now aborts the run instead (the guard in
+`_members`), because a filter that quietly shrinks a published ratio is worse than no
+ratio.
+
+**A candidate test mirrored onto an API it does not fit.** Section 2 splits the unread
+methods by whether they take a `String` at argument 0 — true of every
+destination-carrying method on the Spring templates. Applied to the AWS SDK it
+reported **zero candidates for `SqsClient`**, which would have read as "nothing
+missing here" for the one catalog whose gap G-43 states in detail. The SDK addresses
+the wire through a request OBJECT: `receiveMessage(ReceiveMessageRequest)` carries the
+queue URL inside the argument. A second measured test now covers that style, and it
+finds 24 per client — `receiveMessage` and `sendMessageBatch`, G-43's two named gaps,
+among them. This is the same defect class as W13's and W14's: a rule taken from one
+framework and applied to a set that is not that framework's set.
+
+## What the split does and does not decide
+
+A raw ratio overstates every gap: most of what a template declares is configuration
+and lifecycle. `RabbitTemplate`'s 83 include `setChannelTransacted`,
+`afterPropertiesSet` and every getter, and a method that takes no destination cannot
+address a wire. So the unread half is split by two **measured** properties rather than
+by judgement.
+
+The split bounds the work of writing a slice; it does not write one. A candidate may
+still be deliberately outside (a `receive` with no payload capture, a batch form), and
+a non-candidate may still be a boundary reached another way (a destination-less `send`
+on a template configured with a default). Those are judgements the catalogs state.
+Note also that the arg-0 test admits setters — `setDefaultReceiveQueue`,
+`setExchange`, `setRoutingKey` all take a `String` first — which is why the candidate
+list is a list to read, not a count to subtract.
+
+## The sixth slice is not here
+
+Five of §3.8's six gaps are questions about methods on an owner type. The sixth,
+**G-41**, asks whether `@DgsData` and `@DgsQuery` are `@Inherited` — a question about
+one annotation's meta-annotations, already measured (`javap -v` at 8.7.1 shows
+`@Inherited` on both) and answered in `netflix-dgs.yml` rather than here. **G-45**
+(the Data REST repository roster) and **G-47** (Spring Integration's channel
+annotations) are also not method-on-owner questions: one enumerates interfaces
+reachable through a jar hop, the other annotations in a package. Each needs its own
+read, and calling them done by this table would be the "counted the wrong set" error
+this probe already made once.
+
+---
+
+## Observations
+
+Generated by `scripts/probes/w19_catalog_surface/run.sh` — every cell below is that run's own output, and this document pastes it verbatim.
+
+**Each column header is the version the JAR ITSELF reported**, read out of its own `META-INF/MANIFEST.MF` `Implementation-Version` — not the version the loop asked for, which is only the path this machine cached the artifact at. The run ABORTS when the two disagree rather than printing a row.
+
+Methods every class carries are excluded from both sides of every count: <clinit>, <init>, clone, equals, finalize, getClass, hashCode, main, notify, notifyAll, toString, wait.
+
+### 1. How much of each owner's surface the catalog reads
+
+| gap | catalog | owner | 2.25.31 | 3.1.1 | 3.1.4 | 5.1.2 | 6.1.6 | reads |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| G-44 | `spring-jms-template` | `JmsTemplate` | — | — | — | — | 49 | **1 of 49** |
+| G-44 | `spring-jms-template` | `JmsOperations` | — | — | — | — | 10 | **1 of 10** |
+| G-44 | `spring-rabbit-template` | `RabbitTemplate` | — | — | 88 | — | — | **1 of 88** |
+| G-44 | `spring-rabbit-template` | `AmqpTemplate` | — | — | 8 | — | — | **1 of 8** |
+| G-44 | `spring-sqs-template` | `SqsTemplate` | — | 12 | — | — | — | **1 of 12** |
+| G-44 | `spring-sqs-template` | `SqsOperations` | — | 4 | — | — | — | **1 of 4** |
+| G-44 | `spring-pubsub` | `PubSubTemplate` | — | — | — | 20 | — | **11 of 20** |
+| G-37 | `spring-webflux-router` | `RouterFunctions$Builder` | — | — | — | — | 20 | **0 of 20** |
+| G-43 | `aws-sqs-sdk` | `SqsClient` | 29 | — | — | — | — | **1 of 29** |
+| G-43 | `aws-sqs-sdk` | `SqsAsyncClient` | 28 | — | — | — | — | **0 of 28** |
+
+- A version column holds the count of public methods that owner OFFERS at that version — its own and every one it inherits from a non-platform supertype; `—` means this owner was not measured there.
+
+**Supertypes this run could not open, so the surfaces below them are LOWER BOUNDS.** Each lives in an artifact this probe does not resolve. None of them is a messaging or routing type — they are the Spring and AWS lifecycle interfaces (`InitializingBean`, `Lifecycle`, `AwsClient` and the like) — so no addressable method is expected to be hiding behind one. That expectation is stated rather than measured, and it is the same kind of statement that was wrong about `AbstractMessagingTemplate`.
+
+- `org.springframework.amqp.rabbit.core.RabbitTemplate`: `org.springframework.amqp.core.AmqpTemplate`, `org.springframework.amqp.core.MessageListener`, `org.springframework.beans.factory.BeanFactoryAware`, `org.springframework.beans.factory.BeanNameAware`, `org.springframework.beans.factory.DisposableBean`, `org.springframework.beans.factory.InitializingBean`, `org.springframework.context.ApplicationContextAware`, `org.springframework.context.Lifecycle`
+- `org.springframework.jms.core.JmsTemplate`: `org.springframework.beans.factory.InitializingBean`
+- `software.amazon.awssdk.services.sqs.SqsAsyncClient`: `software.amazon.awssdk.awscore.AwsClient`
+- `software.amazon.awssdk.services.sqs.SqsClient`: `software.amazon.awssdk.awscore.AwsClient`
+
+### 2. Of the unread, which could carry a destination
+
+A raw ratio overstates every gap here: most of what a template class declares is configuration and lifecycle, not boundaries. `RabbitTemplate`'s 83 include `setChannelTransacted`, `afterPropertiesSet` and every getter. So the unread half is split by a MEASURED property rather than by judgement — **does the method take a `String` at argument 0**, the position every destination-carrying method in these APIs uses (measured across all ten owners; it is the position `spring-pubsub.yml`, `spring-jms-template.yml` and `spring-sqs-template.yml` already read). A method that takes no name cannot address a wire, so it is not a candidate boundary and its absence needs no slice.
+
+**This split does not decide the slice**, it bounds the work of writing one: a candidate may still be deliberately outside (a `receive` with no payload capture, a batch form), and a non-candidate may still be a boundary reached another way (a destination-less `send` on a template configured with a default). Those are judgements a catalog states; this table says which methods the judgement is about.
+
+| catalog | owner | unread | name at arg 0 | single `*Request` argument | declares a route | distinct |
+| --- | --- | --- | --- | --- | --- | --- |
+| `spring-jms-template` | `JmsTemplate` | 48 | **11** | **0** | **0** | **11** |
+| `spring-jms-template` | `JmsOperations` | 9 | **9** | **0** | **0** | **9** |
+| `spring-rabbit-template` | `RabbitTemplate` | 87 | **20** | **0** | **0** | **20** |
+| `spring-rabbit-template` | `AmqpTemplate` | 7 | **7** | **0** | **0** | **7** |
+| `spring-sqs-template` | `SqsTemplate` | 11 | **7** | **0** | **0** | **7** |
+| `spring-sqs-template` | `SqsOperations` | 3 | **3** | **0** | **0** | **3** |
+| `spring-pubsub` | `PubSubTemplate` | 9 | **0** | **0** | **0** | **0** |
+| `spring-webflux-router` | `RouterFunctions$Builder` | 20 | **10** | **0** | **11** | **14** |
+| `aws-sqs-sdk` | `SqsClient` | 28 | **0** | **24** | **0** | **24** |
+| `aws-sqs-sdk` | `SqsAsyncClient` | 28 | **0** | **25** | **0** | **25** |
+
+**`spring-jms-template` / `JmsTemplate`**
+
+> by name at argument 0 (11): `browse`, `browseSelected`, `execute`, `receive`, `receiveAndConvert`, `receiveSelected`, `receiveSelectedAndConvert`, `send`, `sendAndReceive`, `setDefaultDestinationName`, `setSessionAcknowledgeModeName`
+
+**`spring-jms-template` / `JmsOperations`**
+
+> by name at argument 0 (9): `browse`, `browseSelected`, `execute`, `receive`, `receiveAndConvert`, `receiveSelected`, `receiveSelectedAndConvert`, `send`, `sendAndReceive`
+
+**`spring-rabbit-template` / `RabbitTemplate`**
+
+> by name at argument 0 (20): `addConsumerArg`, `convertSendAndReceive`, `convertSendAndReceiveAsType`, `nullSafeExchange`, `nullSafeRoutingKey`, `receive`, `receiveAndConvert`, `receiveAndReply`, `removeConsumerArg`, `send`, `sendAndReceive`, `setBeanName`, `setCorrelationKey`, `setDefaultReceiveQueue`, `setEncoding`, `setExchange`, `setMandatoryExpressionString`, `setReplyAddress`, `setRoutingKey`, `setUserIdExpressionString`
+
+**`spring-rabbit-template` / `AmqpTemplate`**
+
+> by name at argument 0 (7): `convertSendAndReceive`, `convertSendAndReceiveAsType`, `receive`, `receiveAndConvert`, `receiveAndReply`, `send`, `sendAndReceive`
+
+**`spring-sqs-template` / `SqsTemplate`**
+
+> by name at argument 0 (7): `receive`, `receiveAsync`, `receiveMany`, `receiveManyAsync`, `sendAsync`, `sendMany`, `sendManyAsync`
+
+**`spring-sqs-template` / `SqsOperations`**
+
+> by name at argument 0 (3): `receive`, `receiveMany`, `sendMany`
+
+**`spring-pubsub` / `PubSubTemplate`** — no unread method addresses a wire by either style.
+
+**`spring-webflux-router` / `RouterFunctions$Builder`**
+
+> by name at argument 0 (10): `DELETE`, `GET`, `HEAD`, `OPTIONS`, `PATCH`, `POST`, `PUT`, `path`, `resources`, `withAttribute`
+
+> by declaring a route (11): `DELETE`, `GET`, `HEAD`, `OPTIONS`, `PATCH`, `POST`, `PUT`, `add`, `nest`, `resource`, `route`
+
+**`aws-sqs-sdk` / `SqsClient`**
+
+> by a `*Request` object (24): `addPermission`, `cancelMessageMoveTask`, `changeMessageVisibility`, `changeMessageVisibilityBatch`, `createQueue`, `deleteMessage`, `deleteMessageBatch`, `deleteQueue`, `getQueueAttributes`, `getQueueUrl`, `listDeadLetterSourceQueues`, `listDeadLetterSourceQueuesPaginator`, `listMessageMoveTasks`, `listQueueTags`, `listQueues`, `listQueuesPaginator`, `purgeQueue`, `receiveMessage`, `removePermission`, `sendMessageBatch`, `setQueueAttributes`, `startMessageMoveTask`, `tagQueue`, `untagQueue`
+
+**`aws-sqs-sdk` / `SqsAsyncClient`**
+
+> by a `*Request` object (25): `addPermission`, `cancelMessageMoveTask`, `changeMessageVisibility`, `changeMessageVisibilityBatch`, `createQueue`, `deleteMessage`, `deleteMessageBatch`, `deleteQueue`, `getQueueAttributes`, `getQueueUrl`, `listDeadLetterSourceQueues`, `listDeadLetterSourceQueuesPaginator`, `listMessageMoveTasks`, `listQueueTags`, `listQueues`, `listQueuesPaginator`, `purgeQueue`, `receiveMessage`, `removePermission`, `sendMessage`, `sendMessageBatch`, `setQueueAttributes`, `startMessageMoveTask`, `tagQueue`, `untagQueue`
+
+### 3. Every unread candidate, one per row
+
+| catalog | owner | method | addressed by |
+|---|---|---|---|
+| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `browse` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `browseSelected` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `execute` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `receive` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `receiveAndConvert` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `receiveSelected` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `receiveSelectedAndConvert` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `send` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `sendAndReceive` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `setDefaultDestinationName` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `setSessionAcknowledgeModeName` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `browse` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `browseSelected` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `execute` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `receive` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `receiveAndConvert` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `receiveSelected` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `receiveSelectedAndConvert` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `send` | `argument 0` |
+| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `sendAndReceive` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `addConsumerArg` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertSendAndReceive` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertSendAndReceiveAsType` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `nullSafeExchange` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `nullSafeRoutingKey` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `receive` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `receiveAndConvert` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `receiveAndReply` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `removeConsumerArg` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `send` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `sendAndReceive` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `setBeanName` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `setCorrelationKey` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `setDefaultReceiveQueue` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `setEncoding` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `setExchange` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `setMandatoryExpressionString` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `setReplyAddress` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `setRoutingKey` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `setUserIdExpressionString` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `convertSendAndReceive` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `convertSendAndReceiveAsType` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `receive` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `receiveAndConvert` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `receiveAndReply` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `send` | `argument 0` |
+| `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `sendAndReceive` | `argument 0` |
+| `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `receive` | `argument 0` |
+| `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `receiveAsync` | `argument 0` |
+| `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `receiveMany` | `argument 0` |
+| `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `receiveManyAsync` | `argument 0` |
+| `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `sendAsync` | `argument 0` |
+| `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `sendMany` | `argument 0` |
+| `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `sendManyAsync` | `argument 0` |
+| `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `receive` | `argument 0` |
+| `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `receiveMany` | `argument 0` |
+| `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `sendMany` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `DELETE` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `GET` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `HEAD` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `OPTIONS` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `PATCH` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `POST` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `PUT` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `path` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `resources` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `withAttribute` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `DELETE` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `GET` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `HEAD` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `OPTIONS` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `PATCH` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `POST` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `PUT` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `add` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `nest` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `resource` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `route` | `route declaration` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `addPermission` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `cancelMessageMoveTask` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `changeMessageVisibility` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `changeMessageVisibilityBatch` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `createQueue` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `deleteMessage` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `deleteMessageBatch` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `deleteQueue` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `getQueueAttributes` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `getQueueUrl` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `listDeadLetterSourceQueues` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `listDeadLetterSourceQueuesPaginator` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `listMessageMoveTasks` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `listQueueTags` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `listQueues` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `listQueuesPaginator` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `purgeQueue` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `receiveMessage` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `removePermission` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `sendMessageBatch` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `setQueueAttributes` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `startMessageMoveTask` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `tagQueue` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `untagQueue` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `addPermission` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `cancelMessageMoveTask` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `changeMessageVisibility` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `changeMessageVisibilityBatch` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `createQueue` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `deleteMessage` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `deleteMessageBatch` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `deleteQueue` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `getQueueAttributes` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `getQueueUrl` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `listDeadLetterSourceQueues` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `listDeadLetterSourceQueuesPaginator` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `listMessageMoveTasks` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `listQueueTags` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `listQueues` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `listQueuesPaginator` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `purgeQueue` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `receiveMessage` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `removePermission` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `sendMessage` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `sendMessageBatch` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `setQueueAttributes` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `startMessageMoveTask` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `tagQueue` | `request object` |
+| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `untagQueue` | `request object` |
+

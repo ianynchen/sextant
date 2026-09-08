@@ -12,7 +12,29 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Added
+
+- **A catalog now declares what it does NOT read.** `slice.outside` names, method by
+  method with a reason, the part of its framework's surface a catalog leaves out
+  ([D02](docs/components/D02-catalog-schema.md) §1c, W19). Catalog presence used to
+  mean completeness and never was: `spring-webflux-router` reads **none** of
+  `RouterFunctions$Builder`'s 20 methods, so the builder DSL derives nothing;
+  `aws-sqs-sdk` reads one of `SqsClient`'s 29 and none of `SqsAsyncClient`'s 28, so an
+  SDK-level SQS consumer is invisible and so is every module on the async client; the
+  JMS, AMQP and SQS templates model the send half only. `scripts/probes/w19_catalog_surface/`
+  enumerates each owner's surface from the jar and
+  `tests/architecture/test_catalog_slice_coverage.py` requires every addressable method
+  the catalog does not read to be declared.
+- **`detect.satisfied_by`** — the annotations that answer a catalog's dependency gate on
+  their own. `@ConnectMapping` is RSocket-only, and F2 §3.6 said so, but the gate ran
+  before any matching, so a `@ConnectMapping` class in a module whose build named no
+  RSocket coordinate derived nothing and asked nothing (W16 review).
+
 ### Fixed
+
+- **Nine of `PubSubTemplate`'s ten consuming methods were unread**, so every pull-based
+  Pub/Sub consumer derived nothing at all — the same output a module consuming no
+  Pub/Sub produces (W18).
 
 - **Every Spring RSocket controller was published as `websocket`** — a wrong-PROTOCOL
   fabrication, and `protocol` is the column DR-5 links on, so those rows reached other

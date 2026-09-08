@@ -290,3 +290,58 @@ wrappers:
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.
 shape_model: json
+
+# D02's declared SLICE (F2 §3.8), and it is the one a reader is most likely to be
+# surprised by. Measured (`scripts/probes/w19_catalog_surface.md`): this catalog reads
+# **0 of the 20** methods `RouterFunctions$Builder` declares at spring-webflux 6.1.6.
+#
+# **`RouterFunctions.route()` — the BUILDER DSL — derives nothing at all.** That has
+# been the reference documentation's recommended Java shape since Spring 5.2, so it is
+# plausibly the majority of real functional routers. What this catalog reads is the
+# other two forms: the argument-rooted `RouterFunctions.route(predicate, handler)` and
+# Kotlin's `coRouter { }`.
+#
+# The distinction is structural, not an oversight about names: this grammar roots a
+# route at an ARGUMENT or in a lambda BODY, and a builder verb sits on a RECEIVER
+# returned by an argument-less `route()`. There is no word for that here, which is why
+# closing it is engine work and not a catalog addition.
+slice:
+  outside:
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+      method_names: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS]
+      why: >
+        The builder DSL's seven verbs (four overloads each, `javap` at 6.1.6). Every
+        route declared this way derives NOTHING — not a partial row and not a question.
+        A module using `RouterFunctions.route().GET("/orders", handler).build()` has its
+        whole functional routing surface absent. This is G-37, and it is engine work:
+        the verb call sits on a receiver this grammar cannot root a walk at.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+      method_names: [path]
+      why: >
+        Nests a builder under a path prefix, so it composes an address the same way an
+        HTTP class-level mapping does. Outside for the same reason as the verbs, and it
+        compounds them: a prefix nobody reads makes every nested route's address wrong
+        as well as absent, were the verbs read without it.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+      method_names: [route, nest, add, resource]
+      why: >
+        The builder's four remaining route-declaring forms, and they address the wire
+        through a `RequestPredicate` object rather than through a path string — so
+        neither of the enumeration's first two tests could see them, and for one run
+        they sat outside the slice AND outside the enumeration, which is the one place
+        a reader could not have found them. `route(predicate, handler)` and
+        `nest(predicate, …)` declare and group routes; `add` attaches a whole
+        `RouterFunction` built elsewhere; `resource` serves one resource under a
+        predicate. All derive nothing, for the same structural reason as the verbs.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+      method_names: [resources]
+      why: >
+        Serves static resources under a pattern. A served route, and arguably a
+        boundary — but it names a resource location rather than a handler, and this
+        analysis has no row shape for "these bytes are served here". Left outside
+        deliberately.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+      method_names: [withAttribute]
+      why: >
+        Attaches metadata to the route being built. Names no address and serves nothing;
+        it appears in the enumeration only because its first parameter is a `String`.

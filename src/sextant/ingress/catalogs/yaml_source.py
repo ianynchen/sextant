@@ -72,6 +72,7 @@ class YamlCatalogSource:
                     source=path,
                     detect_coordinates=_coordinates(raw, path),
                     detect_satisfied_by=_detect_satisfied_by(raw, path),
+                    slice_outside=_slice_outside(raw, path),
                     detect_required=_detect_required(raw, path),
                     # D02 §2a — optional, and framework-specific: an envelope
                     # type a payload sits inside belongs to the framework that
@@ -225,6 +226,53 @@ def _detect_satisfied_by(raw: dict[str, object], path: Path) -> tuple[str, ...]:
                 f"fully-qualified annotation name"
             )
     return tuple(declared)
+
+
+def _slice_outside(raw: dict[str, object], path: Path) -> tuple[dict[str, object], ...]:
+    """D02's `slice.outside` (F2 §3.8), shape-checked here like every other value.
+
+    Every entry must name an `owner`, a non-empty `method_names` list and a `why`.
+
+    **`method_names`, not `methods`, and the name is load-bearing.**
+    `tests/architecture/test_catalog_descriptor_coverage.py` walks every catalog for
+    any `methods:` key ANYWHERE and requires each row under one to declare a
+    `descriptor:` — deliberately unfiltered, because "the one thing this rule must
+    not do is stop seeing a row". A slice's list is bare names and not match rows, so
+    reusing the key made all 109 of them read as undeclared match rows and broke that
+    audit. Renaming here rather than teaching that walker an exception keeps it
+    unfiltered, which is the property it exists for. The
+    `why` is refused when absent rather than defaulted, because an entry without
+    one records that a method is unread and not why — and "we do not model this"
+    and "this is not a boundary" are different claims that a reader has to be able
+    to tell apart.
+    """
+    declared = raw.get("slice")
+    if declared is None:
+        return ()
+    if not isinstance(declared, dict):
+        raise CatalogError(f"loading catalog {path}: `slice` must be a mapping")
+    outside = declared.get("outside")
+    if not isinstance(outside, list) or not outside:
+        raise CatalogError(
+            f"loading catalog {path}: `slice.outside` must be a non-empty list — a slice "
+            f"that names nothing outside it is not a slice"
+        )
+    for entry in outside:
+        if not isinstance(entry, dict):
+            raise CatalogError(f"loading catalog {path}: each `slice.outside` entry is a mapping")
+        missing = [key for key in ("owner", "method_names", "why") if not entry.get(key)]
+        if missing:
+            raise CatalogError(
+                f"loading catalog {path}: `slice.outside` entry for "
+                f"{entry.get('owner', '(no owner)')!r} declares no {', '.join(missing)}"
+            )
+        if not isinstance(entry["method_names"], list) or not all(
+            isinstance(m, str) and m for m in entry["method_names"]
+        ):
+            raise CatalogError(
+                f"loading catalog {path}: `slice.outside` `method_names` must be a list of names"
+            )
+    return tuple(outside)
 
 
 def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:

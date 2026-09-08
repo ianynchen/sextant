@@ -95,6 +95,22 @@ class Catalog:
     # rule that changes when an unrelated catalog is added is a rule nobody can
     # read off the file that states it.
     detect_satisfied_by: tuple[str, ...] = ()
+    # D02's declared SLICE (F2 §3.8): the part of its framework's surface this
+    # catalog does not read, named method by method with the reason.
+    #
+    # A catalog with no slice claims its framework entire, and a catalog whose
+    # slice was written from memory claims whatever its author last looked at.
+    # Both read identically to a consumer — which is why this is not prose. Its
+    # consumer is `tests/architecture/test_catalog_slice_coverage.py`, which reads
+    # the enumeration `scripts/probes/w19_catalog_surface.md` generated and
+    # requires every addressable method the catalog does not read to be named
+    # here. A framework release that adds one fails that audit until somebody
+    # decides which side of the line it is on.
+    #
+    # Each entry is `{owner, method_names, why}`. `why` is required and load-bearing:
+    # "not modelled" and "not a boundary" are different claims, and a reader
+    # deciding whether this catalog covers their code needs to know which.
+    slice_outside: tuple[dict[str, object], ...] = ()
     # D02 §2a, §2e, §2f, §2g. Default to empty so a catalog that declares none
     # of them — every catalog before Task 8, and the invented catalogs tests
     # construct by hand — still loads. **All four are read today**:

@@ -118,3 +118,55 @@ wrappers:
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.
 shape_model: json
+
+# D02's declared SLICE (F2 §3.8). `RabbitTemplate` declares 83 public methods at
+# spring-amqp/spring-rabbit 3.1.4 and this catalog reads ONE
+# (`scripts/probes/w19_catalog_surface.md`). Twenty of the unread take a `String` at
+# argument 0; that test admits setters, so the list below separates the ones that
+# address a wire from the ones that configure a default address.
+#
+# **The honest summary: this catalog models `convertAndSend` and nothing else.** A
+# module that receives over AMQP, or that does request/reply, derives nothing here.
+slice:
+  outside:
+    - owner: org.springframework.amqp.rabbit.core.RabbitTemplate
+      method_names: [receive, receiveAndConvert, receiveAndReply]
+      why: >
+        A boundary this catalog does NOT model — the inbound half of G-44. Each reads
+        from a named queue; `receiveAndReply` is inbound AND outbound in one call and
+        would derive two rows.
+    - owner: org.springframework.amqp.rabbit.core.RabbitTemplate
+      method_names: [send, sendAndReceive, convertSendAndReceive, convertSendAndReceiveAsType]
+      why: >
+        Outbound boundaries this catalog does NOT model. AMQP's wire identity is the
+        exchange AND the routing key, which this file already composes for
+        `convertAndSend`; these overloads take the same pair, so the gap is a fixture
+        and a descriptor sweep rather than a design question. The `*SendAndReceive*`
+        forms are request/reply and derive an outbound and an inbound row from one call.
+    - owner: org.springframework.amqp.rabbit.core.RabbitTemplate
+      method_names: [setExchange, setRoutingKey, setDefaultReceiveQueue, setReplyAddress]
+      why: >
+        Configuration, and the reason it matters: these set the DEFAULT address that a
+        destination-less `send(Message)` or `receive()` then uses. A module configuring
+        its template once and sending without an address everywhere is invisible to
+        this catalog, and no row here says so — the same shape D02 §2's
+        `configured address` form exists for, unread by this file.
+    - owner: org.springframework.amqp.rabbit.core.RabbitTemplate
+      method_names: [setBeanName, setEncoding, setCorrelationKey, setMandatoryExpressionString,
+                setUserIdExpressionString, addConsumerArg, removeConsumerArg]
+      why: >
+        Configuration that names no destination. Not boundaries, and not candidates for
+        one — they appear in the enumeration only because the argument-0 test admits any
+        method whose first parameter is a `String`.
+    - owner: org.springframework.amqp.rabbit.core.RabbitTemplate
+      method_names: [nullSafeExchange, nullSafeRoutingKey]
+      why: >
+        Internal helpers that substitute the configured default when an argument is
+        null. They are public on this class but they address nothing themselves.
+    - owner: org.springframework.amqp.core.AmqpTemplate
+      method_names: [convertSendAndReceive, convertSendAndReceiveAsType, receive, receiveAndConvert,
+                receiveAndReply, send, sendAndReceive]
+      why: >
+        The interface `RabbitTemplate` implements, carried as an owner alternate since
+        W10. Its slice is its implementation's slice: each method is outside for the
+        reason given above for the same name on `RabbitTemplate`.

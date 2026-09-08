@@ -97,3 +97,68 @@ wrappers:
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.
 shape_model: json
+
+# D02's declared SLICE (F2 §3.8). Measured, not remembered: `JmsTemplate` declares
+# 37 public methods at spring-jms 6.1.6 and this catalog reads ONE
+# (`scripts/probes/w19_catalog_surface.md`). Ten of the unread take a destination
+# name at argument 0, so ten are addressable and every one is named below with the
+# reason it is outside. `tests/architecture/test_catalog_slice_coverage.py` fails if
+# a release adds an eleventh and nobody decides which side of the line it is on.
+#
+# **The honest summary a reader needs: this catalog models the CONVERT-AND-SEND half
+# of JmsTemplate and nothing else.** A module that receives over JMS through this
+# template derives nothing from this file.
+slice:
+  outside:
+    - owner: org.springframework.jms.core.JmsTemplate
+      method_names: [receive, receiveSelected, receiveAndConvert, receiveSelectedAndConvert]
+      why: >
+        A boundary this catalog does NOT model. Each is a synchronous receive from a
+        named destination — a real inbound wire, and the largest half of G-44. Reading
+        them needs no new engine capability (the destination is at argument 0, the shape
+        `convertAndSend` already reads); it needs a fixture and a measurement of which
+        overloads carry a payload type, which is the work, not the design.
+    - owner: org.springframework.jms.core.JmsTemplate
+      method_names: [send, sendAndReceive]
+      why: >
+        Outbound boundaries this catalog does NOT model, in the same file that models
+        `convertAndSend`. `send(String, MessageCreator)` builds its own message rather
+        than converting one, so the payload is inside a callback and no argument
+        position carries it; `sendAndReceive` is request/reply and would derive two
+        rows on one call. Both are real sends and both derive nothing today.
+    - owner: org.springframework.jms.core.JmsTemplate
+      method_names: [browse, browseSelected]
+      why: >
+        Reads a named queue WITHOUT consuming from it. Whether a browse is a boundary
+        is a genuine question this catalog does not answer either way: it observes the
+        queue's contents, but it is not a participant in the conversation the queue
+        carries. Left outside deliberately rather than by oversight.
+    - owner: org.springframework.jms.core.JmsTemplate
+      method_names: [execute]
+      why: >
+        Takes a destination name and a `ProducerCallback` — the overload with a
+        `SessionCallback` takes no destination at all. The destination is real, but
+        what the callback DOES — send, receive, both, neither — is not readable from
+        the call, so any row derived here would state a direction we did not measure.
+        Silence is the honest answer until the callback body is traced.
+    - owner: org.springframework.jms.core.JmsTemplate
+      method_names: [setSessionAcknowledgeModeName]
+      why: >
+        Configuration that names no destination — it sets the JMS acknowledge mode.
+        Inherited from `JmsAccessor`, and it appears in the enumeration only because
+        the argument-0 test admits any method whose first parameter is a `String`.
+    - owner: org.springframework.jms.core.JmsTemplate
+      method_names: [setDefaultDestinationName]
+      why: >
+        Configuration, not a boundary — but it is why the destination-less
+        `convertAndSend(Object)` overload is addressable at all, and this catalog does
+        not read that overload either. Named here so the connection is on record rather
+        than rediscovered.
+    - owner: org.springframework.jms.core.JmsOperations
+      method_names: [browse, browseSelected, execute, receive, receiveAndConvert, receiveSelected,
+                receiveSelectedAndConvert, send, sendAndReceive]
+      why: >
+        The interface `JmsTemplate` implements, carried as an owner alternate since W10
+        so an interface-typed field derives the same rows. Its slice is its
+        implementation's slice: every method here is outside for the reason given above
+        for the same name on `JmsTemplate`.

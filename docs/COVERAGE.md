@@ -760,6 +760,51 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- END GENERATED: coverage_versions -->
 
+### 3b. What each catalog does NOT read — the declared slices
+
+`3a` says which versions a catalog's rules were measured against. It does not say how
+much of the framework those rules cover, and **presence in that table never meant
+completeness**. Measured (`scripts/probes/w19_catalog_surface.md`, which enumerates each
+owner's declared methods out of the jar and cross-references the catalog as loaded):
+
+| catalog | owner | reads | of those unread, can address a wire |
+|---|---|---|---|
+| `spring-jms-template` | `JmsTemplate` (spring-jms 6.1.6) | **1 of 49** | 11 |
+| `spring-jms-template` | `JmsOperations` | **1 of 10** | 9 |
+| `spring-rabbit-template` | `RabbitTemplate` (spring-rabbit 3.1.4) | **1 of 88** | 20 |
+| `spring-rabbit-template` | `AmqpTemplate` (spring-amqp 3.1.4) | **1 of 8** | 7 |
+| `spring-sqs-template` | `SqsTemplate` (spring-cloud-aws-sqs 3.1.1) | **1 of 12** | 7 |
+| `spring-sqs-template` | `SqsOperations` | **1 of 4** | 3 |
+| `spring-pubsub` | `PubSubTemplate` (spring-cloud-gcp-pubsub 5.1.2) | **11 of 20** | 0 |
+| `spring-webflux-router` | `RouterFunctions$Builder` (spring-webflux 6.1.6) | **0 of 20** | 14 |
+| `aws-sqs-sdk` | `SqsClient` (sqs 2.25.31) | **1 of 29** | 24 |
+| `aws-sqs-sdk` | `SqsAsyncClient` | **0 of 28** | 25 |
+
+**A raw ratio overstates every one of these** — most of what a template declares is
+configuration and lifecycle, and a method taking no destination cannot address a wire.
+The counts include INHERITED methods: `SqsTemplate` declares ten of its own and gets its
+whole messaging surface from `AbstractMessagingTemplate`, and an earlier run of this
+enumeration missed that and published a `0` in the last column for a catalog whose entire
+inbound direction is unread.
+The last column is the number that matters, and each of those methods is now named
+individually in its catalog's `slice.outside` with the reason it is outside
+([D02](components/D02-catalog-schema.md) §1c). The four headline absences:
+
+- **`RouterFunctions.route()`'s builder DSL derives nothing** — 0 of 20, and it has been
+  the reference documentation's recommended Java shape since Spring 5.2.
+- **An SDK-level SQS consumer is invisible** — `SqsClient.receiveMessage` is unread, so a
+  module that only consumes looks like one that does not touch SQS.
+- **`SqsAsyncClient` is unread entirely**, `sendMessage` included — the same code written
+  against the async client derives nothing, while the sync client derives a row.
+- **The JMS, AMQP and SQS templates model the send half only.** Every `receive`, every
+  request/reply form, and — for SQS — every asynchronous and batch send, derives nothing.
+
+This table is not maintained by hand: `tests/architecture/test_catalog_slice_coverage.py`
+fails if the enumeration lists an addressable method no slice accounts for, and fails the
+other way if a slice names a method the enumeration no longer lists. It holds the catalogs
+to the last measurement — re-reading a new release's bytecode means re-running
+`scripts/probes/w19_catalog_surface/run.sh`, which `scripts/check.sh` does not do.
+
 ### What this does not tell you
 
 - **A measured version means the RULES were read at it, not that a project on it was

@@ -7261,3 +7261,45 @@ def test_narrowing_the_list_and_gating_on_it_is_what_would_lose_the_webflux_rows
         ("GET", "/orders")
     }
     assert _controller_rows(tmp_path / "narrowed", (_WEBFLUX_COORDINATE,), narrowed) == set()
+
+
+# --- F2 §3.8 (W19): `slice.outside` refuses a slice that says nothing. -------
+@pytest.mark.parametrize(
+    ("block", "expected"),
+    [
+        pytest.param("slice: []\n", "must be a mapping", id="not a mapping"),
+        pytest.param("slice:\n  outside: []\n", "non-empty list", id="outside is empty"),
+        pytest.param(
+            "slice:\n  outside:\n    - {owner: a.B, method_names: [x]}\n",
+            "declares no why",
+            id="no reason given",
+        ),
+        pytest.param(
+            "slice:\n  outside:\n    - {owner: a.B, why: because}\n",
+            "declares no method_names",
+            id="no methods named",
+        ),
+        pytest.param(
+            "slice:\n  outside:\n    - {owner: a.B, method_names: x, why: because}\n",
+            "must be a list of names",
+            id="methods not a list",
+        ),
+    ],
+)
+def test_a_slice_that_states_nothing_is_refused(tmp_path: Path, block: str, expected: str):
+    """Each refusal in `_slice_outside`, exercised — the review that added this
+    file found all four unreached (§10).
+
+    The `why` is the one worth spelling out. A slice entry without it records that
+    a method is unread and not WHY, and "this is not a boundary" and "this is a
+    boundary we do not model" are different claims — a reader deciding whether this
+    catalog covers their code needs to know which. Defaulting it would let the
+    cheaper of the two answers be the silent one.
+    """
+    directory = _catalog_dir(tmp_path, _VALID_CATALOG + block)
+
+    with pytest.raises(CatalogError) as failure:
+        YamlCatalogSource(directory).load()
+
+    assert expected in str(failure.value)
+    assert "invented.yml" in str(failure.value)

@@ -40,6 +40,7 @@ matches:
 | `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c. Omitted only by a NON-WIRE style, below |
 | `detect` | Coordinates that make this catalog's framework rule applicable to a module, plus `required` and `satisfied_by`. **Read since Phase 2O Task 6 — by two styles, and by any catalog setting `detect.required`** — see below |
 | `measured` | The artifact(s) and version(s) this catalog's rule was verified against, and the probe that verified it — §1a |
+| `slice` | The part of its framework's surface this catalog does NOT read, named method by method with the reason — §1c. Optional; a catalog with none claims its framework entire |
 | `requires` | Capabilities — scanner-declared or pipeline-declared (below). **If unmet, the catalog does not run and the skip is reported.** |
 | `matches` | Style-specific |
 
@@ -114,6 +115,38 @@ place that reads either form, and it refuses anything else — a mapping, a numb
 list — naming the file and the key. Where a widened value reaches a consumer, the variable is
 PLURAL (`owners`, `handler_fqns`): the rename is what makes a consumer still comparing with
 `==` fail loudly instead of comparing a string against a tuple and matching nothing.
+
+### 1c. `slice` — what a catalog does not read (F2 §3.8)
+
+**Catalog presence used to mean completeness, and it never was.** `spring-jms-template`
+reads ONE of the 37 methods `JmsTemplate` declares; `aws-sqs-sdk` reads one of
+`SqsClient`'s 29 and none of `SqsAsyncClient`'s 28, so an SDK-level SQS consumer is
+invisible; `spring-webflux-router` reads **none** of `RouterFunctions$Builder`'s 20, so
+the builder DSL — the reference documentation's recommended Java shape since Spring 5.2
+— derives nothing at all. None of those files said so, and a consumer reading the
+catalog list saw "JMS: supported", "SQS: supported", "WebFlux routing: supported".
+
+`slice.outside` is a list of `{owner, methods, why}`. All three are required, and `why`
+is load-bearing rather than decorative: *"this is not a boundary"* and *"this is a
+boundary we do not model"* are different claims, and a reader deciding whether a
+catalog covers their code needs to know which one they are being told.
+
+**It is checked, not merely written.** `scripts/probes/w19_catalog_surface/run.sh`
+enumerates each owner's declared methods out of the jar's own bytecode, cross-references
+the catalog as LOADED, and emits every unread method that can address a wire — by taking
+a name at argument 0, or by taking a request object the way the AWS SDK does.
+`tests/architecture/test_catalog_slice_coverage.py` requires every one of those to
+appear in `slice.outside`, and requires the reverse too: an entry naming a method the
+enumeration does not list is stale. So a framework release that adds an addressable
+method fails the audit **once the probe is re-run and its table pasted back** — the same
+arrangement `cp10_catalog_descriptors.md` uses, and the same limit: `scripts/check.sh`
+does not resolve jars, so nothing re-reads bytecode on its own. The audit holds the
+catalog to the last measurement, not to the current release.
+
+**What the audit cannot check is whether the reason is RIGHT.** Only a reader can tell
+whether "not a boundary" was the honest answer. What it holds is that a choice was made,
+in the file, for every method — and that the distance between what a catalog claims and
+what it reads cannot grow silently.
 
 **`detect.coordinates` is read, and it gates SOME catalogs rather than the whole catalog
 set** (Phase 2O Task 6, ruling R9; before it, every shipped catalog declared the key and the

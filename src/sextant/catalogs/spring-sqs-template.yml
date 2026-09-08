@@ -82,3 +82,47 @@ wrappers:
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.
 shape_model: json
+
+# D02's declared SLICE (F2 §3.8). Measured
+# (`scripts/probes/w19_catalog_surface.md`): this catalog reads ONE of the twelve
+# methods `SqsTemplate` OFFERS at spring-cloud-aws-sqs 3.1.1, and seven of the
+# eleven unread take the queue name at argument 0.
+#
+# **Most of that surface is inherited, and the first version of the enumeration
+# could not see it.** `SqsTemplate` declares ten methods and gets its whole
+# messaging surface from `AbstractMessagingTemplate` — which is the same fact this
+# file's own `descriptor` comment already records for three of its four `send`
+# rows. The probe ran `javap` on the named class alone, so it reported "no unread
+# method addresses a wire" for a catalog whose entire INBOUND direction is unread,
+# and COVERAGE published that zero. The probe now walks supertypes; this slice is
+# what the corrected run found.
+#
+# **The honest summary: this catalog models the synchronous, single-message SEND
+# and nothing else.** A module that receives over SQS through this template, or
+# that sends asynchronously or in batches, derives nothing.
+slice:
+  outside:
+    - owner: io.awspring.cloud.sqs.operations.SqsTemplate
+      method_names: [receive, receiveMany, receiveAsync, receiveManyAsync]
+      why: >
+        A boundary this catalog does NOT model: the entire inbound direction.
+        `receive(String, Class<T>)` and `receiveMany` take the queue name at argument
+        0 and a payload type at argument 1 — the exact shape this file already reads
+        for `send`, so the gap is a fixture and a descriptor sweep rather than a
+        design question. A module that only consumes derives nothing at all from
+        this catalog, which reads as a module that does not use SQS.
+    - owner: io.awspring.cloud.sqs.operations.SqsTemplate
+      method_names: [sendAsync, sendManyAsync, sendMany]
+      why: >
+        Outbound boundaries this catalog does NOT model, in the file that models
+        `send`. The async forms are the same wire as `send` with a different return
+        type; the `*Many` forms carry a COLLECTION of messages, so one call is many
+        wire messages to one queue — a row shape this file's single-message rule does
+        not express.
+    - owner: io.awspring.cloud.sqs.operations.SqsOperations
+      method_names: [receive, receiveMany, sendMany]
+      why: >
+        The interface `SqsTemplate` implements, carried as an owner alternate since
+        W10 so an interface-typed field derives the same rows. Its slice is its
+        implementation's slice: each method is outside for the reason given above for
+        the same name on `SqsTemplate`.
