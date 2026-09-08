@@ -261,9 +261,30 @@ public final class ClassScanner {
          *  the enum test before the fallback because an enum is a class in the JVM's
          *  own model. */
         private String constructKindOf(int access) {
+            // BEFORE the interface test, because an annotation type carries
+            // ACC_INTERFACE too — `@interface` compiles to an interface extending
+            // java.lang.annotation.Annotation. Tested second, every `@interface` in
+            // the estate reported `construct_kind: "interface"`, which is the
+            // distinction §8.1 rule 5 says to follow where the provider makes one:
+            // the flag exists precisely to tell them apart.
+            if ((access & Opcodes.ACC_ANNOTATION) != 0) return "annotation";
             if ((access & Opcodes.ACC_INTERFACE) != 0) return "interface";
             if ((access & Opcodes.ACC_ENUM) != 0) return "enum";
             return "class";
+        }
+
+        /** A TYPE's declaration modifiers (W7). Always written, both keys, for the
+         *  reason D00 §5a gives for a field's: an absent one cannot be told apart
+         *  from a scanner that does not report it.
+         *
+         *  <p>`abstract` and `final` are the two a caller can act on — one says the
+         *  type cannot be instantiated, the other that nothing can extend it — and
+         *  they are the flags a sealed hierarchy and a value type both turn on. */
+        private String typeModifiersJson(int access) {
+            TreeMap<String, String> modifiers = new TreeMap<>();
+            modifiers.put("abstract", String.valueOf((access & Opcodes.ACC_ABSTRACT) != 0));
+            modifiers.put("final", String.valueOf((access & Opcodes.ACC_FINAL) != 0));
+            return JsonOut.object(modifiers);
         }
 
         @Override
@@ -1203,6 +1224,11 @@ public final class ClassScanner {
             TreeMap<String, String> modifiers = new TreeMap<>();
             modifiers.put("static", String.valueOf((access & Opcodes.ACC_STATIC) != 0));
             modifiers.put("transient", String.valueOf((access & Opcodes.ACC_TRANSIENT) != 0));
+            // W7. `final` on a field is what tells a constant apart from a mutable
+            // one, and `volatile` is a declaration about concurrency the language
+            // makes and nothing here could read.
+            modifiers.put("final", String.valueOf((access & Opcodes.ACC_FINAL) != 0));
+            modifiers.put("volatile", String.valueOf((access & Opcodes.ACC_VOLATILE) != 0));
             return JsonOut.object(modifiers);
         }
 
@@ -1227,6 +1253,17 @@ public final class ClassScanner {
             modifiers.put("static", String.valueOf((access & Opcodes.ACC_STATIC) != 0));
             modifiers.put("synthetic", String.valueOf(
                 (access & (Opcodes.ACC_SYNTHETIC | Opcodes.ACC_BRIDGE)) != 0));
+            // W7's six. `abstract` first, because without it an interface's `default`
+            // method and its abstract ones emitted IDENTICAL modifiers — a consumer
+            // asking "does this interface declare behaviour" had nothing to read.
+            modifiers.put("abstract", String.valueOf((access & Opcodes.ACC_ABSTRACT) != 0));
+            // `varargs` is the flag capability 9.15 needs: `f(String...)` and
+            // `f(String[])` compile to the same descriptor, so a call passing three
+            // strings and one passing `new String[]{…}` were indistinguishable.
+            modifiers.put("varargs", String.valueOf((access & Opcodes.ACC_VARARGS) != 0));
+            modifiers.put("final", String.valueOf((access & Opcodes.ACC_FINAL) != 0));
+            modifiers.put("native", String.valueOf((access & Opcodes.ACC_NATIVE) != 0));
+            modifiers.put("synchronized", String.valueOf((access & Opcodes.ACC_SYNCHRONIZED) != 0));
             return JsonOut.object(modifiers);
         }
 
@@ -1259,7 +1296,8 @@ public final class ClassScanner {
             // ACC_PUBLIC direction.)
             int access = classAccess;
             int constructFlags = nestedAccess != null ? nestedAccess : classAccess;
-            emit(typeSymbol, constructKindOf(constructFlags), enclosingSymbol, null, access, null, null,
+            emit(typeSymbol, constructKindOf(constructFlags), enclosingSymbol, null, access, null,
+                 typeModifiersJson(access),
                  TypeRefs.genericSuperclassFromSignature(classSignature),
                  interfaceSymbolsJson(classInterfaces),
                  genericInterfacesJson(classSignature), erasedSuperclassJson(superName), null,

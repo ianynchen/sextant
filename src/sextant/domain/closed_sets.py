@@ -23,6 +23,11 @@ class Evidence(StrEnum):
 class ConstructKind(StrEnum):
     CLASS = "class"
     INTERFACE = "interface"
+    # W7, ruled by the user in the design: an annotation TYPE is not an interface,
+    # and the class file says so with `ACC_ANNOTATION`. Tested after `ACC_INTERFACE`
+    # — which every `@interface` also carries — the whole estate reported them as
+    # interfaces, and §8.1 rule 5 says to follow a distinction the provider makes.
+    ANNOTATION = "annotation"
     ENUM = "enum"
     RECORD = "record"
     METHOD = "method"

@@ -14,6 +14,32 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **An `@interface` stops reporting itself as an interface, and ten other access flags are
+  read** (W7, first part).
+
+  `@interface` compiles to an interface extending `java.lang.annotation.Annotation`, so it
+  carries `ACC_INTERFACE` as well — and testing that flag first made every annotation type in
+  the estate report `construct_kind: "interface"`. `ACC_ANNOTATION` is the distinction the
+  class file makes, and §8.1 rule 5 says to follow one the provider makes rather than flatten
+  it. `construct_kind` gains a fifteenth member, which is a fact-schema change and was ruled
+  in the design.
+
+  **Measured before trusting it**, because this is the one W7 flag that changes a derived
+  value rather than adding one: the fixture's two annotation types move, interfaces go 18 to
+  16, and three endpoints DISAPPEARED — `GET /api/composed`, `GET /composed` and the
+  `composed-orders` listener. The meta-annotation composition pass finds an annotation type
+  through a query named `interface_symbols`, named for what annotation types used to report.
+  It now selects both kinds, and the three rows are back. The design's own blast-radius note
+  covered catalogs declaring `declared_on: interface` and missed this one, which is why the
+  fixture was run rather than the note believed.
+
+  **`varargs` unblocks capability 9.15.** `f(String...)` and `f(String[])` compile to one
+  descriptor — in the fixture both hash to `sig_05a88677` — so a call passing three strings
+  and one passing `new String[]{…}` were the same declaration. **`abstract`** tells an
+  interface's `default` method from its declared ones, which emitted identical modifiers.
+  `final`, `native` and `synchronized` join them on a method; `final` and `volatile` on a
+  field; `abstract` and `final` on a type, which carried no modifiers at all.
+
 - **Sextant can say WHERE, not only what** (W6). Three JVMS 4.7 attributes that were being
   dropped, and one derived answer that was wrong rather than absent.
 

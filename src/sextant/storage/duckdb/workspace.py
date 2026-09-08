@@ -251,8 +251,16 @@ _NAMED_QUERIES = {
     # meta-annotations are followed at all — the jar half (D02 §7) never
     # does. `method_symbols` above cannot serve this; a composing type is
     # never a method.
+    # BOTH kinds, and `annotation` is the one this exists for: an `@interface`
+    # reported `construct_kind: "interface"` until W7 read `ACC_ANNOTATION`, which
+    # is why the query is named for the kind it was never really about. Dropping
+    # `annotation` here loses every composed mapping — measured on the fixture,
+    # `@ApiGet` and `@OrderTopicListener` took `GET /api/composed`, `GET /composed`
+    # and the `composed-orders` listener with them. Plain interfaces stay in the
+    # set because they were always in it and nothing measured says they should go.
     "interface_symbols": """
-        SELECT symbol FROM symbols WHERE construct_kind = 'interface' ORDER BY symbol
+        SELECT symbol FROM symbols
+        WHERE construct_kind IN ('interface', 'annotation') ORDER BY symbol
     """,
     # Every declared method's own enclosing type and signature JSON,
     # module-prefixed exactly as the fact wrote them (D00 §5a) — checkpoint

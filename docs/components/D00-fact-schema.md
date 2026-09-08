@@ -185,7 +185,7 @@ goes in `ext`, never into a widened set.
 `di_container`, `dynamic_proxy`, `config_placeholder`, `unindexed_dependency`,
 `scanner_gap`
 
-**`construct_kind`** — `class`, `interface`, `struct`, `trait`, `protocol`, `enum`,
+**`construct_kind`** — `class`, `interface`, `annotation`, `struct`, `trait`, `protocol`, `enum`,
 `record`, `alias`, `method`, `function`, `constructor`, `accessor`, `field`, `module`
 
 **`origin_tier`** — `module_output`, `dependency`, `first_party`, `third_party`,
@@ -320,7 +320,9 @@ its own. (The SCIP parameter descriptor exists for the rare case of naming one f
 outside — a curation, say — and is deferred until something needs it.)
 
 **A field symbol also carries the declaration modifiers that decide whether it reaches a
-payload at all**, as `modifiers.static` and `modifiers.transient` — a value bound to the type
+payload at all**, as `modifiers.static` and `modifiers.transient` — joined in W7 by
+`modifiers.final` and `modifiers.volatile`, which say whether the value can change at all
+and whether the language was asked to publish that change across threads — a value bound to the type
 rather than to an instance, and a declaration the language marks as not serialized. Neither
 is visibility and neither is nullability: a public constant is as public as any field and is
 on no payload, so a shape pass filtering on what it already had would have to guess. Both
@@ -329,8 +331,16 @@ scanner that does not report the modifier. **A compiler-synthesized field is not
 declaration and produces no fact at all** — a modifier would say "somebody wrote this and it
 stays off the wire", where the truth is that no source file contains it.
 
-**A method symbol carries the same `modifiers` slot with a different pair of keys** —
-`modifiers.static` and `modifiers.synthetic` — because the two constructs do not share a
+**A method symbol carries the same `modifiers` slot with a different set of keys** —
+`modifiers.static` and `modifiers.synthetic`, and from W7 `abstract`, `varargs`, `final`,
+`native` and `synchronized`. Two of those answer questions nothing could ask before:
+`abstract` tells an interface's `default` method from its declared ones, which emitted
+IDENTICAL modifiers until it existed; and `varargs` is the only thing separating
+`f(String...)` from `f(String[])`, which compile to one descriptor — so a call passing three
+strings and one passing an array read as the same declaration. `native` is not `abstract`:
+both mean "no body here", one says the code is elsewhere in this language and the other
+outside it. **A TYPE symbol carries the slot too**, with `abstract` and `final`. The pairs
+differ because the constructs do not share a vocabulary — because the two constructs do not share a
 vocabulary. `transient` is deliberately absent: its class-file bit is `ACC_VARARGS` on a
 method, so writing it would report every varargs method as not-serialized. The pair answers
 one question, asked by any rule that enumerates a class's EXPOSED members (D02's
