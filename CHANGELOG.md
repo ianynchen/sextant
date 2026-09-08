@@ -14,6 +14,31 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Four more JVMS 4.7 attributes, and `construct_kind: record` gets its first producer**
+  (W7, second part).
+
+  **`Record` (4.7.30).** There is no `ACC_RECORD` — the attribute's presence is the whole
+  signal — so every record in the estate reported `class`. `record` has been in D00 §4's
+  closed set since it was written and had no producer at all, which is the "declared, never
+  read" defect reached from the other side. Its components are **not** emitted as a second
+  fact shape: they are already here as the record's private final fields, in declaration
+  order, with their types (measured on the fixture), and a second spelling of one declaration
+  would be two vocabularies for it.
+
+  **`Exceptions` (4.7.5).** ASM has always handed this to `visitMethod`; the parameter was
+  accepted and discarded. A method's declared `throws` is its own statement about how it can
+  fail — the same question `error_advice` answers from the handler side, and unreadable from
+  the declaring side until now. It rides inside the signature, because it is part of what a
+  caller must handle in order to call the method.
+
+  **`PermittedSubclasses` (4.7.31).** A sealed type names every type allowed to extend it,
+  which is the one case where "every implementation of this" is a closed answer rather than
+  whatever the scan happened to reach — every other implementation question here is the
+  latter.
+
+  **`Deprecated` (4.7.15).** Distinct from the `@Deprecated` annotation a catalog reads
+  separately: a class file can carry either, both, or neither.
+
 - **An `@interface` stops reporting itself as an interface, and ten other access flags are
   read** (W7, first part).
 

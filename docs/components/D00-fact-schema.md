@@ -457,6 +457,15 @@ ordinary, non-generic superclass carries no such field — there is nothing gene
 capture, and the relationship is still stated once, at `relationship_kind: extends` (§4).
 This also pre-feeds `inherits` edges ([D01](D01-graph-schema.md)).
 
+**A SEALED type carries `permits`** — the complete set of types the language allows to
+extend it (JVMS 4.7.31), emitted only where the declaration is sealed. It is the one place
+"every implementation of this" is a closed answer rather than whatever a scan happened to
+reach, which is what every other implementation question here is.
+
+**A method's signature carries `throws`** — the types it DECLARES it can fail with (JVMS
+4.7.5), in declaration order, and inside the signature rather than beside it because it is
+part of what a caller must handle in order to call it. Omitted where a method declares none.
+
 **A class symbol fact also carries the erased symbols of every interface it implements, in
 declaration order, as `interfaces` — emitted only when non-empty** (the `implemented_interfaces`
 capability, [M03](M03-scanner.md)): a receiver registered by its declared type

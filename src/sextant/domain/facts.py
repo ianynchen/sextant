@@ -95,6 +95,10 @@ class Signature(BaseModel):
     model_config = {"frozen": True}
     parameters: list[Parameter] = Field(default_factory=list)
     returns: TypeRef | None = None
+    # W7: the types a method DECLARES it can fail with (JVMS 4.7.5), in declaration
+    # order. Part of the signature because it is part of what a caller must handle
+    # to call it. Empty for the great majority, which declare none.
+    throws: list[str] = Field(default_factory=list)
 
 
 class ClasspathEntry(BaseModel):
@@ -256,6 +260,11 @@ class SymbolFact(BaseModel):
     # no interface "extends" it, and every root class gets it implicitly, so
     # writing it there would say nothing with it.
     superclass: str | None = None
+    # W7: the complete set of types permitted to extend a SEALED one (JVMS 4.7.31).
+    # The one case where "every implementation of this" is answerable outright
+    # rather than approximated by whatever the scan happened to see. Empty for
+    # every type that is not sealed.
+    permits: list[str] = Field(default_factory=list)
     # `type_parameters` (W5): the formal type parameters this class or method
     # declares, in declaration order. Empty for the great majority of
     # declarations, which have none — the same "nothing generic, nothing

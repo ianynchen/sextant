@@ -118,6 +118,8 @@ public final class ClassScanner {
         private String internalName;
         private int classAccess;
         private String classSignature;
+        private boolean isRecord;
+        private final List<String> permittedSubclasses = new ArrayList<>();
         private String[] classInterfaces;
         private String enclosingSymbol;
         private Integer nestedAccess;
@@ -133,6 +135,32 @@ public final class ClassScanner {
             this.documentId = documentId;
             this.onKotlinMetadataUnsupported = onKotlinMetadataUnsupported;
             this.onSourceFile = onSourceFile;
+        }
+
+        /** JVMS 4.7.31 `PermittedSubclasses`: the COMPLETE set of types allowed to
+         *  extend a sealed one — the language guaranteeing a closed hierarchy, which is
+         *  the one case where "every implementation of this" is answerable rather than
+         *  approximated by whatever the scan happened to see. */
+        @Override
+        public void visitPermittedSubclass(String permitted) {
+            permittedSubclasses.add(JsonOut.string(symbolOf(permitted + "#")));
+        }
+
+        /** JVMS 4.7.30 `Record`. ASM reports one call per component and nothing at all
+         *  for a class that is not a record, so the flag is the presence.
+         *
+         *  <p>The components themselves are not emitted as a new fact shape: a record's
+         *  components already reach the graph as its private final FIELDS, in declaration
+         *  order, and its accessors as methods. Measured on `RecordComponents`: `id` and
+         *  `tags` are both there as fields with their types. A second spelling of the
+         *  same declarations would be two vocabularies for one thing (D00 §5a's rule for
+         *  type references, applied to members). What was missing is what KIND of
+         *  construct they belong to, and that is what this fixes. */
+        @Override
+        public org.objectweb.asm.RecordComponentVisitor visitRecordComponent(
+                String name, String descriptor, String signature) {
+            isRecord = true;
+            return null;
         }
 
         /** JVMS 4.7.10 `SourceFile`: the NAME of the file this class was compiled from.
@@ -270,6 +298,12 @@ public final class ClassScanner {
             if ((access & Opcodes.ACC_ANNOTATION) != 0) return "annotation";
             if ((access & Opcodes.ACC_INTERFACE) != 0) return "interface";
             if ((access & Opcodes.ACC_ENUM) != 0) return "enum";
+            // W7. There is no ACC_RECORD: JVMS 4.7.30's `Record` attribute is what
+            // says so, and its presence is the whole signal. `record` has been in
+            // D00 §4's closed set since it was written and had NO producer — every
+            // record in the estate reported `class` — which is the "declared, never
+            // read" shape §2.3's ledger exists to catch, reached from the other side.
+            if (isRecord) return "record";
             return "class";
         }
 
@@ -284,11 +318,17 @@ public final class ClassScanner {
             TreeMap<String, String> modifiers = new TreeMap<>();
             modifiers.put("abstract", String.valueOf((access & Opcodes.ACC_ABSTRACT) != 0));
             modifiers.put("final", String.valueOf((access & Opcodes.ACC_FINAL) != 0));
+            modifiers.put("deprecated", String.valueOf((access & Opcodes.ACC_DEPRECATED) != 0));
             return JsonOut.object(modifiers);
         }
 
         @Override
         public MethodVisitor visitMethod(int access, String name, String descriptor, String sig, String[] ex) {
+            // `ex` is JVMS 4.7.5 `Exceptions`, and it was accepted and discarded. A
+            // declared `throws` is the method's own statement about what it can fail
+            // with — the same question `error_advice` answers from the handler side —
+            // and nothing could read it from the declaring side at all.
+            String throwsJson = throwsJson(ex);
             String owner = typeSymbol.substring(typeSymbol.lastIndexOf(' ') + 1);
             String methodSymbol = symbolOf(owner + name + "(" + disambiguatorOf(descriptor) + ").");
             String constructKind = "<init>".equals(name) ? "constructor" : "method";
@@ -615,6 +655,7 @@ public final class ClassScanner {
                     fillParameterNamesFromLocals();
                     emit(methodSymbol, constructKind, typeSymbol,
                          signatureJson(descriptor, sig, parameterNames, parameterFlags,
+                                       throwsJson,
                                        parameterAnnotations,
                                        parameterTypeAnnotations, returnTypeAnnotations), methodAccess,
                          null, methodModifiersJson(methodAccess), null, null, null, null,
@@ -1013,8 +1054,18 @@ public final class ClassScanner {
             return JsonOut.string(String.valueOf(value));
         }
 
+        /** JVMS 4.7.5 `Exceptions` as symbols, or null when the method declares none —
+         *  which is most of them, and an empty list on every one would say nothing. */
+        private String throwsJson(String[] exceptions) {
+            if (exceptions == null || exceptions.length == 0) return null;
+            List<String> declared = new ArrayList<>();
+            for (String thrown : exceptions) declared.add(JsonOut.string(symbolOf(thrown + "#")));
+            return JsonOut.array(declared);
+        }
+
         private String signatureJson(String descriptor, String genericSignature,
                                       String[] parameterNames, int[] parameterFlags,
+                                      String declaredThrows,
                                       List<List<String>> parameterAnnotations,
                                       List<List<String>> parameterTypeAnnotations,
                                       List<String> returnTypeAnnotations) {
@@ -1071,6 +1122,10 @@ public final class ClassScanner {
             signature.put("parameters", JsonOut.array(parameters));
             signature.put("returns", returns);
             signature.put("return_type_annotations", JsonOut.array(returnTypeAnnotations));
+            // `throws` belongs to the SIGNATURE rather than beside it: it is part of what
+            // a caller must handle to call this method, which is what a signature is.
+            // Omitted entirely when the method declares none — most do not.
+            if (declaredThrows != null) signature.put("throws", declaredThrows);
             return JsonOut.object(signature);
         }
 
@@ -1229,6 +1284,11 @@ public final class ClassScanner {
             // makes and nothing here could read.
             modifiers.put("final", String.valueOf((access & Opcodes.ACC_FINAL) != 0));
             modifiers.put("volatile", String.valueOf((access & Opcodes.ACC_VOLATILE) != 0));
+            // JVMS 4.7.15 `Deprecated`, which ASM folds into the access flags. A
+            // declaration the language itself marks as on its way out — distinct from
+            // `@Deprecated`, the annotation, which a catalog reads separately: a class
+            // file can carry either, both, or neither.
+            modifiers.put("deprecated", String.valueOf((access & Opcodes.ACC_DEPRECATED) != 0));
             return JsonOut.object(modifiers);
         }
 
@@ -1264,6 +1324,11 @@ public final class ClassScanner {
             modifiers.put("final", String.valueOf((access & Opcodes.ACC_FINAL) != 0));
             modifiers.put("native", String.valueOf((access & Opcodes.ACC_NATIVE) != 0));
             modifiers.put("synchronized", String.valueOf((access & Opcodes.ACC_SYNCHRONIZED) != 0));
+            // JVMS 4.7.15 `Deprecated`, which ASM folds into the access flags. A
+            // declaration the language itself marks as on its way out — distinct from
+            // `@Deprecated`, the annotation, which a catalog reads separately: a class
+            // file can carry either, both, or neither.
+            modifiers.put("deprecated", String.valueOf((access & Opcodes.ACC_DEPRECATED) != 0));
             return JsonOut.object(modifiers);
         }
 
@@ -1301,7 +1366,8 @@ public final class ClassScanner {
                  TypeRefs.genericSuperclassFromSignature(classSignature),
                  interfaceSymbolsJson(classInterfaces),
                  genericInterfacesJson(classSignature), erasedSuperclassJson(superName), null,
-                 typeParametersJson(classSignature));
+                 typeParametersJson(classSignature), 0, 0,
+                 permittedSubclasses.isEmpty() ? null : JsonOut.array(permittedSubclasses));
             // `emit` appends, and this one belongs FIRST — a class's own symbol
             // precedes its members in every fact file, and `symbols.seq` is that
             // order. Moving the appended line is simpler than redirecting where
@@ -1351,6 +1417,15 @@ public final class ClassScanner {
                            String ext, String modifiers, String supertype, String interfaces,
                            String genericInterfaces, String superclass, String annotationDefault,
                            String typeParameters, int lineStart, int lineEnd) {
+            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, supertype,
+                 interfaces, genericInterfaces, superclass, annotationDefault, typeParameters,
+                 lineStart, lineEnd, null);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext, String modifiers, String supertype, String interfaces,
+                           String genericInterfaces, String superclass, String annotationDefault,
+                           String typeParameters, int lineStart, int lineEnd, String permits) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -1373,6 +1448,10 @@ public final class ClassScanner {
             // already follow — most classes and nearly every method declare none, and an
             // empty list on all of them says nothing with a key on every fact.
             if (typeParameters != null) fact.put("type_parameters", typeParameters);
+            // Emitted only for a SEALED type — every other class permits nothing, and an
+            // empty list on all of them says nothing with a key on every fact (the same
+            // rule `supertype` and `generic_interfaces` follow).
+            if (permits != null) fact.put("permits", permits);
             lines.add(JsonOut.object(fact));
         }
     }

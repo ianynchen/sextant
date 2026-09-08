@@ -175,6 +175,11 @@ def test_a_real_2b_field_fact_validates_into_symbol_fact_without_loss():
     assert dumped["signature"] == {
         "parameters": [],
         "returns": REAL_2B_FIELD_FACT["signature"]["returns"],  # type: ignore[index]
+        # W7 added `throws` to the model. A FIELD declares none and the extractor
+        # writes no such key, so this is the model's default surfacing in a dump —
+        # the same thing `parameters: []` above already is, and the reason this
+        # test compares the projection rather than the whole dict.
+        "throws": [],
     }
 
 
@@ -185,6 +190,7 @@ def test_a_real_2b_transient_field_fact_keeps_its_modifiers_without_loss():
     assert fact.model_dump(mode="json")["signature"] == {
         "parameters": [],
         "returns": REAL_2B_TRANSIENT_FIELD_FACT["signature"]["returns"],  # type: ignore[index]
+        "throws": [],
     }
 
 
